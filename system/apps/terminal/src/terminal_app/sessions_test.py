@@ -77,10 +77,14 @@ def test_list_matches_a_record_to_its_session_by_id_whatever_tmux_calls_it(
     # Renamed inside tmux; the key and the title are the record's, not the session's name.
     fake_tmux.set_sessions([_session("my-build", "$5"), _session("terminal-2", "$9")])
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title="Build", workdir=None, session_id="$5")
+        make_terminal_record(
+            name="terminal-1", title="Build", workdir=None, session_id="$5"
+        )
     )
     session_store.save_record(
-        make_terminal_record(name="terminal-2", title=None, workdir=None, session_id="$9")
+        make_terminal_record(
+            name="terminal-2", title=None, workdir=None, session_id="$9"
+        )
     )
 
     listed = session_source.list_terminals()
@@ -102,16 +106,20 @@ def test_list_skips_a_second_session_under_a_tracked_terminals_name(
     # the activities tell the two apart, and tmux may list either first.
     real = make_tmux_session("renamed", "$5", _ACTIVITY)
     impostor = make_tmux_session("terminal-1", "$8", _LATER_ACTIVITY)
-    fake_tmux.set_sessions([impostor, real] if is_impostor_listed_first else [real, impostor])
+    fake_tmux.set_sessions(
+        [impostor, real] if is_impostor_listed_first else [real, impostor]
+    )
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$5")
+        make_terminal_record(
+            name="terminal-1", title=None, workdir=None, session_id="$5"
+        )
     )
 
     listed = session_source.list_terminals()
 
-    assert [(record.name, record.is_stopped, record.last_activity) for record in listed] == [
-        ("terminal-1", False, _ACTIVITY)
-    ]
+    assert [
+        (record.name, record.is_stopped, record.last_activity) for record in listed
+    ] == [("terminal-1", False, _ACTIVITY)]
 
 
 def test_list_is_empty_without_a_tmux_server_or_a_store(
@@ -139,14 +147,21 @@ def test_create_makes_the_session_at_once_with_the_lowest_free_number(
     assert created.is_stopped is False
     assert created.title == "Terminal 4"
     assert fake_tmux.session_names() == ["terminal-1", "terminal-3", "terminal-4"]
-    assert fake_tmux.creates() == [expected_new_session_call("terminal-4", "/home/user/workspace")]
+    assert fake_tmux.creates() == [
+        expected_new_session_call("terminal-4", "/home/user/workspace")
+    ]
     assert session_store.list_records() == [
         make_terminal_record(name="terminal-2", title=None, workdir=None),
         make_terminal_record(
-            name="terminal-4", title=None, workdir="/home/user/workspace", session_id="$5"
+            name="terminal-4",
+            title=None,
+            workdir="/home/user/workspace",
+            session_id="$5",
         ),
     ]
-    assert read_session_id_file(terminal_paths.sessions_dir, "terminal-4") == expected_session_id_file("$5")
+    assert read_session_id_file(
+        terminal_paths.sessions_dir, "terminal-4"
+    ) == expected_session_id_file("$5")
 
 
 def test_two_creates_get_distinct_names_and_the_default_workdir(
@@ -181,7 +196,9 @@ def test_delete_kills_the_session_by_its_id_and_forgets_it(
 ) -> None:
     fake_tmux.set_sessions([_session("renamed-in-tmux", "$3")])
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$3")
+        make_terminal_record(
+            name="terminal-1", title=None, workdir=None, session_id="$3"
+        )
     )
     write_session_id_file(terminal_paths.sessions_dir, "terminal-1", "$3")
 
@@ -218,7 +235,9 @@ def test_delete_refuses_an_agents_session(
 ) -> None:
     fake_tmux.set_sessions([_session("mngr-alice", "$1")])
 
-    with pytest.raises(TerminalConflictError, match="Refusing to destroy non-terminal session"):
+    with pytest.raises(
+        TerminalConflictError, match="Refusing to destroy non-terminal session"
+    ):
         session_source.delete_terminal(TmuxSessionName("mngr-alice"))
 
     assert fake_tmux.session_names() == ["mngr-alice"]
@@ -231,10 +250,14 @@ def test_rename_changes_only_the_title_and_never_the_key_or_the_session(
 ) -> None:
     fake_tmux.set_sessions([_session("terminal-1", "$3")])
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title=None, workdir="/srv", session_id="$3")
+        make_terminal_record(
+            name="terminal-1", title=None, workdir="/srv", session_id="$3"
+        )
     )
 
-    renamed = session_source.rename_terminal(TmuxSessionName("terminal-1"), TerminalTitle("My Build"))
+    renamed = session_source.rename_terminal(
+        TmuxSessionName("terminal-1"), TerminalTitle("My Build")
+    )
 
     assert renamed.name == "terminal-1"
     assert renamed.title == "My Build"
@@ -242,7 +265,9 @@ def test_rename_changes_only_the_title_and_never_the_key_or_the_session(
     assert fake_tmux.session_names() == ["terminal-1"]
     assert all(call[0] == "list-sessions" for call in fake_tmux.calls())
     assert session_store.list_records() == [
-        make_terminal_record(name="terminal-1", title="My Build", workdir="/srv", session_id="$3")
+        make_terminal_record(
+            name="terminal-1", title="My Build", workdir="/srv", session_id="$3"
+        )
     ]
 
 
@@ -254,12 +279,18 @@ def test_rename_of_a_live_session_the_store_never_saw_remembers_it_with_its_id(
 ) -> None:
     fake_tmux.set_sessions([_session("terminal-1", "$3")])
 
-    session_source.rename_terminal(TmuxSessionName("terminal-1"), TerminalTitle("Build"))
+    session_source.rename_terminal(
+        TmuxSessionName("terminal-1"), TerminalTitle("Build")
+    )
 
     assert session_store.list_records() == [
-        make_terminal_record(name="terminal-1", title="Build", workdir=None, session_id="$3")
+        make_terminal_record(
+            name="terminal-1", title="Build", workdir=None, session_id="$3"
+        )
     ]
-    assert read_session_id_file(terminal_paths.sessions_dir, "terminal-1") == expected_session_id_file("$3")
+    assert read_session_id_file(
+        terminal_paths.sessions_dir, "terminal-1"
+    ) == expected_session_id_file("$3")
 
 
 def test_rename_takes_the_live_sessions_id_over_a_stale_one(
@@ -271,15 +302,23 @@ def test_rename_takes_the_live_sessions_id_over_a_stale_one(
     # The session the record knew died and the dispatch recreated one by name on attach.
     fake_tmux.set_sessions([_session("terminal-1", "$9")])
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$3")
+        make_terminal_record(
+            name="terminal-1", title=None, workdir=None, session_id="$3"
+        )
     )
 
-    session_source.rename_terminal(TmuxSessionName("terminal-1"), TerminalTitle("Build"))
+    session_source.rename_terminal(
+        TmuxSessionName("terminal-1"), TerminalTitle("Build")
+    )
 
     assert session_store.list_records() == [
-        make_terminal_record(name="terminal-1", title="Build", workdir=None, session_id="$9")
+        make_terminal_record(
+            name="terminal-1", title="Build", workdir=None, session_id="$9"
+        )
     ]
-    assert read_session_id_file(terminal_paths.sessions_dir, "terminal-1") == expected_session_id_file("$9")
+    assert read_session_id_file(
+        terminal_paths.sessions_dir, "terminal-1"
+    ) == expected_session_id_file("$9")
 
 
 def test_rename_of_a_stopped_terminal_retitles_the_record_without_touching_tmux(
@@ -288,10 +327,14 @@ def test_rename_of_a_stopped_terminal_retitles_the_record_without_touching_tmux(
     session_source: TmuxSessionSource,
 ) -> None:
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title=None, workdir=None, is_stopped=True)
+        make_terminal_record(
+            name="terminal-1", title=None, workdir=None, is_stopped=True
+        )
     )
 
-    renamed = session_source.rename_terminal(TmuxSessionName("terminal-1"), TerminalTitle("Later"))
+    renamed = session_source.rename_terminal(
+        TmuxSessionName("terminal-1"), TerminalTitle("Later")
+    )
 
     assert (renamed.name, renamed.title, renamed.is_stopped) == (
         "terminal-1",
@@ -299,7 +342,9 @@ def test_rename_of_a_stopped_terminal_retitles_the_record_without_touching_tmux(
         True,
     )
     assert session_store.list_records() == [
-        make_terminal_record(name="terminal-1", title="Later", workdir=None, is_stopped=True)
+        make_terminal_record(
+            name="terminal-1", title="Later", workdir=None, is_stopped=True
+        )
     ]
 
 
@@ -313,16 +358,28 @@ def test_rename_of_a_stopped_terminal_whose_session_came_back_adopts_it_as_runni
     # name, so the rename is where the app first sees it.
     fake_tmux.set_sessions([_session("terminal-1", "$4")])
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title=None, workdir="/srv", is_stopped=True)
+        make_terminal_record(
+            name="terminal-1", title=None, workdir="/srv", is_stopped=True
+        )
     )
 
-    renamed = session_source.rename_terminal(TmuxSessionName("terminal-1"), TerminalTitle("Build"))
+    renamed = session_source.rename_terminal(
+        TmuxSessionName("terminal-1"), TerminalTitle("Build")
+    )
 
-    assert (renamed.name, renamed.title, renamed.is_stopped) == ("terminal-1", "Build", False)
+    assert (renamed.name, renamed.title, renamed.is_stopped) == (
+        "terminal-1",
+        "Build",
+        False,
+    )
     assert session_store.list_records() == [
-        make_terminal_record(name="terminal-1", title="Build", workdir="/srv", session_id="$4")
+        make_terminal_record(
+            name="terminal-1", title="Build", workdir="/srv", session_id="$4"
+        )
     ]
-    assert read_session_id_file(terminal_paths.sessions_dir, "terminal-1") == expected_session_id_file("$4")
+    assert read_session_id_file(
+        terminal_paths.sessions_dir, "terminal-1"
+    ) == expected_session_id_file("$4")
 
 
 @pytest.mark.parametrize(
@@ -341,7 +398,9 @@ def test_rename_refuses_a_title_that_makes_no_usable_name(
     fake_tmux.set_sessions([_session("terminal-1", "$3")])
 
     with pytest.raises(InvalidTerminalValueError, match=expected_problem):
-        session_source.rename_terminal(TmuxSessionName("terminal-1"), TerminalTitle(title))
+        session_source.rename_terminal(
+            TmuxSessionName("terminal-1"), TerminalTitle(title)
+        )
 
 
 def test_rename_refuses_a_title_another_terminal_holds_case_insensitively(
@@ -355,11 +414,17 @@ def test_rename_refuses_a_title_another_terminal_holds_case_insensitively(
     )
 
     with pytest.raises(TerminalConflictError, match="already named 'Build'"):
-        session_source.rename_terminal(TmuxSessionName("terminal-1"), TerminalTitle("Build"))
+        session_source.rename_terminal(
+            TmuxSessionName("terminal-1"), TerminalTitle("Build")
+        )
     with pytest.raises(TerminalConflictError, match="already named 'deploy'"):
-        session_source.rename_terminal(TmuxSessionName("terminal-1"), TerminalTitle("deploy"))
+        session_source.rename_terminal(
+            TmuxSessionName("terminal-1"), TerminalTitle("deploy")
+        )
     # A terminal may keep its own title under another spelling.
-    retitled = session_source.rename_terminal(TmuxSessionName("build"), TerminalTitle("BUILD"))
+    retitled = session_source.rename_terminal(
+        TmuxSessionName("build"), TerminalTitle("BUILD")
+    )
     assert retitled.title == "BUILD"
 
 
@@ -371,7 +436,9 @@ def test_rename_of_an_unknown_key_is_404_and_of_an_agent_is_refused(
     with pytest.raises(UnknownTerminalError):
         session_source.rename_terminal(TmuxSessionName("ghost"), TerminalTitle("Boo"))
     with pytest.raises(TerminalConflictError, match="non-terminal session"):
-        session_source.rename_terminal(TmuxSessionName("mngr-alice"), TerminalTitle("Alice"))
+        session_source.rename_terminal(
+            TmuxSessionName("mngr-alice"), TerminalTitle("Alice")
+        )
 
 
 def test_startup_recreates_lost_sessions_adopts_live_ones_and_leaves_stopped_ones(
@@ -384,7 +451,9 @@ def test_startup_recreates_lost_sessions_adopts_live_ones_and_leaves_stopped_one
     # record holding no id; terminal-3 was lost to a container restart; terminal-4 was stopped.
     fake_tmux.set_sessions([_session("renamed", "$5"), _session("terminal-2", "$6")])
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$5")
+        make_terminal_record(
+            name="terminal-1", title=None, workdir=None, session_id="$5"
+        )
     )
     session_store.save_record(
         make_terminal_record(name="terminal-2", title=None, workdir=None)
@@ -393,21 +462,29 @@ def test_startup_recreates_lost_sessions_adopts_live_ones_and_leaves_stopped_one
         make_terminal_record(name="terminal-3", title="Build", workdir="/srv")
     )
     session_store.save_record(
-        make_terminal_record(name="terminal-4", title=None, workdir=None, is_stopped=True)
+        make_terminal_record(
+            name="terminal-4", title=None, workdir=None, is_stopped=True
+        )
     )
     write_session_id_file(terminal_paths.sessions_dir, "terminal-4", "$2")
 
     session_source.recreate_remembered_sessions()
 
     assert fake_tmux.session_names() == ["renamed", "terminal-2", "terminal-3"]
-    assert fake_tmux.creates() == [
-        expected_new_session_call("terminal-3", "/srv")
-    ]
+    assert fake_tmux.creates() == [expected_new_session_call("terminal-3", "/srv")]
     assert session_store.list_records() == [
-        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$5"),
-        make_terminal_record(name="terminal-2", title=None, workdir=None, session_id="$6"),
-        make_terminal_record(name="terminal-3", title="Build", workdir="/srv", session_id="$7"),
-        make_terminal_record(name="terminal-4", title=None, workdir=None, is_stopped=True),
+        make_terminal_record(
+            name="terminal-1", title=None, workdir=None, session_id="$5"
+        ),
+        make_terminal_record(
+            name="terminal-2", title=None, workdir=None, session_id="$6"
+        ),
+        make_terminal_record(
+            name="terminal-3", title="Build", workdir="/srv", session_id="$7"
+        ),
+        make_terminal_record(
+            name="terminal-4", title=None, workdir=None, is_stopped=True
+        ),
     ]
     assert {
         name: read_session_id_file(terminal_paths.sessions_dir, name)
@@ -418,7 +495,9 @@ def test_startup_recreates_lost_sessions_adopts_live_ones_and_leaves_stopped_one
         "terminal-3": expected_session_id_file("$7"),
         "terminal-4": None,
     }
-    assert [(record.name, record.is_stopped) for record in session_source.list_terminals()] == [
+    assert [
+        (record.name, record.is_stopped) for record in session_source.list_terminals()
+    ] == [
         ("terminal-1", False),
         ("terminal-2", False),
         ("terminal-3", False),
@@ -452,17 +531,25 @@ def test_stop_kills_the_session_and_remembers_the_terminal_as_stopped(
 ) -> None:
     fake_tmux.set_sessions([_session("renamed", "$3")])
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title="Build", workdir="/srv", session_id="$3")
+        make_terminal_record(
+            name="terminal-1", title="Build", workdir="/srv", session_id="$3"
+        )
     )
     write_session_id_file(terminal_paths.sessions_dir, "terminal-1", "$3")
 
     stopped = session_source.stop_terminal(TmuxSessionName("terminal-1"))
 
-    assert (stopped.name, stopped.title, stopped.is_stopped) == ("terminal-1", "Build", True)
+    assert (stopped.name, stopped.title, stopped.is_stopped) == (
+        "terminal-1",
+        "Build",
+        True,
+    )
     assert fake_tmux.session_names() == []
     assert ["kill-session", "-t", "$3"] in fake_tmux.calls()
     assert session_store.list_records() == [
-        make_terminal_record(name="terminal-1", title="Build", workdir="/srv", is_stopped=True)
+        make_terminal_record(
+            name="terminal-1", title="Build", workdir="/srv", is_stopped=True
+        )
     ]
     assert read_session_id_file(terminal_paths.sessions_dir, "terminal-1") is None
     # Stopping again is a no-op that answers the same record.
@@ -491,21 +578,31 @@ def test_start_recreates_a_stopped_terminals_session_in_its_workdir(
     terminal_paths: TerminalPaths,
 ) -> None:
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title="Build", workdir="/srv", is_stopped=True)
+        make_terminal_record(
+            name="terminal-1", title="Build", workdir="/srv", is_stopped=True
+        )
     )
 
     started = session_source.start_terminal(TmuxSessionName("terminal-1"))
 
-    assert (started.name, started.title, started.is_stopped) == ("terminal-1", "Build", False)
-    assert fake_tmux.creates() == [
-        expected_new_session_call("terminal-1", "/srv")
-    ]
+    assert (started.name, started.title, started.is_stopped) == (
+        "terminal-1",
+        "Build",
+        False,
+    )
+    assert fake_tmux.creates() == [expected_new_session_call("terminal-1", "/srv")]
     assert session_store.list_records() == [
-        make_terminal_record(name="terminal-1", title="Build", workdir="/srv", session_id="$1")
+        make_terminal_record(
+            name="terminal-1", title="Build", workdir="/srv", session_id="$1"
+        )
     ]
-    assert read_session_id_file(terminal_paths.sessions_dir, "terminal-1") == expected_session_id_file("$1")
+    assert read_session_id_file(
+        terminal_paths.sessions_dir, "terminal-1"
+    ) == expected_session_id_file("$1")
     # Starting a running terminal changes nothing.
-    assert session_source.start_terminal(TmuxSessionName("terminal-1")).is_stopped is False
+    assert (
+        session_source.start_terminal(TmuxSessionName("terminal-1")).is_stopped is False
+    )
     assert len(fake_tmux.creates()) == 1
 
 
@@ -517,7 +614,9 @@ def test_start_adopts_the_live_session_when_the_records_id_is_stale(
 ) -> None:
     fake_tmux.set_sessions([_session("terminal-1", "$9")])
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$3")
+        make_terminal_record(
+            name="terminal-1", title=None, workdir=None, session_id="$3"
+        )
     )
 
     started = session_source.start_terminal(TmuxSessionName("terminal-1"))
@@ -525,9 +624,13 @@ def test_start_adopts_the_live_session_when_the_records_id_is_stale(
     assert (started.name, started.is_stopped) == ("terminal-1", False)
     assert fake_tmux.creates() == []
     assert session_store.list_records() == [
-        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$9")
+        make_terminal_record(
+            name="terminal-1", title=None, workdir=None, session_id="$9"
+        )
     ]
-    assert read_session_id_file(terminal_paths.sessions_dir, "terminal-1") == expected_session_id_file("$9")
+    assert read_session_id_file(
+        terminal_paths.sessions_dir, "terminal-1"
+    ) == expected_session_id_file("$9")
 
 
 def test_stop_and_start_refuse_unknown_keys_and_agent_sessions(
@@ -557,7 +660,11 @@ def test_a_session_id_from_an_earlier_server_binds_nothing(
     fake_tmux.set_sessions([_session("scratch", "$3")])
     session_store.save_record(
         make_terminal_record(
-            name="terminal-1", title="Build", workdir="/srv", session_id="$3", session_created=fake_created_epoch("$3") - 3600
+            name="terminal-1",
+            title="Build",
+            workdir="/srv",
+            session_id="$3",
+            session_created=fake_created_epoch("$3") - 3600,
         )
     )
 
@@ -572,9 +679,13 @@ def test_a_session_id_from_an_earlier_server_binds_nothing(
     session_source.recreate_remembered_sessions()
     assert fake_tmux.session_names() == ["scratch", "terminal-1"]
     assert session_store.list_records() == [
-        make_terminal_record(name="terminal-1", title="Build", workdir="/srv", session_id="$4")
+        make_terminal_record(
+            name="terminal-1", title="Build", workdir="/srv", session_id="$4"
+        )
     ]
-    assert read_session_id_file(terminal_paths.sessions_dir, "terminal-1") == expected_session_id_file("$4")
+    assert read_session_id_file(
+        terminal_paths.sessions_dir, "terminal-1"
+    ) == expected_session_id_file("$4")
     session_source.delete_terminal(TmuxSessionName("terminal-1"))
     assert fake_tmux.session_names() == ["scratch"]
 
@@ -590,7 +701,11 @@ def test_startup_gives_a_record_without_a_creation_time_its_live_sessions_time(
     fake_tmux.set_sessions([_session("renamed", "$3")])
     session_store.save_record(
         make_terminal_record(
-            name="terminal-1", title=None, workdir=None, session_id="$3", is_session_created_known=False
+            name="terminal-1",
+            title=None,
+            workdir=None,
+            session_id="$3",
+            is_session_created_known=False,
         )
     )
 
@@ -598,9 +713,13 @@ def test_startup_gives_a_record_without_a_creation_time_its_live_sessions_time(
 
     assert fake_tmux.creates() == []
     assert session_store.list_records() == [
-        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$3")
+        make_terminal_record(
+            name="terminal-1", title=None, workdir=None, session_id="$3"
+        )
     ]
-    assert read_session_id_file(terminal_paths.sessions_dir, "terminal-1") == expected_session_id_file("$3")
+    assert read_session_id_file(
+        terminal_paths.sessions_dir, "terminal-1"
+    ) == expected_session_id_file("$3")
 
 
 def test_a_record_without_a_creation_time_still_matches_its_session_by_id(
@@ -611,13 +730,17 @@ def test_a_record_without_a_creation_time_still_matches_its_session_by_id(
     fake_tmux.set_sessions([_session("renamed", "$3")])
     session_store.save_record(
         make_terminal_record(
-            name="terminal-1", title=None, workdir=None, session_id="$3", is_session_created_known=False
+            name="terminal-1",
+            title=None,
+            workdir=None,
+            session_id="$3",
+            is_session_created_known=False,
         )
     )
 
-    assert [(record.name, record.is_stopped) for record in session_source.list_terminals()] == [
-        ("terminal-1", False)
-    ]
+    assert [
+        (record.name, record.is_stopped) for record in session_source.list_terminals()
+    ] == [("terminal-1", False)]
 
 
 def test_a_session_renamed_to_another_terminals_key_stays_with_the_terminal_that_holds_its_id(
@@ -631,17 +754,23 @@ def test_a_session_renamed_to_another_terminals_key_stays_with_the_terminal_that
     # refuses a second session of that name, so terminal-2 stays stopped and a start says why.
     fake_tmux.set_sessions([_session("terminal-2", "$5")])
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$5")
+        make_terminal_record(
+            name="terminal-1", title=None, workdir=None, session_id="$5"
+        )
     )
     session_store.save_record(
-        make_terminal_record(name="terminal-2", title=None, workdir="/srv", session_id="$8")
+        make_terminal_record(
+            name="terminal-2", title=None, workdir="/srv", session_id="$8"
+        )
     )
 
     session_source.recreate_remembered_sessions()
 
     assert fake_tmux.creates() == [expected_new_session_call("terminal-2", "/srv")]
     assert fake_tmux.session_names() == ["terminal-2"]
-    assert [(record.name, record.is_stopped) for record in session_source.list_terminals()] == [
+    assert [
+        (record.name, record.is_stopped) for record in session_source.list_terminals()
+    ] == [
         ("terminal-1", False),
         ("terminal-2", True),
     ]
@@ -658,16 +787,32 @@ def test_sweep_marks_terminals_a_window_shows_and_collects_the_ones_it_showed_on
     session_source: TmuxSessionSource,
     terminal_paths: TerminalPaths,
 ) -> None:
-    fake_tmux.set_sessions([_session("terminal-1", "$1"), _session("terminal-2", "$2"), _session("terminal-3", "$3")])
+    fake_tmux.set_sessions(
+        [
+            _session("terminal-1", "$1"),
+            _session("terminal-2", "$2"),
+            _session("terminal-3", "$3"),
+        ]
+    )
     for number in (1, 2, 3):
-        session_store.save_record(make_terminal_record(f"terminal-{number}", None, "/srv", session_id=f"${number}"))
-        write_session_id_file(terminal_paths.sessions_dir, f"terminal-{number}", f"${number}")
+        session_store.save_record(
+            make_terminal_record(
+                f"terminal-{number}", None, "/srv", session_id=f"${number}"
+            )
+        )
+        write_session_id_file(
+            terminal_paths.sessions_dir, f"terminal-{number}", f"${number}"
+        )
 
     # Windows show terminal-1 and terminal-2; one is at a path naming no session and shows nothing.
-    first = session_source.sweep_windows(["/?session=terminal-1", "/?session=terminal-2", "/new?workdir=%2Fsrv"])
+    first = session_source.sweep_windows(
+        ["/?session=terminal-1", "/?session=terminal-2", "/new?workdir=%2Fsrv"]
+    )
 
     assert first == []
-    assert [(record.name, record.is_window_seen) for record in session_store.list_records()] == [
+    assert [
+        (record.name, record.is_window_seen) for record in session_store.list_records()
+    ] == [
         ("terminal-1", True),
         ("terminal-2", True),
         ("terminal-3", False),
@@ -678,7 +823,10 @@ def test_sweep_marks_terminals_a_window_shows_and_collects_the_ones_it_showed_on
 
     assert second == ["terminal-2"]
     assert fake_tmux.session_names() == ["terminal-1", "terminal-3"]
-    assert [record.name for record in session_store.list_records()] == ["terminal-1", "terminal-3"]
+    assert [record.name for record in session_store.list_records()] == [
+        "terminal-1",
+        "terminal-3",
+    ]
     assert read_session_id_file(terminal_paths.sessions_dir, "terminal-2") is None
 
 
@@ -689,7 +837,9 @@ def test_marking_a_terminal_window_seen_lets_a_sweep_collect_it_once_no_window_s
     terminal_paths: TerminalPaths,
 ) -> None:
     fake_tmux.set_sessions([_session("terminal-1", "$1")])
-    session_store.save_record(make_terminal_record("terminal-1", None, "/srv", session_id="$1"))
+    session_store.save_record(
+        make_terminal_record("terminal-1", None, "/srv", session_id="$1")
+    )
     write_session_id_file(terminal_paths.sessions_dir, "terminal-1", "$1")
 
     # Its window closed before any sweep observed it: a sweep alone leaves it be.
@@ -715,7 +865,11 @@ def test_sweep_forgets_a_stopped_terminal_a_window_showed_once_and_kills_nothing
 ) -> None:
     session_store.save_record(
         TerminalSessionRecord(
-            name=TmuxSessionName("terminal-4"), title=None, workdir=None, is_stopped=True, is_window_seen=True
+            name=TmuxSessionName("terminal-4"),
+            title=None,
+            workdir=None,
+            is_stopped=True,
+            is_window_seen=True,
         )
     )
 

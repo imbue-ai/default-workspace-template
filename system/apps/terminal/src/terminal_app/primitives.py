@@ -35,8 +35,12 @@ TERMINAL_SESSION_BAND_KEY: Final[str] = "terminal-session"
 
 # The names the app allocates, ``terminal-<N>``, whose titles derive back from the number ("Terminal 3").
 TERMINAL_NAME_PREFIX: Final[str] = "terminal"
-_NUMBERED_TERMINAL_PATTERN: Final[re.Pattern[str]] = re.compile(rf"^{TERMINAL_NAME_PREFIX}-([0-9]+)$")
-_ALLOCATED_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(rf"^{TERMINAL_NAME_PREFIX}-(?P<number>[1-9][0-9]*)$")
+_NUMBERED_TERMINAL_PATTERN: Final[re.Pattern[str]] = re.compile(
+    rf"^{TERMINAL_NAME_PREFIX}-([0-9]+)$"
+)
+_ALLOCATED_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
+    rf"^{TERMINAL_NAME_PREFIX}-(?P<number>[1-9][0-9]*)$"
+)
 
 # The ttyd URL arguments, in the order the dispatch reads them: ``_`` lands in ``$0`` of the
 # ``bash -c`` dispatch snippet, ``session`` selects the dispatch script, then the script's own
@@ -181,7 +185,12 @@ def pty_path_for_session(name: TmuxSessionName, workdir: Workdir | None) -> str:
     """The path on the pty origin that attaches to ``name``: the ttyd argument shape the dispatch reads. The workdir
     argument is always sent (empty for none), so the viewer marker a wrapper appends (``VIEWER_ARGUMENT``) is
     always the session script's third argument."""
-    arguments = [_URL_ARGUMENT_PLACEHOLDER, SESSION_DISPATCH_KEY, name, workdir if workdir is not None else ""]
+    arguments = [
+        _URL_ARGUMENT_PLACEHOLDER,
+        SESSION_DISPATCH_KEY,
+        name,
+        workdir if workdir is not None else "",
+    ]
     query = "&".join(
         f"{_URL_ARGUMENT_KEY}={urllib.parse.quote(argument, safe='')}"
         for argument in arguments

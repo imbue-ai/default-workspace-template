@@ -702,10 +702,13 @@ describe("opening", () => {
     expect(store.getState().desktops[0].windows[0].path).toBe("/new?message=hi");
   });
 
-  it("shell:start-with-text runs the primary text action, and says so when there is none", async () => {
+  it("shell:start-with-text runs the primary text action, and answers its failure without a toast", async () => {
     const store = await startedStore();
-    expect(await store.startWithText("hello")).toBe(false);
-    expect(last(notices())).toBe("No app in this workspace can start a chat");
+    expect(await store.startWithText("hello")).toEqual({
+      isOpened: false,
+      failure: { message: "No app in this workspace can start a chat.", details: null, isReportable: false },
+    });
+    expect(notices()).toEqual([]);
     socket.deliver().onAppsUpdated([
       appRecord("docs", { launcher_rank: 20 }),
       appRecord("notes", {
@@ -716,7 +719,7 @@ describe("opening", () => {
         ],
       }),
     ]);
-    expect(await store.startWithText("hello")).toBe(true);
+    expect(await store.startWithText("hello")).toEqual({ isOpened: true });
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
       `launch:home:notes:new:{"message":"hello"}:new`,
     );
@@ -945,6 +948,34 @@ describe("opening", () => {
     await settle();
     expect(notices()).toEqual(["That window is no longer here, so nothing was changed. Try again."]);
     expect(api.calls.filter((call) => call === "fetchInventory")).toHaveLength(readsBefore + 1);
+  });
+
+  it("shows the free-up-space agent as pending until its send settles, and toasts a refused one", async () => {
+    const store = await startedStore();
+    offerApps(api, socket, [
+      appRecord("buddy", {
+        display_name: "Buddy",
+        launch_paths: [launchPathRecord({ id: "main", path: "/main", params: ["message"], text_param: "message" })],
+      }),
+    ]);
+    api.refusal = shellRefusal(
+      500,
+      "cannot write shell state file desktops.json: [Errno 28] No space left on device",
+      "This workspace is out of space, so your change could not be saved.",
+      "out_of_space",
+    );
+    await store.openWindowAt("docs", "/x", "new");
+    const [ask] = store.toasts.current()[0].actions;
+    api.refusal = refusedWith(400, { detail: "buddy refused the launch: no account is signed in" });
+
+    ask.run();
+    expect(ask.pending?.isPending()).toBe(true);
+    await settle();
+    expect(ask.pending?.isPending()).toBe(false);
+    expect(store.toasts.current().map((toast) => [toast.message, toast.details])).toContainEqual([
+      "Buddy couldn't open that.",
+      "HTTP 400\nbuddy refused the launch: no account is signed in",
+    ]);
   });
 
   it("offers an agent and a second try when a change could not be saved for want of space", async () => {

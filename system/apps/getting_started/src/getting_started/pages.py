@@ -104,21 +104,29 @@ rebuild it</button></p>
         const failure = document.getElementById("ask-agent-failure");
         const failureDetails = document.getElementById("ask-agent-failure-details");
         const askLabel = ask.textContent;
-        // Until the shell says the agent's chat is up (or why it is not), the button says the ask is out.
+        const show = (outcome) => {
+          failure.hidden = outcome.isOpened;
+          failureDetails.hidden = outcome.isOpened || outcome.failure.details === null;
+          if (outcome.isOpened) return;
+          failure.textContent = outcome.failure.message;
+          failureDetails.textContent = outcome.failure.details ?? "";
+        };
+        let presses = 0;
+        // Until the shell says the agent's chat is up (or why it is not), the button says the ask is out. An answer
+        // that comes after the ask was settled as not answered (the shell restarted) replaces what is shown, unless
+        // the button was pressed again since.
         ask.addEventListener("click", async () => {
+          presses += 1;
+          const press = presses;
           ask.disabled = true;
           ask.textContent = "Asking an agent\u2026";
-          failure.hidden = true;
-          failureDetails.hidden = true;
-          const outcome = await shell.startNewWithText(__REBUILD_REQUEST__);
+          show({ isOpened: true });
+          const outcome = await shell.startNewWithText(__REBUILD_REQUEST__, (late) => {
+            if (press === presses) show(late);
+          });
           ask.disabled = false;
           ask.textContent = askLabel;
-          if (!outcome.isOpened) {
-            failure.textContent = outcome.failure.message;
-            failure.hidden = false;
-            failureDetails.textContent = outcome.failure.details ?? "";
-            failureDetails.hidden = outcome.failure.details === null;
-          }
+          show(outcome);
         });
       })
       .catch((error) => console.warn("[getting-started] could not load the shell contract", error));

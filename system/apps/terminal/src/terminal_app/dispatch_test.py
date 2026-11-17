@@ -25,7 +25,9 @@ from terminal_app.pty_page import PTY_PAGE_SCRIPT
 
 _COMMANDS_DIR = Path("/home/user/workspace/data/.state/terminal/commands")
 _SESSIONS_DIR = Path("/home/user/workspace/data/.state/terminal/sessions")
-_OOM_TAG_SCRIPT = Path("/home/user/workspace/system/services/oom_priority/bin/oom_tag_service.py")
+_OOM_TAG_SCRIPT = Path(
+    "/home/user/workspace/system/services/oom_priority/bin/oom_tag_service.py"
+)
 
 
 def test_dispatch_snippet_runs_the_keyed_script_under_the_commands_directory() -> None:
@@ -46,7 +48,9 @@ exit 1
 """)
 
 
-def test_agent_script_attaches_to_the_prefixed_agent_session_as_a_viewer_when_marked() -> None:
+def test_agent_script_attaches_to_the_prefixed_agent_session_as_a_viewer_when_marked() -> (
+    None
+):
     assert render_agent_script() == snapshot("""\
 #!/bin/bash
 # Attach to a mngr agent's tmux session window 0.
@@ -145,10 +149,15 @@ exec tmux new-session -A -s "$SESSION_NAME" "${WORKDIR_ARGS[@]}" python3 /home/u
 """)
 
 
-def _tmux_on(socket_path: Path, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+def _tmux_on(
+    socket_path: Path, arguments: list[str]
+) -> subprocess.CompletedProcess[str]:
     """Run ``tmux`` against the test's own server, by the socket the script under test resolves to."""
     return subprocess.run(
-        ["tmux", "-S", str(socket_path), *arguments], capture_output=True, text=True, timeout=15.0
+        ["tmux", "-S", str(socket_path), *arguments],
+        capture_output=True,
+        text=True,
+        timeout=15.0,
     )
 
 
@@ -159,16 +168,34 @@ def test_a_viewer_of_a_lost_session_never_lands_on_one_whose_name_merely_starts_
     ``terminal-1`` would read somebody else's terminal; the viewer branch names the session exactly and fails
     instead (it never creates one). Probed on a private tmux server."""
     script = tmp_path / "session.sh"
-    script.write_text(render_session_script(tmp_path / "sessions", tmp_path / "oom_tag_service.py"))
-    started = _tmux_on(private_tmux_socket, ["new-session", "-d", "-s", "terminal-10", "sleep", "36281"])
+    script.write_text(
+        render_session_script(tmp_path / "sessions", tmp_path / "oom_tag_service.py")
+    )
+    started = _tmux_on(
+        private_tmux_socket,
+        ["new-session", "-d", "-s", "terminal-10", "sleep", "36281"],
+    )
     assert started.returncode == 0, started.stderr
     try:
         # The prefix match the exact target guards against: the bare name finds terminal-10, the exact one does not.
-        assert _tmux_on(private_tmux_socket, ["has-session", "-t", "terminal-1"]).returncode == 0
-        assert _tmux_on(private_tmux_socket, ["has-session", "-t", "=terminal-1"]).returncode != 0
+        assert (
+            _tmux_on(
+                private_tmux_socket, ["has-session", "-t", "terminal-1"]
+            ).returncode
+            == 0
+        )
+        assert (
+            _tmux_on(
+                private_tmux_socket, ["has-session", "-t", "=terminal-1"]
+            ).returncode
+            != 0
+        )
 
         attached = subprocess.run(
-            ["bash", str(script), "terminal-1", "", "view"], capture_output=True, text=True, timeout=15.0
+            ["bash", str(script), "terminal-1", "", "view"],
+            capture_output=True,
+            text=True,
+            timeout=15.0,
         )
     finally:
         _tmux_on(private_tmux_socket, ["kill-session", "-t", "=terminal-10"])
@@ -226,21 +253,32 @@ def test_install_writes_executable_scripts_and_keeps_an_existing_workdir_script(
     scripts = {path.name: path for path in terminal_paths.commands_dir.iterdir()}
     assert sorted(scripts) == ["agent.sh", "session.sh", "workdir.sh"]
     assert scripts["agent.sh"].read_text() == render_agent_script()
-    assert scripts["session.sh"].read_text() == render_session_script(terminal_paths.sessions_dir, _OOM_TAG_SCRIPT)
+    assert scripts["session.sh"].read_text() == render_session_script(
+        terminal_paths.sessions_dir, _OOM_TAG_SCRIPT
+    )
     assert scripts["workdir.sh"].read_text() == "#!/bin/bash\n# customised\n"
     for script in scripts.values():
         assert script.stat().st_mode & stat.S_IXUSR
 
 
-def test_install_ttyd_web_client_decompresses_the_patched_client(tmp_path: Path) -> None:
+def test_install_ttyd_web_client_decompresses_the_patched_client(
+    tmp_path: Path,
+) -> None:
     destination = tmp_path / "commands" / "index.html"
     destination.parent.mkdir()
 
-    assert install_ttyd_web_client(gzip.compress(b"<html>patched client</html>"), destination) is True
+    assert (
+        install_ttyd_web_client(
+            gzip.compress(b"<html>patched client</html>"), destination
+        )
+        is True
+    )
     assert destination.read_bytes() == b"<html>patched client</html>"
 
 
-def test_install_ttyd_web_client_adds_the_phone_key_script_before_the_body_closes(tmp_path: Path) -> None:
+def test_install_ttyd_web_client_adds_the_phone_key_script_before_the_body_closes(
+    tmp_path: Path,
+) -> None:
     destination = tmp_path / "index.html"
     client = b"<html><body><p>a</p></body><!-- </body> in a comment --></body></html>"
 
@@ -253,7 +291,9 @@ def test_install_ttyd_web_client_adds_the_phone_key_script_before_the_body_close
     )
 
 
-def test_the_packaged_client_is_installed_with_the_phone_key_script(tmp_path: Path) -> None:
+def test_the_packaged_client_is_installed_with_the_phone_key_script(
+    tmp_path: Path,
+) -> None:
     compressed_client = load_ttyd_web_client(None)
     assert compressed_client is not None
     destination = tmp_path / "index.html"
@@ -268,12 +308,19 @@ def test_the_packaged_client_is_installed_with_the_phone_key_script(tmp_path: Pa
     assert installed.replace(script, b"") == gzip.decompress(compressed_client)
 
 
-def test_a_client_with_no_body_close_is_installed_as_it_is_with_a_warning(tmp_path: Path) -> None:
+def test_a_client_with_no_body_close_is_installed_as_it_is_with_a_warning(
+    tmp_path: Path,
+) -> None:
     destination = tmp_path / "index.html"
     captured: list[str] = []
     sink_id = logger.add(lambda message: captured.append(str(message)), level="WARNING")
     try:
-        assert install_ttyd_web_client(gzip.compress(b"<html>no body close</html>"), destination) is True
+        assert (
+            install_ttyd_web_client(
+                gzip.compress(b"<html>no body close</html>"), destination
+            )
+            is True
+        )
     finally:
         logger.remove(sink_id)
 
@@ -282,7 +329,9 @@ def test_a_client_with_no_body_close_is_installed_as_it_is_with_a_warning(tmp_pa
     assert "without the phone keys" in captured[0]
 
 
-def test_install_ttyd_web_client_falls_back_when_the_archive_will_not_decompress(tmp_path: Path) -> None:
+def test_install_ttyd_web_client_falls_back_when_the_archive_will_not_decompress(
+    tmp_path: Path,
+) -> None:
     destination = tmp_path / "index.html"
     good = gzip.compress(b"<html>patched client</html>" * 100)
     broken_archives = {
@@ -296,7 +345,9 @@ def test_install_ttyd_web_client_falls_back_when_the_archive_will_not_decompress
         assert not destination.exists(), name
 
 
-def test_load_ttyd_web_client_reads_the_packaged_client_when_no_override_is_given() -> None:
+def test_load_ttyd_web_client_reads_the_packaged_client_when_no_override_is_given() -> (
+    None
+):
     # The terminal serves the OSC 52-capable client the imbue-mngr-ttyd package ships; a
     # decompressible archive is what install_ttyd_web_client is then handed.
     compressed_client = load_ttyd_web_client(None)
@@ -305,7 +356,9 @@ def test_load_ttyd_web_client_reads_the_packaged_client_when_no_override_is_give
     assert gzip.decompress(compressed_client).startswith(b"<!DOCTYPE html>")
 
 
-def test_load_ttyd_web_client_reports_an_override_that_is_not_there(tmp_path: Path) -> None:
+def test_load_ttyd_web_client_reports_an_override_that_is_not_there(
+    tmp_path: Path,
+) -> None:
     assert load_ttyd_web_client(tmp_path / "absent.gz") is None
 
 

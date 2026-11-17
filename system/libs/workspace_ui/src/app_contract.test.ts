@@ -24,6 +24,7 @@ import {
   SHELL_START_NEW_WITH_TEXT,
   SHELL_START_NEW_WITH_TEXT_RESULT,
   SHELL_START_WITH_TEXT,
+  SHELL_START_WITH_TEXT_RESULT,
   CHANGE_NOT_ANSWERED_SENTENCE,
   SHELL_THEME,
   ShellContractError,
@@ -33,7 +34,7 @@ import {
   followShellTheme,
   reportedFailureOf,
 } from "./app_contract";
-import type { ShellConnection } from "./app_contract";
+import type { ShellConnection, StartNewOutcome } from "./app_contract";
 
 const HANDSHAKE = {
   type: SHELL_HANDSHAKE,
@@ -42,6 +43,7 @@ const HANDSHAKE = {
   desktopId: "home",
   app: "chat",
   path: "/?chat=agent-1",
+  shellId: "shell-1",
 };
 
 let connection: ShellConnection | null = null;
@@ -104,6 +106,7 @@ describe("connectToShell", () => {
       canReportBug: false,
       opensLocalFiles: false,
       isViewing: false,
+      shellId: "shell-1",
     });
     expect(handlers.onShown).toHaveBeenCalledTimes(1);
     expect(handlers.onHidden).toHaveBeenCalledTimes(1);
@@ -133,6 +136,7 @@ describe("connectToShell", () => {
       canReportBug: false,
       opensLocalFiles: false,
       isViewing: false,
+      shellId: "",
     });
   });
 
@@ -229,7 +233,7 @@ describe("connectToShell", () => {
       [{ type: SHELL_LOCATION, path: "/docs", title: "Docs" }, "*"],
       [{ type: SHELL_OPEN, path: "/?chat=agent-3", ifPresent: "focus" }, "*"],
       [{ type: SHELL_OPEN, path: "/new", ifPresent: "new" }, "*"],
-      [{ type: SHELL_START_WITH_TEXT, text: "Free up space." }, "*"],
+      [{ type: SHELL_START_WITH_TEXT, text: "Free up space.", requestId: expect.any(String) }, "*"],
       [{ type: SHELL_START_NEW_WITH_TEXT, text: "Fix this.", requestId: expect.any(String) }, "*"],
       [{ type: SHELL_DRAFT_TEXT, text: "Explain this element:" }, "*"],
       [{ type: SHELL_MESSAGE, message: { type: "open:file", path: "/home/user/plan.md" } }, "*"],
@@ -679,15 +683,62 @@ describe("startNewWithText's answer", () => {
     expect(await second).toEqual({ isOpened: false, failure });
   });
 
-  it("settles a request the shell never answered as not answered once a fresh handshake arrives", async () => {
+  it("keeps a request pending through the same shell's handshakes, and settles it on the answer", async () => {
+    const parent = shellFramed();
+    const pending = (connection as ShellConnection).startNewWithText("Fix this.");
+    const requestId = lastRequestId(parent);
+    // The shell greets a page again when the embedder says it opens a bug report, a window moves, viewing changes.
+    deliver({ ...HANDSHAKE, canReportBug: true }, parent);
+    deliver({ ...HANDSHAKE, desktopId: "work", isViewing: true }, parent);
+    expect(await settledValue(pending)).toBe("pending");
+    deliver({ type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId, isOpened: true }, parent);
+    expect(await pending).toEqual({ isOpened: true });
+  });
+
+  it("answers startWithText the same way, through shell:start-with-text-result, late answers included", async () => {
+    const parent = shellFramed();
+    const live = connection as ShellConnection;
+    const late: StartNewOutcome[] = [];
+    const asked = live.startWithText("Free up space.", (outcome) => late.push(outcome));
+    const [message] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect(message).toMatchObject({ type: SHELL_START_WITH_TEXT, text: "Free up space." });
+    deliver({ ...HANDSHAKE, canReportBug: true }, parent);
+    expect(await settledValue(asked)).toBe("pending");
+    deliver({ ...HANDSHAKE, shellId: "shell-2" }, parent);
+    expect((await asked).isOpened).toBe(false);
+    const failure = { message: "Chat couldn't open that.", details: "HTTP 400", isReportable: false };
+    deliver({ type: SHELL_START_WITH_TEXT_RESULT, requestId: message.requestId, isOpened: false, failure }, parent);
+    expect(late).toEqual([{ isOpened: false, failure }]);
+
+    const second = live.startWithText("Free up space.");
+    const [again] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    deliver({ type: SHELL_START_WITH_TEXT_RESULT, requestId: again.requestId, isOpened: true }, parent);
+    expect(await second).toEqual({ isOpened: true });
+  });
+
+  it("settles a request as not answered once a shell that started again greets the page", async () => {
     const parent = shellFramed();
     const pending = (connection as ShellConnection).startNewWithText("Fix this.");
     expect(await settledValue(pending)).toBe("pending");
-    deliver(HANDSHAKE, parent);
+    deliver({ ...HANDSHAKE, shellId: "shell-2" }, parent);
     expect(await pending).toEqual({
       isOpened: false,
       failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isReportable: false },
     });
+  });
+
+  it("hands a late answer to a request already settled as not answered to its late-answer callback", async () => {
+    const parent = shellFramed();
+    const late: StartNewOutcome[] = [];
+    const pending = (connection as ShellConnection).startNewWithText("Fix this.", (outcome) => late.push(outcome));
+    const requestId = lastRequestId(parent);
+    deliver({ ...HANDSHAKE, shellId: "shell-2" }, parent);
+    expect((await pending).isOpened).toBe(false);
+    expect(late).toEqual([]);
+
+    deliver({ type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId, isOpened: true }, parent);
+    deliver({ type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId, isOpened: true }, parent);
+    expect(late).toEqual([{ isOpened: true }]);
   });
 
   it("settles a pending request as not answered once the page disconnects", async () => {

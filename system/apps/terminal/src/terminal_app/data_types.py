@@ -31,7 +31,9 @@ class TmuxSession(FrozenModel):
 class TerminalSessionRecord(FrozenModel):
     """What the app remembers about a terminal beyond tmux: that it exists, what the user named it, and where its shell starts."""
 
-    name: TmuxSessionName = Field(description="The tmux session name, which is the terminal's name")
+    name: TmuxSessionName = Field(
+        description="The tmux session name, which is the terminal's name"
+    )
     title: TerminalTitle | None = Field(
         description="The title the user gave it; None when the title derives from the name"
     )
@@ -59,7 +61,9 @@ class TerminalSessionRecord(FrozenModel):
 class TerminalListing(FrozenModel):
     """One terminal as the app lists it: a live session, or a remembered one tmux no longer has."""
 
-    name: TmuxSessionName = Field(description="The terminal's name, which is its tmux session name")
+    name: TmuxSessionName = Field(
+        description="The terminal's name, which is its tmux session name"
+    )
     title: TerminalTitle = Field(description="What its window is called")
     is_stopped: bool = Field(description="Whether no live session backs it")
     last_activity: AwareDatetime | None = Field(

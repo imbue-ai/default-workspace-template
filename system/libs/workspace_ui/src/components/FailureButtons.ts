@@ -1,6 +1,12 @@
 import m from "mithril";
 import { askAgentToFix } from "../app_contract";
-import type { AgentFixRequest, ReportedFailure, ShellConnection, ShownFailure } from "../app_contract";
+import type {
+  AgentFixRequest,
+  ReportedFailure,
+  ShellConnection,
+  ShownFailure,
+  StartNewOutcome,
+} from "../app_contract";
 import { REPORT_A_BUG_LABEL } from "../models/failure";
 import { Button } from "./Button";
 import type { ButtonOptions, ButtonVariant } from "./Button";
@@ -24,25 +30,35 @@ interface FailureButtonOptions extends Pick<ButtonOptions, "sm" | "extra"> {
 
 export interface AskAgentToFixButtonAttrs extends FailureButtonOptions {
   /** The page's connection; null before it connects. */
-  readonly connection: Pick<ShellConnection, "hasShell" | "startNewWithText"> | null;
+  readonly connection: Pick<ShellConnection, "hasShell" | "startNewWithText" | "canReportBug" | "reportBug"> | null;
   readonly failure: AgentFixRequest;
 }
 
 /** Nothing without a shell (a page opened on its own, a share visitor holding only this app): no chat can start.
  *  Pressed, it reads "Asking an agent…" and stays disabled until the shell says the chat's window opened or the start
- *  failed; a failure is shown under it, and the button is back for another try. */
+ *  failed; a failure is shown under it, with Report a bug when it asks for one, and the button is back for another
+ *  try. An answer that comes after the press was settled as not answered replaces what is shown. */
 export const AskAgentToFixButton: m.ClosureComponent<AskAgentToFixButtonAttrs> = () => {
   let isAsking = false;
   let failure: ShownFailure | null = null;
+  let latestAsk = 0;
+
+  function show(outcome: StartNewOutcome): void {
+    failure = outcome.isOpened ? null : outcome.failure;
+    m.redraw();
+  }
 
   async function ask(attrs: AskAgentToFixButtonAttrs): Promise<void> {
     if (attrs.connection === null || isAsking) return;
+    latestAsk += 1;
+    const thisAsk = latestAsk;
     isAsking = true;
     failure = null;
-    const outcome = await askAgentToFix(attrs.connection, attrs.failure);
+    const outcome = await askAgentToFix(attrs.connection, attrs.failure, (late) => {
+      if (thisAsk === latestAsk && !isAsking) show(late);
+    });
     isAsking = false;
-    failure = outcome.isOpened ? null : outcome.failure;
-    m.redraw();
+    show(outcome);
   }
 
   return {
@@ -66,6 +82,14 @@ export const AskAgentToFixButton: m.ClosureComponent<AskAgentToFixButtonAttrs> =
           : m("div", { class: `ask-agent-failure ${TEXT_HELPER_SIZE} basis-full`, role: "alert" }, [
               m("p", { class: "ask-agent-failure-message" }, failure.message),
               m(SeeDetails, { details: failure.details }),
+              failure.isReportable
+                ? m(ReportBugButton, {
+                    connection,
+                    failure: { message: failure.message, details: failure.details },
+                    sm: true,
+                    extra: "mt-1",
+                  })
+                : null,
             ]),
       ];
     },

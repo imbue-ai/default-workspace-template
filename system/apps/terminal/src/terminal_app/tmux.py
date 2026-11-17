@@ -18,7 +18,9 @@ from terminal_app.primitives import TmuxSessionId, TmuxSessionName, Workdir
 TMUX_SLOW_SECONDS: Final[float] = 1.0
 TMUX_TIMEOUT_SECONDS: Final[float] = 5.0
 
-SESSIONS_FORMAT: Final[str] = "#{session_name}\t#{session_id}\t#{session_activity}\t#{session_created}"
+SESSIONS_FORMAT: Final[str] = (
+    "#{session_name}\t#{session_id}\t#{session_activity}\t#{session_created}"
+)
 CREATED_SESSION_FORMAT: Final[str] = "#{session_id}\t#{session_created}"
 
 

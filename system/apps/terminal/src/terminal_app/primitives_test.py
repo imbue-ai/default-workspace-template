@@ -18,7 +18,9 @@ from terminal_app.primitives import (
     "value",
     ["terminal-1", "build", "My-Build", "a_b", "x" * MAX_SESSION_NAME_LENGTH, "9"],
 )
-def test_tmux_session_name_accepts_names_tmux_and_the_url_both_allow(value: str) -> None:
+def test_tmux_session_name_accepts_names_tmux_and_the_url_both_allow(
+    value: str,
+) -> None:
     assert TmuxSessionName(value) == value
 
 
@@ -63,7 +65,9 @@ def test_workdir_rejects_empty_and_control_characters() -> None:
         ({"terminal-0", "terminal-01", "build", "terminal-x"}, "terminal-1"),
     ],
 )
-def test_allocate_terminal_name_fills_the_lowest_gap(taken: set[str], expected: str) -> None:
+def test_allocate_terminal_name_fills_the_lowest_gap(
+    taken: set[str], expected: str
+) -> None:
     assert allocate_terminal_name(taken) == expected
 
 
@@ -77,7 +81,9 @@ def test_allocate_terminal_name_fills_the_lowest_gap(taken: set[str], expected: 
         ("My-Build", "My-Build"),
     ],
 )
-def test_derive_terminal_title_matches_the_frontends_derived_name_rule(name: str, expected: str) -> None:
+def test_derive_terminal_title_matches_the_frontends_derived_name_rule(
+    name: str, expected: str
+) -> None:
     assert derive_terminal_title(TmuxSessionName(name)) == expected
 
 
@@ -86,7 +92,10 @@ def test_session_page_path_is_the_wrapper_page_for_the_session() -> None:
 
 
 def test_pty_path_carries_the_ttyd_arguments_in_dispatch_order() -> None:
-    assert pty_path_for_session(TmuxSessionName("terminal-2"), None) == "/?arg=_&arg=session&arg=terminal-2&arg="
+    assert (
+        pty_path_for_session(TmuxSessionName("terminal-2"), None)
+        == "/?arg=_&arg=session&arg=terminal-2&arg="
+    )
 
 
 def test_pty_path_escapes_the_workdir() -> None:

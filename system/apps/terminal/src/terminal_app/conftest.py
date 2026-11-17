@@ -70,12 +70,20 @@ def window_closed_posts() -> list[TmuxSessionName | None]:
 
 
 @pytest.fixture
-def pages_client(session_source: TmuxSessionSource, tmp_path: Path, window_closed_posts: list[TmuxSessionName | None]) -> FlaskClient:
+def pages_client(
+    session_source: TmuxSessionSource,
+    tmp_path: Path,
+    window_closed_posts: list[TmuxSessionName | None],
+) -> FlaskClient:
     """A test client over the wrapper pages, with the pty registered and a built contract module to serve."""
-    registry_path = write_registry_labels(tmp_path / "apps.toml", {"terminal-pty": TEST_PTY_LABEL})
+    registry_path = write_registry_labels(
+        tmp_path / "apps.toml", {"terminal-pty": TEST_PTY_LABEL}
+    )
     contract_path = tmp_path / "app_contract.js"
     contract_path.write_text(TEST_APP_CONTRACT_SOURCE)
-    return build_pages_test_client(session_source, registry_path, contract_path, window_closed_posts)
+    return build_pages_test_client(
+        session_source, registry_path, contract_path, window_closed_posts
+    )
 
 
 @pytest.fixture
@@ -92,7 +100,11 @@ def private_tmux_socket(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     socket_path.parent.mkdir(mode=0o700)
     yield socket_path
     assert str(tmux_tmpdir).startswith("/tmp/dwt-tmux-")
-    subprocess.run(["tmux", "-S", str(socket_path), "kill-server"], capture_output=True, timeout=15.0)
+    subprocess.run(
+        ["tmux", "-S", str(socket_path), "kill-server"],
+        capture_output=True,
+        timeout=15.0,
+    )
     shutil.rmtree(tmux_tmpdir, ignore_errors=True)
 
 

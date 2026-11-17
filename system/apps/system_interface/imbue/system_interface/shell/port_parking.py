@@ -102,8 +102,9 @@ CHANGE_NOT_ANSWERED_SENTENCE: Final[str] = (
 # What a page that could not start offers: a Try again that asks once more, an agent asked to look at it (shown once
 # a shell that frames the page has greeted it, since only a shell can start one; while the shell has not answered the
 # ask it reads "Asking an agent...", and a failed ask is told under it, its details at the top of the page's one "See
-# details"), and the log's command for whoever wants it. A fresh handshake while an ask is out means the shell
-# restarted, so that ask is settled as not answered.
+# details"), and the log's command for whoever wants it. A handshake from a shell with another ``shellId`` means the
+# shell restarted, so an ask still out is settled as not answered (the same shell greets the page again for ordinary
+# reasons); the old shell's answer, if it still comes, replaces that.
 _FAILED_BODY_TEMPLATE: Final[str] = (
     '{sentence}<p><button type="button" id="try-again">Try again</button> '
     '<button type="button" id="ask-agent" hidden>Ask an agent to look at it</button></p>'
@@ -119,28 +120,43 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     'var failureDetails = document.getElementById("ask-agent-failure-details");'
     "var askLabel = ask.textContent;"
     "var pendingId = null;"
+    "var unansweredId = null;"
+    "var shellId = null;"
     "if (window.parent === window) return;"
+    "function show(told) {"
+    "failure.hidden = told === null;"
+    "failureDetails.hidden = told === null || !told.details;"
+    "if (told === null) return;"
+    "failure.textContent = told.message;"
+    'failureDetails.textContent = told.details || "";'
+    "}"
     "function settle(told) {"
     "pendingId = null;"
     "ask.disabled = false;"
     "ask.textContent = askLabel;"
-    "if (told === null) return;"
-    "failure.textContent = told.message;"
-    "failure.hidden = false;"
-    'failureDetails.textContent = told.details || "";'
-    "failureDetails.hidden = !told.details;"
+    "show(told);"
     "}"
     'window.addEventListener("message", function (event) {'
     "if (event.source !== window.parent || !event.data) return;"
-    "if (event.data.type === {handshake}) {"
+    "var data = event.data;"
+    "if (data.type === {handshake}) {"
     "ask.hidden = false;"
-    "if (pendingId !== null) settle({ message: {not_answered}, details: null });"
-    "} else if (event.data.type === {result} && event.data.requestId === pendingId) {"
-    "settle(event.data.isOpened ? null : event.data.failure);"
+    'var greeter = typeof data.shellId === "string" ? data.shellId : "";'
+    "if (shellId !== null && greeter !== shellId && pendingId !== null) {"
+    "unansweredId = pendingId;"
+    "settle({ message: {not_answered}, details: null });"
+    "}"
+    "shellId = greeter;"
+    "} else if (data.type === {result} && data.requestId === pendingId) {"
+    "settle(data.isOpened ? null : data.failure);"
+    "} else if (data.type === {result} && data.requestId === unansweredId) {"
+    "unansweredId = null;"
+    "show(data.isOpened ? null : data.failure);"
     "}"
     "});"
     'ask.addEventListener("click", function () {'
     "if (pendingId !== null) return;"
+    "unansweredId = null;"
     "pendingId = Math.random().toString(16).slice(2) + Date.now().toString(16);"
     "ask.disabled = true;"
     "ask.textContent = {asking};"

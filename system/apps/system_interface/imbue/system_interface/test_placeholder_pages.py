@@ -131,9 +131,11 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         ask = framed.locator("#ask-agent")
         expect(ask).to_have_text("Ask an agent to look at it")
         expect(ask).to_be_hidden()
-        page.evaluate(
-            "document.getElementById('app').contentWindow.postMessage({ type: 'shell:handshake', windowId: 'w' }, '*')"
+        handshake = (
+            "(shellId) => document.getElementById('app').contentWindow.postMessage("
+            "{ type: 'shell:handshake', windowId: 'w', shellId }, '*')"
         )
+        page.evaluate(handshake, "shell-1")
         ask.click()
         page.wait_for_function("window.received.length > 0")
         (asked,) = page.evaluate("window.received")
@@ -162,15 +164,23 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         framed.get_by_text("See details", exact=True).click()
         expect(framed.locator("#ask-agent-failure-details")).to_have_text("HTTP 500\nboom")
 
-        # A fresh handshake while an ask is out (the shell restarted) settles it as not answered.
+        # The same shell greeting the page again (a window moved, Imbue Studio said it opens help) leaves the ask out.
         ask.click()
         expect(framed.locator("#ask-agent-failure")).to_be_hidden()
-        page.evaluate(
-            "document.getElementById('app').contentWindow.postMessage({ type: 'shell:handshake', windowId: 'w' }, '*')"
-        )
+        page.wait_for_function("window.received.length === 2")
+        second = page.evaluate("window.received[1]")
+        page.evaluate(handshake, "shell-1")
+        page.wait_for_timeout(300)
+        expect(ask).to_be_disabled()
+        expect(ask).to_have_text("Asking an agent…")
+        # A greeting from a restarted shell settles it as not answered; the old shell's answer, if it still comes,
+        # replaces that.
+        page.evaluate(handshake, "shell-2")
         expect(ask).to_be_enabled()
         expect(framed.locator("#ask-agent-failure")).to_have_text(
             "The workspace didn't answer, so Imbue Studio can't tell whether this went through."
         )
+        page.evaluate(reply, {"requestId": second["requestId"], "isOpened": True})
+        expect(framed.locator("#ask-agent-failure")).to_be_hidden()
     finally:
         parked.release()

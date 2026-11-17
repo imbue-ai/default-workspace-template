@@ -70,9 +70,12 @@ export const SHELL_INPUT = "shell:input";
 export const SHELL_LOCATION = "shell:location";
 /** App to shell: open another page of this app beside this one. */
 export const SHELL_OPEN = "shell:open";
-/** App to shell: start something with a text (launcher-and-getting-started plan section 3.7): the shell runs its
- *  launcher's primary text action with it, so a page never names the app that takes it. */
+/** App to shell: start something with a text (``{text, requestId}``; launcher-and-getting-started plan section 3.7):
+ *  the shell runs its launcher's primary text action with it, so a page never names the app that takes it, and
+ *  answers with ``shell:start-with-text-result``. */
 export const SHELL_START_WITH_TEXT = "shell:start-with-text";
+/** Shell to app: how a page's ``shell:start-with-text`` went, in ``shell:start-new-with-text-result``'s shape. */
+export const SHELL_START_WITH_TEXT_RESULT = "shell:start-with-text-result";
 /** App to shell: start something new with a text (``{text, requestId}``): the shell runs its launcher's secondary text
  *  action with it (a new chat on a stock machine, where the primary one sends to the main chat), else the primary one
  *  where there is no second, and answers with ``shell:start-new-with-text-result``. */
@@ -167,8 +170,8 @@ export function hasWorkspaceCoordinate(host: string): boolean {
  * What the shell says about the frame it created: the client, the window, its desktop, the app
  * the window belongs to, the path the window is at, whether the shell can open Imbue Studio's bug report, whether
  * the Imbue Studio chrome around the shell opens its settings for the files shared from the user's computer
- * (desktop-interface contracts.md section 7), and whether the window is being viewed on somebody else's desktop.
- * The client id is required; a text field the shell does not send, a page reads as "", and a flag it does not
+ * (desktop-interface contracts.md section 7), whether the window is being viewed on somebody else's desktop, and
+ * which load of the shell page sent it. The client id is required; a text field the shell does not send, a page reads as "", and a flag it does not
  * send, as false.
  */
 export interface ShellHandshake {
@@ -182,6 +185,8 @@ export interface ShellHandshake {
   /** Whether the window is being looked at on somebody else's desktop (the multiplayer spec, section 8.3): the page
    *  is inert there, and one that attaches to something shared (a terminal's tmux session) attaches as a viewer. */
   isViewing: boolean;
+  /** The shell page's load, the same in every handshake it sends: a different one means the shell started again. */
+  shellId: string;
 }
 
 /**
@@ -224,13 +229,14 @@ export interface ShellConnection {
   /** Ask the shell to open a page of this app at a path beside this one. */
   openPath(path: string, ifPresent: OpenIfPresent): void;
   /** Ask the shell to start something with ``text``: its launcher's primary text action (the main chat on a stock
-   *  machine). */
-  startWithText(text: string): void;
+   *  machine). Settles as ``startNewWithText`` does. */
+  startWithText(text: string, onLateAnswer?: (outcome: StartNewOutcome) => void): Promise<StartNewOutcome>;
   /** Ask the shell to start something new with ``text``: its launcher's secondary text action (a new chat on a stock
-   *  machine). Settles on the shell's answer; as not answered at once without a shell, when a fresh handshake
-   *  comes first (the shell started again and forgot the request), and on ``disconnect``, after which no answer is
-   *  heard, so a later call settles at once too. */
-  startNewWithText(text: string): Promise<StartNewOutcome>;
+   *  machine). Settles on the shell's answer; as not answered at once without a shell, when a handshake from a shell
+   *  that started again comes first (it forgot the request), and on ``disconnect``, after which no answer is heard,
+   *  so a later call settles at once too. An answer that arrives after all for a request settled as not answered
+   *  goes to ``onLateAnswer``. */
+  startNewWithText(text: string, onLateAnswer?: (outcome: StartNewOutcome) => void): Promise<StartNewOutcome>;
   /** Whether "Report a bug" would do anything: the shell's latest handshake said ``canReportBug``. */
   canReportBug(): boolean;
   /** Ask the shell to open Imbue Studio's bug report about ``failure``, which the report carries. */
@@ -258,7 +264,7 @@ function optionalString(value: unknown): string {
 }
 
 function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
-  const { clientId, windowId, desktopId, app, path, canReportBug, opensLocalFiles, isViewing } = data;
+  const { clientId, windowId, desktopId, app, path, canReportBug, opensLocalFiles, isViewing, shellId } = data;
   if (typeof clientId !== "string" || clientId === "") return null;
   return {
     clientId,
@@ -269,6 +275,7 @@ function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
     canReportBug: canReportBug === true,
     opensLocalFiles: opensLocalFiles === true,
     isViewing: isViewing === true,
+    shellId: optionalString(shellId),
   };
 }
 
@@ -438,19 +445,34 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
   let hasShell = false;
   let canReportBug = false;
   let isDisconnected = false;
-  const pendingStarts = new Map<string, (outcome: StartNewOutcome) => void>();
+  let shellId: string | null = null;
+  interface PendingStart {
+    readonly settle: (outcome: StartNewOutcome) => void;
+    readonly onLateAnswer: ((outcome: StartNewOutcome) => void) | null;
+  }
+  const pendingStarts = new Map<string, PendingStart>();
+  const startsSettledAsNotAnswered = new Map<string, (outcome: StartNewOutcome) => void>();
 
   function settlePendingStartsAsNotAnswered(): void {
-    const settles = Array.from(pendingStarts.values());
+    const pending = Array.from(pendingStarts.entries());
     pendingStarts.clear();
-    for (const settle of settles) settle(START_NOT_ANSWERED);
+    for (const [requestId, start] of pending) {
+      if (start.onLateAnswer !== null) startsSettledAsNotAnswered.set(requestId, start.onLateAnswer);
+      start.settle(START_NOT_ANSWERED);
+    }
   }
 
-  function startNewWithText(text: string): Promise<StartNewOutcome> {
+  function askToStart(
+    type: string,
+    text: string,
+    onLateAnswer?: (outcome: StartNewOutcome) => void,
+  ): Promise<StartNewOutcome> {
     if (!hasShell || isDisconnected) return Promise.resolve(START_NOT_ANSWERED);
     const requestId = newRequestId();
-    const outcome = new Promise<StartNewOutcome>((resolve) => pendingStarts.set(requestId, resolve));
-    send(SHELL_START_NEW_WITH_TEXT, { text, requestId });
+    const outcome = new Promise<StartNewOutcome>((settle) =>
+      pendingStarts.set(requestId, { settle, onLateAnswer: onLateAnswer ?? null }),
+    );
+    send(type, { text, requestId });
     return outcome;
   }
 
@@ -465,7 +487,8 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
         if (handshake === null) return;
         hasShell = true;
         canReportBug = handshake.canReportBug;
-        settlePendingStartsAsNotAnswered();
+        if (shellId !== null && handshake.shellId !== shellId) settlePendingStartsAsNotAnswered();
+        shellId = handshake.shellId;
         handlers.onHandshake?.(handshake);
         return;
       }
@@ -491,13 +514,19 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
         if (typeof path === "string") handlers.onNavigate?.(path);
         return;
       }
+      case SHELL_START_WITH_TEXT_RESULT:
       case SHELL_START_NEW_WITH_TEXT_RESULT: {
         const requestId = message.requestId;
         if (typeof requestId !== "string") return;
-        const settle = pendingStarts.get(requestId);
-        if (settle === undefined) return;
-        pendingStarts.delete(requestId);
-        settle(readStartNewOutcome(message));
+        const pending = pendingStarts.get(requestId);
+        if (pending !== undefined) {
+          pendingStarts.delete(requestId);
+          pending.settle(readStartNewOutcome(message));
+          return;
+        }
+        const onLateAnswer = startsSettledAsNotAnswered.get(requestId);
+        startsSettledAsNotAnswered.delete(requestId);
+        onLateAnswer?.(readStartNewOutcome(message));
         return;
       }
       default:
@@ -550,8 +579,10 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     focused: () => send(SHELL_FOCUSED, {}),
     location: (path: string, title: string) => send(SHELL_LOCATION, { path, title }),
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
-    startWithText: (text: string) => send(SHELL_START_WITH_TEXT, { text }),
-    startNewWithText,
+    startWithText: (text: string, onLateAnswer?: (outcome: StartNewOutcome) => void) =>
+      askToStart(SHELL_START_WITH_TEXT, text, onLateAnswer),
+    startNewWithText: (text: string, onLateAnswer?: (outcome: StartNewOutcome) => void) =>
+      askToStart(SHELL_START_NEW_WITH_TEXT, text, onLateAnswer),
     canReportBug: () => canReportBug,
     reportBug: (failure: ReportedFailure) =>
       send(SHELL_REPORT_BUG, { message: failure.message, details: failure.details }),
@@ -569,6 +600,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
       if (boundWindow.open === routedOpen) boundWindow.open = nativeOpen;
       isDisconnected = true;
       settlePendingStartsAsNotAnswered();
+      startsSettledAsNotAnswered.clear();
     },
   };
 }
@@ -607,8 +639,9 @@ function agentFixTask({ whatFailed, details }: AgentFixRequest): string {
 export function askAgentToFix(
   starter: Pick<ShellConnection, "startNewWithText">,
   failure: AgentFixRequest,
+  onLateAnswer?: (outcome: StartNewOutcome) => void,
 ): Promise<StartNewOutcome> {
-  return starter.startNewWithText(agentFixTask(failure));
+  return starter.startNewWithText(agentFixTask(failure), onLateAnswer);
 }
 
 /** A failure as a surface shows it: its sentence, what goes behind "See details" (null when nothing), and whether the
@@ -619,7 +652,8 @@ export interface ShownFailure {
   readonly isReportable: boolean;
 }
 
-/** How a ``startNewWithText`` went: the new window opened, or the failure to show where the press was. */
+/** How a ``startWithText`` or ``startNewWithText`` went: the window opened, or the failure to show where the press
+ *  was. */
 export type StartNewOutcome =
   { readonly isOpened: true } | { readonly isOpened: false; readonly failure: ShownFailure };
 

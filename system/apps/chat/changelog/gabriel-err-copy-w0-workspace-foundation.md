@@ -6,6 +6,6 @@ Chat failures without a reason of their own use the workspace's shared sentences
 
 - A declined `/compact`, and a send refused because the chat's account was signed out, carry their reason as a sentence written for people, so the composer shows it as written rather than only saying the message wasn't delivered. The signed-out notice has "See details" too, holding the status.
 
-- The chat list passes a chat page's "Ask an agent to fix this" (`shell:start-new-with-text`), `shell:start-with-text` and "Report a bug" (`shell:report-bug`) up to the desktop, and hands it the desktop's word on whether a bug report can open and the answer to its "Ask an agent to fix this", so a chat's failures can offer both.
+- The chat list passes a chat page's "Ask an agent to fix this" (`shell:start-new-with-text`), `shell:start-with-text` and "Report a bug" (`shell:report-bug`) up to the desktop, and hands it the desktop's word on whether a bug report can open and the answers to its `shell:start-new-with-text` and `shell:start-with-text`, so a chat's failures can offer both.
 
 - Creating a chat, the empty chat list's new chat, reading or applying a message sent from the launcher, and the secret card's submit and decline now read failures through the shared reader.
