@@ -70,7 +70,9 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   learned it can open a bug report gains the button once it does. Pressing a
   button dismisses its toast, except one marked `keepsToast` (a button that
   hands the failure on, "Ask an agent to ...", and "Report a bug"), after
-  which the toast's other buttons still apply. A plain toast may carry
+  which the toast's other buttons still apply. An action with `pending`
+  (`{isPending, label}`) is drawn disabled under `label` while `isPending()`
+  holds, read at each draw. A plain toast may carry
   details too: it then takes presses, shows "See details" and a close
   button, and stays once its details are opened (`ToastQueue.hold`, which
   `Toasts` calls through `onHold`).

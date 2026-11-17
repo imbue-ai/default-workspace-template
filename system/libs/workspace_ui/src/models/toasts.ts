@@ -13,6 +13,9 @@ export interface ToastAction {
    *  which the toast's other buttons (Try again) still apply. A retry or a button that resolves the failure leaves
    *  this unset, and the toast goes. */
   readonly keepsToast?: boolean;
+  /** While ``isPending()`` (read as the toast draws), the button is disabled under ``label`` ("Asking an agent…"):
+   *  what it started has not settled yet. */
+  readonly pending?: { readonly isPending: () => boolean; readonly label: string };
 }
 
 export type ToastOptions =
