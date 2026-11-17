@@ -8,6 +8,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
+import { ONLY_DESKTOP_REASON } from "../model/failures";
 import type { Desktop, DesktopShortcut } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
 import { TourController } from "../model/tour";
@@ -162,6 +163,37 @@ describe("the startup read's Report a bug", () => {
     expect(labels()).toEqual(["Reload", "Report a bug"]);
     failure().querySelectorAll<HTMLButtonElement>(".boot-failure-line-action")[1].click();
     expect(reportBug).toHaveBeenCalledWith({ message, details: "HTTP 500\ninventory unreadable" });
+  });
+});
+
+describe("an overview thumbnail's Delete", () => {
+  function deleteRow(): HTMLElement {
+    store.openOverview();
+    m.redraw.sync();
+    const thumbnail = document.querySelector('[data-overview-desktop="home"]') as HTMLElement;
+    thumbnail.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 }),
+    );
+    m.redraw.sync();
+    return document.body.querySelector('[data-menu-part="menu"] [data-menu-row="delete"]') as HTMLElement;
+  }
+
+  it("is disabled on the only desktop, saying why on hover, and asks nothing when pressed", () => {
+    const row = deleteRow();
+    expect(row.textContent).toBe("Delete desktop...");
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(row.getAttribute("data-hover-tooltip")).toBe(ONLY_DESKTOP_REASON);
+    row.click();
+    expect(store.getOverviewDeletingId()).toBeNull();
+  });
+
+  it("asks to delete a desktop once there is another", () => {
+    socket.deliver().onDesktopsUpdated([...api.desktops, desktopRecord("work")]);
+    const row = deleteRow();
+    expect(row.getAttribute("aria-disabled")).toBeNull();
+    expect(row.getAttribute("data-hover-tooltip")).toBeNull();
+    row.click();
+    expect(store.getOverviewDeletingId()).toBe("home");
   });
 });
 
