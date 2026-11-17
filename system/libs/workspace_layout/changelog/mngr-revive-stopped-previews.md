@@ -1,0 +1,1 @@
+The inventory's app object carries `instance_kind` (`change` or `mock`) for an app whose window shows a preview or a mock's frame, which the shell can start again once it stops; `null` for every other app and from an older shell.

@@ -86,6 +86,8 @@ import type {
   WindowRecord,
   WindowState,
 } from "../model/records";
+import { IDLE_REVIVAL } from "../model/instanceRevival";
+import type { InstanceRevival } from "../model/instanceRevival";
 import { isSameCell, isSameWindowPaths, shortcutKey } from "../model/records";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import { OwnIdMinter, PAGE_ID_PREFIX, REPORT_ID_PREFIX, SAVE_ID_PREFIX, mintHex } from "../model/ownIds";
@@ -141,6 +143,7 @@ import {
   effectiveWindowTitle,
   entryLook,
   findWindow,
+  isAppShownStopped,
   initialDesktopState,
   isAppStoppable,
   isChatOnScreen,
@@ -244,6 +247,7 @@ export interface DesktopApi {
   /** Record the backdrop size this client's desktop layout draws its frames in (section 8.3). */
   reportViewport(clientId: string, viewport: PixelSize): Promise<ClientRecord>;
   quitApp(appName: string): Promise<void>;
+  reviveApp(appName: string): Promise<void>;
   setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord>;
   fetchAvatars(): Promise<AvatarCatalog>;
   selectAvatar(design: string): Promise<void>;
@@ -557,6 +561,8 @@ export class DesktopStore {
   private hasSocketConnected = false;
   // The path each window's page reported last, so a report answered out of order is not applied.
   private readonly latestReportedPaths = new Map<string, string>();
+  /** How starting each stopped preview or UI sketch again stands; an app absent here was never asked, or started. */
+  private readonly revivalByApp = new Map<string, InstanceRevival>();
   /** The one navigation this client asked for itself and has not yet followed (``navigateOwnWindow``). */
   private ownNavigation: OwnNavigation | null = null;
   // Bumped by every desktops record the shell hands over (the bootstrap's read, each broadcast, its answer to a
@@ -2972,8 +2978,34 @@ export class DesktopStore {
     else this.raiseWindow(windowId);
   }
 
+  /** Reload the window's page; a stopped preview or UI sketch, which has no page to reload, is started again. */
   refreshWindow(windowId: string): void {
+    const found = findWindow(this.state, windowId);
+    const app = found === null ? undefined : appByName(this.state, found.window.app);
+    if (app !== undefined && app.instance_kind !== null && isAppShownStopped(this.state, app)) {
+      void this.reviveApp(app.name);
+      return;
+    }
     this.pageDriver?.reload(windowId);
+  }
+
+  /** How starting a stopped preview or UI sketch again stands. */
+  instanceRevival(appName: string): InstanceRevival {
+    return this.revivalByApp.get(appName) ?? IDLE_REVIVAL;
+  }
+
+  /** Start a stopped preview or UI sketch again; its window's page comes back once the inventory says it runs. */
+  async reviveApp(appName: string): Promise<void> {
+    if (this.instanceRevival(appName).kind === "starting") return;
+    this.revivalByApp.set(appName, { kind: "starting" });
+    this.notifyListeners();
+    try {
+      await this.deps.api.reviveApp(appName);
+      this.revivalByApp.delete(appName);
+    } catch (error) {
+      this.revivalByApp.set(appName, { kind: "failed", reason: (error as Error).message });
+    }
+    this.notifyListeners();
   }
 
   /** A page reported where it is; posted to the window's location route when it differs from the stored

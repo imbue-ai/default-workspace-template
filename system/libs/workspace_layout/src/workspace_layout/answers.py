@@ -15,6 +15,7 @@ from app_manifest.manifest import Pin
 from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
+from app_manifest.registry import IsolatedInstanceKind
 from app_manifest.registry import RegistryLaunchPath
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
@@ -142,6 +143,11 @@ class InventoryApp(FrozenModel):
         default=None,
         description="Where the app's Theming submenu stands: on or off for a themeable app, unthemed for an app that "
         "can be made themeable; None for an app that wears the workspace's theme itself or is not themed",
+    )
+    instance_kind: IsolatedInstanceKind | None = Field(
+        default=None,
+        description="What the isolated instance behind the app's window is (a preview of a change, or a mock's frame), "
+        "which the shell can start again once it stops; None for every other app, and from an older shell",
     )
 
 

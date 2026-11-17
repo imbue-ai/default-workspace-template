@@ -78,6 +78,7 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
         "is_running",
         "share_url",
         "theming",
+        "instance_kind",
     }
     assert serialized[1]["pin"] is None
     # Neither app declares [theming], so each offers to be made themeable.

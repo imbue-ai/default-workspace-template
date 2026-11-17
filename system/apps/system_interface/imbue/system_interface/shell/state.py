@@ -124,6 +124,7 @@ from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.errors import PinnedWindowError
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.errors import WindowNotFoundError
+from imbue.system_interface.shell.instance_revival import InstanceReviver
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import DEFAULT_SHARE_DOMAIN_PATH
 from imbue.system_interface.shell.launches import LaunchPoster
@@ -217,6 +218,9 @@ class ShellState(MutableModel):
     )
     update_notice: UpdateNoticeWatch = Field(
         frozen=True, description="The kept rollback point of the last careful-flow apply, watched for the windows"
+    )
+    instance_reviver: InstanceReviver = Field(
+        frozen=True, description="Starts a stopped preview or UI sketch again, for its window's Start button"
     )
     themes: ThemeCatalogLoaderInterface = Field(
         frozen=True, description="The workspace's themes (docs/system/blueprint/workspace-themes/)"
@@ -1221,6 +1225,7 @@ def build_shell_state(
             broadcaster=broadcaster,
         ),
         update_notice=UpdateNoticeWatch(repo_root=repo_root, broadcaster=broadcaster),
+        instance_reviver=InstanceReviver(repo_root=repo_root.resolve()),
         themes=CachingThemeCatalogLoader(repo_root=repo_root.resolve()),
         repo_root=repo_root.resolve(),
         launch_poster=launch_poster if launch_poster is not None else post_launch,

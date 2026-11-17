@@ -56,6 +56,7 @@ from imbue.system_interface.shell.desktop_document import default_shortcut_targe
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION
 from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
+from imbue.system_interface.shell.instance_revival import REVIVE_SCRIPT_REL
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.primitives import PageId
@@ -114,6 +115,8 @@ def registry_row_toml(
     # Each ``show`` message handler as ``(type, show, showing)``.
     shown_message_handlers: Sequence[tuple[str, str, Sequence[str]]] = (),
     theming_mode: str | None = None,
+    # The isolated instance the row's window shows, as ``(name, kind)``.
+    isolated_instance: tuple[str, str] | None = None,
 ) -> str:
     """One ``[[apps]]`` row as ``forward_port.py`` writes it, with the manifest-derived keys the shell reads."""
     lines = [
@@ -144,6 +147,9 @@ def registry_row_toml(
         lines.append(f'window_closed_path = "{window_closed_path}"')
     if theming_mode is not None:
         lines.append(f'theming_mode = "{theming_mode}"')
+    if isolated_instance is not None:
+        instance_name, instance_kind = isolated_instance
+        lines.append(f'isolated_instance = {{ name = "{instance_name}", kind = "{instance_kind}" }}')
     if message_handlers or shown_message_handlers:
         handlers = [f'{{ type = "{kind}", path = "{path}" }}' for kind, path in message_handlers]
         for kind, show, showing in shown_message_handlers:
@@ -579,6 +585,60 @@ def write_stub_update_self_script(repo_root: Path, exit_code: int = 0, rollback_
 
 def read_stub_update_self_calls(repo_root: Path) -> list[dict[str, Any]]:
     path = repo_root / STUB_UPDATE_SELF_CALLS_REL
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line]
+
+
+# Starting a stopped preview or UI sketch again
+
+# Where the stub revive script records each call it took.
+STUB_REVIVE_CALLS_REL: Final[str] = "data/.state/isolated-instances/stub-revive-calls.jsonl"
+
+# A stand-in for ``serve_isolated_instance.py`` that records its argv and working directory and exits as
+# told, saying why on stderr when told to fail; told a port, it first starts a server there in a session of its
+# own, as a revive boots the instance again, and records the server's pid. Written under the test's workspace
+# root so the shell finds it where it finds the real one.
+_STUB_REVIVE_SCRIPT = """\
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+root = Path(__file__).resolve().parents[4]
+calls = root / "{calls_rel}"
+calls.parent.mkdir(parents=True, exist_ok=True)
+if {exit_code} != 0:
+    served_pid = None
+elif {serve_port} is None:
+    served_pid = None
+else:
+    served_pid = subprocess.Popen(
+        [sys.executable, "-m", "http.server", str({serve_port}), "--bind", "127.0.0.1"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    ).pid
+with calls.open("a") as record:
+    record.write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "served_pid": served_pid}}) + "\\n")
+if {exit_code} != 0:
+    sys.exit("revive: port(s) 41234 of 'today-preview' now belong to another process")
+sys.exit(0)
+"""
+
+
+def write_stub_revive_script(repo_root: Path, exit_code: int = 0, serve_port: int | None = None) -> Path:
+    path = repo_root / REVIVE_SCRIPT_REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        _STUB_REVIVE_SCRIPT.format(calls_rel=STUB_REVIVE_CALLS_REL, exit_code=exit_code, serve_port=serve_port)
+    )
+    return path
+
+
+def read_stub_revive_calls(repo_root: Path) -> list[dict[str, Any]]:
+    path = repo_root / STUB_REVIVE_CALLS_REL
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text().splitlines() if line]

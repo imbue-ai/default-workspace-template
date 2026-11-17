@@ -595,6 +595,18 @@ export class FakeDesktopApi implements DesktopApi {
     this.refuse();
   }
 
+  /** What the next revives answer: resolved once ``reviveGate`` (when set) resolves, or rejected with
+   *  ``reviveRefusal``. */
+  reviveGate: Promise<void> | null = null;
+  reviveRefusal: string | null = null;
+
+  async reviveApp(appName: string): Promise<void> {
+    this.calls.push(`reviveApp:${appName}`);
+    this.refuse();
+    if (this.reviveGate !== null) await this.reviveGate;
+    if (this.reviveRefusal !== null) throw new Error(this.reviveRefusal);
+  }
+
   async setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord> {
     const position = presentation.position === null ? "-" : `${presentation.position.x},${presentation.position.y}`;
     this.calls.push(`setEntryPresentation:${clientId}:${app}:${presentation.mode}:${presentation.style}:${position}`);

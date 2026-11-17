@@ -25,6 +25,7 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     sizeMenuTrigger: {},
     isShielded: false,
     isStopped: false,
+    stoppedInstance: null,
     immersive: null,
     onRaise: vi.fn(),
     onControl: vi.fn(),
@@ -196,6 +197,55 @@ describe("Window", () => {
     expect(
       render({ app: appRecord("docs", { is_running: false }), isStopped: false }).querySelector("[data-stopped-app]"),
     ).toBeNull();
+  });
+
+  it("offers a stopped preview's and UI sketch's window a way to start it again or close it", () => {
+    const onStart = vi.fn();
+    const onClose = vi.fn();
+    const stoppedInstance = { revival: { kind: "idle" as const }, onStart, onClose };
+    const preview = render({
+      app: appRecord("today-preview", { is_running: false, program: "", instance_kind: "change" }),
+      isStopped: true,
+      stoppedInstance,
+    }).querySelector("[data-stopped-app]") as HTMLElement;
+    expect(preview.textContent).toContain("This preview stopped.");
+    (preview.querySelector("[data-revive-start]") as HTMLElement).click();
+    (preview.querySelector("[data-revive-close]") as HTMLElement).click();
+    expect([onStart.mock.calls.length, onClose.mock.calls.length]).toEqual([1, 1]);
+    unmountViews();
+    const sketch = render({
+      app: appRecord("inbox-sketch", { is_running: false, program: "", instance_kind: "mock" }),
+      isStopped: true,
+      stoppedInstance,
+    }).querySelector("[data-stopped-app]") as HTMLElement;
+    expect(sketch.textContent).toContain("This UI sketch stopped.");
+  });
+
+  it("holds the start while it is under way, and says why a start failed", () => {
+    const onStart = vi.fn();
+    const app = appRecord("today-preview", { is_running: false, program: "", instance_kind: "change" });
+    const starting = render({
+      app,
+      isStopped: true,
+      stoppedInstance: { revival: { kind: "starting" }, onStart, onClose: vi.fn() },
+    });
+    const button = starting.querySelector("[data-revive-start]") as HTMLElement;
+    expect(button.textContent).toBe("Starting...");
+    button.click();
+    expect(onStart).not.toHaveBeenCalled();
+    unmountViews();
+    const failed = render({
+      app,
+      isStopped: true,
+      stoppedInstance: {
+        revival: { kind: "failed", reason: "It could not be started again: port 41234 is taken" },
+        onStart,
+        onClose: vi.fn(),
+      },
+    });
+    expect(failed.querySelector("[data-revive-failure]")?.textContent).toContain("port 41234 is taken");
+    (failed.querySelector("[data-revive-start]") as HTMLElement).click();
+    expect(onStart).toHaveBeenCalledTimes(1);
   });
 
   it("a double click on the title bar toggles maximize, a click on a control does not", () => {

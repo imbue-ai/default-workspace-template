@@ -41,11 +41,13 @@ from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import message_report
+from imbue.system_interface.shell.testing import read_stub_revive_calls
 from imbue.system_interface.shell.testing import read_stub_update_self_calls
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_rollback_point
+from imbue.system_interface.shell.testing import write_stub_revive_script
 from imbue.system_interface.shell.testing import write_stub_update_self_script
 from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.shell.wallpapers import BUNDLED_WALLPAPERS_DIRNAME
@@ -358,12 +360,13 @@ def test_a_preview_shell_refuses_only_the_verbs_that_reach_the_live_workspace(
             client.post("/api/apps/plain/stop"),
             client.post("/api/apps/plain/start"),
             client.post("/api/apps/plain/quit"),
+            client.post("/api/apps/plain/revive"),
             client.post(
                 "/api/embedder-messages",
                 json={"type": "minds:focus-chat", "client_id": "c1", "payload": {"chatId": "agent-1"}},
             ),
         ]
-    assert [refusal.status_code for refusal in refusals] == [403, 403, 403, 403]
+    assert [refusal.status_code for refusal in refusals] == [403, 403, 403, 403, 403]
     assert all("preview" in refusal.get_json()["detail"] for refusal in refusals)
     assert fake_supervisor.statename_by_program.get("plain") is None
     assert received == []
@@ -3486,3 +3489,66 @@ def test_the_resource_gauge_settings_round_trip_and_are_the_owners_alone(client:
     refused = client.post("/api/resource-gauge/settings", json={"visibility": "when_warning"}, headers=visitor)
     assert refused.status_code == 403
     assert client.get("/api/resource-gauge", headers=visitor).get_json()["settings"] == chosen
+
+
+# Starting a stopped preview or UI sketch again
+
+
+def _stopped_preview_application(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> Flask:
+    """A shell whose registry holds a stopped preview's frame row, a stopped UI sketch's, and a plain app."""
+    registry_path = write_two_app_registry(
+        tmp_path,
+        registry_row_toml("today-preview", "http://localhost:41234", isolated_instance=("today-preview", "change")),
+        registry_row_toml("inbox-sketch", "http://localhost:41235", isolated_instance=("inbox-sketch", "mock")),
+    )
+    prober = FakeLivenessProber()
+    prober.is_running_by_name = {"today-preview": False, "inbox-sketch": False}
+    return shell_application(tmp_path, build_inventory(registry_path, broadcaster, prober=prober), broadcaster)
+
+
+def test_the_inventory_says_which_apps_are_previews_or_ui_sketches(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    client = _stopped_preview_application(tmp_path, broadcaster).test_client()
+
+    kinds = {app["name"]: app["instance_kind"] for app in client.get("/api/inventory").get_json()["apps"]}
+
+    assert (kinds["today-preview"], kinds["inbox-sketch"], kinds["files"]) == ("change", "mock", None)
+
+
+def test_reviving_a_stopped_preview_runs_its_instances_revive_from_the_workspace_root(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    repo_root = tmp_path / "repo"
+    write_stub_revive_script(repo_root)
+    client = _stopped_preview_application(tmp_path, broadcaster).test_client()
+
+    answer = client.post("/api/apps/today-preview/revive")
+
+    assert answer.status_code == 200
+    assert answer.get_json()["name"] == "today-preview"
+    [call] = read_stub_revive_calls(repo_root)
+    assert call["argv"] == ["revive", "--name", "today-preview", "--repo-root", str(repo_root.resolve())]
+    assert Path(call["cwd"]).resolve() == repo_root.resolve()
+
+
+def test_a_revive_that_fails_answers_its_reason(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+    write_stub_revive_script(tmp_path / "repo", exit_code=1)
+    client = _stopped_preview_application(tmp_path, broadcaster).test_client()
+
+    answer = client.post("/api/apps/inbox-sketch/revive")
+
+    assert answer.status_code == 502
+    assert "now belong to another process" in answer.get_json()["detail"]
+
+
+def test_an_app_that_is_no_preview_is_not_revived(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+    repo_root = tmp_path / "repo"
+    write_stub_revive_script(repo_root)
+    client = _stopped_preview_application(tmp_path, broadcaster).test_client()
+
+    answer = client.post("/api/apps/files/revive")
+
+    assert answer.status_code == 400
+    assert "not a preview or a UI sketch" in answer.get_json()["detail"]
+    assert read_stub_revive_calls(repo_root) == []

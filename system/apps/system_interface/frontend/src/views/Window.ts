@@ -25,7 +25,8 @@ import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import type { PixelRect, ResizeEdge } from "../geometry/frames";
 import { RESIZE_EDGES } from "../geometry/frames";
 import { windowChromeZIndex } from "../geometry/stacking";
-import type { AppRecord, WindowRecord, WindowState } from "../model/records";
+import type { InstanceRevival } from "../model/instanceRevival";
+import type { AppRecord, InstanceKind, WindowRecord, WindowState } from "../model/records";
 import { glyph } from "./glyphs";
 import { rectStyle } from "./pixelStyle";
 import { TitleBar } from "./TitleBar";
@@ -89,6 +90,9 @@ export interface WindowAttrs {
    *  the stopped placeholder. A stoppable app's window keeps its page, which the shell's parker answers with a
    *  loading page until the app is up. */
   readonly isStopped: boolean;
+  /** What the stopped placeholder offers for a preview or UI sketch, which can be started again; null for any
+   *  other app. */
+  readonly stoppedInstance: StoppedInstanceActions | null;
   /** Immersive mode's state and verbs for the fullscreen strip; null hides its control. */
   readonly immersive: ImmersiveControls | null;
   readonly onRaise: () => void;
@@ -98,9 +102,88 @@ export interface WindowAttrs {
   readonly chrome: ThemeChrome;
 }
 
+/** What a stopped preview's or UI sketch's placeholder offers: starting it again, closing its window, and how
+ *  the last start went. */
+export interface StoppedInstanceActions {
+  readonly revival: InstanceRevival;
+  readonly onStart: () => void;
+  readonly onClose: () => void;
+}
+
+/** The store verbs a stopped preview's or UI sketch's placeholder drives. */
+export interface StoppedInstanceVerbs {
+  instanceRevival(appName: string): InstanceRevival;
+  reviveApp(appName: string): Promise<void>;
+  closeOrMinimizeWindow(windowId: string): Promise<void>;
+}
+
+/** What the placeholder of window ``windowId`` offers when its app is a preview or UI sketch; null for any other
+ *  app. */
+export function stoppedInstanceActionsOf(
+  verbs: StoppedInstanceVerbs,
+  app: AppRecord | undefined,
+  windowId: string,
+): StoppedInstanceActions | null {
+  if (app === undefined || app.instance_kind === null) return null;
+  return {
+    revival: verbs.instanceRevival(app.name),
+    onStart: () => void verbs.reviveApp(app.name),
+    onClose: () => void verbs.closeOrMinimizeWindow(windowId),
+  };
+}
+
+/** What the user calls the thing an isolated instance shows. */
+export function instanceNoun(kind: InstanceKind): string {
+  return kind === "mock" ? "UI sketch" : "preview";
+}
+
+function stoppedInstancePlaceholder(kind: InstanceKind, actions: StoppedInstanceActions): m.Vnode {
+  const isStarting = actions.revival.kind === "starting";
+  return m(
+    "div",
+    {
+      "data-stopped-app": "",
+      "data-stopped-instance": kind,
+      class: "flex h-full w-full flex-col items-center justify-center gap-3 bg-surface p-6 text-center",
+    },
+    [
+      m("div", { class: "type-label text-primary" }, `This ${instanceNoun(kind)} stopped.`),
+      actions.revival.kind === "failed"
+        ? m(
+            "div",
+            { "data-revive-failure": "", class: "text-(length:--font-size-row) text-faint" },
+            actions.revival.reason,
+          )
+        : null,
+      m("div", { class: "flex gap-2" }, [
+        m(
+          Button,
+          {
+            variant: "primary",
+            sm: true,
+            readonly: isStarting,
+            "data-revive-start": "",
+            onclick: () => {
+              if (!isStarting) actions.onStart();
+            },
+          },
+          isStarting ? "Starting..." : "Start it again",
+        ),
+        m(Button, { variant: "secondary", sm: true, "data-revive-close": "", onclick: actions.onClose }, "Close"),
+      ]),
+    ],
+  );
+}
+
 /** What a window shows in place of its page while the app behind it is stopped and the workspace cannot bring
- *  it back on a request. */
-export function stoppedPlaceholder(app: AppRecord | undefined): m.Vnode {
+ *  it back on a request: for a preview or UI sketch, a way to start it again. */
+export function stoppedPlaceholder(
+  app: AppRecord | undefined,
+  instance: StoppedInstanceActions | null = null,
+): m.Vnode {
+  if (app !== undefined && app.instance_kind !== null && instance !== null) {
+    return stoppedInstancePlaceholder(app.instance_kind, instance);
+  }
   const label = app?.display_name ?? "This app";
   const detail = app !== undefined && app.program !== "" ? "stopped" : "not running (managed outside the workspace)";
   return m(
@@ -236,7 +319,7 @@ export function Window(): m.Component<WindowAttrs> {
                   class: "window-content relative min-h-0 flex-1 [&>*]:pointer-events-auto",
                 },
                 [
-                  isStopped ? stoppedPlaceholder(app) : null,
+                  isStopped ? stoppedPlaceholder(app, attrs.stoppedInstance) : null,
                   // The shield: the press that raises the window (or closes an open menu or the launcher)
                   // lands here rather than in the page, and bubbles to the window's own handler and on to
                   // the document. A right-click here is that press and nothing more: handled, so the

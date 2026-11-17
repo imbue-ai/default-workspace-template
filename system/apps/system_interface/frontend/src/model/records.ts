@@ -224,9 +224,20 @@ export interface AppRecord {
   /** Where the app's Theming submenu stands (docs/system/themeable-apps.md): on or off for a themeable app,
    *  unthemed for an app that can be made themeable, null for an app that wears the theme itself or is not themed. */
   readonly theming: AppTheming | null;
+  /** What the isolated instance behind the app's window is, a preview of a change or a mock's frame, which the
+   *  shell can start again once it stops; null for every other app. */
+  readonly instance_kind: InstanceKind | null;
 }
 
 export type AppTheming = "on" | "off" | "unthemed";
+
+export type InstanceKind = "change" | "mock";
+
+const INSTANCE_KINDS: readonly InstanceKind[] = ["change", "mock"];
+
+function parseInstanceKind(raw: unknown): InstanceKind | null {
+  return INSTANCE_KINDS.find((kind) => kind === raw) ?? null;
+}
 
 const APP_THEMINGS: readonly AppTheming[] = ["on", "off", "unthemed"];
 
@@ -655,6 +666,7 @@ export function parseAppRecord(raw: unknown): AppRecord {
     is_running: record.is_running === true,
     share_url: typeof record.share_url === "string" && record.share_url !== "" ? record.share_url : null,
     theming: parseAppTheming(record.theming),
+    instance_kind: parseInstanceKind(record.instance_kind),
   };
 }
 

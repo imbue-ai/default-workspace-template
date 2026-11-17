@@ -77,6 +77,7 @@ export function appRecord(name: string, overrides: Partial<AppRecord> = {}): App
     is_running: true,
     share_url: null,
     theming: null,
+    instance_kind: null,
     ...overrides,
   };
 }

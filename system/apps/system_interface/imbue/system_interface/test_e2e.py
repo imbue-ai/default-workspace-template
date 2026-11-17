@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -57,10 +59,12 @@ from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
 from imbue.system_interface.shell.testing import files_registry_row
 from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import message_handling_app
+from imbue.system_interface.shell.testing import read_stub_revive_calls
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import running_files
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_rollback_point
+from imbue.system_interface.shell.testing import write_stub_revive_script
 from imbue.system_interface.shell.testing import write_stub_update_self_script
 from imbue.system_interface.shell.tour import OFFER_TOUR_FILENAME
 from imbue.system_interface.testing import build_test_state
@@ -3111,6 +3115,45 @@ def test_a_kept_rollback_point_raises_one_banner_naming_its_apps_and_everything_
 
     expect(page.locator(".update-notice-banner")).to_have_count(0, timeout=15000)
     assert _get_json(f"{e2e_server.base_url}/api/updates/pending") == {"notice": None}
+
+
+_STOPPED_PREVIEW_NAME = "today-preview"
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_stopped_previews_window_starts_it_again_and_shows_its_page(tmp_path: Path, page: Page) -> None:
+    """A preview a workspace restart stopped says so in its window, with no page; Start it again runs the
+    instance's revive from the workspace root, and once the preview answers on its port again the placeholder
+    gives way to the window's page."""
+    preview_port = find_free_port()
+    preview_row = registry_row_toml(
+        _STOPPED_PREVIEW_NAME,
+        f"http://localhost:{preview_port}",
+        display_name="Today (preview)",
+        isolated_instance=(_STOPPED_PREVIEW_NAME, "change"),
+    )
+    with _running_e2e_server(tmp_path, extra_rows=(preview_row,)) as server:
+        write_stub_revive_script(server.repo_root, serve_port=preview_port)
+        _land(page, server)
+        opened = _post_json(
+            f"{server.base_url}/api/desktops/{_HOME_DESKTOP_ID}/windows",
+            {"app": _STOPPED_PREVIEW_NAME, "path": "/", "client_id": _client_id(page)},
+        )
+        window_id = opened["window"]["id"]
+        window = _window(page, window_id)
+        placeholder = window.locator('[data-stopped-instance="change"]')
+        expect(placeholder).to_contain_text("This preview stopped.", timeout=15000)
+        try:
+            placeholder.locator("[data-revive-start]").click()
+
+            expect(placeholder).to_have_count(0, timeout=30000)
+            expect(page.locator(f'iframe[data-live-page="{window_id}"]')).to_be_visible(timeout=15000)
+            (call,) = read_stub_revive_calls(server.repo_root)
+            assert call["argv"][:3] == ["revive", "--name", _STOPPED_PREVIEW_NAME]
+        finally:
+            for call in read_stub_revive_calls(server.repo_root):
+                if call["served_pid"] is not None:
+                    os.killpg(call["served_pid"], signal.SIGKILL)
 
 
 # Past the grace a freshly torn-out pop-out gives the desktop's detach save before writing the detach itself

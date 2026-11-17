@@ -4203,3 +4203,53 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect([...store.viewedOwnerKeys()]).toEqual([]);
   });
 });
+
+describe("a stopped preview or UI sketch", () => {
+  const STOPPED_PREVIEW = appRecord("today-preview", { program: "", is_running: false, instance_kind: "change" });
+
+  async function storeWithStoppedPreview(): Promise<DesktopStore> {
+    api.apps = [appRecord("docs"), STOPPED_PREVIEW];
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-3", "today-preview", "/")],
+      }),
+    ];
+    return startedStore();
+  }
+
+  it("is started again by its window's refresh, once while the start is under way", async () => {
+    const store = await storeWithStoppedPreview();
+    let release: () => void = () => undefined;
+    api.reviveGate = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    store.refreshWindow("win-3");
+    store.refreshWindow("win-3");
+
+    expect(api.calls.filter((call) => call.startsWith("reviveApp"))).toEqual(["reviveApp:today-preview"]);
+    expect(store.instanceRevival("today-preview").kind).toBe("starting");
+    release();
+    await vi.waitFor(() => expect(store.instanceRevival("today-preview").kind).toBe("idle"));
+  });
+
+  it("keeps the shell's reason when it could not be started again", async () => {
+    const store = await storeWithStoppedPreview();
+    api.reviveRefusal = "It could not be started again: port 41234 is taken";
+
+    await store.reviveApp("today-preview");
+
+    expect(store.instanceRevival("today-preview")).toEqual({
+      kind: "failed",
+      reason: "It could not be started again: port 41234 is taken",
+    });
+  });
+
+  it("is not what a running app's refresh asks for", async () => {
+    const store = await storeWithStoppedPreview();
+
+    store.refreshWindow("win-1");
+
+    expect(api.calls.filter((call) => call.startsWith("reviveApp"))).toEqual([]);
+  });
+});
