@@ -47,21 +47,32 @@ existing app, use the `update-app` skill.
   own window and origin.
 - **Ask in the user's terms**, who may not be technical: "should everyone see
   the same list?", never "do we need multi-tenancy?".
+- **After a compaction**, re-read this file, then the reference your current
+  step names.
+
+## Other tasks
+
+- **Renaming an app, or pinning a window of it**: `references/app-manifest.md`.
+- **Removing an app**: the `update-app` skill's "Removing an app or service".
+  This skill's `references/cleanup.md` has the teardown steps it sends you to.
+- **The shared (public) URL** of an app: `references/public-url.md`.
+- **`forward_port.py`'s flags**, for a registration written by hand:
+  `references/forward-port-cli.md`.
+- **The program schema and its logs**:
+  `.agents/shared/references/service-processes.md`.
 
 ## Steps
 
-- **Step 1: Clarify and plan.** *Ends the turn:* wait for approval.
-- **Step 2: Choose the path, the name and the icon.** Wrapping an existing
-  server replaces steps 3 to 5 with `references/wrap-existing-server.md`.
-- **Step 3: Scaffold the app.**
-- **Step 4: Confirm a mock.** *Hard gate; every round ends the turn* until the
-  user explicitly confirms the look and feel.
-- **Step 5: Build the real app**, framed until it is really hooked up.
-- **Step 6: Verify, then show.** *Ends the turn:* ask whether the working app
-  is right.
-- **Step 7: Hand off to the harden pass**, only on the user's explicit
-  confirmation of the working app.
-- **Other tasks** are listed at the end.
+1. Clarify and plan. *Ends the turn:* wait for approval.
+2. Choose the path, the name and the icon. Wrapping an existing server replaces
+   steps 3 to 5 with `references/wrap-existing-server.md`.
+3. Scaffold the app.
+4. Confirm a mock. *Hard gate; every round ends the turn* until the user
+   explicitly confirms the look and feel.
+5. Build the real app, framed until it is really hooked up.
+6. Verify, then show. *Ends the turn:* ask whether the working app is right.
+7. Hand off to the harden pass, only on the user's explicit confirmation of
+   the working app.
 
 ## Step 1: Clarify and plan
 
@@ -245,14 +256,3 @@ path, its name and what it does. The app is on disk and confirmed live, so the
 worker reconstructs nothing and has no gate of its own.
 If the pass changes the look and feel, confirm with the user again before
 calling the work done.
-
-## Other tasks
-
-- **Renaming an app, or pinning a window of it**: `references/app-manifest.md`.
-- **Removing an app**: the `update-app` skill's "Removing an app or service".
-  This skill's `references/cleanup.md` has the teardown steps it sends you to.
-- **The shared (public) URL** of an app: `references/public-url.md`.
-- **`forward_port.py`'s flags**, for a registration written by hand:
-  `references/forward-port-cli.md`.
-- **The program schema and its logs**:
-  `.agents/shared/references/service-processes.md`.

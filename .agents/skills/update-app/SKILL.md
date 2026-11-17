@@ -3,7 +3,7 @@ name: update-app
 description: "Use immediately whenever the user asks to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service, before touching its code. Covers apps (a window the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no window), the workspace's own critical apps (the shell, the chat, the terminal) included. For creating a brand-new app use build-app."
 metadata:
   author: imbue
-  exempt-checks: depth contents
+  exempt-checks: contents
   exempt-reason: awaiting-restructure
 ---
 
@@ -40,11 +40,20 @@ window keeps showing the old page until it is refreshed. The live change loop
   `system/libs/workspace_themes/` (the theme catalog and theme route the same
   three run). A critical app is never edited in the served tree. When the
   change also touches an ordinary app or a skill, those go through that flow
-  with it.
+  with it. That flow has you lead its harden worker yourself: from its step 3,
+  follow `.agents/shared/references/lead-proxy.md` to poll and answer the
+  worker, and `.agents/shared/references/harden-contention.md` when its step 4
+  finds the pass stale.
 - **A new app**: the `build-app` skill.
 - **Arranging windows** (open, place, focus, minimize, close): the
   `manage-desktop` skill.
-- **Removing an app or service**: the last section.
+- **Removing an app or service**: for a service, follow "Removing a service"
+  in `.agents/shared/references/service-processes.md`; for an app, follow
+  `.agents/skills/build-app/references/cleanup.md`, which also drops its
+  registration and its package. Teardown stops at the code and the process.
+  **Leave the data (`data/.apps/<name>/`) in place**: removing an app or
+  service is not license to delete the user's records. Delete the data
+  directory only if the user explicitly asks, and confirm before you do.
 - **An app still framed as a mock** (`workspace-layout list` lists
   `<name>-sketch` in its place): its window is the frame's, so wherever a step
   below says `--refresh` or `--open`, end the call with a `mock_frame.py`
@@ -72,18 +81,19 @@ window keeps showing the old page until it is refreshed. The live change loop
 - **The harden pass comes after the user's feedback, in the background.** Never
   dispatch it in the turn you made the change, and never run the thorough
   tests or the review gates yourself.
+- **After a compaction**, re-read this file, then the reference your current
+  step names. When the change took the careful flow, that is
+  `references/critical-app.md`, whole.
 
 ## Steps
 
-- **Step 1: Size the change.** A larger-scope change is confirmed on a preview
-  first. *Each preview round ends the turn.*
-- **Step 2: One editor at a time.** Take the editing lease.
-- **Step 3: Make the change.**
-- **Step 4: Apply and verify it.** For an app, one call that also does step 5.
-- **Step 5: Show it, and end the turn.** Refresh or open the window, say what
-  changed, release the lease. *Ends the turn.*
-- **Step 6: Harden the change**, only once the user is satisfied.
-- **Removing an app or service.**
+1. Size the change. *Each preview round of a larger-scope change ends the
+   turn.*
+2. One editor at a time.
+3. Make the change.
+4. Apply and verify it.
+5. Show it, and end the turn. *Ends the turn.*
+6. Harden the change, only once the user is satisfied.
 
 ## Step 1: Size the change
 
@@ -156,8 +166,7 @@ the changes are committed, so only *simultaneous* editing needs the lease.
 in-progress `update` or `heal` ticket whose title lists `<name>` among its
 creations, go ahead: your change makes that pass stale. Leave a note on its
 ticket (`tk add-note <id> "..."`) so its owner catches the pass up at merge
-time. The contention rules are in
-`.agents/shared/references/harden-contention.md`.
+time.
 
 ## Step 3: Make the change
 
@@ -205,8 +214,9 @@ definition, and a restart of the whole services agent.
 
 **What you may check depends on who is looking.** With no window open, check
 freely, as a user would and not just "the process is up". With the app already
-on the user's screen, the call above is the whole check, plus the kind that
-cannot touch their view: a `curl`, a health probe, an exit code, a log line.
+on the user's screen, the call above is the whole check (it confirms the
+marker before it refreshes the window), plus the kind that cannot touch their
+view: a `curl`, a health probe, an exit code, a log line.
 The thorough pass is the harden worker's, on its own instance.
 
 ## Step 5: Show it, and end the turn
@@ -243,17 +253,4 @@ Then invoke one skill, once, for the whole change:
 
 Both enforce one pass per creation: if another chat has a pass in flight for
 any creation in yours, they leave a note on its ticket, and that pass catches
-up at merge time to cover both changes
-(`.agents/shared/references/harden-contention.md`).
-
-## Removing an app or service
-
-For a service, follow "Removing a service" in
-`.agents/shared/references/service-processes.md`. For an app, follow
-`.agents/skills/build-app/references/cleanup.md`, which also drops its
-registration and its package.
-
-Teardown stops at the code and the process. **Leave the data
-(`data/.apps/<name>/`) in place**: removing an app or service is not license to
-delete the user's records. Delete the data directory only if the user
-explicitly asks, and confirm before you do.
+up at merge time to cover both changes.

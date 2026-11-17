@@ -7,13 +7,13 @@ anything, and do not put a Python proxy in front of the tool: it adds a hop,
 costs an extra process, and complicates WebSocket and streaming behaviour. The
 name and the icon are step 2's; steps 6 and 7 apply unchanged.
 
-## Contents
+## Steps
 
-- Pick a port and bind loopback
-- Write the manifest
-- Write the program
-- Confirm it is what the user wanted
-- Give the tool the shell contract, if it can take it
+1. Pick a port and bind loopback
+2. Write the manifest
+3. Write the program
+4. Confirm it is what the user wanted
+5. Give the tool the shell contract, if it can take it
 
 ## Pick a port and bind loopback
 

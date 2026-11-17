@@ -9,19 +9,6 @@ adjustments to SKILL.md's ordinary steps, and nothing else changes: the
 standing instructions, the editing lease and the rule that the harden pass
 waits for the user are all SKILL.md's.
 
-Re-read this file after a compaction: it is the whole flow, and a pass runs
-over many turns.
-
-## Contents
-
-- The three adjustments
-- The hard rule
-- Step 1: On entry, take the leases and provision in the background
-- Step 2: The live loop, in the worktree and its preview
-- Step 3: On approval, hand off to a harden worker on the same branch
-- Step 4: Go live: freshness-check, apply, tear down
-- Why this shape
-
 ## The three adjustments
 
 **The whole change takes this flow, not just its critical part.** When the
@@ -59,6 +46,22 @@ from uncommitted edits. Every change is made in the worktree, built and
 previewed there, and landed on the live tree only through the apply once the
 user has approved it and the worker has hardened it. (A heal of a critical app
 is the one exception, and the `heal-creation` skill says what it costs.)
+
+## Why this shape
+
+Caution scales with the recovery path, not the surface. The shell is the
+recovery surface for a broken app; the terminal handover is the floor for a
+broken shell, never something this flow leans on. Code isolation and the
+auto-rollback apply keep the safety while restoring the fast loop, and the kept
+rollback point with its notice gives the user the last word after go-live.
+
+## Steps
+
+1. On entry, take the leases and provision in the background
+2. The live loop, in the worktree and its preview. *Every round ends the
+   turn.*
+3. On approval, hand off to a harden worker on the same branch
+4. Go live: freshness-check, apply, tear down
 
 ## Step 1: On entry, take the leases and provision in the background
 
@@ -137,10 +140,9 @@ real preview (the "janky real edit" of
 ## Step 2: The live loop, in the worktree and its preview
 
 Work entirely inside the worktree. What the change owes (SKILL.md's step 3)
-holds here too, as do the rules for what you write: the `use-ai-integration`
-skill, and a `frontend-design` skill where your harness provides one. The build
-and test mechanics for a critical app are the worker's job at harden time. In
-the live loop you need a clean build, not the full gate.
+holds here too. The build and test mechanics for a critical app are the
+worker's job at harden time. In the live loop you need a clean build, not the
+full gate.
 
 SKILL.md's standing instruction, *verify before the user can see it*, holds
 per round, not just for the first: the preview's window is closed while you
@@ -496,11 +498,3 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    `update-$SLUG` ticket, remove the worktree if it still exists (again without
    `--force`), and release each lease with `tk close <lease-id> "Live edit
    hardened, applied, and torn down."`.
-
-## Why this shape
-
-Caution scales with the recovery path, not the surface. The shell is the
-recovery surface for a broken app; the terminal handover is the floor for a
-broken shell, never something this flow leans on. Code isolation and the
-auto-rollback apply keep the safety while restoring the fast loop, and the kept
-rollback point with its notice gives the user the last word after go-live.
