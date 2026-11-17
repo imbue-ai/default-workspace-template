@@ -195,7 +195,9 @@ def create_app(
         # A gateway client drops dot segments, so `..` would climb out of a computer's file server to the gateway's
         # own API; nothing is reached that way in the workspace either.
         if any(segment in (".", "..") for segment in path.split("/")):
-            return _refusal(f"{path} isn't a path to a file or folder.", 400)
+            return _refusal(
+                "That isn't a path to a file or folder.", 400, detail=f"{path} isn't a path to a file or folder."
+            )
         query = request.args
         try:
             if request.method in ("GET", "HEAD"):

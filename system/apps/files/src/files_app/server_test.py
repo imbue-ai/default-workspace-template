@@ -365,7 +365,11 @@ def test_a_path_that_climbs_with_dot_segments_is_refused(tmp_path: Path) -> None
     client = _app(None, tmp_path)
     (tmp_path / "secret.txt").write_text("outside the root")
     assert client.get("/..%2fsecret.txt").status_code == 400
-    assert client.get("/a/%2e%2e/%2e%2e/secret.txt").status_code == 400
+    climbing = client.get("/a/%2e%2e/%2e%2e/secret.txt")
+    assert climbing.status_code == 400
+    # The sentence names only the cause, as the page names what failed; the path stays under detail.
+    assert climbing.get_json()["user_facing_message"] == "That isn't a path to a file or folder."
+    assert "/a/../../secret.txt" in climbing.get_json()["detail"]
 
 
 def test_the_build_is_served_with_hashed_files_cached_for_good(tmp_path: Path) -> None:
