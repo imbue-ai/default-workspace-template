@@ -1,6 +1,6 @@
 {
   "recipe:1722492dd8b3e081": {
-    "image_id": "im-SvznxidbF1EKZhvp3B22EB",
+    "image_id": "im-2MSPXtPRH1AMIUeKBrUMv2",
     "recipe": {
       "builder": {
         "modal": {
@@ -22,6 +22,6 @@
     },
     "config_path": "offload-modal.toml",
     "offload_version": "0.10.0",
-    "built_at": "2026-11-17T19:09:54Z"
+    "built_at": "2026-11-17T21:57:34Z"
   }
 }
