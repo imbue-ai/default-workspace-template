@@ -200,7 +200,6 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
 
 
 @pure
-@pure
 def _page_content_security_policy(page: str) -> str:
     """The policy a parked page goes out under: its own stylesheet and its own inline script (the could-not-start
     page's buttons), each admitted by hash, and nothing else."""
@@ -212,6 +211,7 @@ def _page_content_security_policy(page: str) -> str:
     )
 
 
+@pure
 def parked_response_bytes(kind: ParkedPageKind, page: str) -> bytes:
     """One complete HTTP/1.1 503 answer carrying ``page``, asking for the kind's own retry and closing the
     connection so nothing is pooled against the parker."""
