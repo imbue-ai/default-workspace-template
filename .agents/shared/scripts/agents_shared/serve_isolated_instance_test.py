@@ -108,6 +108,9 @@ class _RecordingRegistry(mod.Registry):
 
     registered: list[_Registration] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
+    manifest_registrations: list[
+        tuple[str, str, forward_port.ManifestOverrides | None]
+    ] = field(default_factory=list)
     refused: frozenset[str] = frozenset()
 
     def register(
@@ -129,6 +132,15 @@ class _RecordingRegistry(mod.Registry):
 
     def remove(self, repo_root: Path, service_name: str) -> None:
         self.removed.append(service_name)
+
+    def register_manifest(
+        self,
+        repo_root: Path,
+        manifest_path: Path,
+        url: str,
+        overrides: forward_port.ManifestOverrides | None,
+    ) -> None:
+        self.manifest_registrations.append((str(manifest_path), url, overrides))
 
     def by_name(self) -> dict[str, _Registration]:
         return {entry.service_name: entry for entry in self.registered}
@@ -2079,3 +2091,80 @@ def test_revive_boots_a_stopped_frame_again_from_its_record(tmp_path: Path) -> N
     for flag in ("--port", "--kind", "--note", "--inner-service"):
         assert _wrapper_arg(revived_argv, flag) == _wrapper_arg(first_argv, flag)
     assert not runner.killed_pgroup(spawner.detached_pid)
+
+
+_FRAMED_INBOX = mod.FramedAppRegistration(
+    manifest_path="system/apps/inbox/app.toml",
+    url="http://localhost:8123",
+    overrides={"internal": True, "stop_when_no_windows": False},
+)
+
+
+def _frame_of_a_framed_app(
+    tmp_path: Path,
+    runner: _RecordingRunner,
+    registry: _RecordingRegistry,
+    spawner: _FakeSpawner,
+) -> int:
+    return mod.frame(
+        _FRAME_NAME,
+        tmp_path,
+        inner_service="inbox",
+        frame_service_name=_FRAME_NAME,
+        title="Inbox",
+        display_name="Inbox (UI sketch)",
+        kind=FrameKind.MOCK,
+        note="Sample data.",
+        framed_app=_FRAMED_INBOX,
+        runner=runner,
+        registry=registry,
+        http=_FakeHttp(_all_healthy),
+        spawner=spawner,
+        sleeper=lambda _seconds: None,
+    )
+
+
+def test_a_revived_frame_frames_its_app_the_way_it_was_framed(tmp_path: Path) -> None:
+    """After a restart the framed app's own program registers it from its manifest alone; the revive registers it
+    with the frame's overrides again before booting the frame."""
+    spawner = _FakeSpawner()
+    runner = _RecordingRunner(start_times={spawner.detached_pid: "boot"})
+    assert _frame_of_a_framed_app(tmp_path, runner, _RecordingRegistry(), spawner) == 0
+    _restart(runner, spawner)
+    registry = _RecordingRegistry()
+
+    assert _revive(tmp_path, _FRAME_NAME, runner=runner, registry=registry) == 0
+
+    assert registry.manifest_registrations == [
+        (_FRAMED_INBOX.manifest_path, _FRAMED_INBOX.url, _FRAMED_INBOX.overrides)
+    ]
+    assert mod.read_frame(_FRAME_NAME, tmp_path).framed_app == _FRAMED_INBOX
+
+
+def test_a_frame_that_does_not_come_back_leaves_its_app_registered_plainly(
+    tmp_path: Path,
+) -> None:
+    spawner = _FakeSpawner()
+    runner = _RecordingRunner(start_times={spawner.detached_pid: "boot"})
+    assert _frame_of_a_framed_app(tmp_path, runner, _RecordingRegistry(), spawner) == 0
+    _restart(runner, spawner)
+    registry = _RecordingRegistry()
+
+    code = mod.revive(
+        _FRAME_NAME,
+        tmp_path,
+        runner=runner,
+        registry=registry,
+        http=_FakeHttp(lambda _url: 503),
+        spawner=_FakeSpawner(detached_pid=7000),
+        venv_linker=_RecordingVenvLinker(),
+        sleeper=lambda _seconds: None,
+    )
+
+    assert code == 1
+    assert [
+        overrides for _manifest, _url, overrides in registry.manifest_registrations
+    ] == [
+        _FRAMED_INBOX.overrides,
+        None,
+    ]

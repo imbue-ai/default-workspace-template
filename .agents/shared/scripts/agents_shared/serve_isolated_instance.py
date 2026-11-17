@@ -404,6 +404,20 @@ class Registry:
     def remove(self, repo_root: Path, service_name: str) -> None:
         forward_port.remove(forward_port.apps_file(repo_root), service_name)
 
+    def register_manifest(
+        self,
+        repo_root: Path,
+        manifest_path: Path,
+        url: str,
+        overrides: forward_port.ManifestOverrides | None,
+    ) -> None:
+        forward_port.register_manifest(
+            forward_port.apps_file(repo_root),
+            manifest_path,
+            url,
+            overrides=overrides,
+        )
+
 
 class ProbeResult(NamedTuple):
     """One health probe: the status (None when unreachable) and the response body."""
@@ -1380,6 +1394,14 @@ def up(
 FRAME_STATE_KEY = "frame"
 
 
+class FramedAppRegistration(NamedTuple):
+    """How the app a frame shows is registered while it is framed, so a revive registers it that way again."""
+
+    manifest_path: str
+    url: str
+    overrides: forward_port.ManifestOverrides
+
+
 class FrameRecord(NamedTuple):
     """What a frame was booted with, as ``frame()`` takes it: enough to boot it again unchanged."""
 
@@ -1390,6 +1412,16 @@ class FrameRecord(NamedTuple):
     kind: FrameKind
     note: str | None
     inner_path: str
+    # None for a frame that changes nothing about how the app it shows is registered.
+    framed_app: FramedAppRegistration | None = None
+
+
+def _frame_record_json(record: FrameRecord) -> dict[str, object]:
+    framed_app = record.framed_app
+    return {
+        **record._asdict(),
+        "framed_app": framed_app._asdict() if framed_app is not None else None,
+    }
 
 
 def read_frame(name: str, repo_root: Path) -> FrameRecord | None:
@@ -1403,7 +1435,23 @@ def read_frame(name: str, repo_root: Path) -> FrameRecord | None:
         return None
     try:
         recorded = json.loads(state_path.read_text())[FRAME_STATE_KEY]
-        return FrameRecord(**{**recorded, "kind": FrameKind(recorded["kind"])})
+        framed_app = recorded.get("framed_app")
+        return FrameRecord(
+            inner_service=recorded["inner_service"],
+            frame_service_name=recorded["frame_service_name"],
+            title=recorded["title"],
+            display_name=recorded["display_name"],
+            kind=FrameKind(recorded["kind"]),
+            note=recorded["note"],
+            inner_path=recorded["inner_path"],
+            framed_app=FramedAppRegistration(
+                manifest_path=framed_app["manifest_path"],
+                url=framed_app["url"],
+                overrides=framed_app["overrides"],
+            )
+            if framed_app is not None
+            else None,
+        )
     except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as exc:
         raise InstanceError(f"{state_path} records no frame to read: {exc!r}") from exc
 
@@ -1419,7 +1467,7 @@ def _keep_frame_record(repo_root: Path, name: str, record: FrameRecord) -> None:
                     "name": name,
                     "pids": [],
                     "services": [],
-                    FRAME_STATE_KEY: record._asdict(),
+                    FRAME_STATE_KEY: _frame_record_json(record),
                 },
                 indent=2,
             )
@@ -1442,6 +1490,7 @@ def frame(
     kind: FrameKind,
     note: str | None = None,
     inner_path: str = "/",
+    framed_app: FramedAppRegistration | None = None,
     runner: Runner,
     registry: Registry,
     http: HttpClient,
@@ -1533,6 +1582,7 @@ def frame(
         kind=kind,
         note=note,
         inner_path=inner_path,
+        framed_app=framed_app,
     )
     pids: list[int] = []
     # Counted as registered from the start when re-framing a frame that had a port: its
@@ -1570,7 +1620,7 @@ def frame(
             "pid_starts": [runner.process_start_time(pid) for pid in pids],
             "services": services,
             "wrapper_log": str(wrapper_log_path),
-            FRAME_STATE_KEY: record._asdict(),
+            FRAME_STATE_KEY: _frame_record_json(record),
         }
         state_path.write_text(json.dumps(state, indent=2))
     except (InstanceError, OSError) as exc:
@@ -2099,7 +2149,14 @@ def _revive_frame(
         sys.stderr.write(f"revive: {exc}\n")
         return REVIVE_IMPOSSIBLE_EXIT_CODE
     assert record is not None
-    return frame(
+    # The app's own program registered it from its manifest alone when it came back; it is
+    # framed the way the frame's owner framed it, and put back plainly if the frame fails.
+    framed_app = record.framed_app
+    if framed_app is not None and not _register_framed_app(
+        registry, repo_root, framed_app, framed_app.overrides
+    ):
+        return 1
+    code = frame(
         name,
         repo_root,
         inner_service=record.inner_service,
@@ -2109,12 +2166,32 @@ def _revive_frame(
         kind=record.kind,
         note=record.note,
         inner_path=record.inner_path,
+        framed_app=framed_app,
         runner=runner,
         registry=registry,
         http=http,
         spawner=spawner,
         sleeper=sleeper,
     )
+    if code != 0 and framed_app is not None:
+        _register_framed_app(registry, repo_root, framed_app, None)
+    return code
+
+
+def _register_framed_app(
+    registry: Registry,
+    repo_root: Path,
+    framed_app: FramedAppRegistration,
+    overrides: forward_port.ManifestOverrides | None,
+) -> bool:
+    try:
+        registry.register_manifest(
+            repo_root, Path(framed_app.manifest_path), framed_app.url, overrides
+        )
+    except forward_port.RegistryError as exc:
+        sys.stderr.write(f"revive: could not register the framed app again: {exc}\n")
+        return False
+    return True
 
 
 def _add_repo_root_arg(subparser: argparse.ArgumentParser) -> None:

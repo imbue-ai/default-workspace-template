@@ -99,6 +99,11 @@ class Frames:
             kind=FrameKind.MOCK,
             note=note,
             inner_path=inner_path,
+            framed_app=serve_isolated_instance.FramedAppRegistration(
+                manifest_path=str(app.manifest_path),
+                url=app.url,
+                overrides=FRAMED_APP_OVERRIDES,
+            ),
             runner=serve_isolated_instance.Runner(),
             registry=serve_isolated_instance.Registry(),
             http=serve_isolated_instance.HttpClient(),
