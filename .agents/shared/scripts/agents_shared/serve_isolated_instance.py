@@ -744,8 +744,8 @@ def _refuses_registering_from_a_worktree(
     sys.stderr.write(
         f"{verb}: {repo_root} is a git worktree of {main_checkout}, so a window registered "
         f"from here would go into {forward_port.apps_file(repo_root)}, which the workspace "
-        f"never reads, and nobody could open it. Run from {main_checkout} (or pass "
-        f"--repo-root {main_checkout}) to show it to the user{alternative}.\n"
+        f"never reads, and nobody could open it. Pass --repo-root {main_checkout} to "
+        f"show it to the user{alternative}.\n"
     )
     return True
 
@@ -1140,7 +1140,8 @@ def up(
     if service_name is not None and _refuses_registering_from_a_worktree(
         repo_root,
         "up",
-        ", or drop --service-name for an instance only you reach on its loopback port",
+        ", keeping --cwd on the code to run, or drop --service-name for an instance "
+        "only you reach on its loopback port",
     ):
         return 1
     if not _link_project_venv(venv_linker, cwd, project, "up"):

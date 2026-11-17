@@ -1123,7 +1123,7 @@ def test_up_refuses_to_register_an_instance_from_a_worktree(
     assert registry.registered == []
     assert spawner.detached_spawns == []
     assert not _state_path(worktree).exists()
-    assert f"Run from {live.resolve()}" in capsys.readouterr().err
+    assert f"Pass --repo-root {live.resolve()}" in capsys.readouterr().err
 
 
 def test_a_copy_that_would_not_fit_on_disk_fails_the_boot_before_anything_runs(
