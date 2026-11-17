@@ -4256,6 +4256,17 @@ describe("a stopped preview or UI sketch", () => {
     });
   });
 
+  it("forgets a failed start once the app runs again, so its next stop offers Start", async () => {
+    const store = await storeWithStoppedPreview();
+    api.reviveRefusal = "This preview can't be started again. Ask in chat for a new one.";
+    api.isReviveRefusalFinal = true;
+    await store.reviveApp("today-preview");
+
+    offerApps(api, socket, [appRecord("docs"), { ...STOPPED_PREVIEW, is_running: true }]);
+
+    expect(store.instanceRevival("today-preview").kind).toBe("idle");
+  });
+
   it("is not what a running app's refresh asks for", async () => {
     const store = await storeWithStoppedPreview();
 

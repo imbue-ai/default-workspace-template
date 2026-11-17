@@ -1358,6 +1358,7 @@ export class DesktopStore {
   private takeApps(apps: readonly AppRecord[]): void {
     const themingBefore = new Map(this.state.apps.map((app) => [app.name, app.theming]));
     this.dispatch({ type: "apps_updated", apps });
+    this.forgetFailedRevivalsOfRunningApps(apps);
     this.markAppsLoaded();
     for (const app of apps) {
       const before = themingBefore.get(app.name);
@@ -2987,6 +2988,15 @@ export class DesktopStore {
       return;
     }
     this.pageDriver?.reload(windowId);
+  }
+
+  /** A failed start is about the instance that was stopped then: once the app runs again, its next stop starts
+   *  afresh. */
+  private forgetFailedRevivalsOfRunningApps(apps: readonly AppRecord[]): void {
+    const runningNames = new Set(apps.filter((app) => app.is_running).map((app) => app.name));
+    for (const [appName, revival] of this.revivalByApp) {
+      if (revival.kind === "failed" && runningNames.has(appName)) this.revivalByApp.delete(appName);
+    }
   }
 
   /** How starting a stopped preview or UI sketch again stands. */
