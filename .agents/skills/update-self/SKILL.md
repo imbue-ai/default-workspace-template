@@ -781,8 +781,9 @@ are installed instead of a live build; the apply installs them only as a set (on
 That one command is the whole landing: it fast-forwards to the worker's
 branch, refreshes, rebuilds and restarts what the update changed, probes the
 workspace's health, and reverts the entire merge on any failure. What each
-exit code means is in `.agents/shared/references/apply-exit-codes.md`, and what this
-pass does on each in `references/apply-outcomes.md`:
+exit code means is in
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`,
+and what this pass does on each in `references/apply-outcomes.md`:
 
 - **`0` -- applied.** Read its closing stderr lines before signing off.
 - **`2` -- automatically rolled back.** The update did not land and the
@@ -821,8 +822,9 @@ the same command finishes the rest.
 
 The `provision-incomplete` and `emergency.json` records and an interrupted
 apply (re-run the same command; it resumes) are in
-`.agents/shared/references/apply-exit-codes.md`. What each outcome means for the
-user and how to honor a rollback request are in `references/apply-outcomes.md`.
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`.
+What each outcome means for the user and how to honor a rollback request are
+in `references/apply-outcomes.md`.
 
 ### 5c. Carry out the report-driven remainder
 

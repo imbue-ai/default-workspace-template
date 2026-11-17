@@ -4,7 +4,8 @@ What this pass does on each exit of `update_self.py apply`, what to tell the
 user, and which verdict ends the pass. What each exit means for any caller of
 the apply (the closing stderr lines and their follow-ups, the
 `provision-incomplete` and `emergency.json` records, an interrupted apply, the
-phase timings line) is in `.agents/shared/references/apply-exit-codes.md`:
+phase timings line) is in
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`:
 read its section for the exit you got before the one here.
 
 ## Exit 0 -- applied
