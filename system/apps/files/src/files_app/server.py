@@ -121,19 +121,30 @@ def _text(message: str, status: int) -> Response:
     return Response(message, status=status, mimetype="text/plain")
 
 
+def _is_page_asked() -> bool:
+    """Whether the browser is loading a page (a window opening on a path), not the frontend asking for data."""
+    return "text/html" in request.headers.get("Accept", "") and not _NON_PAGE_QUERIES & request.args.keys()
+
+
+def _is_plain_text_asked() -> bool:
+    """Whether a refusal is read as plain text: a download, of a file or a folder's zip, loads in a hidden frame that
+    can read only that (workspace_ui's ``startDownload``), and a page load shows the body as the whole window."""
+    return bool(_DOWNLOAD_QUERIES & request.args.keys()) or _is_page_asked()
+
+
 def _refusal(sentence: str, status: int, kind: str | None = None, detail: str | None = None) -> Response:
     """A refusal as the ``ErrorResponse`` the page reads: ``sentence`` for the person (naming only the cause, as the
     page's own words name what failed), ``kind`` for a page that words the cause itself, ``detail`` for a script (the
-    sentence when there is nothing more to say). A download, of a file or a folder's zip, is answered in plain text
-    instead: it loads in a hidden frame, which can read only that (workspace_ui's ``startDownload``)."""
-    if _DOWNLOAD_QUERIES & request.args.keys():
+    sentence when there is nothing more to say). A download or a page load is answered with the sentence in plain
+    text instead."""
+    if _is_plain_text_asked():
         return _text(sentence, status)
     return error_response(detail or sentence, status, user_facing_message=sentence, kind=kind)
 
 
 def _unexplained_failure(detail: str) -> Response:
     """A failure no sentence explains, which the page asks to have reported: ``detail`` only."""
-    if _DOWNLOAD_QUERIES & request.args.keys():
+    if _is_plain_text_asked():
         return _text(detail, 500)
     return error_response(detail, 500)
 
@@ -184,10 +195,7 @@ def create_app(
 
     def failure(error: FilesError) -> Response:
         """The error in plain words; a page asked for that isn't there is Files' own "not found" page."""
-        is_page_asked = (
-            "text/html" in request.headers.get("Accept", "") and not _NON_PAGE_QUERIES & request.args.keys()
-        )
-        if error.status == 404 and is_page_asked:
+        if error.status == 404 and _is_page_asked():
             response = send_from_directory(static_directory, "404.html", max_age=None)
             response.status_code = 404
             return response

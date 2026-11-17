@@ -351,6 +351,23 @@ def test_a_download_that_cannot_be_read_says_it_cannot_be_opened(tmp_path: Path)
     assert response.get_data(as_text=True) == "You don't have permission to open this."
 
 
+@pytest.mark.skipif(_IS_ROOT, reason="root lists a folder whatever its mode")
+def test_a_window_opened_on_a_folder_that_cannot_be_listed_reads_the_refusal_while_the_frontend_gets_json(
+    tmp_path: Path, unwritable_folder: Path
+) -> None:
+    client = _app(None, tmp_path)
+    unwritable_folder.chmod(0o000)
+
+    page = client.get("/reports/", headers={"Accept": "text/html,*/*"})
+    fetched = client.get("/reports/?json", headers={"Accept": "*/*"})
+
+    assert page.status_code == 403
+    assert page.content_type.startswith("text/plain")
+    assert page.get_data(as_text=True) == "You don't have permission to open this."
+    assert fetched.status_code == 403
+    assert fetched.get_json()["kind"] == "permission_denied"
+
+
 def test_a_move_from_the_workspace_onto_a_computer_is_refused(tmp_path: Path) -> None:
     client = _app(None, tmp_path)
     (tmp_path / "root" / "notes.txt").write_text("a")
