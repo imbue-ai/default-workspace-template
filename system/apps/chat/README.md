@@ -988,7 +988,7 @@ every chat page of the workspace shares for as long as any of them is open; the
 workspace stores and runs nothing for voice. A phone or tablet also runs the
 model on WebAssembly's quantized weights even where it has WebGPU: the
 full-precision ones take three times the memory, more than a phone's browser
-gives a page. While a dictation runs, the page holds a screen wake lock
+gives a page. While a dictation runs or the model's load is shown, the page holds a screen wake lock
 (`frontend/src/models/screenWakeLock.ts`), so a phone's screen does not dim and
 lock mid-sentence while the person speaks without touching it; the lock is best
 effort, asked for again when the page comes back into view, and nothing is said
@@ -1025,15 +1025,17 @@ nothing itself. The mic shows one of six states, named by its
 
 A shown load can be dismissed: a press on the label, a press on the dimmed text
 box (which puts the caret where the press landed), Escape, the mic's shortcut,
-or the page going out of view. Dismissing hands the box back for typing and
-cancels nothing: the load runs on with the mic `load-needed`, and a press shows
+or the page going out of view (a press right behind the one that asked for the
+load is that press landing twice, and dismisses nothing). Dismissing hands the
+box back for typing and cancels nothing: the load runs on with the mic `load-needed`, and a press shows
 it again from where it has got to. A load that ends while shown leaves the mic
 `ready` and gives the text box focus back; one that fails is told in a notice
 over the composer, whose Retry asks again. A load that ends after a dismissal
 turns the mic `ready` with no sound and no notice, and one that fails then says
 nothing. A model loaded from another page of the workspace turns this page's mic
 `ready` as well. Until a page has found out the model's state as its composer
-mounts, the mic is drawn `ready`, so a loaded model never flashes the badge.
+mounts (five seconds at most), the mic is drawn `ready`, so a loaded model never
+flashes the badge.
 
 A problem with the microphone or with words that could not be transcribed is
 told in the same notice. The library is `system/libs/workspace_voice/` (its

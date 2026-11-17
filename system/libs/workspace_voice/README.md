@@ -69,7 +69,7 @@ is the one surface that uses it.
   first, and the dictation transcribes on the page's port to the engine
   worker, which it leaves open when it is disposed.
   `describeSpeechModelLoadError` puts a failed load in the words a composer
-  shows. One dictation runs per workspace: a start anywhere stops the one
+  shows, and `isSpeechModelLoadProblem` tells such a problem from the others. One dictation runs per workspace: a start anywhere stops the one
   running elsewhere.
 - `src/readyChime.ts`: the two short bell tones a composer plays as dictation
   reaches listening, so a user who pressed the mic and looked away knows when
