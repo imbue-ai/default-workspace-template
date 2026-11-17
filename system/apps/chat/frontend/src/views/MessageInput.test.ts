@@ -1199,6 +1199,49 @@ describe("MessageInput send to a chat still being created", () => {
       expect(getOutgoingMessages("agent-1").map((outgoing) => outgoing.id)).toEqual(earlierBubbles);
     });
 
+    it("leaves the box alone when a send's failure comes after the chat's discard put it back", async () => {
+      let refuse: (error: unknown) => void = () => {};
+      mocks.sendMessage.mockImplementationOnce(() => new Promise((_resolve, reject) => (refuse = reject)));
+      const component = MessageInput();
+      const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+      const sending = typeAndSend(component, "agent-1", "hello");
+      await flushAsync();
+
+      discardProvisionalChat({ chat_id: "agent-1", held_sends: [{ message_id: sentMessageId(), text: "hello" }] });
+      render();
+      refuse("nope");
+      await sending;
+
+      const after = render();
+      expect(renderedText(findByClass(after, "modal-message"))).toContain("Your message wasn't delivered.");
+      expect(findByTag(after, "textarea")?.attrs?.value).toBe("hello");
+      expect(findButton(after, "Retry")).toBeUndefined();
+    });
+
+    it("leaves a retried message where it is in the box when the chat's discard comes before the retry's answer", async () => {
+      let answer: (status: string) => void = () => {};
+      mocks.sendMessage
+        .mockRejectedValueOnce("nope")
+        .mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+      const component = MessageInput();
+      const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+      const failed = await typeAndSend(component, "agent-1", "hello");
+      (findButton(failed, "Retry")!.attrs!.onclick as () => void)();
+      await flushAsync();
+      const textarea = findByTag(render(), "textarea");
+      (textarea?.attrs?.oninput as (event: unknown) => void)({
+        target: { value: "and this\n\nhello", style: {}, scrollHeight: 10 },
+      });
+
+      discardProvisionalChat({ chat_id: "agent-1", held_sends: [{ message_id: sentMessageId(), text: "hello" }] });
+      answer("held");
+      await flushAsync();
+
+      const after = render();
+      expect(renderedText(findByClass(after, "modal-message"))).toContain("Your message wasn't delivered.");
+      expect(findByTag(after, "textarea")?.attrs?.value).toBe("and this\n\nhello");
+    });
+
     it("puts a retried message back when the chat is discarded after the chat app held the retry", async () => {
       mocks.sendMessage.mockRejectedValueOnce("nope").mockResolvedValueOnce("held");
       const component = MessageInput();
