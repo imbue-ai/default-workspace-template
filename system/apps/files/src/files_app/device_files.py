@@ -127,7 +127,7 @@ class DeviceFiles:
             raise FilesError(502, UNREACHABLE) from error
         if upstream.status_code == 403:
             upstream.close()
-            raise FilesError(403, "Your computer only shares this to read.")
+            raise FilesError(403, "Your computer only shares this to read.", "shared_read_only")
         return upstream
 
     def _change(self, method: str, path: str, headers: Mapping[str, str], body: Iterator[bytes] | None) -> None:

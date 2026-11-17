@@ -50,7 +50,11 @@ from files_app.gateway import Gateway
 from files_app.keybindings import FILES_APP_NAME
 from files_app.keybindings import files_keybinding_actions
 from files_app.local_files import LocalFiles
+from files_app.local_files import MoveSide
 from files_app.local_files import content_disposition
+from files_app.os_refusals import OsRefusal
+from files_app.os_refusals import WRITE_REFUSAL_KINDS
+from files_app.os_refusals import refusal_for_os_error
 from files_app.sources import FileSource
 from files_app.sources import FilesError
 from files_app.sources import FolderStamps
@@ -71,6 +75,11 @@ _HASHED_ASSET: Final[re.Pattern[str]] = re.compile(r"-[A-Za-z0-9_-]{8}\.(js|css)
 _A_YEAR_IN_SECONDS: Final[int] = 365 * 24 * 60 * 60
 _NO_MOVE_TO_COMPUTER: Final[str] = "Moving isn't supported on files shared from your computer."
 _NO_GATEWAY: Final[str] = "This workspace isn't connected to Imbue Studio, so it can't reach your computers."
+# A move refused for want of write access, by the end that refused it, so the page can say which folder that was.
+_MOVE_REFUSAL_BY_SIDE: Final[dict[MoveSide, OsRefusal]] = {
+    "destination": OsRefusal(403, "destination_not_writable", "The folder it would move into is read-only."),
+    "source": OsRefusal(403, "source_not_writable", "The folder it's in is read-only."),
+}
 # Queries that ask for data or a download rather than a page, so a failure is answered in plain words.
 _NON_PAGE_QUERIES: Final[frozenset[str]] = frozenset({"json", "zip", "download"})
 
@@ -110,13 +119,21 @@ def _text(message: str, status: int) -> Response:
     return Response(message, status=status, mimetype="text/plain")
 
 
-def _refusal(message: str, status: int, is_written_for_people: bool = True) -> Response:
-    """A refusal as the ``ErrorResponse`` the page reads (``detail`` for a script, and the same words as
-    ``user_facing_message`` when they are written for the person), except to a download: that loads in a hidden frame,
-    which can read only plain text (workspace_ui's ``startDownload``)."""
+def _refusal(sentence: str, status: int, kind: str | None = None, detail: str | None = None) -> Response:
+    """A refusal as the ``ErrorResponse`` the page reads: ``sentence`` for the person (naming only the cause, as the
+    page's own words name what failed), ``kind`` for a page that words the cause itself, ``detail`` for a script (the
+    sentence when there is nothing more to say). A download is answered in plain text instead: it loads in a hidden
+    frame, which can read only that (workspace_ui's ``startDownload``)."""
     if "download" in request.args:
-        return _text(message, status)
-    return error_response(message, status, user_facing_message=message if is_written_for_people else None)
+        return _text(sentence, status)
+    return error_response(detail or sentence, status, user_facing_message=sentence, kind=kind)
+
+
+def _unexplained_failure(detail: str) -> Response:
+    """A failure no sentence explains, which the page asks to have reported: ``detail`` only."""
+    if "download" in request.args:
+        return _text(detail, 500)
+    return error_response(detail, 500)
 
 
 def _request_body() -> Iterator[bytes]:
@@ -124,6 +141,11 @@ def _request_body() -> Iterator[bytes]:
         return iter(())
     stream = request.stream
     return iter(lambda: stream.read(_CHUNK), b"")
+
+
+def _destination_path() -> str:
+    """A MOVE's ``Destination`` as a path, decoded."""
+    return urllib.parse.unquote(urllib.parse.urlsplit(request.headers.get("Destination", "")).path)
 
 
 def _requested_path() -> str:
@@ -167,7 +189,7 @@ def create_app(
             response = send_from_directory(static_directory, "404.html", max_age=None)
             response.status_code = 404
             return response
-        return _refusal(error.message, error.status)
+        return _refusal(error.message, error.status, kind=error.kind)
 
     def answer(source: FileSource, prefix: str, path: str) -> Response:
         # A gateway client drops dot segments, so `..` would climb out of a computer's file server to the gateway's
@@ -200,20 +222,24 @@ def create_app(
             if request.method == "DELETE":
                 source.delete(path)
                 return _text("", 204)
-            destination = urllib.parse.unquote(urllib.parse.urlsplit(request.headers.get("Destination", "")).path)
+            destination = _destination_path()
             if prefix == "" and destination.startswith(f"{REMOTE_PREFIX}/"):
                 return _refusal(_NO_MOVE_TO_COMPUTER, 501)
             source.move(path, destination[len(prefix) :])
             return _text("", 201)
         except FilesError as error:
             return failure(error)
-        except PermissionError:
-            return _refusal(f"You don't have permission to change or read {path}.", 403)
         except OSError as error:
-            logger.warning("{} {} failed: {}", request.method, path, error)
-            return _refusal(
-                f"Couldn't do that with {path}: {error.strerror or error}", 500, is_written_for_people=False
-            )
+            detail = f"{request.method} {path}: {error}"
+            refusal = refusal_for_os_error(error)
+            if refusal is None:
+                logger.warning("{} {} failed: {}", request.method, path, error)
+                return _unexplained_failure(detail)
+            if request.method == "MOVE" and isinstance(source, LocalFiles) and refusal.kind in WRITE_REFUSAL_KINDS:
+                side = source.unwritable_side(path, _destination_path()[len(prefix) :])
+                if side is not None:
+                    refusal = _MOVE_REFUSAL_BY_SIDE[side]
+            return _refusal(refusal.sentence, refusal.status, kind=refusal.kind, detail=detail)
 
     @app.get(f"{ASSETS_PREFIX}/<path:name>")
     def asset(name: str) -> Response:

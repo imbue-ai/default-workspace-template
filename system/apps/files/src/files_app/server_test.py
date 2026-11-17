@@ -3,6 +3,7 @@ import io
 import json
 import os
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import httpx
@@ -180,7 +181,7 @@ def test_a_file_asked_for_as_a_download_is_an_attachment_under_its_name_and_a_re
     missing_here = client.get("/missing.zip?download", headers={"Accept": "text/html,*/*"})
     assert missing_here.status_code == 404
     assert missing_here.content_type.startswith("text/plain")
-    assert missing_here.get_data(as_text=True) == "There's nothing at /missing.zip."
+    assert missing_here.get_data(as_text=True) == "It's no longer there."
     assert "Content-Disposition" not in missing_here.headers
     missing_there = client.get(f"/__remote/{DEVICE}/Users/kim/gone.png?download")
     assert missing_there.status_code == 404
@@ -197,8 +198,8 @@ def test_a_path_that_is_not_there_is_files_own_not_found_page_for_a_browser_and_
 
     fetched = client.get("/missing/?json", headers={"Accept": "text/html,*/*"})
     assert fetched.status_code == 404
-    said = "There's nothing at /missing/."
-    assert fetched.get_json() == {"detail": said, "user_facing_message": said}
+    said = "It's no longer there."
+    assert fetched.get_json() == {"detail": said, "user_facing_message": said, "kind": "not_found"}
 
 
 def test_a_put_writes_the_file_creating_its_folders_and_keeping_its_mode(tmp_path: Path) -> None:
@@ -268,6 +269,66 @@ def test_a_move_never_replaces_what_is_there_nor_puts_a_folder_inside_itself(tmp
     inside = client.open("/box", method="MOVE", headers={"Destination": "http://localhost/box/inner"})
     assert inside.status_code == 409
     assert (root / "box").is_dir()
+
+
+_IS_ROOT = os.geteuid() == 0
+
+
+@pytest.fixture
+def unwritable_folder(tmp_path: Path) -> Iterator[Path]:
+    """``/reports`` under the served root, which nothing can be written into; writable again afterwards so the
+    temporary tree can be removed."""
+    folder = tmp_path / "root" / "reports"
+    folder.mkdir(parents=True)
+    folder.chmod(0o555)
+    yield folder
+    folder.chmod(0o755)
+
+
+@pytest.mark.skipif(_IS_ROOT, reason="root writes into a folder whatever its mode")
+def test_a_move_into_a_folder_that_cannot_be_written_says_that_folder_refused_without_naming_the_file(
+    tmp_path: Path, unwritable_folder: Path
+) -> None:
+    client = _app(None, tmp_path)
+    (tmp_path / "root" / "notes.txt").write_text("a")
+
+    response = client.open("/notes.txt", method="MOVE", headers={"Destination": "http://localhost/reports/notes.txt"})
+
+    assert response.status_code == 403
+    answer = response.get_json()
+    assert answer["kind"] == "destination_not_writable"
+    assert "notes.txt" not in answer["user_facing_message"]
+    assert (tmp_path / "root" / "notes.txt").exists()
+
+
+@pytest.mark.skipif(_IS_ROOT, reason="root writes into a folder whatever its mode")
+def test_a_move_out_of_a_folder_that_cannot_be_written_says_the_folder_it_is_in_refused(
+    tmp_path: Path, unwritable_folder: Path
+) -> None:
+    client = _app(None, tmp_path)
+    unwritable_folder.chmod(0o755)
+    (unwritable_folder / "notes.txt").write_text("a")
+    unwritable_folder.chmod(0o555)
+
+    response = client.open("/reports/notes.txt", method="MOVE", headers={"Destination": "http://localhost/notes.txt"})
+
+    assert response.status_code == 403
+    assert response.get_json()["kind"] == "source_not_writable"
+
+
+@pytest.mark.skipif(_IS_ROOT, reason="root writes into a folder whatever its mode")
+def test_creating_in_a_folder_that_cannot_be_written_is_refused_in_words_for_people(
+    tmp_path: Path, unwritable_folder: Path
+) -> None:
+    client = _app(None, tmp_path)
+
+    response = client.open("/reports/drafts", method="MKCOL")
+
+    assert response.status_code == 403
+    answer = response.get_json()
+    assert answer["kind"] == "permission_denied"
+    assert answer["user_facing_message"] == "You don't have permission to change this."
+    assert "/reports/drafts" in answer["detail"]
 
 
 def test_a_move_from_the_workspace_onto_a_computer_is_refused(tmp_path: Path) -> None:
@@ -542,7 +603,7 @@ def test_a_change_the_computer_refuses_is_answered_as_read_only(tmp_path: Path) 
     response = _app(computer, tmp_path).put(f"/__remote/{DEVICE}/Users/kim/photo.png", data=b"new")
     assert response.status_code == 403
     said = "Your computer only shares this to read."
-    assert response.get_json() == {"detail": said, "user_facing_message": said}
+    assert response.get_json() == {"detail": said, "user_facing_message": said, "kind": "shared_read_only"}
     assert computer.files["/Users/kim/photo.png"] == b"\x89PNG"
 
 
