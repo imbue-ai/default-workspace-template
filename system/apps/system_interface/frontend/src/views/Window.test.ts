@@ -4,8 +4,9 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appRecord, windowRecord } from "../testing/records";
-import { Window } from "./Window";
-import type { WindowAttrs } from "./Window";
+import { Window, stoppedInstanceActionsOf } from "./Window";
+import type { StoppedInstanceVerbs, WindowAttrs } from "./Window";
+import type { InstanceRevival } from "../model/instanceRevival";
 import { STANDARD_CHROME } from "../model/themes";
 
 afterEach(unmountViews);
@@ -199,19 +200,22 @@ describe("Window", () => {
     ).toBeNull();
   });
 
-  it("offers a stopped preview's and UI sketch's window a way to start it again or close it", () => {
+  it("offers a stopped preview's and UI sketch's window to start it again, ask in chat, or close it", () => {
     const onStart = vi.fn();
+    const onAskInChat = vi.fn();
     const onClose = vi.fn();
-    const stoppedInstance = { revival: { kind: "idle" as const }, onStart, onClose, onAskInChat: vi.fn() };
+    const stoppedInstance = { revival: { kind: "idle" as const }, onStart, onClose, onAskInChat };
     const preview = render({
       app: appRecord("today-preview", { is_running: false, program: "", instance_kind: "change" }),
       isStopped: true,
       stoppedInstance,
     }).querySelector("[data-stopped-app]") as HTMLElement;
     expect(preview.textContent).toContain("This preview stopped.");
+    expect(preview.querySelector("[data-revive-failure]")).toBeNull();
     (preview.querySelector("[data-revive-start]") as HTMLElement).click();
+    (preview.querySelector("[data-revive-ask]") as HTMLElement).click();
     (preview.querySelector("[data-revive-close]") as HTMLElement).click();
-    expect([onStart.mock.calls.length, onClose.mock.calls.length]).toEqual([1, 1]);
+    expect([onStart.mock.calls.length, onAskInChat.mock.calls.length, onClose.mock.calls.length]).toEqual([1, 1, 1]);
     unmountViews();
     const sketch = render({
       app: appRecord("inbox-sketch", { is_running: false, program: "", instance_kind: "mock" }),
@@ -221,7 +225,7 @@ describe("Window", () => {
     expect(sketch.textContent).toContain("This UI sketch stopped.");
   });
 
-  it("holds the start while it is under way, and says why a start failed", () => {
+  it("holds the start while it is under way, and after a failed start says so and still offers all three", () => {
     const onStart = vi.fn();
     const app = appRecord("today-preview", { is_running: false, program: "", instance_kind: "change" });
     const starting = render({
@@ -233,44 +237,23 @@ describe("Window", () => {
     expect(button.textContent).toBe("Starting...");
     button.click();
     expect(onStart).not.toHaveBeenCalled();
+    expect(starting.querySelector("[data-revive-ask]")).not.toBeNull();
     unmountViews();
     const failed = render({
       app,
       isStopped: true,
       stoppedInstance: {
-        revival: { kind: "failed", reason: "This preview didn't start. Try again in a moment.", canRetry: true },
+        revival: { kind: "failed", reason: "This preview didn't start." },
         onStart,
         onClose: vi.fn(),
         onAskInChat: vi.fn(),
       },
     });
-    expect(failed.querySelector("[data-revive-failure]")?.textContent).toBe(
-      "This preview didn't start. Try again in a moment.",
-    );
+    expect(failed.querySelector("[data-revive-failure]")?.textContent).toBe("This preview didn't start.");
+    expect(failed.querySelector("[data-revive-ask]")).not.toBeNull();
+    expect(failed.querySelector("[data-revive-close]")).not.toBeNull();
     (failed.querySelector("[data-revive-start]") as HTMLElement).click();
     expect(onStart).toHaveBeenCalledTimes(1);
-  });
-
-  it("offers asking the chat for a new one, not a start, when no start can bring it back", () => {
-    const onAskInChat = vi.fn();
-    const element = render({
-      app: appRecord("today-preview", { is_running: false, program: "", instance_kind: "change" }),
-      isStopped: true,
-      stoppedInstance: {
-        revival: {
-          kind: "failed",
-          reason: "This preview can't be started again. Ask in chat for a new one.",
-          canRetry: false,
-        },
-        onStart: vi.fn(),
-        onClose: vi.fn(),
-        onAskInChat,
-      },
-    });
-    expect(element.querySelector("[data-revive-start]")).toBeNull();
-    (element.querySelector("[data-revive-ask]") as HTMLElement).click();
-    expect(onAskInChat).toHaveBeenCalledTimes(1);
-    expect(element.querySelector("[data-revive-close]")).not.toBeNull();
   });
 
   it("a double click on the title bar toggles maximize, a click on a control does not", () => {
@@ -284,5 +267,52 @@ describe("Window", () => {
       new MouseEvent("dblclick", { bubbles: true }),
     );
     expect(onToggleMaximize).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("stoppedInstanceActionsOf", () => {
+  function verbsWith(revival: InstanceRevival, canRevive = true): StoppedInstanceVerbs & { drafts: string[] } {
+    const drafts: string[] = [];
+    return {
+      drafts,
+      canReviveApp: () => canRevive,
+      instanceRevival: () => revival,
+      reviveApp: vi.fn(async () => undefined),
+      closeOrMinimizeWindow: vi.fn(async () => undefined),
+      draftText: async (text: string) => {
+        drafts.push(text);
+        return true;
+      },
+    };
+  }
+
+  it("drafts what happened to the preview or UI sketch into the chat, with a failed start when there was one", () => {
+    const preview = appRecord("today-preview", {
+      display_name: "Today (preview)",
+      is_running: false,
+      instance_kind: "change",
+    });
+    const sketch = appRecord("inbox-sketch", {
+      display_name: "Inbox (UI sketch)",
+      is_running: false,
+      instance_kind: "mock",
+    });
+    const idle = verbsWith({ kind: "idle" });
+    stoppedInstanceActionsOf(idle, preview, "win-1")?.onAskInChat();
+    stoppedInstanceActionsOf(idle, sketch, "win-2")?.onAskInChat();
+    const failed = verbsWith({ kind: "failed", reason: "This preview didn't start." });
+    stoppedInstanceActionsOf(failed, preview, "win-1")?.onAskInChat();
+
+    expect(idle.drafts).toEqual([
+      'The "Today (preview)" preview stopped.',
+      'The "Inbox (UI sketch)" UI sketch stopped.',
+    ]);
+    expect(failed.drafts).toEqual(['The "Today (preview)" preview stopped, and starting it again failed.']);
+  });
+
+  it("offers nothing for an app that is no preview or UI sketch, or where this shell cannot start one", () => {
+    const preview = appRecord("today-preview", { is_running: false, instance_kind: "change" });
+    expect(stoppedInstanceActionsOf(verbsWith({ kind: "idle" }), appRecord("docs"), "win-1")).toBeNull();
+    expect(stoppedInstanceActionsOf(verbsWith({ kind: "idle" }, false), preview, "win-1")).toBeNull();
   });
 });

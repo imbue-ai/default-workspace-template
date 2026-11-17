@@ -1,8 +1,8 @@
 """Boot a preview: read the app's manifest and turn its ``[preview]`` table into a boot.
 
-Apart from :mod:`update_app_skill.preview_app` because only ``up`` reads a manifest:
-``refresh`` and ``down`` work from the preview's recorded state, so they do not load the
-manifest library (and the pydantic it builds on) at startup.
+Apart from :mod:`update_app_skill.preview_app` because only ``up`` (and ``revive``, which
+re-runs it) reads a manifest: ``refresh`` and ``down`` work from the preview's recorded
+state, so they do not load the manifest library (and the pydantic it builds on) at startup.
 """
 
 from __future__ import annotations
@@ -29,7 +29,9 @@ from update_app_skill.preview_app import (
     InstanceSpec,
     PreviewError,
     PreviewWindow,
+    _instance_state_path,
     _preview_state_path,
+    _read_json,
     _recorded_siblings,
     _reframe_previews_naming,
     _registry_copy_path,
@@ -148,7 +150,6 @@ def build_instance_spec(
     window: PreviewWindow | None,
     registry_copy: Path | None,
     inner_path: str,
-    framed_siblings: Sequence[str] = (),
 ) -> InstanceSpec:
     """The shared substrate's boot of the manifest's preview table."""
     preview = manifest.preview
@@ -162,6 +163,7 @@ def build_instance_spec(
     launch = _under_declared_secrets(manifest, live_root, [*command, *preview.args])
     project = _standalone_project(worktree, manifest)
     return InstanceSpec(
+        app=str(manifest.name),
         name=instance_name(manifest.name),
         command=[
             *(LAUNCHER if project is None else ()),
@@ -179,7 +181,6 @@ def build_instance_spec(
         inner_path=inner_path,
         theming_mode=_declared_theming_mode(worktree, manifest),
         project=project,
-        revive_first=tuple(instance_name(sibling) for sibling in framed_siblings),
     )
 
 
@@ -296,7 +297,6 @@ def up(
         window,
         registry_copy,
         inner_path,
-        framed_siblings=with_apps,
     )
     # An earlier ``up --with`` of this preview may have booted siblings this call does not
     # name; they are still running, and ``down`` finds them only through this record.
@@ -311,15 +311,24 @@ def up(
                 "worktree": str(worktree),
                 "with": siblings,
                 "manifest": str(manifest_path),
+                # With the worktree and siblings, what ``revive`` boots it again with.
+                "instance_key": instance_key,
+                "title": title,
+                "is_private": is_private,
             }
         )
     )
     code = instances.up(spec, repo_root)
-    if code != 0 and not siblings:
+    if (
+        code != 0
+        and not siblings
+        and not _instance_state_path(repo_root, app_name).exists()
+    ):
         # Kept when siblings may be up: their names live only in this record, so dropping it
         # would leave them running with nothing left for ``down`` to reach them by. They are
         # left running rather than torn down here, since the usual next move is a rebuild and
-        # a retry, which reuses them.
+        # a retry, which reuses them. Kept too when the failed boot kept the rows an earlier
+        # boot registered, which an open window shows, so ``revive`` can try again.
         _preview_state_path(repo_root, app_name).unlink(missing_ok=True)
     if code == 0:
         _reframe_previews_naming(repo_root, app_name, dump)
@@ -330,3 +339,44 @@ def _uses_placeholder(manifest: AppManifest, placeholder: str) -> bool:
     preview = manifest.preview
     texts = [*preview.command, *preview.args, *preview.env.values()]
     return any(placeholder in text for text in texts)
+
+
+def revive(app_name: str, repo_root: Path, *, instances: Instances) -> int:
+    """Boot the app's preview again as its last ``up`` booted it, with the siblings it frames.
+
+    What a workspace restart leaves of a preview is its record and the rows its window
+    shows; this re-runs that ``up``, which keeps those rows, so an open window shows the
+    preview again where it was, over a fresh copy of the live data. A preview whose
+    processes all still run is left alone, and two revives at once boot it once.
+    Returns 1, saying why on stderr, when no preview of the app is recorded or the boot
+    fails (a worktree that is gone, a build that no longer boots).
+    """
+    with serve_isolated_instance.instance_lock(repo_root, instance_name(app_name)):
+        record = _read_json(_preview_state_path(repo_root, app_name))
+        if record is None:
+            sys.stderr.write(
+                f"preview: no preview of {app_name!r} is recorded, so there is nothing to "
+                "start again; boot one with 'up'.\n"
+            )
+            return 1
+        siblings = _recorded_siblings(repo_root, app_name)
+        if all(
+            instances.is_running(instance_name(name), repo_root)
+            for name in [app_name, *siblings]
+        ):
+            sys.stderr.write(
+                f"preview: the preview of {app_name!r} is already running.\n"
+            )
+            return 0
+        title = record.get("title")
+        instance_key = record.get("instance_key")
+        return up(
+            app_name,
+            Path(str(record["worktree"])),
+            repo_root,
+            with_apps=siblings,
+            instance_key=str(instance_key) if instance_key is not None else None,
+            title=str(title) if title is not None else None,
+            is_private=bool(record.get("is_private")),
+            instances=instances,
+        )

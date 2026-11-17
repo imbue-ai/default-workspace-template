@@ -26,7 +26,7 @@ import {
   externalLinkMessageType,
   isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
-import { InstanceCannotReviveError, StalePlacementsSaveError } from "../model/api";
+import { StalePlacementsSaveError } from "../model/api";
 import { refreshShellKeybindings } from "../model/keybindings";
 import {
   NO_DRAFT_APP_REASON,
@@ -143,7 +143,6 @@ import {
   effectiveWindowTitle,
   entryLook,
   findWindow,
-  isAppShownStopped,
   initialDesktopState,
   isAppStoppable,
   isChatOnScreen,
@@ -2985,14 +2984,7 @@ export class DesktopStore {
     else this.raiseWindow(windowId);
   }
 
-  /** Reload the window's page; a stopped preview or UI sketch, which has no page to reload, is started again. */
   refreshWindow(windowId: string): void {
-    const found = findWindow(this.state, windowId);
-    const app = found === null ? undefined : appByName(this.state, found.window.app);
-    if (app !== undefined && this.canReviveApp(app) && isAppShownStopped(this.state, app)) {
-      void this.reviveApp(app.name);
-      return;
-    }
     this.pageDriver?.reload(windowId);
   }
 
@@ -3019,8 +3011,7 @@ export class DesktopStore {
       await this.deps.api.reviveApp(appName);
       this.revivalByApp.delete(appName);
     } catch (error) {
-      const canRetry = !(error instanceof InstanceCannotReviveError);
-      this.revivalByApp.set(appName, { kind: "failed", reason: (error as Error).message, canRetry });
+      this.revivalByApp.set(appName, { kind: "failed", reason: (error as Error).message });
     }
     this.notifyListeners();
   }

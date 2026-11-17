@@ -214,7 +214,7 @@ def test_a_private_instance_booted_from_a_worktree_runs_over_the_live_data_and_r
 
 
 @pytest.mark.timeout(_LIFECYCLE_TIMEOUT_SECONDS)
-def test_a_preview_a_restart_stopped_comes_back_at_its_address_over_its_copy(
+def test_a_preview_a_restart_stopped_comes_back_under_the_rows_its_window_shows(
     tmp_path: Path, repo_root_on_disk: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = repo_root_on_disk
@@ -235,7 +235,7 @@ def test_a_preview_a_restart_stopped_comes_back_at_its_address_over_its_copy(
         assert url is not None
         rows_before = _registered_rows(registry)
         assert rows_before["fixture-preview"]["isolated_instance"] == {
-            "name": "fixture-preview",
+            "app": "fixture",
             "kind": "change",
         }
         state_path = (
@@ -255,16 +255,24 @@ def test_a_preview_a_restart_stopped_comes_back_at_its_address_over_its_copy(
         with pytest.raises(urllib.error.URLError):
             _get(url)
 
-        assert (
-            serve_isolated_instance.main(
-                ["revive", "--name", "fixture-preview", *repo_args]
-            )
-            == 0
-        )
+        assert mod.main(["revive", "--app", "fixture", *repo_args]) == 0
 
-        assert _get(url)["greeting"] == "edited in the preview's copy"
-        assert _registered_rows(registry) == rows_before
+        revived_url = mod.live_preview_url(repo_root, "fixture")
+        assert revived_url is not None
+        assert _get(revived_url)["greeting"] == "from the live data"
+        rows_after = _registered_rows(registry)
+        # The window reaches the preview by its row's label, which a revive keeps.
+        assert {name: row["label"] for name, row in rows_after.items()} == {
+            name: row["label"] for name, row in rows_before.items()
+        }
+        assert rows_after["fixture-preview"]["isolated_instance"] == {
+            "app": "fixture",
+            "kind": "change",
+        }
+        assert mod.main(["revive", "--app", "fixture", *repo_args]) == 0
+        assert mod.live_preview_url(repo_root, "fixture") == revived_url
     finally:
         down_code = mod.main(["down", "--app", "fixture", *repo_args])
 
     assert down_code == 0
+    assert _registered_rows(registry) == {}

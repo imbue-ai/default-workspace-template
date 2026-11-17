@@ -47,7 +47,7 @@ from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_rollback_point
-from imbue.system_interface.shell.testing import write_stub_revive_script
+from imbue.system_interface.shell.testing import write_stub_revive_scripts
 from imbue.system_interface.shell.testing import write_stub_update_self_script
 from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.shell.wallpapers import BUNDLED_WALLPAPERS_DIRNAME
@@ -3498,8 +3498,8 @@ def _stopped_preview_application(tmp_path: Path, broadcaster: WebSocketBroadcast
     """A shell whose registry holds a stopped preview's frame row, a stopped UI sketch's, and a plain app."""
     registry_path = write_two_app_registry(
         tmp_path,
-        registry_row_toml("today-preview", "http://localhost:41234", isolated_instance=("today-preview", "change")),
-        registry_row_toml("inbox-sketch", "http://localhost:41235", isolated_instance=("inbox-sketch", "mock")),
+        registry_row_toml("today-preview", "http://localhost:41234", isolated_instance=("today", "change")),
+        registry_row_toml("inbox-sketch", "http://localhost:41235", isolated_instance=("inbox", "mock")),
     )
     prober = FakeLivenessProber()
     prober.is_running_by_name = {"today-preview": False, "inbox-sketch": False}
@@ -3516,45 +3516,46 @@ def test_the_inventory_says_which_apps_are_previews_or_ui_sketches(
     assert (kinds["today-preview"], kinds["inbox-sketch"], kinds["files"]) == ("change", "mock", None)
 
 
-def test_reviving_a_stopped_preview_runs_its_instances_revive_from_the_workspace_root(
-    tmp_path: Path, broadcaster: WebSocketBroadcaster
+@pytest.mark.parametrize(
+    ("window_app", "flow_script", "framed_app"),
+    [
+        ("today-preview", "update_app_skill/preview_app.py", "today"),
+        ("inbox-sketch", "build_app_skill/mock_frame.py", "inbox"),
+    ],
+    ids=["preview", "ui-sketch"],
+)
+def test_reviving_a_stopped_window_runs_its_flows_revive_from_the_workspace_root(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, window_app: str, flow_script: str, framed_app: str
 ) -> None:
     repo_root = tmp_path / "repo"
-    write_stub_revive_script(repo_root)
+    write_stub_revive_scripts(repo_root)
     client = _stopped_preview_application(tmp_path, broadcaster).test_client()
 
-    answer = client.post("/api/apps/today-preview/revive")
+    answer = client.post(f"/api/apps/{window_app}/revive")
 
     assert answer.status_code == 200
-    assert answer.get_json()["name"] == "today-preview"
+    assert answer.get_json()["name"] == window_app
     [call] = read_stub_revive_calls(repo_root)
-    assert call["argv"] == ["revive", "--name", "today-preview", "--repo-root", str(repo_root.resolve())]
+    assert call["script"].endswith(flow_script)
+    assert call["argv"] == ["revive", "--app", framed_app, "--repo-root", str(repo_root.resolve())]
     assert Path(call["cwd"]).resolve() == repo_root.resolve()
 
 
-@pytest.mark.parametrize(
-    ("app", "exit_code", "status", "detail"),
-    [
-        ("inbox-sketch", 1, 502, "This UI sketch didn't start. Try again in a moment."),
-        ("today-preview", 3, 409, "This preview can't be started again. Ask in chat for a new one."),
-    ],
-    ids=["boot-failed", "cannot-come-back"],
-)
-def test_a_failed_revive_says_whether_to_try_again_or_ask_for_a_new_one(
-    tmp_path: Path, broadcaster: WebSocketBroadcaster, app: str, exit_code: int, status: int, detail: str
+def test_a_failed_revive_says_it_did_not_start_in_the_users_words(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
-    write_stub_revive_script(tmp_path / "repo", exit_code=exit_code)
+    write_stub_revive_scripts(tmp_path / "repo", exit_code=1)
     client = _stopped_preview_application(tmp_path, broadcaster).test_client()
 
-    answer = client.post(f"/api/apps/{app}/revive")
+    answer = client.post("/api/apps/inbox-sketch/revive")
 
-    assert answer.status_code == status
-    assert answer.get_json()["detail"] == detail
+    assert answer.status_code == 502
+    assert answer.get_json()["detail"] == "This UI sketch didn't start."
 
 
 def test_an_app_that_is_no_preview_is_not_revived(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
     repo_root = tmp_path / "repo"
-    write_stub_revive_script(repo_root)
+    write_stub_revive_scripts(repo_root)
     client = _stopped_preview_application(tmp_path, broadcaster).test_client()
 
     answer = client.post("/api/apps/files/revive")

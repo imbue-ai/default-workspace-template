@@ -22,6 +22,7 @@ the root venv):
         --app <name> --worktree <dir> [--with <name>]... [--instance-key <key>] \\
         [--title <label> | --private] [--repo-root PATH]
     uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py refresh --app <name> [--repo-root PATH]
+    uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py revive --app <name> [--repo-root PATH]
     uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name> [--repo-root PATH]
 
 ``up`` prints the preview's app name (``<name>-preview``) on stdout; open a window
@@ -32,15 +33,18 @@ boots the same instance with no window, for an agent to drive on its loopback po
 from wherever it runs, and prints that loopback URL on stdout in place of the app
 name; its data copies and secrets still come from the live checkout. ``refresh``
 re-boots the inner process in place after a rebuild, leaving the ports, the wrapper,
-the registrations, and the window untouched. ``down`` tears the preview down together
-with the siblings it booted, and verifies the processes died.
+the registrations, and the window untouched. ``revive`` boots a preview a workspace
+restart stopped again, as its last ``up`` booted it (it is what a stopped preview's window
+offers as "Start it again"); its window stays open on it throughout. ``down`` tears the
+preview down together with the siblings it booted, and verifies the processes died.
 
 Exit codes:
     0  Success.
     1  The manifest could not be read, the table could not be resolved, another
        pass's preview is up, a preview with a window was asked for from a git
        worktree, ``--private`` was given with ``--with`` or over a preview that has
-       a window, or the shared boot failed (which quotes the boot log).
+       a window, or the shared boot failed (which quotes the boot log); for
+       ``revive``, also when no preview of the app is recorded.
 """
 
 from __future__ import annotations
@@ -91,6 +95,8 @@ class PreviewWindow:
 class InstanceSpec:
     """One preview's boot, as ``serve_isolated_instance.up`` takes it."""
 
+    # The app it previews; ``name`` is its instance's.
+    app: str
     name: str
     command: list[str]
     cwd: Path
@@ -103,8 +109,6 @@ class InstanceSpec:
     inner_path: str
     theming_mode: str | None
     project: str | None
-    # The sibling instances this one frames, which ``serve_isolated_instance revive`` brings back first.
-    revive_first: tuple[str, ...]
 
 
 class Instances:
@@ -129,7 +133,7 @@ class Instances:
             inner_path=spec.inner_path,
             theming_mode=spec.theming_mode,
             project=spec.project,
-            revive_first=spec.revive_first,
+            preview_of_app=spec.app if window is not None else None,
             runner=serve_isolated_instance.Runner(),
             registry=serve_isolated_instance.Registry(),
             http=serve_isolated_instance.HttpClient(),
@@ -153,6 +157,11 @@ class Instances:
             repo_root,
             runner=serve_isolated_instance.Runner(),
             registry=serve_isolated_instance.Registry(),
+        )
+
+    def is_running(self, name: str, repo_root: Path) -> bool:
+        return serve_isolated_instance.is_running(
+            name, repo_root, runner=serve_isolated_instance.Runner()
         )
 
 
@@ -404,6 +413,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     _add_repo_root_arg(up_parser)
 
+    revive_parser = subparsers.add_parser(
+        "revive",
+        help=(
+            "Boot a preview a workspace restart stopped again, as it was last booted; "
+            "a preview still running is left alone."
+        ),
+    )
+    revive_parser.add_argument(
+        "--app", required=True, help="The app's registered name."
+    )
+    _add_repo_root_arg(revive_parser)
+
     refresh_parser = subparsers.add_parser(
         "refresh", help="Re-boot the preview's inner process in place after a rebuild."
     )
@@ -434,6 +455,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 is_private=args.private,
                 instances=Instances(),
             )
+        if args.command == "revive":
+            from update_app_skill.preview_boot import revive
+
+            return revive(args.app, repo_root, instances=Instances())
         if args.command == "refresh":
             return refresh(args.app, repo_root, instances=Instances())
         if args.command == "down":

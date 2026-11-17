@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import tomllib
 from collections.abc import Sequence
 from pathlib import Path
@@ -106,6 +107,8 @@ class _RecordingInstances(mod.Instances):
         self.downs: list[str] = []
         self.next_port = next_port
         self.failing_names = set(failing_names)
+        # The instances whose processes all still run; ``up`` adds one, a restart clears them.
+        self.running_names: set[str] = set()
 
     def _state_path(self, name: str) -> Path:
         return self.repo_root / mod.INSTANCES_ROOT / name / mod.INSTANCE_STATE_FILENAME
@@ -132,7 +135,11 @@ class _RecordingInstances(mod.Instances):
                 }
             )
         )
+        self.running_names.add(spec.name)
         return 0
+
+    def is_running(self, name: str, repo_root: Path) -> bool:
+        return name in self.running_names
 
     def down(self, name: str, repo_root: Path) -> int:
         self.downs.append(name)
@@ -178,6 +185,7 @@ def test_up_hands_the_manifests_table_to_the_shared_script_with_its_own_placehol
     assert code == 0
     # The shared substrate's placeholders pass through untouched.
     assert instances.up_spec("chat-preview") == mod.InstanceSpec(
+        app="chat",
         name="chat-preview",
         command=[*boot.LAUNCHER, "chat-app", "--secondary"],
         cwd=worktree,
@@ -197,7 +205,6 @@ def test_up_hands_the_manifests_table_to_the_shared_script_with_its_own_placehol
         inner_path="/?chat=agent-1",
         theming_mode=None,
         project=None,
-        revive_first=(),
     )
 
 
@@ -871,3 +878,120 @@ def test_a_user_built_app_previews_from_its_own_projects_venv(tmp_path: Path) ->
     spec = instances.up_spec("notes-preview")
     assert spec.command == ["notes"]
     assert spec.project == "system/apps/notes"
+
+
+# Starting a preview a restart stopped again
+
+
+def test_a_revive_boots_the_preview_again_as_its_last_up_did_siblings_first(
+    tmp_path: Path,
+) -> None:
+    worktree = _write_worktree(tmp_path)
+    instances = _RecordingInstances(tmp_path)
+    assert (
+        boot.up(
+            "system_interface",
+            worktree,
+            tmp_path,
+            with_apps=["chat"],
+            instance_key="agent-1",
+            title="New desktop",
+            instances=instances,
+            dump_registry=_dump_registry,
+        )
+        == 0
+    )
+    first_boot = list(instances.specs)
+    instances.running_names.clear()
+    instances.specs.clear()
+
+    assert boot.revive("system_interface", tmp_path, instances=instances) == 0
+
+    assert instances.ups() == ["chat-preview", "system_interface-preview"]
+    assert [spec.window for spec in instances.specs] == [
+        spec.window for spec in first_boot
+    ]
+    assert [spec.inner_path for spec in instances.specs] == [
+        "/?chat=agent-1",
+        "/",
+    ]
+
+
+def test_a_revive_of_a_running_preview_boots_nothing(tmp_path: Path) -> None:
+    worktree = _write_worktree(tmp_path)
+    instances = _RecordingInstances(tmp_path)
+    assert boot.up("notes", worktree, tmp_path, instances=instances) == 0
+
+    assert boot.revive("notes", tmp_path, instances=instances) == 0
+
+    assert instances.ups() == ["notes-preview"]
+
+
+def test_a_revive_with_no_recorded_preview_says_so(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    instances = _RecordingInstances(tmp_path)
+
+    assert boot.revive("notes", tmp_path, instances=instances) == 1
+
+    assert instances.ups() == []
+    assert "no preview of 'notes' is recorded" in capsys.readouterr().err
+
+
+def test_a_failed_revive_keeps_the_record_while_the_rows_a_window_shows_are_kept(
+    tmp_path: Path,
+) -> None:
+    """The shared boot leaves a state naming the rows it kept for the open window, so the
+    preview's record stays too and the window's next Start can try again."""
+    worktree = _write_worktree(tmp_path)
+
+    class _FailingAfterKeepingRows(_RecordingInstances):
+        def up(self, spec: mod.InstanceSpec, repo_root: Path) -> int:
+            self.specs.append(spec)
+            state_path = self._state_path(spec.name)
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps({"pids": [], "services": ["notes-preview"]})
+            )
+            return 1
+
+    instances = _RecordingInstances(tmp_path)
+    assert boot.up("notes", worktree, tmp_path, instances=instances) == 0
+    failing = _FailingAfterKeepingRows(tmp_path)
+
+    assert boot.revive("notes", tmp_path, instances=failing) == 1
+    assert boot.revive("notes", tmp_path, instances=failing) == 1
+
+    assert failing.ups() == ["notes-preview", "notes-preview"]
+
+
+def test_two_revives_at_once_boot_the_preview_once(tmp_path: Path) -> None:
+    worktree = _write_worktree(tmp_path)
+    booting = threading.Event()
+    release = threading.Event()
+
+    class _SlowInstances(_RecordingInstances):
+        def up(self, spec: mod.InstanceSpec, repo_root: Path) -> int:
+            booting.set()
+            assert release.wait(timeout=10)
+            return super().up(spec, repo_root)
+
+    instances = _RecordingInstances(tmp_path)
+    assert boot.up("notes", worktree, tmp_path, instances=instances) == 0
+    slow = _SlowInstances(tmp_path)
+    codes: list[int] = []
+    first = threading.Thread(
+        target=lambda: codes.append(boot.revive("notes", tmp_path, instances=slow))
+    )
+    first.start()
+    assert booting.wait(timeout=10)
+    second = threading.Thread(
+        target=lambda: codes.append(boot.revive("notes", tmp_path, instances=slow))
+    )
+    second.start()
+    release.set()
+    first.join(timeout=10)
+    second.join(timeout=10)
+
+    assert codes == [0, 0]
+    assert slow.ups() == ["notes-preview"]

@@ -467,12 +467,13 @@ where the data dies. Encode these, cheapest first:
   window registers, and a private instance registers none.
 
   A workspace restart stops every preview (and every mock's frame). Its window
-  stays, says the preview stopped, and offers **Start it again**, which boots
-  it where it was: the same ports and the same copy of the data. To do the same
-  yourself, run `uv run --no-sync
-  .agents/shared/scripts/agents_shared/serve_isolated_instance.py revive --name
-  <name>-preview`; never boot a stopped preview again with a hand-written
-  supervisord program.
+  stays, says the preview stopped, and offers **Start it again** (which boots
+  it again as its last `up` did, over a fresh copy of the live data, with the
+  window still on it), **Ask in chat**, and **Close**. To do the same yourself,
+  run `uv run --no-sync
+  .agents/skills/update-app/python/update_app_skill/preview_app.py revive --app
+  <name>`; never boot a stopped preview again with a hand-written supervisord
+  program.
 
 - **Never "clean up" test data by deleting from the live store.** If you
   did leave a stray test record in it, leave it -- an additive junk record

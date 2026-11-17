@@ -4217,15 +4217,15 @@ describe("a stopped preview or UI sketch", () => {
     return startedStore();
   }
 
-  it("is started again by its window's refresh, once while the start is under way", async () => {
+  it("is started once while a start is under way", async () => {
     const store = await storeWithStoppedPreview();
     let release: () => void = () => undefined;
     api.reviveGate = new Promise((resolve) => {
       release = resolve;
     });
 
-    store.refreshWindow("win-3");
-    store.refreshWindow("win-3");
+    void store.reviveApp("today-preview");
+    void store.reviveApp("today-preview");
 
     expect(api.calls.filter((call) => call.startsWith("reviveApp"))).toEqual(["reviveApp:today-preview"]);
     expect(store.instanceRevival("today-preview").kind).toBe("starting");
@@ -4233,33 +4233,18 @@ describe("a stopped preview or UI sketch", () => {
     await vi.waitFor(() => expect(store.instanceRevival("today-preview").kind).toBe("idle"));
   });
 
-  it("keeps the shell's reason, and whether trying again can help, when it did not start", async () => {
+  it("keeps the shell's reason when it did not start", async () => {
     const store = await storeWithStoppedPreview();
-    api.reviveRefusal = "This preview didn't start. Try again in a moment.";
+    api.reviveRefusal = "This preview didn't start.";
 
     await store.reviveApp("today-preview");
 
-    expect(store.instanceRevival("today-preview")).toEqual({
-      kind: "failed",
-      reason: "This preview didn't start. Try again in a moment.",
-      canRetry: true,
-    });
-    api.reviveRefusal = "This preview can't be started again. Ask in chat for a new one.";
-    api.isReviveRefusalFinal = true;
-
-    await store.reviveApp("today-preview");
-
-    expect(store.instanceRevival("today-preview")).toEqual({
-      kind: "failed",
-      reason: "This preview can't be started again. Ask in chat for a new one.",
-      canRetry: false,
-    });
+    expect(store.instanceRevival("today-preview")).toEqual({ kind: "failed", reason: "This preview didn't start." });
   });
 
-  it("forgets a failed start once the app runs again, so its next stop offers Start", async () => {
+  it("forgets a failed start once the app runs again, so its next stop starts afresh", async () => {
     const store = await storeWithStoppedPreview();
-    api.reviveRefusal = "This preview can't be started again. Ask in chat for a new one.";
-    api.isReviveRefusalFinal = true;
+    api.reviveRefusal = "This preview didn't start.";
     await store.reviveApp("today-preview");
 
     offerApps(api, socket, [appRecord("docs"), { ...STOPPED_PREVIEW, is_running: true }]);
@@ -4267,10 +4252,10 @@ describe("a stopped preview or UI sketch", () => {
     expect(store.instanceRevival("today-preview").kind).toBe("idle");
   });
 
-  it("is not what a running app's refresh asks for", async () => {
+  it("is not started by its window's refresh", async () => {
     const store = await storeWithStoppedPreview();
 
-    store.refreshWindow("win-1");
+    store.refreshWindow("win-3");
 
     expect(api.calls.filter((call) => call.startsWith("reviveApp"))).toEqual([]);
   });

@@ -44,9 +44,7 @@ The shapes:
 - **Frame only** (``frame``, called by ``build-app``'s ``mock_frame.py``). The
   same labeled frame around a service something else already runs -- a new app's
   live program while it is still a mock -- with a banner kind and note of its own.
-  Nothing else is booted or registered, and ``down`` removes only the frame; how
-  the caller registers the framed app while it is framed is recorded, and
-  ``revive`` registers it that way again.
+  Nothing else is booted or registered, and ``down`` removes only the frame.
 
 The service must read its port (and, when relevant, its data dir) from the
 environment -- that is what ``--port-env`` / ``--env`` inject. Scaffolded Flask
@@ -62,15 +60,11 @@ Usage:
         [--preview-service-name <name> --preview-title <label> [--inner-path /path]] \\
         [--project system/<kind>/<package>] [--repo-root PATH] -- <launch argv...>
     uv run --no-sync serve_isolated_instance.py refresh --name <slug> [--repo-root PATH]
-    uv run --no-sync serve_isolated_instance.py revive --name <slug> [--repo-root PATH]
     uv run --no-sync serve_isolated_instance.py down --name <slug> [--repo-root PATH]
 
 ``refresh`` re-boots the inner server (only) on its existing port so a rebuild or
 edit is picked up in place -- the port, the wrapper frame, the service
-registrations, and the user's window all stay put. ``revive`` boots again whatever
-part of an instance has stopped (a workspace restart stops them all) on the same
-ports and over the same copies, so its window works again; the row a window shows
-names its instance, which is how the shell offers to do this from the window.
+registrations, and the user's window all stay put.
 
 Ports, copies, and placeholders: every ``--port-env`` names a free port the
 instance is given (a bare ``ENVVAR`` is the ``main`` port, the one probed for
@@ -91,24 +85,19 @@ placeholders an app's manifest ``[preview]`` table uses (``app_manifest``'s
 it knows before calling here.
 
 Exit codes:
-    0  Success (instance is up and healthy / rebooted in place / running again /
-       torn down).
+    0  Success (instance is up and healthy / rebooted in place / torn down).
     1  Failure to boot (partial state torn down); or, for ``refresh``, there was
        no refreshable instance, the old server survived SIGKILL, or the
-       rebooted server never became healthy; or, for ``revive``, a boot that
-       failed (trying again may work); or, for ``down``, a recorded process
+       rebooted server never became healthy; or, for ``down``, a recorded process
        survived SIGKILL (its state dir is kept so it stays findable); or, for
        ``up --service-name``, ``--repo-root`` is a git worktree (refused before
        anything boots); or a bad argument / unreadable state file.
-    3  For ``revive``: the instance cannot come back as it was -- no record, a
-       record it cannot read, a record from before revives, a recorded port another
-       process now holds, a copy that is gone, or a checkout it was booted from
-       that is gone -- so only a fresh ``up`` brings it back.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fcntl
 import json
 import os
@@ -124,7 +113,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Callable, NamedTuple, Sequence
+from typing import Callable, Generator, NamedTuple, Sequence
 
 from app_registration import forward_port
 from disk_headroom.space import read_disk_space
@@ -164,14 +153,8 @@ _HOST_PLACEHOLDER_KIND = "host"
 # the state dir, one per name, overwritten each time -- so the path in the message
 # still exists when the agent goes to read more of it.
 FAILED_LOG_SUFFIX = "-failed.log"
-# What ``revive`` exits with when the instance cannot come back as it was (no record, a
-# record it cannot read or from before revives, a port another process holds, a copy or
-# its checkout gone): only a fresh ``up`` brings it back, so a caller should not offer to
-# try again.
-REVIVE_IMPOSSIBLE_EXIT_CODE = 3
-# Held by a ``revive`` from its first look at an instance until its state is written, so
-# two at once (two windows, or a window and an agent) boot it once.
-REVIVE_LOCK_SUFFIX = ".revive.lock"
+# Beside the state directories: the lock one revive of an instance holds.
+LOCK_SUFFIX = ".lock"
 
 # How to spell this script in a message an agent will copy: repo-root-relative,
 # like every other command it prints. The follow-up commands it names
@@ -405,20 +388,6 @@ class Registry:
 
     def remove(self, repo_root: Path, service_name: str) -> None:
         forward_port.remove(forward_port.apps_file(repo_root), service_name)
-
-    def register_manifest(
-        self,
-        repo_root: Path,
-        manifest_path: Path,
-        url: str,
-        overrides: forward_port.ManifestOverrides | None,
-    ) -> None:
-        forward_port.register_manifest(
-            forward_port.apps_file(repo_root),
-            manifest_path,
-            url,
-            overrides=overrides,
-        )
 
 
 class ProbeResult(NamedTuple):
@@ -994,10 +963,11 @@ def _teardown(
 def _pids_still_ours(state: dict, runner: Runner) -> list[int]:
     """The pids ``state`` records, less any no longer the process it started.
 
-    A state that records ``pid_starts`` outlives restarts, so it can name a pid a
-    reboot or a restore into a new container has handed to an unrelated process group;
-    signalling that group would kill it. So a pid whose recorded start time is known
-    and no longer matches is dropped; a pid with none recorded is kept.
+    A state outlives restarts, so it can name a pid a reboot or a restore into a new
+    container has handed to an unrelated process group; signalling that group would
+    kill it. So a pid whose recorded start time is known and no longer matches is
+    dropped; a pid with none recorded (a state from before start times were kept, or
+    macOS, which has none) is kept.
     """
     pids = state.get("pids") or []
     starts = state.get("pid_starts") or []
@@ -1025,12 +995,15 @@ def _unwind_failed_boot(
     pids: Sequence[int],
     services: Sequence[str],
     sleeper: Callable[[float], None],
+    kept_rows: Sequence[str] = (),
 ) -> None:
     """Report a failed ``verb``, tear down what it stood up, and remove its state directory.
 
     The log is copied out and quoted *before* the teardown removes the state
     directory it lives in, so the path the message names still exists when the
-    agent goes to read the rest of it.
+    agent goes to read the rest of it. ``kept_rows`` are rows an earlier boot of the
+    instance registered, which an open window shows: they stay, and a state recording
+    only them is left so ``down`` still removes them and a later boot keeps them again.
     """
     failed_log = getattr(exc, "log_path", None)
     excerpt = ""
@@ -1041,7 +1014,12 @@ def _unwind_failed_boot(
         f"{verb} failed: {exc}\n{excerpt}tearing down partial instance...\n"
     )
     survivors = _teardown(
-        repo_root, runner, registry, pids=pids, services=services, sleeper=sleeper
+        repo_root,
+        runner,
+        registry,
+        pids=pids,
+        services=[service for service in services if service not in kept_rows],
+        sleeper=sleeper,
     )
     if survivors:
         sys.stderr.write(
@@ -1049,6 +1027,33 @@ def _unwind_failed_boot(
             "SIGKILL and may still hold their port.\n"
         )
     shutil.rmtree(_state_dir(repo_root, name), ignore_errors=True)
+    if kept_rows:
+        _write_rows_only_state(repo_root, name, kept_rows)
+
+
+def _write_rows_only_state(repo_root: Path, name: str, rows: Sequence[str]) -> None:
+    """Leave a state for ``name`` recording only its registered ``rows``: nothing running."""
+    state_path = _state_path(repo_root, name)
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps({"name": name, "pids": [], "services": list(rows)}, indent=2)
+        )
+    except OSError as exc:
+        sys.stderr.write(
+            f"warning: could not record the rows {', '.join(rows)} kept for '{name}' at "
+            f"{state_path}: {exc}; remove them with forward_port if the instance is not "
+            "booted again.\n"
+        )
+
+
+def _recorded_services(repo_root: Path, name: str) -> list[str]:
+    """The rows the state of instance ``name`` records, or none when there is no readable state."""
+    try:
+        state = json.loads(_state_path(repo_root, name).read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    return [str(service) for service in state.get("services") or []]
 
 
 def _boot_wrapper(
@@ -1122,7 +1127,7 @@ def up(
     inner_path: str = "/",
     theming_mode: str | None = None,
     project: str | None = None,
-    revive_first: Sequence[str] = (),
+    preview_of_app: str | None = None,
     runner: Runner,
     registry: Registry,
     http: HttpClient,
@@ -1146,12 +1151,15 @@ def up(
     would the app. ``project`` names a standalone project, relative to ``cwd``, that
     ``command`` boots from: its venv is linked before each boot and ``command`` runs
     behind ``project_launcher``. A ``service_name`` from a ``repo_root`` that is a
-    linked git worktree is refused before anything boots. ``revive_first`` names the
-    instances (a preview's siblings, which it frames) that ``revive`` brings back
-    before this one.
+    linked git worktree is refused before anything boots. ``preview_of_app`` names
+    the app this instance previews on the row its window shows, so the shell can
+    offer to start it again once it stops.
 
-    On any failure the partial state is torn down and 1 is returned. On success a
-    state file records the servers + services so ``down`` can find them later.
+    An earlier instance of ``name`` is torn down first, except for the rows this boot
+    registers again: those are updated in place, so a window open on them never sees
+    its app vanish. On any failure the partial state is torn down and 1 is returned,
+    those kept rows staying recorded for ``down``. On success a state file records the
+    servers (with their start times) and services so ``down`` can find them later.
     """
     if not command:
         sys.stderr.write("up: no launch command given (pass it after `--`).\n")
@@ -1188,7 +1196,23 @@ def up(
     # Clear any stale instance for this name first so a re-run is clean. Booting
     # over one that could not be cleared would leave the old server holding its
     # port with nothing left recording its pid, so refuse instead.
-    if down(name, repo_root, runner=runner, registry=registry, sleeper=sleeper) != 0:
+    rows_to_register = {
+        row for row in (service_name, preview_service_name) if row is not None
+    }
+    kept_rows = [
+        row for row in _recorded_services(repo_root, name) if row in rows_to_register
+    ]
+    if (
+        down(
+            name,
+            repo_root,
+            runner=runner,
+            registry=registry,
+            sleeper=sleeper,
+            keeps_rows=kept_rows,
+        )
+        != 0
+    ):
         sys.stderr.write(
             f"up: refusing to boot '{name}' over an instance that could not be "
             f"cleared (see above). Resolve it, or remove "
@@ -1251,9 +1275,13 @@ def up(
             )
 
         # 2. Register it as a service (own browser origin), if asked. The row a window
-        #    shows names this instance, so the shell can start it again once it stops.
-        window_tag = forward_port.IsolatedInstanceTag(
-            name=name, kind=FrameKind.CHANGE.value
+        #    shows names the app it previews, so the shell can start it again.
+        window_tag = (
+            forward_port.IsolatedInstanceTag(
+                app=preview_of_app, kind=FrameKind.CHANGE.value
+            )
+            if preview_of_app is not None
+            else None
         )
         if service_name is not None:
             _register_service(
@@ -1272,7 +1300,6 @@ def up(
 
         # 3. Wrap it in a labeled preview frame, if asked.
         wrapper_port: int | None = None
-        wrapper_args: list[str] | None = None
         if preview_requested:
             # Validated up front: a preview implies all three names are set. Re-assert
             # so the invariant is explicit (and the types narrow from ``str | None``).
@@ -1281,19 +1308,18 @@ def up(
                 and preview_service_name is not None
                 and preview_title is not None
             )
-            wrapper_args = [
-                "--inner-service",
-                service_name,
-                "--title",
-                preview_title,
-                "--inner-path",
-                inner_path,
-            ]
             wrapper_port = _boot_wrapper(
                 repo_root,
                 name,
                 wrapper_log_path,
-                wrapper_args,
+                [
+                    "--inner-service",
+                    service_name,
+                    "--title",
+                    preview_title,
+                    "--inner-path",
+                    inner_path,
+                ],
                 pids,
                 http=http,
                 spawner=spawner,
@@ -1320,15 +1346,10 @@ def up(
             "wrapper_port": wrapper_port,
             "inner_path": inner_path if preview_requested else None,
             "pids": pids,
-            # Each pid's start time, so a later ``revive`` or ``down`` can tell the
-            # process it started from one a restart has handed the same pid.
             "pid_starts": [runner.process_start_time(pid) for pid in pids],
             "services": services,
             "inner_log": str(inner_log_path),
             "wrapper_log": str(wrapper_log_path) if preview_requested else None,
-            # What ``revive`` boots the wrapper (pids[1]) with again, on ``wrapper_port``.
-            "wrapper_args": wrapper_args,
-            "revive_first": list(revive_first),
             # The rest of the recipe to re-boot the inner server (pids[0]) on the
             # same ports, so ``refresh`` can replay it without re-passing any of
             # it. Only what the keys above do not already record -- refresh reads
@@ -1364,6 +1385,7 @@ def up(
             pids=pids,
             services=services,
             sleeper=sleeper,
+            kept_rows=kept_rows,
         )
         return 1
 
@@ -1396,14 +1418,6 @@ def up(
 FRAME_STATE_KEY = "frame"
 
 
-class FramedAppRegistration(NamedTuple):
-    """How the app a frame shows is registered while it is framed, so a revive registers it that way again."""
-
-    manifest_path: str
-    url: str
-    overrides: forward_port.ManifestOverrides
-
-
 class FrameRecord(NamedTuple):
     """What a frame was booted with, as ``frame()`` takes it: enough to boot it again unchanged."""
 
@@ -1414,16 +1428,6 @@ class FrameRecord(NamedTuple):
     kind: FrameKind
     note: str | None
     inner_path: str
-    # None for a frame that changes nothing about how the app it shows is registered.
-    framed_app: FramedAppRegistration | None = None
-
-
-def _frame_record_json(record: FrameRecord) -> dict[str, object]:
-    framed_app = record.framed_app
-    return {
-        **record._asdict(),
-        "framed_app": framed_app._asdict() if framed_app is not None else None,
-    }
 
 
 def read_frame(name: str, repo_root: Path) -> FrameRecord | None:
@@ -1437,23 +1441,7 @@ def read_frame(name: str, repo_root: Path) -> FrameRecord | None:
         return None
     try:
         recorded = json.loads(state_path.read_text())[FRAME_STATE_KEY]
-        framed_app = recorded.get("framed_app")
-        return FrameRecord(
-            inner_service=recorded["inner_service"],
-            frame_service_name=recorded["frame_service_name"],
-            title=recorded["title"],
-            display_name=recorded["display_name"],
-            kind=FrameKind(recorded["kind"]),
-            note=recorded["note"],
-            inner_path=recorded["inner_path"],
-            framed_app=FramedAppRegistration(
-                manifest_path=framed_app["manifest_path"],
-                url=framed_app["url"],
-                overrides=framed_app["overrides"],
-            )
-            if framed_app is not None
-            else None,
-        )
+        return FrameRecord(**{**recorded, "kind": FrameKind(recorded["kind"])})
     except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as exc:
         raise InstanceError(f"{state_path} records no frame to read: {exc!r}") from exc
 
@@ -1463,13 +1451,13 @@ def _keep_frame_record(
     name: str,
     record: FrameRecord,
     *,
-    wrapper_port: int | None = None,
-    services: Sequence[str] = (),
+    wrapper_port: int | None,
+    services: Sequence[str],
 ) -> None:
     """Leave a state for ``name`` holding its frame record and nothing running.
 
-    ``services`` are the rows still registered for it, with ``wrapper_port`` the port
-    they point at, so ``down`` removes them and the next boot takes that port again.
+    ``services`` are the rows still registered for it, at ``wrapper_port``, so ``down``
+    removes them and the next boot takes that port again when it is free.
     """
     state_path = _state_path(repo_root, name)
     try:
@@ -1481,7 +1469,7 @@ def _keep_frame_record(
                     "wrapper_port": wrapper_port,
                     "pids": [],
                     "services": list(services),
-                    FRAME_STATE_KEY: _frame_record_json(record),
+                    FRAME_STATE_KEY: record._asdict(),
                 },
                 indent=2,
             )
@@ -1504,8 +1492,6 @@ def frame(
     kind: FrameKind,
     note: str | None = None,
     inner_path: str = "/",
-    framed_app: FramedAppRegistration | None = None,
-    keeps_row_on_failure: bool = False,
     runner: Runner,
     registry: Registry,
     http: HttpClient,
@@ -1522,17 +1508,16 @@ def frame(
     registration -- and the origin an open window shows it at -- stays put; when
     another process has taken that port, the wrapper boots on a fresh one and its
     row is re-pointed there. ``down`` with the same ``name`` kills the wrapper and
-    deregisters it, and never touches the inner service. ``framed_app`` is only
-    recorded: it is how ``revive`` registers the inner service again.
+    deregisters it, and never touches the inner service. The frame's row names
+    ``inner_service`` as the app it frames, so the shell can offer to start the frame
+    again once it stops.
 
-    Returns 1 on failure. A failed boot is torn down, a re-frame's row deregistered
-    with it unless ``keeps_row_on_failure`` (a revive's, whose row is what an open
-    window and the shell find the instance by); a failed re-frame keeps its record
-    (``read_frame``), so a later call can boot it again without being told the note:
-    on a fresh port, or, when its row was kept, on the port that row points at. An
-    inner path without a leading ``/``, a ``repo_root`` that is a linked git worktree, an
-    unreadable state file, or a previous wrapper that survives SIGKILL is refused
-    before anything changes, leaving a previous frame as it was.
+    Returns 1 on failure. A failed boot is torn down; a failed re-frame keeps its
+    record (``read_frame``) and the row an open window shows, so a later call can boot
+    it again without being told the note. An inner path without a leading ``/``, a
+    ``repo_root`` that is a linked git worktree, an unreadable state file, or a
+    previous wrapper that survives SIGKILL is refused before anything changes, leaving
+    a previous frame as it was.
     """
     if not inner_path.startswith("/"):
         sys.stderr.write(
@@ -1602,12 +1587,11 @@ def frame(
         kind=kind,
         note=note,
         inner_path=inner_path,
-        framed_app=framed_app,
     )
     pids: list[int] = []
-    # Counted as registered from the start when re-framing a frame that had a port: its
-    # row is already there, and a failed re-boot must not leave it routing at a dead port.
-    services: list[str] = [frame_service_name] if has_row else []
+    # A re-frame of a frame that had a port starts with its row already there.
+    kept_rows = [frame_service_name] if has_row else []
+    services: list[str] = list(kept_rows)
     try:
         wrapper_port = _boot_wrapper(
             repo_root,
@@ -1628,7 +1612,7 @@ def frame(
             "forward_port register (frame)",
             display_name=display_name,
             isolated_instance=forward_port.IsolatedInstanceTag(
-                name=name, kind=kind.value
+                app=inner_service, kind=kind.value
             ),
         )
         if frame_service_name not in services:
@@ -1640,7 +1624,7 @@ def frame(
             "pid_starts": [runner.process_start_time(pid) for pid in pids],
             "services": services,
             "wrapper_log": str(wrapper_log_path),
-            FRAME_STATE_KEY: _frame_record_json(record),
+            FRAME_STATE_KEY: record._asdict(),
         }
         state_path.write_text(json.dumps(state, indent=2))
     except (InstanceError, OSError) as exc:
@@ -1652,15 +1636,18 @@ def frame(
             runner,
             registry,
             pids=pids,
-            services=[] if keeps_row_on_failure else services,
+            services=services,
             sleeper=sleeper,
+            kept_rows=kept_rows,
         )
-        if is_reframe and keeps_row_on_failure:
+        if is_reframe:
             _keep_frame_record(
-                repo_root, name, record, wrapper_port=recorded_port, services=services
+                repo_root,
+                name,
+                record,
+                wrapper_port=recorded_port if kept_rows else None,
+                services=kept_rows,
             )
-        elif is_reframe:
-            _keep_frame_record(repo_root, name, record)
         return 1
     sys.stderr.write(
         f"frame up: '{frame_service_name}' frames '{inner_service}' (wrapper on port "
@@ -1676,9 +1663,10 @@ def down(
     runner: Runner,
     registry: Registry,
     sleeper: Callable[[float], None] = time.sleep,
+    keeps_rows: Sequence[str] = (),
 ) -> int:
     """Tear down the instance for ``name``: kill the server(s), deregister the
-    service(s), delete the state directory.
+    service(s) other than ``keeps_rows``, delete the state directory.
 
     Idempotent: a missing state file is a no-op success, so this is safe to run to
     clean up after a successful test, a rejected preview, or a half-set-up
@@ -1700,7 +1688,9 @@ def down(
         sys.stderr.write(f"error: could not read instance state {state_path}: {exc}\n")
         return 1
     pids = _pids_still_ours(state, runner)
-    services = state.get("services") or []
+    services = [
+        service for service in state.get("services") or [] if service not in keeps_rows
+    ]
     survivors = _teardown(
         repo_root, runner, registry, pids=pids, services=services, sleeper=sleeper
     )
@@ -1715,6 +1705,41 @@ def down(
     shutil.rmtree(_state_dir(repo_root, name), ignore_errors=True)
     sys.stderr.write(f"instance for '{name}' torn down.\n")
     return 0
+
+
+def is_running(name: str, repo_root: Path, *, runner: Runner) -> bool:
+    """Whether every process instance ``name`` recorded is still the one it started.
+
+    False with no readable state, with nothing recorded running, or once any of its
+    processes has exited or had its pid handed to another process by a restart.
+    """
+    try:
+        state = json.loads(_state_path(repo_root, name).read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    pids = [int(pid) for pid in state.get("pids") or []]
+    starts = state.get("pid_starts") or []
+    if not pids:
+        return False
+    for index, pid in enumerate(pids):
+        recorded = str(starts[index]) if index < len(starts) else ""
+        if recorded:
+            if runner.process_start_time(pid) != recorded:
+                return False
+        elif not runner.process_group_alive(pid):
+            return False
+    return True
+
+
+@contextlib.contextmanager
+def instance_lock(repo_root: Path, name: str) -> Generator[None]:
+    """Held while instance ``name`` is brought back, so two callers at once (two
+    windows, or a window and an agent) boot it once."""
+    lock_path = repo_root / STATE_ROOT / f"{name}{LOCK_SUFFIX}"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        yield
 
 
 def refresh(
@@ -1770,6 +1795,17 @@ def refresh(
 
     old_pid = int(pids[0])
     port = int(state["inner_port"])
+    port_by_name = {
+        str(port_name): int(value)
+        for port_name, value in (state.get("ports") or {}).items()
+    }
+    copy_by_key = {
+        str(key): str(value) for key, value in (state.get("copies") or {}).items()
+    }
+    scratch_dir = str(
+        state.get("scratch") or _state_dir(repo_root, name) / SCRATCH_DIRNAME
+    )
+    inner_log = str(state["inner_log"])
     if not _link_project_venv(
         venv_linker, str(state["cwd"]), inner.get("project"), "refresh"
     ):
@@ -1778,9 +1814,8 @@ def refresh(
     #    listening socket cannot be rebound, so we must not respawn until it is
     #    gone -- otherwise the new process fails to bind. A pid a restart handed to
     #    another process is left alone: the server it named is already gone.
-    starts = state.get("pid_starts") or []
-    recorded_start = str(starts[0]) if starts else ""
-    if recorded_start and runner.process_start_time(old_pid) != recorded_start:
+    starts = list(state.get("pid_starts") or [])
+    if starts and starts[0] and runner.process_start_time(old_pid) != starts[0]:
         sys.stderr.write(
             f"note: inner server pid {old_pid} is no longer the process this instance "
             "started (it exited, or the workspace restarted); leaving it alone.\n"
@@ -1793,58 +1828,6 @@ def refresh(
         return 1
 
     # 2. Relaunch the recorded inner command on the SAME ports.
-    if not _respawn_inner(
-        name,
-        repo_root,
-        state,
-        "refresh",
-        stops_unhealthy=False,
-        runner=runner,
-        http=http,
-        spawner=spawner,
-        sleeper=sleeper,
-    ):
-        return 1
-    sys.stderr.write(
-        f"refresh: inner server for '{name}' rebooted on port {port}; reload the "
-        "window to see the current build.\n"
-    )
-    return 0
-
-
-def _respawn_inner(
-    name: str,
-    repo_root: Path,
-    state: dict,
-    verb: str,
-    *,
-    stops_unhealthy: bool,
-    runner: Runner,
-    http: HttpClient,
-    spawner: Spawner,
-    sleeper: Callable[[float], None],
-) -> bool:
-    """Launch the recorded inner command (``pids[0]``) on its recorded ports and wait until it is healthy.
-
-    The new pid and its start time are written to the state file before the health
-    wait, so ``down`` reaches the server even when it never becomes healthy. With
-    ``stops_unhealthy`` a server that never becomes healthy is killed, so the next
-    call reads it as stopped and boots it again. False, said on stderr, when the
-    recipe cannot be replayed, the launch fails, or the server does not come up.
-    """
-    inner = state["inner"]
-    port = int(state["inner_port"])
-    port_by_name = {
-        str(port_name): int(value)
-        for port_name, value in (state.get("ports") or {}).items()
-    }
-    copy_by_key = {
-        str(key): str(value) for key, value in (state.get("copies") or {}).items()
-    }
-    scratch_dir = str(
-        state.get("scratch") or _state_dir(repo_root, name) / SCRATCH_DIRNAME
-    )
-    inner_log = str(state["inner_log"])
     try:
         env = _inner_env(
             inner["port_env_by_name"],
@@ -1857,9 +1840,9 @@ def _respawn_inner(
         )
     except InstanceError as exc:
         sys.stderr.write(
-            f"{verb}: the recorded recipe for '{name}' cannot be replayed: {exc}\n"
+            f"refresh: the recorded recipe for '{name}' cannot be replayed: {exc}\n"
         )
-        return False
+        return 1
     _append_boot_marker(Path(inner_log), name)
     try:
         new_pid = spawner.spawn_detached(
@@ -1869,16 +1852,16 @@ def _respawn_inner(
             log_path=inner_log,
         )
     except OSError as exc:
-        sys.stderr.write(f"{verb}: failed to relaunch the inner server: {exc}\n")
-        return False
-    pids = list(state["pids"])
+        sys.stderr.write(f"refresh: failed to relaunch the inner server: {exc}\n")
+        return 1
+    # Record the new pid *before* the health wait so ``down`` can still kill it
+    # even if it never becomes healthy (no leaked server).
     pids[0] = new_pid
     state["pids"] = pids
-    starts = list(state.get("pid_starts") or [])
     if starts:
         starts[0] = runner.process_start_time(new_pid)
         state["pid_starts"] = starts
-    _state_path(repo_root, name).write_text(json.dumps(state, indent=2))
+    state_path.write_text(json.dumps(state, indent=2))
 
     probe = wait_healthy(
         http,
@@ -1889,334 +1872,18 @@ def _respawn_inner(
     )
     if not probe.is_healthy:
         sys.stderr.write(
-            f"{verb}: inner server did not become healthy on port {port} after "
+            f"refresh: inner server did not become healthy on port {port} after "
             "reboot. The preview window will show an error until the underlying "
-            f"build boots; fix it and {verb} again.\n"
+            "build boots; fix it and refresh again.\n"
             f"{probe.describe()}\n"
             f"{_log_excerpt(Path(inner_log))}"
         )
-        if stops_unhealthy:
-            _kill_process_group_and_wait(runner, new_pid, sleeper)
-        return False
-    return True
-
-
-def _is_recorded_process_running(runner: Runner, pid: int, recorded_start: str) -> bool:
-    """Whether ``pid`` is still the process the instance started: its start time matches the
-    recorded one, or, where none could be recorded, its process group is alive."""
-    if recorded_start:
-        return runner.process_start_time(pid) == recorded_start
-    return runner.process_group_alive(pid)
-
-
-def revive(
-    name: str,
-    repo_root: Path,
-    *,
-    runner: Runner,
-    registry: Registry,
-    http: HttpClient,
-    spawner: Spawner,
-    venv_linker: VenvLinker,
-    sleeper: Callable[[float], None] = time.sleep,
-) -> int:
-    """Boot again whatever part of instance ``name`` is no longer running, as it was booted.
-
-    What a workspace restart stops comes back on its recorded ports, so its
-    registrations and any open window point at it again, and over its copies, so it
-    shows the data it had. Parts still running are left alone, the instances its
-    ``revive_first`` names come back first, and a frame is booted again from its
-    record. Two revives of one instance at once boot it once. Returns 1 when a boot
-    fails, and ``REVIVE_IMPOSSIBLE_EXIT_CODE`` when only a fresh ``up`` can bring it
-    back: no record, a record it cannot read, a record from before revives, a recorded
-    port another process now holds, or a copy or the checkout it was booted from that
-    is gone.
-    """
-    lock_path = repo_root / STATE_ROOT / f"{name}{REVIVE_LOCK_SUFFIX}"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "w") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
-        return _revive_locked(
-            name,
-            repo_root,
-            runner=runner,
-            registry=registry,
-            http=http,
-            spawner=spawner,
-            venv_linker=venv_linker,
-            sleeper=sleeper,
-        )
-
-
-def _revive_locked(
-    name: str,
-    repo_root: Path,
-    *,
-    runner: Runner,
-    registry: Registry,
-    http: HttpClient,
-    spawner: Spawner,
-    venv_linker: VenvLinker,
-    sleeper: Callable[[float], None],
-) -> int:
-    state_path = _state_path(repo_root, name)
-    if not state_path.exists():
-        sys.stderr.write(
-            f"revive: no instance named '{name}' is recorded; boot it with `up`.\n"
-        )
-        return REVIVE_IMPOSSIBLE_EXIT_CODE
-    try:
-        state = json.loads(state_path.read_text())
-    except (json.JSONDecodeError, OSError) as exc:
-        sys.stderr.write(f"error: could not read instance state {state_path}: {exc}\n")
-        return REVIVE_IMPOSSIBLE_EXIT_CODE
-    if FRAME_STATE_KEY in state:
-        return _revive_frame(
-            name,
-            repo_root,
-            state,
-            runner=runner,
-            registry=registry,
-            http=http,
-            spawner=spawner,
-            sleeper=sleeper,
-        )
-    for sibling in state.get("revive_first") or []:
-        sibling_code = revive(
-            str(sibling),
-            repo_root,
-            runner=runner,
-            registry=registry,
-            http=http,
-            spawner=spawner,
-            venv_linker=venv_linker,
-            sleeper=sleeper,
-        )
-        if sibling_code != 0:
-            sys.stderr.write(
-                f"revive: '{name}' frames '{sibling}', which could not be started again (see above).\n"
-            )
-            return sibling_code
-
-    pids = [int(pid) for pid in state.get("pids") or []]
-    starts = state.get("pid_starts")
-    is_wrapped = len(pids) > 1
-    if (
-        not state.get("inner")
-        or not pids
-        or starts is None
-        or (is_wrapped and not state.get("wrapper_args"))
-    ):
-        sys.stderr.write(
-            f"revive: '{name}' was booted before its record kept what a revive needs; boot it again with `up`.\n"
-        )
-        return REVIVE_IMPOSSIBLE_EXIT_CODE
-    is_inner_running = _is_recorded_process_running(runner, pids[0], str(starts[0]))
-    is_wrapper_running = not is_wrapped or _is_recorded_process_running(
-        runner, pids[1], str(starts[1])
-    )
-    if is_inner_running and is_wrapper_running:
-        sys.stderr.write(f"revive: '{name}' is already running.\n")
-        return 0
-
-    if _refuses_reviving_over_what_is_gone(
-        name,
-        state,
-        is_inner_running=is_inner_running,
-        is_wrapper_running=is_wrapper_running,
-    ):
-        return REVIVE_IMPOSSIBLE_EXIT_CODE
-
-    if not is_inner_running:
-        inner = state["inner"]
-        if not _link_project_venv(
-            venv_linker, str(state["cwd"]), inner.get("project"), "revive"
-        ):
-            return 1
-        if not _respawn_inner(
-            name,
-            repo_root,
-            state,
-            "revive",
-            stops_unhealthy=True,
-            runner=runner,
-            http=http,
-            spawner=spawner,
-            sleeper=sleeper,
-        ):
-            return 1
-    if not is_wrapper_running and not _revive_wrapper(
-        name,
-        repo_root,
-        state,
-        runner=runner,
-        http=http,
-        spawner=spawner,
-        sleeper=sleeper,
-    ):
         return 1
     sys.stderr.write(
-        f"revive: '{name}' is running again on port {state['inner_port']}.\n"
+        f"refresh: inner server for '{name}' rebooted on port {port}; reload the "
+        "window to see the current build.\n"
     )
     return 0
-
-
-def _refuses_reviving_over_what_is_gone(
-    name: str, state: dict, *, is_inner_running: bool, is_wrapper_running: bool
-) -> bool:
-    """Whether what the stopped parts of instance ``name`` need is gone, said on stderr.
-
-    A port another process took while the instance was down cannot be rebound, a copy a
-    restore from backup left out would boot it over nothing, and it cannot boot from a
-    checkout (a preview's worktree) that has been removed.
-    """
-    ports_needed = (
-        []
-        if is_inner_running
-        else [int(value) for value in (state.get("ports") or {}).values()]
-    )
-    if not is_wrapper_running:
-        ports_needed.append(int(state["wrapper_port"]))
-    taken = [port for port in ports_needed if not _port_is_free(port)]
-    if taken:
-        sys.stderr.write(
-            f"revive: port(s) {', '.join(map(str, taken))} of '{name}' now belong to another process; "
-            "boot it again with `up`.\n"
-        )
-        return True
-    if is_inner_running:
-        return False
-    gone = [
-        str(copy)
-        for copy in (state.get("copies") or {}).values()
-        if not Path(str(copy)).is_dir()
-    ]
-    if gone:
-        sys.stderr.write(
-            f"revive: the copies of '{name}' at {', '.join(gone)} are gone; boot it again with `up`.\n"
-        )
-        return True
-    if not Path(str(state["cwd"])).is_dir():
-        sys.stderr.write(
-            f"revive: the checkout '{name}' was booted from, {state['cwd']}, is gone; boot it again with `up`.\n"
-        )
-        return True
-    return False
-
-
-def _revive_wrapper(
-    name: str,
-    repo_root: Path,
-    state: dict,
-    *,
-    runner: Runner,
-    http: HttpClient,
-    spawner: Spawner,
-    sleeper: Callable[[float], None],
-) -> bool:
-    """Boot the preview frame (``pids[1]``) again with its recorded arguments on its recorded port.
-
-    Its new pid and start time replace the old in the state file once it is healthy. False,
-    said on stderr, when it does not come up; whatever it started is killed.
-    """
-    wrapper_log = Path(str(state["wrapper_log"]))
-    wrapper_pids: list[int] = []
-    try:
-        _boot_wrapper(
-            repo_root,
-            name,
-            wrapper_log,
-            [str(arg) for arg in state["wrapper_args"]],
-            wrapper_pids,
-            http=http,
-            spawner=spawner,
-            sleeper=sleeper,
-            port=int(state["wrapper_port"]),
-        )
-    except (InstanceError, OSError) as exc:
-        for pid in wrapper_pids:
-            _kill_process_group_and_wait(runner, pid, sleeper)
-        sys.stderr.write(f"revive: {exc}\n{_log_excerpt(wrapper_log)}")
-        return False
-    pids = list(state["pids"])
-    pids[1] = wrapper_pids[0]
-    starts = list(state["pid_starts"])
-    starts[1] = runner.process_start_time(wrapper_pids[0])
-    state["pids"] = pids
-    state["pid_starts"] = starts
-    _state_path(repo_root, name).write_text(json.dumps(state, indent=2))
-    return True
-
-
-def _revive_frame(
-    name: str,
-    repo_root: Path,
-    state: dict,
-    *,
-    runner: Runner,
-    registry: Registry,
-    http: HttpClient,
-    spawner: Spawner,
-    sleeper: Callable[[float], None],
-) -> int:
-    """Boot a frame again from its record unless its wrapper still runs; ``frame`` keeps its port when it is free."""
-    pids = [int(pid) for pid in state.get("pids") or []]
-    starts = state.get("pid_starts") or []
-    if pids and _is_recorded_process_running(
-        runner, pids[0], str(starts[0]) if starts else ""
-    ):
-        sys.stderr.write(f"revive: '{name}' is already running.\n")
-        return 0
-    try:
-        record = read_frame(name, repo_root)
-    except InstanceError as exc:
-        sys.stderr.write(f"revive: {exc}\n")
-        return REVIVE_IMPOSSIBLE_EXIT_CODE
-    assert record is not None
-    # The app's own program registered it from its manifest alone when it came back; it is
-    # framed the way the frame's owner framed it, and put back plainly if the frame fails.
-    framed_app = record.framed_app
-    if framed_app is not None and not _register_framed_app(
-        registry, repo_root, framed_app, framed_app.overrides
-    ):
-        return 1
-    code = frame(
-        name,
-        repo_root,
-        inner_service=record.inner_service,
-        frame_service_name=record.frame_service_name,
-        title=record.title,
-        display_name=record.display_name,
-        kind=record.kind,
-        note=record.note,
-        inner_path=record.inner_path,
-        framed_app=framed_app,
-        keeps_row_on_failure=True,
-        runner=runner,
-        registry=registry,
-        http=http,
-        spawner=spawner,
-        sleeper=sleeper,
-    )
-    if code != 0 and framed_app is not None:
-        _register_framed_app(registry, repo_root, framed_app, None)
-    return code
-
-
-def _register_framed_app(
-    registry: Registry,
-    repo_root: Path,
-    framed_app: FramedAppRegistration,
-    overrides: forward_port.ManifestOverrides | None,
-) -> bool:
-    try:
-        registry.register_manifest(
-            repo_root, Path(framed_app.manifest_path), framed_app.url, overrides
-        )
-    except forward_port.RegistryError as exc:
-        sys.stderr.write(f"revive: could not register the framed app again: {exc}\n")
-        return False
-    return True
 
 
 def _add_repo_root_arg(subparser: argparse.ArgumentParser) -> None:
@@ -2368,16 +2035,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     _add_repo_root_arg(refresh_parser)
 
-    revive_parser = subparsers.add_parser(
-        "revive",
-        help="Boot again whatever part of an instance has stopped (after a workspace "
-        "restart), on its recorded ports and over its copies.",
-    )
-    revive_parser.add_argument(
-        "--name", required=True, help="The name passed to 'up' or 'frame'."
-    )
-    _add_repo_root_arg(revive_parser)
-
     args = parser.parse_args(argv)
     repo_root = Path(args.repo_root).resolve()
     if args.command == "up":
@@ -2423,16 +2080,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.name,
             repo_root,
             runner=Runner(),
-            http=HttpClient(),
-            spawner=Spawner(),
-            venv_linker=VenvLinker(),
-        )
-    if args.command == "revive":
-        return revive(
-            args.name,
-            repo_root,
-            runner=Runner(),
-            registry=Registry(),
             http=HttpClient(),
             spawner=Spawner(),
             venv_linker=VenvLinker(),

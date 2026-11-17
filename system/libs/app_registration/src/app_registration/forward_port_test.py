@@ -1588,12 +1588,12 @@ def test_the_isolated_instance_tag_reaches_the_shells_reader_and_is_cleared_by_a
         "http://localhost:9001",
         is_icon_declined=True,
         display_name="Inbox (UI sketch)",
-        isolated_instance={"name": "inbox-sketch", "kind": "mock"},
+        isolated_instance={"app": "inbox", "kind": "mock"},
     )
 
     [row] = read_registry(apps_file)
     assert row.isolated_instance == IsolatedInstanceRef(
-        name="inbox-sketch", kind=IsolatedInstanceKind.MOCK
+        app="inbox", kind=IsolatedInstanceKind.MOCK
     )
 
     forward_port.register(

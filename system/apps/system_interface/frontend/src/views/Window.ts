@@ -102,13 +102,13 @@ export interface WindowAttrs {
   readonly chrome: ThemeChrome;
 }
 
-/** What a stopped preview's or UI sketch's placeholder offers: starting it again, closing its window, and how
- *  the last start went. */
+/** What a stopped preview's or UI sketch's placeholder offers: starting it again, asking in chat, closing its
+ *  window, and how the last start went. */
 export interface StoppedInstanceActions {
   readonly revival: InstanceRevival;
   readonly onStart: () => void;
   readonly onClose: () => void;
-  /** Drafts a request for a new one into the chat, for one no start can bring back. */
+  /** Drafts what happened to it into the chat, unsent, for the user to say what they want. */
   readonly onAskInChat: () => void;
 }
 
@@ -121,9 +121,12 @@ export interface StoppedInstanceVerbs {
   draftText(text: string): Promise<boolean>;
 }
 
-/** What the chat is asked, in the user's words, for a stopped preview or UI sketch no start can bring back. */
-function newInstancePrompt(displayName: string, kind: InstanceKind): string {
-  return `"${displayName}" stopped and can't be started again. Make me a new ${instanceNoun(kind)}.`;
+/** What is drafted into the chat, in the user's words, about a stopped preview or UI sketch. */
+function askInChatDraft(displayName: string, kind: InstanceKind, revival: InstanceRevival): string {
+  const noun = instanceNoun(kind);
+  return revival.kind === "failed"
+    ? `The "${displayName}" ${noun} stopped, and starting it again failed.`
+    : `The "${displayName}" ${noun} stopped.`;
 }
 
 /** What the placeholder of window ``windowId`` offers when its app is a preview or UI sketch; null for any other
@@ -135,11 +138,12 @@ export function stoppedInstanceActionsOf(
 ): StoppedInstanceActions | null {
   const kind = app?.instance_kind ?? null;
   if (app === undefined || kind === null || !verbs.canReviveApp(app)) return null;
+  const revival = verbs.instanceRevival(app.name);
   return {
-    revival: verbs.instanceRevival(app.name),
+    revival,
     onStart: () => void verbs.reviveApp(app.name),
     onClose: () => void verbs.closeOrMinimizeWindow(windowId),
-    onAskInChat: () => void verbs.draftText(newInstancePrompt(app.display_name, kind)),
+    onAskInChat: () => void verbs.draftText(askInChatDraft(app.display_name, kind, revival)),
   };
 }
 
@@ -151,22 +155,6 @@ function instanceNoun(kind: InstanceKind): string {
 function stoppedInstancePlaceholder(kind: InstanceKind, actions: StoppedInstanceActions): m.Vnode {
   const revival = actions.revival;
   const isStarting = revival.kind === "starting";
-  const canStart = !(revival.kind === "failed" && !revival.canRetry);
-  const primary = canStart
-    ? m(
-        Button,
-        {
-          variant: "primary",
-          sm: true,
-          readonly: isStarting,
-          "data-revive-start": "",
-          onclick: () => {
-            if (!isStarting) actions.onStart();
-          },
-        },
-        isStarting ? "Starting..." : "Start it again",
-      )
-    : m(Button, { variant: "primary", sm: true, "data-revive-ask": "", onclick: actions.onAskInChat }, "Ask in chat");
   return m(
     "div",
     {
@@ -180,7 +168,24 @@ function stoppedInstancePlaceholder(kind: InstanceKind, actions: StoppedInstance
         ? m("div", { "data-revive-failure": "", class: "text-(length:--font-size-row) text-faint" }, revival.reason)
         : null,
       m("div", { class: "flex gap-2" }, [
-        primary,
+        m(
+          Button,
+          {
+            variant: "primary",
+            sm: true,
+            readonly: isStarting,
+            "data-revive-start": "",
+            onclick: () => {
+              if (!isStarting) actions.onStart();
+            },
+          },
+          isStarting ? "Starting..." : "Start it again",
+        ),
+        m(
+          Button,
+          { variant: "secondary", sm: true, "data-revive-ask": "", onclick: actions.onAskInChat },
+          "Ask in chat",
+        ),
         m(Button, { variant: "secondary", sm: true, "data-revive-close": "", onclick: actions.onClose }, "Close"),
       ]),
     ],

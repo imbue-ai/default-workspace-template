@@ -17,12 +17,10 @@ from __future__ import annotations
 import io
 import json
 import os
-import shutil
 import signal
 import socket
 import subprocess
 import sys
-import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -108,9 +106,6 @@ class _RecordingRegistry(mod.Registry):
 
     registered: list[_Registration] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
-    manifest_registrations: list[
-        tuple[str, str, forward_port.ManifestOverrides | None]
-    ] = field(default_factory=list)
     refused: frozenset[str] = frozenset()
 
     def register(
@@ -132,15 +127,6 @@ class _RecordingRegistry(mod.Registry):
 
     def remove(self, repo_root: Path, service_name: str) -> None:
         self.removed.append(service_name)
-
-    def register_manifest(
-        self,
-        repo_root: Path,
-        manifest_path: Path,
-        url: str,
-        overrides: forward_port.ManifestOverrides | None,
-    ) -> None:
-        self.manifest_registrations.append((str(manifest_path), url, overrides))
 
     def by_name(self) -> dict[str, _Registration]:
         return {entry.service_name: entry for entry in self.registered}
@@ -210,7 +196,6 @@ def _plenty_of_disk(_path: Path) -> int:
 def _up(
     tmp_path: Path,
     *,
-    name: str = _NAME,
     runner: _RecordingRunner | None = None,
     registry: _RecordingRegistry | None = None,
     http: _FakeHttp | None = None,
@@ -220,7 +205,7 @@ def _up(
     **kwargs,
 ) -> int:
     return mod.up(
-        name,
+        _NAME,
         _LAUNCH,
         str(cwd if cwd is not None else tmp_path),
         tmp_path,
@@ -482,16 +467,9 @@ def test_up_with_service_name_registers_the_instance(tmp_path: Path) -> None:
 
     assert code == 0
     port = json.loads(_state_path(tmp_path).read_text())["inner_port"]
-    # Unwrapped, the instance's own origin is the surface: it stays an app to open, and
-    # its row names the instance so the shell can start it again.
+    # Unwrapped, the instance's own origin is the surface: it stays an app to open.
     assert registry.registered == [
-        _Registration(
-            "demo-app",
-            f"http://localhost:{port}",
-            False,
-            None,
-            {"name": _NAME, "kind": "change"},
-        )
+        _Registration("demo-app", f"http://localhost:{port}", False, None)
     ]
     state = json.loads(_state_path(tmp_path).read_text())
     assert state["services"] == ["demo-app"]
@@ -567,12 +545,31 @@ def test_up_preview_surfaces_only_the_frame_and_titles_it(tmp_path: Path) -> Non
     assert by_name["demo-app"].display_name is None
     assert not by_name["demo-preview"].internal
     assert by_name["demo-preview"].display_name == "my change"
-    # Only the row a window shows names the instance the shell can start again.
-    assert by_name["demo-preview"].isolated_instance == {
-        "name": _NAME,
-        "kind": "change",
-    }
-    assert by_name["demo-app"].isolated_instance is None
+
+
+def test_only_the_row_a_previews_window_shows_names_the_app_it_previews(
+    tmp_path: Path,
+) -> None:
+    wrapped = _RecordingRegistry()
+    assert _up_preview(tmp_path, registry=wrapped, preview_of_app="demo") == 0
+    unwrapped = _RecordingRegistry()
+    assert (
+        _up(
+            tmp_path,
+            registry=unwrapped,
+            service_name="demo-app",
+            preview_of_app="demo",
+        )
+        == 0
+    )
+    untagged = _RecordingRegistry()
+    assert _up_preview(tmp_path, registry=untagged) == 0
+
+    tag = {"app": "demo", "kind": "change"}
+    assert wrapped.by_name()["demo-preview"].isolated_instance == tag
+    assert wrapped.by_name()["demo-app"].isolated_instance is None
+    assert unwrapped.by_name()["demo-app"].isolated_instance == tag
+    assert all(entry.isolated_instance is None for entry in untagged.registered)
 
 
 def test_up_preview_requires_service_name(tmp_path: Path) -> None:
@@ -924,23 +921,6 @@ def test_refresh_reboots_inner_on_same_port_leaving_wrapper_and_services(
     state = json.loads(_state_path(tmp_path).read_text())
     assert state["pids"] == [5555, 4243]
     assert state["services"] == ["demo-app", "demo-preview"]
-
-
-def test_refresh_after_a_restart_never_signals_the_pid_another_process_now_holds(
-    tmp_path: Path,
-) -> None:
-    up_spawner = _FakeSpawner()
-    runner = _RecordingRunner(start_times={4242: "boot", 4243: "boot"})
-    assert _up_preview(tmp_path, runner=runner, spawner=up_spawner) == 0
-    inner_port = json.loads(_state_path(tmp_path).read_text())["inner_port"]
-    runner.start_times = {4242: "after-restart", 4243: "after-restart"}
-    spawner = _FakeSpawner(detached_pid=5555)
-
-    code = _refresh(tmp_path, runner=runner, spawner=spawner)
-
-    assert code == 0
-    assert runner.killed_pgroups == []
-    assert spawner.detached_envs[0][_PORT_ENV] == str(inner_port)
 
 
 def test_refresh_without_state_is_an_error(tmp_path: Path) -> None:
@@ -1552,7 +1532,6 @@ def _frame(
     http: _FakeHttp | None = None,
     spawner: _FakeSpawner | None = None,
     note: str | None = "Sample data; refresh does not work yet.",
-    framed_app: mod.FramedAppRegistration | None = None,
 ) -> int:
     return mod.frame(
         _FRAME_NAME,
@@ -1563,7 +1542,6 @@ def _frame(
         display_name="Inbox (UI sketch)",
         kind=FrameKind.MOCK,
         note=note,
-        framed_app=framed_app,
         runner=runner or _RecordingRunner(),
         registry=registry or _RecordingRegistry(),
         http=http or _FakeHttp(_all_healthy),
@@ -1612,7 +1590,7 @@ def test_frame_boots_only_a_mock_wrapper_and_registers_only_the_frame(
             f"http://localhost:{_wrapper_arg(wrapper_argv, '--port')}",
             internal=False,
             display_name="Inbox (UI sketch)",
-            isolated_instance={"name": _FRAME_NAME, "kind": "mock"},
+            isolated_instance={"app": "inbox", "kind": "mock"},
         )
     ]
     state = json.loads(mod._state_path(tmp_path, _FRAME_NAME).read_text())
@@ -1720,45 +1698,41 @@ def test_a_real_process_start_time_holds_for_its_life_and_follows_its_parents(
     assert runner.process_start_time(pid) == ""
 
 
-def test_a_failed_reframe_deregisters_the_frame_but_keeps_its_record_for_a_retry(
+def test_a_failed_reframe_keeps_its_row_and_record_so_a_retry_boots_it_where_it_was(
     tmp_path: Path,
 ) -> None:
-    """The row must not route to a dead port, but the record is all a caller that never
-    saw the note has to boot the frame again with, so it survives the failure."""
+    """An open window shows the frame's row, and the record is all a caller that never
+    saw the note has to boot the frame again with, so both survive the failure; a retry
+    boots it on the port its row points at, and ``down`` still removes the row."""
     registry = _RecordingRegistry()
     spawner = _FakeSpawner()
     assert _frame(tmp_path, registry=registry, spawner=spawner) == 0
     recorded = mod.read_frame(_FRAME_NAME, tmp_path)
     assert recorded is not None
+    [first_argv] = spawner.detached_spawns
 
     code = _frame(
         tmp_path,
         registry=registry,
-        spawner=spawner,
+        spawner=_FakeSpawner(detached_pid=6000),
         http=_FakeHttp(lambda _url: None),
     )
 
     assert code == 1
-    assert registry.removed == [_FRAME_NAME]
+    assert registry.removed == []
     assert mod.read_frame(_FRAME_NAME, tmp_path) == recorded
 
-    retry_spawner = _FakeSpawner()
+    retry_spawner = _FakeSpawner(detached_pid=7000)
     assert _frame(tmp_path, registry=registry, spawner=retry_spawner) == 0
     [retry_argv] = retry_spawner.detached_spawns
-    # Registered afresh (the failure removed the row), and never removed again.
-    assert registry.removed == [_FRAME_NAME]
-    assert registry.registered[-1] == _Registration(
-        _FRAME_NAME,
-        f"http://localhost:{_wrapper_arg(retry_argv, '--port')}",
-        internal=False,
-        display_name="Inbox (UI sketch)",
-        isolated_instance={"name": _FRAME_NAME, "kind": "mock"},
-    )
+    assert _wrapper_arg(retry_argv, "--port") == _wrapper_arg(first_argv, "--port")
     assert _wrapper_arg(retry_argv, "--note") == recorded.note
+    assert registry.removed == []
     assert (
         mod.down(_FRAME_NAME, tmp_path, runner=_RecordingRunner(), registry=registry)
         == 0
     )
+    assert registry.removed == [_FRAME_NAME]
     assert mod.read_frame(_FRAME_NAME, tmp_path) is None
 
 
@@ -1818,7 +1792,7 @@ def test_down_removes_the_frame_and_nothing_else(tmp_path: Path) -> None:
     assert not mod._state_dir(tmp_path, _FRAME_NAME).exists()
 
 
-# revive
+# Booting an instance again over an earlier one
 
 
 def _restart(runner: _RecordingRunner, spawner: _FakeSpawner) -> None:
@@ -1826,353 +1800,87 @@ def _restart(runner: _RecordingRunner, spawner: _FakeSpawner) -> None:
     runner.start_times = {pid: "after-restart" for pid in spawner.detached_pids}
 
 
-def _revive(
-    tmp_path: Path,
-    name: str = _NAME,
-    *,
-    runner: _RecordingRunner,
-    registry: _RecordingRegistry | None = None,
-    spawner: _FakeSpawner | None = None,
-    http: _FakeHttp | None = None,
-) -> int:
-    return mod.revive(
-        name,
-        tmp_path,
-        runner=runner,
-        registry=registry or _RecordingRegistry(),
-        http=http or _FakeHttp(_all_healthy),
-        spawner=spawner or _FakeSpawner(detached_pid=7000),
-        venv_linker=_RecordingVenvLinker(),
-        sleeper=lambda _seconds: None,
-    )
-
-
-def _booted_preview(tmp_path: Path) -> tuple[_RecordingRunner, _FakeSpawner, dict]:
-    """A wrapped preview over a copy of a store, booted with start times recorded for both its servers."""
-    store = tmp_path / "data" / ".apps" / "my-service"
-    store.mkdir(parents=True)
-    (store / "records.json").write_text("[3]")
-    spawner = _FakeSpawner()
-    runner = _RecordingRunner(
-        start_times={spawner.detached_pid: "boot", spawner.detached_pid + 1: "boot"}
-    )
-    assert (
-        _up_preview(
-            tmp_path,
-            runner=runner,
-            spawner=spawner,
-            copy_sources={"store": "data/.apps/my-service"},
-            free_space=_plenty_of_disk,
-        )
-        == 0
-    )
-    return runner, spawner, json.loads(_state_path(tmp_path).read_text())
-
-
-def test_revive_boots_a_stopped_preview_again_on_its_ports_over_its_copy(
+def test_a_re_up_after_a_restart_never_signals_the_pids_other_processes_now_hold(
     tmp_path: Path,
 ) -> None:
-    runner, spawner, booted = _booted_preview(tmp_path)
-    (Path(booted["copies"]["store"]) / "records.json").write_text("[3, 4]")
+    spawner = _FakeSpawner()
+    runner = _RecordingRunner(start_times={4242: "boot", 4243: "boot"})
+    assert _up_preview(tmp_path, runner=runner, spawner=spawner) == 0
+    assert json.loads(_state_path(tmp_path).read_text())["pid_starts"] == [
+        "boot",
+        "boot",
+    ]
     _restart(runner, spawner)
-    registry = _RecordingRegistry()
-    revived = _FakeSpawner(detached_pid=7000)
 
-    assert _revive(tmp_path, runner=runner, registry=registry, spawner=revived) == 0
+    assert (
+        _up_preview(tmp_path, runner=runner, spawner=_FakeSpawner(detached_pid=7000))
+        == 0
+    )
 
-    inner_env, wrapper_argv = revived.detached_envs[0], revived.detached_spawns[1]
-    assert inner_env[_PORT_ENV] == str(booted["inner_port"])
-    assert revived.detached_spawns[0][-len(_LAUNCH) :] == _LAUNCH
-    assert _wrapper_arg(wrapper_argv, "--port") == str(booted["wrapper_port"])
-    assert wrapper_argv[-len(booted["wrapper_args"]) :] == booted["wrapper_args"]
-    # The copy it had, edits included, is what it runs over again.
-    assert (Path(booted["copies"]["store"]) / "records.json").read_text() == "[3, 4]"
-    # Nothing re-registered or removed: the rows still point at the same ports.
-    assert (registry.registered, registry.removed) == ([], [])
-    # A pid a restart handed to another process is never signalled.
     assert runner.killed_pgroups == []
-    state = json.loads(_state_path(tmp_path).read_text())
-    assert state["pids"] == revived.detached_pids
 
 
-def test_revive_boots_only_the_part_that_stopped(tmp_path: Path) -> None:
-    runner, spawner, booted = _booted_preview(tmp_path)
-    inner_pid, wrapper_pid = booted["pids"]
-    runner.start_times = {inner_pid: "boot", wrapper_pid: "after-restart"}
-    revived = _FakeSpawner(detached_pid=7000)
-
-    assert _revive(tmp_path, runner=runner, spawner=revived) == 0
-
-    assert len(revived.detached_spawns) == 1
-    assert _wrapper_arg(revived.detached_spawns[0], "--port") == str(
-        booted["wrapper_port"]
-    )
-    assert json.loads(_state_path(tmp_path).read_text())["pids"] == [inner_pid, 7000]
-
-
-def test_a_revive_whose_server_never_answers_stops_it_so_the_next_boots_it_again(
+def test_a_re_up_updates_the_rows_a_window_shows_in_place_and_drops_only_the_rest(
     tmp_path: Path,
 ) -> None:
-    runner, spawner, booted = _booted_preview(tmp_path)
-    _restart(runner, spawner)
-    runner.start_times[7000] = "revived"
-    inner_port = f":{booted['inner_port']}/"
-    silent_inner = _FakeHttp(lambda url: None if inner_port in url else 200)
-    revived = _FakeSpawner(detached_pid=7000)
+    """A window open on the preview's row never sees its app vanish while it boots again;
+    a row the new boot does not register again is removed."""
+    registry = _RecordingRegistry()
+    assert _up_preview(tmp_path, registry=registry) == 0
 
-    assert _revive(tmp_path, runner=runner, spawner=revived, http=silent_inner) == 1
-    assert runner.killed_pgroup(7000)
-    # Killed, the server is gone.
-    runner.start_times[7000] = ""
+    assert _up(tmp_path, registry=registry, service_name="demo-app") == 0
 
-    assert _revive(tmp_path, runner=runner, spawner=revived) == 0
-    assert json.loads(_state_path(tmp_path).read_text())["pids"] == [7001, 7002]
+    assert registry.removed == ["demo-preview"]
+    assert registry.registered[-1].service_name == "demo-app"
 
 
-def test_revive_of_a_running_instance_boots_nothing(tmp_path: Path) -> None:
-    runner, _spawner, _booted = _booted_preview(tmp_path)
-    revived = _FakeSpawner(detached_pid=7000)
-
-    assert _revive(tmp_path, runner=runner, spawner=revived) == 0
-
-    assert revived.detached_spawns == []
-
-
-def test_revive_refuses_a_port_another_process_took(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    runner, spawner, booted = _booted_preview(tmp_path)
-    _restart(runner, spawner)
-    revived = _FakeSpawner(detached_pid=7000)
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as squatter:
-        squatter.bind((mod.LOOPBACK_HOST, booted["wrapper_port"]))
-        squatter.listen(1)
-        code = _revive(tmp_path, runner=runner, spawner=revived)
-
-    assert code == mod.REVIVE_IMPOSSIBLE_EXIT_CODE
-    assert revived.detached_spawns == []
-    assert str(booted["wrapper_port"]) in capsys.readouterr().err
-
-
-def _drop_recorded_start_times(tmp_path: Path, _booted: dict) -> None:
-    """Leave a record as ``up`` wrote it before revives existed."""
-    state = json.loads(_state_path(tmp_path).read_text())
-    del state["pid_starts"]
-    _state_path(tmp_path).write_text(json.dumps(state))
-
-
-def _remove_the_copy(_tmp_path: Path, booted: dict) -> None:
-    shutil.rmtree(booted["copies"]["store"])
-
-
-@pytest.mark.parametrize(
-    "damage",
-    [_drop_recorded_start_times, _remove_the_copy],
-    ids=["record-from-before-revives", "copy-gone"],
-)
-def test_revive_refuses_what_only_a_fresh_up_can_bring_back(
-    tmp_path: Path, damage: Callable[[Path, dict], None]
-) -> None:
-    runner, spawner, booted = _booted_preview(tmp_path)
-    damage(tmp_path, booted)
-    _restart(runner, spawner)
-    revived = _FakeSpawner(detached_pid=7000)
-
-    assert (
-        _revive(tmp_path, runner=runner, spawner=revived)
-        == mod.REVIVE_IMPOSSIBLE_EXIT_CODE
-    )
-    assert revived.detached_spawns == []
-
-
-def test_revive_refuses_to_boot_from_a_checkout_that_is_gone(tmp_path: Path) -> None:
-    worktree = tmp_path / "worktree"
-    worktree.mkdir()
-    spawner = _FakeSpawner()
-    runner = _RecordingRunner(start_times={spawner.detached_pid: "boot"})
-    assert _up(tmp_path, runner=runner, spawner=spawner, cwd=worktree) == 0
-    worktree.rmdir()
-    _restart(runner, spawner)
-    revived = _FakeSpawner(detached_pid=7000)
-
-    assert (
-        _revive(tmp_path, runner=runner, spawner=revived)
-        == mod.REVIVE_IMPOSSIBLE_EXIT_CODE
-    )
-    assert revived.detached_spawns == []
-
-
-def test_two_revives_at_once_boot_the_instance_once(tmp_path: Path) -> None:
-    runner, spawner, _booted = _booted_preview(tmp_path)
-    _restart(runner, spawner)
-    # The servers the first revive boots read as running once it has recorded them.
-    runner.start_times.update({7000: "revived", 7001: "revived"})
-    first_boot_started = threading.Event()
-    release_first_boot = threading.Event()
-
-    def held_health(_url: str) -> int:
-        first_boot_started.set()
-        assert release_first_boot.wait(timeout=10)
-        return 200
-
-    revived = _FakeSpawner(detached_pid=7000)
-    codes: list[int] = []
-
-    def revive_with(http: _FakeHttp) -> None:
-        codes.append(_revive(tmp_path, runner=runner, spawner=revived, http=http))
-
-    first = threading.Thread(target=revive_with, args=(_FakeHttp(held_health),))
-    first.start()
-    assert first_boot_started.wait(timeout=10)
-    second = threading.Thread(target=revive_with, args=(_FakeHttp(_all_healthy),))
-    second.start()
-    release_first_boot.set()
-    first.join(timeout=10)
-    second.join(timeout=10)
-
-    assert codes == [0, 0]
-    assert revived.detached_pids == [7000, 7001]
-
-
-def test_revive_boots_the_siblings_a_preview_frames_first(tmp_path: Path) -> None:
-    spawner = _FakeSpawner()
-    runner = _RecordingRunner()
-    assert _up(tmp_path, name="chat-preview", runner=runner, spawner=spawner) == 0
-    assert (
-        _up(tmp_path, runner=runner, spawner=spawner, revive_first=["chat-preview"])
-        == 0
-    )
-    sibling_port = json.loads(mod._state_path(tmp_path, "chat-preview").read_text())[
-        "inner_port"
-    ]
-    own_port = json.loads(_state_path(tmp_path).read_text())["inner_port"]
-    revived = _FakeSpawner(detached_pid=7000)
-
-    assert _revive(tmp_path, runner=runner, spawner=revived) == 0
-
-    assert [env[_PORT_ENV] for env in revived.detached_envs] == [
-        str(sibling_port),
-        str(own_port),
-    ]
-
-
-def test_revive_of_a_preview_whose_sibling_cannot_come_back_cannot_either(
+def test_a_failed_re_up_keeps_the_rows_an_open_window_shows_until_down_removes_them(
     tmp_path: Path,
 ) -> None:
-    spawner = _FakeSpawner()
-    runner = _RecordingRunner(start_times={spawner.detached_pid: "boot"})
-    assert (
-        _up(tmp_path, runner=runner, spawner=spawner, revive_first=["chat-preview"])
-        == 0
-    )
-    _restart(runner, spawner)
-    revived = _FakeSpawner(detached_pid=7000)
-
-    assert (
-        _revive(tmp_path, runner=runner, spawner=revived)
-        == mod.REVIVE_IMPOSSIBLE_EXIT_CODE
-    )
-    assert revived.detached_spawns == []
-
-
-def test_revive_boots_a_stopped_frame_again_from_its_record(tmp_path: Path) -> None:
-    spawner = _FakeSpawner()
-    runner = _RecordingRunner(start_times={spawner.detached_pid: "boot"})
     registry = _RecordingRegistry()
-    assert _frame(tmp_path, runner=runner, registry=registry, spawner=spawner) == 0
-    [first_argv] = spawner.detached_spawns
-    _restart(runner, spawner)
-    revived = _FakeSpawner(detached_pid=7000)
+    assert _up_preview(tmp_path, registry=registry) == 0
 
-    assert (
-        _revive(
-            tmp_path, _FRAME_NAME, runner=runner, registry=registry, spawner=revived
-        )
-        == 0
-    )
-
-    [revived_argv] = revived.detached_spawns
-    for flag in ("--port", "--kind", "--note", "--inner-service"):
-        assert _wrapper_arg(revived_argv, flag) == _wrapper_arg(first_argv, flag)
-    assert not runner.killed_pgroup(spawner.detached_pid)
-
-
-_FRAMED_INBOX = mod.FramedAppRegistration(
-    manifest_path="system/apps/inbox/app.toml",
-    url="http://localhost:8123",
-    overrides={"internal": True, "stop_when_no_windows": False},
-)
-
-
-def test_a_revived_frame_frames_its_app_the_way_it_was_framed(tmp_path: Path) -> None:
-    """After a restart the framed app's own program registers it from its manifest alone; the revive registers it
-    with the frame's overrides again before booting the frame."""
-    spawner = _FakeSpawner()
-    runner = _RecordingRunner(start_times={spawner.detached_pid: "boot"})
-    assert (
-        _frame(tmp_path, runner=runner, spawner=spawner, framed_app=_FRAMED_INBOX) == 0
-    )
-    _restart(runner, spawner)
-    registry = _RecordingRegistry()
-
-    assert _revive(tmp_path, _FRAME_NAME, runner=runner, registry=registry) == 0
-
-    assert registry.manifest_registrations == [
-        (_FRAMED_INBOX.manifest_path, _FRAMED_INBOX.url, _FRAMED_INBOX.overrides)
-    ]
-    record = mod.read_frame(_FRAME_NAME, tmp_path)
-    assert record is not None
-    assert record.framed_app == _FRAMED_INBOX
-
-
-def test_a_frame_that_does_not_come_back_leaves_its_app_registered_plainly(
-    tmp_path: Path,
-) -> None:
-    spawner = _FakeSpawner()
-    runner = _RecordingRunner(start_times={spawner.detached_pid: "boot"})
-    assert (
-        _frame(tmp_path, runner=runner, spawner=spawner, framed_app=_FRAMED_INBOX) == 0
-    )
-    _restart(runner, spawner)
-    registry = _RecordingRegistry()
-
-    code = _revive(
+    failed = _up_preview(
         tmp_path,
-        _FRAME_NAME,
-        runner=runner,
         registry=registry,
-        http=_FakeHttp(lambda _url: 503),
+        spawner=_FakeSpawner(detached_pid=7000),
+        http=_FakeHttp(lambda _url: None),
     )
 
-    assert code == 1
-    assert [
-        overrides for _manifest, _url, overrides in registry.manifest_registrations
-    ] == [
-        _FRAMED_INBOX.overrides,
-        None,
-    ]
-    # The frame's row stays, so its window still offers to start it again.
+    assert failed == 1
     assert registry.removed == []
+    assert not mod.is_running(_NAME, tmp_path, runner=_RecordingRunner())
+    assert mod.down(_NAME, tmp_path, runner=_RecordingRunner(), registry=registry) == 0
+    assert sorted(registry.removed) == ["demo-app", "demo-preview"]
 
 
-def test_a_frame_whose_revive_failed_comes_back_on_its_port_and_down_still_removes_its_row(
+def test_refresh_after_a_restart_never_signals_the_pid_another_process_now_holds(
+    tmp_path: Path,
+) -> None:
+    up_spawner = _FakeSpawner()
+    runner = _RecordingRunner(start_times={4242: "boot", 4243: "boot"})
+    assert _up_preview(tmp_path, runner=runner, spawner=up_spawner) == 0
+    inner_port = json.loads(_state_path(tmp_path).read_text())["inner_port"]
+    _restart(runner, up_spawner)
+    spawner = _FakeSpawner(detached_pid=5555)
+    runner.start_times[5555] = "refreshed"
+
+    code = _refresh(tmp_path, runner=runner, spawner=spawner)
+
+    assert code == 0
+    assert runner.killed_pgroups == []
+    assert spawner.detached_envs[0][_PORT_ENV] == str(inner_port)
+    assert json.loads(_state_path(tmp_path).read_text())["pid_starts"][0] == "refreshed"
+
+
+def test_an_instance_runs_while_every_process_it_recorded_is_still_its_own(
     tmp_path: Path,
 ) -> None:
     spawner = _FakeSpawner()
-    runner = _RecordingRunner(start_times={spawner.detached_pid: "boot"})
-    assert _frame(tmp_path, runner=runner, spawner=spawner) == 0
-    first_port = _wrapper_arg(spawner.detached_spawns[0], "--port")
-    _restart(runner, spawner)
-    assert (
-        _revive(tmp_path, _FRAME_NAME, runner=runner, http=_FakeHttp(lambda _url: 503))
-        == 1
-    )
-    retried = _FakeSpawner(detached_pid=8000)
+    runner = _RecordingRunner(start_times={4242: "boot", 4243: "boot"})
+    assert not mod.is_running(_NAME, tmp_path, runner=runner)
+    assert _up_preview(tmp_path, runner=runner, spawner=spawner) == 0
 
-    assert _revive(tmp_path, _FRAME_NAME, runner=runner, spawner=retried) == 0
-
-    assert _wrapper_arg(retried.detached_spawns[0], "--port") == first_port
-    registry = _RecordingRegistry()
-    assert mod.down(_FRAME_NAME, tmp_path, runner=runner, registry=registry) == 0
-    assert registry.removed == [_FRAME_NAME]
+    assert mod.is_running(_NAME, tmp_path, runner=runner)
+    runner.start_times[4243] = "after-restart"
+    assert not mod.is_running(_NAME, tmp_path, runner=runner)

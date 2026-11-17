@@ -314,13 +314,10 @@ def revive_app(name: str) -> ResponseReturnValue:
     instance = _entry_or_raise(name).row.isolated_instance
     if instance is None:
         raise AppLifecycleRefusedError(f"App {name!r} is not a preview or a UI sketch, so it cannot be started again")
-    noun = INSTANCE_NOUN_BY_KIND[instance.kind]
     try:
-        shell.instance_reviver.revive(str(instance.name))
-    except InstanceReviveError as e:
-        if e.is_final:
-            return detail_response(f"This {noun} can't be started again. Ask in chat for a new one.", HTTP_CONFLICT)
-        return detail_response(f"This {noun} didn't start. Try again in a moment.", HTTP_BAD_GATEWAY)
+        shell.instance_reviver.revive(str(instance.app), instance.kind)
+    except InstanceReviveError:
+        return detail_response(f"This {INSTANCE_NOUN_BY_KIND[instance.kind]} didn't start.", HTTP_BAD_GATEWAY)
     shell.inventory.refresh_liveness()
     refreshed = shell.inventory.entry(name)
     return model_response(

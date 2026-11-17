@@ -111,7 +111,7 @@ class IsolatedInstanceKind(StrEnum):
 class IsolatedInstanceRef(FrozenModel):
     """The isolated instance a row's window shows, as ``serve_isolated_instance`` registered it."""
 
-    name: NonEmptyStr = Field(description="The instance's name, which its ``revive`` takes")
+    app: NonEmptyStr = Field(description="The app it previews or frames, which its flow's ``revive --app`` takes")
     kind: IsolatedInstanceKind = Field(description="Whether it previews a change or frames a mock")
 
 
