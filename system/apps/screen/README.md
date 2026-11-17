@@ -18,8 +18,15 @@ throwaway copy can run beside the live one, and a change to it is verified live.
 
 ## The service
 
-Identity comes from `X-Imbue-Identity` (a header-less request came over loopback and is the
-owner). A visitor, an identity whose `owner` is false, may use only the viewer's routes (the
+Identity comes from `X-Imbue-Identity`, read as every app reads it (`workspace_layout.identity`;
+a present header that does not parse is refused with 400). A header-less request is the owner's,
+but only once the request guard every app installs ahead of its routes (`app_schema.request_guard`)
+has admitted it: the browser on the Screen is on loopback too, so a header-less request counts
+only from loopback under a loopback `Host` (a page reaching the service through a rebound name
+names that host instead), and a request a browser marks as a page of another origin's
+(`Sec-Fetch-Site`, other than a GET or HEAD navigation such as the shell's frame) is refused with
+403 whatever it carries. Agents' clients send no fetch metadata and use a loopback host, so they
+are unaffected. A visitor, an identity whose `owner` is false, may use only the viewer's routes (the
 page and its assets, `/health`, `/api/schema`, `/api/state`, `/api/start`, `/api/connect-info`,
 `/api/ws`, `/api/session`, `/api/control/take` and `/return`, `/api/input-seen`, `/api/screen-size`,
 `/api/clipboard/image`, `/api/drop` and `/browsers/<name>/pending-url/cancel` with a visitor's
@@ -67,7 +74,8 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
 - `POST /api/start`: start the stack (the stopped overlay's Start button).
 - `POST /api/session`: a neko session for the requester's identity (`X-Imbue-Identity`;
   a header-less request is the owner): the service logs the human in to neko with the
-  user password and a display name from the identity and answers
+  user password and a display name from the identity (the email's local part, else
+  Owner or Guest) and answers
   `{"session_id", "token", "name", "is_owner"}`; the viewer uses the token under `/neko/`.
 - `POST /api/control/take` and `POST /api/control/return`, body `{"session_id"}`: the
   human verbs for that session.
@@ -245,25 +253,39 @@ null sink's monitor in any case.
 
 ## Clipboard, files and the phone
 
-`xclipboard.py` (the browser app's bridge, carried over) owns the X clipboard: `xclip`
-sets and reads the CLIPBOARD selection and an XFixes watcher on `:99` notices every
-ownership change while the stack runs. neko sends `clipboard/updated` to the host
-session alone and with text only, so the directions are:
+`xclipboard.py` (the browser app's bridge, carried over) owns the service's side of the X
+clipboard: `xclip` sets and reads the CLIPBOARD selection and an XFixes watcher on `:99` notices
+every ownership change while the stack runs. neko owns the text side, also through `xclip`, and
+two facts about that pair shape the directions (verified against neko 3.2.0 and xclip 0.13):
+neko's clipboard write sets one target (`text/html` when any HTML is sent, else `UTF8_STRING`),
+and an `xclip` owner answers a request for any target with its one payload, so neko's read-back
+of its own write reports HTML equal to the text. neko announces every change, its own writes
+included, as `clipboard/updated` to the host session alone and with text only. So:
 
-- Remote to local: on `clipboard/updated` the controller's viewer reads text and HTML
-  from neko's `GET /api/room/clipboard` (host only) and writes them with the Clipboard
-  API; when the watcher sees an image target the service broadcasts `clipboard`
-  (`{"kind": "image"}`) on `/api/ws` and the controller's viewer fetches
-  `GET /neko/api/room/clipboard/image.png` and writes it. A write that fails for want of
-  focus runs on the next focus.
-- Local to remote: on focus and on paste, while this viewer holds control, the viewer
-  reads the local clipboard; text and HTML go to neko's `POST /api/room/clipboard` (its
-  `clipboard/set` message drops the HTML), an image to `POST /api/clipboard/image` as this
-  session, which the service accepts from the session in control alone (a visitor in control
-  included). A paste chord (Ctrl+V, Cmd+V) is
-  left to the browser so its `paste` event carries the data; once the remote clipboard
-  holds it the viewer taps V with Ctrl held on the remote, and a paste that did not cross
-  says so in the strip. What was just received is never echoed back, by content hash.
+- Remote to local: on `clipboard/updated` the controller's viewer reads text and HTML from
+  neko's `GET /api/room/clipboard` (host only) and writes them with the Clipboard API, taking
+  HTML equal to the text as no HTML. A read whose text is what this viewer last sent, with no
+  other remote change since, is the echo of its own write and is not written back. When the
+  watcher sees an image target the service broadcasts `clipboard` (`{"kind": "image"}`) on
+  `/api/ws` and the controller's viewer fetches `GET /neko/api/room/clipboard/image.png` and
+  writes it, with the same echo rule by content hash. A write that fails for want of focus
+  runs on the next focus.
+- Local to remote: on paste, while this viewer holds control, the paste event's plain text goes
+  to neko's `POST /api/room/clipboard`, never its HTML (an HTML-only X clipboard gives a URL bar
+  or a terminal nothing to paste), unless the Screen already holds that text (just sent, or just
+  copied there), in which case nothing is sent and the Screen's clipboard keeps its rich flavors.
+  An image goes to `POST /api/clipboard/image` as this session, which the service accepts from
+  the session in control alone (a visitor in control included). A paste chord (Ctrl+V, Cmd+V) is
+  left to the browser so its `paste` event carries the data; once the remote clipboard holds it
+  the viewer taps V with Ctrl held on the remote. A paste that did not cross, and a paste while
+  this viewer does not control, say so in the strip. The viewer never reads the local clipboard
+  on its own (a programmatic read makes Safari and Firefox show a "Paste" button and Chrome a
+  permission prompt on every click into the Screen).
+- The viewer's calls to neko's routes (`/neko/api/room/clipboard`, the image, the screencast,
+  the logout) carry the session token in the `token` query parameter, as its WebSocket does,
+  never as an `Authorization: Bearer` header: the share gateway reads such a header as a
+  visiting agent's admission token and refuses the request, and strips it from what it
+  forwards, so a bearer never reaches neko over a share.
 - `keyboard/map` goes once per neko connection and again when this session takes
   control (only the host may set it), with the layout `navigator.language` suggests,
   `us` by default.

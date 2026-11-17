@@ -66,10 +66,16 @@ function renderRow(row: RowDescriptor): HTMLElement {
   return root;
 }
 
+/** The row whose stretch holds the turn's progress block. */
 function progressRow(view: ConversationView): RowDescriptor {
-  const row = view.rows.find((candidate) => candidate.key.startsWith("progress-"));
-  if (row === undefined) throw new Error("the view has no progress row");
+  const row = view.rows.find((candidate) => renderRow(candidate).querySelector(".progress-block") !== null);
+  if (row === undefined) throw new Error("the view has no progress block");
   return row;
+}
+
+/** The expansion key of step `ticketId` in the row's progress block. */
+function stepExpansionKey(row: RowDescriptor, ticketId: string): string {
+  return `step:${renderRow(row).querySelector(".progress-block")!.id}:${ticketId}`;
 }
 
 describe("the reply draft", () => {
@@ -91,12 +97,13 @@ describe("the reply draft", () => {
   it("follows the live step's work when the step is opened", () => {
     const view = buildConversationView("agent-1", STEP_OPEN_EVENTS, false, null, null, () => DRAFT);
     const block = progressRow(view);
-    toggleBlockExpanded(`step:${block.key}:s1`);
+    const expansionKey = stepExpansionKey(block, "s1");
+    toggleBlockExpanded(expansionKey);
     try {
       const expanded = renderRow(block).querySelector(".pv-tl-expanded");
       expect(expanded?.textContent).toContain("Looking inside the cache now.");
     } finally {
-      toggleBlockExpanded(`step:${block.key}:s1`);
+      toggleBlockExpanded(expansionKey);
     }
   });
 

@@ -102,6 +102,12 @@ export const PAGE_FRAME_SANDBOX =
 // which the Imbue Studio chrome's immersive mode needs delegated down every frame on the way (the Screen
 // integration spec, section 5.5).
 export const PAGE_FRAME_ALLOW = "clipboard-read; clipboard-write; fullscreen";
+
+/** What ``app``'s frames may do: the grant every page gets, plus the microphone for an app whose manifest says its
+ *  pages listen (the chat's dictation), which no other app's frame is handed. */
+export function pageFrameAllow(app: AppRecord): string {
+  return app.uses_microphone ? `${PAGE_FRAME_ALLOW}; microphone` : PAGE_FRAME_ALLOW;
+}
 // The page's bottom corners follow the chrome's rounding, which a fullscreen window has none of.
 const PAGE_CORNERS_CLASS = "rounded-b-(--desk-window-radius)";
 // The shell's WindowTitle rule (contracts.md section 1, ``shell/primitives.py``): a longer title is
@@ -751,7 +757,7 @@ export class LivePagesLayer implements PageDriver {
     const frame = document.createElement("iframe");
     frame.setAttribute(LIVE_PAGE_ATTRIBUTE, window.id);
     frame.setAttribute("sandbox", PAGE_FRAME_SANDBOX);
-    frame.setAttribute("allow", PAGE_FRAME_ALLOW);
+    frame.setAttribute("allow", pageFrameAllow(app));
     const state = this.store.getState();
     frame.title = effectiveWindowTitle(state, window, app);
     frame.className = "block h-full w-full border-0";

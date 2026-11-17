@@ -1,0 +1,1 @@
+Getting Started installs the request guard ahead of its routes (`app_schema.request_guard`), as every built-in app does: a request the workspace's own browser marks as a page of another origin's is refused with 403, and a request with no `X-Imbue-Identity` header reads as the owner's only from loopback under a loopback `Host` (imbue-ai/mngr-internal#2816).

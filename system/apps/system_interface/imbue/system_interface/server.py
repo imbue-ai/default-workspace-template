@@ -17,6 +17,7 @@ from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
 from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
 from app_schema.api_schema import register_api_schema_route
 from app_schema.errors import InvalidRequestBodyError
+from app_schema.request_guard import install_request_guard
 from app_schema.routes import error_response
 from app_schema.routes import model_response
 from flask import Flask
@@ -860,6 +861,10 @@ def _run_ws_broadcast_loop(
         chats_activity = shell.chats_activity.current()
         if chats_activity is not None:
             websocket.send(json.dumps({"type": "chats_activity", **chats_activity.model_dump(mode="json")}))
+        # The tray's resource gauge as it stands; later changes are broadcast by its monitor.
+        websocket.send(
+            json.dumps({"type": "resource_gauge_changed", "view": shell.resource_gauge.view().model_dump(mode="json")})
+        )
 
         is_client_registered = False
         shutdown = False
@@ -918,6 +923,8 @@ def create_application(state: SystemInterfaceState) -> Flask:
     # static_folder=None disables Flask's default /static route; the shell serves its own
     # static assets explicitly below.
     application = Flask(__name__, static_folder=None)
+    # The two browser-side modules are served to other origins on purpose (a CORS header below).
+    install_request_guard(application, exempt_rules=frozenset({APP_CONTRACT_ROUTE, CONTEXT_MENU_ROUTE}))
     attach_state(application, state)
     attach_document_policy(application, {"img-src": f"'self' data: blob: {ONBOARDING_MEDIA_ORIGIN}"})
     application.register_error_handler(Exception, handle_unhandled_exception)

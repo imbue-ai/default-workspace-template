@@ -7,7 +7,7 @@
  * off from the rest by a rule, since it is where a text with no chat of its own goes. A row is renameable in place (double-click,
  * or the pencil under the pointer), and a right-click opens a menu: rename, stop or restart,
  * delete (which asks first). A stopped chat stays in the list faded with a pause mark; one
- * being deleted is crossed out until the list drops it.
+ * being deleted leaves the list at once and comes back if the delete is refused (``pendingDeletes``).
  *
  * The list's right edge drags to resize it (``railWidth``); a double-click there puts back the
  * default width.
@@ -29,6 +29,7 @@ import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverToolt
 import { anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import { kebabGlyph, peopleGlyph, plusGlyph } from "../glyphs";
 import { isUnread } from "./chatUnread";
+import { dropPendingDelete, showPendingDelete } from "./pendingDeletes";
 import { acceptPendingRename, dropPendingRename, showPendingRename } from "./pendingRenames";
 import { destroyChat, makeMainChat, renameChat, startChat, stopChat } from "./verbs";
 import { foldOwnerKey, getParticipant, participantName } from "../models/Participants";
@@ -53,7 +54,10 @@ export interface ChatRailAttrs {
   isInDrawer: boolean;
   /** Whether the list takes the finger's form: the drawer on a touchscreen. */
   isTouch: boolean;
-  onPick: (chatId: string) => void;
+  /** Show a chat, or with null none: the last chat was deleted. */
+  onPick: (chatId: string | null) => void;
+  /** A delete came back refused, so the chat is listed again. */
+  onDeleteRefused: () => void;
   onNew: () => void;
   /** The scope a reference to a row carries (the root's handshake). */
   referenceScope: ReferenceScope;
@@ -87,7 +91,6 @@ interface RenameState {
 }
 
 let rename: RenameState | null = null;
-const deletingChatIds = new Set<string>();
 
 // The row whose menu is up, or null. Which row it belongs to is this file's; opening, placing,
 // dismissing and closing are the component's, and its `onClose` keeps the two in step.
@@ -110,11 +113,6 @@ const railMenu = createMenu({
 
 function beginRename(row: ChatRow): void {
   rename = { chatId: row.chatId, draft: row.title, error: null };
-}
-
-/** Whether ``chatId`` is being deleted: its delete was asked for and has not failed. */
-export function isDeleting(chatId: string): boolean {
-  return deletingChatIds.has(chatId);
 }
 
 /** Whether ``chatId`` is being renamed. */
@@ -148,12 +146,6 @@ function refuseRename(row: ChatRow, title: string, error: unknown): void {
   m.redraw();
 }
 
-function pruneDeleting(rows: readonly ChatRow[]): void {
-  for (const chatId of deletingChatIds) {
-    if (!rows.some((row) => row.chatId === chatId)) deletingChatIds.delete(chatId);
-  }
-}
-
 function setRunningFromMenu(row: ChatRow, isRunning: boolean): void {
   const verb = isRunning ? startChat : stopChat;
   verb(row.chatId).catch((error: unknown) => {
@@ -169,8 +161,8 @@ function makeMainFromMenu(row: ChatRow): void {
   });
 }
 
-/** What a row's menu needs of the root: the rows, the one shown, and how to show another. */
-export type RowMenuContext = Pick<ChatRailAttrs, "rows" | "selectedChatId" | "onPick">;
+/** What a row's menu needs of the root: the rows, the one shown, how to show another, and word of a refused delete. */
+export type RowMenuContext = Pick<ChatRailAttrs, "rows" | "selectedChatId" | "onPick" | "onDeleteRefused">;
 
 /** What a reference to an element of the list needs of the root, as its right-click menu does. */
 export type RowReferenceContext = Pick<
@@ -184,8 +176,8 @@ export function referenceRowsFor(attrs: RowReferenceContext, element: Element, c
   return elementReferenceRows(reference, attrs.onDraftReference, attrs.isReferenceDraftAvailable);
 }
 
-/** Delete from the menu, after asking. When it is the chat the root shows, the root moves to
- *  the next one in the list first, so it is not left on a page whose chat is gone. */
+/** Delete from the menu, after asking: the chat leaves the list at once, and when it is the chat the root shows, the
+ *  root moves to the next one in the list (to none, for the last chat). A refusal brings the chat back and says why. */
 function deleteFromMenu(attrs: RowMenuContext, row: ChatRow): void {
   const isConfirmed = window.confirm(
     isRoom(row)
@@ -193,15 +185,15 @@ function deleteFromMenu(attrs: RowMenuContext, row: ChatRow): void {
       : `Delete "${row.title}"?\n\nThis ends its agent and removes its conversation. It cannot be undone.`,
   );
   if (!isConfirmed) return;
-  const next = attrs.rows.find(
-    (candidate) => candidate.chatId !== row.chatId && !deletingChatIds.has(candidate.chatId),
-  );
-  deletingChatIds.add(row.chatId);
+  const next = attrs.rows.find((candidate) => candidate.chatId !== row.chatId);
+  showPendingDelete(row.chatId);
+  if (row.chatId === attrs.selectedChatId) attrs.onPick(next?.chatId ?? null);
   m.redraw();
-  if (row.chatId === attrs.selectedChatId && next !== undefined) attrs.onPick(next.chatId);
   destroyChat(row.chatId).catch((error: unknown) => {
-    deletingChatIds.delete(row.chatId);
-    m.redraw();
+    dropPendingDelete(row.chatId);
+    attrs.onDeleteRefused();
+    // Synchronous, so the chat is back behind the alert rather than after it.
+    m.redraw.sync();
     alert(`Could not delete "${row.title}".\n\n${error instanceof Error ? error.message : String(error)}`);
   });
 }
@@ -295,7 +287,6 @@ export const ChatRail: m.Component<ChatRailAttrs> = {
     }
   },
   view({ attrs }) {
-    pruneDeleting(attrs.rows);
     const menuRow = menuChatId === null ? undefined : attrs.rows.find((row) => row.chatId === menuChatId);
     return m(
       "nav",
@@ -453,7 +444,6 @@ function drawerHead(attrs: ChatRailAttrs): m.Vnode {
 
 function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
   const isSelected = row.chatId === attrs.selectedChatId;
-  const isDeleting = deletingChatIds.has(row.chatId);
   if (rename !== null && rename.chatId === row.chatId) return renameRow(row, isSelected, attrs.isTouch);
   const status = displayStatus(row);
   return m(
@@ -468,13 +458,11 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
         isAgentStarted(row) ? "chat-rail-row--nested pr-2 pl-5" : "px-2",
         // The selected row wears the same grey as a not-yours bubble (one fill for "where you are" and "what
         // someone else said", per the design), so the rows' hover has to read lighter than it.
-        isDeleting
-          ? "chat-rail-row--deleting text-danger line-through opacity-50"
-          : status === "done"
-            ? `chat-rail-row--done font-semibold text-success ${isSelected ? "bg-bubble-other" : "hover:bg-fill-faint"}`
-            : isSelected
-              ? "chat-rail-row--selected bg-bubble-other text-primary"
-              : "text-primary hover:bg-fill-faint",
+        status === "done"
+          ? `chat-rail-row--done font-semibold text-success ${isSelected ? "bg-bubble-other" : "hover:bg-fill-faint"}`
+          : isSelected
+            ? "chat-rail-row--selected bg-bubble-other text-primary"
+            : "text-primary hover:bg-fill-faint",
         row.status === "stopped" ? "chat-rail-row--stopped opacity-50" : "",
         row.isMain ? "chat-rail-row--main font-medium" : "",
       ].join(" "),
@@ -483,7 +471,6 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       "data-main": row.isMain ? "true" : undefined,
       "aria-current": isSelected ? "true" : undefined,
       ...LIST_ROW_PART,
-      "aria-disabled": isDeleting ? "true" : undefined,
       // In the drawer the chat on screen is picked again to close it.
       onclick: () => {
         if (!isSelected || attrs.isInDrawer) attrs.onPick(row.chatId);
@@ -491,7 +478,6 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       ondblclick: () => beginRename(row),
       oncontextmenu: (event: MouseEvent) => {
         event.preventDefault();
-        if (isDeleting) return;
         menuChatId = row.chatId;
         menuReferenceRows = referenceRowsForEvent(attrs, event);
         railMenu.open(anchorForPoint(event.clientX, event.clientY));
@@ -509,7 +495,7 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       m("span", { class: "chat-rail-title min-w-0 flex-1 truncate text-(length:--font-size-row)" }, row.title),
       row.hasMention ? mentionMark() : null,
       participantPhotos(row),
-      attrs.isTouch && isDeleting ? null : attrs.isTouch ? rowKebab(row) : [renamePencil(row), hoverKebab(row)],
+      attrs.isTouch ? rowKebab(row) : [renamePencil(row), hoverKebab(row)],
     ],
   );
 }

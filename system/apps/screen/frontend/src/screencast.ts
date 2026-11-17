@@ -2,6 +2,8 @@
  *  through the service's proxy with the session token, drawn into an image over the stage. Input keeps flowing over
  *  the WebSocket meanwhile. */
 
+import { nekoRouteWithToken } from "./clipboard";
+
 export const SCREENCAST_PATH = "/neko/api/room/screen/cast.jpg";
 // neko encodes the screencast at this rate (capture.screencast.rate in neko_config.py), so polling faster only
 // repeats a frame.
@@ -43,10 +45,7 @@ export class ScreencastPoller {
     if (!this.isRunning) return;
     let delay = POLL_INTERVAL_MS;
     try {
-      const response = await fetch(SCREENCAST_PATH, {
-        headers: { Authorization: `Bearer ${this.token}` },
-        cache: "no-store",
-      });
+      const response = await fetch(nekoRouteWithToken(SCREENCAST_PATH, this.token), { cache: "no-store" });
       if (!response.ok) throw new Error(`screencast answered ${response.status}`);
       const url = URL.createObjectURL(await response.blob());
       if (!this.isRunning) {

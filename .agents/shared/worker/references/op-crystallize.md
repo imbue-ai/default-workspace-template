@@ -74,10 +74,13 @@ testing/hardening and preserve-and-surface contract from `harden-creation.md`.
 **Pre-existing shape:** Once its own tests pass on your branch,
 commit and declare a **milestone** per `worker-reporting.md`'s "Milestone
 reports (non-blocking)". Name it for what is true at that commit, and make its
-`## Tested` section list exactly what you ran here and what you have not. The
-lead may merge that commit and let the user start using the hardened build
-while you work through the rest of the pass, so do not stop your turn: push it
-and go straight on to Stage 4. 
+`## Tested` section list exactly what you ran here and what you have not
+(for an app, naming the phone and sharing checks among what you have not).
+The lead may merge that commit and let the user start using the hardened
+build while you work through the rest of the pass, so do not stop your turn:
+push it and go straight on. For an app, the first work after it is the phone
+and sharing checks (`type-app.md`, "Phone and sharing checks"), so the user
+gets the hardened core first; then Stage 4.
 
 **Reconstruct shape:** do not declare a milestone yet. The user has
 approved only an outline. As an example, a skill whose scenarios have never run is not
@@ -139,7 +142,12 @@ Committed on branch `<branch-name>`. Ready to merge.
 - Outside footprint: <none, or one path per line with why it changed>
 - Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
 - Flaky tests: <none, or each test that failed in the gate and passed when rerun alone>
+- Phone: <what you fixed for a phone and what you could not, or "nothing needed">
+- Sharing: <routes made owner-only; the access log, or "none, visitors can only read"; anything the review found but could not fix>
 ```
+
+The `Phone:` and `Sharing:` lines are an app's; leave them out for any other
+creation.
 
 ## If you need to give up
 

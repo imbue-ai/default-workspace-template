@@ -14,9 +14,14 @@ launcher_rank = 30
 system = true
 
 # The launch path id is ``screen`` rather than the spec's ``open``: the manifest schema reserves ``open`` for the
-# root launch path the shell synthesizes for an app that declares none, and this app declares two.
-[default_shortcut]
+# root launch path the shell synthesizes for an app that declares none, and this app declares two. Each gets a
+# desktop shortcut, as each gets a launcher row.
+[[default_shortcut]]
 launch = "screen"
+mode = "focus"
+
+[[default_shortcut]]
+launch = "browser"
 mode = "focus"
 
 [[launch_paths]]

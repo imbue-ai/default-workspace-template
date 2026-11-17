@@ -1,8 +1,9 @@
 /**
  * The agent's tray entry (the multiplayer spec, section 6.4): the workspace avatar at 36px, in its mood, attending
  * while the pinned chat window is focused. The one avatar creature's home in the tray: while a client floats the
- * avatar it is drawn above the windows instead, and the tray draws none. A click opens the main chat; hovering
- * opens its card; a right-click offers the card's actions as a menu, the way the floating creature's does.
+ * avatar it is drawn above the windows instead, and the tray draws none. A click shows the pinned chat window on
+ * the chat it holds (the main chat when there is no such window); hovering opens its card; a right-click offers
+ * the card's actions as a menu, the way the floating creature's does.
  */
 
 import m from "mithril";
@@ -15,7 +16,7 @@ export interface AgentEntryAttrs {
   readonly avatar: AvatarState;
   readonly workspaceName: string;
   readonly isAttending: boolean;
-  /** Whether a bubble of the agent's just appeared, which the entry hops for. */
+  /** Whether the agent just posted into a room or a chat just notified the user, which the entry hops for. */
   readonly isHopping: boolean;
   readonly onClick: () => void;
   readonly onContextMenu: (x: number, y: number) => void;

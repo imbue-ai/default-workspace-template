@@ -26,6 +26,9 @@ observe`, its own supervised service) writes, and serves:
   (opened bare, or after the chat on screen is deleted) it shows the main chat
   (below), else the most recent chat, and with no chats one awaiting its first send
   (`POST /api/chats/awaiting`, held in memory until that send launches it).
+  A chat leaves the list the moment its delete is confirmed and comes back if
+  the delete is refused, and with no chats left the one awaiting its first send
+  is only asked for once no delete is on its way.
   With nothing signed in, a chat awaiting its first send shows "Connect an AI
   provider to start chatting." and a "Choose a provider" button above its
   composer, which stays in view (holding any draft) but disabled, and opens the
@@ -86,7 +89,8 @@ observe`, its own supervised service) writes, and serves:
   no pty is registered) in meta tags. Every chat page reports its path and the
   chat's title to the shell.
 - Every `/api/chats/<chat-id>/...` route (events, streams, sends, model choice,
-  the queue actions, presence and watchers, destroy, rename, make-main, start, stop; the subagent reads under
+  the queue actions, presence and watchers, a notification's desktop bubble, destroy, rename, make-main, start,
+  stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats/awaiting` (the chat an empty chat list opens on), `/api/chats`,
   `/api/harnesses`, `/api/uploads`,
@@ -253,11 +257,12 @@ second, through mngr's `stream_snapshot` converter
 shows the draft while `after_event_id` is still the last event it holds, so the
 reply landing replaces it at once; an empty `text` clears it. It shows where the
 reply will land: while a step is open, as that step's caption (or at the end of
-its work, when the step is expanded), and otherwise after the transcript. A step
-left open from an earlier turn takes it only once the agent works in it again
-in the new turn. A draft that matches a reply the transcript already holds is
-never sent. The terminal's rendering loses heading levels and code-fence
-languages, which the landed reply restores. Codex also writes an agent message
+its work, when the step is expanded), and otherwise as a bubble at the end of
+the agent's output (see the stretch layout below). A step left open from an
+earlier turn takes it only once the agent works in it again in the new turn. A
+draft that matches a reply the transcript already holds is never sent. The
+terminal's rendering loses heading levels and code-fence languages, which the
+landed reply restores. Codex also writes an agent message
 to its rollout only once it is finished; its draft comes from the
 `item/agentMessage/delta` notifications the agent's live app-server connection
 already receives (`harnesses/codex/reply_stream.py`), and is dropped once the
@@ -342,7 +347,9 @@ carries the switch out: once its message is sent the chip names the target,
 unmarked, until the new agent reports its model, and a failed switch leaves it
 on the agent the chat still runs on.
 While the chat converges the held messages render from the snapshot's
-`handoff.held_sends` (each carries the display decision its text would get in
+`handoff.held_sends`, which keeps listing each one the switch has delivered
+until the switch is done, so a message stays on the page until its turn is in
+the transcript (each carries the display decision its text would get in
 the transcript, so a held background-task report shows as its notice; the
 message the user switched with stands down once the `agent_switch` marker
 carrying it is on the transcript, where it renders as the successor's opening
@@ -556,12 +563,14 @@ first one. Fast mode is a per-chat setting with three modes
 (fast throughout). A new chat starts in the workspace's default mode
 (`fast_mode_default` in `GET`/`PUT /api/settings`, `chat_settings.py`, stored
 at `data/.apps/chat/settings.json`; off unless changed, auto's limit 2), and
-a chat whose mode calls for it launches through the `fast` create template, a
-handoff's successor included. The model picker's fast row states the chat's
-mode and opens a submenu where the mode, auto's turn limit and the default for
-new chats are set; `/fast on` and `/fast off` typed in the composer choose the
-mode too. The first time auto switches a chat in a workspace, a one-time notice
-over the model bar explains it.
+a chat whose mode calls for it launches fast, a handoff's successor included:
+claude through the `fast` create template, codex through a switch of the fast
+axis once its agent is up and before its first message
+(`is_launch_fast_switched` in `harnesses/registry.py`). The model picker's
+fast row states the chat's mode and opens a submenu where the mode, auto's turn
+limit and the default for new chats are set; `/fast on` and `/fast off` typed
+in the composer choose the mode too. The first time auto switches a chat in a
+workspace, a one-time notice over the model bar explains it.
 
 ## Chat names
 
@@ -583,10 +592,15 @@ call to the new model instead of breaking it:
 The message goes to the model inside `<message>` tags, with the instruction
 repeated after it, and the system prompt says it is text to title: a small model
 handed a bare "what's 2+2?" answers "4" rather than naming the chat. The title
-names the subject in two to five words, short enough for the chat list to show
-whole. A leading label ("Title: ") is dropped from the answer, and an answer
-with a colon is refused: a "Short name: description" title's two halves restate
-each other ("Map app: build a simple map application").
+names the message's one main subject as tersely as it can while still saying
+what the chat is about, in fewer than 40 characters and preferably far fewer,
+and leaves out the details a long message lists (the tools, sources, places or
+steps it names). A leading label ("Title: ") is
+dropped from the answer, and an answer with a colon is refused: a "Short name:
+description" title's two halves restate each other ("Map app: build a simple map
+application"). A title longer than 40 characters is cut at a word and ends in
+"..." ("Information flow diagram for Obsidian..."), and the cut is logged as a
+warning.
 
 Names are ASCII. A chat's true name is the ASCII part of its name, so a name in
 another script would leave it a fragment ("React 待办应用" -> "React") or nothing,
@@ -959,6 +973,36 @@ exception is a workspace with no ledger to read (its chats predate this app
 keeping one, or the file was lost): every labeled chat it already has is adopted
 as shown, since a window for each is worse than missing one.
 
+## Dictation
+
+The composer dictates (the workspace-voice-input spec in the mngr repository):
+a mic button left of Send, and Cmd+Shift+M (Ctrl+Shift+M off a Mac) anywhere in
+the chat page, turn speech into text on the user's own device. The speech model
+(Moonshine Base, the first engine) is downloaded by the page from Hugging Face at
+a pinned commit, checked against its size and SHA-256, kept in the browser's
+Cache Storage for the workspace's origin (one checked copy, which the browser
+evicts under storage pressure like any site's and which is checked again on
+every read), and run in a SharedWorker every chat page of the workspace shares
+for as long as any of them is open; the workspace stores and runs nothing for
+voice.
+Silero VAD splits speech into utterances, and a bounded streaming window keeps
+every inference job short, so dictation has no length limit. The words land at
+the caret, fitted to the sentence around them; the unfinished tail is rewritten
+in place, and only final words reach the saved draft. The box is read-only while
+listening; Enter or Send finishes the words first and then sends; Escape drops
+the words that are not yet final. The mic carries every state (a ring while the
+model downloads, a spinner while starting and stopping, the neutral pressed tint
+with its capsule filling to the input level while listening), and a problem is
+told in a notice over the composer. The library is `system/libs/workspace_voice/`
+(its README has the pieces); `frontend/src/views/DictationButton.ts` draws the
+mic and the notice, and `MessageInput.ts` drives the dictation and writes its
+words. The page's policy admits the model's WebAssembly (`'wasm-unsafe-eval'`)
+and Hugging Face's hosts (see `create_application`), the manifest declares
+`uses_microphone`, and the root's inner frames allow the microphone. For a
+side-by-side evaluation, a browser's `localStorage` may name another registered
+engine under `workspace-voice:engine` and insist on a device (`webgpu` or
+`wasm`) under `workspace-voice:device`.
+
 ## Development
 
 ```bash
@@ -1026,7 +1070,10 @@ Every request reaches the chat app with the shell's `X-Imbue-Identity` header
 person the workspace is shared with (`user:<id>`), or a visiting agent
 (`agent:<id>`). A present header that does not parse is refused with 400; only a
 missing or blank one reads as the owner (an in-workspace caller, such as a
-script). Every route that delivers a person's words attributes them the same
+script), and only from loopback under a loopback `Host`, since the workspace's
+own browser is on loopback too; a request a browser marks as a page of another
+origin's is refused with 403 before any route runs (the request guard every app
+installs, `app_schema.request_guard`). Every route that delivers a person's words attributes them the same
 way: the message route, a new chat's first message (the create's and the
 new-chat intake's), and the message that confirms a switch. A send from anyone but the owner is delivered
 to the harness as `[from: <name>] <text>` when the harness the words are for reads
@@ -1044,9 +1091,14 @@ read (the backlog, the live stream, `GET /api/chats/<chat-id>/events`), each is
 stamped `author` and `author_name` from the nearest annotation whose hash matches
 its text, else from a `[from: <name>]` prefix the harness kept (a turn merged from
 several queued messages), else not at all: an unstamped turn is the owner's. The
-prefix is stripped into `display_body` so the page never shows it, and a send held
-while the chat converges is listed in the snapshot's `held_sends` without it too; the
-terminal view shows the pane as it is.
+prefix is stripped into `display_body` so the page never shows it; the
+terminal view shows the pane as it is. A message the page shows before its turn
+exists is drawn under its sender the same way: each of the harness queue's entries
+(`active_agent.queued_messages`) is joined to its annotation like a turn and gets the
+words behind its prefix as `display_body`, and each send held while the chat
+converges (`handoff.held_sends`) or is being created (the provisional chat's
+`held_sends`) is listed without the prefix and with the author of the annotation
+recorded under its message id.
 
 The page draws its own turns on the right and another person's on the left under
 their name and picture, from two routes: `GET /api/me` answers the page's own
@@ -1057,8 +1109,22 @@ workspace agent's avatar icon) rewritten to `GET /api/participants/<key>/picture
 (the shell URL's query kept, so a versioned picture stays cached), which the chat
 app proxies from the shell -- asked at that path with the page's own query, its
 caching answer relayed -- so the page needs no second origin.
-The agent's prose is drawn as bubbles under that picture and the workspace's name,
-one per reply (tool chips and cards sit between them, outside the bubbles).
+A stretch of the agent's output -- everything it does until a person speaks or another
+agent takes over -- sits under the workspace's name, once, with its picture beside the
+first piece. Each message's prose is a grey bubble of its own. Its tool chips, step
+timeline and the system notices among them sit on the chat between the bubbles, on the
+bubbles' text edge, and its cards line up with the bubbles. One thin line threads the
+stretch, through the chip icons, step bullets and notice ticks, stopping short of each
+piece; the pieces sit 12px apart. The call the agent is running shows in its chip on the
+line (the working dot, the harness's caption, and how long the turn has run); a call in a
+step's work is said by the status line instead, which is the stretch's last piece on the
+line whenever it shows; the done mark sits just under the stretch. A command a person
+runs in bash mode (`!ls`) and its output are theirs, not the agent's: they stand on the
+person's side and end the stretch (display `person_chip`). The reply the agent is still
+writing, and a switch the transcript does not show yet, end the last stretch while it is
+open, and open a stretch of their own after a person's turn or a switch to another agent.
+A run of one person's turns names them once, over its first bubble ("You" for the
+viewer's own); pictures are 24px.
 
 ## Rooms and mentions
 
@@ -1124,13 +1190,19 @@ the Lounge's composer, unsent. A secondary chat makes no Lounge (403).
 The tray's feed (`tray_feed.py`, sections 6.4 and 6.5): every message a person or a
 visiting agent sends (the send route, an intake's send, a room's first message once it has
 landed, a new agent chat's first message as its create is accepted) is posted to the shell
-as a speech bubble (`POST /api/bubbles`, with the people it mentions when the chat is a
-room), as is every turn the workspace agent closes with text (an assistant turn
-of the chat's live agent's own session, or its post into a room), cut to the bubble's
-length. The agent's turns reach the feed through the session watcher a page's stream
-builds (`ChatAppState.bubble_agent_turns`, in its `on_events`), which memory shedding
-evicts, so the agent's bubbles rise for the turns of the chats a page is reading: a turn in
-a chat nobody has open raises none (the spec's section 11). And every chat-list push is
+as a `message` (`POST /api/bubbles`, with the people it mentions when the chat is a
+room), as is every post the workspace agent makes into a room (with the people it
+mentions), cut to the bubble's length; the agent's turns in an agent chat are not posted.
+A `message` hops its speaker's tray entry everywhere and raises a speech bubble
+only on the clients of the people it mentions. Every notification a chat sends the user
+is posted as a `notification` over the agent's entry, which raises a bubble on every
+client not looking at the chat: the notify-user skill's script tells the chat app with
+`POST /api/chats/<chat-id>/notification` (loopback only; `{"message", "title"}`, the
+title shown as a prefix), whether or not the Imbue Studio app takes the notification.
+The agent's room posts reach the feed through the session watcher a page's stream
+builds (`ChatAppState.post_agents_room_posts`, in its `on_events`), which memory shedding
+evicts, so they are posted for the rooms a page is reading: a post in a room nobody has
+open posts nothing (the spec's section 11). And every chat-list push is
 posted as what each chat is doing (`POST /api/chats-activity`), the last report posted
 again once a minute, since the shell keeps it in memory alone and one restarted since the
 last chat-list change would otherwise paint nothing on the agent's card. Both go through

@@ -48,7 +48,9 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   `default_chords`, the chords that trigger it out of the box, whose grammar
   the `workspace_profile` library checks),
   `DefaultShortcut`
-  (`launch`, `mode`), `ShortcutMode`, `AppReference` (`path`, optional `note`),
+  (`launch`, `mode`; the manifest's `default_shortcut` is one table or an
+  array of them, read as `default_shortcuts`), `ShortcutMode`,
+  `AppReference` (`path`, optional `note`),
   `ScopeRules` (`exclude`), `PreviewSpec` (the optional `[preview]` table: how
   a throwaway instance boots, with named free ports, a scratch copy of the
   directories it names, and placeholders in its command, args, and env;

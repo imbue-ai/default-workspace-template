@@ -1,15 +1,16 @@
 /**
  * What a shortcut, a launcher tile, or a desktop's menu comes to (desktop-interface plan sections
  * 3.6, 4.8, 4.9): a focus-mode shortcut raises the app's most recently focused window in this
- * client's layout and opens at the launch path only when there is none; a new desktop is minted
- * ``Desktop <n>``; a shortcut added from a tile lands at the first free cell in reading order over
- * the current grid.
+ * client's layout and opens at the launch path only when there is none, except that one of a
+ * one-window app's POST launch path always runs it into that app's window, as its launcher row does;
+ * a new desktop is minted ``Desktop <n>``; a shortcut added from a tile lands at the first free cell
+ * in reading order over the current grid.
  */
 
 import { drawnCells, firstFreeCellInReadingOrder, placeShortcuts } from "../geometry/grid";
 import type { GridDimensions } from "../geometry/grid";
 import { mostRecentlyFocusedWindowOfApp } from "../geometry/stack";
-import { launchPathOf } from "../model/launch";
+import { launchPathOf, launchRowKindOf } from "../model/launch";
 import type { Desktop, DesktopShortcut, GridCell, ShortcutMode } from "../model/records";
 import { activeDesktop, appByName } from "./desktopState";
 import type { DesktopState } from "./desktopState";
@@ -24,8 +25,11 @@ export type ShortcutRun =
 /** What the user is told when a shortcut is run before the apps are known. */
 export const STILL_CONNECTING_NOTICE = "Still connecting to the workspace; try again in a moment.";
 
-/** What running the launch path of ``app`` in ``mode`` on the active desktop comes to. An app the page does not
- *  know is ``connecting`` until the first app list lands, and unregistered after. */
+/** What running the launch path of ``app`` in ``mode`` on the active desktop comes to. A focus run raises the app's
+ *  most recently focused window rather than running the launch path; a POST launch path of a one-window app (the
+ *  launcher's ``one`` rows) does something the window alone does not, so it always runs, and the focus target lands
+ *  it in that window, as the launcher row does. An app the page does not know is ``connecting`` until the first app
+ *  list lands, and unregistered after. */
 export function resolveLaunchRun(
   state: DesktopState,
   appName: string,
@@ -41,7 +45,8 @@ export function resolveLaunchRun(
   if (launchPath === null) return { kind: "unavailable", reason: `${app.display_name} has no launch path ${launch}` };
   const desktop = activeDesktop(state);
   if (desktop === null) return { kind: "unavailable", reason: "there is no desktop to open on" };
-  if (mode === "focus") {
+  const isOneWindowAction = launchPath.method === "POST" && launchRowKindOf(app, launchPath) === "one";
+  if (mode === "focus" && !isOneWindowAction) {
     const recent = mostRecentlyFocusedWindowOfApp(state.layout, desktop, app.name);
     if (recent !== null) return { kind: "raise", windowId: recent.id };
   }

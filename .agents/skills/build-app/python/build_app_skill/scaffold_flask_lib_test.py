@@ -360,7 +360,7 @@ def test_write_lib_writes_a_manifest_the_library_accepts(tmp_path: Path) -> None
     assert manifest.icon == "icon.svg"
     assert manifest.priority == "user"
     assert manifest.program == "inbox-status"
-    assert manifest.default_shortcut is None
+    assert manifest.default_shortcuts == ()
     assert manifest.description == "inbox status dashboard"
     assert manifest.api_schema_path == "/api/schema"
     assert (lib_dir / "src" / "inbox_status" / "runner_test.py").exists()
@@ -795,6 +795,7 @@ def _workspace_for_a_real_lock(root: Path) -> Path:
         "system/libs/app_schema",
         "system/libs/app_manifest",
         "system/libs/app_registration",
+        "system/libs/workspace_layout",
     ):
         shutil.rmtree(root / library)
         shutil.copytree(

@@ -1,0 +1,1 @@
+An update's pre-flight check now boots the shell with its state and presence folders in a throwaway directory, so the check never leaves files in the workspace's source tree for the next update to refuse as uncommitted changes.

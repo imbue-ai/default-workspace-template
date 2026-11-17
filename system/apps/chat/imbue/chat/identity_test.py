@@ -1,4 +1,5 @@
 import pytest
+from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from flask import Flask
 from workspace_layout.identity import IDENTITY_HEADER
 
@@ -7,6 +8,8 @@ from imbue.chat.identity import is_owner_identity
 from imbue.chat.identity import request_identity
 from imbue.chat.identity import request_participant
 from imbue.chat.request_helpers import answer_chat_app_error
+from imbue.chat.server import create_application
+from imbue.chat.testing import build_test_state
 
 
 @pytest.mark.parametrize(
@@ -60,3 +63,14 @@ def test_a_route_answers_400_for_an_unreadable_header_and_the_anonymous_owner_fo
         refused = client.get(path, headers={IDENTITY_HEADER: '{"owner": "false"}'})
         assert refused.status_code == 400
         assert IDENTITY_HEADER in refused.get_json()["detail"]
+
+
+def test_the_app_refuses_a_page_of_another_origin_and_a_header_less_request_off_loopback() -> None:
+    """The workspace's own browser is on loopback too, so the chat app reads a header-less request as the owner's
+    only from loopback under a loopback Host, and never one its browser marks as another origin's."""
+    client = create_application(build_test_state()).test_client()
+    assert client.get("/api/me").status_code == 200
+    assert_request_guard_refuses_unknown_provenance(client, "GET", "/api/me")
+    # The shell's frame of a chat page is a navigation.
+    framed = client.get("/", headers={"Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "navigate"})
+    assert framed.status_code != 403

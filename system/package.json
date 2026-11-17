@@ -5,6 +5,7 @@
   "type": "module",
   "workspaces": [
     "libs/workspace_ui",
+    "libs/workspace_voice",
     "apps/system_interface/frontend",
     "apps/chat/frontend",
     "apps/getting_started/frontend",

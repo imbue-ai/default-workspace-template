@@ -47,7 +47,10 @@ needs a directory put on `sys.path`, and each stub says which. See
 - Utility scripts: `forward_port.py` (port registry), `message_chat.py` (send a
   message to a chat by its id through the chat app, with `mngr message` as the backoff; the in-workspace
   replacement for `mngr message <agent>`; `--create` makes a new chat there
-  the same way, with `mngr create` as the backoff), `rename_chat.py` (rename the
+  the same way, with `mngr create` as the backoff; `--interrupt` first restarts
+  the chat's agent through the chat app's interrupt route, keeping its
+  conversation and resending anything queued for it, with
+  `mngr start --restart` as the backoff), `rename_chat.py` (rename the
   chat under one title to another through the chat app's rename route, for an
   app whose display name changed; the `build-app` skill runs it),
   `workspace_bare_scripts/room_agent.py` (the `room` agent type's process: it
@@ -76,7 +79,13 @@ needs a directory put on `sys.path`, and each stub says which. See
   `mngr exec` by the Imbue Studio app), `require_create_account.py` (the
   create gate), `refresh_workspace_view.py` (rebuild the user's view after the
   interface changes).
-- Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.
+- Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`,
+  and `minds_container_start_hook.sh` (installed in the image as
+  `/usr/local/bin/mngr-container-start-hook`, which mngr's container
+  entrypoint runs on every container start to relaunch the services agent
+  after a restart docker made on its own; it records the restart as a
+  `container_restarted` event through
+  `workspace_bare_scripts/record_container_restart.py`).
 - The changelog gate: `workspace_scripts/check_changelog_entries.py`.
 
 Cohesive machinery lives in packages instead: the routines runner and its

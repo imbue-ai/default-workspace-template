@@ -1,11 +1,14 @@
 import os
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from update_self_skill.agents_testing import FakeAgents
+from update_self_skill.chat_app_testing import FakeChatAppServer
 from update_self_skill.messenger_testing import RecordingMessengers
+from update_self_skill.update_layout import APPS_REGISTRY_PATH
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -46,6 +49,32 @@ def recording_messengers(
     messengers = RecordingMessengers(bin_dir, tmp_path / "messenger-calls.jsonl")
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     return messengers
+
+
+@pytest.fixture
+def fake_chat_app(tmp_path: Path) -> Iterator[FakeChatAppServer]:
+    """A chat app over loopback, registered under the ``chat`` row of ``tmp_path``'s registry.
+
+    ``server.answers`` is the sequence of ``(status, body)`` its chat list gives, the last one
+    repeating. ``server.interrupt_answers`` maps a chat id to the sequence its interrupt route
+    gives (default a 200), and ``server.interrupts`` records each ``(chat_id, body)`` posted
+    there. ``server.workspace`` is the workspace root, the same ``tmp_path`` the other fixtures
+    here use.
+    """
+    server = FakeChatAppServer(tmp_path)
+    registry = server.workspace / APPS_REGISTRY_PATH
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        f'[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:{server.server_address[1]}"\n'
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 @pytest.fixture

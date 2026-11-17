@@ -363,7 +363,8 @@ def utc_now() -> datetime:
 
 
 class PresenceSweep(MutableModel):
-    """The periodic check that notices a silent departure and announces the connected set when it changed."""
+    """The periodic check that notices a silent departure and announces the connected set when it changed, and the
+    announcement a background profile fetch asks for when it changed what the connected users carry."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
@@ -403,6 +404,16 @@ class PresenceSweep(MutableModel):
             self.announce(outcome.users)
             self.announce_roster()
         return outcome.is_membership_changed
+
+    def announce_connected(self) -> None:
+        """Announce the connected set and the roster now, whether or not its membership changed: a profile a
+        background fetch changed changes what each connected user carries."""
+        # Runs on the profile-refresh thread, where nothing else would log it.
+        try:
+            self.announce(self.store.connected_users(utc_now()))
+            self.announce_roster()
+        except (OSError, ValueError) as e:
+            logger.opt(exception=e).error("Failed to announce a refreshed profile; the next announcement carries it")
 
     def _run(self) -> None:
         while not self._stop.wait(timeout=self.interval_seconds):

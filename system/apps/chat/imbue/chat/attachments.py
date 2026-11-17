@@ -6,6 +6,7 @@ from loguru import logger
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
+from imbue.chat.image_sizes import read_image_size
 from imbue.chat.models import AttachmentError
 
 # Chat attachments live under the gitignored ``data/uploads/`` directory,
@@ -42,17 +43,39 @@ def store_uploaded_file(uploads_directory: Path, original_filename: str, file_st
     """Store an uploaded file under a fresh unique subdirectory and return its path.
 
     Each upload gets its own subdirectory so two files with the same name never
-    collide. Raises AttachmentError if the file cannot be written.
+    collide. An image's subdirectory also carries the size it is drawn at
+    (``<id>-<width>x<height>``), so a chat bubble naming it can hold its space
+    before it loads (``uploadedImageSize`` in frontend/src/models/attachments.ts
+    reads it back). Raises AttachmentError if the file cannot be written.
     """
-    unique_subdirectory = uploads_directory / uuid.uuid4().hex
+    unique_id = uuid.uuid4().hex
     safe_name = sanitize_upload_filename(original_filename)
+    unique_subdirectory = uploads_directory / unique_id
     destination_path = unique_subdirectory / safe_name
     try:
         unique_subdirectory.mkdir(parents=True, exist_ok=True)
         file_storage.save(destination_path)
     except OSError as e:
         raise AttachmentError(f"Could not store uploaded file '{original_filename}'") from e
-    return destination_path
+    size = read_image_size(destination_path)
+    if size is None:
+        return destination_path
+    sized_subdirectory = uploads_directory / f"{unique_id}-{size.width}x{size.height}"
+    return _move_to_sized_subdirectory(unique_subdirectory, sized_subdirectory, safe_name)
+
+
+def _move_to_sized_subdirectory(unique_subdirectory: Path, sized_subdirectory: Path, safe_name: str) -> Path:
+    """Rename an upload's subdirectory to the one naming its size and return the file's new path.
+
+    The size is only a hint for drawing the image, so when the rename fails the file stays where it
+    was saved and its unsized path is returned.
+    """
+    try:
+        unique_subdirectory.rename(sized_subdirectory)
+    except OSError as e:
+        logger.warning("Kept upload {} without its size in the path: {}", unique_subdirectory / safe_name, e)
+        return unique_subdirectory / safe_name
+    return sized_subdirectory / safe_name
 
 
 def resolve_upload_path(uploads_directory: Path, relative_path: str) -> Path | None:

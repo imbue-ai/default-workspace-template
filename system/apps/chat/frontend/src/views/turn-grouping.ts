@@ -175,7 +175,7 @@ export type TimelineItem =
    *  exactly like a no-steps turn. */
   | { kind: "ungrouped"; key: string; events: RunPart[] }
   /** An agent permission request, lifted out of any open step so it always
-   *  renders inline as a thread-breaking block. The user must be able to see and
+   *  renders inline, on the stretch's line between the steps. The user must be able to see and
    *  act on it without expanding a step. `event` may carry more than one
    *  permission-request tool call (a batched request); each card resolves its
    *  own verdict by looking up its own request id in `resolutionsByRequestId`
@@ -203,6 +203,8 @@ export interface SectionView {
    *  switch that carries no message. */
   user_event: UserMessageEvent | null;
   key: string;
+  /** Whether the section opens on an agent switch: what follows is another agent's. */
+  is_after_switch: boolean;
   items: TimelineItem[];
   /** The final run of ungrouped prose: the user-facing reply, rendered below
    *  the timeline. */
@@ -476,6 +478,7 @@ function isSubsequentTurnActivity(entry: SectionEntry): boolean {
 interface SectionBuilder {
   user_event: UserMessageEvent | null;
   key: string;
+  is_after_switch: boolean;
   /** Step nodes in first-appearance (transcript) order. */
   steps: Map<string, StepNode>;
   step_order: string[];
@@ -496,10 +499,11 @@ interface SectionBuilder {
   open_handoff: HandoffNode | null;
 }
 
-function newSection(user_event: UserMessageEvent | null, key: string): SectionBuilder {
+function newSection(user_event: UserMessageEvent | null, key: string, is_after_switch: boolean): SectionBuilder {
   return {
     user_event,
     key,
+    is_after_switch,
     steps: new Map(),
     step_order: [],
     entries: [],
@@ -637,8 +641,12 @@ export function buildSections(
   // for the same file can mark the earlier card superseded.
   const pendingSecretRequestByFile = new Map<string, string>();
   const secretNotesByRequestId = new Map<string, string>();
-  const ensureSection = (user_event: UserMessageEvent | null, key: string): SectionBuilder => {
-    const section = newSection(user_event, key);
+  const ensureSection = (
+    user_event: UserMessageEvent | null,
+    key: string,
+    is_after_switch = false,
+  ): SectionBuilder => {
+    const section = newSection(user_event, key, is_after_switch);
     // Re-open carried-over steps at the top of the new section.
     for (const id of carryover) {
       openStep(section, id, /* is_carryover */ true);
@@ -650,10 +658,15 @@ export function buildSections(
   // Close the current section, carrying its open steps over, and open the next. A turn the user
   // started is a new request, so the carried-over steps wait until the agent takes them up again;
   // any other break continues the request the closed section was answering.
-  const breakSection = (user_event: UserMessageEvent | null, key: string, isNewRequest: boolean): void => {
+  const breakSection = (
+    user_event: UserMessageEvent | null,
+    key: string,
+    isNewRequest: boolean,
+    isAfterSwitch = false,
+  ): void => {
     const previous = current;
     carryover = previous === null ? [] : openStepsAtEnd(previous);
-    current = ensureSection(user_event, key);
+    current = ensureSection(user_event, key, isAfterSwitch);
     if (isNewRequest) setCarryoverDormant(current);
     else continueCarryover(previous, current);
   };
@@ -667,7 +680,7 @@ export function buildSections(
       // The chat's first agent taking over from the seed segment, which no agent wrote: nothing
       // was handed off, so no node marks it; the agent's first turn simply opens a section.
       if (current !== null) carryover = openStepsAtEnd(current);
-      current = ensureSection(openingTurnOf(e), `section-switch-${e.event_id}`);
+      current = ensureSection(openingTurnOf(e), `section-switch-${e.event_id}`, true);
       continue;
     }
     if (e.type === "agent_switch") {
@@ -688,7 +701,12 @@ export function buildSections(
       }
       // The successor starts on the message the user switched with, so a step the retiring
       // agent left open does not take its answer unless it takes the step up.
-      breakSection(openingTurnOf(e), `section-switch-${e.event_id}`, /* isNewRequest */ true);
+      breakSection(
+        openingTurnOf(e),
+        `section-switch-${e.event_id}`,
+        /* isNewRequest */ true,
+        /* isAfterSwitch */ true,
+      );
       continue;
     }
     if (e.type === "user_message") {
@@ -810,7 +828,8 @@ export function buildSections(
         applyTransition(current, t);
         if (t.status === "in_progress") lastOpened = t.id;
       }
-      if (parsed.render !== null && (parsed.render.text || parsed.render.tool_calls.length > 0)) {
+      // Whitespace-only text draws nothing, so it counts as no text.
+      if (parsed.render !== null && (parsed.render.text.trim() || parsed.render.tool_calls.length > 0)) {
         if (hasPermissionRequest(parsed.render, toolResults)) {
           // A permission or secret request breaks out of any open step: it must
           // always be directly visible, never collapsed inside a step node. The step
@@ -1184,6 +1203,7 @@ function finalizeSection(
   return {
     user_event: section.user_event,
     key: section.key,
+    is_after_switch: section.is_after_switch,
     items,
     trailing_reply,
     trailing_status,

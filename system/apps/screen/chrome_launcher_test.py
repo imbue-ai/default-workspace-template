@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 
 from imbue.imbue_common.model_update import to_update
+from screen.chrome_args import NEVER_DISABLED_FEATURES
 from screen.chrome_args import STRIPPED_FROM_PLAYWRIGHT
+from screen.chrome_args import disabled_features
 from screen.chrome_args import launch_args
 from screen.chrome_launcher import ChromiumLaunchRequest
 from screen.chrome_launcher import ChromiumProcess
@@ -46,6 +48,15 @@ def test_launch_args_keep_stealth_suppress_the_bad_flag_infobar_and_declare_engl
 
 def test_launch_args_never_emit_a_playwright_anti_stealth_switch() -> None:
     assert not set(_args()) & set(STRIPPED_FROM_PLAYWRIGHT)
+
+
+def test_launch_args_keep_the_browsers_local_network_access_checks_on() -> None:
+    """A page of another origin reaching a loopback service is gated by Chromium first; the launch arguments turn
+    plenty of features off, but never that one."""
+    disabled = disabled_features(_args())
+    assert "AcceptCHFrame" in disabled
+    assert "LocalNetworkAccessChecks" in NEVER_DISABLED_FEATURES
+    assert not disabled & set(NEVER_DISABLED_FEATURES)
 
 
 def test_the_devtools_port_file_is_cleared_with_the_other_singletons_and_read_back(tmp_path: Path) -> None:

@@ -10,7 +10,7 @@ mngr lifecycle (RUNNING) plus the transcript tail. Two things differ from claude
    base applies that gate before this function is reached. It matters for agy specifically
    because agy RESUMES its own store, so a restarted agent's transcript still carries the
    dead process's unmatched tool call. What this function need not re-check is liveness: the
-   mngr ``active`` marker (surfaced as ``is_agent_running``) is removed when agy goes idle.
+   mngr ``active`` marker (surfaced as ``is_agent_alive``) is removed when agy goes idle.
 
 2. **An empty planner step is not the end of the turn.** agy emits a PLANNER_RESPONSE step
    carrying only ``thinking`` (empty text) before each tool call -- its "deciding what to

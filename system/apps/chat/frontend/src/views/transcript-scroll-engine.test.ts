@@ -57,6 +57,9 @@ function makeDataSource(rowCount = 0): TranscriptScrollDataSource {
     estimate: SCROLL_HEIGHT_PX / rowCount,
     anchorEventId: eventId,
     render: () => null,
+    takesLiveTail: false,
+    chipCallIds: new Set(),
+    speakerTurn: null,
   }));
   return {
     getRows: () => rows,

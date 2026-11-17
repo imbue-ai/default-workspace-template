@@ -8,6 +8,7 @@ from typing import Self
 
 from pydantic import Field
 from pydantic import ValidationError
+from pydantic import field_validator
 from pydantic import model_validator
 
 from app_manifest.errors import InvalidManifestValueError
@@ -372,10 +373,16 @@ class AppTheming(FrozenModel):
 
 
 class DefaultShortcut(FrozenModel):
-    """The shortcut a new desktop is seeded with for this app."""
+    """One shortcut a new desktop is seeded with for this app."""
 
     launch: LaunchPathId = Field(description="A declared launch path id, or 'open' when the app declares none")
     mode: ShortcutMode = Field(description="focus or new")
+
+
+def as_default_shortcut_list(value: object) -> object:
+    """A ``default_shortcut`` value as the list it stands for: one table is a list of one; anything else is left for
+    validation to judge."""
+    return [value] if isinstance(value, dict) else value
 
 
 def _preview_placeholders(text: str) -> list[tuple[str, str | None]]:
@@ -504,6 +511,11 @@ class AppManifest(FrozenModel):
         description="Whether the shell may stop the app's program once no window on any desktop shows it "
         "(docs/system/specs/stop-when-no-windows.md); a critical app never is",
     )
+    uses_microphone: bool = Field(
+        default=False,
+        description="Whether the app's pages listen to the microphone; the shell delegates it to the frames of "
+        "an app that declares this, and to no other",
+    )
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
     program: ProgramName = Field(description="The supervisord program that runs the app (defaults to the name)")
     internal: bool = Field(default=False, description="Hidden from every open surface")
@@ -512,8 +524,11 @@ class AppManifest(FrozenModel):
         description="Part of the workspace itself rather than an app built on it: the minds Share tab lists it under "
         "its System group instead of offering it up front",
     )
-    default_shortcut: DefaultShortcut | None = Field(
-        default=None, description="The shortcut a new desktop is seeded with"
+    default_shortcuts: tuple[DefaultShortcut, ...] = Field(
+        default=(),
+        validation_alias="default_shortcut",
+        description="The shortcuts a new desktop is seeded with, in order: the ``default_shortcut`` table, or an "
+        "array of them; none declared leaves the choice to the shell",
     )
     launch_paths: tuple[LaunchPath, ...] = Field(
         default=(),
@@ -578,6 +593,14 @@ class AppManifest(FrozenModel):
             return {**data, "preview": scaffold_preview_spec(name)}
         return data
 
+    @field_validator("default_shortcuts", mode="before")
+    @classmethod
+    def _read_one_default_shortcut_as_a_list(cls, value: object) -> object:
+        listed = as_default_shortcut_list(value)
+        if isinstance(listed, list) and not listed:
+            raise InvalidManifestValueError("default_shortcut, when declared, names at least one shortcut")
+        return listed
+
     @model_validator(mode="after")
     def _check_cross_field_rules(self) -> Self:
         if self.icon is None and not self.internal:
@@ -614,12 +637,15 @@ class AppManifest(FrozenModel):
         secret_files = [secret.file for secret in self.secrets]
         if len(set(secret_files)) != len(secret_files):
             raise InvalidManifestValueError(f"secret files must be unique, got {secret_files}")
-        if self.default_shortcut is not None:
-            allowed_launch_ids = set(launch_path_ids) if launch_path_ids else {OPEN_LAUNCH_PATH_ID}
-            if self.default_shortcut.launch not in allowed_launch_ids:
+        allowed_launch_ids = set(launch_path_ids) if launch_path_ids else {OPEN_LAUNCH_PATH_ID}
+        for shortcut in self.default_shortcuts:
+            if shortcut.launch not in allowed_launch_ids:
                 raise InvalidManifestValueError(
-                    f"default_shortcut.launch {self.default_shortcut.launch!r} is not one of {sorted(allowed_launch_ids)}"
+                    f"default_shortcut.launch {shortcut.launch!r} is not one of {sorted(allowed_launch_ids)}"
                 )
+        shortcut_launch_ids = [shortcut.launch for shortcut in self.default_shortcuts]
+        if len(set(shortcut_launch_ids)) != len(shortcut_launch_ids):
+            raise InvalidManifestValueError(f"default_shortcut launches must be unique, got {shortcut_launch_ids}")
         return self
 
 

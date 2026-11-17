@@ -8,6 +8,7 @@ import threading
 import time
 from collections.abc import Callable
 from collections.abc import Generator
+from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -32,6 +33,9 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 from pydantic import Field
 from pydantic import SecretStr
+from update_self_skill import update_agent_restarts
+from update_self_skill import update_runtime
+from update_self_skill.update_layout import APPS_REGISTRY_PATH
 from watchdog.observers.api import BaseObserver
 from werkzeug.test import TestResponse
 from workspace_bare_scripts import message_chat
@@ -39,6 +43,7 @@ from workspace_bare_scripts import room_agent
 from workspace_layout.identity import IDENTITY_HEADER
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import parse_identity_header
+from workspace_layout.primitives import BubbleKind
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ParticipantKind
 from workspace_layout.roster import RosterDocument
@@ -53,6 +58,7 @@ from imbue.chat.accounts import delete_account
 from imbue.chat.accounts import index_path
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.activity_state import BACKGROUND_LIFECYCLE_STATE
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import COMPACT_UNAVAILABLE_SEND_FAILURE_KIND
@@ -62,17 +68,21 @@ from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import agent_state_dir
 from imbue.chat.agent_discovery import get_host_dir
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import FirstMessage
+from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.authors import author_prefix
 from imbue.chat.authors import text_sha256
 from imbue.chat.background_tasks import BackgroundTaskReader
+from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
 from imbue.chat.errors import ChatAppError
@@ -91,6 +101,7 @@ from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
+from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_shoulder_tap
@@ -104,6 +115,7 @@ from imbue.chat.models import CreateChatRequest
 from imbue.chat.models import CreatedChat
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import InterruptAgentRequest
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
@@ -134,6 +146,7 @@ from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
 from imbue.chat.testing import compact_summary_record
 from imbue.chat.testing import drain_is_connecting_pushes
+from imbue.chat.testing import drain_pushes
 from imbue.chat.testing import is_chat_connecting
 from imbue.chat.testing import make_agent_fixture
 from imbue.chat.testing import make_chat_agent_entry
@@ -150,6 +163,7 @@ from imbue.chat.testing import write_background_task_marker
 from imbue.chat.testing import write_compacting_marker
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
+from imbue.chat.ws_broadcaster import provisional_chat_created_message
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.find import AgentMatch
@@ -208,8 +222,9 @@ def client(app: Flask) -> FlaskClient:
 def test_the_chat_documents_are_served_under_the_document_policy(client: FlaskClient) -> None:
     """The chats document carries a policy a browser would run it under; the terminal frame and the markdown's
     images, video and audio from anywhere are admitted (the shared default admits images from the chat's own
-    origin only; the sanitizer admits all three tags, see the frontend's markdown test), and a non-page answer
-    carries none."""
+    origin only; the sanitizer admits all three tags, see the frontend's markdown test), the composer's dictation
+    may compile WebAssembly and download its speech model from Hugging Face and the CDN hosts it redirects to,
+    scripts still come only from the chat's origin, and a non-page answer carries none."""
     page = client.get("/")
 
     assert page.status_code == 200
@@ -218,6 +233,8 @@ def test_the_chat_documents_are_served_under_the_document_policy(client: FlaskCl
     assert "frame-src http: https:" in policy
     assert "img-src * data: blob:" in policy
     assert "media-src * data: blob:" in policy
+    assert "script-src 'self' 'wasm-unsafe-eval'" in policy
+    assert "connect-src 'self' https://huggingface.co https://*.hf.co" in policy
     assert "Content-Security-Policy" not in client.get("/api/health").headers
 
 
@@ -2130,7 +2147,7 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     # Each option carries the suffix-free reported id the matcher keys on. Keyed by id
     # rather than by position, so reordering the picker does not break this.
     reported = {option["id"]: option["harness_reported_model_id"] for option in claude["options"]}
-    assert reported["fable[1m]"] == "claude-fable-5-1"
+    assert reported["fable[1m]"] == "claude-fable-5-2"
     assert reported["opus[1m]"] == "claude-opus-5-5"
     assert reported["sonnet[1m]"] == "claude-sonnet-5-5"
     assert claude["switch_mode"] == "eager_then_reconcile"
@@ -2457,6 +2474,95 @@ def test_fast_mode_changes_on_a_codex_chat_whose_effort_was_never_picked(tmp_pat
     assert codex_client.calls == [{"service_tier": None}]
 
 
+@pytest.mark.parametrize(
+    ("harness", "mode", "expected_calls"),
+    [
+        (HarnessType.CODEX, FastModeMode.ON, [{"service_tier": "priority"}]),
+        (HarnessType.CODEX, FastModeMode.AUTO, [{"service_tier": "priority"}]),
+        (HarnessType.CODEX, FastModeMode.OFF, []),
+        # claude launches fast through the ``fast`` create template, so nothing is switched.
+        (HarnessType.CLAUDE, FastModeMode.ON, []),
+    ],
+)
+def test_launch_fast_mode_switches_only_the_fast_axis_of_a_codex_agent_whose_chat_launches_fast(
+    harness: HarnessType, mode: FastModeMode, expected_calls: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    agent_id = "agent-00000000000000000000000000000017"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=harness)
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger, chat_files_root=tmp_path / "chats")
+    manager.set_fast_mode_state(ChatId(agent_id), ChatFastModeState(mode=mode))
+    switch_client = _RecordingSwitchClient()
+    try:
+        with patch("imbue.chat.harnesses.codex.model.open_bound_codex_client", return_value=switch_client):
+            manager.apply_launch_fast_mode(ChatId(agent_id), agent_info)
+    finally:
+        manager.stop()
+
+    assert switch_client.calls == expected_calls
+    assert messenger.sent == []
+
+
+class _StepRecordingSwitchClient(_RecordingSwitchClient):
+    """A switch client that also notes each switch in a log shared with the deliveries, to order them."""
+
+    def __init__(self, steps: list[str]) -> None:
+        super().__init__()
+        self._steps = steps
+
+    def settings_update(self, **kwargs: Any) -> None:
+        super().settings_update(**kwargs)
+        self._steps.append(f"switch:{kwargs}")
+
+
+@pytest.mark.parametrize(
+    "model_pick",
+    [
+        None,
+        # A pick the agent refuses leaves the chat on its default model, still at its launch speed.
+        ModelPick(model_id="no-such-model", effort=None, fast=False),
+    ],
+)
+def test_a_new_codex_chat_that_launches_fast_is_switched_fast_before_its_first_message(
+    model_pick: ModelPick | None, agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    chat_id = ChatId("codex-chat")
+    with agent_manager._lock:
+        # The create settles on the pick and account its provisional chat carries.
+        agent_manager._provisional_chats[chat_id] = ProvisionalChat(
+            chat_id=chat_id, name="Chat 1", account_id="", phase=ProvisionalChatPhase.CREATING, model_pick=model_pick
+        )
+    agent_manager.set_fast_mode_state(chat_id, ChatFastModeState(mode=FastModeMode.ON))
+    steps: list[str] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        steps.append(f"deliver:{text}")
+        return SendOutcome.OK
+
+    agent_manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader([]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=deliver,
+        )
+    )
+    with patch(
+        "imbue.chat.harnesses.codex.model.open_bound_codex_client", return_value=_StepRecordingSwitchClient(steps)
+    ):
+        agent_manager._run_creation(
+            chat_id,
+            str(chat_id),
+            "test-agent",
+            ["true"],
+            tmp_path,
+            {"display_name": "Chat 1"},
+            HarnessType.CODEX,
+            first_message=FirstMessage(text="hello", message_id="m-0"),
+        )
+
+    assert steps == ["switch:{'service_tier': 'priority'}", "deliver:hello"]
+
+
 class _FakeCodexConnection:
     """A minimal stand-in for a live ``CodexLiveConnection`` for the connect-seed write-through."""
 
@@ -2533,7 +2639,7 @@ def _manager_with_capturing_prioritizer(writes: list[tuple[int, int]], pids: dic
     manager = AgentManager.build(WebSocketBroadcaster())
     manager._oom_prioritizer = ChatOomPrioritizer(
         list_chat_ids=manager.get_chat_ids,
-        resolve_pids=lambda cid: [pids[cid]] if cid in pids else [],
+        resolve_pids_by_chat_id=lambda cids: {cid: [pids[cid]] for cid in cids if cid in pids},
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         # No process-start marker in this fake, so the chat's idle time comes from
         # the reported presence alone -- which is what these tests are about.
@@ -2707,7 +2813,7 @@ def test_send_records_the_message_for_the_chats_recency() -> None:
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
     manager._oom_prioritizer = ChatOomPrioritizer(
         list_chat_ids=manager.get_chat_ids,
-        resolve_pids=lambda cid: [4242] if cid == agent_id else [],
+        resolve_pids_by_chat_id=lambda cids: {cid: [4242] for cid in cids if cid == agent_id},
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         resolve_process_started_at=lambda _cid: None,
     )
@@ -3014,6 +3120,139 @@ def test_flush_queue_returns_500_on_restart_failure(client: FlaskClient) -> None
     assert response.status_code == 500
     # The restart failed, so nothing is resent.
     mock_send.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("lifecycle", "body", "expected_status", "is_restart_expected"),
+    [
+        ("WAITING", {"only_if_idle": True}, 200, True),
+        ("RUNNING", {"only_if_idle": True}, 409, False),
+        # Without the flag the route is the plain interrupt it always was.
+        ("RUNNING", None, 200, True),
+    ],
+)
+def test_interrupt_only_if_idle_restarts_an_idle_chat_and_leaves_a_busy_one(
+    client: FlaskClient,
+    app: Flask,
+    lifecycle: str,
+    body: dict[str, bool] | None,
+    expected_status: int,
+    is_restart_expected: bool,
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    _register_agent(app, agent_id, "claude-agent", lifecycle)
+
+    with patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run:
+        response = client.post(f"/api/chats/{agent_id}/interrupt", json=body)
+
+    assert response.status_code == expected_status
+    assert mock_run.called is is_restart_expected
+    if expected_status == 409:
+        assert response.get_json()["busy_with"] == "working"
+
+
+@pytest.mark.parametrize(
+    ("data", "content_type", "expected_status"),
+    [
+        # A script or curl posting without a JSON content type still gets the busy chat left alone.
+        ('{"only_if_idle": true}', "text/plain", 409),
+        ('{"only_if_idle": "sometimes"}', "application/json", 400),
+        ('{"only_if_idle": true, "force": true}', "application/json", 400),
+        ("[]", "application/json", 400),
+        ("not json", "application/json", 400),
+    ],
+)
+def test_an_interrupt_body_is_honoured_whatever_its_content_type_and_a_malformed_one_restarts_nothing(
+    client: FlaskClient, app: Flask, data: str, content_type: str, expected_status: int
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    _register_agent(app, agent_id, "claude-agent", "RUNNING")
+
+    with patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run:
+        response = client.post(f"/api/chats/{agent_id}/interrupt", data=data, content_type=content_type)
+
+    assert response.status_code == expected_status
+    mock_run.assert_not_called()
+
+
+@pytest.mark.parametrize("queued_block", ["first message\nsecond message", ""])
+def test_interrupt_keep_queue_restarts_and_resends_what_was_queued(client: FlaskClient, queued_block: str) -> None:
+    """Unlike the flush, an empty queue still restarts: the caller asked for the restart itself."""
+    fake_watcher = _fake_queue_watcher(queued_block)
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=_agent_info()),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch.object(AgentManager, "reset_activity_state"),
+        patch.object(AgentManager, "send_message_to_agent", return_value=SendDelivery.DELIVERED) as mock_send,
+    ):
+        response = client.post("/api/chats/agent-123/interrupt", json={"keep_queue": True})
+
+    assert response.status_code == 200
+    assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "claude-agent", "--restart", "--no-resume"]
+    assert [call.args[1] for call in mock_send.call_args_list] == ([queued_block] if queued_block else [])
+    assert fake_watcher.clear_calls == [True]
+
+
+def test_message_chats_interrupt_asks_for_what_the_interrupt_route_takes() -> None:
+    """``message_chat.py --interrupt`` is standard-library only and carries its own copy of the route's
+    request; a rename here would leave it dropping the queue of every chat it restarts."""
+    assert InterruptAgentRequest.model_validate(message_chat.INTERRUPT_REQUEST).keep_queue is True
+
+
+class _TestClientHttp(update_runtime.HttpClient):
+    """update-self's HTTP client, answered by this app's test client instead of a socket."""
+
+    def __init__(self, client: FlaskClient) -> None:
+        self._client = client
+
+    def get_page(self, url: str, timeout: float) -> update_runtime.FetchedPage | None:
+        return self._page_of(self._client.get(urlparse(url).path))
+
+    def post_json(self, url: str, body: Mapping[str, object], timeout: float) -> update_runtime.FetchedPage | None:
+        return self._page_of(self._client.post(urlparse(url).path, json=dict(body)))
+
+    @staticmethod
+    def _page_of(response: TestResponse) -> update_runtime.FetchedPage:
+        return update_runtime.FetchedPage(
+            status=response.status_code, body=response.get_data(as_text=True), headers={}
+        )
+
+
+def test_update_selfs_agent_restarts_restart_only_the_idle_chats_this_app_lists(tmp_path: Path) -> None:
+    """update-self's restart pass, run against this app: it restarts the idle chat, leaves the busy ones and
+    the switching one running and says why, and skips its own chat, a stopped chat and a room.
+
+    The pass is standard-library only and reads this app's chat list and interrupt answers from its
+    own copies of their wire names, so this is what fails when the two drift apart."""
+    app, _log_path = _recording_app(tmp_path)
+    manager: AgentManager = state_of(app).agent_manager
+    own, idle, working, backgrounded, stopped, room = (f"agent-{uuid4().hex}" for _ in range(6))
+    _register_agent(app, own, "Chat-own", "WAITING")
+    _register_agent(app, idle, "Chat-idle", "WAITING")
+    _register_agent(app, working, "Chat-working", "RUNNING")
+    _register_agent(app, backgrounded, "Chat-backgrounded", BACKGROUND_LIFECYCLE_STATE)
+    _register_agent(app, stopped, "Chat-stopped", "STOPPED")
+    seed_agent_state(manager, room, name="Lounge", harness=HarnessType.ROOM)
+    switching, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
+    workspace = tmp_path / "workspace"
+    registry = workspace / APPS_REGISTRY_PATH
+    registry.parent.mkdir(parents=True)
+    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://chat.test"\n')
+
+    with patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run:
+        report = update_agent_restarts.restart_idle_agents(workspace, own, set(), _TestClientHttp(app.test_client()))
+
+    assert [entry["chat_id"] for entry in report["restarted"]] == [idle]
+    assert sorted((entry["chat_id"], entry["busy_with"]) for entry in report["left_running"]) == sorted(
+        [
+            (working, "working"),
+            (backgrounded, "waiting on background work"),
+            (switching, "switching to another agent"),
+        ]
+    )
+    assert report["failed"] == []
+    assert mock_run.call_count == 1
 
 
 @pytest.mark.parametrize("route", ["interrupt", "flush-queue"])
@@ -4763,7 +5002,7 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
     assert not log_path.exists()
 
 
-def test_a_visitors_send_to_a_converging_chat_is_held_prefixed_and_listed_without_the_prefix(
+def test_a_visitors_send_to_a_converging_chat_is_held_prefixed_and_listed_as_theirs_without_the_prefix(
     tmp_path: Path,
 ) -> None:
     app, _log_path = _recording_app(tmp_path)
@@ -4777,18 +5016,19 @@ def test_a_visitors_send_to_a_converging_chat_is_held_prefixed_and_listed_withou
     )
     assert held.status_code == 202
 
-    # The successor is handed the prefix; the page, which draws the held send as the sender's own bubble, is not.
+    # The successor is handed the prefix; the page, which draws the held send under its sender, is handed the words
+    # and who the sender is.
     manager: AgentManager = state_of(app).agent_manager
     record = manager._chat_record_store.read(ChatId(first))
     assert record is not None and record.handoff is not None
     assert [held_send.text for held_send in record.handoff.held_sends] == ["Carry on in Codex", "[from: bob] and this"]
     listed = client.get("/api/chats").get_json()["chats"]
     assert [
-        {"message_id": held_send["message_id"], "text": held_send["text"]}
+        {key: held_send[key] for key in ("message_id", "text", "author", "author_name")}
         for held_send in listed[0]["handoff"]["held_sends"]
     ] == [
-        {"message_id": "trigger-1", "text": "Carry on in Codex"},
-        {"message_id": "m-2", "text": "and this"},
+        {"message_id": "trigger-1", "text": "Carry on in Codex", "author": None, "author_name": None},
+        {"message_id": "m-2", "text": "and this", "author": "user:user-bob-4471", "author_name": "bob"},
     ]
 
 
@@ -5474,6 +5714,27 @@ def test_the_stop_button_clears_a_compaction_it_cancelled(tmp_path: Path) -> Non
     assert agent_id not in manager._compaction_pending_by_agent
 
 
+@pytest.mark.parametrize("body", [None, {"keep_queue": True}])
+def test_an_interrupt_clears_a_compaction_its_restart_ended(tmp_path: Path, body: dict[str, bool] | None) -> None:
+    state_dir, config_dir = _claude_tap_dirs(tmp_path)
+    agent_id = f"agent-{uuid4().hex}"
+    agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir, claude_config_dir=config_dir)
+    marker = write_compacting_marker(state_dir, "manual")
+    manager, _ = _manager_with_known_agents()
+    manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+    app = create_application(build_test_state(agent_manager=manager))
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=_fake_queue_watcher("")),
+        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()),
+    ):
+        response = app.test_client().post(f"/api/chats/{agent_id}/interrupt", json=body)
+
+    assert response.status_code == 200
+    assert not marker.exists()
+    assert agent_id not in manager._compaction_pending_by_agent
+
+
 def test_a_compact_command_the_agent_refused_shows_no_compaction(tmp_path: Path) -> None:
     agent_id = f"agent-{uuid4().hex}"
     agent_info, _ = make_agent_fixture(tmp_path, agent_id=agent_id)
@@ -5912,6 +6173,32 @@ def test_a_visitors_send_to_a_chat_the_app_does_not_know_is_refused_with_nothing
     assert not (authors_root / unknown_id).exists()
     assert not (authors_root.parent / "authors.jsonl").exists()
     assert sorted(path.name for path in authors_root.glob("*")) == []
+
+
+def test_a_visitors_send_to_a_chat_being_created_is_shown_under_them_without_the_prefix() -> None:
+    """The agent the chat gets is handed the prefix; every page, the ones that reconnect included, is sent the
+    words and who sent them."""
+    chat_id = ChatId(f"agent-{uuid4().hex}")
+    manager, client = _creating_chat_and_client(chat_id)
+
+    client.post(
+        f"/api/chats/{chat_id}/message",
+        json={"message": "hello", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+    client.post(f"/api/chats/{chat_id}/message", json={"message": "and mine", "message_id": "m-2"})
+
+    proto = manager.get_provisional_chat(chat_id)
+    assert proto is not None
+    assert [held.text for held in proto.held_sends] == ["[from: bob] hello", "and mine"]
+    (shown,) = manager.get_provisional_chats_as_shown()
+    replayed = provisional_chat_created_message(shown)
+    assert [
+        {key: held[key] for key in ("message_id", "text", "author", "author_name")} for held in replayed["held_sends"]
+    ] == [
+        {"message_id": "m-1", "text": "hello", "author": _VISITOR_KEY, "author_name": "bob"},
+        {"message_id": "m-2", "text": "and mine", "author": None, "author_name": None},
+    ]
 
 
 def test_me_answers_the_requesters_participant_key(app: Flask) -> None:
@@ -6368,6 +6655,7 @@ def test_a_persons_send_raises_a_bubble_over_their_entry_naming_the_people_it_me
         ("user:user-bob-4471", _LOUNGE_ID, "Lounge", "@Josh @agent look at this", "m-1", ("user:user-josh-0001",)),
         ("user:user-josh-0001", _MAIN_ID, "Main", "@Bob is right", "m-2", ()),
     ]
+    assert {bubble.kind for bubble in shell.bubbles} == {BubbleKind.MESSAGE}
 
 
 def test_a_send_no_proxy_vouched_for_raises_no_bubble_and_its_mentions_act_on_nothing(tmp_path: Path) -> None:
@@ -6411,32 +6699,89 @@ def test_a_send_no_proxy_vouched_for_raises_no_bubble_and_its_mentions_act_on_no
     assert lounge is not None and lounge.awaiting_chat_ids == (ChatId(_MAIN_ID),)
 
 
-def test_the_agents_turns_raise_a_bubble_with_their_first_paragraph(tmp_path: Path) -> None:
-    """An assistant turn of the chat's live agent, and the agent's post into a room, each raise a bubble over the
-    agent's entry; a retired agent's words raise none."""
+def test_only_the_agents_room_posts_reach_the_tray_naming_the_people_they_mention(tmp_path: Path) -> None:
+    """The agent's post into a room is posted to the tray with the people it mentions, whose clients raise it as a
+    bubble (the multiplayer spec, section 6.5); its turns in an agent chat and a retired agent's words post none."""
     app = _peopled_app(tmp_path, RecordingMngrMessenger())
     state = state_of(app)
     shell = _fake_shell_of(app)
-    turn = {
-        "type": "assistant_message",
-        "event_id": "e-1",
-        "agent_id": _MAIN_ID,
-        "text": "Done: the report is ready.\n\nIt covers three cases.",
-    }
+    turn = {"type": "assistant_message", "event_id": "e-1", "agent_id": _MAIN_ID, "text": "Looking into it."}
     room_post = {"type": "user_message", "event_id": "e-2", "content": "It is noon.", "author": "workspace-agent"}
+    mentioning = {**room_post, "event_id": "e-3", "content": "@Josh @Bob done, and @agent is me."}
 
-    state.bubble_agent_turns(ChatId(_MAIN_ID), _MAIN_ID, [turn, {**turn, "event_id": "e-3", "text": "  "}])
-    state.bubble_agent_turns(ChatId(_LOUNGE_ID), _LOUNGE_ID, [room_post])
-    state.bubble_agent_turns(ChatId(_MAIN_ID), "agent-00000000000000000000000000000099", [turn])
+    state.post_agents_room_posts(ChatId(_MAIN_ID), _MAIN_ID, [turn])
+    state.post_agents_room_posts(ChatId(_LOUNGE_ID), "agent-00000000000000000000000000000099", [room_post])
+    state.post_agents_room_posts(
+        ChatId(_LOUNGE_ID), _LOUNGE_ID, [room_post, {**room_post, "event_id": "e-4", "content": " "}]
+    )
+    state.post_agents_room_posts(ChatId(_LOUNGE_ID), _LOUNGE_ID, [mentioning])
 
-    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "the agent's bubbles to reach the shell")
+    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "the agent's room posts to reach the shell")
     assert [
-        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.message_id)
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.message_id, bubble.mentions)
         for bubble in shell.bubbles
     ] == [
-        ("workspace-agent", _MAIN_ID, "Main", "Done: the report is ready.", "e-1"),
-        ("workspace-agent", _LOUNGE_ID, "Lounge", "It is noon.", "e-2"),
+        ("workspace-agent", _LOUNGE_ID, "Lounge", "It is noon.", "e-2", ()),
+        (
+            "workspace-agent",
+            _LOUNGE_ID,
+            "Lounge",
+            "@Josh @Bob done, and @agent is me.",
+            "e-3",
+            (ParticipantKey("user:user-josh-0001"), ParticipantKey("user:user-bob-4471")),
+        ),
     ]
+    assert {bubble.kind for bubble in shell.bubbles} == {BubbleKind.MESSAGE}
+
+
+def test_a_chats_notification_raises_a_notification_bubble_over_the_agents_entry(tmp_path: Path) -> None:
+    """The notify script tells the chat app about each notification it sends (the multiplayer spec, section 6.5):
+    the chat app raises it over the agent's entry, under the chat's title, the optional title as its prefix."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+
+    plain = client.post(f"/api/chats/{_MAIN_ID}/notification", json={"message": "The report is ready."})
+    titled = client.post(
+        f"/api/chats/{_LOUNGE_ID}/notification", json={"message": "All 412 passed.", "title": "Test run"}
+    )
+
+    assert (plain.status_code, titled.status_code) == (200, 200)
+    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "both notifications to reach the shell")
+    assert [
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.mentions, bubble.kind)
+        for bubble in shell.bubbles
+    ] == [
+        ("workspace-agent", _MAIN_ID, "Main", "The report is ready.", (), BubbleKind.NOTIFICATION),
+        ("workspace-agent", _LOUNGE_ID, "Lounge", "Test run: All 412 passed.", (), BubbleKind.NOTIFICATION),
+    ]
+    assert shell.bubbles[0].message_id != shell.bubbles[1].message_id
+
+
+def test_a_notification_is_taken_only_from_loopback_for_a_chat_there_is_with_something_to_say(tmp_path: Path) -> None:
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+    unknown_chat = "agent-00000000000000000000000000000099"
+
+    remote = client.post(
+        f"/api/chats/{_MAIN_ID}/notification", json={"message": "hi"}, environ_base={"REMOTE_ADDR": "10.0.0.7"}
+    )
+    unknown = client.post(f"/api/chats/{unknown_chat}/notification", json={"message": "hi"})
+    not_an_id = client.post("/api/chats/not-an-agent/notification", json={"message": "hi"})
+    empty = client.post(f"/api/chats/{_MAIN_ID}/notification", json={"message": ""})
+
+    assert [response.status_code for response in (remote, unknown, not_an_id, empty)] == [403, 404, 404, 400]
+    assert shell.bubbles == []
+
+
+def test_a_secondary_chat_app_takes_a_notification_and_raises_no_bubble(tmp_path: Path) -> None:
+    app = _peopled_app(tmp_path, RecordingMngrMessenger(), is_secondary=True)
+
+    response = app.test_client().post(f"/api/chats/{_MAIN_ID}/notification", json={"message": "hi"})
+
+    assert response.status_code == 200
+    assert _fake_shell_of(app).bubbles == []
 
 
 def test_every_chat_list_push_tells_the_shell_what_each_chat_is_doing(tmp_path: Path) -> None:
@@ -6741,12 +7086,14 @@ def test_a_visitors_create_with_a_message_hands_the_agent_the_prefix_and_annotat
 
 def test_a_visitors_switch_message_is_attributed_for_the_harness_the_chat_moves_to(tmp_path: Path) -> None:
     """The confirming message of a switch is the next agent's first (section 5.1): a switch to a room holds the
-    visitor's bare words (a room reads no prefix), annotated as theirs, and the held-send listing shows them."""
+    visitor's bare words (a room reads no prefix), annotated as theirs, and the held-send listing shows them under
+    the visitor from the first push that tells the pages of the switch."""
     app, _log_path = _recording_app(tmp_path)
     client = app.test_client()
     first = f"agent-{uuid4().hex}"
     # Stopped, so the switch has nothing to drain off it.
     _register_agent(app, first, "Chat-1", "STOPPED")
+    pushes = state_of(app).agent_manager.broadcaster.register()
 
     response = client.post(
         f"/api/chats/{first}/handoff",
@@ -6764,6 +7111,16 @@ def test_a_visitors_switch_message_is_attributed_for_the_harness_the_chat_moves_
     assert annotation.text_sha256 == text_sha256("let's make this a room")
     listed = [chat for chat in client.get("/api/chats").get_json()["chats"] if chat["chat_id"] == first]
     assert [held["text"] for held in listed[0]["handoff"]["held_sends"]] == ["let's make this a room"]
+    first_switch_push = next(
+        chat
+        for push in drain_pushes(pushes)
+        if push["type"] == "chats_updated"
+        for chat in push["chats"]
+        if chat["chat_id"] == first and chat["handoff"] is not None
+    )
+    assert [(held["author"], held["author_name"]) for held in first_switch_push["handoff"]["held_sends"]] == [
+        (_VISITOR_KEY, "bob")
+    ]
 
 
 def test_a_switch_the_manager_refuses_annotates_nothing(tmp_path: Path) -> None:

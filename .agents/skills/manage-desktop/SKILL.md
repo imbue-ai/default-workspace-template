@@ -215,14 +215,17 @@ uv run --no-sync workspace-layout place "$(uv run --no-sync workspace-layout ope
 ## Shortcuts and the wallpaper
 
 Each desktop's backdrop carries **shortcuts**: one per (app, launch path), in
-grid cells. A new desktop is seeded with a shortcut of every app: its
-manifest's `default_shortcut` (which may be a launch path that takes typed
-text), or, when it declares none and a program runs it, its first launch path
-taking no text (its first of all when every one takes text), focusing.
+grid cells. A new desktop is seeded with the shortcuts of every app: each
+`default_shortcut` its manifest declares (one table, or several as
+`[[default_shortcut]]`; each may be a launch path that takes typed text), or,
+when it declares none and a program runs it, its first launch path taking no
+text (its first of all when every one takes text), focusing.
 An app that registers after a desktop was made (one you just built included)
-has its shortcut added to every desktop once: there is no need to add it by
-hand, and one taken off after that stays off. The user can also add or remove
-an app's own shortcut by right-clicking it in the launcher or the taskbar.
+has its shortcuts added to every desktop once: there is no need to add them by
+hand, and one taken off after that stays off. A shortcut of an app that is no
+longer registered (one a release retired) is taken off every desktop. The user
+can also add or remove one of an app's own shortcuts by right-clicking its row
+in the launcher, or the app's first one from the taskbar.
 
 ```bash
 # The target client's active desktop's shortcuts: app, launch path, mode, cell.

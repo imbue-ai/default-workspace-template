@@ -21,6 +21,7 @@ from latchkey_access.gateway import GatewayAccess
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 from pydantic import SecretStr
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.testing import FakeShell
 from workspace_layout.testing import connected_client
 
@@ -46,6 +47,7 @@ from imbue.chat.agent_manager import FirstMessage
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import ROOM_CREATE_SETTINGS
+from imbue.chat.agent_manager import UNREADABLE_CHAT_BUSY_REASON
 from imbue.chat.agent_manager import UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import _AwaitedChat
 from imbue.chat.agent_manager import _FINISHED_TASK_TURN_GRACE_PASSES
@@ -61,9 +63,15 @@ from imbue.chat.agent_manager import _ids_of_user_turns_saying
 from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.agent_manager import _sends_the_transcript_does_not_hold
 from imbue.chat.agent_manager import chat_status_for_agent
+from imbue.chat.agent_manager import is_first_message_after_create
 from imbue.chat.agent_manager import is_rebind_target
+from imbue.chat.agent_manager import launch_fast_identity
 from imbue.chat.agent_manager import launch_role_templates
+from imbue.chat.agent_manager import resolve_is_busy
+from imbue.chat.agent_manager import restart_busy_reason
 from imbue.chat.agent_manager import user_turns_refused_for_sign_in
+from imbue.chat.authors import author_prefix
+from imbue.chat.authors import new_author_annotation
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
@@ -108,6 +116,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
+from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
@@ -613,6 +622,48 @@ def test_a_handoffs_successor_starts_fast_only_when_the_chats_mode_calls_for_it(
         assert "fast" in manager._build_successor_create_command(spec)
     finally:
         manager.stop()
+
+
+def test_a_chat_that_launches_fast_switches_only_the_fast_axis_on() -> None:
+    """A codex agent's launch speed is set by a switch once it is up: fast on, its own model and effort kept."""
+    live = ModelIdentity(model_id="gpt-6.1-sol", effort="medium", fast=False)
+
+    assert launch_fast_identity(ChatFastModeState(mode=FastModeMode.ON), live) == ModelIdentity(
+        model_id="gpt-6.1-sol", effort="medium", fast=True
+    )
+    assert launch_fast_identity(ChatFastModeState(mode=FastModeMode.AUTO), live) == ModelIdentity(
+        model_id="gpt-6.1-sol", effort="medium", fast=True
+    )
+    # Before the agent has recorded a selection, the fast axis alone is still enough to switch.
+    assert launch_fast_identity(ChatFastModeState(mode=FastModeMode.ON), None) == ModelIdentity(
+        model_id="", effort=None, fast=True
+    )
+
+
+@pytest.mark.parametrize(
+    ("harness", "is_picked", "launches_fast", "expected"),
+    [
+        (HarnessType.CLAUDE, False, False, False),
+        # claude launches fast through the template, so its message can still ride the create.
+        (HarnessType.CLAUDE, False, True, False),
+        (HarnessType.CLAUDE, True, False, True),
+        (HarnessType.CODEX, False, False, False),
+        # codex is switched fast once it is up, which has to land before its first turn.
+        (HarnessType.CODEX, False, True, True),
+        (HarnessType.ROOM, False, False, True),
+    ],
+)
+def test_a_new_chats_first_message_follows_the_create_when_something_must_be_set_before_its_first_turn(
+    harness: HarnessType, is_picked: bool, launches_fast: bool, expected: bool
+) -> None:
+    assert is_first_message_after_create(harness, is_picked, launches_fast) is expected
+
+
+def test_a_chat_that_does_not_launch_fast_is_not_switched() -> None:
+    live = ModelIdentity(model_id="gpt-6.1-sol", effort="medium", fast=False)
+
+    assert launch_fast_identity(ChatFastModeState(mode=FastModeMode.OFF), live) is None
+    assert launch_fast_identity(ChatFastModeState(mode=FastModeMode.AUTO, is_switched=True), live) is None
 
 
 def test_a_handoffs_successor_is_created_and_tracked_with_the_chats_idle_compaction_setting(
@@ -2450,6 +2501,7 @@ class _RecordingSwitchAgentManager(AgentManager):
         origin: HeldSendOrigin,
         model_pick: ModelPick | None = None,
         kind: ChatKind = ChatKind.AGENT,
+        on_begun: Callable[[], None] | None = None,
     ) -> tuple[TransitionKind, HandoffPhase, str]:
         self.switches.append((str(chat_id), account_id, message, model_pick))
         return TransitionKind.HANDOFF, HandoffPhase.SUMMARIZING, ""
@@ -2811,8 +2863,9 @@ def test_every_harness_launches_through_the_oom_band_wrapper() -> None:
 
 def test_chat_create_argv_carries_no_launch_settings() -> None:
     """Plain chats launch at the harness defaults: no `-S` overrides at all. Fast
-    mode rides only the `fast` create template (see .mngr/settings.toml), never
-    the argv, so a chat launched without it starts at standard speed."""
+    mode rides the `fast` create template (see .mngr/settings.toml) or a switch
+    once the agent is up, never the argv, so a chat launched without either
+    starts at standard speed."""
     argv = _chat_create_argv()
     assert "-S" not in argv
     assert not any("fastMode" in token for token in argv)
@@ -3164,13 +3217,15 @@ def test_an_automatic_title_is_shown_over_a_chat_being_created_until_it_is_clear
     broadcast = json.loads(q.get_nowait() or "")
     assert broadcast["type"] == "provisional_chat_created"
     assert broadcast["name"] == "Rome trip: plan five days"
-    assert [chat.name for chat in agent_manager.get_provisional_chats_as_shown()] == ["Rome trip: plan five days"]
+    assert [shown.chat.name for shown in agent_manager.get_provisional_chats_as_shown()] == [
+        "Rome trip: plan five days"
+    ]
     # Shown, not given: the chat still wears its minted name, so the rename that follows may replace it
     assert agent_manager.has_placeholder_name(minted.chat_id)
 
     agent_manager.clear_automatic_title(minted.chat_id)
 
-    assert [chat.name for chat in agent_manager.get_provisional_chats_as_shown()] == [minted.name]
+    assert [shown.chat.name for shown in agent_manager.get_provisional_chats_as_shown()] == [minted.name]
 
 
 def test_renaming_a_chat_drops_the_automatic_title_shown_over_it(
@@ -4193,7 +4248,10 @@ def test_stop_activity_tracking_clears_caches(agent_manager: AgentManager, tmp_p
 
 def _plain_queued_wire(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The wire shape of queued entries whose content gets no render decision."""
-    return [{**entry, "display": None, "display_label": None, "display_body": None} for entry in snapshot]
+    return [
+        {**entry, "display": None, "display_label": None, "display_body": None, "author": None, "author_name": None}
+        for entry in snapshot
+    ]
 
 
 _QUEUED_BACKGROUND_TASK_REPORT = (
@@ -4257,6 +4315,49 @@ def test_a_queued_background_task_report_carries_its_notice_decision(
         assert queued["display"] == DisplayKind.NOTICE.value
         assert queued["display_label"] == "Background task"
         assert queued["display_body"] == "Wait for the worker (finished)"
+    finally:
+        agent_manager.stop()
+
+
+def test_a_queued_message_is_listed_under_its_sender_without_the_prefix(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The harness queues the text it was handed, a visitor's with the author prefix on it; the snapshot lists each
+    queued message as its transcript turn will read: the sender joined from the chat's annotations (none for the
+    owner's), and the words behind the prefix as the body."""
+    (tmp_path / "agents" / "agent-1").mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+    visitors_text = author_prefix("Bob") + "and one more thing"
+    bob = ParticipantKey("user:user-bob-4471")
+    agent_manager.set_author_annotations_reader(
+        lambda chat_id: (new_author_annotation("m-1", bob, "Bob", visitors_text),) if chat_id == "agent-1" else ()
+    )
+
+    listener = broadcaster.register()
+    try:
+        agent_manager.update_queued_messages(
+            "agent-1",
+            [
+                {"queued_id": "q1", "content": visitors_text, "timestamp": "2026-08-07T00:00:01.000Z"},
+                {"queued_id": "q2", "content": "mine", "timestamp": "2026-08-07T00:00:02.000Z"},
+            ],
+        )
+
+        latest = _last_chats_updated(_drain(listener))
+        assert latest is not None
+        assert [
+            {key: queued[key] for key in ("content", "author", "author_name", "display_body")}
+            for queued in latest["chats"][0]["active_agent"]["queued_messages"]
+        ] == [
+            {
+                "content": "[from: Bob] and one more thing",
+                "author": "user:user-bob-4471",
+                "author_name": "Bob",
+                "display_body": "and one more thing",
+            },
+            {"content": "mine", "author": None, "author_name": None, "display_body": None},
+        ]
     finally:
         agent_manager.stop()
 
@@ -5417,7 +5518,7 @@ def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> 
     writes: list[tuple[int, int]] = []
     manager._oom_prioritizer = ChatOomPrioritizer(
         list_chat_ids=manager.get_chat_ids,
-        resolve_pids=lambda cid: [pids[cid]] if cid in pids else [],
+        resolve_pids_by_chat_id=lambda cids: {cid: [pids[cid]] for cid in cids if cid in pids},
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         resolve_process_started_at=manager._read_active_process_started_at,
     )
@@ -6512,19 +6613,19 @@ def test_a_message_the_chat_app_sends_outside_a_session_is_kept_for_sending_agai
 
 
 @pytest.mark.parametrize(
-    ("sent", "recorded"),
+    ("sent", "recorded", "display"),
     [
-        pytest.param("/model opus", "/model opus", id="a-machine-line"),
-        pytest.param("!ls -la", "<bash-input>ls -la</bash-input>", id="a-bash-mode-command"),
+        pytest.param("/model opus", "/model opus", DisplayKind.HIDDEN, id="a-machine-line"),
+        pytest.param("!ls -la", "<bash-input>ls -la</bash-input>", DisplayKind.PERSON_CHIP, id="a-bash-mode-command"),
     ],
 )
 def test_a_send_the_transcript_holds_as_a_machine_line_is_not_sent_again_when_the_process_exits(
-    broadcaster: WebSocketBroadcaster, sent: str, recorded: str
+    broadcaster: WebSocketBroadcaster, sent: str, recorded: str, display: DisplayKind
 ) -> None:
     chat = _LostSendChat(broadcaster)
     try:
         chat.send(sent)
-        chat.transcript._events.append(_typed_turn(recorded, display="chip", at=_recorded_at(time.time())))
+        chat.transcript._events.append(_typed_turn(recorded, display=display.value, at=_recorded_at(time.time())))
         chat.observe(AgentLifecycleState.DONE)
     finally:
         chat.manager.stop()
@@ -7442,6 +7543,72 @@ def test_a_converging_chat_holds_sends_refuses_the_verbs_and_can_be_cancelled(
         manager.stop()
 
 
+def test_a_switch_keeps_listing_each_held_send_it_has_delivered_until_it_is_done(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The switch takes each held send off its list as it delivers it, before its turn can reach the transcript, so
+    the page goes on showing it from the snapshot: the snapshot lists it until the switch is done, and is pushed as each
+    send is taken, so the page knows which are delivered. A send that did not land has no turn to wait for, so it stops
+    being listed."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent, has_user_turn=False)
+    first = f"agent-{uuid4().hex}"
+    chat_id = ChatId(first)
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    is_delivering_trigger = threading.Event()
+    is_follow_up_held = threading.Event()
+    is_delivering_last = threading.Event()
+    is_last_retried = threading.Event()
+    listed_while_delivering: dict[str, list[tuple[str, bool]]] = {}
+    q = broadcaster.register()
+    pushed: list[dict[str, Any]] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        latest = _last_chats_updated(_drain(q))
+        if latest is not None:
+            pushed[:] = [latest]
+        [snapshot] = [chat for chat in pushed[0]["chats"] if chat["chat_id"] == chat_id]
+        listed_while_delivering[message_id] = [
+            (held["message_id"], held["is_delivered"]) for held in snapshot["handoff"]["held_sends"]
+        ]
+        if message_id == "m-1":
+            is_delivering_trigger.set()
+            is_follow_up_held.wait(timeout=10.0)
+        if message_id == "m-3":
+            is_delivering_last.set()
+            is_last_retried.wait(timeout=10.0)
+        sent.append((agent_info.id, text, message_id))
+        return SendOutcome.FAILED if message_id == "m-2" else SendOutcome.OK
+
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader(["e-1"]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=deliver,
+        )
+    )
+    try:
+        manager.begin_handoff(chat_id, _openai_account(), "Carry on in Codex", "m-1", HeldSendOrigin.CLIENT)
+        wait_for(is_delivering_trigger.is_set, timeout=15.0)
+        assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.CLIENT) is HandoffPhase.SWITCHING
+        assert manager.hold_send(chat_id, "m-3", "and that", HeldSendOrigin.CLIENT) is HandoffPhase.SWITCHING
+        is_follow_up_held.set()
+        wait_for(is_delivering_last.is_set, timeout=15.0)
+        # A client retrying a send the switch has already taken to deliver does not have it delivered again.
+        assert manager.hold_send(chat_id, "m-3", "and that", HeldSendOrigin.CLIENT) is HandoffPhase.SWITCHING
+        is_last_retried.set()
+        _wait_until_settled(store, chat_id)
+        assert [message_id for _agent, _text, message_id in sent] == ["m-1", "m-2", "m-3"]
+        assert listed_while_delivering == {
+            "m-1": [("m-1", True)],
+            "m-2": [("m-1", True), ("m-2", True), ("m-3", False)],
+            "m-3": [("m-1", True), ("m-3", True)],
+        }
+        assert manager.get_handoff_state(chat_id) is None
+    finally:
+        manager.stop()
+
+
 def test_a_held_background_task_report_carries_the_notice_it_renders_as(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
@@ -7912,6 +8079,41 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
 
 
 @pytest.mark.parametrize(
+    ("lifecycle", "activity", "is_turn_closing", "has_background_task", "expected"),
+    [
+        # The lifecycle alone can carry it: mngr reports RUNNING_BACKGROUND for every task kind
+        # the harness names, while a marker exists only for the kinds this workspace records.
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, False, False, True),
+        ("RUNNING_BACKGROUND", None, False, False, True),
+        # A marker alone carries a detached runner, which the harness never reports.
+        ("WAITING", ActivityState.IDLE, False, True, True),
+        # The transcript tail and the closing turn cover a turn the lifecycle has not caught.
+        ("WAITING", ActivityState.THINKING, False, False, True),
+        ("WAITING", ActivityState.IDLE, True, False, True),
+        # Nothing outstanding: the user is the next mover.
+        ("WAITING", ActivityState.IDLE, False, False, False),
+        ("STOPPED", None, False, False, False),
+    ],
+)
+def test_busy_means_the_agent_will_resume_on_its_own(
+    lifecycle: str,
+    activity: ActivityState | None,
+    is_turn_closing: bool,
+    has_background_task: bool,
+    expected: bool,
+) -> None:
+    assert (
+        resolve_is_busy(
+            activity_state=activity,
+            is_turn_closing=is_turn_closing,
+            lifecycle_state=lifecycle,
+            has_background_task=has_background_task,
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
     ("lifecycle", "activity", "is_permission_pending", "is_busy", "is_turn_closing", "expected"),
     [
         ("RUNNING", ActivityState.THINKING, False, True, False, ChatStatus.WORKING),
@@ -7926,6 +8128,11 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
         # A pending background task: busy with no turn in flight.
         ("WAITING", ActivityState.IDLE, False, True, False, ChatStatus.BACKGROUND),
         ("WAITING", None, False, True, False, ChatStatus.BACKGROUND),
+        # An agent carrying work past its turn reaches this rule as busy, and a live turn or a
+        # permission prompt still outranks it.
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, False, True, False, ChatStatus.BACKGROUND),
+        ("RUNNING_BACKGROUND", ActivityState.THINKING, False, True, False, ChatStatus.WORKING),
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, True, True, False, ChatStatus.ATTENTION),
         # A permission prompt outranks the wait, and a dead agent outranks everything.
         ("WAITING", ActivityState.IDLE, True, True, False, ChatStatus.ATTENTION),
         ("STOPPED", None, False, True, False, ChatStatus.STOPPED),
@@ -7945,6 +8152,91 @@ def test_status_mapping_follows_the_chat_row(
     expected: ChatStatus,
 ) -> None:
     assert chat_status_for_agent(lifecycle, activity, is_permission_pending, is_busy, is_turn_closing) is expected
+
+
+@pytest.mark.parametrize(
+    (
+        "lifecycle",
+        "activity",
+        "is_marker_present",
+        "is_permission_pending",
+        "is_connecting",
+        "has_queued",
+        "has_harness_task",
+        "expected",
+    ),
+    [
+        ("WAITING", ActivityState.IDLE, False, False, False, False, False, None),
+        ("WAITING", None, False, False, False, False, False, None),
+        # The transcript reads idle between an assistant message and its next tool call.
+        ("RUNNING", ActivityState.IDLE, False, False, False, False, False, "working"),
+        # A turn the observe-reported lifecycle has not caught up with yet.
+        ("WAITING", ActivityState.IDLE, True, False, False, False, False, "working"),
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, True, False, False, False, False, "working"),
+        ("RUNNING", ActivityState.TOOL_RUNNING, True, False, False, False, False, "working"),
+        ("WAITING", ActivityState.COMPACTING, False, False, False, False, False, "working"),
+        ("UNKNOWN", ActivityState.IDLE, False, False, False, False, False, "working"),
+        ("WAITING", ActivityState.IDLE, True, True, False, False, False, "waiting on a dialog"),
+        ("WAITING", ActivityState.IDLE, False, False, True, False, False, "receiving a message"),
+        ("WAITING", ActivityState.IDLE, False, False, False, True, False, "holding queued messages"),
+        # The harness's own background work, which a restart would end unreported: as the lifecycle reports it,
+        # and as an older turn-end hook's chat, which reports WAITING, records it.
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, False, False, False, False, False, "waiting on background work"),
+        ("WAITING", ActivityState.IDLE, False, False, False, False, True, "waiting on background work"),
+    ],
+)
+def test_only_a_chat_whose_harness_ended_its_turn_is_free_to_restart(
+    lifecycle: str,
+    activity: ActivityState | None,
+    is_marker_present: bool,
+    is_permission_pending: bool,
+    is_connecting: bool,
+    has_queued: bool,
+    has_harness_task: bool,
+    expected: str | None,
+) -> None:
+    assert (
+        restart_busy_reason(
+            lifecycle, activity, is_marker_present, is_permission_pending, is_connecting, has_queued, has_harness_task
+        )
+        == expected
+    )
+
+
+def test_a_turn_the_lifecycle_has_not_caught_up_with_is_read_off_the_active_marker(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", state="WAITING")
+    agent_manager._ensure_activity_tracking("agent-1")
+    assert agent_manager.restart_busy_reason_for_chat(ChatId("agent-1")) is None
+
+    (state_dir / "active").touch()
+    assert agent_manager.restart_busy_reason_for_chat(ChatId("agent-1")) == "working"
+
+
+def test_only_a_harness_task_keeps_a_waiting_chat_from_its_restart_and_is_read_without_waiting_for_the_poller(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A ``run_in_background`` command a restart ends is reported by its runner, which outlives the restart; one
+    of the harness's own tasks dies unreported. The check re-reads the markers, so a task recorded since the poller's
+    last pass still counts."""
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING", activity_state=ActivityState.IDLE)
+        write_background_task_marker(reader, "agent-1", "runner-task", os.getpid())
+        assert manager.restart_busy_reason_for_chat(ChatId("agent-1")) is None
+
+        write_background_task_marker(reader, "agent-1", "claude-task", os.getpid(), harness="claude")
+        assert manager.restart_busy_reason_for_chat(ChatId("agent-1")) == "waiting on background work"
+    finally:
+        manager.stop()
+
+
+def test_a_chat_the_manager_cannot_read_is_never_free_to_restart(agent_manager: AgentManager) -> None:
+    """An unattended restart needs positive evidence the turn has ended; not finding the chat is not that."""
+    assert agent_manager.restart_busy_reason_for_chat(ChatId("agent-unknown")) == UNREADABLE_CHAT_BUSY_REASON
 
 
 def test_mint_awaiting_chat_lists_a_provisional_chat_with_a_minted_name_and_no_seed(
