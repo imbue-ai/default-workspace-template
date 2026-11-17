@@ -57,6 +57,8 @@ from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILE
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION
 from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
 from imbue.system_interface.shell.inventory import AppInventory
+from imbue.system_interface.shell.launches import LaunchPost
+from imbue.system_interface.shell.launches import LaunchPostOutcome
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.primitives import PageId
 from imbue.system_interface.shell.state_files import write_json_atomic
@@ -381,6 +383,44 @@ def shell_application(
         launch_poster=launch_poster,
     )
     return create_application(state)
+
+
+def not_built_shell(
+    tmp_path: Path, outcomes: list[LaunchPostOutcome], is_preview: bool = False, is_chat_registered: bool = True
+) -> tuple[Flask, list[LaunchPost]]:
+    """A shell with no built interface over the two-app registry (a terminal whose ``new`` is a GET, labelled
+    ``terminal-x1``) plus, unless told otherwise, a chat-shaped ``helper`` labelled ``helper-y2`` whose ``main`` and
+    ``new`` post typed text (to its main chat, and to a new one); its posts are answered from ``outcomes`` and kept in
+    the list returned beside it."""
+    helper = registry_row_toml(
+        "helper",
+        "http://localhost:7002",
+        display_name="Helper",
+        label="helper-y2",
+        launcher_rank=10,
+        launch_paths=(
+            ("root", "Helper", "/"),
+            ("main", "Send to main chat", "/api/intake"),
+            ("new", "New chat", "/api/intake"),
+        ),
+        launch_params={"main": ["message"], "new": ["message"]},
+        launch_text_params={"main": "message", "new": "message"},
+        launch_methods={"main": "POST", "new": "POST"},
+        launch_presets={"main": {"target": "main_chat"}, "new": {"target": "new_chat"}},
+    )
+    registry_path = write_two_app_registry(tmp_path, *([helper] if is_chat_registered else []))
+    registry_path.write_text(registry_path.read_text().replace('label = ""', 'label = "terminal-x1"', 1))
+    posts: list[LaunchPost] = []
+
+    def poster(post: LaunchPost) -> LaunchPostOutcome:
+        posts.append(post)
+        return outcomes.pop(0)
+
+    broadcaster = WebSocketBroadcaster()
+    application = shell_application(
+        tmp_path, build_inventory(registry_path, broadcaster), broadcaster, is_preview=is_preview, launch_poster=poster
+    )
+    return application, posts
 
 
 class FakeLivenessProber:

@@ -5,27 +5,21 @@ shell that frames it for an agent. Neither needs the built frontend: both are st
 from pathlib import Path
 
 import pytest
-from flask import Flask
 from playwright.sync_api import Page
 from playwright.sync_api import expect
 from workspace_layout.identity import ANONYMOUS_OWNER
 
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_MESSAGE
-from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.port_parking import ParkedPort
 from imbue.system_interface.shell.port_parking import ParkingTarget
 from imbue.system_interface.shell.port_parking import could_not_start_request
 from imbue.system_interface.shell.port_parking import parked_page_html
-from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import identity_headers
-from imbue.system_interface.shell.testing import registry_row_toml
-from imbue.system_interface.shell.testing import shell_application
-from imbue.system_interface.shell.testing import write_two_app_registry
+from imbue.system_interface.shell.testing import not_built_shell
 from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.testing import serve_app
-from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 pytestmark = [
     pytest.mark.browser,
@@ -37,41 +31,15 @@ pytestmark = [
 _COORDINATE: str = "host-abc123.localhost"
 
 
-def _not_built_shell(tmp_path: Path, outcomes: list[LaunchPostOutcome], posts: list[LaunchPost]) -> Flask:
-    """A shell with no built interface over a terminal labelled ``terminal-x1`` and a chat-shaped ``helper``
-    labelled ``helper-y2``, whose launch posts are answered from ``outcomes`` and recorded in ``posts``."""
-    helper = registry_row_toml(
-        "helper",
-        "http://localhost:7002",
-        display_name="Helper",
-        label="helper-y2",
-        launcher_rank=10,
-        launch_paths=(("root", "Helper", "/"), ("new", "New chat", "/api/intake")),
-        launch_params={"new": ["message"]},
-        launch_text_params={"new": "message"},
-        launch_methods={"new": "POST"},
-        launch_presets={"new": {"target": "new_chat"}},
-    )
-    registry_path = write_two_app_registry(tmp_path, helper)
-    registry_path.write_text(registry_path.read_text().replace('label = ""', 'label = "terminal-x1"', 1))
-
-    def poster(post: LaunchPost) -> LaunchPostOutcome:
-        posts.append(post)
-        return outcomes.pop(0)
-
-    broadcaster = WebSocketBroadcaster()
-    return shell_application(tmp_path, build_inventory(registry_path, broadcaster), broadcaster, launch_poster=poster)
-
-
 def test_the_not_built_page_asks_an_agent_and_frames_its_chat_and_a_terminal_session(
     tmp_path: Path, page: Page
 ) -> None:
-    posts: list[LaunchPost] = []
     outcomes = [
         LaunchPostOutcome(status_code=500, body={"detail": "boom"}),
         LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-1"}),
     ]
-    with serve_app(_not_built_shell(tmp_path, outcomes, posts)) as served:
+    app, posts = not_built_shell(tmp_path, outcomes)
+    with serve_app(app) as served:
         # The workspace's front door stamps every request it forwards with who sent it; a request under the
         # coordinate's host that carries none is refused.
         page.set_extra_http_headers(identity_headers(ANONYMOUS_OWNER))
