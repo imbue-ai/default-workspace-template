@@ -702,6 +702,18 @@ describe("startNewWithText's answer", () => {
     });
   });
 
+  it("settles at once as not answered, asking nothing of the shell, once the page has disconnected", async () => {
+    const parent = shellFramed();
+    const live = connection as ShellConnection;
+    live.disconnect();
+    const sentBefore = parent.postMessage.mock.calls.length;
+    expect(await settledValue(live.startNewWithText("Fix this."))).toEqual({
+      isOpened: false,
+      failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isReportable: false },
+    });
+    expect(parent.postMessage.mock.calls.length).toBe(sentBefore);
+  });
+
   it("settles at once as not answered on a page no shell frames", async () => {
     connection = connectToShell({});
     expect(await connection.startNewWithText("Fix this.")).toEqual({
