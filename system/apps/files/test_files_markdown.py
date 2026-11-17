@@ -65,7 +65,11 @@ def test_a_plan_is_reviewed_with_suggestions_comments_and_accept_all(
     expect(page.locator("#save-status")).to_have_text("Saved")
 
     # A signed comment on a selected word.
+    # Hovered first, so the browser's pointer glide does not split the double-click into two clicks; and given a
+    # moment, as a person's hands would, for the editor to take up the selection.
+    page.locator(".tiptap h1").hover()
     page.locator(".tiptap h1").dblclick(position={"x": 20, "y": 20})
+    page.wait_for_timeout(300)
     page.keyboard.press("Control+Alt+KeyM")
     page.fill("#popover-field", "Rename this")
     page.fill("#popover-signature", "Sam")
@@ -111,6 +115,30 @@ def test_an_edit_made_while_an_agent_rewrites_the_file_is_never_saved_over_it(
     page.click("#conflict-load")
     expect(page.locator(".tiptap")).to_contain_text("The agent's second draft.")
     assert plan.read_text() == "# Plan\n\nThe agent's second draft.\n"
+
+
+def test_a_conflict_right_after_an_update_notice_stays_until_answered(
+    open_files_page: OpenFilesPage, files_root: Path
+) -> None:
+    plan = files_root / "plan.md"
+    plan.write_text("# Plan\n\nFirst draft.\n")
+    page = open_files_page("/plan.md?view")
+    expect(page.locator(".tiptap h1")).to_have_text("Plan")
+    page.click("#mode-edit")
+
+    # An agent rewrites the file while nothing is unsaved: the page shows it, with a notice that clears itself.
+    plan.write_text("# Plan\n\nSecond draft.\n")
+    expect(page.locator("#markdown-banner")).to_contain_text("just updated", timeout=10_000)
+
+    # Before the notice clears, the person edits and the agent rewrites again: the conflict must outlive the notice.
+    page.locator(".tiptap > p").first.click()
+    page.keyboard.press("End")
+    page.keyboard.type(" Mine.")
+    plan.write_text("# Plan\n\nThird draft.\n")
+    expect(page.locator("#conflict-load")).to_be_visible(timeout=10_000)
+    page.wait_for_timeout(5000)
+    expect(page.locator("#conflict-load")).to_be_visible()
+    assert plan.read_text() == "# Plan\n\nThird draft.\n"
 
 
 def test_the_bar_stays_under_the_header_in_a_narrow_window(open_files_page: OpenFilesPage, files_root: Path) -> None:

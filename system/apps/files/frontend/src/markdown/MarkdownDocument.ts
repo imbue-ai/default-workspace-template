@@ -266,6 +266,8 @@ export class MarkdownDocument {
   }
 
   private showBanner(text: string, actions: { label: string; id: string; run: () => void }[], tone: string): void {
+    // A notice's timer hides only that notice, never a banner shown after it (a conflict asking what to keep).
+    this.clearNoticeTimer();
     this.bannerText.textContent = text;
     this.bannerActions.replaceChildren(
       ...actions.map((action) => {
@@ -279,7 +281,13 @@ export class MarkdownDocument {
   }
 
   private hideBanner(): void {
+    this.clearNoticeTimer();
     this.banner.hidden = true;
+  }
+
+  private clearNoticeTimer(): void {
+    if (this.noticeTimer !== null) window.clearTimeout(this.noticeTimer);
+    this.noticeTimer = null;
   }
 
   private showConflict(): void {
@@ -395,7 +403,6 @@ export class MarkdownDocument {
       }
       await this.reloadFromDisk();
       this.showBanner("This file was just updated outside the editor; showing the new version.", [], "info");
-      if (this.noticeTimer !== null) window.clearTimeout(this.noticeTimer);
       this.noticeTimer = window.setTimeout(() => this.hideBanner(), NOTICE_MS);
     } catch {
       // The server is restarting or the file moved; the next check tries again.
