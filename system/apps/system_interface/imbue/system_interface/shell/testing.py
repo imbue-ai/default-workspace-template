@@ -596,8 +596,8 @@ def read_stub_update_self_calls(repo_root: Path) -> list[dict[str, Any]]:
 STUB_REVIVE_CALLS_REL: Final[str] = "data/.state/isolated-instances/stub-revive-calls.jsonl"
 
 # A stand-in for ``serve_isolated_instance.py`` that records its argv and working directory and exits as
-# told, saying why on stderr when told to fail; told a port, it first starts a server there in a session of its
-# own, as a revive boots the instance again, and records the server's pid. Written under the test's workspace
+# told; told a port, it first starts a server there in a session of its own, as a revive boots the instance
+# again, and records the server's pid. Written under the test's workspace
 # root so the shell finds it where it finds the real one.
 _STUB_REVIVE_SCRIPT = """\
 import json
@@ -622,8 +622,6 @@ else:
     ).pid
 with calls.open("a") as record:
     record.write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "served_pid": served_pid}}) + "\\n")
-if {exit_code} != 0:
-    print("revive: the stub was told to fail", file=sys.stderr)
 sys.exit({exit_code})
 """
 
