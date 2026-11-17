@@ -130,4 +130,32 @@ describe("Toasts", () => {
     ]);
     expect(queue.current()).toHaveLength(2);
   });
+
+  it("gives a plain note with details a See details and a close control, and holds it up once they are opened", () => {
+    const queue = new ToastQueue(() => m.redraw.sync());
+    const hold = vi.spyOn(queue, "hold");
+    queue.show("Could not close the window.", { isLasting: false, details: "HTTP 409\nWindow win-1 is pinned" });
+    queue.show("Could not move the shortcut.");
+    const root = mountView(() =>
+      m(Toasts, {
+        toasts: queue.current(),
+        placementClass: "fixed",
+        onDismiss: (id) => queue.dismiss(id),
+        onHold: (id) => queue.hold(id),
+      }),
+    );
+
+    const [withDetails, bare] = Array.from(root.querySelectorAll<HTMLElement>("[data-toast]"));
+    expect(withDetails.className).toContain("pointer-events-auto");
+    expect(withDetails.querySelector(".see-details pre")?.textContent).toBe("HTTP 409\nWindow win-1 is pinned");
+    expect(bare.querySelector(".see-details")).toBeNull();
+    expect(bare.querySelector("[data-toast-dismiss]")).toBeNull();
+
+    const disclosure = withDetails.querySelector<HTMLDetailsElement>(".see-details")!;
+    disclosure.open = true;
+    disclosure.dispatchEvent(new Event("toggle"));
+    expect(hold).toHaveBeenCalledWith(queue.current()[0].id);
+    withDetails.querySelector<HTMLButtonElement>("[data-toast-dismiss]")!.click();
+    expect(queue.current().map((toast) => toast.message)).toEqual(["Could not move the shortcut."]);
+  });
 });

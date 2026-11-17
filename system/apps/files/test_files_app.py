@@ -555,7 +555,7 @@ def test_a_download_the_server_refuses_says_why_in_a_toast(open_files_page: Open
     (files_root / "notes.txt").unlink()
     _entry(page, "/notes.txt").click(button="right")
     page.locator('[data-menu-row="download"]').click()
-    expect(page.locator("[data-toast]")).to_have_text("Couldn't download notes.txt: It's no longer there.")
+    expect(page.locator("[data-toast]")).to_have_text('Couldn\'t download "notes.txt". It\'s no longer there.')
 
 
 def test_add_makes_a_new_folder_and_names_it(open_files_page: OpenFilesPage, files_root: Path) -> None:
