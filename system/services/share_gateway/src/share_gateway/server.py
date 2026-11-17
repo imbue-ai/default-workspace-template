@@ -103,14 +103,15 @@ _PAGE_STYLE = (
 _PAGE_STYLE_HASH = base64.b64encode(hashlib.sha256(_PAGE_STYLE.encode("utf-8")).digest()).decode("ascii")
 
 
-def page_content_security_policy(auth_origin: str, broker_origin: str) -> str:
+def page_content_security_policy(workspace_domain: str, broker_origin: str) -> str:
     """The gateway's own pages load nothing but their inline stylesheet, and their one form (switching account)
-    posts to the auth origin, which redirects to the broker: a browser holds that redirect to form-action too.
-    Stated in full because the frame-ancestors policy caddy adds governs embedding only; the two headers compose by
-    intersection."""
+    posts to the auth origin. A browser holds every redirect after that post to form-action too: to the broker, and
+    when the broker signs the visitor straight back in, through the callback to the app being opened, so the
+    workspace's own origins are admitted with the broker. Stated in full because the frame-ancestors policy caddy
+    adds governs embedding only; the two headers compose by intersection."""
     return (
         f"default-src 'none'; style-src 'sha256-{_PAGE_STYLE_HASH}'; base-uri 'none'; "
-        f"form-action {auth_origin} {broker_origin}"
+        f"form-action https://*.{workspace_domain} {broker_origin}"
     )
 
 
@@ -338,7 +339,7 @@ def build_gateway_app(
 
     auth_host = f"{auth_label}.{workspace_domain}"
     broker_parts = urlsplit(materials.broker_url)
-    page_policy = page_content_security_policy(auth_origin, f"{broker_parts.scheme}://{broker_parts.netloc}")
+    page_policy = page_content_security_policy(workspace_domain, f"{broker_parts.scheme}://{broker_parts.netloc}")
 
     def _html_page(page: str, status: int) -> Response:
         """One of the gateway's own pages, under the policy that admits exactly its contents."""

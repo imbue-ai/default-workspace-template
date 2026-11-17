@@ -759,9 +759,10 @@ def test_gateway_pages_carry_a_policy_admitting_exactly_their_stylesheet(tmp_pat
     assert forbidden.status_code == 403
     for page in (loading, forbidden):
         policy = page.headers["Content-Security-Policy"]
-        assert policy == page_content_security_policy(_AUTH_ORIGIN, _BROKER_URL)
-        # The one form the pages carry posts to the auth origin, which redirects to the broker; nowhere else.
-        assert policy.endswith(f"; form-action {_AUTH_ORIGIN} {_BROKER_URL}")
+        assert policy == page_content_security_policy(_DOMAIN, _BROKER_URL)
+        # The one form the pages carry posts to the auth origin, whose redirects go through the broker and may come
+        # back through the callback to the app being opened: the workspace's own origins and the broker, nowhere else.
+        assert policy.endswith(f"; form-action https://*.{_DOMAIN} {_BROKER_URL}")
         # The hash is the page's actual stylesheet, so a browser enforcing the
         # policy still renders the page as styled.
         assert f"'sha256-{_inline_style_hash(page.get_data(as_text=True))}'" in policy
