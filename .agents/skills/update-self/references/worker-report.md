@@ -1,7 +1,7 @@
 # Worker: the body of a `done` report (the worker guide's Step 6)
 
-Read this when you write a `done` report. The body gives the lead everything
-for its audit, the apply, and the results message. The lead sends back a
+The body gives the lead everything for its audit, the apply, and the results
+message. The lead sends back a
 report that lacks a section it needs, or either of the two rule records under
 Validation.
 

@@ -100,9 +100,11 @@ def retired_skills(
 ) -> tuple[list[str], list[RenamedSkill]]:
     """The skills the target dropped, and the ones it renamed with their new names.
 
-    A skill is renamed when its directory is gone and most of its files that git traced
-    went to one directory the base did not have. ``renamed_files`` holds each file git
-    reports as renamed, as ``(old path, new path)``.
+    ``renamed_files`` holds each file git's own rename detection pairs up, as
+    ``(old path, new path)`` (``git diff -M --diff-filter=R``, run by ``update_self``). Git
+    reports a rename per file and never for a directory, so this only goes from the files
+    to the skill: a skill is renamed when its directory is gone and most of the files git
+    traced went to one directory the base did not have.
     """
     gone = sorted(set(base_skills) - set(target_skills))
     arrived = set(target_skills) - set(base_skills)

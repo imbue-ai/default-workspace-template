@@ -6,9 +6,6 @@ own tree, launcher and installed tools are whatever release it is still on
 than some release. Nothing else in the skill carries such text: a step that
 has a difference points at its section here in one line.
 
-Read it whole when SKILL.md Step 3 sends you here, because another copy of
-this skill ran your Steps 1-2. Otherwise read the one section a step names.
-
 **The floor** is the oldest release a workspace updates from in one pass:
 minds-v0.3.17, which `python/update_self_skill/launcher_contract_test.py`
 pins. Every item below goes once minds-v0.10.0 is the stable release and the

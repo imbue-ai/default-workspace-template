@@ -1,9 +1,8 @@
 # Worker: validation items (the worker guide's Step 4b)
 
-Read this when any condition in the worker guide's Step 4b table holds beyond
-the skill-exemption stamp. Run each item whose condition holds, in this
-order, and no other. Record which items ran and why, with each condition and
-whether it held, in your report.
+Run each item whose condition holds, in this order, and no other. Record
+which items ran and why, with each condition and whether it held, in your
+report.
 
 ## Contents
 

@@ -61,15 +61,12 @@ Read the one that applies instead of starting at Step 1:
 
 ## Steps
 
-- [ ] 1. Preconditions: backup check, lease, run record, uncommitted work.
-- [ ] 2. Resolve the target; (2a) stage its copy of this skill and hand off.
-- [ ] 3. Dispatch the worker: (3a) re-check the ceiling, bridge, stage shared
-  prose; (3b) launch and arm the poll. **Ends the turn.**
-- [ ] 4. Proxy the `question` gate, when the poll brings one. An answer
-  **ends the turn**; a hold ends the pass.
-- [ ] 5. Terminal status. On `done`: (5a) audit, (5b) apply, (5c) fix what
-  broke, (5d) escalate built-in defects.
-- [ ] 6. Teardown, the verdict, show this chat. **Ends the turn.**
+1. Preconditions
+2. Resolve the target
+3. Dispatch the worker. *Ends the turn.*
+4. Proxy the `question` gate. *An answer ends the turn.*
+5. Terminal status
+6. Teardown. *Ends the turn.*
 
 ## 1. Preconditions
 

@@ -1,21 +1,8 @@
 # Applying the update (SKILL.md Step 5b)
 
-Follow this top to bottom once the audit has passed. Other chats keep working
+Follow the steps in order once the audit has passed. Other chats keep working
 while the worker runs, and nothing waits on them: they are paused only right
 before the apply, for as long as it takes.
-
-## Contents
-
-- What does not block the apply
-- 1. Check that the branch still fast-forwards
-- Catching the worker up
-- Messaging the worker
-- 2. Pause the other chats
-- 3. Save what the chats left uncommitted
-- 4. Take the critical-app leases
-- 5. Run the apply
-- 6. Bring the chats back
-- Landing a frontend change any other way
 
 ## What does not block the apply
 
@@ -30,40 +17,6 @@ results message:
 
 A genuinely breaking case is a migration-required update instead
 (`apply-outcomes.md`, "Migration-required updates").
-
-## 1. Check that the branch still fast-forwards
-
-While the other chats still run, check whether they committed since the
-worker branched:
-
-```bash
-git merge-base --is-ancestor HEAD mngr/update-self
-```
-
-Exit 0 means the branch still fast-forwards: go to step 2. Exit 1 means
-`HEAD` moved under the pass, and the apply would refuse it: catch the worker
-up, then come back here.
-
-## Catching the worker up
-
-A moved `HEAD` never calls for a fresh pass, so never destroy or stop the
-worker to make room for one. The worker is still waiting, and holds the
-branch and any bundles it built. A fresh pass (`launching-the-worker.md`) is
-only for a worker that is gone, or one that reports `stuck` on the catch-up
-and is not resumed (`resuming-after-stuck.md`).
-
-If the `done` report you are answering is still in place, consume it first
-(`older-workspaces.md`, "Consuming a report by hand"). Then message the
-worker:
-
-```bash
-MESSAGE="Catch up to $(git rev-parse HEAD) per Step 7 of your worker guide, then report done again."
-WORKER_ID=$(sed -n 's/^worker_agent_id: *//p' data/.tasks/update-self/task.md)
-python3 system/scripts/message_chat.py "$WORKER_ID" -m "$MESSAGE"
-```
-
-Re-arm the poll (`launching-the-worker.md`, section 5) and end your turn.
-Audit the `done` it sends back (Step 5a) before you return to step 1.
 
 ## Messaging the worker
 
@@ -88,6 +41,61 @@ Read its exit code:
   worker liveness" in
   `data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy.md`)
   and send again. A worker that is gone takes a fresh pass.
+
+## Landing a frontend change any other way
+
+The served pages are the built `static/` bundles, not the source the update
+changed, and the shared `workspace_ui` library is compiled into every one of
+them, including behavior the shell depends on from every app page (the
+`shell:input` activity reports its presence reads). An update applied without
+the rebuild leaves every page running the old code while the tree says
+otherwise. The apply command does the rebuild itself: a change under any
+frontend source directory or `workspace_ui` re-emits the bundles. So the rule
+matters only when landing such an update any other way: never hand-apply one
+without running `npm run build` for every affected frontend.
+
+## Steps
+
+1. Check that the branch still fast-forwards
+2. Pause the other chats
+3. Save what the chats left uncommitted
+4. Take the critical-app leases
+5. Run the apply
+6. Bring the chats back
+
+## 1. Check that the branch still fast-forwards
+
+While the other chats still run, check whether they committed since the
+worker branched:
+
+```bash
+git merge-base --is-ancestor HEAD mngr/update-self
+```
+
+Exit 0 means the branch still fast-forwards: go to step 2. Exit 1 means
+`HEAD` moved under the pass, and the apply would refuse it: catch the worker
+up, then come back here.
+
+### Catching the worker up
+
+A moved `HEAD` never calls for a fresh pass, so never destroy or stop the
+worker to make room for one. The worker is still waiting, and holds the
+branch and any bundles it built. A fresh pass (`launching-the-worker.md`) is
+only for a worker that is gone, or one that reports `stuck` on the catch-up
+and is not resumed (`resuming-after-stuck.md`).
+
+If the `done` report you are answering is still in place, consume it first
+(`older-workspaces.md`, "Consuming a report by hand"). Then message the
+worker:
+
+```bash
+MESSAGE="Catch up to $(git rev-parse HEAD) per Step 7 of your worker guide, then report done again."
+WORKER_ID=$(sed -n 's/^worker_agent_id: *//p' data/.tasks/update-self/task.md)
+python3 system/scripts/message_chat.py "$WORKER_ID" -m "$MESSAGE"
+```
+
+Re-arm the poll (`launching-the-worker.md`, section 5) and end your turn.
+Audit the `done` it sends back (Step 5a) before you return to step 1.
 
 ## 2. Pause the other chats
 
@@ -223,15 +231,3 @@ notice the user sees labelled "Workspace updated". A background agent is
 named to its lead chat, since it does not pick its work back up by itself.
 The command is safe to re-run: a non-zero exit names what it could not start
 or tell, and the same command finishes the rest.
-
-## Landing a frontend change any other way
-
-The served pages are the built `static/` bundles, not the source the update
-changed, and the shared `workspace_ui` library is compiled into every one of
-them, including behavior the shell depends on from every app page (the
-`shell:input` activity reports its presence reads). An update applied without
-the rebuild leaves every page running the old code while the tree says
-otherwise. The apply command does the rebuild itself: a change under any
-frontend source directory or `workspace_ui` re-emits the bundles. So the rule
-matters only when landing such an update any other way: never hand-apply one
-without running `npm run build` for every affected frontend.

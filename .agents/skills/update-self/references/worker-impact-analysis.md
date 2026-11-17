@@ -1,16 +1,14 @@
 # Worker: impact analysis (the worker guide's Step 4a)
 
-Read this when `classify-merge` reports `has_local_footprint: true`, or when
-a routine or cron entry named something the update retires. It finds every
-*user-created* consumer of what the update changed, in this order.
+The analysis finds every *user-created* consumer of what the update changed.
 
-## Contents
+## Steps
 
-- 1. Scope files: the user's creations by footprint
-- 2. Retired names
-- 3. Dependents of each changed file
-- 4. Provisioning files and global dependencies
-- What to record
+1. Scope files: the user's creations by footprint
+2. Retired names
+3. Dependents of each changed file
+4. Provisioning files and global dependencies
+5. Record what you found
 
 ## 1. Scope files: the user's creations by footprint
 
@@ -211,7 +209,7 @@ chains, `.mngr/**`) and **global-dependency bumps** always count as impacted
 even though nothing imports them. Work them per
 `worker-provisioning-changes.md` and report each there.
 
-## What to record
+## 5. Record what you found
 
 Under your report's Impact analysis: the scope-file evidence (which creations
 carried local content, which the update reached), the retired names you
