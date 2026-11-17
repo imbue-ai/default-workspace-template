@@ -1179,6 +1179,43 @@ describe("MessageInput send to a chat still being created", () => {
     });
   });
 
+  it("puts a held message back when the chat's discard reaches the page before the send's own answer", async () => {
+    mocks.isChatRegistered = false;
+    mocks.provisional = {
+      chat_id: "agent-1",
+      name: "Chat 2",
+      account_id: "acct-1",
+      phase: "creating",
+      error: null,
+      is_seeded: false,
+      held_sends: [],
+    };
+    let answer: (status: string) => void = () => {};
+    mocks.sendMessage.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    try {
+      const earlierBubbles = getOutgoingMessages("agent-1").map((outgoing) => outgoing.id);
+      const component = MessageInput();
+      const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+      const sending = typeAndSend(component, "agent-1", "hello");
+      await flushAsync();
+
+      discardProvisionalChat({
+        ...(mocks.provisional as ProvisionalChat),
+        held_sends: [{ message_id: sentMessageId(), text: "hello" }],
+      });
+      answer("held");
+      await sending;
+
+      const after = render();
+      expect(renderedText(findByClass(after, "modal-message"))).toContain("Your message wasn't delivered.");
+      expect(findByTag(after, "textarea")?.attrs?.value).toBe("hello");
+      expect(getOutgoingMessages("agent-1").map((outgoing) => outgoing.id)).toEqual(earlierBubbles);
+    } finally {
+      mocks.isChatRegistered = true;
+      mocks.provisional = undefined;
+    }
+  });
+
   it("returns the message to the composer with the reason when the create has already failed", async () => {
     stubShellConnection(true);
     mocks.refuseSendToFailedChat.mockImplementationOnce(() => {

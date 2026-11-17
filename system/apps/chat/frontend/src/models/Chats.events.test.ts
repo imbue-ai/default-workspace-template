@@ -14,7 +14,7 @@ vi.mock("@imbue/workspace-ui/src/base-path", () => ({
   wsUrl: (path: string) => `ws://test${path}`,
 }));
 
-import type { ProvisionalChat } from "./Chats";
+import type { DiscardedChat, ProvisionalChat } from "./Chats";
 import { chatSnapshotFixture } from "./chatSnapshotFixture";
 
 type ChatsModule = typeof import("./Chats");
@@ -197,20 +197,68 @@ describe("the provisional chats over the socket", () => {
   });
 
   it("drops a discarded chat and rejects a held send as one no agent is behind", async () => {
-    const discarded: ProvisionalChat[] = [];
+    const discarded: DiscardedChat[] = [];
     manager.addProvisionalChatDiscardedListener((record) => discarded.push(record));
-    const held = { ...proto("agent-1", "creating"), held_sends: [{ message_id: "m-1", text: "hello" }] };
-    push({ type: "provisional_chat_created", ...held });
+    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     const registered = manager.whenChatRegistered("agent-1");
 
-    push({ type: "provisional_chat_completed", chat_id: "agent-1", success: false, error: null });
+    const heldSends = [{ message_id: "m-1", text: "hello" }];
+    push({
+      type: "provisional_chat_completed",
+      chat_id: "agent-1",
+      success: false,
+      error: null,
+      held_sends: heldSends,
+    });
 
-    // The composer hears what the chat still held when it went, to put back.
-    expect(discarded).toEqual([held]);
+    // The composer hears what the chat app dropped with it, to put back.
+    expect(discarded).toEqual([{ chat_id: "agent-1", held_sends: heldSends }]);
 
     // The composer offers neither Retry nor Restart for it: there is no agent to send to or restart.
     await expect(registered).rejects.toBeInstanceOf(manager.ChatNotStartedError);
     await expect(registered).rejects.toThrow("closed before it started");
+    expect(manager.getProvisionalChat("agent-1")).toBeUndefined();
+  });
+
+  it("tells the composer the messages the chat app dropped with a discarded chat, even ones its record never showed", () => {
+    const discarded: DiscardedChat[] = [];
+    manager.addProvisionalChatDiscardedListener((record) => discarded.push(record));
+    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
+
+    // The hold's own push had not reached this page yet when the chat was deleted.
+    push({
+      type: "provisional_chat_completed",
+      chat_id: "agent-1",
+      success: false,
+      error: null,
+      held_sends: [{ message_id: "m-1", text: "hello" }],
+    });
+
+    expect(discarded.map((record) => [record.chat_id, record.held_sends.map((held) => held.message_id)])).toEqual([
+      ["agent-1", ["m-1"]],
+    ]);
+  });
+
+  it("hears a discard it missed while the socket was down from the replay, with what the chat app held", async () => {
+    const discarded: DiscardedChat[] = [];
+    manager.addProvisionalChatDiscardedListener((record) => discarded.push(record));
+    push({ type: "chats_updated", chats: [] });
+    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
+
+    // The chat was given a message and deleted while this page was disconnected: the replay says so.
+    open();
+    push({
+      type: "provisional_chat_completed",
+      chat_id: "agent-1",
+      success: false,
+      error: null,
+      held_sends: [{ message_id: "m-1", text: "hello" }],
+    });
+    push({ type: "chats_updated", chats: [] });
+
+    expect(discarded.map((record) => [record.chat_id, record.held_sends.map((held) => held.message_id)])).toEqual([
+      ["agent-1", ["m-1"]],
+    ]);
     expect(manager.getProvisionalChat("agent-1")).toBeUndefined();
   });
 
