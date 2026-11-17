@@ -142,6 +142,11 @@ describe("the Getting Started page", () => {
     expect(failed.root.querySelector(".getting-started-templates-status")!.textContent).toBe(
       "Templates couldn't be loaded. Try again. If this persists, report a bug.",
     );
+    // The reason waits behind a collapsed "See details" under the line.
+    const seeDetails = failed.root.querySelector<HTMLDetailsElement>(".getting-started-templates-failed details")!;
+    expect(seeDetails.open).toBe(false);
+    expect(seeDetails.querySelector("summary")!.textContent).toBe("See details");
+    expect(seeDetails.querySelector("pre")!.textContent).toBe("HTTP 502");
     // Its next step is on the line: Try again fetches again, in place.
     failed.root.querySelector<HTMLElement>(".getting-started-templates-retry")!.click();
     expect(failed.retries).toEqual([1]);

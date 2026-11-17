@@ -15,6 +15,7 @@ import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { CatalogTemplate, TemplateCatalogState } from "../models/TemplateCatalog";
 import { resolveShelves, searchTemplates } from "../models/TemplateCatalog";
@@ -158,7 +159,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
   }
 
   /** The failure line, with the next steps in it: Try again (a fresh fetch) and Report a bug (where the shell says
-   *  Imbue Studio opens one). */
+   *  Imbue Studio opens one), and the reason under it behind "See details". */
   function templatesFailure(attrs: GettingStartedPageAttrs, details: string): m.Vnode {
     const action = (label: string, extra: string, onclick: () => void): m.Vnode =>
       m(Button, { variant: "ghost", sm: true, extra, onclick }, label);
@@ -174,6 +175,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
         sm: true,
         extra: "getting-started-templates-report",
       }),
+      m("div", { class: "basis-full" }, m(SeeDetails, { details })),
     ]);
   }
 
