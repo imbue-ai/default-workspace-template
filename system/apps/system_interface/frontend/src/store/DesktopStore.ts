@@ -50,6 +50,7 @@ import {
   mentionRowsOf,
   textRowDisabledReason,
 } from "../model/launch";
+import type { AppLaunch } from "../model/launch";
 import { applyPresence, getOwnIdentity, getOwnParticipant } from "../model/Presence";
 import { applyRoster, getRoster } from "../model/Roster";
 import { isClientOf, isOwnDesktop, ownDesktops, ownerEntryOf } from "../model/Ownership";
@@ -1133,11 +1134,18 @@ export class DesktopStore {
     ]);
   }
 
-  /** Whether ``app`` is the one agents are asked through (the launcher's primary text action's, Chat on a stock
-   *  workspace), or there is none, so no agent can be asked about it. */
+  /** Whether ``app`` is the one agents are asked through (the app of the row ``startNewWithText`` runs, Chat on a
+   *  stock workspace), or there is none, so no agent can be asked about it. */
   private isAskedThrough(app: AppRecord): boolean {
-    const askedThrough = freeTextRowsOf(openableApps(this.state))[0]?.app.name ?? null;
+    const askedThrough = this.newTextRow()?.app.name ?? null;
     return askedThrough === null || askedThrough === app.name;
+  }
+
+  /** The row a new chat is asked through: the secondary text action (Chat's New Chat on a stock machine), else the
+   *  primary one; undefined with no free-text row on the machine. */
+  private newTextRow(): AppLaunch | undefined {
+    const [primary, secondary] = freeTextRowsOf(openableApps(this.state));
+    return secondary ?? primary;
   }
 
   /** Whether this shell can stop and start the app: supervised, not critical, not inside a critical program, and
@@ -3028,8 +3036,7 @@ export class DesktopStore {
    *  text (Chat's New Chat on a stock machine), else the primary one; with no free-text row on the machine the user
    *  is told. */
   async startNewWithText(text: string): Promise<boolean> {
-    const [primary, secondary] = freeTextRowsOf(openableApps(this.state));
-    const row = secondary ?? primary;
+    const row = this.newTextRow();
     if (row === undefined) {
       this.toast(NO_TEXT_APP_REASON);
       return false;

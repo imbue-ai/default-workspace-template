@@ -1144,6 +1144,31 @@ describe("a stopped app's window", () => {
       isReportable: true,
     });
   });
+
+  it("judges which app agents are asked through by the new-chat row the agent button runs, not the primary one", async () => {
+    const textApp = (name: string, rank: number) =>
+      appRecord(name, {
+        display_name: name.toUpperCase(),
+        launcher_rank: rank,
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      });
+    const primary = textApp("alpha", 1);
+    const secondary = textApp("beta", 2);
+    api.apps = [primary, secondary];
+    const store = await startedStore();
+
+    // The app new chats go through, stopped, can only be reported.
+    expect(store.stoppedNotice({ ...secondary, is_running: false })).toMatchObject({
+      actions: [],
+      isReportable: true,
+    });
+    // The primary app, stopped, is asked about through the secondary.
+    const stopped = store.stoppedNotice({ ...primary, is_running: false });
+    expect(stopped.actions.map((action) => action.label)).toEqual(["Ask an agent to start it"]);
+    stopped.actions[0].run();
+    await settle();
+    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toMatch(/^launch:home:beta:new:/);
+  });
 });
 
 describe("a launch into an app that is not running", () => {
