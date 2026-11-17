@@ -41,7 +41,8 @@ export interface OverlayView {
 }
 
 const INSTALL_FAILED_STEM = "The Screen couldn't be set up in this workspace";
-const START_FAILED_STEM = "The Screen couldn't start";
+/** What failed when the stack would not start, or a Start was refused or not answered. */
+export const START_FAILED_STEM = "The Screen couldn't start";
 const STOPPED_UNEXPECTEDLY_STEM = "The Screen stopped unexpectedly";
 const LOAD_FAILED_STEM = "The Screen couldn't load";
 

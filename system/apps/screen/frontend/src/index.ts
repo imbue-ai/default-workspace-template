@@ -26,7 +26,7 @@ import { InputRelay, XK_V } from "./input";
 import { keyboardMapForLanguage } from "./keyboard_map";
 import { MobileControls, isPhoneViewer } from "./mobile";
 import { NekoSocket } from "./neko_socket";
-import { Overlays, type FailureHost, type PageFailure } from "./overlays";
+import { Overlays, START_FAILED_STEM, type FailureHost, type PageFailure } from "./overlays";
 import { PointerLockControl } from "./pointer_lock";
 import { RemoteCursor, listenForCursor } from "./remote_cursor";
 import { ResizeReporter } from "./resize_reporter";
@@ -278,7 +278,7 @@ class Viewer {
     this.render();
     const failure = await postStart();
     if (failure === null) return;
-    const told = failureSentence(failure, "The Screen couldn't start");
+    const told = failureSentence(failure, START_FAILED_STEM);
     this.startFailure = { message: told.message, details: told.details };
     this.render();
   }
