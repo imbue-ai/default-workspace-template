@@ -264,12 +264,15 @@ class Viewer {
    *  events once the service answers. */
   async loadState(): Promise<void> {
     if (this.state === null) this.overlays.showLoading();
+    let state: ScreenStateDocument;
     try {
-      this.handleEvent({ type: "state", ...(await fetchState()) });
+      state = await fetchState();
     } catch (error: unknown) {
       console.error("[screen] state failed", error);
       if (this.state === null) this.overlays.showLoadFailure(failureOf(error, "read"));
+      return;
     }
+    this.handleEvent({ type: "state", ...state });
   }
 
   /** The overlay's Start (or Try again): a refusal, or no answer, is said under its title until the stack moves. */
