@@ -78,6 +78,7 @@ summary{cursor:pointer}</style></head>
 <p>The Getting Started page isn't available right now. It comes back on its own once it is rebuilt.</p>
 <p><button type="button" id="reload">Reload</button><button type="button" id="ask-agent" hidden>Ask an agent to
 rebuild it</button></p>
+<p id="ask-agent-failure" hidden></p>
 <details><summary>See details</summary><p>Its built files are missing. They are rebuilt with
 <code>npm run build</code> in <code>system/</code>.</p></details>
 </main>
@@ -98,7 +99,21 @@ rebuild it</button></p>
         const ask = document.getElementById("ask-agent");
         // Only a shell can start a chat, so the button waits for one to greet the page.
         const shell = connectToShell({ onHandshake: () => (ask.hidden = false) });
-        ask.addEventListener("click", () => shell.startNewWithText(__REBUILD_REQUEST__));
+        const failure = document.getElementById("ask-agent-failure");
+        const askLabel = ask.textContent;
+        // Until the shell says the agent's chat is up (or why it is not), the button says the ask is out.
+        ask.addEventListener("click", async () => {
+          ask.disabled = true;
+          ask.textContent = "Asking an agent\u2026";
+          failure.hidden = true;
+          const outcome = await shell.startNewWithText(__REBUILD_REQUEST__);
+          ask.disabled = false;
+          ask.textContent = askLabel;
+          if (!outcome.isOpened) {
+            failure.textContent = outcome.failure.message;
+            failure.hidden = false;
+          }
+        });
       })
       .catch((error) => console.warn("[getting-started] could not load the shell contract", error));
   }
