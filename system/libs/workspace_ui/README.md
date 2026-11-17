@@ -52,9 +52,12 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   renders nothing where no shell frames the page. `askAgentToFix` answers a
   promise that settles on the shell's `shell:start-new-with-text-result`
   (`{isOpened: true}`, or `{isOpened: false, failure}`; as not answered at
-  once without a shell, and on a fresh handshake or `disconnect()`), and the
-  button reads "Asking an agent…", disabled, until
-  it settles, then shows a failure under itself; `ReportBugButton` asks the
+  once without a shell, on a handshake from a shell that started again (a
+  different `shellId`), and on `disconnect()`; an answer that still arrives
+  goes to its optional `onLateAnswer`), and the button reads "Asking an
+  agent…", disabled, until it settles, then shows a failure under itself,
+  with "Report a bug" for that failure when it asks for one, and takes a late
+  answer in place of a not-answered one; `ReportBugButton` asks the
   shell to open Imbue Studio's bug report about the failure it is given (a
   `ReportedFailure`: the sentence on screen and what its "See details" holds,
   sent as `shell:report-bug {message, details}`), and renders only where the

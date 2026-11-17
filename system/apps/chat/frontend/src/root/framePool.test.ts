@@ -19,6 +19,7 @@ const HANDSHAKE: ShellHandshake = {
   canReportBug: true,
   opensLocalFiles: false,
   isViewing: false,
+  shellId: "shell-1",
 };
 
 let container: HTMLElement;
