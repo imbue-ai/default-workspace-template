@@ -218,6 +218,47 @@ describe("Ask an agent to fix this", () => {
     expect(changes).toEqual([refused, null]);
   });
 
+  it("tells the page its refused ask is gone when it is removed, and hands it nothing that answers afterwards", async () => {
+    root = document.createElement("div");
+    const parent = framed();
+    const live = connectToShell({});
+    connection = live;
+    handshake(parent, { canReportBug: true });
+    const changes: (ShownFailure | null)[] = [];
+    const attrs = {
+      connection: live,
+      failure: FAILURE,
+      pageReportBug: { onFailureChange: (failure: ShownFailure | null) => changes.push(failure) },
+    };
+    const refused = { message: "Chat couldn't open that.", details: "HTTP 502", isReportable: true };
+    async function refuse(): Promise<void> {
+      const [asked] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            type: SHELL_START_NEW_WITH_TEXT_RESULT,
+            requestId: asked.requestId,
+            isOpened: false,
+            failure: refused,
+          },
+          source: parent as unknown as Window,
+        }),
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+
+    render(m(AskAgentToFixButton, attrs))?.click();
+    await refuse();
+    expect(changes).toEqual([refused]);
+    m.render(root, null);
+    expect(changes).toEqual([refused, null]);
+
+    render(m(AskAgentToFixButton, attrs))?.click();
+    m.render(root, null);
+    await refuse();
+    expect(changes).toEqual([refused, null]);
+  });
+
   it("takes an answer that comes after a restarted shell settled its request as not answered", async () => {
     root = document.createElement("div");
     const parent = framed();
