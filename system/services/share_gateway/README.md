@@ -144,7 +144,9 @@ refusal, and logs every denial (never the token) to the service's stderr:
   the broker asks which account to continue as and offers a different one.
   The route takes only a POST whose Origin is one of this workspace's, so no
   link from another site can sign a visitor out (a GET is a 405; a POST from
-  anywhere else gets the page below and keeps the session).
+  anywhere else gets the page below and keeps the session). The page sets its
+  own `strict-origin` referrer policy: under the `same-origin` one caddy sends,
+  a browser posts the form from an app's origin with `Origin: null`.
 - A request from another site that the Origin policy refuses (a cross-site
   form post, say) is **"This page can't be opened from another site"** (403:
   "For your security, this workspace doesn't accept requests sent from other

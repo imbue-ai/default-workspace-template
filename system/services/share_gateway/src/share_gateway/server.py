@@ -114,11 +114,15 @@ def page_content_security_policy(auth_origin: str, broker_origin: str) -> str:
     )
 
 
-def _render_page(title: str, body_html: str, refresh_seconds: int | None = None) -> str:
-    """One of the gateway's own full-page answers: a heading and a few lines, centred."""
+def _render_page(
+    title: str, body_html: str, refresh_seconds: int | None = None, referrer_policy: str | None = None
+) -> str:
+    """One of the gateway's own full-page answers: a heading and a few lines, centred. ``referrer_policy`` replaces
+    the one caddy's header gives the page."""
     refresh = f'<meta http-equiv="refresh" content="{refresh_seconds}">' if refresh_seconds is not None else ""
+    referrer = f'<meta name="referrer" content="{referrer_policy}">' if referrer_policy is not None else ""
     return (
-        f'<!DOCTYPE html>\n<html><head><meta charset="utf-8">{refresh}\n'
+        f'<!DOCTYPE html>\n<html><head><meta charset="utf-8">{refresh}{referrer}\n'
         f"<title>{html.escape(title)}</title>\n<style>{_PAGE_STYLE}</style></head>\n"
         f"<body><div>{body_html}</div></body></html>\n"
     )
@@ -207,6 +211,9 @@ def _not_shared_with_account_page(reload_url: str, switch_account_url: str, next
         f'<form method="post" action="{html.escape(switch_account_url)}">'
         f'<input type="hidden" name="next" value="{html.escape(next_url)}">'
         '<button class="button secondary" type="submit">Sign in with a different account</button></form>',
+        # Served at an app's origin, the form posts to the auth origin: under caddy's same-origin policy the browser
+        # would send that post with "Origin: null", which switch-account refuses.
+        referrer_policy="strict-origin",
     )
 
 

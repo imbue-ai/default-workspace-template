@@ -294,6 +294,11 @@ def test_a_visitor_refused_by_the_grants_is_told_so_and_offered_another_account(
         f"{_AUTH_ORIGIN}/_auth/switch-account",
         f"https://{_SHELL_HOST}/desk?view=2",
     )
+    # The form posts across origins, and caddy's "Referrer-Policy: same-origin" would make the browser send that post
+    # with "Origin: null", which switch-account refuses; the page sets a policy that keeps the real Origin.
+    referrer_policies = re.findall(r'<meta name="referrer" content="([^"]*)">', page)
+    assert len(referrer_policies) == 1
+    assert referrer_policies[0] not in ("same-origin", "no-referrer")
 
 
 def test_switching_account_ends_the_session_and_asks_the_broker_which_account_to_use(tmp_path: Path) -> None:
