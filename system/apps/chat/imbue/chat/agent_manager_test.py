@@ -2045,6 +2045,7 @@ def test_discard_provisional_chat_drops_a_failed_chat(
         "chat_id": "failed-1",
         "success": False,
         "error": None,
+        "held_sends": [],
     }
 
 
@@ -2060,7 +2061,33 @@ def test_discard_provisional_chat_drops_a_create_in_flight_at_once_and_leaves_an
 
     assert agent_manager.get_provisional_chats() == []
     completed = json.loads(q.get_nowait() or "")
-    assert completed == {"type": "provisional_chat_completed", "chat_id": "proto-1", "success": False, "error": None}
+    assert completed == {
+        "type": "provisional_chat_completed",
+        "chat_id": "proto-1",
+        "success": False,
+        "error": None,
+        "held_sends": [],
+    }
+
+
+def test_discarding_a_chat_being_created_tells_the_pages_the_messages_it_held(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The held messages go with the chat, so the pages that sent them put them back in the box: the discard carries
+    them, in the order they were held."""
+    _seed_creating_chat(agent_manager, ChatId("proto-1"), "Chat 9")
+    agent_manager.hold_send_for_chat_being_created(ChatId("proto-1"), "m-1", "first", HeldSendOrigin.CLIENT)
+    agent_manager.hold_send_for_chat_being_created(ChatId("proto-1"), "m-2", "second", HeldSendOrigin.CLIENT)
+    q = broadcaster.register()
+
+    assert agent_manager.discard_provisional_chat("proto-1") is True
+
+    completed = json.loads(q.get_nowait() or "")
+    assert completed["type"] == "provisional_chat_completed"
+    assert [(held["message_id"], held["text"]) for held in completed["held_sends"]] == [
+        ("m-1", "first"),
+        ("m-2", "second"),
+    ]
 
 
 def test_a_chat_deleted_while_it_is_created_has_its_agent_destroyed_as_the_create_lands(

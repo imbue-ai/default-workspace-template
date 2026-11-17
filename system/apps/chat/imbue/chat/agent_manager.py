@@ -184,6 +184,7 @@ from imbue.chat.models import ChatPartlyDestroyedError
 from imbue.chat.models import ChatSegmentInfo
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import CreatedChat
+from imbue.chat.models import DiscardedChat
 from imbue.chat.models import DisplayDecisionFields
 from imbue.chat.models import HandoffError
 from imbue.chat.models import HandoffPhase
@@ -287,6 +288,9 @@ _DEFAULT_MESSENGER: Final[MngrMessenger] = MngrMessenger()
 # have one yet (see ``_reconnect_pending_sessions``). Also bounds the service's idle wake-up
 # rate, which costs ~3x under gVisor.
 _SESSION_SWEEP_INTERVAL_SECONDS: Final[float] = 10.0
+# How long a page that connects is told of a chat deleted while it was created, with the messages dropped with it:
+# far longer than a page's socket stays down while the page is still open.
+_DISCARD_REPLAYED_SECONDS: Final[float] = 15 * 60.0
 
 # How long after starting the main chat's stopped agent another start is not tried, so one that fails (or that
 # the observe stream has not caught up with yet) is not retried on every chat-list push.
@@ -1492,6 +1496,8 @@ class AgentManager:
     # The chats deleted while their create ran. They are listed nowhere, and the agent the create
     # makes is destroyed as it lands.
     _abandoned_creates: set[ChatId]
+    # The provisional chats deleted lately, for the connect-time replay (``get_recent_discards``).
+    _recent_discards: dict[ChatId, DiscardedChat]
     _mngr_binary: str
     _host_dir: Path
     _activity_tracked_agents: set[str]
@@ -1818,6 +1824,7 @@ class AgentManager:
         manager._connecting_message_ids_by_agent = {}
         manager._withdrawable_sends_by_agent = {}
         manager._abandoned_creates = set()
+        manager._recent_discards = {}
         manager._withdrawn_message_ids = set()
         manager._pending_resends_after_sign_in_by_agent = {}
         manager._resend_locks_by_agent = {}
@@ -4922,9 +4929,25 @@ class AgentManager:
                 if record is None or record.is_seed_only:
                     self._delete_record_locked(parsed)
         self._auto_open.forget(parsed)
-        self._broadcaster.broadcast_provisional_chat_completed(chat_id=parsed, success=False, error=None)
+        held_sends = self._provisional_as_shown(provisional).held_sends
+        with self._lock:
+            self._recent_discards[parsed] = DiscardedChat(
+                chat_id=parsed, held_sends=held_sends, discarded_at=time.monotonic()
+            )
+        self._broadcaster.broadcast_provisional_chat_completed(
+            chat_id=parsed, success=False, error=None, held_sends=held_sends
+        )
         self._broadcast_chats_updated()
         return True
+
+    def get_recent_discards(self) -> list[DiscardedChat]:
+        """The provisional chats deleted lately, oldest first, each with the messages dropped with it: what a page
+        whose socket was down then has to be told on connecting."""
+        cutoff = time.monotonic() - _DISCARD_REPLAYED_SECONDS
+        with self._lock:
+            for chat_id in [key for key, discard in self._recent_discards.items() if discard.discarded_at < cutoff]:
+                del self._recent_discards[chat_id]
+            return list(self._recent_discards.values())
 
     def create_chat(
         self,

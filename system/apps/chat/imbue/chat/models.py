@@ -940,6 +940,16 @@ class ProvisionalChat(FrozenModel):
     )
 
 
+class DiscardedChat(FrozenModel):
+    """A chat deleted while it was created, as a page that connects soon after is told of it."""
+
+    chat_id: ChatId = Field(description="The deleted chat")
+    held_sends: tuple[HeldSendSnapshot, ...] = Field(
+        description="The messages it held for its agent, dropped with it, in the order they were held"
+    )
+    discarded_at: float = Field(description="When it was deleted (monotonic seconds)")
+
+
 class ProvisionalChatAsShown(FrozenModel):
     """A provisional chat as the pages are sent it (the ``provisional_chat_created`` message)."""
 

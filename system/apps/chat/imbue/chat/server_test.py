@@ -4808,6 +4808,38 @@ def test_websocket_replays_the_provisional_chats_before_the_agent_list(
 
 
 @pytest.mark.timeout(15)
+def test_a_page_that_connects_after_a_chat_was_discarded_hears_the_discard_with_the_messages_it_held(
+    app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A page whose socket was down when a chat being created was deleted still learns which of its messages the chat
+    app dropped, so it can put them back in the box."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+    agent_manager = state_of(app).agent_manager
+    with agent_manager._lock:
+        agent_manager._provisional_chats[ChatId("proto-1")] = ProvisionalChat(
+            chat_id=ChatId("proto-1"), name="Chat 9", account_id="acct-1", phase=ProvisionalChatPhase.CREATING
+        )
+    agent_manager.hold_send_for_chat_being_created(ChatId("proto-1"), "m-1", "hello", HeldSendOrigin.CLIENT)
+    assert agent_manager.discard_provisional_chat("proto-1") is True
+
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            first = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+            second = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+        finally:
+            close_ws(ws)
+
+    assert first["type"] == "provisional_chat_completed"
+    assert first["chat_id"] == "proto-1"
+    assert (first["success"], first["error"]) == (False, None)
+    assert [(held["message_id"], held["text"]) for held in first["held_sends"]] == [("m-1", "hello")]
+    assert second["type"] == "chats_updated"
+
+
+@pytest.mark.timeout(15)
 def test_a_page_that_connects_before_the_first_agent_listing_gets_its_chat_list_from_that_listing(
     config: Config, signed_in_account: str, tmp_path: Path, messenger: RecordingMngrMessenger
 ) -> None:
