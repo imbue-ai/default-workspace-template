@@ -330,7 +330,8 @@ closes every window of the app and stops it at once; critical apps offer
 nothing there and are never stopped or parked.
 The stop and start routes remain for agents. A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`,
-`shell:capabilities`, `shell:start-with-text`); a page that reports the path it is showing gets it
+`shell:capabilities`, `shell:start-with-text`, `shell:start-new-with-text`,
+`shell:report-bug`, ...); a page that reports the path it is showing gets it
 stored on its window and reopens there, one that declared `navigation`
 is sent `shell:navigate` when an agent points its window elsewhere, and one
 that declared `closeChord` keeps its window on the close chord (it is only sent
@@ -644,7 +645,9 @@ highlighted; the arrows move it, hovering moves it, Enter or a click runs it,
 and a run closes the menu and clears the field. A framed page starts a chat
 without naming the chat app through `shell:start-with-text`, which the shell
 answers by running the primary free-text row (the Getting Started app's
-intents and templates use it), and drafts a text into the chat on screen
+intents and templates use it), starts a new one through
+`shell:start-new-with-text`, which runs the secondary free-text row (Chat's
+New Chat; a failure's "Ask an agent to fix this" uses it), and drafts a text into the chat on screen
 through `shell:draft-text`, which the shell answers by running the pinned
 app's launch path with a `draft_param` into the pinned window, as the avatar
 dialog's "Design your own..." does (the element context menu's "Explain..."
@@ -654,7 +657,13 @@ open, placed there once by that app for the first client that connects.
 
 A refused operation (an open, a close, a shortcut move) says so in a toast at
 the foot of the screen (the shared toasts of `system/libs/workspace_ui`) rather
-than a browser alert.
+than a browser alert. A toast whose sentence asks for a bug report offers
+"Report a bug" whenever the Imbue Studio chrome says it opens one, decided as
+the toast draws, and the report it opens carries the toast's sentence and
+details (`minds:open-help {errorDetails}`); a failure told in place (a dialog's
+line, the launcher, the backdrop, a stopped window) does the same, and so does a
+page's `shell:report-bug` with the failure the page sent. "Ask an agent to ..."
+and "Report a bug" leave their toast up; Try again takes it down.
 
 ### The phone layout
 
@@ -792,12 +801,14 @@ bundle, it still works when nothing else does.
 The placeholder is the workspace's general recovery surface, so it hands over
 an **agent** and a **terminal** rather than a repair. "Ask an agent to fix
 this" sends the agent the message the command below carries, through the
-workspace's primary text action (Chat's New Chat on a stock workspace), and
-frames the agent's chat on the page. Behind "See details" are the command, for
-whoever would rather run it themselves, and a session of the already-running
-terminal app in a frame, made when the details are first opened. With no app to
-ask an agent through, the button is not offered and the details start open; with
-no terminal, the details say so. The page cannot post to another app's origin,
+workspace's secondary text action (Chat's New Chat on a stock workspace, so the
+repair gets a chat of its own), and frames the agent's chat on the page. Behind
+"See details" are the command, for whoever would rather run it themselves,
+"Open this workspace's terminal", whose session of the already-running terminal
+app is made in a frame only when that section is first opened, and, after a
+refused attempt, why the agent didn't start. With no app to ask an agent
+through, the button is not offered and the details and the terminal start
+open; with no terminal, the details say so. The page cannot post to another app's origin,
 so both launches go through the shell's `POST /api/not-built/launch` (desktop
 contracts.md section 5.1), which answers where the launched page is. The command:
 

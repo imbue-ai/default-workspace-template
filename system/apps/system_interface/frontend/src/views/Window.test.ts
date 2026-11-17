@@ -25,6 +25,7 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     sizeMenuTrigger: {},
     isShielded: false,
     stopped: null,
+    onReportBug: null,
     isAppGone: false,
     immersive: null,
     onRaise: vi.fn(),
@@ -207,6 +208,25 @@ describe("Window", () => {
     expect(
       render({ app: appRecord("docs", { is_running: false }), stopped: null }).querySelector("[data-stopped-app]"),
     ).toBeNull();
+  });
+
+  it("offers Report a bug about a stopped app's sentence that asks for one, decided as it draws", () => {
+    const stopped = {
+      message: "Chat is not running right now. If this persists, report a bug.",
+      details: null,
+      actions: [],
+      isReportable: true,
+    };
+    const chat = appRecord("chat", { is_running: false });
+    expect(render({ app: chat, stopped }).querySelector("[data-stopped-app] button")).toBeNull();
+    unmountViews();
+    const reportBug = vi.fn();
+    const button = render({ app: chat, stopped, onReportBug: reportBug }).querySelector(
+      "[data-stopped-app] button",
+    ) as HTMLButtonElement;
+    expect(button.textContent).toBe("Report a bug");
+    button.click();
+    expect(reportBug).toHaveBeenCalledWith({ message: stopped.message, details: null });
   });
 
   it("says a window's app is no longer part of the workspace, offers to close it, and drops Refresh", () => {

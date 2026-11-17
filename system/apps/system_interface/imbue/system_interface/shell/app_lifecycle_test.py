@@ -17,6 +17,7 @@ from imbue.system_interface.shell.app_lifecycle import ProgramStatesReader
 from imbue.system_interface.shell.app_lifecycle import TRANSITION_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_WINDOW_SECONDS
+from imbue.system_interface.shell.app_lifecycle import WakeOutcome
 from imbue.system_interface.shell.app_lifecycle import WindowCountsReader
 from imbue.system_interface.shell.app_lifecycle import recent_wake_times
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
@@ -538,14 +539,14 @@ def test_wake_and_wait_answers_once_the_app_accepts(
 
     waiting = _manager_over(manager.inventory, supervisor, start_program=start, clock=time.monotonic)
     try:
-        assert waiting.wake_and_wait(entry, timeout_seconds=5.0) is True
+        assert waiting.wake_and_wait(entry, timeout_seconds=5.0) is WakeOutcome.UP
     finally:
         listener.close()
-    # An app that never binds is answered False once the wait is up, and a running one at once.
+    # An app that never binds is still starting once the wait is up, and a running one is answered at once.
     is_bound[0] = True
-    assert waiting.wake_and_wait(entry, timeout_seconds=0.3) is False
+    assert waiting.wake_and_wait(entry, timeout_seconds=0.3) is WakeOutcome.STILL_STARTING
     running = manager.inventory.entry("plain")
-    assert running is not None and waiting.wake_and_wait(running, timeout_seconds=0.1) is True
+    assert running is not None and waiting.wake_and_wait(running, timeout_seconds=0.1) is WakeOutcome.UP
 
 
 def test_wake_and_wait_gives_up_once_the_port_is_parked_again(
@@ -566,7 +567,7 @@ def test_wake_and_wait_gives_up_once_the_port_is_parked_again(
 
     failing = _manager_over(manager.inventory, supervisor, start_program=start_then_fail_and_sweep, clock=clock)
     try:
-        assert failing.wake_and_wait(entry, timeout_seconds=5.0) is False
+        assert failing.wake_and_wait(entry, timeout_seconds=5.0) is WakeOutcome.FAILED
         assert failing.is_app_parked("docs")
     finally:
         failing.stop()
@@ -576,14 +577,37 @@ def test_wake_and_wait_gives_up_once_the_port_is_parked_again(
 def test_wake_and_wait_gives_up_once_the_manager_is_stopped(
     manager: AppLifecycleManager, supervisor: FakeSupervisor
 ) -> None:
-    """A launch in flight while the shell stops is answered False at once rather than polled to its deadline
+    """A launch in flight while the shell stops is answered at once rather than polled to its deadline
     (the fake clock never reaches one, so a poll that ignored the stop would never return)."""
     entry = manager.inventory.entry("docs")
     assert entry is not None and entry.is_running is False
     manager.stop()
 
-    assert manager.wake_and_wait(entry, timeout_seconds=5.0) is False
+    assert manager.wake_and_wait(entry, timeout_seconds=5.0) is WakeOutcome.STILL_STARTING
     assert supervisor.started == ["docs"]
+
+
+def test_wake_and_wait_says_why_a_wake_brought_nothing_up(
+    manager: AppLifecycleManager, supervisor: FakeSupervisor
+) -> None:
+    """The launch that waited words its refusal from this: a start supervisord refused, and a wake the budget
+    refused, are each answered at once without polling the port."""
+    entry = manager.inventory.entry("docs")
+    assert entry is not None and entry.is_running is False
+
+    def refuse(program: str) -> None:
+        raise SupervisorProgramActionError(f"supervisord refused to start {program!r}")
+
+    refusing = _manager_over(manager.inventory, supervisor, start_program=refuse)
+    try:
+        assert refusing.wake_and_wait(entry, timeout_seconds=5.0) is WakeOutcome.FAILED
+    finally:
+        refusing.stop()
+
+    for _ in range(WAKE_BUDGET_COUNT):
+        assert manager.wake("docs") is ParkedPageKind.STARTING
+    assert manager.wake_and_wait(entry, timeout_seconds=5.0) is WakeOutcome.BUDGET_SPENT
+    assert len(supervisor.started) == WAKE_BUDGET_COUNT
 
 
 def _clock_of(manager: AppLifecycleManager) -> FakeClock:

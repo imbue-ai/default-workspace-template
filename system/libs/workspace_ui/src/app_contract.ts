@@ -73,6 +73,10 @@ export const SHELL_OPEN = "shell:open";
 /** App to shell: start something with a text (launcher-and-getting-started plan section 3.7): the shell runs its
  *  launcher's primary text action with it, so a page never names the app that takes it. */
 export const SHELL_START_WITH_TEXT = "shell:start-with-text";
+/** App to shell: start something new with a text: the shell runs its launcher's secondary text action with it (a new
+ *  chat on a stock machine, where the primary one sends to the main chat), else the primary one where there is no
+ *  second. */
+export const SHELL_START_NEW_WITH_TEXT = "shell:start-new-with-text";
 /** App to shell: draft a text into a chat, unsent (element-reference-menu plan section 5): the shell runs the
  *  pinned app's draft launch path with it, as its own "Design your own..." does, so a page never names the app. */
 export const SHELL_DRAFT_TEXT = "shell:draft-text";
@@ -85,8 +89,9 @@ export const SHELL_MESSAGE = "shell:message";
  *  ``<label>.localhost`` host or registered port it is, else the workspace's browser), the file in Files, an
  *  external link in the app registered for it or else outside the workspace, or says why it cannot. */
 export const SHELL_OPEN_LINK = "shell:open-link";
-/** App to shell: open Imbue Studio's bug report, as the shell's own "Report a bug" does. The shell acts on it only
- *  where its handshake said ``canReportBug``, since only the shell can reach the embedder that opens one. */
+/** App to shell: open Imbue Studio's bug report about a failure (``{message, details}``, a ``ReportedFailure``), as
+ *  the shell's own "Report a bug" does. The shell acts on it only where its handshake said ``canReportBug``, since
+ *  only the shell can reach the embedder that opens one. */
 export const SHELL_REPORT_BUG = "shell:report-bug";
 
 /** The bare host names of this machine (a ``*.localhost`` host is local too). */
@@ -214,12 +219,16 @@ export interface ShellConnection {
   location(path: string, title: string): void;
   /** Ask the shell to open a page of this app at a path beside this one. */
   openPath(path: string, ifPresent: OpenIfPresent): void;
-  /** Ask the shell to start something with ``text``: its launcher's primary text action (a new chat on a stock machine). */
+  /** Ask the shell to start something with ``text``: its launcher's primary text action (the main chat on a stock
+   *  machine). */
   startWithText(text: string): void;
+  /** Ask the shell to start something new with ``text``: its launcher's secondary text action (a new chat on a stock
+   *  machine). */
+  startNewWithText(text: string): void;
   /** Whether "Report a bug" would do anything: the shell's latest handshake said ``canReportBug``. */
   canReportBug(): boolean;
-  /** Ask the shell to open Imbue Studio's bug report. */
-  reportBug(): void;
+  /** Ask the shell to open Imbue Studio's bug report about ``failure``, which the report carries. */
+  reportBug(failure: ReportedFailure): void;
   /** Ask the shell to draft ``text`` into a chat's composer, unsent (the chat on screen on a stock machine). */
   draftText(text: string): void;
   /** Send the shell a message for the apps registered for ``type``, with ``fields`` as its own fields. */
@@ -510,8 +519,10 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     location: (path: string, title: string) => send(SHELL_LOCATION, { path, title }),
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
     startWithText: (text: string) => send(SHELL_START_WITH_TEXT, { text }),
+    startNewWithText: (text: string) => send(SHELL_START_NEW_WITH_TEXT, { text }),
     canReportBug: () => canReportBug,
-    reportBug: () => send(SHELL_REPORT_BUG, {}),
+    reportBug: (failure: ReportedFailure) =>
+      send(SHELL_REPORT_BUG, { message: failure.message, details: failure.details }),
     draftText: (text: string) => send(SHELL_DRAFT_TEXT, { text }),
     sendMessage: (type: string, fields: Readonly<Record<string, unknown>>) =>
       send(SHELL_MESSAGE, { message: { ...fields, type } }),
@@ -555,9 +566,31 @@ function agentFixTask({ whatFailed, details }: AgentFixRequest): string {
   return parts.join("\n\n");
 }
 
-/** "Ask an agent to fix this": start a chat whose first message asks an agent to fix ``failure``, through the
- *  shell's ``shell:start-with-text`` (a page passes its connection; the shell, which is not framed, its own
- *  ``startWithText``). */
-export function askAgentToFix(starter: Pick<ShellConnection, "startWithText">, failure: AgentFixRequest): void {
-  starter.startWithText(agentFixTask(failure));
+/** "Ask an agent to fix this": start a new chat whose first message asks an agent to fix ``failure``, through the
+ *  shell's ``shell:start-new-with-text`` (a page passes its connection; the shell, which is not framed, its own
+ *  ``startNewWithText``). A new chat, so the task does not land in the middle of a conversation about something
+ *  else. */
+export function askAgentToFix(starter: Pick<ShellConnection, "startNewWithText">, failure: AgentFixRequest): void {
+  starter.startNewWithText(agentFixTask(failure));
+}
+
+/** The failure a "Report a bug" is about: the sentence the user saw, and what was behind its "See details" (null when
+ *  nothing was). */
+export interface ReportedFailure {
+  readonly message: string;
+  readonly details: string | null;
+}
+
+/** The failure a page's ``shell:report-bug`` carries, or null when its payload holds none in that shape. */
+export function reportedFailureOf(payload: Readonly<Record<string, unknown>>): ReportedFailure | null {
+  const { message, details } = payload;
+  if (typeof message !== "string" || message.trim() === "") return null;
+  if (details !== null && details !== undefined && typeof details !== "string") return null;
+  return { message, details: details ?? null };
+}
+
+/** The text a bug report carries for ``failure``: the sentence the user saw, then everything under it (the shape
+ *  Imbue Studio's own reports carry). */
+export function bugReportText({ message, details }: ReportedFailure): string {
+  return details === null || details.trim() === "" ? message : `${message}\n\n${details}`;
 }

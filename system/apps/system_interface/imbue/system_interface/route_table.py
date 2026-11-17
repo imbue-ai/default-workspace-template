@@ -224,10 +224,11 @@ SHELL_ROUTE_TABLE: RouteTable = {
         response_model=EmbedderMessageRelayResponse,
         alternate_responses=(AlternateResponse(status=HTTP_BAD_GATEWAY, model=EmbedderMessageRelayResponse),),
     ),
-    # The update notice
+    # Section 5.1: the not-built placeholder's launches
     ("POST", "/api/not-built/launch"): RouteModels(
         request_model=NotBuiltLaunchRequest, response_model=NotBuiltLaunchAnswer
     ),
+    # The update notice
     ("GET", "/api/updates/pending"): RouteModels(response_model=PendingUpdateResponse),
     ("POST", "/api/updates/pending/confirm"): RouteModels(success_status=HTTP_NO_CONTENT),
     ("POST", "/api/updates/pending/rollback"): RouteModels(

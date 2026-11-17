@@ -1,15 +1,16 @@
 import m from "mithril";
 import { askAgentToFix } from "../app_contract";
-import type { AgentFixRequest, ShellConnection } from "../app_contract";
+import type { AgentFixRequest, ReportedFailure, ShellConnection } from "../app_contract";
 import { REPORT_A_BUG_LABEL } from "../models/failure";
 import { Button } from "./Button";
 import type { ButtonOptions, ButtonVariant } from "./Button";
 
 /**
  * The two buttons a failure in a framed app page offers beside its sentence, both of which go through the shell that
- * frames the page: "Ask an agent to fix this" starts a chat with the failure as its task, and "Report a bug" opens
- * Imbue Studio's bug report. Each renders nothing where it could not work, so a surface draws both unconditionally;
- * it reads the connection at render time, so the page redraws when a handshake arrives (as every page does).
+ * frames the page: "Ask an agent to fix this" starts a new chat with the failure as its task, and "Report a bug" opens
+ * Imbue Studio's bug report with the failure attached. Each renders nothing where it could not work, so a surface
+ * draws both unconditionally; it reads the connection at render time, so the page redraws when a handshake arrives (as
+ * every page does).
  */
 
 export const ASK_AGENT_TO_FIX_LABEL = "Ask an agent to fix this";
@@ -20,7 +21,7 @@ interface FailureButtonOptions extends Pick<ButtonOptions, "sm" | "extra"> {
 
 export interface AskAgentToFixButtonAttrs extends FailureButtonOptions {
   /** The page's connection; null before it connects. */
-  readonly connection: Pick<ShellConnection, "hasShell" | "startWithText"> | null;
+  readonly connection: Pick<ShellConnection, "hasShell" | "startNewWithText"> | null;
   readonly failure: AgentFixRequest;
 }
 
@@ -45,16 +46,18 @@ export const AskAgentToFixButton: m.Component<AskAgentToFixButtonAttrs> = {
 export interface ReportBugButtonAttrs extends FailureButtonOptions {
   /** The page's connection; null before it connects. */
   readonly connection: Pick<ShellConnection, "canReportBug" | "reportBug"> | null;
+  /** The failure on screen: its sentence and what its "See details" holds, which the report carries. */
+  readonly failure: ReportedFailure;
 }
 
 /** Nothing unless the shell's handshake said Imbue Studio opens a bug report here. */
 export const ReportBugButton: m.Component<ReportBugButtonAttrs> = {
   view(vnode) {
-    const { connection, variant, sm, extra } = vnode.attrs;
+    const { connection, failure, variant, sm, extra } = vnode.attrs;
     if (connection === null || !connection.canReportBug()) return null;
     return m(
       Button,
-      { variant, sm, extra: `report-bug ${extra ?? ""}`.trim(), onclick: () => connection.reportBug() },
+      { variant, sm, extra: `report-bug ${extra ?? ""}`.trim(), onclick: () => connection.reportBug(failure) },
       REPORT_A_BUG_LABEL,
     );
   },

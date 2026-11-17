@@ -22,6 +22,7 @@ from screen.data_types import IceServersAnswer
 from screen.data_types import Lifecycle
 from screen.data_types import MediaCandidate
 from screen.data_types import NekoSessionRecord
+from screen.data_types import StopCause
 from screen.data_types import TransportProtocol
 from screen.data_types import XWindow
 from screen.primitives import NekoSessionId
@@ -351,10 +352,59 @@ def test_the_stopped_state_says_what_kind_of_end_it_was(
     stopped = client.get("/api/state").get_json()
     assert (stopped["stop_cause"], stopped["stop_reason"]) == ("out_of_memory", "screen-neko exited")
 
+    # earlyoom records a shed only once it has seen the process gone, so its record can land after the watcher's
+    # notice: still a shed.
+    fake_install.ledger_reads_before_shed[53] = 3
+    start_service_stack(service)
+    _stop_every_member(fake_supervisor)
+    client.post("/api/internal/stopped", json={"member": "screen-neko", "reason": "screen-neko exited", "pid": 53})
+    assert client.get("/api/state").get_json()["stop_cause"] == "out_of_memory"
+
     fake_supervisor.failing_programs.add("screen-neko")
     service.ensure_started()
     assert wait_until(lambda: service.stack.lifecycle == Lifecycle.STOPPED)
     assert client.get("/api/state").get_json()["stop_cause"] == "start_failed"
+
+
+def test_a_stop_notice_never_overrides_what_happened_while_it_waited_for_the_shed_record(
+    client: FlaskClient, service: ScreenService, fake_supervisor: FakeSupervisor, fake_install: FakeInstall
+) -> None:
+    # A Quit while the notice waits on the memory guard's ledger: the stop stays the one asked for.
+    start_service_stack(service)
+    _stop_every_member(fake_supervisor)
+    fake_install.on_next_ledger_read = lambda: service.stack.stop("Quit from the window menu")
+    client.post("/api/internal/stopped", json={"member": "screen-neko", "reason": "screen-neko exited", "pid": 61})
+    assert (service.stack.stop_cause, service.stack.stop_reason) == (StopCause.REQUESTED, "Quit from the window menu")
+
+    # A start begun while the notice waits is not the notice's to abort.
+    start_service_stack(service)
+    _stop_every_member(fake_supervisor)
+
+    def quit_and_start_again() -> None:
+        service.stack.stop("Quit from the window menu")
+        service.ensure_started()
+
+    fake_install.on_next_ledger_read = quit_and_start_again
+    client.post("/api/internal/stopped", json={"member": "screen-neko", "reason": "screen-neko exited", "pid": 62})
+    assert wait_until(lambda: service.stack.lifecycle == Lifecycle.RUNNING)
+    assert service.stack.stop_cause is None
+
+
+def test_a_member_that_leaves_before_the_stack_runs_ended_the_start_rather_than_crashed(
+    service: ScreenService, fake_supervisor: FakeSupervisor, fake_neko: FakeNeko
+) -> None:
+    def a_member_leaves_while_the_start_waits_for_neko() -> None:
+        _stop_every_member(fake_supervisor)
+        assert service.notify_stopped("screen-neko", "screen-neko could not be started", None)
+
+    fake_neko.on_next_health_check = a_member_leaves_while_the_start_waits_for_neko
+    service.ensure_started()
+
+    assert wait_until(lambda: service.stack.lifecycle == Lifecycle.STOPPED)
+    assert (service.stack.stop_cause, service.stack.stop_reason) == (
+        StopCause.START_FAILED,
+        "screen-neko could not be started",
+    )
 
 
 def test_an_install_that_failed_this_boot_is_reported_while_the_stack_waits_for_it(

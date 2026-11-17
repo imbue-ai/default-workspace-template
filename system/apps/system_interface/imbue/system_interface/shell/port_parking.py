@@ -92,7 +92,7 @@ _PAGE_TEMPLATE: Final[str] = """<!DOCTYPE html>
 # The app contract's wire (system/libs/workspace_ui/src/app_contract.ts), which this page speaks without the
 # contract module: the parker answers every path with this page, so it cannot serve the module beside it.
 SHELL_HANDSHAKE_TYPE: Final[str] = "shell:handshake"
-SHELL_START_WITH_TEXT_TYPE: Final[str] = "shell:start-with-text"
+SHELL_START_NEW_WITH_TEXT_TYPE: Final[str] = "shell:start-new-with-text"
 
 # What a page that could not start offers: a Try again that asks once more, an agent asked to look at it (shown once
 # a shell that frames the page has greeted it, since only a shell can start one), and the log's command for whoever
@@ -110,7 +110,7 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     "if (event.source === window.parent && event.data && event.data.type === {handshake}) ask.hidden = false;"
     "});"
     'ask.addEventListener("click", function () {'
-    'window.parent.postMessage({ type: {start_with_text}, text: {request} }, "*");'
+    'window.parent.postMessage({ type: {start_new_with_text}, text: {request} }, "*");'
     "});"
     "})();</script>"
 )
@@ -128,6 +128,19 @@ def could_not_start_request(display_name: str, program: str) -> str:
     return (
         f"{display_name} couldn't start in this workspace. Its program's log may say why "
         f"(supervisorctl tail {program} stderr). Please find out why and get it running again."
+    )
+
+
+@pure
+def could_not_start_sentence(display_name: str) -> str:
+    return f"{display_name} couldn't start."
+
+
+@pure
+def start_budget_spent_sentence(display_name: str) -> str:
+    return (
+        f"{display_name} failed to start several times in the last few minutes, so it wasn't started again. "
+        "Try again in a few minutes."
     )
 
 
@@ -152,7 +165,7 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
     failed_body = (
         _FAILED_BODY_TEMPLATE.replace("{program}", html.escape(program))
         .replace("{handshake}", _script_literal(SHELL_HANDSHAKE_TYPE))
-        .replace("{start_with_text}", _script_literal(SHELL_START_WITH_TEXT_TYPE))
+        .replace("{start_new_with_text}", _script_literal(SHELL_START_NEW_WITH_TEXT_TYPE))
         .replace("{request}", _script_literal(could_not_start_request(display_name, program)))
     )
     match kind:
@@ -169,7 +182,7 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
                 style=_PAGE_STYLE,
                 refresh="",
                 title=f"{name} couldn't start",
-                heading=f"{name} couldn't start.",
+                heading=html.escape(could_not_start_sentence(display_name), quote=False),
                 body=failed_body.replace("{sentence}", ""),
             )
         case ParkedPageKind.BUDGET_SPENT:
@@ -177,18 +190,15 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
                 style=_PAGE_STYLE,
                 refresh="",
                 title=f"{name} couldn't start",
-                heading=f"{name} couldn't start.",
+                heading=html.escape(could_not_start_sentence(display_name), quote=False),
                 body=failed_body.replace(
-                    "{sentence}",
-                    f"<p>{name} failed to start several times in the last few minutes, so it wasn't started again. "
-                    "Try again in a few minutes.</p>",
+                    "{sentence}", f"<p>{html.escape(start_budget_spent_sentence(display_name), quote=False)}</p>"
                 ),
             )
         case _ as unreachable:
             assert_never(unreachable)
 
 
-@pure
 @pure
 def _page_content_security_policy(page: str) -> str:
     """The policy a parked page goes out under: its own stylesheet and its own inline script (the could-not-start
@@ -201,6 +211,7 @@ def _page_content_security_policy(page: str) -> str:
     )
 
 
+@pure
 def parked_response_bytes(kind: ParkedPageKind, page: str) -> bytes:
     """One complete HTTP/1.1 503 answer carrying ``page``, asking for the kind's own retry and closing the
     connection so nothing is pooled against the parker."""

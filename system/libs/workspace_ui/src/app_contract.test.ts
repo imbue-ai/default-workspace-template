@@ -21,12 +21,15 @@ import {
   SHELL_REPORT_BUG,
   SHELL_SHOWN,
   SHELL_KEYBINDINGS_CHANGED,
+  SHELL_START_NEW_WITH_TEXT,
   SHELL_START_WITH_TEXT,
   SHELL_THEME,
   ShellContractError,
   askAgentToFix,
+  bugReportText,
   connectToShell,
   followShellTheme,
+  reportedFailureOf,
 } from "./app_contract";
 import type { ShellConnection } from "./app_contract";
 
@@ -205,7 +208,7 @@ describe("connectToShell", () => {
     expect(onNavigate.mock.calls).toEqual([["/?chat=agent-2"]]);
   });
 
-  it("posts focused, location, openPath, draftText, sendMessage, and openLink to the parent with the contract shapes", () => {
+  it("posts focused, location, openPath, the text starts, draftText, sendMessage, and openLink with the contract shapes", () => {
     const parent = framed();
     connection = connectToShell({});
 
@@ -213,6 +216,8 @@ describe("connectToShell", () => {
     connection.location("/docs", "Docs");
     connection.openPath("/?chat=agent-3", "focus");
     connection.openPath("/new", "new");
+    connection.startWithText("Free up space.");
+    connection.startNewWithText("Fix this.");
     connection.draftText("Explain this element:");
     connection.sendMessage("open:file", { path: "/home/user/plan.md", type: "ignored" });
     connection.openLink("http://files-ab12cd34.host-0123.localhost:8421/");
@@ -222,6 +227,8 @@ describe("connectToShell", () => {
       [{ type: SHELL_LOCATION, path: "/docs", title: "Docs" }, "*"],
       [{ type: SHELL_OPEN, path: "/?chat=agent-3", ifPresent: "focus" }, "*"],
       [{ type: SHELL_OPEN, path: "/new", ifPresent: "new" }, "*"],
+      [{ type: SHELL_START_WITH_TEXT, text: "Free up space." }, "*"],
+      [{ type: SHELL_START_NEW_WITH_TEXT, text: "Fix this." }, "*"],
       [{ type: SHELL_DRAFT_TEXT, text: "Explain this element:" }, "*"],
       [{ type: SHELL_MESSAGE, message: { type: "open:file", path: "/home/user/plan.md" } }, "*"],
       [{ type: SHELL_OPEN_LINK, url: "http://files-ab12cd34.host-0123.localhost:8421/" }, "*"],
@@ -255,8 +262,11 @@ describe("connectToShell", () => {
     expect(connection.canReportBug()).toBe(true);
     deliver({ ...HANDSHAKE, canReportBug: false }, {});
     expect(connection.canReportBug()).toBe(true);
-    connection.reportBug();
-    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: SHELL_REPORT_BUG }, "*");
+    connection.reportBug({ message: "Docs couldn't save.", details: "HTTP 500\nboom" });
+    expect(parent.postMessage).toHaveBeenLastCalledWith(
+      { type: SHELL_REPORT_BUG, message: "Docs couldn't save.", details: "HTTP 500\nboom" },
+      "*",
+    );
     deliver({ ...HANDSHAKE, canReportBug: "yes" }, parent);
     expect(connection.canReportBug()).toBe(false);
   });
@@ -608,11 +618,11 @@ describe("askAgentToFix", () => {
   /** The text the shell was asked to start something with. */
   function startedText(parent: { postMessage: ReturnType<typeof vi.fn> }): string {
     const [message] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
-    expect(message.type).toBe(SHELL_START_WITH_TEXT);
+    expect(message.type).toBe(SHELL_START_NEW_WITH_TEXT);
     return message.text as string;
   }
 
-  it("asks the shell to start a chat whose task says what failed and carries the details as they are", () => {
+  it("asks the shell to start a new chat whose task says what failed and carries the details as they are", () => {
     const parent = shellFramed();
     const details = "HTTP 502\ndocs answered the launch with 500: boom\n  at render (``` in a template)";
     askAgentToFix(connection as ShellConnection, { whatFailed: "Docs couldn't open that", details });
@@ -631,5 +641,28 @@ describe("askAgentToFix", () => {
     expect(text.startsWith("This window couldn't be closed.\n\n")).toBe(true);
     expect(text).not.toContain("`");
     expect(text).not.toContain("closed..");
+  });
+});
+
+describe("the failure a bug report carries", () => {
+  it("reads a shell:report-bug payload's failure, and none from a payload not in that shape", () => {
+    expect(reportedFailureOf({ message: "Docs couldn't save.", details: "HTTP 500" })).toEqual({
+      message: "Docs couldn't save.",
+      details: "HTTP 500",
+    });
+    expect(reportedFailureOf({ message: "Docs couldn't save." })).toEqual({
+      message: "Docs couldn't save.",
+      details: null,
+    });
+    expect(reportedFailureOf({})).toBeNull();
+    expect(reportedFailureOf({ message: " ", details: "HTTP 500" })).toBeNull();
+    expect(reportedFailureOf({ message: "Docs couldn't save.", details: { status: 500 } })).toBeNull();
+  });
+
+  it("is the sentence the user saw, then everything under it", () => {
+    expect(bugReportText({ message: "Docs couldn't save.", details: "HTTP 500\nboom" })).toBe(
+      "Docs couldn't save.\n\nHTTP 500\nboom",
+    );
+    expect(bugReportText({ message: "Docs couldn't save.", details: null })).toBe("Docs couldn't save.");
   });
 });

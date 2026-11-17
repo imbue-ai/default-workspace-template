@@ -52,7 +52,7 @@ export function RootNoticeView(): m.Component<RootNoticeViewAttrs> {
         dismissLabel: retry === null ? "OK" : "Cancel",
         onDismiss: closeRootNotice,
         actions: [
-          ...reportBugActions(vnode.attrs.connection, notice.lines.isReportable),
+          ...reportBugActions(vnode.attrs.connection, notice.lines),
           ...(retry === null
             ? []
             : [

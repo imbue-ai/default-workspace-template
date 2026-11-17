@@ -5,8 +5,9 @@ import m from "mithril";
 import { PARTS } from "@imbue/workspace-ui/src/themes/parts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThemeChrome } from "../model/themes";
+import { refusedWith } from "../testing/failures";
 import { appRecord, themeCatalog, themeRecord } from "../testing/records";
-import { ThemeGallery, galleryStateOf } from "./ThemeGallery";
+import { ThemeGallery, galleryFailureNotice, galleryStateOf } from "./ThemeGallery";
 
 beforeEach(() => {
   // jsdom has no matchMedia, which the workspace character asks about reduced motion.
@@ -125,5 +126,21 @@ describe("ThemeGallery", () => {
     } finally {
       document.documentElement.style.removeProperty("--term-background");
     }
+  });
+});
+
+describe("galleryFailureNotice", () => {
+  it("names what failed, keeps the reason behind See details, and offers Try again", () => {
+    const reload = vi.fn();
+    const failed = galleryFailureNotice(refusedWith(500, { detail: "themes directory unreadable" }), reload);
+    expect(failed.message).toBe("The theme gallery couldn't load. Try again. If this persists, report a bug.");
+    expect(failed.details).toBe("HTTP 500\nthemes directory unreadable");
+    expect(failed.actions.map((action) => action.label)).toEqual(["Try again"]);
+    failed.actions[0].run();
+    expect(reload).toHaveBeenCalledTimes(1);
+
+    const unanswered = galleryFailureNotice(new TypeError("Failed to fetch"), reload);
+    expect(unanswered.message).not.toContain("Failed to fetch");
+    expect(unanswered.actions.map((action) => action.label)).toEqual(["Try again"]);
   });
 });

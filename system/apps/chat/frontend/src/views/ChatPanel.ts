@@ -98,7 +98,13 @@ import { closeRunningCompactionChips } from "./compaction-chips";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
-import { joinDetailLines, plainFailureLines, plainFailureLinesOf, plainFailureSentence } from "./failure-lines";
+import {
+  joinDetailLines,
+  plainFailureLines,
+  plainFailureLinesOf,
+  plainFailureSentence,
+  reportedFailureOfLines,
+} from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 
 // The one quiet line an empty conversation shows while its chat starts, and once it is up.
@@ -437,7 +443,9 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     return m("div", { class: `${extraClass} flex flex-col items-center gap-1 text-center` }, [
       m("p", { class: "text-danger text-sm" }, plainFailureSentence(lines)),
       m("div", { class: "text-secondary" }, m(SeeDetails, { details: lines.details })),
-      lines.isReportable ? m(ReportBugButton, { connection: getShellConnection(), sm: true }) : null,
+      lines.isReportable
+        ? m(ReportBugButton, { connection: getShellConnection(), failure: reportedFailureOfLines(lines), sm: true })
+        : null,
     ]);
   }
 
@@ -873,7 +881,13 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         m("p", { class: "message-list-error-text text-danger text-center" }, plainFailureSentence(lines)),
         m("div", { class: "flex items-center gap-2" }, [
           m(Button, { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(chatId) }, "Refresh"),
-          lines.isReportable ? m(ReportBugButton, { connection: getShellConnection(), sm: true }) : null,
+          lines.isReportable
+            ? m(ReportBugButton, {
+                connection: getShellConnection(),
+                failure: reportedFailureOfLines(lines),
+                sm: true,
+              })
+            : null,
         ]),
         m("div", { class: "text-secondary" }, m(SeeDetails, { details: lines.details })),
       ]);

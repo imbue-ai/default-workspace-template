@@ -45,8 +45,11 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
   the unit's exit code and error output, once env-converge recorded it failing in this
   boot), `starting` while the group comes up, `running`, or `stopped` with the
   `stop_reason` and the `stop_cause`: `requested` (Quit, the service's own shutdown),
-  `start_failed`, `crashed` (a member left on its own), or `out_of_memory` (a member the
-  memory guard's shed ledger names by pid). `title` follows the frontmost X window ("Browser"
+  `start_failed` (a member leaving before the stack ran included), `crashed` (a member
+  of a running stack left on its own), or `out_of_memory` (a member the
+  memory guard's shed ledger names by pid; the service waits up to 3 seconds for that
+  record, which earlyoom writes only after it has seen the process gone). `title` follows
+  the frontmost X window ("Browser"
   for a Chromium window, the window's title otherwise, "Screen" for an empty desktop);
   `video_id` is the profile every viewer selects (below); `chromium` is the browser's
   `{"state", "name", "pending_url"}` (see "The browser").
@@ -436,7 +439,8 @@ is recorded. The lease is checkpointed to `data/.state/screen/control.json`.
 `data/.state/screen/`: `xorg.conf`, `neko.yaml` (mode 600, this start's passwords and
 API token), `pulse.pa`, `control.json`, `modes.json` (the RANDR modes added this stack
 life), `stop_reason` and `stop_cause` (why the stack last ended and what kind of end it was,
-shown by the next service life until the next start, since a service restart ends the stack), `events/screen/events.jsonl` (the
+shown by the next service life until the next start, since a service restart ends the
+stack), `events/screen/events.jsonl` (the
 `screen_stopped` events the watcher appends).
 
 ## The commands

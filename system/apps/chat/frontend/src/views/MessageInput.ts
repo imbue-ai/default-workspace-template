@@ -7,6 +7,7 @@ import { startChatOnAccount } from "../shell";
 import { getShellConnection } from "../shellConnection";
 import { reportBugActions } from "./failure-actions";
 import {
+  composerFailureKindOf,
   describeCancelSwitchFailure,
   describeLaunchFailure,
   describeNewChatFailure,
@@ -15,6 +16,7 @@ import {
   describeSwitchFailure,
   isNothingToCancel,
 } from "./composer-failures";
+import type { ComposerFailureKind } from "./composer-failures";
 import { plainFailureLines } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 import {
@@ -69,7 +71,6 @@ import {
   describeRequestError,
   describeRequestErrorKind,
   describeRequestFailure,
-  isUnansweredRequest,
 } from "@imbue/workspace-ui/src/models/request-error";
 import {
   accountForFirstSend,
@@ -166,14 +167,33 @@ const ATTACHMENT_DETAIL_CLASS = "composer-attachment-detail truncate text-[11px]
 const MESSAGE_TEXT_KEY_PREFIX = "message-text:";
 const COMPOSER_HINT_KEY_PREFIX = "composer-hint:";
 
-// Kinds of refused send that no retry or restart can clear: the chat's account was signed out, or the chat is gone.
-const KINDS_NOTHING_HERE_CAN_CLEAR: ReadonlySet<SendFailureKind> = new Set(["account_signed_out", "chat_gone"]);
+// Kinds of refused send that no retry or restart can clear: the chat's account was signed out, the chat is gone, or it
+// never became an agent (its create failed, or it was closed first), which leaves no agent to send to.
+const KINDS_NOTHING_HERE_CAN_CLEAR: ReadonlySet<ComposerFailureKind> = new Set([
+  "account_signed_out",
+  "chat_gone",
+  "chat_not_started",
+]);
 // Kinds of refused send whose cause the agent's terminal shows.
-const KINDS_THE_TERMINAL_SHOWS: ReadonlySet<SendFailureKind> = new Set([
+const KINDS_THE_TERMINAL_SHOWS: ReadonlySet<ComposerFailureKind> = new Set([
   "input_blocked",
-  "not_ready",
   "submission_unconfirmed",
-  "unknown",
+]);
+// Kinds a restart must not answer: an agent still starting would lose the session it was about to finish bringing up;
+// one that may already be working on the message would have that turn cut off and get it twice; an agent whose start
+// just failed has nothing running to restart, and Retry starts it again; and a kind the composer does not know says
+// nothing about the agent.
+const KINDS_RESTART_MUST_NOT_ANSWER: ReadonlySet<ComposerFailureKind> = new Set([
+  "not_ready",
+  "agent_start_failed",
+  "submission_unconfirmed",
+  "not_answered",
+  "unrecognised",
+]);
+// Kinds of send that may have reached the agent: its turn arriving takes the copy back out of the composer.
+const KINDS_THAT_MAY_HAVE_ARRIVED: ReadonlySet<ComposerFailureKind> = new Set([
+  "submission_unconfirmed",
+  "not_answered",
 ]);
 // The kinds of the server's refusal of a /compact it declines to run: before the agent has anything
 // to compact, and while it is busy or stopped.
@@ -187,13 +207,6 @@ const DECLINED_COMPACT_SEND_FAILURE_KINDS: ReadonlySet<string | null> = new Set(
 // binary content), so dropping them sends exactly what the user saw.
 function withoutNulCharacters(draft: string): string {
   return draft.split("\0").join("");
-}
-
-/** The kind the notice handles a failed send as. A send that got no answer may have been delivered
- *  before its answer was lost, so it is handled as one mngr could not confirm. */
-function noticeKindOf(sendError: unknown): SendFailureKind {
-  const isUnanswered = isUnansweredRequest(sendError) || describeRequestFailure(sendError).cause === "not_answered";
-  return isUnanswered ? "submission_unconfirmed" : describeRequestErrorKind(sendError);
 }
 
 function messageTextKey(chatId: string): string {
@@ -212,19 +225,8 @@ function composerHintKey(chatId: string): string {
 // survives even if the composer is not currently mounted -- never swallowed (contract A1a).
 const pendingComposerPrepends = new Map<string, string>();
 
-// What the failure notice says about a send, in place of mngr's reason, which is written for its own
-// command line. "unknown" is worded by failureSentence instead; the reason stays behind See details either way.
-const SEND_FAILURE_SENTENCES: Partial<Record<SendFailureKind, string>> = {
-  input_blocked: "The agent is waiting on something in its terminal. Answer it there and try again.",
-  agent_unreachable: "The agent isn't running and didn't start.",
-  not_ready: "The agent isn't ready for messages yet. Try again in a moment.",
-  state_unknown: "Couldn't reach the agent just now. Try again in a moment.",
-  agent_not_found: "Couldn't find the agent. Try again in a moment.",
-  not_submitted: "The agent didn't take your message. Try again.",
-};
-
-// Added to the sentence above only when the notice offers Restart.
-const SEND_FAILURE_RESTART_SENTENCES: Partial<Record<SendFailureKind, string>> = {
+// Added to the notice's sentence only when it offers Restart.
+const SEND_FAILURE_RESTART_SENTENCES: Partial<Record<ComposerFailureKind, string>> = {
   input_blocked: "Or restart the agent.",
   agent_unreachable: "Restart it to send your message.",
 };
@@ -651,8 +653,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   const actionFailureNotice = makeNoticeDialog();
   const declinedCommandNotice = makeNoticeDialog();
   const authCommandNotice = makeNoticeDialog();
-  // mngr's classification of the failure, which decides which recoveries are worth offering.
-  let actionFailureKind: SendFailureKind = "unknown";
+  // How the composer handles the failure (composerFailureKindOf), which decides which recoveries are worth offering.
+  let actionFailureKind: ComposerFailureKind = "unknown";
   // A send mngr typed into the agent but could not confirm, or one the chat app never answered
   // (it may have delivered it before the answer was lost): its text went back to the composer
   // like any failed send's, but the agent may have it. Once its turn reaches the transcript
@@ -665,7 +667,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     // A Send again that is unconfirmed too keeps the first watch: the turns read before the
     // first send let a landing of either one count.
     if (
-      noticeKindOf(err) === "submission_unconfirmed" &&
+      KINDS_THAT_MAY_HAVE_ARRIVED.has(composerFailureKindOf(err)) &&
       !unconfirmedSends.some((watched) => watched.recovery === recovery)
     ) {
       unconfirmedSends = [...unconfirmedSends, { recovery, priorTurnIds }];
@@ -1322,7 +1324,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           noteOutgoingAccepted(chatId, outgoingId);
         } catch (err) {
           // A refusal means the message was NOT accepted; one nothing answered, or mngr could not
-          // confirm, may have reached the agent anyway (noticeKindOf). A /compact the server declined
+          // confirm, may have reached the agent anyway (KINDS_THAT_MAY_HAVE_ARRIVED). A /compact the server declined
           // to run gets the declined-command notice rather than the failure notice, since retrying
           // at once cannot change it.
           const failure = describeRequestFailure(err);
@@ -1708,7 +1710,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         actionFailure = describeSendFailure(error);
         // The reason can change between attempts -- a blocked input can become an agent that is gone -- and the
         // buttons follow the kind, so it is read with the text every time.
-        actionFailureKind = noticeKindOf(error);
+        actionFailureKind = composerFailureKindOf(error);
         actionFailureServerKind = describeRequestFailure(error).kind;
         isActionFailureOnSignedOutAccount = actionFailureKind === "account_signed_out";
         actionFailureActions =
@@ -1951,46 +1953,64 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           });
         }
         // The chat app already tried once more for an agent that was down and would not start,
-        // and Restart is the stronger way to bring it up, so Retry is not offered; nor for a chat that is gone or
-        // whose account was signed out, which neither can clear. Every other kind -- and anything unclassified --
-        // keeps it.
+        // and Restart is the stronger way to bring it up, so Retry is not offered; nor for a chat that is gone, whose
+        // account was signed out, or that never became an agent, which neither can clear. Every other kind -- and
+        // anything unclassified -- keeps it.
         const isResendable = !KINDS_NOTHING_HERE_CAN_CLEAR.has(actionFailureKind);
         const isRepeatable =
           isResendable &&
           actionFailureKind !== "agent_unreachable" &&
           (recovery !== null || actionFailureLaunch !== null || externalRetry !== null);
-        // The text was typed and Enter sent but nothing confirmed the agent took it, or the chat app
-        // never answered the send, so it may already be in the agent's input or turn and a resend
-        // can deliver it twice. The notice shows its own sentence: mngr's reason for this kind is its
-        // diagnostics (the whole pane included), and an unanswered send has no reason at all.
+        // The text was typed and Enter sent but nothing confirmed the agent took it, so it may already be in the
+        // agent's input or turn and a resend can deliver it twice. The notice shows its own sentence: mngr's reason
+        // for this kind is its diagnostics (the whole pane included).
         const isUnconfirmed = actionFailureKind === "submission_unconfirmed";
-        const sendFailureSentence = SEND_FAILURE_SENTENCES[actionFailureKind];
+        // The chat app never answered the send, so it may have delivered it before the answer was lost. Send again
+        // repeats the message's id, which the chat app answers as it answered the first, so it is not sent twice.
+        const isNotAnswered = actionFailureKind === "not_answered";
         const retryWording = isUnconfirmed
           ? { label: "Send again", inFlight: "Sending…", tooltip: "Sends the message again, even if the agent has it" }
-          : {
-              label: recovery === null ? "Try again" : "Retry",
-              inFlight: "Retrying…",
-              tooltip: "Tries the same thing again",
-            };
+          : isNotAnswered
+            ? { label: "Send again", inFlight: "Sending…", tooltip: "Sends the message again, unless it arrived" }
+            : {
+                label: recovery === null ? "Try again" : "Retry",
+                inFlight: "Retrying…",
+                tooltip: "Tries the same thing again",
+              };
+        // Restart needs a message to send afterwards, so it is offered only for our own send. It survives Retry
+        // being withheld for an agent that would not start, whose restart is the stronger way to bring it up.
+        const isRestartOffered =
+          isResendable && recovery !== null && !KINDS_RESTART_MUST_NOT_ANSWER.has(actionFailureKind);
         // The agent itself refused, so its terminal shows why.
         const isTerminalUseful =
           onTurnOnSourceView !== undefined &&
           recovery !== null &&
           actionFailureServerKind !== null &&
           KINDS_THE_TERMINAL_SHOWS.has(actionFailureKind);
+        // An unconfirmed send's notice is worded here, and its sentence asks for no bug report.
+        const shown: FailureLines = isUnconfirmed
+          ? {
+              body: ["The agent may already have it, so check its terminal before you send it again."],
+              details: failure.details,
+              isReportable: false,
+            }
+          : {
+              ...failure,
+              body: [
+                ...failure.body,
+                isRestartOffered ? (SEND_FAILURE_RESTART_SENTENCES[actionFailureKind] ?? null) : null,
+              ],
+            };
         return m(actionFailureNotice, {
-          title: isUnconfirmed ? "Couldn't confirm your message arrived" : actionFailureTitle,
-          body: isUnconfirmed
-            ? ["The agent may already have it, so check its terminal before you send it again."]
-            : sendFailureSentence !== undefined
-              ? [
-                  sendFailureSentence,
-                  recovery === null ? null : (SEND_FAILURE_RESTART_SENTENCES[actionFailureKind] ?? null),
-                ]
-              : failure.body,
-          details: failure.details,
+          title: isUnconfirmed
+            ? "Couldn't confirm your message arrived"
+            : isNotAnswered
+              ? "Your message may not have been sent"
+              : actionFailureTitle,
+          body: shown.body,
+          details: shown.details,
           dismissLabel:
-            isRepeatable || recovery !== null || actionFailureActions.length > 0 || externalAction !== null
+            isRepeatable || isRestartOffered || actionFailureActions.length > 0 || externalAction !== null
               ? "Cancel"
               : "OK",
           isDismissable: actionFailureInFlight === null,
@@ -2021,14 +2041,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   },
                 ]
               : []),
-            ...reportBugActions(getShellConnection(), failure.isReportable),
-            // Restart needs a message to send afterwards, so it is offered only for our own send --
-            // and never for an agent that is merely still starting, where restarting would
-            // discard the session it was about to finish bringing up, or for one that may already
-            // be working on this message, where it would cut that turn off and send it twice. It
-            // survives Retry being withheld for an agent that would not start, whose restart is
-            // the stronger way to bring it up.
-            ...(!isResendable || recovery === null || actionFailureKind === "not_ready" || isUnconfirmed
+            ...reportBugActions(getShellConnection(), shown),
+            ...(!isRestartOffered
               ? []
               : [
                   {

@@ -28,6 +28,7 @@ import { windowChromeZIndex } from "../geometry/stacking";
 import type { FailureNotice } from "../model/failures";
 import type { AppRecord, WindowRecord, WindowState } from "../model/records";
 import { FailureLine } from "./FailureLine";
+import type { ReportBug } from "./FailureLine";
 import { glyph } from "./glyphs";
 import { rectStyle } from "./pixelStyle";
 import { TitleBar } from "./TitleBar";
@@ -91,6 +92,8 @@ export interface WindowAttrs {
    *  program), with the next step the workspace has; null otherwise. A stoppable app's window keeps its page, which
    *  the shell's parker answers with a loading page until the app is up. */
   readonly stopped: FailureNotice | null;
+  /** Report a bug about the stopped notice where it asks for one; null where no bug report can be opened. */
+  readonly onReportBug: ReportBug;
   /** Whether the window's app is no longer part of the workspace (the app list has landed without it): the window
    *  says so and offers to close, in place of a page it can never show. */
   readonly isAppGone: boolean;
@@ -106,14 +109,14 @@ export interface WindowAttrs {
 
 /** What a window shows in place of its page: why it has none (its app is stopped, or no longer part of the
  *  workspace), with the buttons for the next step. */
-export function windowPlaceholder(marker: string, notice: FailureNotice): m.Vnode {
+export function windowPlaceholder(marker: string, notice: FailureNotice, onReportBug: ReportBug): m.Vnode {
   return m(
     "div",
     {
       [`data-${marker}`]: "",
       class: "flex h-full w-full flex-col items-center justify-center bg-surface px-6 text-center",
     },
-    m(FailureLine, { notice, marker: `${marker}-notice`, messageClass: "type-label text-primary" }),
+    m(FailureLine, { notice, onReportBug, marker: `${marker}-notice`, messageClass: "type-label text-primary" }),
   );
 }
 
@@ -190,7 +193,8 @@ export function Window(): m.Component<WindowAttrs> {
   return {
     view(vnode) {
       const attrs = vnode.attrs;
-      const { window, app, title, rect, state, stackIndex, isFocused, isTouch, stopped, isAppGone } = attrs;
+      const { window, app, title, rect, state, stackIndex, isFocused, isTouch, stopped, isAppGone, onReportBug } =
+        attrs;
       const isFullscreen = state === "FULLSCREEN";
       const isResizable = !isTouch && !isFullscreen;
       return m(
@@ -252,8 +256,8 @@ export function Window(): m.Component<WindowAttrs> {
                   class: "window-content relative min-h-0 flex-1 [&>*]:pointer-events-auto",
                 },
                 [
-                  stopped === null ? null : windowPlaceholder("stopped-app", stopped),
-                  isAppGone ? windowPlaceholder("gone-app", appGoneNotice(attrs.onClose)) : null,
+                  stopped === null ? null : windowPlaceholder("stopped-app", stopped, onReportBug),
+                  isAppGone ? windowPlaceholder("gone-app", appGoneNotice(attrs.onClose), onReportBug) : null,
                   // The shield: the press that raises the window (or closes an open menu or the launcher)
                   // lands here rather than in the page, and bubbles to the window's own handler and on to
                   // the document. A right-click here is that press and nothing more: handled, so the

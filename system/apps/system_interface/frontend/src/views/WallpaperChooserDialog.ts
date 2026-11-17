@@ -11,6 +11,7 @@ import { MODAL_LABEL_CLASS, Modal } from "@imbue/workspace-ui/src/components/Mod
 import type { FailureNotice } from "../model/failures";
 import type { Desktop, Wallpaper, WallpaperListing } from "../model/records";
 import { FailureLine } from "./FailureLine";
+import type { ReportBug } from "./FailureLine";
 
 const WALLPAPER_NOT_SAVED = "The wallpaper couldn't be changed";
 
@@ -18,8 +19,11 @@ export interface WallpaperChooserDialogAttrs {
   readonly desktop: Desktop;
   /** The wallpapers on offer, bundled first; null while they load. */
   readonly wallpapers: readonly WallpaperListing[] | null;
-  /** A failed save as the dialog's line says it: what failed, a sentence stem, then the reason. */
-  readonly wordFailure: (whatFailed: string, error: unknown) => FailureNotice;
+  /** A failed save as the dialog's line says it, from what failed (a sentence stem) and the error, with ``retry``
+   *  where the failure is one to try again. */
+  readonly wordFailure: (whatFailed: string, error: unknown, retry: () => void) => FailureNotice;
+  /** Report a bug about a failed save where it asks for one; null where no bug report can be opened. */
+  readonly onReportBug: ReportBug;
   readonly onSave: (wallpaper: Wallpaper | null) => Promise<void>;
   readonly onCancel: () => void;
 }
@@ -42,7 +46,7 @@ export function WallpaperChooserDialog(): m.Component<WallpaperChooserDialogAttr
     try {
       await attrs.onSave(resolvedWallpaper(attrs.wallpapers));
     } catch (e) {
-      error = attrs.wordFailure(WALLPAPER_NOT_SAVED, e);
+      error = attrs.wordFailure(WALLPAPER_NOT_SAVED, e, () => void save(attrs));
       isSaving = false;
     }
     m.redraw();
@@ -138,6 +142,7 @@ export function WallpaperChooserDialog(): m.Component<WallpaperChooserDialogAttr
                 { class: "mt-1" },
                 m(FailureLine, {
                   notice: error,
+                  onReportBug: attrs.onReportBug,
                   marker: "wallpaper-chooser-error",
                   messageClass: "type-helper text-danger",
                 }),

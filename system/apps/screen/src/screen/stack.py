@@ -204,7 +204,7 @@ class ScreenStack(MutableModel):
         abort: threading.Event,
         lifecycle: Lifecycle,
         install_reason: str | None,
-        install_failure: str | None = None,
+        install_failure: str | None,
     ) -> bool:
         """A start's own lifecycle step, skipped (False) once a stop has aborted it, so the STOPPED the stop
         recorded is never overwritten by the start it interrupted."""
@@ -260,7 +260,7 @@ class ScreenStack(MutableModel):
             abort.wait(self.install_poll_seconds)
             missing = self.install_check()
         if is_installing:
-            self._set_lifecycle_unless_aborted(abort, Lifecycle.STARTING, None)
+            self._set_lifecycle_unless_aborted(abort, Lifecycle.STARTING, None, install_failure=None)
         try:
             self._bring_up(abort)
         except (StackStartError, SupervisorError, NekoError, OSError) as e:
@@ -377,6 +377,11 @@ class ScreenStack(MutableModel):
             self.supervisor.program_state(program) in (ProgramState.RUNNING, ProgramState.STARTING)
             for program in STACK_PROGRAMS
         )
+
+    def start_generation(self) -> int:
+        """The number of the latest start, so a caller can tell whether a start began since it last looked."""
+        with self._lock:
+            return self._start_generation
 
     def mark_stopped(self, reason: str, cause: StopCause) -> None:
         """The watcher says the group ended on its own (``cause`` says whether the memory guard ended it); a start in

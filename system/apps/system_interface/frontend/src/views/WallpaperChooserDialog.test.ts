@@ -3,10 +3,7 @@ import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { failureSentence, readFailure } from "@imbue/workspace-ui/src/models/failure";
-import { HttpError } from "@imbue/workspace-ui/src/models/http";
-import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import { noticeOf } from "../model/failures";
+import { refusedWith, wordFailureAsTheStoreDoes } from "../testing/failures";
 import { desktopRecord } from "../testing/records";
 import { WallpaperChooserDialog, isSameWallpaper } from "./WallpaperChooserDialog";
 import type { WallpaperChooserDialogAttrs } from "./WallpaperChooserDialog";
@@ -15,11 +12,6 @@ afterEach(unmountViews);
 
 const reportBug = vi.fn();
 
-/** A refusal of a change as the REST helper throws it. */
-function refusedWith(status: number, body: unknown, rawText: string | null = null): HttpError {
-  return new HttpError(readFailure({ status, body, rawText, requestKind: "change" }));
-}
-
 const ARCS = { kind: "bundled" as const, name: "arcs", url: "/wallpapers/bundled/arcs" };
 const DAWN = { kind: "bundled" as const, name: "dawn", url: "/wallpapers/bundled/dawn" };
 
@@ -27,8 +19,8 @@ function render(overrides: Partial<WallpaperChooserDialogAttrs> = {}): Wallpaper
   const attrs: WallpaperChooserDialogAttrs = {
     desktop: desktopRecord("home", { name: "Home" }),
     wallpapers: [ARCS, DAWN],
-    wordFailure: (whatFailed, error) =>
-      noticeOf(failureSentence(describeRequestFailure(error), whatFailed), [], reportBug),
+    wordFailure: wordFailureAsTheStoreDoes,
+    onReportBug: reportBug,
     onSave: vi.fn(async () => undefined),
     onCancel: vi.fn(),
     ...overrides,
@@ -85,6 +77,21 @@ describe("WallpaperChooserDialog", () => {
     expect(card().querySelector(".see-details pre")?.textContent).toBe("HTTP 400\nno such wallpaper");
     expect((card().querySelector(".wallpaper-chooser-save") as HTMLButtonElement).disabled).toBe(false);
     expect(attrs.onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Try again, which saves again, and Report a bug about the line's failure, for a save with no reason", async () => {
+    const attrs = render({ onSave: vi.fn(async () => Promise.reject(refusedWith(500, null, "boom"))) });
+    save();
+    await settled();
+    const message = "The wallpaper couldn't be changed. Try again. If this persists, report a bug.";
+    expect(card().querySelector(".wallpaper-chooser-error-message")?.textContent).toBe(message);
+    const buttons = [...card().querySelectorAll<HTMLButtonElement>(".wallpaper-chooser-error-action")];
+    expect(buttons.map((button) => button.textContent)).toEqual(["Try again", "Report a bug"]);
+    buttons[1].click();
+    expect(reportBug).toHaveBeenCalledWith({ message, details: "HTTP 500\nboom" });
+    buttons[0].click();
+    await settled();
+    expect(attrs.onSave).toHaveBeenCalledTimes(2);
   });
 
   it("Escape cancels", () => {

@@ -45,6 +45,11 @@ from workspace_themes.flask_routes import (
 from workspace_themes.primitives import THEME_ID_PATTERN
 from workspace_themes.serving import THEME_STATIC_ROUTE_PREFIX
 
+from terminal_app.dispatch import (
+    ENDED_MISSING_FOLDER,
+    ENDED_NOT_STARTED,
+    ENDED_WITH_ERROR,
+)
 from terminal_app.errors import (
     InvalidTerminalValueError,
     TerminalAppError,
@@ -89,7 +94,8 @@ _CONFIG_ELEMENT_ID: Final[str] = "terminal-config"
 # The template's placeholders, filled in one pass so that a title or a config carrying a
 # placeholder's text is not itself filled.
 _PLACEHOLDER: Final[re.Pattern[str]] = re.compile(
-    r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH|THEME|VIEWER_ARGUMENT)__"
+    r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH|THEME|VIEWER_ARGUMENT"
+    r"|ENDED_NOT_STARTED|ENDED_WITH_ERROR|ENDED_MISSING_FOLDER)__"
 )
 
 # xterm's theme keys for the contract's terminal tokens, in TERMINAL_TOKENS' order.
@@ -244,9 +250,9 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     actions: ["retry", "ask", "report"],
   };
   const ENDINGS = {
-    "not-started": NOT_STARTED,
-    "ended": { message: "This terminal closed.", cause: "", actions: ["new"] },
-    "missing-folder": {
+    "__ENDED_NOT_STARTED__": NOT_STARTED,
+    "__ENDED_WITH_ERROR__": { message: "This terminal closed.", cause: "", actions: ["new"] },
+    "__ENDED_MISSING_FOLDER__": {
       message: "This terminal closed.",
       cause: "This terminal's folder no longer exists, so it can't open.",
       actions: ["new"],
@@ -254,6 +260,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   };
   let endedActions = [];
   let endedDetail = "";
+  let endedSentence = "";
 
   function showEnding(ending, detail) {
     frame.hidden = true;
@@ -261,6 +268,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     empty.hidden = true;
     endedActions = ending.actions;
     endedDetail = detail;
+    endedSentence = ending.cause === "" ? ending.message : `${ending.message} ${ending.cause}`;
     document.getElementById("ended-message").textContent = ending.message;
     const cause = document.getElementById("ended-cause");
     cause.textContent = ending.cause;
@@ -280,8 +288,9 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     endedReport.hidden = !endedActions.includes("report") || connection === null || !connection.canReportBug();
   }
 
+  // The kind comes from the pty's output, so only ENDINGS' own keys count (not "constructor" and the like).
   function showEnded(kind, detail) {
-    showEnding(ENDINGS[kind] ?? ENDINGS.ended, detail);
+    showEnding(Object.hasOwn(ENDINGS, kind) ? ENDINGS[kind] : ENDINGS["__ENDED_WITH_ERROR__"], detail);
   }
 
   endedRetry.addEventListener("click", () => {
@@ -294,7 +303,9 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   endedAsk.addEventListener("click", () => {
     askAgentToFix(connection, { whatFailed: `The terminal ${current} couldn't start`, details: endedDetail || null });
   });
-  endedReport.addEventListener("click", () => connection.reportBug());
+  endedReport.addEventListener("click", () =>
+    connection.reportBug({ message: endedSentence, details: endedDetail || null }),
+  );
   endedNew.addEventListener("click", async () => {
     endedNew.disabled = true;
     try {
@@ -632,7 +643,11 @@ _FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
   ask.addEventListener("click", () =>
     askAgentToFix(connection, { whatFailed: config.agent_fix.what_failed, details: config.agent_fix.details }),
   );
-  report.addEventListener("click", () => connection.reportBug());
+  // The report carries what this page says and what its "See details" holds.
+  report.addEventListener("click", () => {
+    const details = document.querySelector("details pre").textContent;
+    connection.reportBug({ message: document.querySelector(".failure-message").textContent, details: details || null });
+  });
 </script>
 </body>
 </html>
@@ -685,7 +700,7 @@ def page_failure(error: TerminalAppError, raw_session: str) -> PageFailure:
         case TerminalStoreVersionError():
             return PageFailure(
                 message="This workspace's saved terminals were written by a newer version of the workspace's "
-                "software (for example before an update was rolled back).",
+                "software (for example before an update was rolled back), so terminals can't open.",
                 details=details,
                 is_retryable=False,
                 agent_fix=AgentFix(
@@ -849,6 +864,9 @@ def render_page(config: PageConfig) -> str:
         "CONTRACT_PATH": APP_CONTRACT_ROUTE,
         "THEME": _THEME_SCRIPT_CONFIG,
         "VIEWER_ARGUMENT": VIEWER_ARGUMENT,
+        "ENDED_NOT_STARTED": ENDED_NOT_STARTED,
+        "ENDED_WITH_ERROR": ENDED_WITH_ERROR,
+        "ENDED_MISSING_FOLDER": ENDED_MISSING_FOLDER,
     }
     return _PLACEHOLDER.sub(lambda match: values[match.group(1)], _PAGE_TEMPLATE)
 

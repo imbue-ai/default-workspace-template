@@ -17,7 +17,7 @@ from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.port_parking import ParkedPort
 from imbue.system_interface.shell.port_parking import ParkingTarget
 from imbue.system_interface.shell.port_parking import SHELL_HANDSHAKE_TYPE
-from imbue.system_interface.shell.port_parking import SHELL_START_WITH_TEXT_TYPE
+from imbue.system_interface.shell.port_parking import SHELL_START_NEW_WITH_TEXT_TYPE
 from imbue.system_interface.shell.port_parking import STARTING_REFRESH_SECONDS
 from imbue.system_interface.shell.port_parking import parked_page_html
 from imbue.system_interface.shell.port_parking import parked_response_bytes
@@ -173,7 +173,7 @@ def test_the_could_not_start_pages_wire_types_are_the_app_contracts() -> None:
     app_contract_ts = (Path(__file__).parents[5] / "libs" / "workspace_ui" / "src" / "app_contract.ts").read_text()
     for name, value in (
         ("SHELL_HANDSHAKE", SHELL_HANDSHAKE_TYPE),
-        ("SHELL_START_WITH_TEXT", SHELL_START_WITH_TEXT_TYPE),
+        ("SHELL_START_NEW_WITH_TEXT", SHELL_START_NEW_WITH_TEXT_TYPE),
     ):
         declared = re.search(rf'export const {name} = "([^"]+)";', app_contract_ts)
         assert declared is not None and declared.group(1) == value

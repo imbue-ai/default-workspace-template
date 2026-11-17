@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+from playwright.sync_api import Page
 from werkzeug.test import TestResponse
 
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
@@ -317,6 +318,11 @@ def shell_stand_in_page(frame_url: str, can_report_bug: bool) -> str:
     return _SHELL_STAND_IN_TEMPLATE.replace("__FRAME_URL__", html.escape(frame_url)).replace(
         "__CAN_REPORT_BUG__", json.dumps(can_report_bug)
     )
+
+
+def shell_messages(page: Page, message_type: str) -> list[dict[str, object]]:
+    """The messages of ``message_type`` the framed page has posted to the ``shell_stand_in_page`` loaded in ``page``."""
+    return [message for message in page.evaluate("window.shellMessages") if message["type"] == message_type]
 
 
 def declare_root_dependency(repo_root: Path, name: str) -> None:

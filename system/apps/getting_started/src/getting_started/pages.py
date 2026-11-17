@@ -98,7 +98,7 @@ rebuild it</button></p>
         const ask = document.getElementById("ask-agent");
         // Only a shell can start a chat, so the button waits for one to greet the page.
         const shell = connectToShell({ onHandshake: () => (ask.hidden = false) });
-        ask.addEventListener("click", () => shell.startWithText(__REBUILD_REQUEST__));
+        ask.addEventListener("click", () => shell.startNewWithText(__REBUILD_REQUEST__));
       })
       .catch((error) => console.warn("[getting-started] could not load the shell contract", error));
   }

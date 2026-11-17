@@ -52,6 +52,7 @@ from workspace_themes.interfaces import ThemeCatalogLoaderInterface
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
+from imbue.imbue_common.pure import pure
 from imbue.system_interface.avatar.catalog import AvatarCatalogStore
 from imbue.system_interface.avatar.catalog import DEFAULT_AVATAR_CATALOG_DIRECTORY
 from imbue.system_interface.avatar.selection import AvatarSelectionStore
@@ -66,6 +67,7 @@ from imbue.system_interface.profiles import UserProfile
 from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import IDLE_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
+from imbue.system_interface.shell.app_lifecycle import WakeOutcome
 from imbue.system_interface.shell.app_lifecycle import build_app_lifecycle_manager
 from imbue.system_interface.shell.app_theming import AppThemingStore
 from imbue.system_interface.shell.client_activity import ClientActivityLog
@@ -122,6 +124,8 @@ from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import LaunchUnavailableError
+from imbue.system_interface.shell.errors import LaunchUnreachableError
+from imbue.system_interface.shell.errors import LaunchedNotOpenedError
 from imbue.system_interface.shell.errors import PinnedWindowError
 from imbue.system_interface.shell.errors import RefusalKind
 from imbue.system_interface.shell.errors import ShellStateError
@@ -137,6 +141,8 @@ from imbue.system_interface.shell.ownership import is_desktop_owned_by
 from imbue.system_interface.shell.ownership import visitor_desktop_owners
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
+from imbue.system_interface.shell.port_parking import could_not_start_sentence
+from imbue.system_interface.shell.port_parking import start_budget_spent_sentence
 from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import WindowInputKind
 from imbue.system_interface.shell.primitives import mint_save_id
@@ -462,15 +468,27 @@ class ShellState(MutableModel):
         asked of the app for a POST one, with the requesting client, its desktop, and the aimed-at window's path as
         the envelope. A POST to a stoppable app that is stopped wakes it first and waits for it to answer (the
         stop-when-no-windows spec, section 5.6) when the lifecycle manager owns the live workspace's apps; a
-        preview's does not, and its post fails as one to any unreachable app does. Raises LaunchRefusedError (a
-        400) and LaunchUnavailableError (a 502)."""
+        preview's does not. A post nothing listens for, to an app that is then read as not running, is refused as
+        one to a stopped app. Raises LaunchRefusedError (a 400) and LaunchUnavailableError (a 502), the latter with
+        a ``kind`` when the app is not running."""
         if launch_path.method is LaunchPathMethod.POST and not entry.is_running and self.lifecycle.is_enabled:
-            is_stoppable = stoppable_program_of(entry, self.inventory.entries()) is not None
-            if is_stoppable and not self.lifecycle.wake_and_wait(entry):
-                raise LaunchUnavailableError(f"{entry.row.name} is stopped and could not be brought up for the launch")
-        return resolve_launch_destination(
-            entry, launch_path, params, client_id, desktop_id, window_path, self.launch_poster
-        )
+            if stoppable_program_of(entry, self.inventory.entries()) is not None:
+                _raise_unless_up(entry, self.lifecycle.wake_and_wait(entry))
+        try:
+            return resolve_launch_destination(
+                entry, launch_path, params, client_id, desktop_id, window_path, self.launch_poster
+            )
+        except LaunchUnreachableError as e:
+            # The inventory's liveness is a sweep's reading; the refused connection is newer news.
+            self.inventory.refresh_liveness()
+            refreshed = self.inventory.entry(str(entry.row.name))
+            if refreshed is None or refreshed.is_running:
+                raise
+            raise LaunchUnavailableError(
+                f"{entry.row.name} is not running, so it could not take the launch: {e}",
+                f"{entry.display_name} isn't running right now, so it couldn't open that.",
+                kind=RefusalKind.APP_STOPPED,
+            ) from e
 
     def _client_desktop_view(self, desktop: Desktop, client_id: ClientId) -> ClientDesktopView:
         """The desktop as one client sees it: its layout, and the windows at the client's own paths."""
@@ -533,13 +551,66 @@ class ShellState(MutableModel):
         window there (the ``new`` and ``focus`` targets, as ``open_window`` does), point the named window at it (the
         ``window`` target, as the op route's ``navigate`` does), or put it on screen by the ``show`` op's rule and,
         when the target names a window, lay the shown window out beside it (the ``show`` target; the multiplayer
-        spec, section 9.2)."""
+        spec, section 9.2).
+
+        Once the page is resolved the app has acted on the launch (a POST launch may have started a chat), so a
+        state write that fails after that does not fail the launch: a window that shows the page is answered as
+        the client should see it, with the write's kind as ``unsaved``; with no such window the launch raises
+        LaunchedNotOpenedError rather than inviting a second launch."""
         desktop = self.get_desktop(desktop_id)
         entry = self.require_app_entry(str(request.app))
         launch_path = self.require_launch_path(entry, request.launch)
+        aimed: Window | None = None
+        window_path: WindowPath | None = None
+        if request.target.kind is LaunchTargetKind.WINDOW:
+            aimed = self._launch_target_window(desktop, request)
+            window_path = aimed.path if request.target.sends_window_path else None
+        beside = (
+            require_window(desktop, request.target.beside)
+            if request.target.kind is LaunchTargetKind.SHOW and request.target.beside is not None
+            else None
+        )
+        path = self.launch_destination(entry, launch_path, request.params, request.client_id, desktop.id, window_path)
+        windows_before = {window.id for window in desktop.windows}
+        try:
+            return self._land_launch(desktop, request, path, aimed, beside)
+        except ShellStateError as e:
+            logger.opt(exception=e).warning(
+                "{} took a launch, but the shell could not record its window", entry.row.name
+            )
+            window = self._window_showing_launch(desktop.id, request, path, aimed, windows_before)
+            if window is None:
+                raise _launched_not_opened(entry, e) from e
+            is_new = window.id not in windows_before
+            if is_new:
+                self.broadcast_desktops_updated()
+            return LaunchOutcome(window=window, path=path, is_new=is_new, unsaved=e.kind)
+
+    def _launch_target_window(self, desktop: Desktop, request: LaunchRequest) -> Window:
+        """The window a ``window`` target names, as the requesting client sees it; refused as gone when the desktop has
+        no such window or it shows another app."""
+        assert request.target.window_id is not None, "a window target names its window"
+        window = find_window(desktop, request.target.window_id)
+        if window is None:
+            raise WindowNotFoundError(
+                str(request.target.window_id),
+                user_facing_message=WINDOW_GONE_SENTENCE,
+                kind=RefusalKind.WINDOW_GONE,
+            )
+        if window.app != request.app:
+            raise DesktopValueError(
+                f"Window {str(window.id)} shows {str(window.app)!r}, not {str(request.app)!r}",
+                user_facing_message=WINDOW_GONE_SENTENCE,
+                kind=RefusalKind.WINDOW_GONE,
+            )
+        return effective_window(window, self.read_window_paths(desktop, request.client_id).get(window.id))
+
+    def _land_launch(
+        self, desktop: Desktop, request: LaunchRequest, path: WindowPath, aimed: Window | None, beside: Window | None
+    ) -> LaunchOutcome:
+        """Put the launched page on screen for the target, writing the shell's state for it."""
         match request.target.kind:
             case LaunchTargetKind.NEW | LaunchTargetKind.FOCUS:
-                path = self.launch_destination(entry, launch_path, request.params, request.client_id, desktop.id, None)
                 if_present = IfPresent.NEW if request.target.kind is LaunchTargetKind.NEW else IfPresent.FOCUS
                 opened = self.open_window(
                     desktop.id,
@@ -554,30 +625,10 @@ class ShellState(MutableModel):
                 )
                 return LaunchOutcome(window=opened.window, path=path, is_new=opened.is_new)
             case LaunchTargetKind.WINDOW:
-                assert request.target.window_id is not None, "a window target names its window"
-                window = find_window(desktop, request.target.window_id)
-                if window is None:
-                    raise WindowNotFoundError(
-                        str(request.target.window_id),
-                        user_facing_message=WINDOW_GONE_SENTENCE,
-                        kind=RefusalKind.WINDOW_GONE,
-                    )
-                if window.app != request.app:
-                    raise DesktopValueError(
-                        f"Window {str(window.id)} shows {str(window.app)!r}, not {str(request.app)!r}",
-                        user_facing_message=WINDOW_GONE_SENTENCE,
-                        kind=RefusalKind.WINDOW_GONE,
-                    )
-                seen = effective_window(window, self.read_window_paths(desktop, request.client_id).get(window.id))
-                window_path = seen.path if request.target.sends_window_path else None
-                path = self.launch_destination(
-                    entry, launch_path, request.params, request.client_id, desktop.id, window_path
-                )
-                navigated = self.report_window_location(desktop.id, window.id, request.client_id, path, seen.title)
+                assert aimed is not None, "a window target's window is found before the launch"
+                navigated = self.report_window_location(desktop.id, aimed.id, request.client_id, path, aimed.title)
                 return LaunchOutcome(window=navigated, path=path, is_new=False)
             case LaunchTargetKind.SHOW:
-                beside = require_window(desktop, request.target.beside) if request.target.beside is not None else None
-                path = self.launch_destination(entry, launch_path, request.params, request.client_id, desktop.id, None)
                 shown = self.show_window(
                     request.client_id,
                     desktop,
@@ -608,6 +659,45 @@ class ShellState(MutableModel):
                 return LaunchOutcome(window=seen, path=path, is_new=shown.outcome is ShowOutcome.OPENED)
             case _ as unreachable:
                 assert_never(unreachable)
+
+    def _window_showing_launch(
+        self,
+        desktop_id: DesktopId,
+        request: LaunchRequest,
+        path: WindowPath,
+        aimed: Window | None,
+        windows_before: AbstractSet[WindowId],
+    ) -> Window | None:
+        """After a state write failed partway through landing a launch, the window that shows its page, as the client
+        should see it (at ``path``, whatever was or was not written), or None when no window was put there."""
+        desktop = self.get_desktop(desktop_id)
+        window: Window | None
+        match request.target.kind:
+            case LaunchTargetKind.WINDOW:
+                window = aimed
+            case LaunchTargetKind.NEW:
+                window = next(
+                    (
+                        candidate
+                        for candidate in desktop.windows
+                        if candidate.id not in windows_before
+                        and (candidate.app, candidate.path) == (request.app, path)
+                    ),
+                    None,
+                )
+            case LaunchTargetKind.FOCUS:
+                window = find_window_at(desktop, request.app, path)
+            case LaunchTargetKind.SHOW:
+                # The writes before the failed one changed nothing the rule reads, but the opened window itself.
+                window = choose_show_target(
+                    self._client_desktop_view(desktop, request.client_id), [], request.app, path, set(), set()
+                ).window
+            case _ as unreachable:
+                assert_never(unreachable)
+        if window is None:
+            return None
+        seen = effective_window(window, self.read_window_paths(desktop, request.client_id).get(window.id))
+        return seen.model_copy_update(to_update(seen.field_ref().path, path))
 
     def get_desktop(self, desktop_id: str) -> Desktop:
         for desktop in self.list_desktops():
@@ -1118,6 +1208,53 @@ class ShellState(MutableModel):
                 report.report_id,
             )
         return outcome
+
+
+@pure
+def _launched_not_opened(entry: AppInventoryEntry, error: ShellStateError) -> LaunchedNotOpenedError:
+    """The refusal of a launch the app took when no window could be written to show it: a full disk named as such,
+    anything else asking for a bug report."""
+    name = entry.display_name
+    is_out_of_space = error.kind is RefusalKind.OUT_OF_SPACE
+    return LaunchedNotOpenedError(
+        f"{entry.row.name} took the launch, but its window could not be recorded: {error}",
+        user_facing_message=(
+            f"{name} got it, but this workspace is out of space, so its window couldn't be opened."
+            if is_out_of_space
+            else f"{name} got it, but its window couldn't be opened. If this persists, report a bug."
+        ),
+        kind=RefusalKind.LAUNCHED_NOT_OPENED_OUT_OF_SPACE if is_out_of_space else RefusalKind.LAUNCHED_NOT_OPENED,
+        reportable=not is_out_of_space,
+    )
+
+
+@pure
+def _raise_unless_up(entry: AppInventoryEntry, outcome: WakeOutcome) -> None:
+    """Refuse a POST launch whose wake did not bring the app up, in the could-not-start page's words."""
+    name = entry.display_name
+    match outcome:
+        case WakeOutcome.UP:
+            return
+        case WakeOutcome.FAILED:
+            raise LaunchUnavailableError(
+                f"{entry.row.name} is stopped and could not be started for the launch",
+                could_not_start_sentence(name),
+                kind=RefusalKind.APP_COULD_NOT_START,
+            )
+        case WakeOutcome.BUDGET_SPENT:
+            raise LaunchUnavailableError(
+                f"{entry.row.name} is stopped and its wake budget is spent, so it was not started for the launch",
+                start_budget_spent_sentence(name),
+                kind=RefusalKind.APP_START_BUDGET_SPENT,
+            )
+        case WakeOutcome.STILL_STARTING:
+            raise LaunchUnavailableError(
+                f"{entry.row.name} was started for the launch but did not answer in time",
+                f"{name} is still starting. Try again in a moment.",
+                kind=RefusalKind.APP_STILL_STARTING,
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def _count_windows_by_app(desktops: DesktopStore) -> Counter[str]:

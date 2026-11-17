@@ -282,9 +282,9 @@ class SendFailedError(Exception):
     into the failure the composer shows. The other callers of ``send_message_to_agent`` check
     the returned reason instead, so this changes nothing for them.
 
-    ``kind`` is mngr's classification of the failure, which is what lets the chat decide what to
-    offer: trying again can clear a blocked input, where only a restart is left for an agent that would not start.
-    Unknown when mngr did not classify it.
+    ``kind`` is mngr's classification of the failure, or the chat app's own for a failure it met itself, which is
+    what lets the chat decide what to offer: trying again can clear a blocked input, where only a restart is left for
+    a pane that is gone. Unknown when mngr did not classify it.
     """
 
     def __init__(self, detail: str, kind: str = "unknown") -> None:
@@ -303,13 +303,18 @@ class SendDelivery(UpperCaseStrEnum):
     RESENT = auto()
 
 
+# The kind of a send whose agent had to be started first and would not start. The chat app's own, apart from mngr's
+# ``agent_unreachable`` (a pane that is gone): starting it again is worth trying, so the page offers Try again.
+AGENT_START_FAILED_SEND_FAILURE_KIND: Final[str] = "agent_start_failed"
+
+
 class AgentStartFailedError(SendFailedError):
     """A send that had to start its agent first, and the start itself failed: nothing is starting, so waiting will not
     help."""
 
     def __init__(self, agent_name: str, error: Exception) -> None:
         super().__init__(
-            f"Could not start agent '{agent_name}' for a send: {error}", str(SendFailureKind.AGENT_UNREACHABLE)
+            f"Could not start agent '{agent_name}' for a send: {error}", AGENT_START_FAILED_SEND_FAILURE_KIND
         )
 
 

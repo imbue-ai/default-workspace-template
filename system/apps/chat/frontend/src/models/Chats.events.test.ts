@@ -196,12 +196,14 @@ describe("the provisional chats over the socket", () => {
     await expect(manager.whenChatRegistered("agent-1")).resolves.toBeUndefined();
   });
 
-  it("drops a discarded chat and rejects a held send", async () => {
+  it("drops a discarded chat and rejects a held send as one no agent is behind", async () => {
     push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     const registered = manager.whenChatRegistered("agent-1");
 
     push({ type: "provisional_chat_completed", chat_id: "agent-1", success: false, error: null });
 
+    // The composer offers neither Retry nor Restart for it: there is no agent to send to or restart.
+    await expect(registered).rejects.toBeInstanceOf(manager.ChatNotStartedError);
     await expect(registered).rejects.toThrow("closed before it started");
     expect(manager.getProvisionalChat("agent-1")).toBeUndefined();
   });

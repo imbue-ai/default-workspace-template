@@ -742,6 +742,13 @@ describe("a failure on the chooser's screens", () => {
     return Object.assign(new Error(message), { code, response });
   }
 
+  /** The part of a failure screen that scrolls: the body holding its status. */
+  function scrollingBodyOf(root: HTMLElement): Element {
+    const body = root.querySelector("[data-e2e='status-error']")?.closest(".overflow-y-auto") ?? null;
+    expect(body).not.toBeNull();
+    return body!;
+  }
+
   it("says the providers couldn't be loaded, with the status behind See details", async () => {
     state.loaded = false;
     loadLanesAndAccountsWithRetry.mockRejectedValue(rejection(500, null));
@@ -754,7 +761,63 @@ describe("a failure on the chooser's screens", () => {
     );
     expect(root.querySelector(".see-details-text")?.textContent).toBe("HTTP 500");
     (root.querySelector(".report-bug") as HTMLElement).click();
+    expect(shell.posted("shell:report-bug")).toEqual([
+      {
+        type: "shell:report-bug",
+        message: "Couldn't load the list of providers. Try again. If this persists, report a bug.",
+        details: "HTTP 500",
+      },
+    ]);
+    shell.release();
+  });
+
+  it("offers Try again and Report a bug for a failed load whose providers were already listed", async () => {
+    state.loaded = true;
+    loadLanesAndAccountsWithRetry.mockRejectedValueOnce(rejection(500, { detail: "Internal server error: boom" }));
+    const shell = framePageInShell(true);
+
+    const { root, draw } = await mounted();
+
+    expect(root.textContent).toContain(
+      "Couldn't load the list of providers. Try again. If this persists, report a bug.",
+    );
+    expect(root.querySelector(".see-details-text")?.textContent).toContain("Internal server error: boom");
+    (root.querySelector(".report-bug") as HTMLElement).click();
     expect(shell.posted("shell:report-bug")).toHaveLength(1);
+    (root.querySelector("[data-e2e=retry-providers]") as HTMLButtonElement).click();
+    await settled();
+    draw();
+    expect(loadLanesAndAccountsWithRetry).toHaveBeenCalledTimes(2);
+    expect(root.textContent).not.toContain("Couldn't load the list of providers");
+    shell.release();
+  });
+
+  it("keeps a failure screen's buttons out of the scrolling body, so opening See details cannot push them away", async () => {
+    startFlow.mockRejectedValue(rejection(500, { detail: "a long reason" }));
+    const { root, draw } = await mounted();
+
+    (root.querySelector('[data-e2e="lane-anthropic"]') as HTMLElement).click();
+    await settled();
+    draw();
+
+    const tryAgain = [...root.querySelectorAll("button")].find((button) => button.textContent === "Try again");
+    expect(tryAgain).toBeDefined();
+    expect(scrollingBodyOf(root).contains(tryAgain!)).toBe(false);
+  });
+
+  it("keeps the failed provider list's buttons out of the scrolling body too", async () => {
+    state.loaded = false;
+    loadLanesAndAccountsWithRetry.mockRejectedValue(rejection(500, { detail: "a long reason" }));
+    const shell = framePageInShell(true);
+
+    const { root } = await mounted();
+
+    const tryAgain = root.querySelector("[data-e2e=retry-providers]");
+    const reportBug = root.querySelector(".report-bug");
+    expect(tryAgain).not.toBeNull();
+    expect(reportBug).not.toBeNull();
+    expect(scrollingBodyOf(root).contains(tryAgain)).toBe(false);
+    expect(scrollingBodyOf(root).contains(reportBug)).toBe(false);
     shell.release();
   });
 

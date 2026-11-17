@@ -131,7 +131,7 @@ On the first accepted connection it:
 3. answers the accepted connection with the loading page (section 5.3) and `Connection: close`, and closes it.
 
 It reads the request only far enough to answer sensibly (the first line and headers, bounded), never proxies anything, and answers every method and path the same way.
-Connections left in the backlog when the listener closes are reset by the kernel; whoever sent them sees a connection error and retries (`mngr forward`'s loader polls every second; caddy's error handler serves its own loading page).
+Connections left in the backlog when the listener closes are reset by the kernel; whoever sent them sees a connection error and retries (`mngr forward`'s loader polls every second; caddy's error handler serves the gateway's not-responding page, which reloads for up to a minute, section 5.7).
 
 Two facts make the handoff safe.
 Every failure mode between "the app stopped" and "the app answers" lands on a loading page that retries: a refused connection lands on the proxy's, and a connection the parker accepted lands on the parker's.
@@ -143,7 +143,7 @@ The parker answers `503 Service Unavailable` with `Retry-After` set to 2 seconds
 A fetch from a page gets the same 503 and retries on its own terms.
 Nothing here depends on the shell's liveness sweep: the page reloads into the app the moment the app binds.
 
-When the app fails to start (section 5.5), the page instead says "<display name> couldn't start." (and, when the wake budget refused the wake, that it failed to start several times in the last few minutes and to try again in a few minutes), with a Try again button that reloads, an "Ask an agent to look at it" button (shown once the shell that frames the page has greeted it, which it asks with `shell:start-with-text`, naming the app and its log), and `supervisorctl tail <program> stderr` behind a collapsed "See details". It does not refresh itself: each reload is a new request and so a new wake, which spends the budget, so the next wake attempt is the user's Try again.
+When the app fails to start (section 5.5), the page instead says "<display name> couldn't start." (and, when the wake budget refused the wake, that it failed to start several times in the last few minutes and to try again in a few minutes), with a Try again button that reloads, an "Ask an agent to look at it" button (shown once the shell that frames the page has greeted it, which it asks with `shell:start-new-with-text`, a new chat, naming the app and its log), and `supervisorctl tail <program> stderr` behind a collapsed "See details". It does not refresh itself: each reload is a new request and so a new wake, which spends the budget, so the next wake attempt is the user's Try again.
 
 ### 5.4 The lifecycle manager
 
@@ -176,7 +176,7 @@ The budget is per shell process and resets with it.
 A GET launch path needs no special handling: the window's frame requests the page, the parker wakes the app, and the loading page reloads into it.
 A POST launch path is asked for its page by the shell itself (`shell/launches.py`), and a POST to the parker would be answered 503.
 So before posting a launch to a stoppable app that is not running, the shell wakes it and waits for the app's port to accept a connection (polled, up to 20 seconds; `startsecs` is supervisord's notion of "started" and says nothing about when the app binds), then posts.
-An app that does not come up in time fails the launch with the existing `502`.
+A wake that does not bring the app up fails the launch with a `502` whose `kind` says why, in the could-not-start page's words: `app_could_not_start` (supervisord could not start it, or it failed and was parked again), `app_start_budget_spent` (the wake budget refused it), or `app_still_starting` (it did not answer within the wait).
 
 ### 5.7 The share gateway
 

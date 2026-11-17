@@ -165,7 +165,7 @@ def _render_hardening_headers(indent: str) -> str:
     """The ``header`` block stamping the hardening headers on every response of one route list.
 
     Rendered once per route list: ``handle_errors`` runs a handler chain of
-    its own, so the site-level block never reaches the 502 loading page.
+    its own, so the site-level block never reaches the 502 not-responding page.
     """
     lines = [
         "# Deferred so it runs after the backend's response headers are copied",

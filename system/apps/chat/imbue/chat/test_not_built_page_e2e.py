@@ -93,8 +93,11 @@ def test_the_not_built_page_asks_the_shell_for_a_bug_report(
         expect(report).to_be_visible()
         report.click()
 
+        # The report carries the page's sentence, so it arrives saying what failed.
         page.wait_for_function(
-            "window.posted.some((message) => message.type === 'shell:report-bug')", timeout=_WAIT_MS
+            "window.posted.some((message) => message.type === 'shell:report-bug'"
+            ' && message.message.startsWith("Chat isn\'t available in this workspace"))',
+            timeout=_WAIT_MS,
         )
 
 

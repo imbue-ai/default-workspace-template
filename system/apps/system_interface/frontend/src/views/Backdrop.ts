@@ -247,6 +247,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                           isShielded: window.id !== focusedWindowId || attrs.isOverlayOpen,
                           stopped:
                             app !== undefined && isAppShownStopped(state, app) ? store.stoppedNotice(app) : null,
+                          onReportBug: store.reportBugAction(),
                           isAppGone: app === undefined && state.isAppsLoaded,
                           immersive: store.getCanImmerse()
                             ? {

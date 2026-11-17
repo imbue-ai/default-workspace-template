@@ -27,7 +27,9 @@ kind-specific wording, which is the right way for the set to grow.
 from typing import Any
 
 from imbue.chat.harnesses.auth_errors import is_auth_error_text
+from imbue.chat.harnesses.error_patterns import CONTEXT_TOO_LONG_KIND
 from imbue.chat.harnesses.error_patterns import classify_api_error
+from imbue.chat.harnesses.error_patterns import is_context_too_long_text
 from imbue.chat.harnesses.error_patterns import kind_for_status
 from imbue.imbue_common.frozen_model import FrozenModel
 
@@ -65,7 +67,7 @@ class ErrorNotice(FrozenModel):
     is_auth_error: bool = False
     # The turn failed against the model API: renders as a failure rather than as prose.
     is_api_error: bool = False
-    # Normalized kind, for the wording of the provider-fault note. None when the failure is
+    # Normalized kind, which picks how the failed turn is worded. None when the failure is
     # real but unclassified, which still renders -- just without a named cause.
     api_error_kind: str | None = None
 
@@ -100,6 +102,9 @@ def classify_error_notice(raw: dict[str, Any], text: str) -> ErrorNotice:
     # precedence rule.)
     if claude_kind in _AUTH_ERROR_KINDS or is_auth_error_text(text):
         return ErrorNotice(is_auth_error=True)
+    # A prompt too long for the model is stamped as an ordinary 400, so its wording is read before the status.
+    if is_context_too_long_text(text):
+        return ErrorNotice(is_api_error=True, api_error_kind=CONTEXT_TOO_LONG_KIND)
     kind = kind_for_status(status) or _KIND_BY_CLAUDE_ERROR.get(claude_kind) or classify_api_error(text)
     if kind is None and raw.get("isApiErrorMessage") is not True:
         return _NO_ERROR

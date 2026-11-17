@@ -17,6 +17,7 @@ import { avatarImageUrl, avatarSourceUrl } from "../model/api";
 import type { FailureNotice } from "../model/failures";
 import type { AvatarDesign } from "../model/records";
 import { FailureLine } from "./FailureLine";
+import type { ReportBug } from "./FailureLine";
 import { IMBUE_CHARACTER_DESIGN_ID, ImbueCharacter } from "./character/ImbueCharacter";
 
 /** The disabled "Design your own..." button's tooltip: the request goes into the pinned window of the app that takes
@@ -40,6 +41,8 @@ export interface AvatarChooserDialogAttrs {
   readonly designs: readonly AvatarDesign[] | null;
   /** Why the designs could not be read, in place of the grid; null while they load or once they have. */
   readonly loadError: FailureNotice | null;
+  /** Report a bug about that failure where it asks for one; null where no bug report can be opened. */
+  readonly onReportBug: ReportBug;
   /** Read the designs again. */
   readonly onRetry: () => void;
   /** The workspace's current design. */
@@ -99,6 +102,7 @@ function designGrid(attrs: AvatarChooserDialogAttrs): m.Children {
     const retry = { label: "Try again", run: attrs.onRetry };
     return m(FailureLine, {
       notice: { ...attrs.loadError, actions: [retry, ...attrs.loadError.actions] },
+      onReportBug: attrs.onReportBug,
       marker: "avatar-designs-failure",
       messageClass: "type-helper text-danger",
     });

@@ -1129,6 +1129,7 @@ export function App(): m.Component<AppAttrs> {
     return m(AvatarChooserDialog, {
       designs: chooser.designs,
       loadError: chooser.loadError,
+      onReportBug: current.reportBugAction(),
       onRetry: () => openAvatarChooser(current),
       selected: state.avatar.design,
       onSelect: (design) => void current.selectAvatar(design),
@@ -1153,7 +1154,8 @@ export function App(): m.Component<AppAttrs> {
     return m(WallpaperChooserDialog, {
       desktop,
       wallpapers,
-      wordFailure: (whatFailed, error) => current.failureNotice(whatFailed, error),
+      wordFailure: (whatFailed, error, retry) => current.changeFailureNotice(whatFailed, error, retry),
+      onReportBug: current.reportBugAction(),
       onSave: async (wallpaper) => {
         if (!isSameWallpaper(wallpaper, desktop.wallpaper)) await current.setDesktopWallpaper(desktop.id, wallpaper);
         wallpaperDialogDesktopId = null;
@@ -1190,11 +1192,13 @@ export function App(): m.Component<AppAttrs> {
     void current.showAppPage(SYSTEM_MONITOR_APP_NAME, systemMonitorPathOf(resource), SYSTEM_MONITOR_PAGES);
   }
 
-  function resourceGaugeDialogView(): m.Children {
+  function resourceGaugeDialogView(current: DesktopStore): m.Children {
     const view = currentResourceGauge();
     if (view === null) return null;
     return m(ResourceGaugeDialog, {
       settings: view.settings,
+      wordFailure: (whatFailed, error, retry) => current.changeFailureNotice(whatFailed, error, retry),
+      onReportBug: current.reportBugAction(),
       onSave: (settings) => saveResourceGaugeSettings(settings, () => m.redraw()),
       onClose: () => {
         isResourceGaugeDialogOpen = false;
@@ -1202,8 +1206,10 @@ export function App(): m.Component<AppAttrs> {
     });
   }
 
-  function keyboardShortcutsDialogView(): m.Children {
+  function keyboardShortcutsDialogView(current: DesktopStore): m.Children {
     return m(KeyboardShortcutsDialog, {
+      wordFailure: (whatFailed, error, retry) => current.changeFailureNotice(whatFailed, error, retry),
+      onReportBug: current.reportBugAction(),
       onClose: () => {
         isKeyboardShortcutsDialogOpen = false;
       },
@@ -1215,7 +1221,8 @@ export function App(): m.Component<AppAttrs> {
     if (desktop === null) return null;
     return m(ThemeChooserDialog, {
       desktop,
-      wordFailure: (whatFailed, error) => current.failureNotice(whatFailed, error),
+      wordFailure: (whatFailed, error, retry) => current.changeFailureNotice(whatFailed, error, retry),
+      onReportBug: current.reportBugAction(),
       onSave: async (themeChoice) => {
         // A theme made the workspace's default is worn by this desktop as the default, not as its own.
         if (themeChoice.isWorkspaceDefault) await current.setDefaultTheme(themeChoice.theme);
@@ -1233,7 +1240,7 @@ export function App(): m.Component<AppAttrs> {
           ? null
           : () => {
               themeDialogDesktopId = null;
-              void current.draftIntoPinnedWindow(THEME_DESIGN_PROMPT);
+              void current.draftIntoPinnedWindow(THEME_DESIGN_PROMPT, true, "theme-request");
             },
       onPreviewTheme: (choice) => current.previewDesktopTheme(desktop.id, choice),
       isDesktopShown: activeDesktop(current.getState())?.id === desktop.id,
@@ -1249,7 +1256,7 @@ export function App(): m.Component<AppAttrs> {
       "div",
       { class: "flex h-full items-center justify-center text-(length:--font-size-row) text-faint" },
       bootFailure !== null
-        ? m(BootFailureNotice, { notice: bootFailure })
+        ? m(BootFailureNotice, { notice: bootFailure, onReportBug: current.reportBugAction() })
         : current.getState().isDesktopsLoaded
           ? "No desktop yet."
           : "Loading…",
@@ -1314,6 +1321,7 @@ export function App(): m.Component<AppAttrs> {
         void current.runFreeText(row.app.name, row.launchPath.id, row.text, report).then(clearIfUnchanged);
         return;
       case "tour":
+        launcherQuery = "";
         tour?.start();
         return;
     }
@@ -1466,6 +1474,7 @@ export function App(): m.Component<AppAttrs> {
             toasts: current.toasts.current(),
             placementClass: "fixed bottom-(--desk-toast-gap)",
             onDismiss: (id) => current.toasts.dismiss(id),
+            onReportBug: current.reportBugAction(),
           }),
         ]);
       }
@@ -1585,6 +1594,7 @@ export function App(): m.Component<AppAttrs> {
                     isApplePlatform: isApplePlatform(),
                     bottomOffsetPx: launcherFieldRise,
                     failure: launcherFailure,
+                    onReportBug: current.reportBugAction(),
                     onRun: (row) => runLauncherRow(current, row),
                     onHighlight: (index) => {
                       launcherHighlight = index;
@@ -1689,12 +1699,13 @@ export function App(): m.Component<AppAttrs> {
             toasts: current.toasts.current(),
             placementClass: "fixed bottom-[calc(var(--desk-taskbar-height)+var(--desk-toast-gap))]",
             onDismiss: (id) => current.toasts.dismiss(id),
+            onReportBug: current.reportBugAction(),
           }),
           menuRows === null ? null : menu.view(menuRows),
           wallpaperDialogDesktopId === null ? null : wallpaperDialogView(current, wallpaperDialogDesktopId),
           themeDialogDesktopId === null ? null : themeDialogView(current, themeDialogDesktopId),
-          isKeyboardShortcutsDialogOpen ? keyboardShortcutsDialogView() : null,
-          isResourceGaugeDialogOpen ? resourceGaugeDialogView() : null,
+          isKeyboardShortcutsDialogOpen ? keyboardShortcutsDialogView(current) : null,
+          isResourceGaugeDialogOpen ? resourceGaugeDialogView(current) : null,
           replacedDesktopNotice(current),
           avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
           tourCardView(current, vnode.attrs.tour),

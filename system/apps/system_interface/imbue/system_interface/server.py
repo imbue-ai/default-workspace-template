@@ -165,7 +165,7 @@ _NOT_BUILT_POLL_SECONDS = 10
 #
 # Kept in sync with that builder by ``test_chat_system.py``, which also validates it
 # against the live CLI. The server never runs it: the page's "Ask an agent to fix
-# this" sends the same message through the workspace's primary text action
+# this" sends the same message through the workspace's secondary text action
 # instead (``_not_built_launch``), so an agent is created only if the reader
 # presses it.
 _NOT_BUILT_REPAIR_MNGR_COMMAND: Final[str] = (
@@ -271,10 +271,7 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
   <div id="ask-agent" hidden>
     <p>If it isn't back in a few minutes, an agent can fix it.</p>
     <p><button id="ask-agent-button" class="action" type="button">Ask an agent to fix this</button></p>
-    <div id="ask-agent-failure" hidden>
-      <p id="ask-agent-failure-message"></p>
-      <details><summary>See details</summary><pre id="ask-agent-failure-details"></pre></details>
-    </div>
+    <p id="ask-agent-failure-message" hidden></p>
     <p id="agent-started" hidden></p>
     <div id="agent-chat-slot" hidden>
       <iframe id="agent-chat" title="The repair agent's chat"></iframe>
@@ -282,6 +279,10 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
   </div>
   <details id="repair-details">
     <summary>See details</summary>
+    <div id="ask-agent-failure-reason" hidden>
+      <p>Why the agent didn't start:</p>
+      <pre id="ask-agent-failure-details"></pre>
+    </div>
     <p>This creates an agent and tells it what you are looking at:</p>
     <div id="repair">
       <pre id="repair-command">__REPAIR_COMMAND__</pre>
@@ -289,18 +290,21 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
            never shows a button that does nothing. -->
       <button id="copy-repair" type="button" hidden>Copy</button>
     </div>
-    <!-- The lead-in belongs to the terminal, not to the command: the command
-         stands on its own wherever the reader finds a shell, so it keeps its own
-         introduction above and is never left orphaned when there is no terminal
-         to offer. -->
-    <p id="terminal-intro" hidden>You can run that -- or do the repair yourself --
-       in this workspace's terminal, below.</p>
     <p id="no-terminal">The workspace's terminal isn't running yet, so there is
        nowhere to run this here.</p>
-    <p id="terminal-failure" hidden></p>
-    <div id="terminal-slot" hidden>
-      <iframe id="terminal" title="Workspace terminal"></iframe>
-    </div>
+    <details id="terminal-details" hidden>
+      <summary>Open this workspace's terminal</summary>
+      <!-- The lead-in belongs to the terminal, not to the command: the command
+           stands on its own wherever the reader finds a shell, so it keeps its own
+           introduction above and is never left orphaned when there is no terminal
+           to offer. -->
+      <p id="terminal-intro" hidden>You can run that -- or do the repair yourself --
+         in this workspace's terminal, below.</p>
+      <p id="terminal-failure" hidden></p>
+      <div id="terminal-slot" hidden>
+        <iframe id="terminal" title="Workspace terminal"></iframe>
+      </div>
+    </details>
   </details>
 </main>
 <script>
@@ -399,7 +403,8 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
     document.getElementById("ask-agent").hidden = false;
     askButton.addEventListener("click", function () {
       askButton.disabled = true;
-      document.getElementById("ask-agent-failure").hidden = true;
+      document.getElementById("ask-agent-failure-message").hidden = true;
+      document.getElementById("ask-agent-failure-reason").hidden = true;
       launch("repair_agent", "Couldn't start an agent").then(function (answer) {
         var page = pageAt(answer);
         askButton.hidden = true;
@@ -414,21 +419,28 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
         }
       }, function (failure) {
         askButton.disabled = false;
-        document.getElementById("ask-agent-failure-message").textContent = failure.sentence;
+        var message = document.getElementById("ask-agent-failure-message");
+        message.textContent = failure.sentence;
+        message.hidden = false;
         document.getElementById("ask-agent-failure-details").textContent = failure.message;
-        document.getElementById("ask-agent-failure").hidden = false;
+        document.getElementById("ask-agent-failure-reason").hidden = false;
       });
     });
   }
 
-  // The terminal is a session of its own, made when the reader first opens the details rather than on every load
-  // of this page, so a page left open or reloaded does not pile up sessions nobody looks at.
+  // The terminal is a session of its own, made when the reader first opens its section rather than on every load
+  // of this page or every look at the details, so a page left open or reloaded does not pile up sessions nobody
+  // looks at.
   var details = document.getElementById("repair-details");
+  var terminalDetails = document.getElementById("terminal-details");
   var isTerminalOffered = Boolean(terminalLabel && appOrigin(terminalLabel));
-  if (isTerminalOffered) document.getElementById("no-terminal").hidden = true;
+  if (isTerminalOffered) {
+    document.getElementById("no-terminal").hidden = true;
+    terminalDetails.hidden = false;
+  }
   var isTerminalAsked = false;
-  details.addEventListener("toggle", function () {
-    if (!details.open || !isTerminalOffered || isTerminalAsked) return;
+  terminalDetails.addEventListener("toggle", function () {
+    if (!terminalDetails.open || !isTerminalOffered || isTerminalAsked) return;
     isTerminalAsked = true;
     launch("terminal", "The workspace's terminal couldn't be opened here").then(function (answer) {
       var page = pageAt(answer);
@@ -442,8 +454,11 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
       line.hidden = false;
     });
   });
-  // With no agent to offer, what is behind the details is the only way out, so it starts open.
-  if (!isAgentOffered) details.open = true;
+  // With no agent to offer, what is behind the details is the only way out, so it starts open, the terminal too.
+  if (!isAgentOffered) {
+    details.open = true;
+    if (isTerminalOffered) terminalDetails.open = true;
+  }
 
   // Ask whether the bundle is back rather than reloading blind. The reply
   // carries the same header the reveal flow's own health check reads, so a
@@ -580,7 +595,7 @@ def _frontend_not_built_response(missing_page: Path) -> Response:
 
 def _not_built_launch() -> ResponseReturnValue:
     """``POST /api/not-built/launch``: run one of the placeholder's launches -- a terminal session, or the repair
-    agent asked through the primary text action -- and answer where its page is: the app's origin label, the
+    agent asked through the secondary text action -- and answer where its page is: the app's origin label, the
     path, and the app's display name. 404 when no app offers it; a launch's own failures answer as the launch
     route's do. A preview refuses, since either would act on the live workspace."""
     if get_state().is_preview:

@@ -8,8 +8,9 @@
  *  and app contract). */
 
 import { askAgentToFix } from "@imbue/workspace-ui/src/app_contract";
-import type { AgentFixRequest, ShellConnection } from "@imbue/workspace-ui/src/app_contract";
-import { REPORT_A_BUG_LABEL } from "@imbue/workspace-ui/src/models/failure";
+import type { AgentFixRequest, ReportedFailure, ShellConnection } from "@imbue/workspace-ui/src/app_contract";
+import { REPORT_A_BUG_LABEL, fallbackSentence, failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
 import { isOwnSessionController } from "./state";
 import type { StreamStatus } from "./webrtc";
@@ -17,13 +18,7 @@ import type { StreamStatus } from "./webrtc";
 export const ASK_AGENT_TO_FIX_LABEL = "Ask an agent to fix this";
 
 /** What the overlay needs of the shell connection for its failure buttons. */
-export type FailureHost = Pick<ShellConnection, "hasShell" | "startWithText" | "canReportBug" | "reportBug">;
-
-/** A failure the page itself ran into (a refused Start, a state it could not load): our sentence and its details. */
-export interface PageFailure {
-  readonly message: string;
-  readonly details: string | null;
-}
+export type FailureHost = Pick<ShellConnection, "hasShell" | "startNewWithText" | "canReportBug" | "reportBug">;
 
 /** What the main overlay shows: hidden (null), or a title, a line under it, the details, and the offered actions. */
 export interface OverlayView {
@@ -32,14 +27,18 @@ export interface OverlayView {
   readonly details: string | null;
   /** The Start button's label, or null when it is not offered. */
   readonly startLabel: string | null;
+  /** Whether "Try again" loads the Screen's state again (the page never got one). */
+  readonly isReloadOffered: boolean;
   /** What "Ask an agent to fix this" hands the agent, or null when it is not offered. */
   readonly agentFix: AgentFixRequest | null;
   readonly isReportable: boolean;
 }
 
 const INSTALL_FAILED_STEM = "The Screen couldn't be set up in this workspace";
-const START_FAILED_STEM = "The Screen couldn't start";
+/** What failed when the stack would not start, or a Start was refused or not answered. */
+export const START_FAILED_STEM = "The Screen couldn't start";
 const STOPPED_UNEXPECTEDLY_STEM = "The Screen stopped unexpectedly";
+const LOAD_FAILED_STEM = "The Screen couldn't load";
 
 function joinDetails(parts: readonly (string | null)[]): string | null {
   const kept = parts.filter((part): part is string => part !== null && part.trim() !== "");
@@ -47,15 +46,35 @@ function joinDetails(parts: readonly (string | null)[]): string | null {
 }
 
 function view(title: string, fields: Partial<Omit<OverlayView, "title">> = {}): OverlayView {
-  return { title, body: "", details: null, startLabel: null, agentFix: null, isReportable: false, ...fields };
+  return {
+    title,
+    body: "",
+    details: null,
+    startLabel: null,
+    isReloadOffered: false,
+    agentFix: null,
+    isReportable: false,
+    ...fields,
+  };
 }
 
-function stoppedView(state: ScreenStateDocument, startFailure: PageFailure | null): OverlayView {
+/** What the main overlay shows when the page could not load the Screen's state at all. */
+export function describeLoadFailure(failure: Failure): OverlayView {
+  const told = failureSentence(failure, LOAD_FAILED_STEM);
+  const fields = { details: told.details, isReloadOffered: true, isReportable: told.isReportable };
+  // These sentences do not name the Screen, so they go under a title that does.
+  if (failure.cause === "not_answered" || failure.cause === "user_facing") {
+    return view(`${LOAD_FAILED_STEM}.`, { ...fields, body: told.message });
+  }
+  return view(told.message, fields);
+}
+
+function stoppedView(state: ScreenStateDocument, startFailure: FailureMessage | null): OverlayView {
   const details = state.stop_reason;
   let stopped: OverlayView;
   switch (state.stop_cause) {
     case "start_failed":
-      stopped = view("Couldn't start the Screen. Try again. If this persists, report a bug.", {
+      stopped = view(fallbackSentence(START_FAILED_STEM), {
         details,
         startLabel: "Try again",
         agentFix: { whatFailed: START_FAILED_STEM, details },
@@ -85,7 +104,13 @@ function stoppedView(state: ScreenStateDocument, startFailure: PageFailure | nul
   }
   // A Start that was refused or not answered says so under the title, its own details first.
   if (startFailure === null) return stopped;
-  return { ...stopped, body: startFailure.message, details: joinDetails([startFailure.details, details]) };
+  return {
+    ...stopped,
+    // A refused Start after a failed start would repeat the title word for word.
+    body: startFailure.message === stopped.title ? stopped.body : startFailure.message,
+    details: joinDetails([startFailure.details, details]),
+    isReportable: stopped.isReportable || startFailure.isReportable,
+  };
 }
 
 /** What the main overlay shows for the stack's state and this viewer's connection to it; null hides it. */
@@ -94,7 +119,7 @@ export function describeOverlay(
   streamStatus: StreamStatus,
   session: NekoSessionAnswer | null,
   signInFailureDetails: string | null,
-  startFailure: PageFailure | null,
+  startFailure: FailureMessage | null,
 ): OverlayView | null {
   switch (state.lifecycle) {
     case "installing":
@@ -139,6 +164,7 @@ export class Overlays {
   private readonly detailsText = document.createElement("pre");
   private readonly actions = document.createElement("div");
   private readonly startButton = document.createElement("button");
+  private readonly reloadButton = document.createElement("button");
   private readonly askAgentButton = document.createElement("button");
   private readonly reportBugButton = document.createElement("button");
   private readonly dim = document.createElement("div");
@@ -148,8 +174,10 @@ export class Overlays {
   private readonly dimCancel = document.createElement("button");
   private host: FailureHost | null = null;
   private agentFix: AgentFixRequest | null = null;
+  private reported: ReportedFailure | null = null;
+  private isReportable = false;
 
-  constructor(onStart: () => void, onTakeControl: () => void, onCancelPendingUrl: () => void) {
+  constructor(onStart: () => void, onTakeControl: () => void, onCancelPendingUrl: () => void, onReload: () => void) {
     this.element.className = "screen-overlay";
     this.element.dataset.screenOverlay = "true";
     this.title.className = "screen-overlay__title";
@@ -165,6 +193,10 @@ export class Overlays {
     this.startButton.className = "screen-button screen-button--primary";
     this.startButton.dataset.screenStart = "true";
     this.startButton.addEventListener("click", () => onStart());
+    this.reloadButton.className = "screen-button screen-button--primary";
+    this.reloadButton.textContent = "Try again";
+    this.reloadButton.dataset.screenReload = "true";
+    this.reloadButton.addEventListener("click", () => onReload());
     this.askAgentButton.className = "screen-button ask-agent-to-fix";
     this.askAgentButton.textContent = ASK_AGENT_TO_FIX_LABEL;
     this.askAgentButton.dataset.screenAskAgent = "true";
@@ -174,12 +206,15 @@ export class Overlays {
     this.reportBugButton.className = "screen-button report-bug";
     this.reportBugButton.textContent = REPORT_A_BUG_LABEL;
     this.reportBugButton.dataset.screenReportBug = "true";
-    this.reportBugButton.addEventListener("click", () => this.host?.reportBug());
-    this.actions.append(this.startButton, this.askAgentButton, this.reportBugButton);
+    this.reportBugButton.addEventListener("click", () => {
+      if (this.host !== null && this.reported !== null) this.host.reportBug(this.reported);
+    });
+    this.actions.append(this.startButton, this.reloadButton, this.askAgentButton, this.reportBugButton);
     this.element.append(this.title, this.body, this.details, this.actions);
     // Until the first state arrives, the page is loading: nothing to start, nothing failed.
-    this.render(view("Loading the Screen"));
+    this.showLoading();
     this.dim.className = "screen-overlay screen-overlay--dim";
+    this.dim.hidden = true;
     this.dim.dataset.screenAgentOverlay = "true";
     this.dimTitle.className = "screen-overlay__title";
     this.dimPending.className = "screen-overlay__detail";
@@ -208,7 +243,7 @@ export class Overlays {
     streamStatus: StreamStatus,
     session: NekoSessionAnswer | null,
     signInFailureDetails: string | null,
-    startFailure: PageFailure | null,
+    startFailure: FailureMessage | null,
   ): void {
     this.render(describeOverlay(state, streamStatus, session, signInFailureDetails, startFailure));
     const control: ControlDocument = state.control;
@@ -227,9 +262,21 @@ export class Overlays {
     }
   }
 
+  /** Show "Ask an agent to fix this" and "Report a bug" as the host now says they can work, for what the overlay
+   *  shows; the shell's handshake can arrive after it was drawn. */
+  syncShellButtons(): void {
+    this.askAgentButton.hidden = this.agentFix === null || this.host === null || !this.host.hasShell();
+    this.reportBugButton.hidden = !this.isReportable || this.host === null || !this.host.canReportBug();
+  }
+
   /** The page could not load the state at all; the service's events bring it once the service answers. */
-  showLoadFailure(failure: PageFailure): void {
-    this.render(view(failure.message, { details: failure.details }));
+  showLoadFailure(failure: Failure): void {
+    this.render(describeLoadFailure(failure));
+  }
+
+  /** Try again was pressed on a load failure: the page is loading again. */
+  showLoading(): void {
+    this.render(view("Loading the Screen"));
   }
 
   private render(shown: OverlayView | null): void {
@@ -245,8 +292,13 @@ export class Overlays {
     this.detailsText.textContent = shown.details ?? "";
     this.startButton.hidden = shown.startLabel === null;
     this.startButton.textContent = shown.startLabel ?? "";
+    this.reloadButton.hidden = !shown.isReloadOffered;
     this.agentFix = shown.agentFix;
-    this.askAgentButton.hidden = shown.agentFix === null || this.host === null || !this.host.hasShell();
-    this.reportBugButton.hidden = !shown.isReportable || this.host === null || !this.host.canReportBug();
+    this.reported = {
+      message: shown.body === "" ? shown.title : `${shown.title} ${shown.body}`,
+      details: shown.details,
+    };
+    this.isReportable = shown.isReportable;
+    this.syncShellButtons();
   }
 }

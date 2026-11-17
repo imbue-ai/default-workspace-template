@@ -66,7 +66,11 @@ export interface ResolvedShelf {
 }
 
 export type TemplateCatalogState =
-  { kind: "loading" } | { kind: "loaded"; catalog: TemplateCatalog } | { kind: "failed" } | { kind: "disabled" };
+  | { kind: "loading" }
+  | { kind: "loaded"; catalog: TemplateCatalog }
+  /** ``details`` is what went wrong, for the bug report the failure line offers. */
+  | { kind: "failed"; details: string }
+  | { kind: "disabled" };
 
 export const TEMPLATES_CATALOG_PATH = "/api/templates-catalog";
 
@@ -149,13 +153,13 @@ async function fetchTemplateCatalog(isRetry: boolean): Promise<TemplateCatalogSt
     const response = await fetch(apiUrl(TEMPLATES_CATALOG_PATH) + (isRetry ? RETRY_QUERY : ""));
     if (!response.ok) {
       console.warn(`[getting-started] could not load the template catalog: HTTP ${response.status}`);
-      return { kind: "failed" };
+      return { kind: "failed", details: `HTTP ${response.status}` };
     }
     const data = (await response.json()) as CatalogResponse;
     if (data.catalog === null) return { kind: "disabled" };
     return { kind: "loaded", catalog: data.catalog };
   } catch (e) {
     console.warn("[getting-started] could not load the template catalog", e);
-    return { kind: "failed" };
+    return { kind: "failed", details: String(e) };
   }
 }

@@ -39,7 +39,7 @@ export const SoloView: m.Component<SoloViewAttrs> = {
           ? m(
               "div",
               { class: "flex h-full items-center justify-center" },
-              m(BootFailureNotice, { notice: bootFailure }),
+              m(BootFailureNotice, { notice: bootFailure, onReportBug: store.reportBugAction() }),
             )
           : isKnown || !state.isDesktopsLoaded
             ? null

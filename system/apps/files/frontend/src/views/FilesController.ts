@@ -5,7 +5,7 @@
 
 import m from "mithril";
 
-import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
+import type { ReportedFailure, ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 import {
   EMBEDDER_CAPABILITIES,
   OPEN_LOCAL_FILES,
@@ -22,6 +22,7 @@ import { isTextLike } from "../models/fileKinds";
 import { decodePathname, titleOf } from "../models/paths";
 import { sourcesFromFileList } from "../models/uploads";
 import { isAnySyncMoving, isLiveShared } from "../models/connections";
+import { reportBugAction, type FailureHost } from "../models/failures";
 import { Dialogs } from "./dialogs";
 
 /** How often the shares, and the folders on screen, are read again while the window is on screen: often while a sync
@@ -120,8 +121,10 @@ export class FilesController {
         confirmDelete: (entries) => this.dialogs.confirmDelete(entries),
         confirmReplace: (names) => this.dialogs.confirmReplace(names),
         askNewName: (suggested, isFolder) => this.dialogs.askNewName(suggested, isFolder),
+        hasShell: () => connection.hasShell(),
+        startWithText: (text) => connection.startWithText(text),
         canReportBug: () => connection.canReportBug(),
-        reportBug: () => connection.reportBug(),
+        reportBug: (failure) => connection.reportBug(failure),
       },
       folder,
       initial,
@@ -144,6 +147,16 @@ export class FilesController {
     setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) =>
       this.setOpensLocalFiles(message.opensLocalFiles === true),
     );
+  }
+
+  /** The shell connection a failure's buttons go through. */
+  get failureHost(): FailureHost {
+    return this.connection;
+  }
+
+  /** What the toasts' "Report a bug" does as they are drawn; null while Imbue Studio opens no bug report here. */
+  reportBugAction(): ((failure: ReportedFailure) => void) | null {
+    return reportBugAction(this.connection);
   }
 
   /** The shell showed or hid the window: a hidden one stops reading, and one shown again reads now. */

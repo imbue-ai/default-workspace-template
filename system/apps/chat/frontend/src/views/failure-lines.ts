@@ -4,6 +4,7 @@
  * that leaves unknown in its own words ("can't tell whether the agent stopped") in place of the general sentence.
  */
 
+import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure, RequestKind } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
@@ -54,4 +55,9 @@ export function joinDetailLines(lines: readonly (string | null)[]): string | nul
 /** The one-paragraph sentence of ``plainFailureLines``, for a surface with room for a single line. */
 export function plainFailureSentence(lines: FailureLines): string {
   return lines.body.filter((line): line is string => line !== null && line !== "").join(" ");
+}
+
+/** What a bug report about ``lines`` carries: the sentence on screen and what its "See details" holds. */
+export function reportedFailureOfLines(lines: FailureLines): ReportedFailure {
+  return { message: plainFailureSentence(lines), details: lines.details };
 }

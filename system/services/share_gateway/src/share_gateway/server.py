@@ -31,6 +31,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import urlencode
+from urllib.parse import urlsplit
 
 from flask import Flask
 from flask import Response
@@ -50,6 +51,7 @@ from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.handoff import verify_handoff_token
 from share_gateway.hostnames import service_for_host
+from share_gateway.hostnames import workspace_origins_allow
 from share_gateway.identity import AgentIdentity
 from share_gateway.identity import IDENTITY_HEADER
 from share_gateway.identity import RequesterIdentity
@@ -94,30 +96,40 @@ _SHELL_SERVICE_NAME = "system_interface"
 _PAGE_STYLE = (
     "body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;"
     "height:100vh;margin:0;color:#334155}div{text-align:center;max-width:32rem;padding:0 1rem}"
-    "a.button{display:inline-block;margin-top:0.5rem;padding:0.5rem 1rem;border-radius:0.375rem;"
-    "background:#334155;color:#fff;text-decoration:none}"
+    ".button{display:inline-block;margin-top:0.5rem;padding:0.5rem 1rem;border-radius:0.375rem;"
+    "background:#334155;color:#fff;text-decoration:none;border:1px solid #334155;font:inherit;cursor:pointer}"
+    ".button.secondary{background:#fff;color:#334155;margin-left:0.5rem}form{display:inline}"
 )
 _PAGE_STYLE_HASH = base64.b64encode(hashlib.sha256(_PAGE_STYLE.encode("utf-8")).digest()).decode("ascii")
 
-# The gateway's own pages load nothing but their inline stylesheet. Stated in
-# full here because the frame-ancestors policy caddy adds governs embedding
-# only; the two headers compose by intersection.
-PAGE_CONTENT_SECURITY_POLICY = (
-    f"default-src 'none'; style-src 'sha256-{_PAGE_STYLE_HASH}'; base-uri 'none'; form-action 'none'"
-)
 
-
-def _page_html(title: str, body_html: str, refresh_seconds: int | None = None) -> str:
-    """One of the gateway's own full-page answers: a heading and a few lines, centred."""
-    refresh = f'<meta http-equiv="refresh" content="{refresh_seconds}">' if refresh_seconds is not None else ""
+def page_content_security_policy(workspace_domain: str, broker_origin: str) -> str:
+    """The gateway's own pages load nothing but their inline stylesheet, and their one form (switching account)
+    posts to the auth origin. A browser holds every redirect after that post to form-action too: to the broker, and
+    when the broker signs the visitor straight back in, through the callback to the app being opened, so the
+    workspace's own origins are admitted with the broker. Stated in full because the frame-ancestors policy caddy
+    adds governs embedding only; the two headers compose by intersection."""
     return (
-        f'<!DOCTYPE html>\n<html><head><meta charset="utf-8">{refresh}\n'
+        f"default-src 'none'; style-src 'sha256-{_PAGE_STYLE_HASH}'; base-uri 'none'; "
+        f"form-action https://*.{workspace_domain} {broker_origin}"
+    )
+
+
+def _render_page(
+    title: str, body_html: str, refresh_seconds: int | None = None, referrer_policy: str | None = None
+) -> str:
+    """One of the gateway's own full-page answers: a heading and a few lines, centred. ``referrer_policy`` replaces
+    the one caddy's header gives the page."""
+    refresh = f'<meta http-equiv="refresh" content="{refresh_seconds}">' if refresh_seconds is not None else ""
+    referrer = f'<meta name="referrer" content="{referrer_policy}">' if referrer_policy is not None else ""
+    return (
+        f'<!DOCTYPE html>\n<html><head><meta charset="utf-8">{refresh}{referrer}\n'
         f"<title>{html.escape(title)}</title>\n<style>{_PAGE_STYLE}</style></head>\n"
         f"<body><div>{body_html}</div></body></html>\n"
     )
 
 
-_LOADING_PAGE = _page_html(
+_LOADING_PAGE = _render_page(
     "Loading...",
     "<h1>Starting up&hellip;</h1>\n<p>This service is not ready yet. The page retries automatically.</p>",
     refresh_seconds=3,
@@ -127,45 +139,52 @@ _LOADING_PAGE = _page_html(
 # an app's own page, at that page's address.
 _TRY_AGAIN_BUTTON = '<a class="button" href="">Try again</a>'
 
-_UNRESPONSIVE_WAITING_PAGE = _page_html(
+_UNRESPONSIVE_WAITING_PAGE = _render_page(
     "Waiting for this page",
     "<h1>Waiting for this page</h1>\n<p>This page isn't responding yet. It will open as soon as it answers.</p>",
     refresh_seconds=3,
 )
 
-_UNRESPONSIVE_PAGE = _page_html(
+_UNRESPONSIVE_PAGE = _render_page(
     "This page isn't responding",
     "<h1>This page isn't responding</h1>\n"
     "<p>This page isn't responding right now. Let the person who shared it know, then try again.</p>\n"
     f"{_TRY_AGAIN_BUTTON}",
 )
 
-_UNRESPONSIVE_NOT_RESTARTED_PAGE = _page_html(
+_UNRESPONSIVE_NOT_RESTARTED_PAGE = _render_page(
     "This app isn't responding",
     "<h1>This app isn't responding</h1>\n"
     "<p>This app isn't responding. The workspace owner may need to restart it.</p>\n"
     f"{_TRY_AGAIN_BUTTON}",
 )
 
-_NOTHING_SHARED_HERE_PAGE = _page_html(
+_NOTHING_SHARED_HERE_PAGE = _render_page(
     "Nothing shared here",
     "<h1>Nothing shared here</h1>\n"
     "<p>Nothing is shared at this address right now. Check the link with the person who sent it.</p>",
 )
 
-_ORIGIN_REFUSED_PAGE = _page_html(
-    "Not shared with you",
-    "<h1>Not shared with you</h1>\n"
-    "<p>This workspace exists, but your account has not been granted access to this page.</p>",
-)
 
-_EXPIRED_LOGIN_PAGE = _page_html(
+def _origin_refused_page(open_url: str) -> str:
+    """A request sent from another site; ``open_url`` opens the page itself with a plain GET, which is always
+    allowed ("" when this page is served at that page's own address)."""
+    return _render_page(
+        "This page can't be opened from another site",
+        "<h1>This page can't be opened from another site</h1>\n"
+        "<p>For your security, this workspace doesn't accept requests sent from other websites. "
+        "Open the page directly instead.</p>\n"
+        f'<a class="button" href="{html.escape(open_url)}">Open this page</a>',
+    )
+
+
+_EXPIRED_LOGIN_PAGE = _render_page(
     "Sign-in link expired",
     "<h1>Sign-in link expired</h1>\n"
     "<p>This sign-in link was already used or has expired. Open the workspace link again.</p>",
 )
 
-_MISCONFIGURED_PAGE = _page_html(
+_MISCONFIGURED_PAGE = _render_page(
     "Sharing is misconfigured",
     "<h1>Sharing is misconfigured</h1>\n"
     "<p>This workspace's sharing settings could not be read, so nobody can be let in right now.\n"
@@ -180,20 +199,22 @@ _UNRESPONSIVE_GIVE_UP_SECONDS = 60.0
 _UNRESPONSIVE_WAIT_GAP_SECONDS = 30.0
 
 
-def _not_shared_with_account_page(switch_account_url: str) -> str:
-    return _page_html(
+def _not_shared_with_account_page(reload_url: str, switch_account_url: str, next_url: str) -> str:
+    """The refusal of a signed-in account; ``reload_url`` is the page the visitor was opening ("" when this page is
+    served at that page's own address)."""
+    return _render_page(
         "Not shared with you",
         "<h1>Not shared with you</h1>\n"
         "<p>This page hasn't been shared with your account. "
         "Ask the person who shared it to give you access, then reload this page.</p>\n"
-        f'<p><a href="{html.escape(switch_account_url)}">Sign in with a different account</a></p>',
-    )
-
-
-def _html_page(page: str, status: int) -> Response:
-    """One of the gateway's own pages, under the policy that admits exactly its contents."""
-    return Response(
-        page, status=status, mimetype="text/html", headers={"Content-Security-Policy": PAGE_CONTENT_SECURITY_POLICY}
+        f'<a class="button" href="{html.escape(reload_url)}">Reload</a>'
+        # A form, so only a press on this page can end the session: a link could be followed from any site.
+        f'<form method="post" action="{html.escape(switch_account_url)}">'
+        f'<input type="hidden" name="next" value="{html.escape(next_url)}">'
+        '<button class="button secondary" type="submit">Sign in with a different account</button></form>',
+        # Served at an app's origin, the form posts to the auth origin: under caddy's same-origin policy the browser
+        # would send that post with "Origin: null", which switch-account refuses.
+        referrer_policy="strict-origin",
     )
 
 
@@ -246,17 +267,23 @@ class UnansweredAddressWaits:
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self._clock = clock
-        self._first_and_last_by_host: dict[str, tuple[float, float]] = {}
+        self._first_and_last_by_address: dict[str, tuple[float, float]] = {}
         self._lock = threading.Lock()
 
-    def seconds_waiting(self, host: str) -> float:
-        """Record one unanswered request for ``host``; answer how long its current wait has lasted."""
+    def record_unanswered_request(self, address: str) -> float:
+        """Record one unanswered request for ``address``; answer how long its current wait has lasted."""
         now = self._clock()
         with self._lock:
-            first, last = self._first_and_last_by_host.get(host, (now, now))
+            first, last = self._first_and_last_by_address.get(address, (now, now))
             if now - last > _UNRESPONSIVE_WAIT_GAP_SECONDS:
                 first = now
-            self._first_and_last_by_host[host] = (first, now)
+            # A wait whose address has gone quiet is over, so it is dropped rather than kept for good.
+            self._first_and_last_by_address = {
+                other: times
+                for other, times in self._first_and_last_by_address.items()
+                if now - times[1] <= _UNRESPONSIVE_WAIT_GAP_SECONDS
+            }
+            self._first_and_last_by_address[address] = (first, now)
         return now - first
 
 
@@ -311,17 +338,23 @@ def build_gateway_app(
     chrome_origin = materials.chrome_origin
 
     auth_host = f"{auth_label}.{workspace_domain}"
+    broker_parts = urlsplit(materials.broker_url)
+    page_policy = page_content_security_policy(workspace_domain, f"{broker_parts.scheme}://{broker_parts.netloc}")
+
+    def _html_page(page: str, status: int) -> Response:
+        """One of the gateway's own pages, under the policy that admits exactly its contents."""
+        return Response(page, status=status, mimetype="text/html", headers={"Content-Security-Policy": page_policy})
 
     def _nothing_shared_here() -> Response:
         return _html_page(_NOTHING_SHARED_HERE_PAGE, status=403)
 
-    def _origin_refused() -> Response:
-        return _html_page(_ORIGIN_REFUSED_PAGE, status=403)
+    def _origin_refused(open_url: str) -> Response:
+        return _html_page(_origin_refused_page(open_url), status=403)
 
-    def _not_shared_with_account(requested_url: str) -> Response:
-        switch_query = urlencode({"next": requested_url if _is_workspace_url(requested_url) else ""})
-        switch_account_url = f"{auth_origin}/_auth/switch-account?{switch_query}"
-        return _html_page(_not_shared_with_account_page(switch_account_url), status=403)
+    def _not_shared_with_account(requested_url: str, reload_url: str) -> Response:
+        next_url = requested_url if _is_workspace_url(requested_url) else ""
+        switch_account_url = f"{auth_origin}/_auth/switch-account"
+        return _html_page(_not_shared_with_account_page(reload_url, switch_account_url, next_url), status=403)
 
     def _expired_login() -> Response:
         return _html_page(_EXPIRED_LOGIN_PAGE, status=403)
@@ -395,32 +428,47 @@ def build_gateway_app(
     def loading() -> Response:
         return _html_page(_LOADING_PAGE, status=503)
 
-    @app.get("/_auth/unresponsive")
+    # Caddy rewrites the path of whatever request the backend refused and keeps its method, so a page's POST to a
+    # down app is answered as not responding too, rather than as a method this route does not take (Files sends the
+    # WebDAV ones).
+    @app.route(
+        "/_auth/unresponsive",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "MOVE", "MKCOL", "PROPFIND"],
+    )
     def unresponsive() -> Response:
         # Caddy rewrites the path but keeps the Host, so the address the visitor was opening is
         # still known here. Read raw: werkzeug's parsed host is empty for a label with an
         # underscore, which the shell's has.
         host = request.headers.get("Host", "")
-        if unanswered_waits.seconds_waiting(host) < _UNRESPONSIVE_GIVE_UP_SECONDS:
-            return _html_page(_UNRESPONSIVE_WAITING_PAGE, status=503)
         registered_apps = get_registered_apps()
         _is_ours, service_name = service_for_host(
             host, workspace_domain, build_label_to_name(registered_apps), auth_label
         )
+        # Counted per service rather than per spelling of its host (case, a port), which caddy passes on as sent.
+        address = service_name if service_name is not None else host.strip().lower()
+        if unanswered_waits.record_unanswered_request(address) < _UNRESPONSIVE_GIVE_UP_SECONDS:
+            return _html_page(_UNRESPONSIVE_WAITING_PAGE, status=503)
         app_entry = next((entry for entry in registered_apps if entry.name == service_name), None)
         if app_entry is not None and not is_started_on_demand(app_entry, registered_apps):
             return _html_page(_UNRESPONSIVE_NOT_RESTARTED_PAGE, status=503)
         return _html_page(_UNRESPONSIVE_PAGE, status=503)
 
-    @app.get("/_auth/switch-account")
+    @app.post("/_auth/switch-account")
     def switch_account() -> Response:
         # Ending the gateway's session alone would sign the visitor straight back in as the same
         # account: the broker remembers it. Sending them through the broker unconfirmed makes it
         # ask which account to continue as, with a way to use a different one.
-        next_url = request.args.get("next", "")
-        response = _redirect_to_broker(
-            next_url if _is_workspace_url(next_url) else "", is_confirmed=False, is_retry=False
-        )
+        next_url = request.form.get("next", "")
+        safe_next = next_url if _is_workspace_url(next_url) else ""
+        # Only the not-granted page, on one of this workspace's origins, may end the session.
+        origin_header = request.headers.get("Origin", "")
+        if not origin_header or not workspace_origins_allow(
+            origin_header, workspace_domain, build_label_to_name(get_registered_apps()), auth_label
+        ):
+            _log_denied("switch-account posted without one of this workspace's origins", auth_host)
+            return _origin_refused(_post_login_redirect_target(safe_next))
+        response = _redirect_to_broker(safe_next, is_confirmed=False, is_retry=False)
+        response.status_code = 303
         clear_session_cookie(response, workspace_domain)
         return response
 
@@ -459,7 +507,7 @@ def build_gateway_app(
             chrome_origin,
         ):
             _log_denied("request Origin is not allowed", host)
-            return _counted(_origin_refused(), REQUESTER_KIND_NONE, "", DENIED_ORIGIN)
+            return _counted(_origin_refused(""), REQUESTER_KIND_NONE, "", DENIED_ORIGIN)
 
         # A CORS preflight from the hosted chrome must reach the service so it
         # can answer with its CORS headers -- and preflights never carry
@@ -542,7 +590,8 @@ def build_gateway_app(
             ):
                 _log_denied("session identity has no grant admitting it to this service", host)
                 return _counted(
-                    _not_shared_with_account(_requested_url(host, forwarded_uri)),
+                    # Caddy answers the visitor with this page at the address they were opening.
+                    _not_shared_with_account(_requested_url(host, forwarded_uri), reload_url=""),
                     requester_kind,
                     requester_id,
                     DENIED_NO_GRANT,
@@ -596,7 +645,8 @@ def build_gateway_app(
             _log_denied(
                 f"signed-in account {handoff.user_id} has no grant admitting it anywhere on this workspace", auth_host
             )
-            return _not_shared_with_account(next_url)
+            # Served at the single-use callback address, so Reload goes to the page the visitor was opening.
+            return _not_shared_with_account(next_url, reload_url=_post_login_redirect_target(next_url))
         _upgrade_invite(grants, handoff)
 
         response = Response(status=302, headers={"Location": _post_login_redirect_target(next_url)})

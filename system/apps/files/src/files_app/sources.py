@@ -12,12 +12,16 @@ from imbue.imbue_common.frozen_model import FrozenModel
 
 
 class FilesError(Exception):
-    """A request the source could not carry out, with the status and plain words to answer it with."""
+    """A request the source could not carry out, with the status and plain words to answer it with, the kind of
+    refusal it was when the frontend words that kind itself, and the text behind the words (what a computer's file
+    server answered) when there is more to say than they do."""
 
-    def __init__(self, status: int, message: str) -> None:
+    def __init__(self, status: int, message: str, kind: str | None = None, detail: str | None = None) -> None:
         super().__init__(message)
         self.status = status
         self.message = message
+        self.kind = kind
+        self.detail = detail
 
 
 class EntryRecord(FrozenModel):

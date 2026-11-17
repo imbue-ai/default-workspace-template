@@ -106,11 +106,13 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
     const found = findWindow(state, windowId);
     if (found === null) return null;
     const app = appByName(state, found.window.app);
-    return phoneWindowMenuRows(app, {
-      refresh: () => store.refreshWindow(windowId),
+    const rows = phoneWindowMenuRows(app, {
+      // A window whose app is gone shows a placeholder, not a page.
+      refresh: app === undefined && state.isAppsLoaded ? null : () => store.refreshWindow(windowId),
       share: app === undefined || app.critical || !isEmbedded() ? null : () => openShareSettings(app),
       quit: app !== undefined && store.canStopApp(app) ? () => void store.quitApp(app.name) : null,
     });
+    return rows.length === 0 ? null : rows;
   }
 
   /** An app's launch rows, each opening a new window (the focus row of a pinned app shows its window). */
@@ -215,6 +217,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
             store.openPhoneSheet(null);
           },
           failure: startFailure,
+          onReportBug: store.reportBugAction(),
         });
       }
     }
@@ -274,7 +277,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
                 ? m(
                     "div",
                     { class: "absolute inset-0" },
-                    windowPlaceholder("stopped-app", store.stoppedNotice(shownApp)),
+                    windowPlaceholder("stopped-app", store.stoppedNotice(shownApp), store.reportBugAction()),
                   )
                 : null,
               shownWindow !== null && shownApp === undefined && state.isAppsLoaded
@@ -284,6 +287,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
                     windowPlaceholder(
                       "gone-app",
                       appGoneNotice(() => void store.closeOrMinimizeWindow(shownWindow.id)),
+                      store.reportBugAction(),
                     ),
                   )
                 : null,
@@ -291,7 +295,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
                 ? m(
                     "div",
                     { class: "absolute inset-0 flex items-center justify-center" },
-                    m(BootFailureNotice, { notice: bootFailure }),
+                    m(BootFailureNotice, { notice: bootFailure, onReportBug: store.reportBugAction() }),
                   )
                 : null,
               isHome
@@ -334,6 +338,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
               ? "absolute bottom-(--desk-toast-gap)"
               : "absolute bottom-[calc(var(--desk-phone-bar-height)+var(--desk-phone-safe-bottom)+var(--desk-toast-gap))]",
             onDismiss: (id) => store.toasts.dismiss(id),
+            onReportBug: store.reportBugAction(),
           }),
           sheetView(store),
           menuRows === null ? null : menu.view(menuRows),

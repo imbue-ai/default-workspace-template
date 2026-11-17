@@ -25,6 +25,13 @@ describe("failureSentence", () => {
     expect(failureSentence(notAsking, CLOSE_FAILED).isReportable).toBe(false);
   });
 
+  it("keeps a reason that only repeats the server's sentence out of See details, which then says the status", () => {
+    const sentence = "You signed out of the account this chat runs on. Choose a provider to continue it on.";
+    const told = failureSentence(answer(409, { detail: sentence, user_facing_message: sentence }), CLOSE_FAILED);
+    expect(told).toEqual({ message: sentence, details: "HTTP 409", isReportable: false });
+    expect(failureText(answer(409, { detail: sentence, user_facing_message: sentence }))).toBe(sentence);
+  });
+
   it("says only that the workspace didn't answer, never prefixed with what failed, for a read and for a change", () => {
     expect(failureSentence(answer(0, null, "Failed to fetch"), CLOSE_FAILED)).toEqual({
       message: notAnsweredSentence("change"),

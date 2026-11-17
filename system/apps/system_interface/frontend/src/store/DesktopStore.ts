@@ -27,11 +27,11 @@ import {
   isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
-import { FOCUS_CHAT } from "@imbue/workspace-ui/src/embed";
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
+import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import { noticeOf, refusalKindOf, stoppedSentence } from "../model/failures";
+import { couldNotStartRequest, isRetryable, refusalKindOf, stoppedSentence } from "../model/failures";
 import type { FailureNotice } from "../model/failures";
 import { refreshShellKeybindings } from "../model/keybindings";
 import {
@@ -49,6 +49,7 @@ import {
   mentionRowsOf,
   textRowDisabledReason,
 } from "../model/launch";
+import type { AppLaunch } from "../model/launch";
 import { applyPresence, getOwnIdentity, getOwnParticipant } from "../model/Presence";
 import { applyRoster, getRoster } from "../model/Roster";
 import { isClientOf, isOwnDesktop, ownDesktops, ownerEntryOf } from "../model/Ownership";
@@ -282,8 +283,9 @@ export const BOOT_READ_WHAT_FAILED = "This workspace's desktops couldn't be load
 export const FREE_SPACE_REQUEST =
   "This workspace is out of disk space, so changes on its desktop can't be saved. Please free up some space.";
 
-/** The message types a link becomes when it is relayed to an app: a local URL, and an external one by its kind. */
-const LINK_MESSAGE_TYPES: ReadonlySet<string> = new Set([OPEN_URL_MESSAGE, "open:web", "open:mailto", "open:tel"]);
+/** The prefix of every message type a link becomes when it is relayed to an app: ``open:url`` for a local URL, and
+ *  ``open:<scheme>`` (``open:web`` for a web link) for an external one; ``open:file`` is the one that is no link. */
+const OPEN_MESSAGE_PREFIX = "open:";
 
 /** Where a failure of something a surface ran is told: under that surface (the launcher's field) rather than in a
  *  toast. */
@@ -302,10 +304,13 @@ interface AskedFor {
 interface LaunchFailureCopy {
   readonly whatFailed?: string;
   readonly report?: FailureReport;
+  /** What a toast's Try again runs, when it is more than the launch itself; a surface that reports the failure
+   *  itself keeps its own retry (the launcher's field, which still holds the text). */
+  readonly retry?: () => void;
 }
 
 /** What a page's draft into the pinned window was for, which its failure names. */
-export type DraftPurpose = "page-draft" | "avatar-request";
+export type DraftPurpose = "page-draft" | "avatar-request" | "theme-request";
 /** Why a click on a person's tray entry went nowhere: no app takes a mention of them. */
 export const NO_MENTION_APP_REASON = "No app in this workspace can open a chat with them";
 /** Why a window's "Chat about this app" went nowhere: no app declares a launch path about an app. */
@@ -469,8 +474,9 @@ export interface StoreDependencies {
   readonly popOut?: PopOutBridge;
   /** Where external links open when no app takes them; absent opens none. */
   readonly outsideLinks?: OutsideLinkOpener;
-  /** Open the bug report a failure's "Report a bug" asks for; absent opens none. */
-  readonly reportBug?: () => void;
+  /** Open the bug report a failure's "Report a bug" asks for, with the failure attached (null: a page that sent
+   *  none); absent opens none. */
+  readonly reportBug?: (failure: ReportedFailure | null) => void;
   /** The immersive-mode conversation with the embedder; absent means no embedder. */
   readonly immersive?: ImmersiveBridge;
   /** The one window this shell shows edge to edge (a pulled-out window's own desktop window), else null. */
@@ -620,7 +626,7 @@ export class DesktopStore {
   private markAppsLoaded: () => void = () => undefined;
   private readonly popOut: PopOutBridge;
   private readonly outsideLinks: OutsideLinkOpener;
-  private readonly reportBug: () => void;
+  private readonly reportBug: (failure: ReportedFailure | null) => void;
   private readonly immersiveBridge: ImmersiveBridge;
   private readonly soloWindowId: string | null;
   /** Whether the embedder can pull a window out; off until it says so (an older chrome, a plain browser). */
@@ -718,10 +724,9 @@ export class DesktopStore {
     this.toasts.show(message);
   }
 
-  /** ``told`` as a surface shows it: ``actions``, then "Report a bug" where it asks for one and the embedder opens a
-   *  bug report. */
+  /** ``told`` as a surface shows it, with ``actions``. */
   private noticeOf(told: FailureMessage, actions: readonly ToastAction[] = []): FailureNotice {
-    return noticeOf(told, actions, this.canReportBug ? this.reportBug : null);
+    return { ...told, actions };
   }
 
   /** A sentence of the desktop's own that asks for no bug report, with ``actions``. */
@@ -730,15 +735,22 @@ export class DesktopStore {
   }
 
   /** ``error`` in ``failureSentence``'s words for ``whatFailed`` (a sentence stem naming what failed), as a surface
-   *  shows it: ``actions``, then "Report a bug" where the sentence asks for one. */
+   *  shows it, with ``actions``. */
   failureNotice(whatFailed: string, error: unknown, actions: readonly ToastAction[] = []): FailureNotice {
     return this.noticeOf(failureSentence(describeRequestFailure(error), whatFailed), actions);
+  }
+
+  /** A failed change in ``noticeFor``'s words for ``whatFailed``, for a surface that shows it itself (a dialog's
+   *  line), offering ``retry`` where the failure is one to try again. */
+  changeFailureNotice(whatFailed: string, error: unknown, retry: () => void): FailureNotice {
+    return this.noticeFor(whatFailed, error, { retry });
   }
 
   /**
    * Show ``notice`` in a toast. A call site whose retry is the control just pressed asks for a plain note; any other
    * shows one that stays, with its details and buttons, and so does any notice that asks for a bug report or carries
-   * a button, which a note that leaves on its own cannot hold.
+   * a button, which a note that leaves on its own cannot hold. A toast that asks for a bug report offers "Report a
+   * bug" wherever the embedder opens one when the toast is drawn (``reportBugAction``).
    */
   private toastNotice(notice: FailureNotice, { isLasting }: { readonly isLasting: boolean }): void {
     if (!isLasting && !notice.isReportable && notice.actions.length === 0) {
@@ -747,7 +759,12 @@ export class DesktopStore {
       this.toast(notice.message);
       return;
     }
-    this.toasts.show(notice.message, { isLasting: true, details: notice.details, actions: notice.actions });
+    this.toasts.show(notice.message, {
+      isLasting: true,
+      details: notice.details,
+      actions: notice.actions,
+      isReportable: notice.isReportable,
+    });
   }
 
   /** What users call the app, or "This app" for one this window no longer knows. */
@@ -760,7 +777,8 @@ export class DesktopStore {
    * ``failureSentence``'s words for ``whatFailed``. A refusal for an app or a launch path that went in the meantime
    * names them as this window last knew them; a launch into a window that has gone re-reads the desktops, so a second
    * try finds the window as it is now; a change that could not be saved offers to try again (and, on a full disk, an
-   * agent to free up space).
+   * agent to free up space); a launch into an app that is not running says what its window would; and a failure
+   * whose sentence ends in the fallback's "Try again", or a read nothing answered, offers ``asked.retry``.
    */
   private noticeFor(whatFailed: string, error: unknown, asked: AskedFor = {}): FailureNotice {
     const failure = describeRequestFailure(error);
@@ -785,16 +803,60 @@ export class DesktopStore {
         void this.refreshInventory();
         break;
       case "out_of_space":
-        return this.noticeOf(failureSentence(failure, whatFailed), [
-          { label: "Ask an agent to free up space", run: () => void this.startWithText(FREE_SPACE_REQUEST) },
-          ...tryAgain,
-        ]);
+        return this.noticeOf(failureSentence(failure, whatFailed), [this.freeSpaceAction(), ...tryAgain]);
       case "not_saved":
         return this.noticeOf(failureSentence(failure, whatFailed), tryAgain);
+      case "app_stopped":
+        if (app === undefined) break;
+        return { ...this.stoppedNotice(app), details: failure.details };
+      case "app_could_not_start":
+        if (app === undefined) break;
+        return this.couldNotStartNotice(app, `${app.display_name} couldn't start.`, failure.details, tryAgain);
+      case "app_start_budget_spent":
+        if (app === undefined) break;
+        return this.couldNotStartNotice(app, failureSentence(failure, whatFailed).message, failure.details, []);
+      case "app_still_starting":
+        return this.noticeOf(failureSentence(failure, whatFailed), tryAgain);
+      case "launched_not_opened_out_of_space":
+        return this.noticeOf(failureSentence(failure, whatFailed), [this.freeSpaceAction()]);
+      case "launched_not_opened":
       case null:
         break;
     }
-    return this.noticeOf(failureSentence(failure, whatFailed));
+    return this.noticeOf(failureSentence(failure, whatFailed), isRetryable(failure) ? tryAgain : []);
+  }
+
+  /** What a full disk offers: an agent, in the main chat, asked to free up space; its toast stays up. */
+  private freeSpaceAction(): ToastAction {
+    return {
+      label: "Ask an agent to free up space",
+      run: () => void this.startWithText(FREE_SPACE_REQUEST),
+      keepsToast: true,
+    };
+  }
+
+  /** An app that could not start, as its could-not-start page says it: ``sentence``, then ``actions`` and an agent
+   *  asked to look at it, unless the app is the one agents are asked through, which can only be reported. */
+  private couldNotStartNotice(
+    app: AppRecord,
+    sentence: string,
+    details: string | null,
+    actions: readonly ToastAction[],
+  ): FailureNotice {
+    if (this.isAskedThrough(app)) {
+      return this.noticeOf(
+        { message: `${sentence} If this persists, report a bug.`, details, isReportable: true },
+        actions,
+      );
+    }
+    return this.noticeOf({ message: sentence, details, isReportable: false }, [
+      ...actions,
+      {
+        label: "Ask an agent to look at it",
+        run: () => void this.startNewWithText(couldNotStartRequest(app)),
+        keepsToast: true,
+      },
+    ]);
   }
 
   /** Tell the user, in a toast, that what they asked for failed with ``error`` (see ``noticeFor`` and
@@ -870,11 +932,20 @@ export class DesktopStore {
     if (this.canReportBug === canReportBug) return;
     this.canReportBug = canReportBug;
     this.pageDriver?.greetAll();
+    // The toasts already up decide their "Report a bug" as they draw.
+    this.notifyListeners();
   }
 
-  /** A page's ``shell:report-bug``: the bug report opens, where the embedder opens one. */
-  reportBugFromPage(): void {
-    if (this.canReportBug) this.reportBug();
+  /** What a reportable toast's "Report a bug" runs: the bug report about its failure, or null while the embedder
+   *  opens none. */
+  reportBugAction(): ((failure: ReportedFailure) => void) | null {
+    return this.canReportBug ? (failure) => this.reportBug(failure) : null;
+  }
+
+  /** A page's ``shell:report-bug``: the bug report about ``failure`` opens, where the embedder opens one; null opens
+   *  it with nothing attached. */
+  reportBugFromPage(failure: ReportedFailure | null): void {
+    if (this.canReportBug) this.reportBug(failure);
   }
 
   /** Whether the embedder can take the app window immersive for a window of this desktop. */
@@ -1053,11 +1124,10 @@ export class DesktopStore {
 
   /** What a window of ``app``, stopped and not started by the workspace on a request, says: that it isn't running,
    *  and the next step the workspace has. That is an agent asked to start it, unless the app is the one agents are
-   *  asked through (the launcher's primary text action's, Chat on a stock workspace), which can only be reported. */
+   *  asked through, which can only be reported. */
   stoppedNotice(app: AppRecord): FailureNotice {
     const sentence = stoppedSentence(app);
-    const askedThrough = freeTextRowsOf(openableApps(this.state))[0]?.app.name ?? null;
-    if (askedThrough === null || askedThrough === app.name) {
+    if (this.isAskedThrough(app)) {
       return this.noticeOf({
         message: `${sentence} If this persists, report a bug.`,
         details: null,
@@ -1066,8 +1136,22 @@ export class DesktopStore {
     }
     const request = `${app.display_name} (${app.name}) isn't running in this workspace. Please start it again.`;
     return this.plainNotice(sentence, [
-      { label: "Ask an agent to start it", run: () => void this.startWithText(request) },
+      { label: "Ask an agent to start it", run: () => void this.startNewWithText(request), keepsToast: true },
     ]);
+  }
+
+  /** Whether ``app`` is the one agents are asked through (the app of the row ``startNewWithText`` runs, Chat on a
+   *  stock workspace), or there is none, so no agent can be asked about it. */
+  private isAskedThrough(app: AppRecord): boolean {
+    const askedThrough = this.newTextRow()?.app.name ?? null;
+    return askedThrough === null || askedThrough === app.name;
+  }
+
+  /** The row a new chat is asked through: the secondary text action (Chat's New Chat on a stock machine), else the
+   *  primary one; undefined with no free-text row on the machine. */
+  private newTextRow(): AppLaunch | undefined {
+    const [primary, secondary] = freeTextRowsOf(openableApps(this.state));
+    return secondary ?? primary;
   }
 
   /** Whether this shell can stop and start the app: supervised, not critical, not inside a critical program, and
@@ -2097,14 +2181,13 @@ export class DesktopStore {
     const target = draftTargetOf(this.state);
     if (target === null) return false;
     const name = this.displayNameOf(target.window.app);
-    const whatFailed =
-      purpose === "avatar-request" ? `Couldn't start the avatar request in ${name}` : `Couldn't put that into ${name}`;
+    const whatFailed = draftWhatFailed(purpose, name);
     const launched = await this.launchAt(
       target.window.app,
       target.launchPath.id,
       freeTextParams(target.launchPath, text),
       { kind: "window", windowId: target.window.id, sendsWindowPath: isAboutPage },
-      { whatFailed },
+      { whatFailed, retry: () => void this.draftIntoPinnedWindow(text, isAboutPage, purpose) },
     );
     // A refused draft leaves the window where it was: nothing in it changed.
     if (launched === null) return false;
@@ -2154,8 +2237,8 @@ export class DesktopStore {
    *  the app that did not take it), a chat to show, or anything else. */
   private relayWhatFailed(type: string, error: unknown): string {
     if (type === OPEN_FILE_MESSAGE) return "Couldn't open that file";
-    if (type === FOCUS_CHAT) return "Couldn't show that chat";
-    if (!LINK_MESSAGE_TYPES.has(type)) return "Couldn't do that";
+    if (type === FOCUS_CHAT_MESSAGE_TYPE) return "Couldn't show that chat";
+    if (!type.startsWith(OPEN_MESSAGE_PREFIX)) return "Couldn't do that";
     const app = undeliveredAppOf(error);
     return app === null ? "Couldn't open this link" : `${this.displayNameOf(app)} couldn't open this link`;
   }
@@ -2248,8 +2331,10 @@ export class DesktopStore {
     try {
       outcome = await this.deps.api.showPage(this.deps.clientId, { app, path, repoint });
     } catch (error) {
-      this.toastFailure(`Could not open ${appByName(this.state, app)?.display_name ?? app}`, error, {
+      this.toastFailure(`${this.displayNameOf(app)} couldn't be opened`, error, {
         isLasting: false,
+        app,
+        retry: () => void this.showAppPage(app, path, repoint),
       });
       return;
     }
@@ -2922,6 +3007,7 @@ export class DesktopStore {
               ? `Couldn't send that to ${name}`
               : `Couldn't send that to ${name}, so your text is still in the box`,
           report,
+          retry: () => void this.launchPinnedFirst(appName, launchId, params, report),
         },
       );
       if (launched === null) return false;
@@ -2952,6 +3038,18 @@ export class DesktopStore {
       return false;
     }
     return this.runFreeText(primary.app.name, primary.launchPath.id, text);
+  }
+
+  /** A page's ``shell:start-new-with-text`` ("Ask an agent to fix this"): the secondary text action runs with the
+   *  text (Chat's New Chat on a stock machine), else the primary one; with no free-text row on the machine the user
+   *  is told. */
+  async startNewWithText(text: string): Promise<boolean> {
+    const row = this.newTextRow();
+    if (row === undefined) {
+      this.toast(NO_TEXT_APP_REASON);
+      return false;
+    }
+    return this.runFreeText(row.app.name, row.launchPath.id, text);
   }
 
   /** The desktop an open goes to: the active one, or on a phone the first, where a window opened out of sight
@@ -3041,14 +3139,20 @@ export class DesktopStore {
       const asked: AskedFor = {
         app,
         launchLabel: this.launchLabelOf(app, launchId),
-        retry: () => void this.launchAt(app, launchId, params, target, copy),
+        retry:
+          copy.report !== undefined
+            ? undefined
+            : (copy.retry ?? (() => void this.launchAt(app, launchId, params, target, copy))),
       };
       const notice = this.noticeFor(copy.whatFailed ?? `${this.displayNameOf(app)} couldn't open that`, error, asked);
-      // Lasting: a launch from a page's draft has already let go of the text it carried, so pressing again is no
-      // retry, and an app's own reason waits behind "See details".
+      // Lasting for every launch, a shortcut's included: a text row or a page's draft has already let go of the text
+      // it carried, which only the toast's Try again still holds, and an app's own reason waits behind "See details".
       if (copy.report === undefined) this.toastNotice(notice, { isLasting: true });
       else copy.report(notice);
       return null;
+    }
+    if (outcome.unsavedKind !== null) {
+      this.toastNotice(this.unsavedLaunchNotice(app, outcome.unsavedKind), { isLasting: false });
     }
     if (target.kind === "window") {
       if (named !== null) this.applyOwnNavigation(named, outcome.window);
@@ -3060,6 +3164,23 @@ export class DesktopStore {
     }
     this.takeOpened(desktopId, outcome.window, outcome.isNew, isMinimized);
     return outcome.window.id;
+  }
+
+  /** What a launch the app took says when the shell could not record where its window is: the window shows what
+   *  was asked for, but may not be where it is now after a reload. */
+  private unsavedLaunchNotice(app: string, unsavedKind: "out_of_space" | "not_saved"): FailureNotice {
+    const name = this.displayNameOf(app);
+    if (unsavedKind === "out_of_space") {
+      return this.plainNotice(
+        `${name} got it, but this workspace is out of space, so its window's place wasn't saved.`,
+        [this.freeSpaceAction()],
+      );
+    }
+    return this.noticeOf({
+      message: `${name} got it, but its window's place wasn't saved. If this persists, report a bug.`,
+      details: null,
+      isReportable: true,
+    });
   }
 
   /** ``shell:open {path, ifPresent}`` from a page: a window of the posting window's own app, on its desktop. */
@@ -3793,6 +3914,19 @@ export function chooseInitialDesktopId(
   if (deepLinkDesktopId !== null && ids.has(deepLinkDesktopId)) return deepLinkDesktopId;
   if (arrivalDesktopId !== null && ids.has(arrivalDesktopId)) return arrivalDesktopId;
   return desktops[0].id;
+}
+
+/** What failed when a draft for ``purpose`` into ``appName``'s pinned window did, as a sentence stem: a chooser's
+ *  request is named, since its dialog has closed and nothing on screen says what was asked. */
+function draftWhatFailed(purpose: DraftPurpose, appName: string): string {
+  switch (purpose) {
+    case "page-draft":
+      return `Couldn't put that into ${appName}`;
+    case "avatar-request":
+      return `Couldn't start the avatar request in ${appName}`;
+    case "theme-request":
+      return `Couldn't start the theme request in ${appName}`;
+  }
 }
 
 /** The first app a refused relay names as not having taken the message, from the shell's answer; null with none. */

@@ -15,6 +15,7 @@ import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { CatalogTemplate, TemplateCatalogState } from "../models/TemplateCatalog";
 import { resolveShelves, searchTemplates } from "../models/TemplateCatalog";
@@ -158,8 +159,8 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
   }
 
   /** The failure line, with the next steps in it: Try again (a fresh fetch) and Report a bug (where the shell says
-   *  Imbue Studio opens one). */
-  function templatesFailure(attrs: GettingStartedPageAttrs): m.Vnode {
+   *  Imbue Studio opens one), and the reason under it behind "See details". */
+  function templatesFailure(attrs: GettingStartedPageAttrs, details: string): m.Vnode {
     const action = (label: string, extra: string, onclick: () => void): m.Vnode =>
       m(Button, { variant: "ghost", sm: true, extra, onclick }, label);
     return m("div", { class: "getting-started-templates-failed flex flex-wrap items-center gap-x-1 py-1" }, [
@@ -169,10 +170,12 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
       action("Try again", "getting-started-templates-retry", attrs.onRetryTemplates),
       m(ReportBugButton, {
         connection: attrs.connection,
+        failure: { message: TEMPLATES_FAILED_MESSAGE, details },
         variant: "ghost",
         sm: true,
         extra: "getting-started-templates-report",
       }),
+      m("div", { class: "basis-full" }, m(SeeDetails, { details })),
     ]);
   }
 
@@ -185,7 +188,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
         body = templatesStatus(TEMPLATES_LOADING_MESSAGE);
         break;
       case "failed":
-        body = templatesFailure(attrs);
+        body = templatesFailure(attrs, catalog.details);
         break;
       case "loaded":
         body = m(TemplateShelves, {

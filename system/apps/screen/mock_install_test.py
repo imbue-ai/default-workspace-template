@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 from pydantic import Field
 
 from imbue.imbue_common.mutable_model import MutableModel
@@ -11,3 +13,27 @@ class FakeInstall(MutableModel):
     missing_browser: str | None = Field(default=None, description="What Chromium still misses")
     failure: str | None = Field(default=None, description="How the unit failed in this boot")
     shed_pids: set[int] = Field(default_factory=set, description="The pids the memory guard just shed")
+    ledger_reads_before_shed: dict[int, int] = Field(
+        default_factory=dict,
+        description="Pids the memory guard shed whose record lands only after this many reads of the ledger",
+    )
+
+    on_next_ledger_read: Callable[[], None] | None = Field(
+        default=None, description="What happens elsewhere while the ledger is next read; run once"
+    )
+
+    def was_shed(self, pid: int) -> bool:
+        """Whether the ledger names ``pid`` as shed, as read now."""
+        happening = self.on_next_ledger_read
+        if happening is not None:
+            self.on_next_ledger_read = None
+            happening()
+        if pid in self.shed_pids:
+            return True
+        reads_left = self.ledger_reads_before_shed.get(pid)
+        if reads_left is None:
+            return False
+        if reads_left == 0:
+            return True
+        self.ledger_reads_before_shed[pid] = reads_left - 1
+        return False

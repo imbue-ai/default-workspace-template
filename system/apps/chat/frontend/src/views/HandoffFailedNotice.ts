@@ -21,7 +21,7 @@ import { startChatOnAccount } from "../shell";
 import { getShellConnection } from "../shellConnection";
 import { raiseNewChatFailure } from "./MessageInput";
 import { harnessLabel } from "./harness-labels";
-import { plainFailureLines, plainFailureSentence } from "./failure-lines";
+import { plainFailureLines, plainFailureSentence, reportedFailureOfLines } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 
@@ -148,7 +148,12 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
                 m("p", { class: "handoff-retry-error text-sm text-danger" }, plainFailureSentence(retryError)),
                 m("div", { class: "text-secondary" }, m(SeeDetails, { details: retryError.details })),
                 retryError.isReportable
-                  ? m(ReportBugButton, { connection: getShellConnection(), sm: true, extra: "self-start" })
+                  ? m(ReportBugButton, {
+                      connection: getShellConnection(),
+                      failure: reportedFailureOfLines(retryError),
+                      sm: true,
+                      extra: "self-start",
+                    })
                   : null,
               ])
             : null,

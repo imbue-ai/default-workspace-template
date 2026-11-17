@@ -17,7 +17,7 @@
 import "./style.css";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
-import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import { failureSentence, type FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { ClipboardBridge, navigatorClipboard, nekoRouteWithToken, serviceClipboardTransport } from "./clipboard";
@@ -26,7 +26,7 @@ import { InputRelay, XK_V } from "./input";
 import { keyboardMapForLanguage } from "./keyboard_map";
 import { MobileControls, isPhoneViewer } from "./mobile";
 import { NekoSocket } from "./neko_socket";
-import { Overlays, type FailureHost, type PageFailure } from "./overlays";
+import { Overlays, START_FAILED_STEM, type FailureHost } from "./overlays";
 import { PointerLockControl } from "./pointer_lock";
 import { RemoteCursor, listenForCursor } from "./remote_cursor";
 import { ResizeReporter } from "./resize_reporter";
@@ -91,7 +91,7 @@ class Viewer {
   private screenSize: Size = { width: 0, height: 0 };
   private isSigningIn = false;
   private signInFailureDetails: string | null = null;
-  private startFailure: PageFailure | null = null;
+  private startFailure: FailureMessage | null = null;
   private signInRetryTimer = 0;
   private notice: string | null = null;
   private noticeTimer = 0;
@@ -127,6 +127,7 @@ class Viewer {
       () => void this.start(),
       () => this.takeControl(),
       () => this.cancelPendingUrl(),
+      () => void this.loadState(),
     );
     this.stage.className = "screen-stage screen-stage--not-controlling";
     this.stage.tabIndex = 0;
@@ -249,7 +250,8 @@ class Viewer {
   attachShell(reportLocation: (title: string) => void): void {
     this.reportLocation = reportLocation;
     if (this.state) reportLocation(this.state.title);
-    // A handshake decides which failure buttons the overlay offers.
+    // A handshake decides which failure buttons the overlay offers, a state or not.
+    this.overlays.syncShellButtons();
     this.render();
   }
 
@@ -258,12 +260,19 @@ class Viewer {
     this.overlays.setHost(host);
   }
 
-  /** The first state could not be loaded; the service's events bring it once the service answers. */
-  showLoadFailure(error: unknown): void {
-    console.error("[screen] state failed", error);
-    if (this.state !== null) return;
-    const told = failureSentence(failureOf(error, "read"), "The Screen couldn't load");
-    this.overlays.showLoadFailure({ message: told.message, details: told.details });
+  /** Reads the Screen's state; a failure stays on the overlay until a state arrives, from here or the service's
+   *  events once the service answers. */
+  async loadState(): Promise<void> {
+    if (this.state === null) this.overlays.showLoading();
+    let state: ScreenStateDocument;
+    try {
+      state = await fetchState();
+    } catch (error: unknown) {
+      console.error("[screen] state failed", error);
+      if (this.state === null) this.overlays.showLoadFailure(failureOf(error, "read"));
+      return;
+    }
+    this.handleEvent({ type: "state", ...state });
   }
 
   /** The overlay's Start (or Try again): a refusal, or no answer, is said under its title until the stack moves. */
@@ -272,8 +281,7 @@ class Viewer {
     this.render();
     const failure = await postStart();
     if (failure === null) return;
-    const told = failureSentence(failure, "The Screen couldn't start");
-    this.startFailure = { message: told.message, details: told.details };
+    this.startFailure = failureSentence(failure, START_FAILED_STEM);
     this.render();
   }
 
@@ -623,10 +631,7 @@ function bootstrap(): void {
   window.addEventListener("focus", () => connection.focused());
   installElementContextMenu({ connection, handshake: () => handshake, open: createContextMenuOpener().open });
   const events = new ServiceEvents((event) => viewer.handleEvent(event));
-  fetchState()
-    .then((state) => viewer.handleEvent({ type: "state", ...state }))
-    .catch((error: unknown) => viewer.showLoadFailure(error))
-    .finally(() => events.start());
+  void viewer.loadState().finally(() => events.start());
 }
 
 window.addEventListener("load", bootstrap);

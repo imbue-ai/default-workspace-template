@@ -29,6 +29,7 @@ import { shortcutKey } from "../model/records";
 import type { LauncherMenuRows, LauncherRow, TextRow } from "../reducers/launcherRows";
 import { isRowEnabled } from "../reducers/launcherRows";
 import { FailureLine } from "./FailureLine";
+import type { ReportBug } from "./FailureLine";
 import { appGlyph, glyph } from "./glyphs";
 import { MENU_ITEM_PART, MENU_PART, MENU_SEPARATOR_PART } from "@imbue/workspace-ui/src/themes/parts";
 
@@ -66,6 +67,8 @@ export interface LauncherMenuAttrs extends Omit<LauncherSectionsAttrs, "isSheet"
   readonly bottomOffsetPx: number;
   /** Why the last row the launcher ran failed, shown at the card's foot, by the field that still holds its text. */
   readonly failure: FailureNotice | null;
+  /** Report a bug about that failure where it asks for one; null where no bug report can be opened. */
+  readonly onReportBug: ReportBug;
 }
 
 /** The key that runs the secondary text action, as the platform spells it. */
@@ -258,12 +261,17 @@ function launcherSections(attrs: LauncherSectionsAttrs): m.Children {
 }
 
 /** Why a run of the launcher (or the phone's start sheet) failed, beside its field. */
-export function launcherFailureLine(failure: FailureNotice | null): m.Children {
+export function launcherFailureLine(failure: FailureNotice | null, onReportBug: ReportBug): m.Children {
   if (failure === null) return null;
   return m(
     "div",
     { class: "mx-3 my-1.5" },
-    m(FailureLine, { notice: failure, marker: "launcher-failure", messageClass: "type-helper text-danger" }),
+    m(FailureLine, {
+      notice: failure,
+      onReportBug,
+      marker: "launcher-failure",
+      messageClass: "type-helper text-danger",
+    }),
   );
 }
 
@@ -288,7 +296,7 @@ export function LauncherMenu(): m.Component<LauncherMenuAttrs> {
           // Anchored above the field (plan section 4.2): the card rises with a field that grew past one row.
           style: { bottom: `${attrs.bottomOffsetPx}px` },
         },
-        [launcherSections({ ...attrs, isSheet: false }), launcherFailureLine(attrs.failure)],
+        [launcherSections({ ...attrs, isSheet: false }), launcherFailureLine(attrs.failure, attrs.onReportBug)],
       );
     },
   };

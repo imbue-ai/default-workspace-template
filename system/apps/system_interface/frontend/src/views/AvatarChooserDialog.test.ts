@@ -25,6 +25,7 @@ function render(overrides: Partial<AvatarChooserDialogAttrs> = {}): HTMLElement 
       { id: "mine", label: "Mine", source_path: "/tmp/mine.svg" },
     ],
     loadError: null,
+    onReportBug: null,
     onRetry: vi.fn(),
     selected: "mine",
     onSelect: vi.fn(),

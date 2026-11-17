@@ -46,16 +46,12 @@ from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
-from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
 from imbue.system_interface.shell.testing import TEST_PAGE_ID
-from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import client_report
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import identity_headers
-from imbue.system_interface.shell.testing import registry_row_toml
-from imbue.system_interface.shell.testing import shell_application
-from imbue.system_interface.shell.testing import write_two_app_registry
+from imbue.system_interface.shell.testing import not_built_shell
 from imbue.system_interface.shell.tour import ONBOARDING_MEDIA_ORIGIN
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
@@ -549,45 +545,13 @@ def test_not_built_repair_line_splits_the_way_a_shell_splits_it() -> None:
     assert printed_words.stdout.splitlines() == list(_NOT_BUILT_REPAIR_ARGV)
 
 
-def _not_built_shell(
-    tmp_path: Path, outcomes: list[LaunchPostOutcome], is_preview: bool = False, is_chat_registered: bool = True
-) -> tuple[Flask, list[LaunchPost]]:
-    """A shell with no built interface over the two-app registry (a terminal whose ``new`` is a GET, labelled
-    ``terminal-x1``) plus, unless told otherwise, a chat-shaped ``helper`` whose ``new`` posts typed text; its posts
-    are answered from ``outcomes`` and kept in the list returned beside it."""
-    helper = registry_row_toml(
-        "helper",
-        "http://localhost:7002",
-        display_name="Helper",
-        label="helper-y2",
-        launcher_rank=10,
-        launch_paths=(("root", "Helper", "/"), ("new", "New chat", "/api/intake")),
-        launch_params={"new": ["message"]},
-        launch_text_params={"new": "message"},
-        launch_methods={"new": "POST"},
-        launch_presets={"new": {"target": "new_chat"}},
-    )
-    registry_path = write_two_app_registry(tmp_path, *([helper] if is_chat_registered else []))
-    registry_path.write_text(registry_path.read_text().replace('label = ""', 'label = "terminal-x1"', 1))
-    posts: list[LaunchPost] = []
-
-    def poster(post: LaunchPost) -> LaunchPostOutcome:
-        posts.append(post)
-        return outcomes.pop(0)
-
-    broadcaster = WebSocketBroadcaster()
-    application = shell_application(
-        tmp_path, build_inventory(registry_path, broadcaster), broadcaster, is_preview=is_preview, launch_poster=poster
-    )
-    return application, posts
-
-
-def test_the_not_built_page_asks_an_agent_through_the_primary_text_action_and_opens_a_terminal_session(
+def test_the_not_built_page_asks_a_new_agent_through_the_secondary_text_action_and_opens_a_terminal_session(
     tmp_path: Path,
 ) -> None:
-    """The placeholder's "Ask an agent to fix this" sends the repair message through the app the launcher's text goes
-    to and answers where that chat's page is; its "See details" terminal is a session of its own."""
-    app, posts = _not_built_shell(
+    """The placeholder's "Ask an agent to fix this" sends the repair message through the launcher's secondary text
+    action, a new chat rather than the main one, and answers where that chat's page is; its "See details" terminal is
+    a session of its own."""
+    app, posts = not_built_shell(
         tmp_path,
         [
             LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-1"}),
@@ -618,12 +582,12 @@ def test_the_not_built_page_asks_an_agent_through_the_primary_text_action_and_op
 
 
 def test_the_not_built_page_offers_no_agent_without_an_app_to_ask_and_a_preview_asks_nothing(tmp_path: Path) -> None:
-    app, posts = _not_built_shell(tmp_path / "bare", [], is_chat_registered=False)
+    app, posts = not_built_shell(tmp_path / "bare", [], is_chat_registered=False)
     client = app.test_client()
     assert "var isAgentOffered = false;" in client.get("/").text
     assert client.post(NOT_BUILT_LAUNCH_PATH, json={"purpose": "repair_agent"}).status_code == 404
 
-    preview, preview_posts = _not_built_shell(tmp_path / "preview", [], is_preview=True)
+    preview, preview_posts = not_built_shell(tmp_path / "preview", [], is_preview=True)
     refused = preview.test_client().post(NOT_BUILT_LAUNCH_PATH, json={"purpose": "repair_agent"})
     assert refused.status_code == 403
     assert refused.get_json()["user_facing_message"] == refused.get_json()["detail"]

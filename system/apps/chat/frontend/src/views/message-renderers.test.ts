@@ -195,6 +195,36 @@ describe("renderAssistantMessageChildren API errors", () => {
     expect(seeDetailsOf(children)).toBeNull();
   });
 
+  it("leads a conversation too long for the model with what gets past it, since trying again fails the same way", () => {
+    const body =
+      'API Error: 400 {"type":"error","error":{"type":"invalid_request_error",' +
+      '"message":"prompt is too long: 214332 tokens > 200000 maximum"}}';
+    for (const text of [body, "Prompt is too long"]) {
+      const children = renderAssistantMessageChildren(
+        apiErrorEvent(text, "context_too_long", false),
+        new Map(),
+        "agent-1",
+      );
+      expect(allText(children)).toContain(
+        "This conversation is too long for the model to take in. Start a new chat, or send /compact to shorten it.",
+      );
+      expect(allText(children)).not.toContain("having trouble");
+    }
+  });
+
+  it("leads a request the provider refused with that, not with the provider having trouble", () => {
+    const body =
+      'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: too large"}}';
+    const children = renderAssistantMessageChildren(
+      apiErrorEvent(body, "invalid_request", false),
+      new Map(),
+      "agent-1",
+    );
+    expect(allText(children)).toContain("The model provider refused this request.");
+    expect(allText(children)).not.toContain("having trouble");
+    expect(seeDetailsOf(children)).toBe(body);
+  });
+
   it("leads a credential failure whose text is a raw body with the way to sign in again", () => {
     const body = '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}';
     const children = renderAssistantMessageChildren(

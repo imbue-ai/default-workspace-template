@@ -25,7 +25,7 @@ import { getShellConnection } from "../shellConnection";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import { mintMessageId, sendMessage } from "../models/Response";
 import { describeSendFailure } from "./composer-failures";
-import { plainFailureLinesOf, plainFailureSentence } from "./failure-lines";
+import { plainFailureLinesOf, plainFailureSentence, reportedFailureOfLines } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 import { raiseFailureNotice } from "./MessageInput";
 import type { SecretResolution } from "./message-classification";
@@ -444,7 +444,13 @@ export function renderSecretCard(
                   "Ask the agent again",
                 )
               : null,
-            state.error.isReportable ? m(ReportBugButton, { connection: getShellConnection(), sm: true }) : null,
+            state.error.isReportable
+              ? m(ReportBugButton, {
+                  connection: getShellConnection(),
+                  failure: reportedFailureOfLines(state.error),
+                  sm: true,
+                })
+              : null,
           ]),
         ])
       : null,

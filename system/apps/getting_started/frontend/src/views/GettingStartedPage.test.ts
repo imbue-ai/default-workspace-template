@@ -2,6 +2,7 @@
 import "@imbue/workspace-ui/src/testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
+import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { afterEach, describe, expect, it } from "vitest";
 import type { TemplateCatalogState } from "../models/TemplateCatalog";
 import { catalogTemplateRecord } from "../testing/records";
@@ -32,19 +33,19 @@ interface Rendered {
   readonly root: HTMLElement;
   readonly started: string[];
   readonly retries: number[];
-  readonly bugReports: number[];
+  readonly bugReports: ReportedFailure[];
 }
 
 function render(catalog: TemplateCatalogState = LOADED, canReportBug = true): Rendered {
   const started: string[] = [];
   const retries: number[] = [];
-  const bugReports: number[] = [];
+  const bugReports: ReportedFailure[] = [];
   const root = mountView(() =>
     m(GettingStartedPage, {
       catalog,
       onStartWithText: (text) => started.push(text),
       onRetryTemplates: () => retries.push(retries.length + 1),
-      connection: { canReportBug: () => canReportBug, reportBug: () => bugReports.push(bugReports.length + 1) },
+      connection: { canReportBug: () => canReportBug, reportBug: (failure) => bugReports.push(failure) },
     }),
   );
   return { root, started, retries, bugReports };
@@ -137,20 +138,27 @@ describe("the Getting Started page", () => {
     const loading = render({ kind: "loading" });
     expect(loading.root.querySelector(".getting-started-templates-status")!.textContent).toContain("Loading");
     unmountViews();
-    const failed = render({ kind: "failed" });
+    const failed = render({ kind: "failed", details: "HTTP 502" });
     expect(failed.root.querySelector(".getting-started-templates-status")!.textContent).toBe(
       "Templates couldn't be loaded. Try again. If this persists, report a bug.",
     );
+    // The reason waits behind a collapsed "See details" under the line.
+    const seeDetails = failed.root.querySelector<HTMLDetailsElement>(".getting-started-templates-failed details")!;
+    expect(seeDetails.open).toBe(false);
+    expect(seeDetails.querySelector("summary")!.textContent).toBe("See details");
+    expect(seeDetails.querySelector("pre")!.textContent).toBe("HTTP 502");
     // Its next step is on the line: Try again fetches again, in place.
     failed.root.querySelector<HTMLElement>(".getting-started-templates-retry")!.click();
     expect(failed.retries).toEqual([1]);
     const report = failed.root.querySelector<HTMLElement>(".getting-started-templates-report")!;
     expect(report.textContent).toBe("Report a bug");
     report.click();
-    expect(failed.bugReports).toEqual([1]);
+    expect(failed.bugReports).toEqual([
+      { message: "Templates couldn't be loaded. Try again. If this persists, report a bug.", details: "HTTP 502" },
+    ]);
     unmountViews();
     // Where the shell says Imbue Studio opens no bug report, the line offers none.
-    const unreportable = render({ kind: "failed" }, false);
+    const unreportable = render({ kind: "failed", details: "HTTP 502" }, false);
     expect(unreportable.root.querySelector(".getting-started-templates-report")).toBeNull();
     unmountViews();
     const disabled = render({ kind: "disabled" });

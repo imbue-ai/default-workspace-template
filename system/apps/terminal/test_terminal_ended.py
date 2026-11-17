@@ -17,6 +17,7 @@ import pytest
 from app_manifest.testing import (
     SHELL_HANDSHAKE_COUNTER_SCRIPT,
     built_app_contract_source,
+    shell_messages,
     shell_stand_in_page,
 )
 from playwright.sync_api import Browser, BrowserContext, Frame, Page, Route, expect
@@ -99,10 +100,6 @@ def _serve(context: BrowserContext, wrapper_html: str, can_report_bug: bool = Fa
     return launched
 
 
-def _shell_messages(page: Page, message_type: str) -> list[dict[str, object]]:
-    return [message for message in page.evaluate("window.shellMessages") if message["type"] == message_type]
-
-
 def _open(context: BrowserContext) -> tuple[Page, Frame, Frame]:
     page = context.new_page()
     pty_url = f"http://{_PTY_LABEL}.{_WRAPPER_HOST}/?arg=_&arg=session&arg=terminal-1"
@@ -139,14 +136,17 @@ def test_a_terminal_tmux_would_not_start_says_so_and_offers_try_again_an_agent_a
     expect(ended.get_by_role("button", name="Start a new terminal")).to_be_hidden()
 
     ended.get_by_role("button", name="Ask an agent to fix this").click()
-    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:start-with-text')")
-    [asked] = _shell_messages(page, "shell:start-with-text")
+    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:start-new-with-text')")
+    [asked] = shell_messages(page, "shell:start-new-with-text")
     task = str(asked["text"])
     assert task.startswith("The terminal terminal-1 couldn't start.\n\nDetails:\n```\n")
     assert "no server running on /tmp/tmux-1000/default\n```" in task
 
     ended.get_by_role("button", name="Report a bug").click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
+    [reported] = shell_messages(page, "shell:report-bug")
+    assert reported["message"] == "This terminal couldn't start. Try again. If this persists, report a bug."
+    assert reported["details"] == "no server running on /tmp/tmux-1000/default"
 
     ended.get_by_role("button", name="Try again").click()
     expect(ended).to_be_hidden()
@@ -175,8 +175,20 @@ def test_a_terminal_whose_folder_is_gone_says_so_and_starts_a_new_one_in_the_sam
     )
     assert launched == ["POST"]
     page.wait_for_function("window.shellMessages.some((message) => message.path === '/?session=terminal-2')")
-    locations = _shell_messages(page, "shell:location")
+    locations = shell_messages(page, "shell:location")
     assert locations[-1] == {"type": "shell:location", "path": "/?session=terminal-2", "title": "Terminal 2"}
+
+
+def test_an_unknown_kind_from_the_pty_reads_as_a_terminal_that_closed(desktop_context: BrowserContext) -> None:
+    _serve(desktop_context, _wrapper_html("terminal-1"))
+    _page, wrapper, pty = _open(desktop_context)
+
+    # Anything in the pty can print the sequence; a kind naming an Object member is not one of the endings.
+    _print_end(pty, "constructor", "printed by a program")
+
+    ended = wrapper.locator("#ended")
+    expect(ended.locator("#ended-message")).to_have_text("This terminal closed.")
+    expect(ended.get_by_role("button", name="Start a new terminal")).to_be_visible()
 
 
 def _open_failure_page(context: BrowserContext, error: TerminalAppError, can_report_bug: bool) -> tuple[Page, Frame]:
@@ -200,8 +212,8 @@ def test_a_failure_page_for_unreadable_saved_terminals_asks_an_agent_through_the
     expect(wrapper.get_by_role("button", name="Report a bug")).to_be_hidden()
     wrapper.get_by_role("button", name="Ask an agent to fix this").click()
 
-    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:start-with-text')")
-    [asked] = _shell_messages(page, "shell:start-with-text")
+    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:start-new-with-text')")
+    [asked] = shell_messages(page, "shell:start-new-with-text")
     task = str(asked["text"])
     assert task.startswith("The Terminal app can't open terminals: it can't read this workspace's saved terminals.")
     assert "the terminal store /x/instances.json is not valid JSON: x\n```" in task
@@ -230,6 +242,9 @@ def test_a_failure_page_that_asks_for_a_bug_report_offers_one_only_where_the_she
         return
     report.click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
+    [reported] = shell_messages(page, "shell:report-bug")
+    assert reported["message"] == "This terminal couldn't be opened. Try again. If this persists, report a bug."
+    assert reported["details"] == "unexpected"
 
 
 def test_a_failure_page_opened_on_its_own_offers_no_agent(desktop_context: BrowserContext) -> None:
