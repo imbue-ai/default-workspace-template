@@ -10,12 +10,9 @@
  */
 
 import m from "mithril";
-import type { StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
-import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import type { CatalogTemplate, TemplateCatalogState } from "../models/TemplateCatalog";
 import { resolveShelves, searchTemplates } from "../models/TemplateCatalog";
 import { TemplateDetail } from "./TemplateDetail";
@@ -47,8 +44,8 @@ const FIELD_GLYPH_SIZE = 14;
 
 export interface GettingStartedPageAttrs {
   readonly catalog: TemplateCatalogState;
-  /** Start a chat whose first message is ``text``; settles with how it went. */
-  readonly onStartWithText: (text: string) => Promise<StartNewOutcome>;
+  /** Start a chat whose first message is ``text``. */
+  readonly onStartWithText: (text: string) => void;
 }
 
 export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
@@ -56,15 +53,6 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
   let startShownCount = START_PAGE_SIZE;
   let detailTemplate: CatalogTemplate | null = null;
   let isScrollToTemplatesPending = false;
-  const toasts = new ToastQueue(() => m.redraw());
-
-  /** The shell answers a failed start to the page and shows nothing itself, so the page's toast says it. */
-  function start(text: string, attrs: GettingStartedPageAttrs): void {
-    void attrs.onStartWithText(text).then((outcome) => {
-      if (outcome.isOpened) return;
-      toasts.show(outcome.failure.message, { isLasting: false, details: outcome.failure.details });
-    });
-  }
 
   function startTile(option: StartOption, attrs: GettingStartedPageAttrs): m.Vnode {
     const isCatalogOffered = attrs.catalog.kind !== "disabled";
@@ -75,7 +63,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
         isScrollToTemplatesPending = true;
         return;
       }
-      start(option.prompt, attrs);
+      attrs.onStartWithText(option.prompt);
     };
     return m(
       "button",
@@ -269,7 +257,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
               onBack: () => {
                 detailTemplate = null;
               },
-              onStartWithText: (text) => start(text, attrs),
+              onStartWithText: attrs.onStartWithText,
             })
           : [
               searchField(),
@@ -281,19 +269,11 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
                   : [pagedStartSomethingSection(attrs), templatesSection(attrs.catalog)],
               ),
             ];
-      return [
-        m(
-          "main",
-          { class: "getting-started-page h-screen w-full overflow-y-auto bg-page px-6 py-5 text-primary" },
-          m("div", { class: "@container mx-auto w-full max-w-4xl" }, body),
-        ),
-        m(Toasts, {
-          toasts: toasts.current(),
-          placementClass: "fixed bottom-4",
-          onDismiss: (id) => toasts.dismiss(id),
-          onHold: (id) => toasts.hold(id),
-        }),
-      ];
+      return m(
+        "main",
+        { class: "getting-started-page h-screen w-full overflow-y-auto bg-page px-6 py-5 text-primary" },
+        m("div", { class: "@container mx-auto w-full max-w-4xl" }, body),
+      );
     },
   };
 }
