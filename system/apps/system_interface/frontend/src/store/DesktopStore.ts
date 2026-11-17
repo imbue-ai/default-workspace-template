@@ -3132,6 +3132,9 @@ export class DesktopStore {
       else copy.report(notice);
       return null;
     }
+    if (outcome.unsavedKind !== null) {
+      this.toastNotice(this.unsavedLaunchNotice(app, outcome.unsavedKind), { isLasting: false });
+    }
     if (target.kind === "window") {
       if (named !== null) this.applyOwnNavigation(named, outcome.window);
       return outcome.window.id;
@@ -3142,6 +3145,22 @@ export class DesktopStore {
     }
     this.takeOpened(desktopId, outcome.window, outcome.isNew, isMinimized);
     return outcome.window.id;
+  }
+
+  /** What a launch the app took says when the shell could not record where its window is: the window shows what
+   *  was asked for, but may not be where it is now after a reload. */
+  private unsavedLaunchNotice(app: string, unsavedKind: "out_of_space" | "not_saved"): FailureNotice {
+    const name = this.displayNameOf(app);
+    if (unsavedKind === "out_of_space") {
+      return this.plainNotice(
+        `${name} got it, but this workspace is out of space, so its window's place wasn't saved.`,
+      );
+    }
+    return this.noticeOf({
+      message: `${name} got it, but its window's place wasn't saved. If this persists, report a bug.`,
+      details: null,
+      isReportable: true,
+    });
   }
 
   /** ``shell:open {path, ifPresent}`` from a page: a window of the posting window's own app, on its desktop. */

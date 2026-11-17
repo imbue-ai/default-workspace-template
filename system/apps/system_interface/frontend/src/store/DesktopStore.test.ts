@@ -10,7 +10,13 @@ import { TOAST_DURATION_MS } from "@imbue/workspace-ui/src/models/toasts";
 import { notAnsweredSentence, readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
-import { activeFocusedWindowId, activePlacements, barEntries, isLayoutDirty } from "../reducers/desktopState";
+import {
+  activeFocusedWindowId,
+  activePlacements,
+  barEntries,
+  findWindow,
+  isLayoutDirty,
+} from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
 import {
@@ -840,6 +846,38 @@ describe("opening", () => {
     expect(notices()).toEqual(["Couldn't send that to Buddy. Try again. If this persists, report a bug."]);
     const pinned = activePlacements(store.getState()).find((placement) => placement.window_id === "win-9");
     expect(pinned?.is_minimized).toBe(true);
+  });
+
+  it("takes a send the app took as sent though the shell could not record the window's place, and says so", async () => {
+    const store = await startedStore();
+    offerApps(api, socket, [
+      appRecord("buddy", {
+        display_name: "Buddy",
+        pin: { path: "/", style: "plain", scope: "independent", default_mode: "bar" },
+        launch_paths: [
+          launchPathRecord({ id: "new", path: "/new", method: "POST", params: ["message"], text_param: "message" }),
+        ],
+      }),
+    ]);
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" })],
+      }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    api.postLaunchAnswer = "/?chat=agent-1";
+    api.launchUnsavedKind = "out_of_space";
+
+    const reported: FailureNotice[] = [];
+    expect(await store.runFreeText("buddy", "new", "free up space", (notice) => reported.push(notice))).toBe(true);
+
+    // The launcher lets go of the text, the window shows the chat the app answered, and the launch went once.
+    expect(reported).toEqual([]);
+    expect(api.calls.filter((call) => call.startsWith("launch"))).toHaveLength(1);
+    expect(store.getState().layout.window_paths["win-9"]?.path).toBe("/?chat=agent-1");
+    expect(notices()).toEqual([
+      "Buddy got it, but this workspace is out of space, so its window's place wasn't saved.",
+    ]);
   });
 
   it("reads the desktops again after a launch into a window that has gone, so a second try finds it as it is", async () => {

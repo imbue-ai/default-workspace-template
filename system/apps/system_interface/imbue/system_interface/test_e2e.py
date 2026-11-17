@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -64,6 +65,7 @@ from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_rollback_point
 from imbue.system_interface.shell.testing import write_stub_update_self_script
 from imbue.system_interface.shell.tour import OFFER_TOUR_FILENAME
+from imbue.system_interface.shell.window_paths import WINDOW_PATHS_DIRNAME
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import is_e2e_browser_installed
@@ -1032,7 +1034,7 @@ def test_a_launch_into_an_app_that_is_not_running_says_so_and_offers_an_agent_to
 ) -> None:
     """A POST launch nothing listens for, of an app the workspace does not start on a request, is told as the app's
     stopped window tells it (not as a failed open to report), and the agent it offers is asked through the
-    launcher's primary text action."""
+    launcher's text action, the note staying up."""
     ghost_row = registry_row_toml(
         "ghost",
         f"http://127.0.0.1:{find_free_port()}",
@@ -1063,7 +1065,43 @@ def test_a_launch_into_an_app_that_is_not_running_says_so_and_offers_an_agent_to
             poll_interval=0.1,
             error_message="the request to start Ghost never reached the agent's app",
         )
+        # Handing the failure to an agent leaves the note up.
+        expect(toast).to_contain_text("Ghost isn't running.")
         assert [window["id"] for window in _windows(server.base_url)] == windows_before
+
+
+@pytest.mark.timeout(90, func_only=False)
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into a read-only directory")
+def test_a_send_the_app_took_shows_its_page_once_though_the_window_s_place_could_not_be_saved(
+    tmp_path: Path, page: Page
+) -> None:
+    """With this client's window paths unwritable, text sent into the pinned window still goes to the app once, the
+    window shows the page the app answered, the launcher lets go of the text, and a note says the place wasn't
+    saved (the send is not offered again, which would ask the app a second time)."""
+    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar")) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        window_paths = server.state_dir / WINDOW_PATHS_DIRNAME
+        window_paths.mkdir(exist_ok=True)
+        window_paths.chmod(0o555)
+        try:
+            _open_launcher(page)
+            field = page.locator("[data-launcher-field] textarea")
+            field.fill("free up some space")
+            page.keyboard.press("Enter")
+
+            new_page_path = _launched_page_path(_PINNED_NEW_LAUNCH_ID, {_PINNED_TEXT_PARAM: "free up some space"})
+            frame = _page_frame(page, pinned["id"])
+            expect(frame.locator("#where")).to_have_text(new_page_path, timeout=15000)
+            expect(page.locator("[data-toast]")).to_contain_text(
+                "Buddy got it, but its window's place wasn't saved.", timeout=10000
+            )
+            expect(field).to_have_value("")
+            page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
+            assert len(_posted_launches(server.pinned_url)) == 1
+            assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
+        finally:
+            window_paths.chmod(0o755)
 
 
 @pytest.mark.timeout(60, func_only=False)
