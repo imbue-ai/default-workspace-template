@@ -17,7 +17,7 @@
 import "./style.css";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
-import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import { failureSentence, type FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { ClipboardBridge, navigatorClipboard, nekoRouteWithToken, serviceClipboardTransport } from "./clipboard";
@@ -26,7 +26,7 @@ import { InputRelay, XK_V } from "./input";
 import { keyboardMapForLanguage } from "./keyboard_map";
 import { MobileControls, isPhoneViewer } from "./mobile";
 import { NekoSocket } from "./neko_socket";
-import { Overlays, START_FAILED_STEM, type FailureHost, type PageFailure } from "./overlays";
+import { Overlays, START_FAILED_STEM, type FailureHost } from "./overlays";
 import { PointerLockControl } from "./pointer_lock";
 import { RemoteCursor, listenForCursor } from "./remote_cursor";
 import { ResizeReporter } from "./resize_reporter";
@@ -91,7 +91,7 @@ class Viewer {
   private screenSize: Size = { width: 0, height: 0 };
   private isSigningIn = false;
   private signInFailureDetails: string | null = null;
-  private startFailure: PageFailure | null = null;
+  private startFailure: FailureMessage | null = null;
   private signInRetryTimer = 0;
   private notice: string | null = null;
   private noticeTimer = 0;
@@ -281,8 +281,7 @@ class Viewer {
     this.render();
     const failure = await postStart();
     if (failure === null) return;
-    const told = failureSentence(failure, START_FAILED_STEM);
-    this.startFailure = { message: told.message, details: told.details, isReportable: told.isReportable };
+    this.startFailure = failureSentence(failure, START_FAILED_STEM);
     this.render();
   }
 

@@ -10,7 +10,7 @@
 import { askAgentToFix } from "@imbue/workspace-ui/src/app_contract";
 import type { AgentFixRequest, ReportedFailure, ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 import { REPORT_A_BUG_LABEL, failureSentence } from "@imbue/workspace-ui/src/models/failure";
-import type { Failure } from "@imbue/workspace-ui/src/models/failure";
+import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
 import { isOwnSessionController } from "./state";
 import type { StreamStatus } from "./webrtc";
@@ -19,14 +19,6 @@ export const ASK_AGENT_TO_FIX_LABEL = "Ask an agent to fix this";
 
 /** What the overlay needs of the shell connection for its failure buttons. */
 export type FailureHost = Pick<ShellConnection, "hasShell" | "startNewWithText" | "canReportBug" | "reportBug">;
-
-/** A failure the page itself ran into (a refused Start, a state it could not load): our sentence, its details, and
- *  whether the sentence asks for a bug report. */
-export interface PageFailure {
-  readonly message: string;
-  readonly details: string | null;
-  readonly isReportable: boolean;
-}
 
 /** What the main overlay shows: hidden (null), or a title, a line under it, the details, and the offered actions. */
 export interface OverlayView {
@@ -77,7 +69,7 @@ export function describeLoadFailure(failure: Failure): OverlayView {
   return view(told.message, fields);
 }
 
-function stoppedView(state: ScreenStateDocument, startFailure: PageFailure | null): OverlayView {
+function stoppedView(state: ScreenStateDocument, startFailure: FailureMessage | null): OverlayView {
   const details = state.stop_reason;
   let stopped: OverlayView;
   switch (state.stop_cause) {
@@ -126,7 +118,7 @@ export function describeOverlay(
   streamStatus: StreamStatus,
   session: NekoSessionAnswer | null,
   signInFailureDetails: string | null,
-  startFailure: PageFailure | null,
+  startFailure: FailureMessage | null,
 ): OverlayView | null {
   switch (state.lifecycle) {
     case "installing":
@@ -250,7 +242,7 @@ export class Overlays {
     streamStatus: StreamStatus,
     session: NekoSessionAnswer | null,
     signInFailureDetails: string | null,
-    startFailure: PageFailure | null,
+    startFailure: FailureMessage | null,
   ): void {
     this.render(describeOverlay(state, streamStatus, session, signInFailureDetails, startFailure));
     const control: ControlDocument = state.control;
