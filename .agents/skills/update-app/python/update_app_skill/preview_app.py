@@ -191,6 +191,12 @@ def live_preview_url(repo_root: Path, app_name: str) -> str | None:
     return f"http://127.0.0.1:{int(str(port))}" if port else None
 
 
+def live_preview_is_surfaced(repo_root: Path, app_name: str) -> bool:
+    """Whether the app's current preview registered a window, as a private instance does not."""
+    state = _read_json(_instance_state_path(repo_root, app_name))
+    return state is not None and bool(state.get("services"))
+
+
 def live_registry_path(repo_root: Path) -> Path:
     """The workspace's registry: the live checkout's, even when ``repo_root`` is a git worktree."""
     return forward_port.apps_file(serve_isolated_instance.live_checkout(repo_root))

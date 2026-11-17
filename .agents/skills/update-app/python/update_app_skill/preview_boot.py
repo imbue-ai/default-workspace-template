@@ -33,6 +33,7 @@ from update_app_skill.preview_app import (
     _reframe_previews_naming,
     _registry_copy_path,
     instance_name,
+    live_preview_is_surfaced,
     live_preview_url,
     live_preview_worktree,
     live_registry_path,
@@ -227,6 +228,13 @@ def up(
             f"'{instance_name(app_name)}' app can only be one at a time, so booting this one would "
             "hijack it. Surface this to the user and coordinate with that pass -- or, if it is "
             f"abandoned, tear it down first with 'down --app {app_name}'.\n"
+        )
+        return 1
+    if is_private and live_preview_is_surfaced(repo_root, app_name):
+        sys.stderr.write(
+            f"preview: a preview of {app_name!r} with a window is already up, and a private "
+            "instance would replace it, closing the user's window on it. Drop --private to "
+            f"re-boot it with its window, or tear it down first with 'down --app {app_name}'.\n"
         )
         return 1
     manifest_path, manifest = find_manifest(worktree, app_name)

@@ -117,8 +117,19 @@ class _RecordingInstances(mod.Instances):
         state_path = self._state_path(spec.name)
         state_path.parent.mkdir(parents=True, exist_ok=True)
         self.next_port += 1
+        services = [
+            name
+            for name in (spec.service_name, spec.preview_service_name)
+            if name is not None
+        ]
         state_path.write_text(
-            json.dumps({"cwd": str(spec.cwd), "inner_port": self.next_port})
+            json.dumps(
+                {
+                    "cwd": str(spec.cwd),
+                    "inner_port": self.next_port,
+                    "services": services,
+                }
+            )
         )
         return 0
 
@@ -351,6 +362,33 @@ def test_a_private_shell_from_a_worktree_reads_the_live_checkouts_registry(
     )
 
     assert _shell_registry_rows(worktree)["chat"]["url"] == "http://localhost:8010"
+
+
+def test_a_private_up_refuses_to_replace_a_preview_with_a_window_but_replaces_a_private_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    worktree = _write_worktree(tmp_path)
+    instances = _RecordingInstances(tmp_path)
+
+    def _up_notes(*, is_private: bool) -> int:
+        return boot.up(
+            "notes",
+            worktree,
+            tmp_path,
+            is_private=is_private,
+            instances=instances,
+            dump_registry=_dump_registry,
+        )
+
+    assert _up_notes(is_private=False) == 0
+    assert _up_notes(is_private=True) == 1
+    assert "closing the user's window" in capsys.readouterr().err
+    assert instances.ups() == ["notes-preview"]
+
+    assert mod.down("notes", tmp_path, instances=instances) == 0
+    assert _up_notes(is_private=True) == 0
+    assert _up_notes(is_private=True) == 0
+    assert instances.ups() == ["notes-preview"] * 3
 
 
 def test_a_private_instance_cannot_frame_siblings(tmp_path: Path) -> None:
