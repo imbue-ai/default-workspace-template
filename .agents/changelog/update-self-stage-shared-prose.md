@@ -8,6 +8,4 @@
 
 - **`validate_skill.py`** counts a path into a copy of the tree (`<somewhere>/.agents/...`) as a link to the file it copies, so the depth check sees through the staged prefix.
 
-- **The shared layer links no file inside a skill.** `launch-task`'s `worker-failure.md` and `dead-worker-recovery.md`, which every lead follows, moved to `.agents/shared/references/lead-proxy/`, so `update-self` stages one path fewer. `harden-contention.md` and `interactive-delivery.md` no longer point into the harden worker's references, `freeing-memory.md` names the `update-self` skill in place of its reference, and the visiting agent's primer names the `connect-external-service` skill in place of its latchkey reference. `skill_checks.py` gains `shared_links_into_skills`, which lists any such link.
-
 The scripts the skill mirrors into its own package are unchanged.

@@ -1,0 +1,1 @@
+`system/test_skills.py` fails when a file under `.agents/shared/` links a file inside a skill other than its `SKILL.md`: the shared layer may name a skill, and what several skills need lives in the shared layer.
