@@ -10,8 +10,8 @@ Six checks, each over one skill (``check_failures``):
 - ``paths``: every path its markdown names under ``.agents/``, ``system/`` or ``docs/`` exists.
 - ``contents``: a SKILL.md over 200 lines, or a reference over 100, has a list in its first 100
   lines naming every H2 section below it.
-- ``boundary``: its markdown links no file inside another skill, other than that skill's
-  SKILL.md.
+- ``boundary``: its markdown links no markdown file inside another skill, other than that
+  skill's SKILL.md. Another skill's scripts are run, not read, so they may be named.
 
 And two over what lies outside every skill: ``unreached_shared_files``, and
 ``outside_links_into_skills`` for the shared layer and ``AGENTS.md``.
@@ -611,11 +611,14 @@ def check_failures(
             )
     for markdown in markdown_files:
         failures.extend(_contents_failures(tree, markdown, skill_md))
+    own_prefix = f"{skill}/"
     for markdown in markdown_files:
-        if not markdown.startswith(f"{skill}/"):
+        if not markdown.startswith(own_prefix):
             continue
         for linked in sorted(tree.links(markdown, skill)):
-            if _is_inside_a_skill(linked) and not linked.startswith(f"{skill}/"):
+            if linked.startswith(own_prefix):
+                continue
+            if _is_skill_internal_markdown(linked):
                 failures.append(
                     CheckFailure(
                         Check.BOUNDARY,
@@ -625,8 +628,9 @@ def check_failures(
     return failures
 
 
-def _is_inside_a_skill(linked: str) -> bool:
-    """Whether a linked file is one of a skill's own, as opposed to the skill's SKILL.md."""
+def _is_skill_internal_markdown(linked: str) -> bool:
+    """Whether a linked file is a skill's markdown other than its SKILL.md: a file only that
+    skill's reader reads. A skill's scripts are run, not read, so they are not."""
     return (
         linked.startswith(_SKILLS_DIR + "/")
         and linked.endswith(".md")
@@ -644,11 +648,11 @@ def skill_dirs(repo_root: Path) -> list[Path]:
 def outside_links_into_skills(
     repo_root: Path, tree: SkillTree | None = None
 ) -> list[tuple[str, str]]:
-    """Each markdown file outside every skill with a file it links inside one.
+    """Each markdown file outside every skill with a markdown file it links inside one.
 
     The files are the ones under ``.agents/shared/`` and ``AGENTS.md``. Either may name a
-    skill, by its name or its SKILL.md. A skill's other files are that skill's own: what
-    several skills need belongs in the shared layer.
+    skill, by its name or its SKILL.md, and run its scripts. A skill's other markdown is that
+    skill's own: what several skills need belongs in the shared layer.
     """
     if tree is None:
         tree = SkillTree(repo_root)
@@ -659,7 +663,7 @@ def outside_links_into_skills(
         (name, linked)
         for name in outside
         for linked in tree.links(name, None)
-        if _is_inside_a_skill(linked)
+        if _is_skill_internal_markdown(linked)
     )
 
 
