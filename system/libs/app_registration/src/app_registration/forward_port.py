@@ -908,7 +908,7 @@ _MANIFEST_TABLE_ARRAY_COPIERS: tuple[tuple[str, _TableCopier], ...] = (
 class IsolatedInstanceTag(TypedDict):
     """The isolated instance a row's window shows (a preview, or a mock's frame), so the shell can offer to start it again."""
 
-    # The app it previews or frames: what ``preview_app.py revive --app`` or ``mock_frame.py revive --app`` takes.
+    # The app it previews or frames.
     app: str
     # What the frame shows, as ``preview_wrapper_server.FrameKind`` spells it: ``change`` or ``mock``.
     kind: str

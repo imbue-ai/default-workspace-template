@@ -25,8 +25,7 @@ REVIVE_SCRIPT_REL_BY_KIND: Final[dict[IsolatedInstanceKind, str]] = {
     IsolatedInstanceKind.MOCK: ".agents/skills/build-app/python/build_app_skill/mock_frame.py",
 }
 
-# A revive waits up to a minute for each server it boots: a preview's own two, and two more
-# for each sibling it frames.
+# A revive waits up to a minute for each server it boots, a preview's siblings' included.
 _REVIVE_TIMEOUT_SECONDS: Final[float] = 300.0
 _REVIVE_SHUTDOWN_TIMEOUT_SECONDS: Final[float] = 5.0
 # How much of the script's stderr the shell's log keeps of a failure: its last lines say why.
