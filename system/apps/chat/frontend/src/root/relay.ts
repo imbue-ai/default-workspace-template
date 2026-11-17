@@ -27,8 +27,9 @@
  * not the page that asked: those answers (``minds:provider-sign-in-ack``, and
  * ``minds:permission-resolutions``, the verdict on a permission request a page asked the chrome
  * to open, which the page's card flips on and whose activity strip covers the wait for the agent
- * to be told) are passed down to the root's inner frames, as is the shell's
- * ``shell:keybindings-changed`` (each inner page re-fetches its resolved chords). Everything else
+ * to be told) are passed down to the root's inner frames, as are the shell's
+ * ``shell:keybindings-changed`` (each inner page re-fetches its resolved chords) and its
+ * ``shell:start-new-with-text-result`` (each inner page settles only a request it sent, by its id). Everything else
  * the chrome sends is the root's own to handle.
  *
  * Trust: a message going up counts only when its source is one of the root's own inner frames,
@@ -47,6 +48,7 @@ import {
   SHELL_OPEN_LINK,
   SHELL_REPORT_BUG,
   SHELL_START_NEW_WITH_TEXT,
+  SHELL_START_NEW_WITH_TEXT_RESULT,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
@@ -69,6 +71,7 @@ const FORWARDED_TO_INNER_TYPES: ReadonlySet<string> = new Set([
   PROVIDER_SIGN_IN_ACK,
   PERMISSION_RESOLUTIONS,
   SHELL_KEYBINDINGS_CHANGED,
+  SHELL_START_NEW_WITH_TEXT_RESULT,
 ]);
 
 /** Whether a posted message is one the root passes up to the shell. */

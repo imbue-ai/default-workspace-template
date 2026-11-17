@@ -49,7 +49,11 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   chat that asks an agent to fix the failure (`askAgentToFix` in
   `src/app_contract.ts`, through `shell:start-new-with-text`, one task text
   for every caller: what failed, the details verbatim, and what to do), and
-  renders nothing where no shell frames the page; `ReportBugButton` asks the
+  renders nothing where no shell frames the page. `askAgentToFix` answers a
+  promise that settles on the shell's `shell:start-new-with-text-result`
+  (`{isOpened: true}`, or `{isOpened: false, failure}`; as not answered on a
+  fresh handshake), and the button reads "Asking an agent…", disabled, until
+  it settles, then shows a failure under itself; `ReportBugButton` asks the
   shell to open Imbue Studio's bug report about the failure it is given (a
   `ReportedFailure`: the sentence on screen and what its "See details" holds,
   sent as `shell:report-bug {message, details}`), and renders only where the
@@ -66,7 +70,12 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   learned it can open a bug report gains the button once it does. Pressing a
   button dismisses its toast, except one marked `keepsToast` (a button that
   hands the failure on, "Ask an agent to ...", and "Report a bug"), after
-  which the toast's other buttons still apply.
+  which the toast's other buttons still apply. An action with `pending`
+  (`{isPending, label}`) is drawn disabled under `label` while `isPending()`
+  holds, read at each draw. A plain toast may carry
+  details too: it then takes presses, shows "See details" and a close
+  button, and stays once its details are opened (`ToastQueue.hold`, which
+  `Toasts` calls through `onHold`).
 - `src/app_contract.ts`: an app page's side of the browser-side contract
   (contracts.md section 10 of the workspace app model, extended by section 7
   of the desktop interface's contracts.md), which the shell's frontend also
@@ -88,8 +97,14 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
     askButton.hidden = !connection.hasShell();
     reportButton.hidden = !connection.canReportBug();
   }
-  askButton.onclick = () =>
-    askAgentToFix(connection, { whatFailed: "The terminal couldn't start", details: output });
+  askButton.onclick = async () => {
+    askButton.disabled = true;
+    askButton.textContent = "Asking an agent…";
+    const outcome = await askAgentToFix(connection, { whatFailed: "The terminal couldn't start", details: output });
+    askButton.disabled = false;
+    askButton.textContent = "Ask an agent to fix this";
+    if (!outcome.isOpened) showFailure(outcome.failure);
+  };
   reportButton.onclick = () => connection.reportBug({ message: sentence, details: output });
   ```
 

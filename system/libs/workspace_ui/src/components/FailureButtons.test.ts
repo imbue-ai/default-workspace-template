@@ -6,7 +6,13 @@
 import "../testing/dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
-import { SHELL_HANDSHAKE, SHELL_REPORT_BUG, SHELL_START_NEW_WITH_TEXT, connectToShell } from "../app_contract";
+import {
+  SHELL_HANDSHAKE,
+  SHELL_REPORT_BUG,
+  SHELL_START_NEW_WITH_TEXT,
+  SHELL_START_NEW_WITH_TEXT_RESULT,
+  connectToShell,
+} from "../app_contract";
 import type { ShellConnection } from "../app_contract";
 import { AskAgentToFixButton, ReportBugButton } from "./FailureButtons";
 
@@ -55,6 +61,52 @@ describe("Ask an agent to fix this", () => {
     const [message] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
     expect(message.type).toBe(SHELL_START_NEW_WITH_TEXT);
     expect(message.text).toContain("HTTP 502\nboom");
+  });
+
+  it("reads Asking an agent and stays disabled until the shell answers, then comes back, with the failure if any", async () => {
+    root = document.createElement("div");
+    const parent = framed();
+    const live = connectToShell({});
+    connection = live;
+    handshake(parent);
+    const view = (): m.Children => m(AskAgentToFixButton, { connection: live, failure: FAILURE });
+    /** Answer the page's last request, then let the button take the answer. */
+    async function answer(reply: Record<string, unknown>): Promise<void> {
+      const [message] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId: message.requestId, ...reply },
+          source: parent as unknown as Window,
+        }),
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+
+    render(view())?.click();
+    const pending = render(view());
+    expect(pending?.textContent).toBe("Asking an agent…");
+    expect(pending?.disabled).toBe(true);
+    const sent = parent.postMessage.mock.calls.length;
+    pending?.click();
+    expect(parent.postMessage.mock.calls.length).toBe(sent);
+
+    await answer({
+      isOpened: false,
+      failure: { message: "Chat couldn't open that.", details: "HTTP 400\nno account", isReportable: false },
+    });
+    const failed = render(view());
+    expect(failed?.textContent).toBe("Ask an agent to fix this");
+    expect(failed?.disabled).toBe(false);
+    expect(root.querySelector(".ask-agent-failure")?.textContent).toContain("Chat couldn't open that.");
+    expect(root.querySelector(".ask-agent-failure .see-details pre")?.textContent).toBe("HTTP 400\nno account");
+
+    failed?.click();
+    expect(root.querySelector(".ask-agent-failure")).not.toBeNull();
+    render(view());
+    expect(root.querySelector(".ask-agent-failure")).toBeNull();
+    await answer({ isOpened: true });
+    expect(render(view())?.textContent).toBe("Ask an agent to fix this");
+    expect(root.querySelector(".ask-agent-failure")).toBeNull();
   });
 
   it("renders nothing on a page opened on its own", () => {

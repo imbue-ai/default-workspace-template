@@ -130,4 +130,66 @@ describe("Toasts", () => {
     ]);
     expect(queue.current()).toHaveLength(2);
   });
+
+  it("gives a plain note with details a See details and a close control, and holds it up once they are opened", () => {
+    const queue = new ToastQueue(() => m.redraw.sync());
+    const hold = vi.spyOn(queue, "hold");
+    queue.show("Could not close the window.", { isLasting: false, details: "HTTP 409\nWindow win-1 is pinned" });
+    queue.show("Could not move the shortcut.");
+    const root = mountView(() =>
+      m(Toasts, {
+        toasts: queue.current(),
+        placementClass: "fixed",
+        onDismiss: (id) => queue.dismiss(id),
+        onHold: (id) => queue.hold(id),
+      }),
+    );
+
+    const [withDetails, bare] = Array.from(root.querySelectorAll<HTMLElement>("[data-toast]"));
+    expect(withDetails.className).toContain("pointer-events-auto");
+    expect(withDetails.querySelector(".see-details pre")?.textContent).toBe("HTTP 409\nWindow win-1 is pinned");
+    expect(bare.querySelector(".see-details")).toBeNull();
+    expect(bare.querySelector("[data-toast-dismiss]")).toBeNull();
+
+    const disclosure = withDetails.querySelector<HTMLDetailsElement>(".see-details")!;
+    disclosure.open = true;
+    disclosure.dispatchEvent(new Event("toggle"));
+    expect(hold).toHaveBeenCalledWith(queue.current()[0].id);
+    withDetails.querySelector<HTMLButtonElement>("[data-toast-dismiss]")!.click();
+    expect(queue.current().map((toast) => toast.message)).toEqual(["Could not move the shortcut."]);
+  });
+
+  it("draws a pending action disabled under its pending label, and as itself once it is no longer pending", () => {
+    const queue = new ToastQueue(() => m.redraw.sync());
+    let isAsking = false;
+    const ask = vi.fn(() => {
+      isAsking = true;
+    });
+    queue.show("Docs is not running right now.", {
+      isLasting: true,
+      actions: [
+        {
+          label: "Ask an agent to start it",
+          run: ask,
+          keepsToast: true,
+          pending: { isPending: () => isAsking, label: "Asking an agent…" },
+        },
+      ],
+    });
+    const root = mountQueue(queue);
+    const button = (): HTMLButtonElement => root.querySelector<HTMLButtonElement>(".toast-action")!;
+    expect(button().disabled).toBe(false);
+
+    button().click();
+    m.redraw.sync();
+    expect(button().textContent).toBe("Asking an agent…");
+    expect(button().disabled).toBe(true);
+    button().click();
+    expect(ask).toHaveBeenCalledTimes(1);
+
+    isAsking = false;
+    m.redraw.sync();
+    expect(button().textContent).toBe("Ask an agent to start it");
+    expect(button().disabled).toBe(false);
+  });
 });

@@ -27,6 +27,7 @@ import {
   SHELL_SHOWN,
   SHELL_THEME,
   SHELL_START_NEW_WITH_TEXT,
+  SHELL_START_NEW_WITH_TEXT_RESULT,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
@@ -1270,7 +1271,7 @@ describe("the contract", () => {
     warn.mockRestore();
   });
 
-  it("runs a page's shell:start-new-with-text as the secondary text action", async () => {
+  it("runs a page's shell:start-new-with-text as the secondary text action, and answers the page once it opened", async () => {
     offerApps(api, socket, [
       appRecord("docs", {
         url: "http://127.0.0.1:7001",
@@ -1281,10 +1282,52 @@ describe("the contract", () => {
       }),
       notes,
     ]);
-    messageFromPage("win-1", { type: SHELL_START_NEW_WITH_TEXT, text: "Fix this." });
+    const spy = spyOnFrame("win-1");
+    messageFromPage("win-1", { type: SHELL_START_NEW_WITH_TEXT, text: "Fix this.", requestId: "req-1" });
     await settle();
     expect(api.calls).toContain(`launch:home:docs:new:{"message":"Fix this."}:new`);
     expect(api.calls.some((call) => call.startsWith("launch:home:docs:main:"))).toBe(false);
+    expect(spy).toHaveBeenCalledWith(
+      { type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId: "req-1", isOpened: true },
+      "*",
+    );
+  });
+
+  it("answers a page's shell:start-new-with-text with the failure when the launch is refused, toasting nothing", async () => {
+    offerApps(api, socket, [
+      appRecord("docs", {
+        url: "http://127.0.0.1:7001",
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+      notes,
+    ]);
+    api.refusal = "docs refused the launch: no account is signed in";
+    const spy = spyOnFrame("win-1");
+    messageFromPage("win-1", { type: SHELL_START_NEW_WITH_TEXT, text: "Fix this.", requestId: "req-2" });
+    await settle();
+    expect(spy).toHaveBeenCalledWith(
+      {
+        type: SHELL_START_NEW_WITH_TEXT_RESULT,
+        requestId: "req-2",
+        isOpened: false,
+        failure: {
+          message: "Docs couldn't open that.",
+          details: "HTTP 400\ndocs refused the launch: no account is signed in",
+          isReportable: false,
+        },
+      },
+      "*",
+    );
+    expect(store.toasts.current()).toEqual([]);
+  });
+
+  it("ignores a page's shell:start-new-with-text that carries no request id", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    messageFromPage("win-1", { type: SHELL_START_NEW_WITH_TEXT, text: "Fix this." });
+    await settle();
+    expect(api.calls.some((call) => call.startsWith("launch"))).toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("carried no request id"));
+    warn.mockRestore();
   });
 
   it("drafts a page's shell:draft-text into the pinned window that takes a draft, and warns when it carries no text", async () => {

@@ -4,7 +4,8 @@
  *
  * A plain toast goes on its own and takes no press unless the page also sets ``closesPlainToasts``: the shell's never
  * stand between the user and what is under them, while a page whose notes run longer (Files lists what failed) gives
- * each a close button. A lasting toast (details or buttons) takes presses and carries a close control wherever the
+ * each a close button. A plain toast with details takes presses either way, for its "See details" and close button;
+ * opening the details holds it up (``onHold``). A lasting toast (details or buttons) takes presses and carries a close control wherever the
  * page offers ``onDismiss``. A lasting toast whose message asks for a bug report gets "Report a bug" while the page
  * gives ``onReportBug``, decided as it draws: whether the embedder opens a bug report can be learned after the toast
  * went up.
@@ -29,11 +30,26 @@ export interface ToastsAttrs {
   readonly onDismiss?: (id: number) => void;
   /** Give each plain toast a close button too (it calls ``onDismiss``). */
   readonly closesPlainToasts?: boolean;
+  /** Keep a plain toast up until dismissed: its reader opened its details. */
+  readonly onHold?: (id: number) => void;
   /** Open the bug report about a reportable toast's failure; absent or null where none can be opened now. */
   readonly onReportBug?: ((failure: ReportedFailure) => void) | null;
 }
 
-function plainToastBody(toast: Toast, onDismiss: ((id: number) => void) | null): m.Children {
+function plainToastBody(
+  toast: Toast,
+  onDismiss: ((id: number) => void) | null,
+  onHold: ((id: number) => void) | null,
+): m.Children {
+  const head = plainToastHead(toast, onDismiss);
+  if (toast.details === null) return head;
+  return [
+    m("div", { class: "flex items-start gap-3" }, head),
+    m(SeeDetails, { details: toast.details, onOpen: () => onHold?.(toast.id) }),
+  ];
+}
+
+function plainToastHead(toast: Toast, onDismiss: ((id: number) => void) | null): m.Children {
   return [
     m("span", { class: "min-w-0 flex-1" }, toast.message),
     onDismiss === null
@@ -91,13 +107,15 @@ function lastingToastBody(
       : m(
           "div",
           { class: "toast-actions -mx-2 flex flex-wrap gap-1" },
-          actions.map((action) =>
-            m(
+          actions.map((action) => {
+            const isPending = action.pending?.isPending() === true;
+            return m(
               Button,
               {
                 variant: "ghost-inverse",
                 sm: true,
                 extra: action === reportBug ? "toast-action report-bug" : "toast-action",
+                disabled: isPending,
                 // A retry or a resolving button has done the note's job, and a retry that fails again leaves a new
                 // one; a button that hands the failure on leaves it up for its other buttons.
                 onclick: () => {
@@ -105,17 +123,18 @@ function lastingToastBody(
                   action.run();
                 },
               },
-              action.label,
-            ),
-          ),
+              isPending ? action.pending?.label : action.label,
+            );
+          }),
         ),
   ];
 }
 
 export const Toasts: m.Component<ToastsAttrs> = {
   view(vnode) {
-    const { toasts, placementClass, onDismiss, closesPlainToasts, onReportBug } = vnode.attrs;
-    const plainDismiss = onDismiss !== undefined && closesPlainToasts === true ? onDismiss : null;
+    const { toasts, placementClass, onDismiss, closesPlainToasts, onHold, onReportBug } = vnode.attrs;
+    const plainDismiss = (toast: Toast): ((id: number) => void) | null =>
+      onDismiss !== undefined && (closesPlainToasts === true || toast.details !== null) ? onDismiss : null;
     return m(
       "div",
       {
@@ -135,13 +154,15 @@ export const Toasts: m.Component<ToastsAttrs> = {
             class:
               (toast.isLasting
                 ? "toast toast--lasting pointer-events-auto flex w-[min(28rem,100%)] flex-col gap-1.5 "
-                : `toast flex items-start gap-3 ${plainDismiss === null ? "" : "pointer-events-auto "}`) +
+                : toast.details !== null
+                  ? "toast pointer-events-auto flex flex-col gap-1.5 "
+                  : `toast flex items-start gap-3 ${plainDismiss(toast) === null ? "" : "pointer-events-auto "}`) +
               "max-w-[min(480px,100%)] animate-[toast-rise_var(--dur-slow)_ease-out] rounded-[20px] bg-inverse " +
               "px-4 py-2.5 text-(length:--font-size-body) whitespace-pre-line text-on-accent shadow-overlay",
           },
           toast.isLasting
             ? lastingToastBody(toast, onDismiss ?? null, onReportBug ?? null)
-            : plainToastBody(toast, plainDismiss),
+            : plainToastBody(toast, plainDismiss(toast), onHold ?? null),
         ),
       ),
     );
