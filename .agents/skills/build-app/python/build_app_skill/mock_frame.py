@@ -332,9 +332,9 @@ def refresh(
 ) -> int:
     """Reload what the user sees of the app: its mock frame while one is up, else its own windows.
 
-    With a frame up, the frame is booted again with its recorded note and page and the
-    app hidden again, so this is also what puts both back after the app restarts or the
-    workspace reboots.
+    With a frame up, the frame is booted again with its recorded note and page, under
+    ``chat`` (else the chat recorded with it), and the app hidden again, so this is also
+    what puts both back after the app restarts or the workspace reboots.
     """
     recorded = frames.recorded(app_name, repo_root)
     if recorded is not None:
