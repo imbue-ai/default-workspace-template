@@ -637,8 +637,28 @@ def test_a_change_the_computer_refuses_in_its_own_words_keeps_them_behind_the_de
     assert response.status_code == 404
     assert response.get_json() == {
         "detail": "DELETE /Users/kim/Atkinson/gone.otf: Not Found",
-        "user_facing_message": "Your computer answered 404.",
+        "user_facing_message": "It's no longer there.",
+        "kind": "not_found",
     }
+
+
+def test_a_change_the_computer_fails_says_so_with_its_status_only_behind_the_details(tmp_path: Path) -> None:
+    computer = _FailingComputer(permissions=["minds-file-server-write-/Users/kim/notes.txt"], folders={})
+    response = _app(computer, tmp_path).put(f"/__remote/{DEVICE}/Users/kim/notes.txt", data=b"new")
+    assert response.status_code == 500
+    answer = response.get_json()
+    assert answer["user_facing_message"] == "Your computer couldn't do this."
+    assert "500" not in answer["user_facing_message"]
+    assert answer["detail"] == "PUT /Users/kim/notes.txt: disk error"
+
+
+class _FailingComputer(FakeComputer):
+    """A computer whose file server fails every write."""
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(500, text="disk error")
+        return super().handle(request)
 
 
 class _GarbledGateway(FakeComputer):

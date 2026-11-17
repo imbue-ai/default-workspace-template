@@ -51,7 +51,10 @@ space (`out_of_space`, 507), gone, already there, a name too long, a file where 
 folder should be or the reverse, in use, too large, or a link loop. A MOVE refused
 for want of write access says which end refused (`destination_not_writable`,
 `source_not_writable`). Any other disk error carries a `detail` only, which the
-page asks to have reported. A refusal to a `?download` or a `?zip` stays plain
+page asks to have reported. A computer's file server refusing a change is "Your
+computer only shares this to read." (`shared_read_only`), "It's no longer
+there." (`not_found`), or else "Your computer couldn't do this.", its status
+and own text behind "See details". A refusal to a `?download` or a `?zip` stays plain
 text, which is all the hidden frame a download loads in can read.
 
 `/__files/assets/` is the frontend's build, and `/__files/api/connections` lists

@@ -136,11 +136,11 @@ class DeviceFiles:
             if upstream.status_code >= 400:
                 # The file server's own text goes behind the page's "See details", never on its visible line.
                 answered = upstream.read().decode("utf-8", "replace").strip()
-                raise FilesError(
-                    upstream.status_code,
-                    f"Your computer answered {upstream.status_code}.",
-                    detail=f"{method} {path}: {answered}" if answered else None,
-                )
+                detail = f"{method} {path}: {answered}" if answered else None
+                if upstream.status_code == 404:
+                    raise FilesError(404, "It's no longer there.", "not_found", detail=detail)
+                # The status goes behind "See details" with the rest; the page names what failed.
+                raise FilesError(upstream.status_code, "Your computer couldn't do this.", detail=detail)
         finally:
             upstream.close()
 
