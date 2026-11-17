@@ -7,6 +7,9 @@ All three name the scripts as plain strings, and a name that no longer resolves 
 of these files, or a guard added to one harness and forgotten on another, is invisible
 without this test.
 
+It also holds every claude hook command to naming its files from `"${CLAUDE_PROJECT_DIR}"`,
+since claude runs hooks in whatever directory the agent's shell is in.
+
 See tool-call-policies-state-of-things.md; "Keeping the harnesses in step" is the invariant
 asserted here.
 """
