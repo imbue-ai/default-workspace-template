@@ -89,7 +89,8 @@ class InstanceSpec:
     env_overrides: dict[str, str]
     copy_sources: dict[str, str]
     health_path: str
-    # The three registrations a preview surfaces itself through; None for a private instance.
+    # The two registrations a preview surfaces itself through and its frame's label; None for a
+    # private instance.
     service_name: str | None
     preview_service_name: str | None
     preview_title: str | None
