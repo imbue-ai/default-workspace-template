@@ -663,7 +663,10 @@ the toast draws, and the report it opens carries the toast's sentence and
 details (`minds:open-help {errorDetails}`); a failure told in place (a dialog's
 line, the launcher, the backdrop, a stopped window) does the same, and so does a
 page's `shell:report-bug` with the failure the page sent. "Ask an agent to ..."
-and "Report a bug" leave their toast up; Try again takes it down.
+and "Report a bug" leave their toast up; Try again takes it down. Pressed, an
+"Ask an agent to ..." button reads "Asking an agent…" and takes no second press
+until the agent's chat is on the desktop, and an ask that fails is told in a
+toast of its own.
 
 ### The phone layout
 
@@ -802,7 +805,9 @@ The placeholder is the workspace's general recovery surface, so it hands over
 an **agent** and a **terminal** rather than a repair. "Ask an agent to fix
 this" sends the agent the message the command below carries, through the
 workspace's secondary text action (Chat's New Chat on a stock workspace, so the
-repair gets a chat of its own), and frames the agent's chat on the page. Behind
+repair gets a chat of its own), and frames the agent's chat on the page; until
+the launch answers it reads "Asking an agent…" and takes no second press, and a
+refused attempt is told under it. Behind
 "See details" are the command, for whoever would rather run it themselves,
 "Open this workspace's terminal", whose session of the already-running terminal
 app is made in a frame only when that section is first opened, and, after a
