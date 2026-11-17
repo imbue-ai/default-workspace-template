@@ -532,7 +532,9 @@ class StoppedAgent:
     is told on resume, because a restarted worker does not pick its work back up.
     ``interrupted_tasks`` names the background commands that were stopped with it.
     ``is_restarted`` and ``is_told`` are ``resume-chats``'s progress, so a re-run
-    restarts and tells only what is left.
+    restarts and tells only what is left. ``is_started_after_landing`` says the resume
+    started it after the update landed, so it already runs what the update installed and
+    ``restart-agents`` leaves it alone.
     """
 
     id: str
@@ -543,6 +545,7 @@ class StoppedAgent:
     interrupted_tasks: list[str] = field(default_factory=list)
     is_restarted: bool = False
     is_told: bool = False
+    is_started_after_landing: bool = False
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -554,6 +557,7 @@ class StoppedAgent:
             "interrupted_tasks": list(self.interrupted_tasks),
             "is_restarted": self.is_restarted,
             "is_told": self.is_told,
+            "is_started_after_landing": self.is_started_after_landing,
         }
 
     @classmethod
@@ -573,6 +577,7 @@ class StoppedAgent:
             else [],
             is_restarted=bool(raw.get("is_restarted", False)),
             is_told=bool(raw.get("is_told", False)),
+            is_started_after_landing=bool(raw.get("is_started_after_landing", False)),
         )
 
 

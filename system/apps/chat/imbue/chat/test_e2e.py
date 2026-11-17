@@ -34,6 +34,7 @@ from playwright.sync_api import Frame
 from playwright.sync_api import FrameLocator
 from playwright.sync_api import Locator
 from playwright.sync_api import Page
+from playwright.sync_api import Route
 from playwright.sync_api import ViewportSize
 from playwright.sync_api import expect
 from workspace_layout.primitives import ParticipantKey
@@ -2876,6 +2877,131 @@ def test_the_phone_header_kebab_renames_the_chat_on_screen(e2e_server: RunningWo
         timeout_seconds=15.0,
         what="the chat to take the name typed in the header",
     )
+
+
+def _hold_chat_verb(page: Page, verb: str) -> list[Route]:
+    """Keep every POST of ``verb`` from reaching the chat app; the list fills with them as they are sent."""
+    held: list[Route] = []
+    page.route(f"**/api/chats/*/{verb}", lambda route: held.append(route))
+    return held
+
+
+def _refuse_held_verb(page: Page, held: list[Route], detail: str) -> None:
+    """Answer the verb ``_hold_chat_verb`` held as the chat app does a refusal.
+
+    Polled through the page: a route reaches ``held`` only while Playwright is running."""
+    for _ in range(150):
+        if held:
+            held.pop().fulfill(status=500, content_type="application/json", body=json.dumps({"detail": detail}))
+            return
+        page.wait_for_timeout(100)
+    raise TimeoutError("the verb never reached the route that holds it")
+
+
+def _expect_window_title_to_follow_a_refused_rename(page: Page, row: Locator, title: str) -> None:
+    """Rename ``row`` away from ``title``: the window takes the typed name ahead of the chat app, and a refusal gives
+    ``title`` back."""
+    expect(page).to_have_title(title, timeout=15000)
+    held = _hold_chat_verb(page, "rename")
+
+    row.dblclick()
+    field = page.locator(".chat-rail-rename-input")
+    field.fill("Typed name")
+    field.press("Enter")
+
+    expect(page).to_have_title("Typed name")
+    _refuse_held_verb(page, held, "the name is taken")
+    expect(page).to_have_title(title)
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_rename_reaches_the_window_title_before_the_chat_app_answers(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """The window takes the typed name as the list does, and gives it back on a refusal."""
+    page.goto(f"{e2e_server.chat_url}{_FIXTURE_ROOT_PATH}")
+    row = page.locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]')
+
+    _expect_window_title_to_follow_a_refused_rename(page, row, "test-agent")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_chat_with_no_agent_yet_wears_its_name_and_a_rename_in_the_window_title(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """A chat awaiting its first send has only a provisional record, whose name the window shows as the list does."""
+    e2e_server.chat_state.agent_manager.remove_agent(FIXTURE_AGENT_ID)
+    page.goto(f"{e2e_server.chat_url}/")
+    row = page.locator(".chat-rail-row")
+    expect(row).to_have_count(1, timeout=15000)
+
+    _expect_window_title_to_follow_a_refused_rename(page, row, row.locator(".chat-rail-title").inner_text())
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_deleting_the_last_chat_empties_the_list_at_once_and_a_refusal_brings_the_chat_back(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """The last chat leaves the list and the selection the moment its delete is confirmed, and no new chat is asked
+    for while the delete is on its way, since the chat could yet come back. A refusal puts it back on screen and says
+    why."""
+    dialogs: list[str] = []
+    awaiting_requests: list[str] = []
+
+    def record_and_accept(dialog: Dialog) -> None:
+        dialogs.append(dialog.message)
+        dialog.accept()
+
+    page.on("dialog", record_and_accept)
+    page.on(
+        "request",
+        lambda request: awaiting_requests.append(request.url) if request.url.endswith("/api/chats/awaiting") else None,
+    )
+    page.goto(f"{e2e_server.chat_url}{_FIXTURE_ROOT_PATH}")
+    rows = page.locator(".chat-rail-row")
+    expect(rows).to_have_count(1, timeout=15000)
+    held = _hold_chat_verb(page, "destroy")
+
+    rows.first.click(button="right")
+    page.locator('.chat-rail-menu [data-menu-row="delete"]').click()
+
+    expect(rows).to_have_count(0)
+    expect(page.locator(".chat-root-empty")).to_be_visible()
+    assert _selection_of(page.url) is None
+
+    _refuse_held_verb(page, held, "mngr failed")
+
+    expect(rows).to_have_count(1)
+    expect(page.locator(".chat-root-empty")).to_have_count(0)
+    assert _selection_of(page.url) == FIXTURE_AGENT_ID
+    assert "mngr failed" in dialogs[-1]
+    assert awaiting_requests == []
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_deleting_the_only_chat_while_it_awaits_its_first_send_opens_a_new_one(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """The chat an empty list opened can itself be deleted: the root asks again once it is gone, is handed a new chat
+    rather than that one, and the deleted chat's frame goes with it."""
+    e2e_server.chat_state.agent_manager.remove_agent(FIXTURE_AGENT_ID)
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.goto(f"{e2e_server.chat_url}/")
+    rows = page.locator(".chat-rail-row")
+    expect(rows).to_have_count(1, timeout=15000)
+    deleted_chat_id = rows.first.get_attribute("data-chat-id")
+    assert deleted_chat_id is not None
+
+    rows.first.click(button="right")
+    page.locator('.chat-rail-menu [data-menu-row="delete"]').click()
+
+    new_row = page.locator(f'.chat-rail-row:not([data-chat-id="{deleted_chat_id}"])')
+    expect(new_row).to_have_count(1, timeout=15000)
+    expect(rows).to_have_count(1)
+    new_chat_id = new_row.get_attribute("data-chat-id")
+    assert new_chat_id is not None
+    expect(page).to_have_url(f"{e2e_server.chat_url}{chat_root_path(ChatId(new_chat_id))}")
+    expect(page.locator(f'iframe.chat-root-frame[data-chat-id="{deleted_chat_id}"]')).to_have_count(0)
 
 
 @pytest.mark.timeout(60, func_only=False)

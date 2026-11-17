@@ -1,0 +1,1 @@
+- Moved the Lima guest image (`[providers.lima]` `default_image_url_*`) to the Debian 13 genericcloud `20261103-2651` release (`linux` 6.12.115-2), matching the `mngr_lima` library default and the gen-2 slice guest image. Its kernel carries the btrfs chunk-allocation fix the slice VMs need before they turn on automatic reclaim of sparse data block groups.

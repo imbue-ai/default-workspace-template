@@ -1,6 +1,6 @@
 `update-self` is restructured: SKILL.md is the lead's checklist, and each step's detail is in a reference the step names. No command of the update changed.
 
-- **SKILL.md is 13.9 KB** (was 51.6 KB): standing instructions, a numbered step list with one entry per step, then each step in a few lines. The launch, the question gates, the audit, the apply, the report-driven remainder and teardown each moved to a reference. The step headings are unchanged, so a lead arriving from an older release still enters at "Step 3".
+- **SKILL.md is 13.5 KB** (was 54.8 KB): standing instructions, a numbered step list with one entry per step, then each step in a few lines. The launch, the question gates, the audit, the apply, the report-driven remainder and teardown each moved to a reference. The step headings are unchanged, so a lead arriving from an older release still enters at "Step 3".
 
 - **`references/older-workspaces.md`** (new) holds everything true only for a workspace older than some release, each item with a `CLEANUP:` line. A step with such a difference points at its section in one line. `heal-shallow-history.md` is folded into it.
 

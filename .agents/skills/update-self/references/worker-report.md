@@ -1,9 +1,8 @@
 # Worker: the body of a `done` report (the worker guide's Step 6)
 
 The body gives the lead everything for its audit, the apply, and the results
-message. The lead sends back a
-report that lacks a section it needs, or either of the two rule records under
-Validation.
+message. The lead sends back a report that lacks a section it needs, or
+either of the two rule records under Validation.
 
 ## The sections
 
@@ -58,6 +57,12 @@ Validation.
   in the worktree; the lead checks it after the apply", with what your
   research turned up. Only a change whose absence would break the running
   workspace is a `stuck` report.
+- **Agent restarts**: the 4d verdict, `needed` or `not needed`, with
+  `agent-restart-verdict`'s output and any changed file you judged beyond it,
+  and, when needed, one plain line naming what the restart picks up (for
+  example "Claude Code 2.1.300" or "new pi command guards"); the lead passes
+  that line to the restart. Add any change that reaches only newly created
+  agents.
 - **Validation**:
   - **Which branch of the 4b scope rule applied, with its evidence**: each
     item's condition and whether it held; on a clean pull with no footprint,
