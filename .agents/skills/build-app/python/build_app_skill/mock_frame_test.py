@@ -278,7 +278,7 @@ def test_refresh_after_a_restart_reframes_with_the_recorded_note_and_page(
 
 
 def test_revive_after_a_restart_reframes_as_recorded_and_leaves_the_window_alone(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     registry = _registered_app(tmp_path, monkeypatch)
     frames = _RecordingFrames(registry=registry)
@@ -293,6 +293,7 @@ def test_revive_after_a_restart_reframes_as_recorded_and_leaves_the_window_alone
         )
         == 0
     )
+    assert "workspace-layout open" in capsys.readouterr().err
     framed_row = _row(registry)
     # A restart stops the frame, and the app's program registers it plainly as it starts.
     frames.running = False
@@ -310,6 +311,8 @@ def test_revive_after_a_restart_reframes_as_recorded_and_leaves_the_window_alone
     ]
     assert _row(registry) == framed_row
     assert layout.ops == []
+    # The window is already open on the frame, so nothing tells the caller to open one.
+    assert "workspace-layout open" not in capsys.readouterr().err
 
 
 def test_revive_boots_nothing_while_the_frame_runs_and_fails_with_none_recorded(

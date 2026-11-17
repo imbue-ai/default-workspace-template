@@ -236,7 +236,7 @@ def up(
     so a ``revive`` asked for meanwhile waits.
     """
     with serve_isolated_instance.instance_lock(repo_root, frame_name(app_name)):
-        return _up_locked(
+        code = _up_locked(
             app_name,
             note,
             repo_root,
@@ -245,6 +245,11 @@ def up(
             frames=frames,
             layout=layout,
         )
+    if code == 0 and surface is None:
+        sys.stderr.write(
+            f"mock frame up: open it with `uv run --no-sync workspace-layout open {frame_name(app_name)} --beside`.\n"
+        )
+    return code
 
 
 def _up_locked(
@@ -257,7 +262,7 @@ def _up_locked(
     frames: Frames,
     layout: Layout,
 ) -> int:
-    """``up``, with the frame's lock already held."""
+    """``up``, with the frame's lock already held; with no ``surface``, the window is left alone."""
     if note is None or inner_path is None:
         recorded = frames.recorded(app_name, repo_root)
         if note is None:
@@ -286,9 +291,6 @@ def _up_locked(
         _register(app, repo_root, None)
         return 1
     if surface is None:
-        sys.stderr.write(
-            f"mock frame up: open it with `uv run --no-sync workspace-layout open {frame_name(app_name)} --beside`.\n"
-        )
         return 0
     return _run_layout(
         layout,
