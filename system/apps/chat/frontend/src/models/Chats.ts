@@ -236,7 +236,8 @@ type WsEvent =
   | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null }
   | { type: "accounts_updated" };
 
-/** A send refused because its chat's create failed: there is no agent behind it to retry or restart. */
+/** A send refused because its chat never became an agent (its create failed, or it was closed first): there is no
+ *  agent behind it to retry or restart. */
 export class ChatNotStartedError extends Error {}
 
 export type ChatsUpdatedListener = (chats: ChatSnapshot[]) => void;
@@ -437,7 +438,7 @@ function handleEvent(event: WsEvent): void {
       } else if (event.error === null) {
         // Discarded before it launched: gone, with nothing to show.
         provisionalChats = provisionalChats.filter((p) => p.chat_id !== event.chat_id);
-        settleRegistration(event.chat_id, new Error("The chat was closed before it started"));
+        settleRegistration(event.chat_id, new ChatNotStartedError("The chat was closed before it started"));
       } else {
         const error = event.error;
         provisionalChats = provisionalChats.map((p) =>

@@ -167,8 +167,8 @@ const ATTACHMENT_DETAIL_CLASS = "composer-attachment-detail truncate text-[11px]
 const MESSAGE_TEXT_KEY_PREFIX = "message-text:";
 const COMPOSER_HINT_KEY_PREFIX = "composer-hint:";
 
-// Kinds of refused send that no retry or restart can clear: the chat's account was signed out, the chat is gone, or its
-// create failed, which leaves no agent to send to.
+// Kinds of refused send that no retry or restart can clear: the chat's account was signed out, the chat is gone, or it
+// never became an agent (its create failed, or it was closed first), which leaves no agent to send to.
 const KINDS_NOTHING_HERE_CAN_CLEAR: ReadonlySet<ComposerFailureKind> = new Set([
   "account_signed_out",
   "chat_gone",
@@ -1952,7 +1952,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         }
         // The chat app already tried once more for an agent that was down and would not start,
         // and Restart is the stronger way to bring it up, so Retry is not offered; nor for a chat that is gone, whose
-        // account was signed out, or whose create failed, which neither can clear. Every other kind -- and anything
+        // account was signed out, or that never became an agent, which neither can clear. Every other kind -- and anything
         // unclassified -- keeps it.
         const isResendable = !KINDS_NOTHING_HERE_CAN_CLEAR.has(actionFailureKind);
         const isRepeatable =

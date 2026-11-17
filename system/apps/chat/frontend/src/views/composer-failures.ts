@@ -24,7 +24,7 @@ const SEND_REFUSED = "Your message wasn't delivered. Your text is back in the bo
  * How the composer handles a failed send, which decides the notice's buttons: one of mngr's or the chat app's send
  * kinds; ``not_answered`` for a send nothing answered (it may have been delivered before the answer was lost);
  * ``unrecognised`` for a kind the server named that the composer does not know, which gets nothing kind-specific; and
- * ``chat_not_started`` for a send to a chat whose create failed, which has no agent behind it.
+ * ``chat_not_started`` for a send to a chat that never became an agent (its create failed, or it was closed first).
  */
 export type ComposerFailureKind = SendFailureKind | "not_answered" | "unrecognised" | "chat_not_started";
 
