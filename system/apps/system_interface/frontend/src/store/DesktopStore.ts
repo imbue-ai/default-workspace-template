@@ -690,8 +690,8 @@ export class DesktopStore {
    * Tell the user that what they asked for failed with ``error``, in ``failureSentence``'s words for ``whatFailed``
    * (a sentence stem naming it), with the status and the server's own text behind "See details". A call site whose
    * retry is the control just pressed asks for a plain note; any other, and any failure that asks for a bug report,
-   * shows one that stays, with for a failure that asks for one, "Report a bug" wherever the embedder opens a bug report
-   * when the toast is drawn (``reportBugAction``).
+   * shows one that stays, which for a failure that asks for one offers "Report a bug" wherever the embedder opens a bug
+   * report when the toast is drawn (``reportBugAction``).
    */
   private toastFailure(whatFailed: string, error: unknown, options: { readonly isLasting: boolean }): void {
     this.showFailure(failureSentence(describeRequestFailure(error), whatFailed), options);
