@@ -884,6 +884,25 @@ def test_a_user_built_app_previews_from_its_own_projects_venv(tmp_path: Path) ->
 # Starting a preview a restart stopped again
 
 
+class _GatedInstances(_RecordingInstances):
+    """Instances whose first ``up`` sets ``booting`` and holds until ``release`` is set; a later
+    ``up`` runs straight through and sets ``reupped``."""
+
+    def __init__(self, repo_root: Path) -> None:
+        super().__init__(repo_root)
+        self.booting = threading.Event()
+        self.release = threading.Event()
+        self.reupped = threading.Event()
+
+    def up(self, spec: mod.InstanceSpec, repo_root: Path) -> int:
+        if not self.booting.is_set():
+            self.booting.set()
+            assert self.release.wait(timeout=10)
+        else:
+            self.reupped.set()
+        return super().up(spec, repo_root)
+
+
 def test_a_revive_boots_the_preview_again_as_its_last_up_did_siblings_first(
     tmp_path: Path,
 ) -> None:
@@ -968,29 +987,20 @@ def test_a_failed_revive_keeps_the_record_while_the_rows_a_window_shows_are_kept
 
 def test_two_revives_at_once_boot_the_preview_once(tmp_path: Path) -> None:
     worktree = _write_worktree(tmp_path)
-    booting = threading.Event()
-    release = threading.Event()
-
-    class _SlowInstances(_RecordingInstances):
-        def up(self, spec: mod.InstanceSpec, repo_root: Path) -> int:
-            booting.set()
-            assert release.wait(timeout=10)
-            return super().up(spec, repo_root)
-
     instances = _RecordingInstances(tmp_path)
     assert boot.up("notes", worktree, tmp_path, instances=instances) == 0
-    slow = _SlowInstances(tmp_path)
+    slow = _GatedInstances(tmp_path)
     codes: list[int] = []
     first = threading.Thread(
         target=lambda: codes.append(boot.revive("notes", tmp_path, instances=slow))
     )
     first.start()
-    assert booting.wait(timeout=10)
+    assert slow.booting.wait(timeout=10)
     second = threading.Thread(
         target=lambda: codes.append(boot.revive("notes", tmp_path, instances=slow))
     )
     second.start()
-    release.set()
+    slow.release.set()
     first.join(timeout=10)
     second.join(timeout=10)
 
@@ -1002,18 +1012,11 @@ def test_a_siblings_own_revive_waits_for_the_revive_booting_it_and_boots_nothing
     tmp_path: Path,
 ) -> None:
     worktree = _write_worktree(tmp_path)
-    booting = threading.Event()
-    release = threading.Event()
     chat_checked = threading.Event()
 
-    class _SlowInstances(_RecordingInstances):
-        def up(self, spec: mod.InstanceSpec, repo_root: Path) -> int:
-            booting.set()
-            assert release.wait(timeout=10)
-            return super().up(spec, repo_root)
-
+    class _CheckRecordingInstances(_GatedInstances):
         def is_running(self, name: str, repo_root: Path) -> bool:
-            if booting.is_set():
+            if self.booting.is_set():
                 chat_checked.set()
             return super().is_running(name, repo_root)
 
@@ -1030,7 +1033,7 @@ def test_a_siblings_own_revive_waits_for_the_revive_booting_it_and_boots_nothing
         )
         == 0
     )
-    slow = _SlowInstances(tmp_path)
+    slow = _CheckRecordingInstances(tmp_path)
     codes: list[int] = []
     shell = threading.Thread(
         target=lambda: codes.append(
@@ -1038,7 +1041,7 @@ def test_a_siblings_own_revive_waits_for_the_revive_booting_it_and_boots_nothing
         )
     )
     shell.start()
-    assert booting.wait(timeout=10)
+    assert slow.booting.wait(timeout=10)
     chat = threading.Thread(
         target=lambda: codes.append(boot.revive("chat", tmp_path, instances=slow))
     )
@@ -1046,7 +1049,7 @@ def test_a_siblings_own_revive_waits_for_the_revive_booting_it_and_boots_nothing
     # Unlocked, the chat's revive checks the chat while the shell's is booting it; locked, it
     # checks nothing until that boot is done, so this wait runs out.
     assert not chat_checked.wait(timeout=1)
-    release.set()
+    slow.release.set()
     shell.join(timeout=10)
     chat.join(timeout=10)
 
@@ -1060,28 +1063,15 @@ def test_an_up_asked_for_while_a_revive_boots_the_preview_waits_for_it(
     """A window reads its preview as stopped while a re-up boots it, so a Start pressed then
     must not boot a second instance beside the agent's."""
     worktree = _write_worktree(tmp_path)
-    booting = threading.Event()
-    release = threading.Event()
-    reupped = threading.Event()
-
-    class _SlowInstances(_RecordingInstances):
-        def up(self, spec: mod.InstanceSpec, repo_root: Path) -> int:
-            if not booting.is_set():
-                booting.set()
-                assert release.wait(timeout=10)
-            else:
-                reupped.set()
-            return super().up(spec, repo_root)
-
     instances = _RecordingInstances(tmp_path)
     assert boot.up("notes", worktree, tmp_path, instances=instances) == 0
-    slow = _SlowInstances(tmp_path)
+    slow = _GatedInstances(tmp_path)
     codes: list[int] = []
     reviving = threading.Thread(
         target=lambda: codes.append(boot.revive("notes", tmp_path, instances=slow))
     )
     reviving.start()
-    assert booting.wait(timeout=10)
+    assert slow.booting.wait(timeout=10)
     upping = threading.Thread(
         target=lambda: codes.append(
             boot.up("notes", worktree, tmp_path, instances=slow)
@@ -1089,8 +1079,8 @@ def test_an_up_asked_for_while_a_revive_boots_the_preview_waits_for_it(
     )
     upping.start()
 
-    assert not reupped.wait(timeout=1)
-    release.set()
+    assert not slow.reupped.wait(timeout=1)
+    slow.release.set()
     reviving.join(timeout=10)
     upping.join(timeout=10)
     assert codes == [0, 0]
