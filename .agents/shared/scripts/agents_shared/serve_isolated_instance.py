@@ -1945,39 +1945,13 @@ def _revive_locked(
         sys.stderr.write(f"revive: '{name}' is already running.\n")
         return 0
 
-    # A port another process took while the instance was down cannot be rebound.
-    ports_needed = (
-        []
-        if is_inner_running
-        else [int(value) for value in (state.get("ports") or {}).values()]
-    )
-    if not is_wrapper_running:
-        ports_needed.append(int(state["wrapper_port"]))
-    taken = [port for port in ports_needed if not _port_is_free(port)]
-    if taken:
-        sys.stderr.write(
-            f"revive: port(s) {', '.join(map(str, taken))} of '{name}' now belong to another process; "
-            "boot it again with `up`.\n"
-        )
+    if _refuses_reviving_over_what_is_gone(
+        name,
+        state,
+        is_inner_running=is_inner_running,
+        is_wrapper_running=is_wrapper_running,
+    ):
         return REVIVE_IMPOSSIBLE_EXIT_CODE
-    # A copy a restore from backup left out would boot the instance over nothing.
-    if not is_inner_running:
-        gone = [
-            str(copy)
-            for copy in (state.get("copies") or {}).values()
-            if not Path(str(copy)).is_dir()
-        ]
-        if gone:
-            sys.stderr.write(
-                f"revive: the copies of '{name}' at {', '.join(gone)} are gone; boot it again with `up`.\n"
-            )
-            return REVIVE_IMPOSSIBLE_EXIT_CODE
-        # Nor can it boot from a checkout (a preview's worktree) that has been removed.
-        if not Path(str(state["cwd"])).is_dir():
-            sys.stderr.write(
-                f"revive: the checkout '{name}' was booted from, {state['cwd']}, is gone; boot it again with `up`.\n"
-            )
-            return REVIVE_IMPOSSIBLE_EXIT_CODE
 
     if not is_inner_running:
         inner = state["inner"]
@@ -1997,37 +1971,107 @@ def _revive_locked(
             sleeper=sleeper,
         ):
             return 1
-    if not is_wrapper_running:
-        wrapper_log = Path(str(state["wrapper_log"]))
-        wrapper_pids: list[int] = []
-        try:
-            _boot_wrapper(
-                repo_root,
-                name,
-                wrapper_log,
-                [str(arg) for arg in state["wrapper_args"]],
-                wrapper_pids,
-                http=http,
-                spawner=spawner,
-                sleeper=sleeper,
-                port=int(state["wrapper_port"]),
-            )
-        except (InstanceError, OSError) as exc:
-            for pid in wrapper_pids:
-                _kill_process_group_and_wait(runner, pid, sleeper)
-            sys.stderr.write(f"revive: {exc}\n{_log_excerpt(wrapper_log)}")
-            return 1
-        revived = list(state["pids"])
-        revived[1] = wrapper_pids[0]
-        revived_starts = list(state["pid_starts"])
-        revived_starts[1] = runner.process_start_time(wrapper_pids[0])
-        state["pids"] = revived
-        state["pid_starts"] = revived_starts
-        state_path.write_text(json.dumps(state, indent=2))
+    if not is_wrapper_running and not _revive_wrapper(
+        name,
+        repo_root,
+        state,
+        runner=runner,
+        http=http,
+        spawner=spawner,
+        sleeper=sleeper,
+    ):
+        return 1
     sys.stderr.write(
         f"revive: '{name}' is running again on port {state['inner_port']}.\n"
     )
     return 0
+
+
+def _refuses_reviving_over_what_is_gone(
+    name: str, state: dict, *, is_inner_running: bool, is_wrapper_running: bool
+) -> bool:
+    """Whether what the stopped parts of instance ``name`` need is gone, said on stderr.
+
+    A port another process took while the instance was down cannot be rebound, a copy a
+    restore from backup left out would boot it over nothing, and it cannot boot from a
+    checkout (a preview's worktree) that has been removed.
+    """
+    ports_needed = (
+        []
+        if is_inner_running
+        else [int(value) for value in (state.get("ports") or {}).values()]
+    )
+    if not is_wrapper_running:
+        ports_needed.append(int(state["wrapper_port"]))
+    taken = [port for port in ports_needed if not _port_is_free(port)]
+    if taken:
+        sys.stderr.write(
+            f"revive: port(s) {', '.join(map(str, taken))} of '{name}' now belong to another process; "
+            "boot it again with `up`.\n"
+        )
+        return True
+    if is_inner_running:
+        return False
+    gone = [
+        str(copy)
+        for copy in (state.get("copies") or {}).values()
+        if not Path(str(copy)).is_dir()
+    ]
+    if gone:
+        sys.stderr.write(
+            f"revive: the copies of '{name}' at {', '.join(gone)} are gone; boot it again with `up`.\n"
+        )
+        return True
+    if not Path(str(state["cwd"])).is_dir():
+        sys.stderr.write(
+            f"revive: the checkout '{name}' was booted from, {state['cwd']}, is gone; boot it again with `up`.\n"
+        )
+        return True
+    return False
+
+
+def _revive_wrapper(
+    name: str,
+    repo_root: Path,
+    state: dict,
+    *,
+    runner: Runner,
+    http: HttpClient,
+    spawner: Spawner,
+    sleeper: Callable[[float], None],
+) -> bool:
+    """Boot the preview frame (``pids[1]``) again with its recorded arguments on its recorded port.
+
+    Its new pid and start time replace the old in the state file once it is healthy. False,
+    said on stderr, when it does not come up; whatever it started is killed.
+    """
+    wrapper_log = Path(str(state["wrapper_log"]))
+    wrapper_pids: list[int] = []
+    try:
+        _boot_wrapper(
+            repo_root,
+            name,
+            wrapper_log,
+            [str(arg) for arg in state["wrapper_args"]],
+            wrapper_pids,
+            http=http,
+            spawner=spawner,
+            sleeper=sleeper,
+            port=int(state["wrapper_port"]),
+        )
+    except (InstanceError, OSError) as exc:
+        for pid in wrapper_pids:
+            _kill_process_group_and_wait(runner, pid, sleeper)
+        sys.stderr.write(f"revive: {exc}\n{_log_excerpt(wrapper_log)}")
+        return False
+    pids = list(state["pids"])
+    pids[1] = wrapper_pids[0]
+    starts = list(state["pid_starts"])
+    starts[1] = runner.process_start_time(wrapper_pids[0])
+    state["pids"] = pids
+    state["pid_starts"] = starts
+    _state_path(repo_root, name).write_text(json.dumps(state, indent=2))
+    return True
 
 
 def _revive_frame(
