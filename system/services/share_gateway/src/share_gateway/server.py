@@ -260,6 +260,12 @@ class UnansweredAddressWaits:
             first, last = self._first_and_last_by_address.get(address, (now, now))
             if now - last > _UNRESPONSIVE_WAIT_GAP_SECONDS:
                 first = now
+            # A wait whose address has gone quiet is over, so it is dropped rather than kept for good.
+            self._first_and_last_by_address = {
+                other: times
+                for other, times in self._first_and_last_by_address.items()
+                if now - times[1] <= _UNRESPONSIVE_WAIT_GAP_SECONDS
+            }
             self._first_and_last_by_address[address] = (first, now)
         return now - first
 
