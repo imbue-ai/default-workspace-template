@@ -10,8 +10,7 @@
  */
 
 import type { ReportedFailure, ShellConnection } from "@imbue/workspace-ui/src/app_contract";
-import { failureSentence, type FailureMessage } from "@imbue/workspace-ui/src/models/failure";
-import type { Failure } from "@imbue/workspace-ui/src/models/failure";
+import { failureSentence, type Failure, type FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import type { ToastAction, ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 
