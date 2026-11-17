@@ -7,7 +7,14 @@ from flask.testing import FlaskClient
 
 from mock_chromium_test import FakeCdpConnector
 from mock_chromium_test import FakeChromiumLauncher
+from mock_install_test import FakeInstall
 from mock_window_tools_test import FakeWindowTools
+from screen.browser_routes import BAD_LINK_MESSAGE
+from screen.browser_routes import BAD_START_PAGE_MESSAGE
+from screen.browser_routes import BROWSER_INSTALLING_MESSAGE
+from screen.browser_routes import BROWSER_INSTALL_FAILED_MESSAGE
+from screen.browser_routes import FLEET_FULL_MESSAGE
+from screen.browser_routes import WINDOW_NOT_SHOWN_MESSAGE
 from screen.data_types import BrowserLifecycle
 from screen.data_types import Lifecycle
 from screen.data_types import XWindow
@@ -70,6 +77,7 @@ def test_the_launch_path_refuses_a_bad_start_page_under_detail(client: FlaskClie
     refused = client.post("/launch/browser", json={"url": "ftp://example.com"})
     assert refused.status_code == 400
     assert "url" in refused.get_json()["detail"]
+    assert refused.get_json()["user_facing_message"] == BAD_START_PAGE_MESSAGE
     assert client.post("/launch/browser", json=["https://example.com"]).status_code == 400
     assert client.post("/launch/browser", json={"url": 3}).status_code == 400
     assert client.get("/launch/browser").status_code == 405
@@ -155,6 +163,35 @@ def test_open_url_refuses_what_it_cannot_open_with_the_reason_under_detail(
     assert loopback_shell.posted_ops() == []
 
 
+def test_an_external_link_is_refused_with_a_sentence_for_the_person_who_clicked_it(
+    client: FlaskClient, loopback_shell: LoopbackShell
+) -> None:
+    answer = client.post("/api/open-url", json={"client_id": "c-link", "url": "https://example.com/"})
+    assert answer.status_code == 400
+    assert answer.get_json()["user_facing_message"] == BAD_LINK_MESSAGE
+    assert answer.get_json()["reportable"] is False
+
+
+@pytest.mark.parametrize("path", ["/launch/browser", "/api/open-url"])
+def test_a_browser_not_yet_installed_says_so_in_words_and_one_that_failed_to_install_asks_for_an_agent(
+    client: FlaskClient, fake_install: FakeInstall, loopback_shell: LoopbackShell, path: str
+) -> None:
+    body = {"client_id": "c-link", "url": "http://localhost:3000/"}
+    fake_install.missing_browser = "Chromium is still installing in this workspace; try again in a minute."
+    installing = client.post(path, json=body)
+    assert installing.status_code == 503
+    assert installing.get_json() == {
+        "detail": "Chromium is still installing in this workspace; try again in a minute.",
+        "user_facing_message": BROWSER_INSTALLING_MESSAGE,
+        "reportable": False,
+    }
+    fake_install.failure = "env-converge ran system/scripts/env.d/2000-screen.sh in this boot and it failed"
+    failed = client.post(path, json=body)
+    assert failed.status_code == 503
+    assert failed.get_json()["user_facing_message"] == BROWSER_INSTALL_FAILED_MESSAGE
+    assert "2000-screen.sh in this boot and it failed" in failed.get_json()["detail"]
+
+
 def test_open_url_says_why_when_the_shell_will_not_show_the_screen(
     client: FlaskClient, service: ScreenService, fake_cdp_connector: FakeCdpConnector, loopback_shell: LoopbackShell
 ) -> None:
@@ -163,6 +200,9 @@ def test_open_url_says_why_when_the_shell_will_not_show_the_screen(
     answer = client.post("/api/open-url", json={"client_id": "c-gone", "url": "http://localhost:3000/"})
     assert answer.status_code == 502
     assert "No client 'c-gone'" in answer.get_json()["detail"]
+    # The page did open, but the window the person asked for did not: a sentence of ours that asks for a bug report.
+    assert answer.get_json()["user_facing_message"] == WINDOW_NOT_SHOWN_MESSAGE
+    assert answer.get_json()["reportable"] is True
     assert fake_cdp_connector.clients[0].created == ["http://localhost:3000/"]
 
 
@@ -182,7 +222,9 @@ def test_a_named_create_and_its_refusals(client: FlaskClient, service: ScreenSer
     assert created.status_code == 200 and created.get_json() == {"name": "research"}
     assert wait_until(lambda: service.fleet.get(BrowserName("research")).is_running)
     assert client.post("/browsers", json={"name": "Bad Name"}).status_code == 400
-    assert client.post("/browsers", json={"name": "second"}).status_code == 409
+    full = client.post("/browsers", json={"name": "second"})
+    assert full.status_code == 409
+    assert full.get_json()["user_facing_message"] == FLEET_FULL_MESSAGE
     assert client.post("/browsers", json={"url": "nope"}).status_code == 400
 
 

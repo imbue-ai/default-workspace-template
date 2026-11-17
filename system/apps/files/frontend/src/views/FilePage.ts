@@ -10,12 +10,17 @@ import { Button, buttonClass } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { createMenu, type Menu } from "@imbue/workspace-ui/src/components/menu";
+import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
+import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import { startDownload } from "@imbue/workspace-ui/src/download";
 
 import { isLiveShared } from "../models/connections";
 import * as server from "../models/server";
+import { reportBugAction, toastFailures, toldFailure, type FailureHost, type FilesFailure } from "../models/failures";
+import { renameOnServer } from "../models/FilesModel";
 import { isTextLike, previewKindOf } from "../models/fileKinds";
 import { formatSize } from "../models/format";
 import { matchesKeybinding } from "../models/keybindings";
@@ -31,7 +36,21 @@ export interface FilePageOptions {
   isText: boolean;
 }
 
-type TextState = { status: "loading" } | { status: "ready"; saved: string } | { status: "error"; error: string };
+type TextState =
+  { status: "loading" } | { status: "ready"; saved: string } | { status: "error"; failure: FilesFailure };
+
+/** Why a file's text could not be loaded: gone since the page was asked for, or anything else in words. */
+function loadFailureOf(error: unknown): FilesFailure {
+  if (error instanceof HttpError && error.status === 404) {
+    return {
+      message: "This file is no longer there. It may have been moved or deleted.",
+      details: error.failure.details,
+      isReportable: false,
+      isOutOfSpace: false,
+    };
+  }
+  return toldFailure(error, "This file couldn't be opened", "open");
+}
 
 export class FilePageModel {
   text: TextState = { status: "loading" };
@@ -42,7 +61,11 @@ export class FilePageModel {
   size: number | null = null;
   readonly dialogs = new Dialogs();
 
-  constructor(readonly options: FilePageOptions) {}
+  constructor(
+    readonly options: FilePageOptions,
+    /** The shell connection a failure's buttons go through. */
+    readonly reporter: FailureHost,
+  ) {}
 
   get isDirty(): boolean {
     return this.text.status === "ready" && this.draft !== this.text.saved;
@@ -61,12 +84,18 @@ export class FilePageModel {
       })
       .catch(() => undefined);
     if (!this.showsText) return;
+    await this.loadText();
+  }
+
+  /** Read the file's text into the editor; what went wrong takes its place when it cannot be read. */
+  async loadText(): Promise<void> {
+    this.text = { status: "loading" };
     try {
       const text = await server.readText(this.options.path);
       this.text = { status: "ready", saved: text };
       this.draft = text;
     } catch (error) {
-      this.text = { status: "error", error: error instanceof Error ? error.message : String(error) };
+      this.text = { status: "error", failure: loadFailureOf(error) };
     }
     m.redraw();
   }
@@ -81,7 +110,12 @@ export class FilePageModel {
       this.text = { status: "ready", saved: content };
       this.size = new Blob([content]).size;
     } catch (error) {
-      this.toasts.show(error instanceof Error ? error.message : String(error));
+      toastFailures(
+        this.toasts,
+        [toldFailure(error, `Couldn't save "${nameOf(this.options.path)}"`, "item")],
+        this.reporter,
+        () => m.redraw(),
+      );
     }
     this.isSaving = false;
     m.redraw();
@@ -93,11 +127,9 @@ export class FilePageModel {
     const parent = parentOf(path);
     if (name === null || parent === null) return;
     const target = childPath(parent, name, false);
-    try {
-      if (await server.exists(target)) throw new Error(`"${name}" is already taken.`);
-      await server.movePath(path, target);
-    } catch (error) {
-      this.toasts.show(error instanceof Error ? error.message : String(error));
+    const failure = await renameOnServer(path, target, name);
+    if (failure !== null) {
+      toastFailures(this.toasts, [failure], this.reporter, () => m.redraw());
       m.redraw();
       return;
     }
@@ -119,7 +151,12 @@ export class FilePageModel {
     try {
       await server.deletePath(path);
     } catch (error) {
-      this.toasts.show(error instanceof Error ? error.message : String(error));
+      toastFailures(
+        this.toasts,
+        [toldFailure(error, `Couldn't delete "${nameOf(path)}"`, "item")],
+        this.reporter,
+        () => m.redraw(),
+      );
       m.redraw();
       return;
     }
@@ -164,7 +201,7 @@ function body(page: FilePageModel): m.Children {
     case "text": {
       const text = page.text;
       if (text.status === "loading") return m("div", { class: centred }, m("div.spinner"));
-      if (text.status === "error") return m("div", { class: `${centred} type-body text-danger` }, text.error);
+      if (text.status === "error") return loadFailureView(page, text.failure, centred);
       return m("textarea.files-editor", {
         value: page.draft,
         readOnly: kind === "view",
@@ -185,6 +222,25 @@ function body(page: FilePageModel): m.Children {
         m(Button, { sm: true, extra: "mt-2", onclick: () => downloadFile(page, path) }, "Download"),
       ]);
   }
+}
+
+/** A file whose text could not be loaded, in place of the editor: the sentence, what the server said behind "See
+ *  details", Try again, and Report a bug where the sentence asks for one. */
+function loadFailureView(page: FilePageModel, failure: FilesFailure, centred: string): m.Children {
+  return m("div.files-load-failure", { class: `${centred} flex-col gap-3 text-center` }, [
+    m("div.files-load-failure-message", { class: "type-body text-danger" }, failure.message),
+    m(SeeDetails, { details: failure.details }),
+    m("div", { class: "flex gap-2" }, [
+      m(Button, { sm: true, "data-action": "retry-load", onclick: () => void page.loadText() }, "Try again"),
+      failure.isReportable
+        ? m(ReportBugButton, {
+            connection: page.reporter,
+            failure: { message: failure.message, details: failure.details },
+            sm: true,
+          })
+        : null,
+    ]),
+  ]);
 }
 
 function downloadFile(page: FilePageModel, path: string): void {
@@ -305,6 +361,8 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
           placementClass: "fixed bottom-6",
           onDismiss: (id: number) => page.toasts.dismiss(id),
           closesPlainToasts: true,
+          onReportBug: reportBugAction(page.reporter),
+          onHold: (id: number) => page.toasts.hold(id),
         }),
         page.dialogs.view(),
       ]);

@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import html
 import json
 import re
 import subprocess
@@ -8,6 +9,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
+import pytest
+from playwright.sync_api import Page
 from werkzeug.test import TestResponse
 
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
@@ -259,6 +262,92 @@ def build_selection_workspace(repo_root: Path) -> None:
         repo_root, ".agents/skills/refresh/scripts/refresh_test.py", "def test_refresh() -> None:\n    pass\n"
     )
     commit_everything(repo_root, "workspace")
+
+
+def built_app_contract_source() -> str:
+    """The shell's built app contract module, through which a page under test speaks to ``shell_stand_in_page``; skips
+    the test when the shell's frontend has not been built."""
+    if not SHELL_APP_CONTRACT_PATH.is_file():
+        pytest.skip(f"the shell's frontend is not built: no {SHELL_APP_CONTRACT_PATH} (`cd system && npm run build`)")
+    return SHELL_APP_CONTRACT_PATH.read_text()
+
+
+_SHELL_STAND_IN_TEMPLATE: Final[str] = """<!doctype html>
+<html>
+<body style="margin: 0">
+<iframe id="app" src="__FRAME_URL__" style="width: 1000px; height: 700px; border: 0"></iframe>
+<script>
+  window.shellMessages = [];
+  const frame = document.getElementById("app");
+  window.shellId = "stand-in-shell";
+  const greet = () => frame.contentWindow.postMessage({
+    type: "shell:handshake",
+    shellId: window.shellId,
+    clientId: "client-stand-in",
+    windowId: "window-stand-in",
+    desktopId: "desktop-stand-in",
+    app: "stand-in",
+    path: "/",
+    canReportBug: __CAN_REPORT_BUG__,
+  }, "*");
+  frame.addEventListener("load", greet);
+  window.greet = greet;
+  // Settles the frame's latest shell:start-new-with-text as the shell does once the chat opened or could not.
+  window.answerStartNewWithText = (outcome) => {
+    const asked = window.shellMessages.filter((message) => message.type === "shell:start-new-with-text").at(-1);
+    frame.contentWindow.postMessage(
+      { type: "shell:start-new-with-text-result", requestId: asked.requestId, ...outcome }, "*",
+    );
+  };
+  window.addEventListener("message", (event) => {
+    if (event.source !== frame.contentWindow) return;
+    window.shellMessages.push(event.data);
+    if (event.data?.type === "shell:capabilities") greet();
+  });
+</script>
+</body>
+</html>
+"""
+
+
+# An init script for a browser context (``add_init_script``) that counts the shell handshakes each frame receives, in
+# ``window.shellHandshakes``. It listens before any of the page's own scripts, so once a frame's count has moved, the
+# page there has handled the handshake too: what it hides for want of a shell is hidden for that reason.
+SHELL_HANDSHAKE_COUNTER_SCRIPT: Final[str] = """
+window.shellHandshakes = 0;
+window.addEventListener("message", (event) => {
+  if (event.source === window.parent && event.data?.type === "shell:handshake") window.shellHandshakes += 1;
+});
+"""
+
+
+def shell_stand_in_page(frame_url: str, can_report_bug: bool) -> str:
+    """A page standing in for the workspace shell around one app page: it frames ``frame_url``, greets the frame with
+    a ``shell:handshake`` on every load and in answer to each ``shell:capabilities``, as the shell does, saying
+    ``can_report_bug`` and one ``shellId``, keeps every message the frame posts in ``window.shellMessages``, answers a
+    ``shell:start-new-with-text`` when a test calls ``answer_start_new_with_text``, and greets again when a test calls
+    ``resend_shell_handshake``."""
+    return _SHELL_STAND_IN_TEMPLATE.replace("__FRAME_URL__", html.escape(frame_url)).replace(
+        "__CAN_REPORT_BUG__", json.dumps(can_report_bug)
+    )
+
+
+def answer_start_new_with_text(page: Page, outcome: Mapping[str, object]) -> None:
+    """Answer the framed page's latest ``shell:start-new-with-text`` with ``outcome`` (``{"isOpened": True}``, or
+    ``{"isOpened": False, "failure": {...}}``), as the shell does, through the ``shell_stand_in_page`` loaded in
+    ``page``."""
+    page.evaluate("(outcome) => window.answerStartNewWithText(outcome)", dict(outcome))
+
+
+def resend_shell_handshake(page: Page, shell_id: str | None = None) -> None:
+    """Greet the framed page again, as the shell does when something about the window changes (the same
+    ``shellId``), or, given another ``shell_id``, as a shell that started again does."""
+    page.evaluate("(shellId) => { if (shellId !== null) window.shellId = shellId; window.greet(); }", shell_id)
+
+
+def shell_messages(page: Page, message_type: str) -> list[dict[str, object]]:
+    """The messages of ``message_type`` the framed page has posted to the ``shell_stand_in_page`` loaded in ``page``."""
+    return [message for message in page.evaluate("window.shellMessages") if message["type"] == message_type]
 
 
 def declare_root_dependency(repo_root: Path, name: str) -> None:

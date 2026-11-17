@@ -33,13 +33,30 @@ both offer the verbs `sources.py` names. For either:
   something already there; DELETE removes;
 - a path that isn't there is answered with `404.html` when a page was asked for
   (the request accepts `text/html` and is not a `?json`, `?zip`, or `?download`),
-  and in plain words otherwise.
+  and refused as below otherwise.
 
 A computer's file server has no MOVE, and a folder there is not offered as a zip,
 so those are refused, as is a MOVE from the workspace onto a computer. Each name
 header a computer sends is made ASCII-safe: a name with a character outside
 Latin-1 (the narrow space macOS puts in screenshot names) makes the forwarder
 between the workspace and the browser answer with an error in place of the file.
+
+A refusal is an `ErrorResponse` (`app_schema`): a `user_facing_message` naming
+only the cause ("It's no longer there.", "Something with that name is already
+there."), since the page's own words name the file; a `kind` the page words per
+action where the refusing folder matters; and `detail`. A disk error people can
+act on is classified by its errno (`os_refusals.py`): no permission
+(`permission_denied`) or a read-only file system (`read_only`), out of disk
+space (`out_of_space`, 507), gone, already there, a name too long, a file where a
+folder should be or the reverse, in use, too large, or a link loop. A MOVE refused
+for want of write access says which end refused (`destination_not_writable`,
+`source_not_writable`). Any other disk error carries a `detail` only, which the
+page asks to have reported. A computer's file server refusing a change is "Your
+computer only shares this to read." (`shared_read_only`), "It's no longer
+there." (`not_found`), or else "Your computer couldn't do this.", its status
+and own text behind "See details". A refusal to a `?download` or a `?zip` stays plain
+text, which is all the hidden frame a download loads in can read, and so does one to
+a page the browser loads (a window opening on a folder it cannot list).
 
 `/__files/assets/` is the frontend's build, and `/__files/api/connections` lists
 what the user has shared with the workspace from their computers, read through
@@ -158,6 +175,25 @@ shared by every window.
   upload whose name is taken asks whether to replace it or keep both. Uploads
   show their progress in a panel at the bottom right, which goes away a moment
   after the last one lands and stays up when one failed.
+
+A failed request is told through `workspace_ui`'s reader (`models/failures.ts`):
+a sentence naming what failed, then the cause the server gave (`Couldn't move
+"notes.txt" into "reports". That folder is read-only.`), worded by Files where it
+depends on which folder refused, with the status and the server's text behind
+"See details". A request nothing answered says only that. One whose sentence asks
+for a bug report leaves a toast that stays, with "See details" and, where the
+shell says Imbue Studio opens one, "Report a bug"; a full disk leaves one that
+stays with "Ask an agent to free up space", which asks in the chat already
+running (a new agent would need disk) and reads "Asking an agent…" until the
+shell says the chat opened, a note saying why when it could not; any other leaves a note that goes, its
+details behind "See details" (opening them keeps it up). A rename says it in the name field (one that asks for a bug
+report ends the rename and leaves the toast that stays), and a folder that cannot be
+listed says it in place of the listing, with Try again and, for a sentence that
+asks for a bug report, "Report a bug". A file whose text cannot
+be loaded says so in place of the editor, with Try again; an upload that failed
+says why in its row (interrupted, a read-only folder, out of disk space, or
+failed), with the details on hover; and a file whose location is too long for a
+window of its own is told rather than asked of the shell.
 
 Under 520px of the frame's own width the window lays itself out for a phone:
 the sidebar floats over the folder from a button at the toolbar's start, one

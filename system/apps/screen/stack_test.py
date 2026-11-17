@@ -17,6 +17,7 @@ from screen.connect_info import ConnectInfoAggregator
 from screen.data_types import Lifecycle
 from screen.data_types import NekoSecrets
 from screen.data_types import NekoSession
+from screen.data_types import StopCause
 from screen.interfaces import ProgramState
 from screen.neko_config import render_neko_yaml
 from screen.primitives import STACK_PROGRAMS
@@ -158,13 +159,15 @@ def test_installing_is_reported_until_the_unit_is_satisfied(
         display_socket_path=tmp_path / "x11" / "X99",
         input_socket_path=tmp_path / "runtime" / "xf86-input-neko.sock",
         install_check=lambda: missing.pop(0) if missing else None,
+        install_failure_check=lambda: None,
         install_poll_seconds=0.01,
         on_lifecycle_changed=lambda: lifecycles.append(stack.lifecycle),
         on_running=lambda _secrets, session: adopted.append(session),
         set_api_token=fake_neko.set_api_token,
     )
     stack.ensure_started()
-    assert wait_until(lambda: stack.lifecycle == Lifecycle.RUNNING)
+    # The lifecycle reads RUNNING a moment before its change is reported; the report is what this test reads.
+    assert wait_until(lambda: bool(lifecycles) and lifecycles[-1] == Lifecycle.RUNNING)
     # The start is visible at once, then the install wait, then the start proper.
     assert lifecycles[0] == Lifecycle.STARTING
     installing_index = lifecycles.index(Lifecycle.INSTALLING)
@@ -329,6 +332,7 @@ def test_a_stops_reason_outlives_the_service_life_until_the_next_start(
     assert second.adopt_running_stack() is False
     assert second.lifecycle == Lifecycle.STOPPED
     assert second.stop_reason == "the Screen service is restarting"
+    assert second.stop_cause == StopCause.REQUESTED
     # The next start wipes the recorded reason, so a later life does not show a stale one.
     start_service_stack(service)
     assert service.stack.stop_reason is None

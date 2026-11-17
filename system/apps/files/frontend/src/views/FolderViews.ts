@@ -5,7 +5,9 @@
 
 import m from "mithril";
 
+import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { alertDotIcon, icon } from "@imbue/workspace-ui/src/components/icons";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 
 import { shareBadgeOf, shareRootAt, syncNoticeOf } from "../models/connections";
 import type { Entry } from "../models/server";
@@ -219,7 +221,19 @@ function columnBody(
     return m("div", { class: "flex justify-center py-6" }, m("div.spinner"));
   }
   if (state.status === "error" && entries.length === 0) {
-    return m("div", { class: "px-3 py-4 type-helper text-danger" }, state.error);
+    const failure = state.error;
+    return m("div", { class: "px-3 py-4 type-helper text-danger" }, [
+      failure?.message,
+      m(SeeDetails, { details: failure?.details ?? null }),
+      failure?.isReportable
+        ? m(ReportBugButton, {
+            connection: app.failureHost,
+            failure: { message: failure.message, details: failure.details },
+            sm: true,
+            extra: "mt-2",
+          })
+        : null,
+    ]);
   }
   if (entries.length === 0) {
     const notice = syncNoticeOf(app.model.connections, folder);

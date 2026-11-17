@@ -2,6 +2,8 @@
 
 import type { Entry } from "../models/server";
 import { childPath } from "../models/paths";
+import { readFailure, type RequestKind } from "@imbue/workspace-ui/src/models/failure";
+import { HttpError } from "@imbue/workspace-ui/src/models/http";
 
 export function fileEntry(folder: string, name: string, overrides: Partial<Entry> = {}): Entry {
   return {
@@ -40,4 +42,14 @@ export function memoryStorage(): Storage {
     removeItem: (key) => void values.delete(key),
     setItem: (key, value) => void values.set(key, value),
   };
+}
+
+/** The ``HttpError`` the request layer throws for an answer of `status` carrying `body` (null for a body that was not
+ *  JSON, or a status 0 for a request nothing answered). */
+export function httpFailure(
+  status: number,
+  body: Record<string, unknown> | null,
+  requestKind: RequestKind = "change",
+): HttpError {
+  return new HttpError(readFailure({ status, body, rawText: body === null ? "" : JSON.stringify(body), requestKind }));
 }
