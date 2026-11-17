@@ -359,6 +359,23 @@ def _chat_not_found_response(chat_id: str) -> Response:
     return model_response(_chat_not_found_error(chat_id), 404)
 
 
+# A send's sentence for a chat the app does not know: the message went back into the composer it was typed in.
+SEND_TO_GONE_CHAT_SENTENCE: Final[str] = (
+    "This chat is no longer here -- it was deleted. Your message is still in the box, so you can paste it into a "
+    "new chat."
+)
+
+
+def _send_to_gone_chat_error(chat_id: str) -> ErrorResponse:
+    return refusal_answer(
+        f"Chat '{chat_id}' not found", user_facing_message=SEND_TO_GONE_CHAT_SENTENCE, kind=CHAT_GONE_KIND
+    )
+
+
+def _send_to_gone_chat_response(chat_id: str) -> Response:
+    return model_response(_send_to_gone_chat_error(chat_id), 404)
+
+
 def _agent_list_not_known_response(starting_sentence: str = WORKSPACE_STARTING_SENTENCE) -> Response:
     """The 503 before the agent list is read: a wait while the chat app starts, or, once its first listing failed and the
     agent observer is down too, a list nothing is going to bring."""
@@ -934,6 +951,32 @@ def _consider_naming_chat(state: ChatAppState, chat_id: ChatId, message: str) ->
 # list has not caught up with the sign-out sends and meets this.
 ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND: Final[str] = "account_signed_out"
 
+# What a refused send says for each of mngr's kinds, in place of mngr's reason, which is written for its own command
+# line and goes behind the page's details. An unclassified refusal (``unknown``) has no sentence of its own, and an
+# unconfirmed one is worded by the page, which offers Send again for it.
+_SEND_FAILURE_SENTENCES: Final[dict[str, str]] = {
+    SendFailureKind.INPUT_BLOCKED: "The agent is waiting on something in its terminal. Answer it there and try again.",
+    SendFailureKind.AGENT_UNREACHABLE: "The agent isn't running and didn't start.",
+    SendFailureKind.NOT_READY: "The agent isn't ready for messages yet. Try again in a moment.",
+    SendFailureKind.STATE_UNKNOWN: "Couldn't reach the agent just now. Try again in a moment.",
+    SendFailureKind.AGENT_NOT_FOUND: "Couldn't find the agent. Try again in a moment.",
+    SendFailureKind.NOT_SUBMITTED: "The agent didn't take your message. Try again.",
+}
+# A send whose agent had to be started first, and the start failed.
+_AGENT_START_FAILED_SENTENCE: Final[str] = (
+    "This chat's agent couldn't be started. Try again. If this persists, report a bug."
+)
+
+
+def _send_failure_sentence(send_failure: SendFailedError) -> str | None:
+    """The sentence a refused send shows; a declined /compact's reason is already the chat's sentence for people."""
+    if send_failure.kind in _DECLINED_SEND_FAILURE_KINDS:
+        return send_failure.detail
+    if isinstance(send_failure, AgentStartFailedError):
+        return _AGENT_START_FAILED_SENTENCE
+    return _SEND_FAILURE_SENTENCES.get(send_failure.kind)
+
+
 # The kind of a create refused because nothing is signed in: the caller opens the chat awaiting its first send, whose
 # page asks for a provider, rather than showing the refusal. A create naming a signed-out account answers
 # ``ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND``, like a send to a chat on one.
@@ -983,7 +1026,7 @@ def _send_to_chat(
         # is archived by then and must receive nothing.
         agent_info = _find_active_agent(str(chat_id))
         if agent_info is None:
-            return _SendRefused(answer=_chat_not_found_error(str(chat_id)), status=404)
+            return _SendRefused(answer=_send_to_gone_chat_error(str(chat_id)), status=404)
         if is_refused_on_signed_out_account and _is_account_signed_out(agent_info):
             detail = "You signed out of the account this chat runs on. Choose a provider to continue it on."
             return _SendRefused(
@@ -1009,20 +1052,19 @@ def _send_to_chat(
         except AgentNotFoundError as e:
             # Destroyed while the send was in flight: the chat is gone, not refusing.
             logger.info("Agent {} was destroyed while a message to it was in flight: {}", agent_info.name, e)
-            return _SendRefused(answer=_chat_not_found_error(str(chat_id)), status=404)
+            return _SendRefused(answer=_send_to_gone_chat_error(str(chat_id)), status=404)
         except SendFailedError as send_failure:
-            # The harness's reason goes back as the detail, with its kind beside it: the page says what the kind
-            # means in its own words and decides what to offer (trying again can clear a blocked input, where only a
-            # restart is left for an agent that would not start), keeping the reason behind its details. A /compact
-            # the chat declines is its own refusal, not a failure, and its reason is the chat's sentence for the
-            # person.
+            # The harness's reason goes back as the detail, with its kind beside it, and the sentence for the kind:
+            # only this side knows which case it met (a start that failed, a pane that is gone), while the page
+            # decides what to offer by the kind (trying again can clear a blocked input, where only a restart is left
+            # for an agent that would not start). A /compact the chat declines is its own refusal, not a failure.
             logger.info("Send to chat {} failed: {}", chat_id, send_failure.kind)
             is_declined = send_failure.kind in _DECLINED_SEND_FAILURE_KINDS
             status_code = 409 if is_declined else 500
             return _SendRefused(
                 answer=refusal_answer(
                     send_failure.detail,
-                    user_facing_message=send_failure.detail if is_declined else None,
+                    user_facing_message=_send_failure_sentence(send_failure),
                     kind=send_failure.kind,
                 ),
                 status=status_code,
@@ -1301,7 +1343,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
         return _agent_list_not_known_response()
     parsed = parse_chat_ref(chat_id)
     if parsed is None:
-        return _chat_not_found_response(chat_id)
+        return _send_to_gone_chat_response(chat_id)
     send_message_request = parse_request_body(SendMessageRequest)
     if not send_message_request.message_id:
         return _send_message(state, chat_id, parsed, send_message_request, uuid4().hex)
@@ -1316,7 +1358,10 @@ def _send_message_endpoint(chat_id: str) -> Response:
             send_message_request.is_repeat,
         )
     except SendStillUnderWayError:
-        return error_response("The message is still on its way.", 503)
+        # The first send may still deliver the message, so this one is unconfirmed rather than refused.
+        return refusal_response(
+            "The message is still on its way.", 503, kind=SendFailureKind.SUBMISSION_UNCONFIRMED.value
+        )
     except RepeatedSendOutcomeUnknownError:
         return model_response(
             SendFailureResponse(
@@ -1350,7 +1395,7 @@ def _send_message(
         provisional := agent_manager.get_provisional_chat(chat_id)
     ) is not None and provisional.phase is ProvisionalChatPhase.CREATING
     if _find_active_agent(chat_id) is None and not is_being_created:
-        return _chat_not_found_response(chat_id)
+        return _send_to_gone_chat_response(chat_id)
     delivered_text = _attributed_delivery(state, parsed, send_message_request.message, message_id, request_identity())
     if _find_active_agent(chat_id) is None:
         held = _hold_send_for_chat_being_created(state, chat_id, send_message_request, delivered_text, message_id)
@@ -1359,7 +1404,7 @@ def _send_message(
             return held
         # The create may have landed between the lookup and the hold, which then refuses.
         if _find_active_agent(chat_id) is None:
-            return _chat_not_found_response(chat_id)
+            return _send_to_gone_chat_response(chat_id)
 
     # Alongside the delivery rather than after it, which can take seconds: the name should land
     # while the agent is still answering.

@@ -23,11 +23,6 @@ from imbue.chat.errors import ChatAppError
 # The peer addresses a loopback-only route answers, as the shell's routes of that kind do.
 _LOOPBACK_CLIENT_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "localhost"})
 
-# What a page shows for an exception no route expected. Never "nothing was changed": it can come after part of the
-# work was done.
-UNEXPECTED_FAILURE_SENTENCE: Final[str] = (
-    "Something went wrong in this chat. Try again. If this persists, report a bug."
-)
 # How a sentence for people that asks for a bug report ends.
 _REPORT_A_BUG_ENDING: Final[str] = "If this persists, report a bug."
 
@@ -78,4 +73,5 @@ def handle_unhandled_exception(exc: Exception) -> Response | HTTPException:
         return exc
     tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
     logger.error("Unhandled exception on {} {}: {}\n{}", request.method, request.path, exc, "".join(tb))
-    return refusal_response(f"Internal server error: {exc}", 500, user_facing_message=UNEXPECTED_FAILURE_SENTENCE)
+    # No sentence for people: each page names what failed, which a route that did not expect this cannot.
+    return refusal_response(f"Internal server error: {exc}", 500)
