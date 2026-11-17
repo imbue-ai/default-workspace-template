@@ -620,7 +620,6 @@ def test_a_file_outside_every_skill_may_name_a_skill_but_no_file_inside_one(
         ".agents/shared/references/reaching.md",
         "Read `.agents/skills/user/references/own.md`.\n",
     )
-
     _write(
         tmp_path,
         "AGENTS.md",

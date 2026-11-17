@@ -2,8 +2,8 @@
 
 When the memory daemon (earlyoom) sheds something and an agent reports it to
 you -- a worker's `question` gate about a shed test command, a worker you find
-shed (`lead-proxy.md`, `lead-proxy/dead-worker-recovery.md`), or anything else an agent or
-the user brings you -- the workspace ran short of memory, and the next heavy
+shed, or anything else an agent or the user brings you -- the workspace ran
+short of memory, and the next heavy
 command is likely to be shed too. Memory is the user's to spend, so you find
 what could be freed and let them choose; you never stop anything on your own.
 
