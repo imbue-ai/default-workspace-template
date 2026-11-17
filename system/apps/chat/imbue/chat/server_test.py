@@ -1840,7 +1840,8 @@ def test_a_send_whose_agent_cannot_be_started_is_not_called_not_ready(tmp_path: 
         response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hi"})
     assert response.status_code == 500
     body = response.get_json()
-    assert body["kind"] == "agent_unreachable"
+    # Its own kind, apart from mngr's agent_unreachable (a pane that is gone), so the page offers Try again for it.
+    assert body["kind"] == "agent_start_failed"
     assert body["user_facing_message"] == (
         "This chat's agent couldn't be started. Try again. If this persists, report a bug."
     )

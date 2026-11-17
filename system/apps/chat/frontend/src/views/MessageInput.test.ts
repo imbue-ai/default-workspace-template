@@ -1451,7 +1451,7 @@ describe("MessageInput send failure notice", () => {
     // stands as written.
     for (const [kind, sentence] of [
       ["not_ready", "This chat is still waking up. Try again in a moment."],
-      ["agent_unreachable", "This chat's agent couldn't be started. Try again. If this persists, report a bug."],
+      ["agent_start_failed", "This chat's agent couldn't be started. Try again. If this persists, report a bug."],
       ["chat_gone", "This chat is no longer here -- it was deleted."],
     ]) {
       mocks.sendMessage.mockRejectedValueOnce(
@@ -2864,6 +2864,29 @@ describe("MessageInput tells each way a send can fail", () => {
     expect(findButton(after, "Restart")).toBeDefined();
     (findButton(after, "Turn on Source view")!.attrs!.onclick as () => void)();
     expect(turned()).toBe(1);
+  });
+
+  it("offers Retry and Report a bug for an agent whose start failed, as its sentence asks, and no Restart", async () => {
+    stubShellConnection(true);
+    mocks.sendMessage.mockRejectedValueOnce(
+      refusal(500, {
+        detail: "Could not start agent 'Chat-1' for a send: mngr start exited 1",
+        user_facing_message: "This chat's agent couldn't be started. Try again. If this persists, report a bug.",
+        reportable: true,
+        kind: "agent_start_failed",
+      }),
+    );
+    const { component } = composerWithSourceView();
+
+    const after = await typeAndSend(component, "agent-1", "hello");
+
+    expect(renderedText(findByClass(after, "modal-message")).trim()).toBe(
+      "This chat's agent couldn't be started. Try again. If this persists, report a bug.",
+    );
+    expect(findButton(after, "Retry")).toBeDefined();
+    expect(findButton(after, "Report a bug")).toBeDefined();
+    expect(findButton(after, "Restart")).toBeUndefined();
+    expect(findButton(after, "Turn on Source view")).toBeUndefined();
   });
 
   it("offers only Retry for a refusal whose kind the composer does not know", async () => {

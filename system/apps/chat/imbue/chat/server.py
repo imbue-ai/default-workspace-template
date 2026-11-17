@@ -78,6 +78,7 @@ from imbue.chat.accounts import account_exists
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.activity_state import is_lifecycle_dead
+from imbue.chat.agent_discovery import AGENT_START_FAILED_SEND_FAILURE_KIND
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import AgentStartFailedError
 from imbue.chat.agent_discovery import COMPACT_UNAVAILABLE_SEND_FAILURE_KIND
@@ -967,19 +968,16 @@ _SEND_FAILURE_SENTENCES: Final[dict[str, str]] = {
     SendFailureKind.STATE_UNKNOWN: "Couldn't reach the agent just now. Try again in a moment.",
     SendFailureKind.AGENT_NOT_FOUND: "Couldn't find the agent. Try again in a moment.",
     SendFailureKind.NOT_SUBMITTED: "The agent didn't take your message. Try again.",
+    AGENT_START_FAILED_SEND_FAILURE_KIND: (
+        "This chat's agent couldn't be started. Try again. If this persists, report a bug."
+    ),
 }
-# A send whose agent had to be started first, and the start failed.
-_AGENT_START_FAILED_SENTENCE: Final[str] = (
-    "This chat's agent couldn't be started. Try again. If this persists, report a bug."
-)
 
 
 def _send_failure_sentence(send_failure: SendFailedError) -> str | None:
     """The sentence a refused send shows; a declined /compact's reason is already the chat's sentence for people."""
     if send_failure.kind in _DECLINED_SEND_FAILURE_KINDS:
         return send_failure.detail
-    if isinstance(send_failure, AgentStartFailedError):
-        return _AGENT_START_FAILED_SENTENCE
     return _SEND_FAILURE_SENTENCES.get(send_failure.kind)
 
 

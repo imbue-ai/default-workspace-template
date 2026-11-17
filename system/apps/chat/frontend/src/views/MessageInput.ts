@@ -180,10 +180,12 @@ const KINDS_THE_TERMINAL_SHOWS: ReadonlySet<ComposerFailureKind> = new Set([
   "submission_unconfirmed",
 ]);
 // Kinds a restart must not answer: an agent still starting would lose the session it was about to finish bringing up;
-// one that may already be working on the message would have that turn cut off and get it twice; and a kind the
-// composer does not know says nothing about the agent.
+// one that may already be working on the message would have that turn cut off and get it twice; an agent whose start
+// just failed has nothing running to restart, and Retry starts it again; and a kind the composer does not know says
+// nothing about the agent.
 const KINDS_RESTART_MUST_NOT_ANSWER: ReadonlySet<ComposerFailureKind> = new Set([
   "not_ready",
+  "agent_start_failed",
   "submission_unconfirmed",
   "not_answered",
   "unrecognised",
