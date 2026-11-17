@@ -58,18 +58,14 @@ def is_same_session(record: TerminalSessionRecord, session: TmuxSession) -> bool
 def _find_record_of_session(
     session: TmuxSession, records: Sequence[TerminalSessionRecord]
 ) -> TerminalSessionRecord | None:
-    return next(
-        (record for record in records if is_same_session(record, session)), None
-    )
+    return next((record for record in records if is_same_session(record, session)), None)
 
 
 @pure
 def _find_session_of_record(
     record: TerminalSessionRecord, live_sessions: Sequence[TmuxSession]
 ) -> TmuxSession | None:
-    return next(
-        (session for session in live_sessions if is_same_session(record, session)), None
-    )
+    return next((session for session in live_sessions if is_same_session(record, session)), None)
 
 
 @pure
@@ -88,17 +84,14 @@ def _unclaimed_session_named(
         (
             session
             for session in live_sessions
-            if session.name == name
-            and _find_record_of_session(session, records) is None
+            if session.name == name and _find_record_of_session(session, records) is None
         ),
         None,
     )
 
 
 @pure
-def _live_listing(
-    session: TmuxSession, record: TerminalSessionRecord | None
-) -> TerminalListing:
+def _live_listing(session: TmuxSession, record: TerminalSessionRecord | None) -> TerminalListing:
     name = record.name if record is not None else TmuxSessionName(session.name)
     return TerminalListing(
         name=name,
@@ -159,10 +152,7 @@ def match_live_sessions(
         record = _find_record_of_session(session, records)
         if record is None:
             record = record_by_name.get(session.name)
-            if (
-                record is not None
-                and _find_session_of_record(record, live_sessions) is not None
-            ):
+            if record is not None and _find_session_of_record(record, live_sessions) is not None:
                 # The record's own session is live under another name; this one only reuses its old name.
                 logger.debug(
                     "Skipped tmux session {!r} ({}): terminal {!r} is backed by session {}",
@@ -175,9 +165,7 @@ def match_live_sessions(
         if record is not None:
             matched.add(record.name)
         listings.append(_live_listing(session, record))
-    listings.extend(
-        _stopped_listing(record) for record in records if record.name not in matched
-    )
+    listings.extend(_stopped_listing(record) for record in records if record.name not in matched)
     return listings
 
 
@@ -186,9 +174,7 @@ def _require_usable_title(title: TerminalTitle) -> None:
     """A title must canonicalize to something a name could be made of; one that does not is a bad title."""
     canonical = canonical_name_from_title(title)
     if not canonical:
-        raise InvalidTerminalValueError(
-            f"invalid title {title!r}: it contains no usable characters"
-        )
+        raise InvalidTerminalValueError(f"invalid title {title!r}: it contains no usable characters")
     try:
         TmuxSessionName(canonical)
     except InvalidTerminalValueError as e:
@@ -249,9 +235,7 @@ class TmuxSessionSource(MutableModel):
             name = allocate_terminal_name(self._taken_names())
             record = self._create_session_for(
                 TerminalSessionRecord(
-                    name=name,
-                    title=None,
-                    workdir=workdir if workdir is not None else self.default_workdir,
+                    name=name, title=None, workdir=workdir if workdir is not None else self.default_workdir
                 )
             )
         return _fresh_listing(record)
@@ -259,9 +243,7 @@ class TmuxSessionSource(MutableModel):
     def delete_terminal(self, name: TmuxSessionName) -> None:
         """Kill the terminal's session and forget it; an unknown name is not an error."""
         if is_agent_session(name, self.agent_session_prefix):
-            raise TerminalConflictError(
-                f"Refusing to destroy non-terminal session: {name!r}"
-            )
+            raise TerminalConflictError(f"Refusing to destroy non-terminal session: {name!r}")
         with self._lock:
             record = self._record_named(name)
             live = self._live_session_of(name, record, self._user_sessions())
@@ -281,11 +263,7 @@ class TmuxSessionSource(MutableModel):
             record = self._record_named(name)
             if record is None or record.is_window_seen:
                 return False
-            self.store.save_record(
-                record.model_copy_update(
-                    to_update(record.field_ref().is_window_seen, True)
-                )
-            )
+            self.store.save_record(record.model_copy_update(to_update(record.field_ref().is_window_seen, True)))
             return True
 
     def sweep_windows(self, window_paths: Sequence[str]) -> list[TmuxSessionName]:
@@ -296,35 +274,25 @@ class TmuxSessionSource(MutableModel):
         nobody watching outlives any sweep. Answers what was collected.
         """
         shown_names = {
-            name
-            for path in window_paths
-            if (name := window_query_value(path, SESSION_QUERY_KEY)) is not None
+            name for path in window_paths if (name := window_query_value(path, SESSION_QUERY_KEY)) is not None
         }
         collected: list[TmuxSessionName] = []
         with self._lock:
             for record in self.store.list_records():
                 if record.name in shown_names:
                     if not record.is_window_seen:
-                        self.store.save_record(
-                            record.model_copy_update(
-                                to_update(record.field_ref().is_window_seen, True)
-                            )
-                        )
+                        self.store.save_record(record.model_copy_update(to_update(record.field_ref().is_window_seen, True)))
                 elif record.is_window_seen:
                     collected.append(record.name)
         for name in collected:
             self.delete_terminal(name)
         return collected
 
-    def rename_terminal(
-        self, name: TmuxSessionName, title: TerminalTitle
-    ) -> TerminalListing:
+    def rename_terminal(self, name: TmuxSessionName, title: TerminalTitle) -> TerminalListing:
         """Retitle the terminal; its name and its tmux session stay. Raises UnknownTerminalError, or
         TerminalConflictError for an agent's session or a title another terminal holds."""
         if is_agent_session(name, self.agent_session_prefix):
-            raise TerminalConflictError(
-                f"Refusing to rename a non-terminal session: {name!r}"
-            )
+            raise TerminalConflictError(f"Refusing to rename a non-terminal session: {name!r}")
         _require_usable_title(title)
         with self._lock:
             live_sessions = self._user_sessions()
@@ -332,9 +300,7 @@ class TmuxSessionSource(MutableModel):
             listed = match_live_sessions(live_sessions, records)
             if not any(listing.name == name for listing in listed):
                 raise UnknownTerminalError(f"no terminal is named {name!r}")
-            other_titles = [
-                str(listing.title) for listing in listed if listing.name != name
-            ]
+            other_titles = [str(listing.title) for listing in listed if listing.name != name]
             if is_name_conflict(title, other_titles):
                 raise TerminalConflictError(
                     f"another terminal is already named {canonical_name_from_title(title)!r}"
@@ -343,9 +309,7 @@ class TmuxSessionSource(MutableModel):
             live_session = self._live_session_of(name, existing, live_sessions)
             if existing is None:
                 existing = TerminalSessionRecord(name=name, title=None, workdir=None)
-            retitled = existing.model_copy_update(
-                to_update(existing.field_ref().title, title)
-            )
+            retitled = existing.model_copy_update(to_update(existing.field_ref().title, title))
             if live_session is not None and not is_same_session(retitled, live_session):
                 # The live session of its name is not the one the record holds (a session the
                 # dispatch created on attach, or one the store never saw): it is the terminal's now.
@@ -397,16 +361,12 @@ class TmuxSessionSource(MutableModel):
             except TmuxCommandError as e:
                 # tmux refuses a name a session already carries: one renamed inside tmux to this
                 # terminal's name, which belongs to the terminal holding its id, not to this one.
-                raise TerminalConflictError(
-                    f"could not start terminal {name!r}: {e}"
-                ) from e
+                raise TerminalConflictError(f"could not start terminal {name!r}: {e}") from e
         return _fresh_listing(created)
 
     def _refuse_agent_session(self, name: TmuxSessionName, verb: str) -> None:
         if is_agent_session(name, self.agent_session_prefix):
-            raise TerminalConflictError(
-                f"Refusing to {verb} a non-terminal session: {name!r}"
-            )
+            raise TerminalConflictError(f"Refusing to {verb} a non-terminal session: {name!r}")
 
     def recreate_remembered_sessions(self) -> None:
         """Bring every remembered terminal back at startup: a live session is adopted, a lost one is recreated unless the user stopped it.
@@ -440,29 +400,21 @@ class TmuxSessionSource(MutableModel):
                     self._create_session_for(record)
                 except TmuxCommandError as e:
                     logger.warning(
-                        "Could not recreate the session of terminal {}: {}",
-                        record.name,
-                        e,
+                        "Could not recreate the session of terminal {}: {}", record.name, e
                     )
 
-    def _create_session_for(
-        self, record: TerminalSessionRecord
-    ) -> TerminalSessionRecord:
+    def _create_session_for(self, record: TerminalSessionRecord) -> TerminalSessionRecord:
         """Create the record's session, then remember it with the new id and its id file written; the caller holds the lock."""
         session = self.tmux.create_session(
             record.name, record.workdir or self.default_workdir, self.session_command
         )
         return self._bind(record, session)
 
-    def _adopt(
-        self, record: TerminalSessionRecord, session: TmuxSession
-    ) -> TerminalSessionRecord:
+    def _adopt(self, record: TerminalSessionRecord, session: TmuxSession) -> TerminalSessionRecord:
         """Bind a record to the live session that carries its name; the caller holds the lock."""
         return self._bind(record, session)
 
-    def _bind(
-        self, record: TerminalSessionRecord, session: TmuxSession
-    ) -> TerminalSessionRecord:
+    def _bind(self, record: TerminalSessionRecord, session: TmuxSession) -> TerminalSessionRecord:
         """Remember ``session`` as the record's, running, with its id file written."""
         bound = record.model_copy_update(
             to_update(record.field_ref().session_id, TmuxSessionId(session.session_id)),
@@ -480,8 +432,7 @@ class TmuxSessionSource(MutableModel):
 
     def _record_named(self, name: TmuxSessionName) -> TerminalSessionRecord | None:
         return next(
-            (record for record in self.store.list_records() if record.name == name),
-            None,
+            (record for record in self.store.list_records() if record.name == name), None
         )
 
     def _live_session_of(
@@ -528,9 +479,7 @@ class TmuxSessionSource(MutableModel):
             )
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         created = "" if record.session_created is None else str(record.session_created)
-        self._session_id_file(record.name).write_text(
-            f"{record.session_id}\n{created}\n"
-        )
+        self._session_id_file(record.name).write_text(f"{record.session_id}\n{created}\n")
 
     def _remove_session_id_file(self, name: TmuxSessionName) -> None:
         self._session_id_file(name).unlink(missing_ok=True)
