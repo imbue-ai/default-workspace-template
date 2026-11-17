@@ -584,12 +584,13 @@ addModelChoiceFailureListener((chatId, error) =>
 );
 
 /** A message this page sent that the chat app holds for a chat still being created: the typed words and attachments
- *  to put back if the chat is deleted before its agent lands, which drops what was held, and the bubble standing for
- *  it. */
+ *  to put back if the chat is deleted before its agent lands, which drops what was held, the bubble standing for it,
+ *  and the id the chat app holds it under. */
 interface SendHeldForCreation {
   text: string;
   attachments: readonly ComposerAttachment[];
   outgoingId: string;
+  messageId: string;
 }
 const sendsHeldForCreation = new Map<string, SendHeldForCreation[]>();
 let isListeningForDiscardedChats = false;
@@ -607,10 +608,14 @@ function noteSendHeldForCreation(chatId: string, status: SendStatus | null, send
   }
 }
 
-function putBackSendsHeldForDiscardedChat(chatId: string): void {
-  const held = sendsHeldForCreation.get(chatId);
-  if (held === undefined) return;
+function putBackSendsHeldForDiscardedChat(discarded: ProvisionalChat): void {
+  const chatId = discarded.chat_id;
+  const noted = sendsHeldForCreation.get(chatId);
   sendsHeldForCreation.delete(chatId);
+  // A send Stop took back is no longer held, and is already in a composer.
+  const stillHeldIds = new Set(discarded.held_sends.map((held) => held.message_id));
+  const held = (noted ?? []).filter((send) => stillHeldIds.has(send.messageId));
+  if (held.length === 0) return;
   for (const send of held) {
     dropOutgoing(chatId, send.outgoingId);
     restoreToComposer(chatId, send.text, send.attachments);
@@ -1364,7 +1369,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).
           dropOutgoingNoTurnWillRetire(chatId, outgoingId, status);
           noteOutgoingAccepted(chatId, outgoingId);
-          noteSendHeldForCreation(chatId, status, { text: sentText, attachments: sentAttachments, outgoingId });
+          noteSendHeldForCreation(chatId, status, {
+            text: sentText,
+            attachments: sentAttachments,
+            outgoingId,
+            messageId,
+          });
         } catch (err) {
           // A refusal means the message was NOT accepted; one nothing answered, or mngr could not
           // confirm, may have reached the agent anyway (KINDS_THAT_MAY_HAVE_ARRIVED). A /compact the server declined
@@ -1857,6 +1867,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             text: recovery.text,
             attachments: recovery.attachments,
             outgoingId,
+            messageId,
           });
           // Landed, so take the restored copy back out of the composer.
           clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);

@@ -253,8 +253,9 @@ export type ChatActivityListener = (chatId: string, previous: string | null, cur
  */
 export type ChatActiveAgentListener = (chatId: string, previousAgentId: string, currentAgentId: string) => void;
 
-/** Told when a chat still being created is discarded (deleted from any page) before its agent lands. */
-export type ProvisionalChatDiscardedListener = (chatId: string) => void;
+/** Told when a chat still being created is discarded (deleted from any page) before its agent lands, with its last
+ *  record: the sends that record still holds are the ones dropped with it. */
+export type ProvisionalChatDiscardedListener = (discarded: ProvisionalChat) => void;
 
 let chats: ChatSnapshot[] = [];
 // The workspace's main chat (the backend's ``main_chat.py``): listed first, and where a text with no chat of its
@@ -441,9 +442,12 @@ function handleEvent(event: WsEvent): void {
         provisionalChats = provisionalChats.filter((p) => p.chat_id !== event.chat_id);
       } else if (event.error === null) {
         // Discarded before it launched: gone, with nothing to show.
+        const discarded = getProvisionalChat(event.chat_id);
         provisionalChats = provisionalChats.filter((p) => p.chat_id !== event.chat_id);
         settleRegistration(event.chat_id, new ChatNotStartedError("The chat was closed before it started"));
-        for (const listener of provisionalChatDiscardedListeners) listener(event.chat_id);
+        if (discarded !== undefined) {
+          for (const listener of provisionalChatDiscardedListeners) listener(discarded);
+        }
       } else {
         const error = event.error;
         provisionalChats = provisionalChats.map((p) =>
