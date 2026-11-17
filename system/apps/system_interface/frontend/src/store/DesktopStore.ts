@@ -2683,7 +2683,7 @@ export class DesktopStore {
    *  pinned-first: when the app has a pinned window on the active desktop, the launch runs into this client's view
    *  of it (the page the launch answers is pure, so a linked window is safe too) and the window is restored and
    *  raised; otherwise the launch opens a new window. False when the text cannot go (a GET launch path over the
-   *  path bound) or the shell refused, each told to the user. */
+   *  path bound) or the shell refused, each toasted or, given ``onFailure``, handed to it to show. */
   async runFreeText(
     appName: string,
     launchId: string,
