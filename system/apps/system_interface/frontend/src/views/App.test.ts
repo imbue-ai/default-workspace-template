@@ -772,6 +772,29 @@ describe("the element menu", () => {
     }
   });
 
+  it("gives a guest's right-click on the resource gauge the element menu alone, with no settings row", async () => {
+    setOwnIdentityForTesting({
+      owner: false,
+      user_id: "user-alice-0001",
+      email: "alice@example.com",
+      participant: "user:user-alice-0001",
+    });
+    // On a desktop of her own, where the tray (and the gauge in it) shows in place of the viewing chip.
+    socket.deliver().onDesktopsUpdated([...api.desktops, desktopRecord("alice", { owner: "user:user-alice-0001" })]);
+    await store.switchDesktop("alice");
+    applyResourceGauge(viewFromWire({ settings: { visibility: "always" } }), () => m.redraw());
+    try {
+      m.redraw.sync();
+      const gauge = document.querySelector("[data-resource-gauge]") as HTMLElement;
+      expect(rightClick(gauge).defaultPrevented).toBe(true);
+      const keys = menuRowKeys();
+      expect(keys).not.toContain("resource-gauge-settings");
+      expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
+    } finally {
+      resetResourceGaugeForTesting();
+    }
+  });
+
   it("ends a taskbar entry's menu with the reference rows, and drafts the reference through the store", async () => {
     pinnedEntry();
     const entry = document.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
