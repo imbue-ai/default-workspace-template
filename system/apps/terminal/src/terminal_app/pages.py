@@ -273,7 +273,6 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   let askingAbout = null;
   let askFailure = null;
 
-
   function showEnding(ending, detail) {
     frame.hidden = true;
     keys.hidden = true;
@@ -343,17 +342,17 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     askingAbout = askedAbout;
     showAskFailure(null);
     syncAskButton();
-    const show = (outcome) => {
+    const showOutcome = (outcome) => {
       if (endingCount === askedAbout && askPresses === press) showAskFailure(outcome.isOpened ? null : outcome.failure);
     };
     const outcome = await askAgentToFix(
       connection,
       { whatFailed: `The terminal ${current} couldn't start`, details: endedDetail || null },
-      show,
+      showOutcome,
     );
     if (askingAbout === askedAbout && askPresses === press) askingAbout = null;
     syncAskButton();
-    show(outcome);
+    showOutcome(outcome);
   });
   endedReport.addEventListener("click", () =>
     connection.reportBug({ message: endedSentence, details: endedDetail || null }),
