@@ -3,6 +3,7 @@ arrival, and the absolute-directory invariant it is built with."""
 
 import errno
 import itertools
+import os
 import queue
 import socket
 import threading
@@ -416,22 +417,46 @@ def test_a_post_launch_nothing_listens_for_is_refused_as_one_to_a_stopped_app(
     assert refreshed is not None and refreshed.is_running is False
 
 
-class _DesktopStoreOnAFullDisk(DesktopStore):
-    """Reads and writes the desktops as the real store does, except that writing a new window fails as a full
-    disk does."""
+class _DesktopStoreWhoseWindowWriteFails(DesktopStore):
+    """Reads and writes the desktops as the real store does, except that writing a new window fails with
+    ``write_errno``."""
+
+    write_errno: int
 
     def open_window(self, desktop_id: str, window: Window) -> Desktop:
         raise state_write_error(
-            self.state_directory / DESKTOPS_FILENAME, OSError(errno.ENOSPC, "No space left on device")
+            self.state_directory / DESKTOPS_FILENAME, OSError(self.write_errno, os.strerror(self.write_errno))
         )
 
 
+@pytest.mark.parametrize(
+    ("write_errno", "expected_kind", "expected_message", "is_reportable"),
+    [
+        (
+            errno.ENOSPC,
+            RefusalKind.LAUNCHED_NOT_OPENED_OUT_OF_SPACE,
+            "Docs got it, but this workspace is out of space, so its window couldn't be opened.",
+            False,
+        ),
+        (
+            errno.EIO,
+            RefusalKind.LAUNCHED_NOT_OPENED,
+            "Docs got it, but its window couldn't be opened. If this persists, report a bug.",
+            True,
+        ),
+    ],
+)
 def test_a_launch_the_app_took_whose_window_cannot_be_written_is_refused_as_launched_not_opened(
-    tmp_path: Path, broadcaster: WebSocketBroadcaster
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    write_errno: int,
+    expected_kind: RefusalKind,
+    expected_message: str,
+    is_reportable: bool,
 ) -> None:
     """The app acted on the launch, so a new window the shell then cannot write is not answered as a failed launch
     to try again (which would ask the app a second time) but as launched and not opened, saying a full disk is
-    one; nothing opens."""
+    one and asking for a bug report for any other failed write; nothing opens."""
     registry_path = write_registry(
         tmp_path / "apps.toml",
         registry_row_toml(
@@ -457,7 +482,10 @@ def test_a_launch_the_app_took_whose_window_cannot_be_written_is_refused_as_laun
         launch_poster=poster,
     )
     shell = built.model_copy_update(
-        to_update(built.field_ref().desktops, _DesktopStoreOnAFullDisk(state_directory=tmp_path / "state"))
+        to_update(
+            built.field_ref().desktops,
+            _DesktopStoreWhoseWindowWriteFails(state_directory=tmp_path / "state", write_errno=write_errno),
+        )
     )
     (home,) = shell.list_desktops()
     request = LaunchRequest(
@@ -470,11 +498,9 @@ def test_a_launch_the_app_took_whose_window_cannot_be_written_is_refused_as_laun
     with pytest.raises(LaunchedNotOpenedError) as not_opened:
         shell.launch(str(home.id), request)
 
-    assert not_opened.value.kind is RefusalKind.LAUNCHED_NOT_OPENED_OUT_OF_SPACE
-    assert not_opened.value.user_facing_message == (
-        "Docs got it, but this workspace is out of space, so its window couldn't be opened."
-    )
-    assert not_opened.value.reportable is False
+    assert not_opened.value.kind is expected_kind
+    assert not_opened.value.user_facing_message == expected_message
+    assert not_opened.value.reportable is is_reportable
     assert len(posts) == 1
     (still,) = shell.list_desktops()
     assert still.windows == home.windows
