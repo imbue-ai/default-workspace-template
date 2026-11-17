@@ -63,8 +63,8 @@ _REBUILD_REQUEST: Final[str] = (
 )
 
 # Served in place of the page while the frontend has not been built (``static/`` is build output): it checks again
-# on its own, offers a Reload, and, once a shell has greeted it, an agent to rebuild it; the build command is behind
-# "See details". The contract module it asks the shell with is the shell's, served from this origin; when it cannot
+# on its own, offers a Reload, and, once a shell has greeted it, an agent to rebuild it; the build command, and a failed
+# ask's reason, are behind "See details". The contract module it asks the shell with is the shell's, served from this origin; when it cannot
 # be loaded (the shell's frontend is not built either), or no shell greets the page, the agent button stays hidden.
 _NOT_BUILT_PAGE: Final[str] = (
     """<!doctype html>
@@ -79,8 +79,9 @@ summary{cursor:pointer}</style></head>
 <p><button type="button" id="reload">Reload</button><button type="button" id="ask-agent" hidden>Ask an agent to
 rebuild it</button></p>
 <p id="ask-agent-failure" hidden></p>
-<details><summary>See details</summary><p>Its built files are missing. They are rebuilt with
-<code>npm run build</code> in <code>system/</code>.</p></details>
+<details><summary>See details</summary>
+<pre id="ask-agent-failure-details" hidden></pre>
+<p>Its built files are missing. They are rebuilt with <code>npm run build</code> in <code>system/</code>.</p></details>
 </main>
 <script type="module">
   document.getElementById("reload").addEventListener("click", () => window.location.reload());
@@ -100,18 +101,22 @@ rebuild it</button></p>
         // Only a shell can start a chat, so the button waits for one to greet the page.
         const shell = connectToShell({ onHandshake: () => (ask.hidden = false) });
         const failure = document.getElementById("ask-agent-failure");
+        const failureDetails = document.getElementById("ask-agent-failure-details");
         const askLabel = ask.textContent;
         // Until the shell says the agent's chat is up (or why it is not), the button says the ask is out.
         ask.addEventListener("click", async () => {
           ask.disabled = true;
           ask.textContent = "Asking an agent\u2026";
           failure.hidden = true;
+          failureDetails.hidden = true;
           const outcome = await shell.startNewWithText(__REBUILD_REQUEST__);
           ask.disabled = false;
           ask.textContent = askLabel;
           if (!outcome.isOpened) {
             failure.textContent = outcome.failure.message;
             failure.hidden = false;
+            failureDetails.textContent = outcome.failure.details ?? "";
+            failureDetails.hidden = outcome.failure.details === null;
           }
         });
       })
