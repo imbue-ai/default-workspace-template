@@ -1510,6 +1510,7 @@ def _commit_prose_paths(root: Path, marker: str) -> None:
         (root / path).mkdir(parents=True, exist_ok=True)
         (root / path / "note.md").write_text(f"{marker} {path}\n", encoding="utf-8")
     other = root / ".agents" / "skills" / "launch-task" / "SKILL.md"
+    other.parent.mkdir(parents=True, exist_ok=True)
     other.write_text(f"{marker} not staged\n", encoding="utf-8")
     for args in (["add", "-A"], ["commit", "-q", "-m", f"prose {marker}"]):
         subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
