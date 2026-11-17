@@ -1724,6 +1724,7 @@ def refresh(
         repo_root,
         state,
         "refresh",
+        stops_unhealthy=False,
         runner=runner,
         http=http,
         spawner=spawner,
@@ -1743,6 +1744,7 @@ def _respawn_inner(
     state: dict,
     verb: str,
     *,
+    stops_unhealthy: bool,
     runner: Runner,
     http: HttpClient,
     spawner: Spawner,
@@ -1751,9 +1753,10 @@ def _respawn_inner(
     """Launch the recorded inner command (``pids[0]``) on its recorded ports and wait until it is healthy.
 
     The new pid and its start time are written to the state file before the health
-    wait, so ``down`` reaches the server even when it never becomes healthy. False,
-    said on stderr, when the recipe cannot be replayed, the launch fails, or the
-    server does not come up.
+    wait, so ``down`` reaches the server even when it never becomes healthy. With
+    ``stops_unhealthy`` a server that never becomes healthy is killed, so the next
+    call reads it as stopped and boots it again. False, said on stderr, when the
+    recipe cannot be replayed, the launch fails, or the server does not come up.
     """
     inner = state["inner"]
     port = int(state["inner_port"])
@@ -1818,6 +1821,8 @@ def _respawn_inner(
             f"{probe.describe()}\n"
             f"{_log_excerpt(Path(inner_log))}"
         )
+        if stops_unhealthy:
+            _kill_process_group_and_wait(runner, new_pid, sleeper)
         return False
     return True
 
@@ -1985,6 +1990,7 @@ def _revive_locked(
             repo_root,
             state,
             "revive",
+            stops_unhealthy=True,
             runner=runner,
             http=http,
             spawner=spawner,

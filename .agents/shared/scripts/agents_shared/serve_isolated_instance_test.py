@@ -1895,6 +1895,25 @@ def test_revive_boots_only_the_part_that_stopped(tmp_path: Path) -> None:
     assert json.loads(_state_path(tmp_path).read_text())["pids"] == [inner_pid, 7000]
 
 
+def test_a_revive_whose_server_never_answers_stops_it_so_the_next_boots_it_again(
+    tmp_path: Path,
+) -> None:
+    runner, spawner, booted = _booted_preview(tmp_path)
+    _restart(runner, spawner)
+    runner.start_times[7000] = "revived"
+    inner_port = f":{booted['inner_port']}/"
+    silent_inner = _FakeHttp(lambda url: None if inner_port in url else 200)
+    revived = _FakeSpawner(detached_pid=7000)
+
+    assert _revive(tmp_path, runner=runner, spawner=revived, http=silent_inner) == 1
+    assert runner.killed_pgroup(7000)
+    # Killed, the server is gone.
+    runner.start_times[7000] = ""
+
+    assert _revive(tmp_path, runner=runner, spawner=revived) == 0
+    assert json.loads(_state_path(tmp_path).read_text())["pids"] == [7001, 7002]
+
+
 def test_revive_of_a_running_instance_boots_nothing(tmp_path: Path) -> None:
     runner, _spawner, _booted = _booted_preview(tmp_path)
     revived = _FakeSpawner(detached_pid=7000)
