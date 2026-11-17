@@ -3,11 +3,11 @@ import io
 import json
 import os
 import zipfile
-from collections.abc import Iterator
 from pathlib import Path
 
 import httpx
 import pytest
+from flask.testing import FlaskClient
 from werkzeug.test import TestResponse
 from workspace_themes.testing import write_standard_theme
 
@@ -16,9 +16,11 @@ from app_schema.testing import assert_api_schema_describes_app
 from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from files_app.connections import shared_paths
 from files_app.device_files import safe_content_disposition
+from files_app.local_files import LocalFiles
 from files_app.server import create_app
 from files_app.testing import DEVICE
 from files_app.testing import FakeComputer
+from files_app.testing import RefusingLocalFiles
 from files_app.testing import json_of
 from files_app.testing import propfind_body
 from files_app.webdav import parse_propfind
@@ -27,7 +29,8 @@ NARROW_NAME = "Screenshot at 4.16.34\u202fPM.png"
 _MANIFEST_PATH = Path(__file__).resolve().parents[2] / "app.toml"
 
 
-def _app(computer: FakeComputer | None, tmp_path: Path):
+def _app(computer: FakeComputer | None, tmp_path: Path, local: LocalFiles | None = None) -> FlaskClient:
+    """The app over ``tmp_path/root`` (or ``local``'s files), reaching ``computer`` through the gateway."""
     static = tmp_path / "static"
     static.mkdir(exist_ok=True)
     (static / "index.html").write_text('<script src="/__files/assets/index-AbCd1234.js"></script>__INDEX_DATA__')
@@ -39,7 +42,7 @@ def _app(computer: FakeComputer | None, tmp_path: Path):
         gateway=computer.gateway() if computer is not None else None,
         static_directory=static,
         agent_id="agent-main",
-        root=root,
+        local=local if local is not None else LocalFiles(root),
         synced_root=tmp_path / "synced",
     ).test_client()
 
@@ -54,7 +57,9 @@ def test_a_folder_stamp_moves_when_something_is_added_to_it_and_not_when_a_file_
     folder = tmp_path / "fonts"
     folder.mkdir()
     (folder / "Inter.ttf").write_text("a")
-    client = create_app(gateway=None, static_directory=tmp_path, agent_id="agent-main", root=tmp_path).test_client()
+    client = create_app(
+        gateway=None, static_directory=tmp_path, agent_id="agent-main", local=LocalFiles(tmp_path)
+    ).test_client()
 
     def stamps() -> dict[str, str | None]:
         return json_of(client.get("/__files/api/stamps?path=/fonts/&path=/fonts/Inter.ttf&path=/missing/"))["stamps"]
@@ -276,25 +281,19 @@ def test_a_move_never_replaces_what_is_there_nor_puts_a_folder_inside_itself(tmp
     assert (root / "box").is_dir()
 
 
-_IS_ROOT = os.geteuid() == 0
+def _refusing_app(tmp_path: Path, read_only_folders: set[str], unreadable_paths: set[str]) -> FlaskClient:
+    """The app over files where those folders refuse to be written and those paths to be read, as they would to
+    anyone but root."""
+    root = tmp_path / "root"
+    root.mkdir(exist_ok=True)
+    return _app(None, tmp_path, RefusingLocalFiles(root, read_only_folders, unreadable_paths))
 
 
-@pytest.fixture
-def unwritable_folder(tmp_path: Path) -> Iterator[Path]:
-    """``/reports`` under the served root, which nothing can be written into; writable again afterwards so the
-    temporary tree can be removed."""
-    folder = tmp_path / "root" / "reports"
-    folder.mkdir(parents=True)
-    folder.chmod(0o555)
-    yield folder
-    folder.chmod(0o755)
-
-
-@pytest.mark.skipif(_IS_ROOT, reason="root writes into a folder whatever its mode")
 def test_a_move_into_a_folder_that_cannot_be_written_says_that_folder_refused_without_naming_the_file(
-    tmp_path: Path, unwritable_folder: Path
+    tmp_path: Path,
 ) -> None:
-    client = _app(None, tmp_path)
+    client = _refusing_app(tmp_path, {"/reports/"}, set())
+    (tmp_path / "root" / "reports").mkdir()
     (tmp_path / "root" / "notes.txt").write_text("a")
 
     response = client.open("/notes.txt", method="MOVE", headers={"Destination": "http://localhost/reports/notes.txt"})
@@ -306,14 +305,10 @@ def test_a_move_into_a_folder_that_cannot_be_written_says_that_folder_refused_wi
     assert (tmp_path / "root" / "notes.txt").exists()
 
 
-@pytest.mark.skipif(_IS_ROOT, reason="root writes into a folder whatever its mode")
-def test_a_move_out_of_a_folder_that_cannot_be_written_says_the_folder_it_is_in_refused(
-    tmp_path: Path, unwritable_folder: Path
-) -> None:
-    client = _app(None, tmp_path)
-    unwritable_folder.chmod(0o755)
-    (unwritable_folder / "notes.txt").write_text("a")
-    unwritable_folder.chmod(0o555)
+def test_a_move_out_of_a_folder_that_cannot_be_written_says_the_folder_it_is_in_refused(tmp_path: Path) -> None:
+    client = _refusing_app(tmp_path, {"/reports/"}, set())
+    (tmp_path / "root" / "reports").mkdir()
+    (tmp_path / "root" / "reports" / "notes.txt").write_text("a")
 
     response = client.open("/reports/notes.txt", method="MOVE", headers={"Destination": "http://localhost/notes.txt"})
 
@@ -321,11 +316,9 @@ def test_a_move_out_of_a_folder_that_cannot_be_written_says_the_folder_it_is_in_
     assert response.get_json()["kind"] == "source_not_writable"
 
 
-@pytest.mark.skipif(_IS_ROOT, reason="root writes into a folder whatever its mode")
-def test_creating_in_a_folder_that_cannot_be_written_is_refused_in_words_for_people(
-    tmp_path: Path, unwritable_folder: Path
-) -> None:
-    client = _app(None, tmp_path)
+def test_creating_in_a_folder_that_cannot_be_written_is_refused_in_words_for_people(tmp_path: Path) -> None:
+    client = _refusing_app(tmp_path, {"/reports/"}, set())
+    (tmp_path / "root" / "reports").mkdir()
 
     response = client.open("/reports/drafts", method="MKCOL")
 
@@ -334,15 +327,12 @@ def test_creating_in_a_folder_that_cannot_be_written_is_refused_in_words_for_peo
     assert answer["kind"] == "permission_denied"
     assert answer["user_facing_message"] == "You don't have permission to change this."
     assert "/reports/drafts" in answer["detail"]
+    assert not (tmp_path / "root" / "reports" / "drafts").exists()
 
 
-@pytest.mark.skipif(_IS_ROOT, reason="root reads a file whatever its mode")
 def test_a_download_that_cannot_be_read_says_it_cannot_be_opened(tmp_path: Path) -> None:
-    client = _app(None, tmp_path)
-    unreadable = tmp_path / "root" / "notes.txt"
-    unreadable.parent.mkdir(parents=True, exist_ok=True)
-    unreadable.write_text("a")
-    unreadable.chmod(0o000)
+    client = _refusing_app(tmp_path, set(), {"/notes.txt"})
+    (tmp_path / "root" / "notes.txt").write_text("a")
 
     response = client.get("/notes.txt?download")
 
@@ -351,12 +341,11 @@ def test_a_download_that_cannot_be_read_says_it_cannot_be_opened(tmp_path: Path)
     assert response.get_data(as_text=True) == "You don't have permission to open this."
 
 
-@pytest.mark.skipif(_IS_ROOT, reason="root lists a folder whatever its mode")
 def test_a_window_opened_on_a_folder_that_cannot_be_listed_reads_the_refusal_while_the_frontend_gets_json(
-    tmp_path: Path, unwritable_folder: Path
+    tmp_path: Path,
 ) -> None:
-    client = _app(None, tmp_path)
-    unwritable_folder.chmod(0o000)
+    client = _refusing_app(tmp_path, set(), {"/reports/"})
+    (tmp_path / "root" / "reports").mkdir()
 
     page = client.get("/reports/", headers={"Accept": "text/html,*/*"})
     fetched = client.get("/reports/?json", headers={"Accept": "*/*"})

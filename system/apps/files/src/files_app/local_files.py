@@ -137,11 +137,15 @@ class LocalFiles:
     def unwritable_side(self, path: str, destination: str) -> MoveSide | None:
         """Which end of moving ``path`` to ``destination`` cannot be written: the folder it would go into, else the
         folder it is in; None when both can."""
-        if not _is_writable(self._on_disk(destination).parent):
+        if not self.is_folder_writable(_nearest_existing(self._on_disk(destination).parent)):
             return "destination"
-        if not _is_writable(self._on_disk(path.rstrip("/")).parent):
+        if not self.is_folder_writable(_nearest_existing(self._on_disk(path.rstrip("/")).parent)):
             return "source"
         return None
+
+    def is_folder_writable(self, folder: Path) -> bool:
+        """Whether this process may add to or remove from ``folder``."""
+        return os.access(folder, os.W_OK)
 
     def zip(self, path: str) -> Response:
         folder = self._existing(path)
@@ -153,11 +157,11 @@ class LocalFiles:
         return response
 
 
-def _is_writable(folder: Path) -> bool:
+def _nearest_existing(folder: Path) -> Path:
     # The nearest folder that is there decides, as a move makes the folders above its destination.
     while not folder.exists() and folder != folder.parent:
         folder = folder.parent
-    return os.access(folder, os.W_OK)
+    return folder
 
 
 def content_disposition(disposition: str, name: str) -> str:
