@@ -205,11 +205,12 @@ workspace's health, and reverts the entire merge on any failure. It keeps its
 own run record and raises no "recently updated" notice
 (`--keep-rollback-point` is the careful flow's, not this one's).
 
-`apply-outcomes.md` is the one home of its exit codes. In short: `0` applied,
-`2` rolled back automatically, `3` emergency, `1` a precondition failed and
-nothing changed. Read that file's section for the code you got before you do
-anything else, and for exit 0 read the apply's closing stderr lines against
-its "Exit 0" section before signing off.
+In short: `0` applied, `2` rolled back automatically, `3` emergency, `1` a
+precondition failed and nothing changed. Before you do anything else, read
+the section for the code you got in
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`,
+which says what the exit means and what its closing stderr lines ask for,
+then the same section of `apply-outcomes.md`, which says what this pass does.
 
 ## 6. Bring the chats back
 

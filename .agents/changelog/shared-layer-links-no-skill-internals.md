@@ -10,6 +10,8 @@ A skill's files have one reader, an agent following that skill: nothing outside 
 
 - **`worker-failure.md` and `dead-worker-recovery.md`** move from `launch-task/references/` to `.agents/shared/references/lead-proxy/`. Every lead follows them through `lead-proxy.md`, whichever skill it came from, so `dead-worker-recovery.md`'s commands take the lead's own task file rather than `launch-task`'s, and `worker-failure.md` no longer links the more specific `harden-contention.md`.
 
+- **`apply-exit-codes.md`** (new, under `.agents/shared/references/`) says what each exit of `update_self.py apply` means for anyone who runs it, what its closing stderr lines ask for, how an interrupted apply resumes or heals itself, and what the phase timings line is. `update-self` and `update-app`'s careful flow both run that command, and both now read this file: `update-self`'s `apply-outcomes.md` keeps only what its own pass does on each outcome, and the careful flow no longer names a file inside `update-self`.
+
 - **Pointers that now name a skill.** A latchkey permission request in `github-sync`, `migrate-workspace`, `update-installed-template`, `update-published-template`, `use-template` and `datalib` names the `connect-external-service` skill, as does the visiting agent's primer. `build-app` and `interactive-delivery.md` name the `harden-worker` skill, and `freeing-memory.md` the `update-self` skill.
 
 - **Pointers dropped, with the fact stated where it is used**: `build-app`'s `.nobackup` rule, `update-creation` on a worker splitting its pass and on the critical-app handoff, `harden-contention.md` on how a worker catches up, and `freeing-memory.md` on the files that send a lead to it.
