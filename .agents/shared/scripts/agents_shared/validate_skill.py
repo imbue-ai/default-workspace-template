@@ -17,7 +17,7 @@ Static structural checks (in order, short-circuit on first failure per check):
     `<name>-skill` and its one package `<name_with_underscores>_skill` (a directory
     beside it with an `__init__.py`).
 - The frontmatter's exemption, if it carries one, names known checks and a known reason.
-- The five checks of ``skill_checks`` (size, reachability, depth, paths, contents) pass, apart
+- The six checks of ``skill_checks`` (size, reachability, depth, paths, contents, boundary) pass, apart
   from the ones the exemption names. An exemption naming a check the skill passes is stale,
   and fails. ``--no-exemptions`` refuses any exemption: the mode for a new skill. ``--edited``
   refuses a ``predates-checks`` exemption and honours an ``awaiting-restructure`` one: the mode

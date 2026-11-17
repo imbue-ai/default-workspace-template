@@ -13,7 +13,7 @@ from agents_shared.skill_checks import (
     MAX_SKILL_MD_BYTES,
     Check,
     check_failures,
-    shared_links_into_skills,
+    outside_links_into_skills,
     unreached_shared_files,
 )
 from agents_shared.skill_exemptions import (
@@ -588,7 +588,9 @@ def test_a_shared_file_is_reached_from_a_skill_agents_md_or_a_program_and_report
     ]
 
 
-def test_a_shared_file_may_name_a_skill_but_no_file_inside_one(tmp_path: Path) -> None:
+def test_a_file_outside_every_skill_may_name_a_skill_but_no_file_inside_one(
+    tmp_path: Path,
+) -> None:
     skill = _skill(tmp_path, "user", "Read `references/own.md`.\n")
     _write(skill, "references/own.md", "Text.\n")
     _write(skill, "scripts/run.sh", "true\n")
@@ -604,9 +606,46 @@ def test_a_shared_file_may_name_a_skill_but_no_file_inside_one(tmp_path: Path) -
         "Read `.agents/skills/user/references/own.md`.\n",
     )
 
-    assert shared_links_into_skills(tmp_path) == [
+    _write(
+        tmp_path,
+        "AGENTS.md",
+        "Use the `user` skill, as `.agents/skills/user/references/own.md` says.\n",
+    )
+
+    assert outside_links_into_skills(tmp_path) == [
         (
             ".agents/shared/references/reaching.md",
             ".agents/skills/user/references/own.md",
-        )
+        ),
+        ("AGENTS.md", ".agents/skills/user/references/own.md"),
+    ]
+
+
+def test_a_skill_links_no_file_inside_another_skill_but_its_skill_md(
+    tmp_path: Path,
+) -> None:
+    other = _skill(tmp_path, "other", "Read `references/own.md`.\n")
+    _write(other, "references/own.md", "Text.\n")
+    _write(tmp_path, ".agents/shared/references/common.md", "Text.\n")
+    naming = _skill(
+        tmp_path,
+        "naming",
+        "Use the `other` skill (`.agents/skills/other/SKILL.md`) and read "
+        "`.agents/shared/references/common.md`.\n",
+    )
+    reaching = _skill(tmp_path, "reaching", "Read `references/deeper.md`.\n")
+    _write(
+        reaching,
+        "references/deeper.md",
+        "Read `.agents/skills/other/references/own.md`.\n",
+    )
+
+    assert _failed(naming) == set()
+    assert [
+        failure.detail
+        for failure in check_failures(reaching)
+        if failure.check is Check.BOUNDARY
+    ] == [
+        ".agents/skills/reaching/references/deeper.md links "
+        ".agents/skills/other/references/own.md, a file inside another skill"
     ]

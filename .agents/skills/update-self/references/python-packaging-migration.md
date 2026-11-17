@@ -64,7 +64,7 @@ same rule `running-python.md` states for built-in code:
 
 Both layouts end by validating the skill. That step is there for its packaging:
 when the validator reports a skill check instead (`size`, `reachability`,
-`depth`, `paths` or `contents`), or an exemption that has gone stale, run
+`depth`, `paths`, `contents` or `boundary`), or an exemption that has gone stale, run
 `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py --stamp`,
 which records what the skill fails as an exemption in its frontmatter, and
 validate again. Never restructure the user's skill to pass one.
