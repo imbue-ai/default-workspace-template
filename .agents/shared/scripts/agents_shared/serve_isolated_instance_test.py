@@ -2009,6 +2009,25 @@ def test_revive_boots_the_siblings_a_preview_frames_first(tmp_path: Path) -> Non
     ]
 
 
+def test_revive_of_a_preview_whose_sibling_cannot_come_back_cannot_either(
+    tmp_path: Path,
+) -> None:
+    spawner = _FakeSpawner()
+    runner = _RecordingRunner(start_times={spawner.detached_pid: "boot"})
+    assert (
+        _up(tmp_path, runner=runner, spawner=spawner, revive_first=["chat-preview"])
+        == 0
+    )
+    _restart(runner, spawner)
+    revived = _FakeSpawner(detached_pid=7000)
+
+    assert (
+        _revive(tmp_path, runner=runner, spawner=revived)
+        == mod.REVIVE_IMPOSSIBLE_EXIT_CODE
+    )
+    assert revived.detached_spawns == []
+
+
 def test_revive_boots_a_stopped_frame_again_from_its_record(tmp_path: Path) -> None:
     spawner = _FakeSpawner()
     runner = _RecordingRunner(start_times={spawner.detached_pid: "boot"})

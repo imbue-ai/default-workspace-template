@@ -1892,23 +1892,21 @@ def _revive_locked(
             sleeper=sleeper,
         )
     for sibling in state.get("revive_first") or []:
-        if (
-            revive(
-                str(sibling),
-                repo_root,
-                runner=runner,
-                registry=registry,
-                http=http,
-                spawner=spawner,
-                venv_linker=venv_linker,
-                sleeper=sleeper,
-            )
-            != 0
-        ):
+        sibling_code = revive(
+            str(sibling),
+            repo_root,
+            runner=runner,
+            registry=registry,
+            http=http,
+            spawner=spawner,
+            venv_linker=venv_linker,
+            sleeper=sleeper,
+        )
+        if sibling_code != 0:
             sys.stderr.write(
                 f"revive: '{name}' frames '{sibling}', which could not be started again (see above).\n"
             )
-            return 1
+            return sibling_code
 
     pids = [int(pid) for pid in state.get("pids") or []]
     starts = state.get("pid_starts")
