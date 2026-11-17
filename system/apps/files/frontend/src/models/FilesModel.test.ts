@@ -442,9 +442,8 @@ describe("telling a failed change", () => {
   const PERMISSION = "You don't have permission to change this.";
   const PERMISSION_DETAIL = "MOVE /home/b.txt: [Errno 13] Permission denied: '/home/zeta/b.txt'";
 
-  it("says what failed, then the cause the server gave, as a note that goes with its details only in the log", async () => {
+  it("says what failed, then the cause the server gave, as a note that goes with its details behind See details", async () => {
     const { model } = harness();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const said = "Something with that name is already there.";
     vi.mocked(server.movePath).mockRejectedValueOnce(
       httpFailure(412, { detail: said, user_facing_message: said, kind: "already_exists" }),
@@ -453,10 +452,27 @@ describe("telling a failed change", () => {
     await model.moveInto(["/home/b.txt"], "/home/zeta/");
 
     const message = `Couldn't move "b.txt" into "zeta". ${said}`;
-    expect(model.toasts.current().map((toast) => [toast.message, toast.isLasting])).toEqual([[message, false]]);
     // The reader drops a reason that only repeats the sentence.
-    expect(warn).toHaveBeenCalledWith(`[files] ${message}`, "HTTP 412");
-    warn.mockRestore();
+    expect(model.toasts.current().map((toast) => [toast.message, toast.isLasting, toast.details])).toEqual([
+      [message, false, "HTTP 412"],
+    ]);
+  });
+
+  it("keeps a computer's refusal of a delete behind See details on the note: its status and its own text", async () => {
+    const { model } = harness();
+    vi.mocked(server.deletePath).mockRejectedValueOnce(
+      httpFailure(404, {
+        detail: "DELETE /Users/kim/b.txt: Not Found",
+        user_facing_message: "It's no longer there.",
+        kind: "not_found",
+      }),
+    );
+
+    await model.deleteEntries(["/home/b.txt"]);
+
+    expect(model.toasts.current().map((toast) => [toast.message, toast.isLasting, toast.details])).toEqual([
+      ["Couldn't delete \"b.txt\". It's no longer there.", false, "HTTP 404\nDELETE /Users/kim/b.txt: Not Found"],
+    ]);
   });
 
   it("says which folder refused a move that could not be written", async () => {

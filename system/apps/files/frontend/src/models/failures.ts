@@ -5,8 +5,8 @@
  * depend on which folder refused (the server's ``kind``), else in the server's sentence, which names only the cause.
  * A failure whose sentence asks for a bug report leaves a toast that stays, with "See details" and, where the shell
  * says Imbue Studio opens one when the toast is drawn, "Report a bug"; a full disk leaves one that stays with "Ask an
- * agent to free up space"; any other leaves a plain note, its retry being the control just used, and its details go to
- * the log.
+ * agent to free up space"; any other leaves a plain note, its retry being the control just used, with its details
+ * behind "See details" (opening them keeps the note up).
  */
 
 import type { ReportedFailure, ShellConnection } from "@imbue/workspace-ui/src/app_contract";
@@ -91,9 +91,7 @@ export function toastFailures(toasts: ToastQueue, failures: readonly FilesFailur
   }
   const isReportable = failures.some((failure) => failure.isReportable);
   if (!isReportable && actions.length === 0) {
-    // A plain note has no room for the details, so they go to the log rather than nowhere.
-    if (details !== null) console.warn(`[files] ${message}`, details);
-    toasts.show(message);
+    toasts.show(message, { isLasting: false, details });
     return;
   }
   toasts.show(message, { isLasting: true, details, actions, isReportable });

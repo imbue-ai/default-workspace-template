@@ -337,7 +337,7 @@ def test_a_download_that_cannot_be_read_says_it_cannot_be_opened(tmp_path: Path)
     response = client.get("/notes.txt?download")
 
     assert response.status_code == 403
-    # Plain text, which the page quotes as written after "Couldn't download notes.txt:".
+    # Plain text, which the page quotes as written after: Couldn't download "notes.txt".
     assert response.get_data(as_text=True) == "You don't have permission to open this."
 
 
