@@ -591,7 +591,7 @@ interface SendToChatNotYetAnAgent {
   text: string;
   attachments: readonly ComposerAttachment[];
   outgoingId: string;
-  /** A Retry's: the failed send's copy is still in the box, so nothing is put back. */
+  /** A Retry's until it lands: the failed send's copy is still in the box, so nothing is put back. */
   isInBox: boolean;
 }
 const sendsToChatsNotYetAgents = new Map<string, Map<string, SendToChatNotYetAnAgent>>();
@@ -621,6 +621,12 @@ function settleSendToChatNotYetAnAgent(chatId: string, messageId: string, status
   if (putBackBeforeAnswered.delete(messageId)) return true;
   if (status !== "held") sendsToChatsNotYetAgents.get(chatId)?.delete(messageId);
   return false;
+}
+
+/** A noted Retry landed and its copy left the box, so the chat's discard has to put it back. */
+function noteSendLeftBox(chatId: string, messageId: string): void {
+  const send = sendsToChatsNotYetAgents.get(chatId)?.get(messageId);
+  if (send !== undefined) send.isInBox = false;
 }
 
 function putBackSendsDroppedWithChat(discarded: DiscardedChat): void {
@@ -1913,6 +1919,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           }
           // Landed, so take the restored copy back out of the composer.
           clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);
+          noteSendLeftBox(recovery.chatId, messageId);
           stopWatchingUnconfirmedTurn(recovery);
           clearActionFailureNotice();
           focusMessageTextarea();

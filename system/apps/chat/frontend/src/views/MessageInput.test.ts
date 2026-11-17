@@ -1216,6 +1216,41 @@ describe("MessageInput send to a chat still being created", () => {
     }
   });
 
+  it("puts a retried message back when the chat is discarded after the chat app held the retry", async () => {
+    mocks.isChatRegistered = false;
+    mocks.provisional = {
+      chat_id: "agent-1",
+      name: "Chat 2",
+      account_id: "acct-1",
+      phase: "creating",
+      error: null,
+      is_seeded: false,
+      held_sends: [],
+    };
+    mocks.sendMessage.mockRejectedValueOnce("nope");
+    try {
+      const component = MessageInput();
+      const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+      const failed = await typeAndSend(component, "agent-1", "hello");
+      mocks.sendMessage.mockResolvedValueOnce("held");
+      (findButton(failed, "Retry")!.attrs!.onclick as () => void)();
+      await flushAsync();
+      expect(findByTag(render(), "textarea")?.attrs?.value).toBe("");
+
+      discardProvisionalChat({
+        ...(mocks.provisional as ProvisionalChat),
+        held_sends: [{ message_id: sentMessageId(), text: "hello" }],
+      });
+
+      const after = render();
+      expect(renderedText(findByClass(after, "modal-message"))).toContain("Your message wasn't delivered.");
+      expect(findByTag(after, "textarea")?.attrs?.value).toBe("hello");
+    } finally {
+      mocks.isChatRegistered = true;
+      mocks.provisional = undefined;
+    }
+  });
+
   it("returns the message to the composer with the reason when the create has already failed", async () => {
     stubShellConnection(true);
     mocks.refuseSendToFailedChat.mockImplementationOnce(() => {
