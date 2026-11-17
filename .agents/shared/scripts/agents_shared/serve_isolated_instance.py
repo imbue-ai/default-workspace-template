@@ -716,38 +716,21 @@ def parse_copy_assignments(assignments: Sequence[str]) -> dict[str, str]:
     return parsed
 
 
-def main_checkout_of_linked_worktree(path: Path) -> Path | None:
-    """The checkout that the linked git worktree holding ``path`` was added from, or None
-    when ``path`` is not in a linked worktree.
+def live_checkout(repo_root: Path) -> Path:
+    """The checkout whose ``data/`` is the user's: ``repo_root`` itself, or the checkout
+    its linked git worktree was added from.
 
     The user's data, secrets, and app registry live only in that main checkout: a
     worktree has its own ``data/``, which nothing in the workspace reads.
     """
-    git_dirs = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(path),
-            "rev-parse",
-            "--path-format=absolute",
-            "--git-dir",
-            "--git-common-dir",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if git_dirs.returncode != 0:
-        return None
-    git_dir, common_dir = (Path(line) for line in git_dirs.stdout.splitlines())
-    if git_dir == common_dir:
-        return None
-    return common_dir.parent
+    return run_in_background.main_checkout(repo_root)
 
 
-def live_checkout(path: Path) -> Path:
-    """The checkout whose ``data/`` is the user's: ``path`` itself, or the checkout its worktree was added from."""
-    return main_checkout_of_linked_worktree(path) or path
+def main_checkout_of_linked_worktree(repo_root: Path) -> Path | None:
+    """The checkout the linked git worktree at ``repo_root`` was added from, or None when
+    ``repo_root`` is not a linked worktree."""
+    main_checkout = live_checkout(repo_root)
+    return None if main_checkout == repo_root else main_checkout
 
 
 def _refuses_registering_from_a_worktree(
