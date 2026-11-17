@@ -444,7 +444,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       loadError !== null ? inlineFailure(loadError, [reportBugButton(loadError), loadAgainButton()]) : null,
       // Removing an account can fail -- a row with no folder, a store that will not write --
       // and without this the row simply stays put with no explanation.
-      error !== null ? inlineFailure(error, error.isReportable ? reportBugButton(error) : null) : null,
+      error !== null ? inlineFailure(error, reportBugButton(error)) : null,
       signedIn !== null ? m("div", { class: `${css.SECTION_LABEL} mt-6` }, "Add more") : null,
       m("div", { class: css.ROW_STACK }, getLanes().map(laneRow)),
       roomRow(),
