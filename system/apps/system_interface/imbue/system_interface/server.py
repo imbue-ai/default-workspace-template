@@ -290,14 +290,14 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
            never shows a button that does nothing. -->
       <button id="copy-repair" type="button" hidden>Copy</button>
     </div>
-    <!-- The lead-in belongs to the terminal, not to the command: the command
-         stands on its own wherever the reader finds a shell, so it keeps its own
-         introduction above and is never left orphaned when there is no terminal
-         to offer. -->
     <p id="no-terminal">The workspace's terminal isn't running yet, so there is
        nowhere to run this here.</p>
     <details id="terminal-details" hidden>
       <summary>Open this workspace's terminal</summary>
+      <!-- The lead-in belongs to the terminal, not to the command: the command
+           stands on its own wherever the reader finds a shell, so it keeps its own
+           introduction above and is never left orphaned when there is no terminal
+           to offer. -->
       <p id="terminal-intro" hidden>You can run that -- or do the repair yourself --
          in this workspace's terminal, below.</p>
       <p id="terminal-failure" hidden></p>
