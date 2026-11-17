@@ -53,13 +53,16 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   promise that settles on the shell's `shell:start-new-with-text-result`
   (`{isOpened: true}`, or `{isOpened: false, failure}`; as not answered at
   once without a shell, on a handshake from a shell that started again (a
-  different `shellId`), and on `disconnect()`; an answer that still arrives
-  goes to its optional `onLateAnswer`), and the button reads "Asking an
+  different `shellId`), and on `disconnect()`; the button passes
+  `{showsOutcome: true, onLateAnswer}`, so the shell toasts nothing for its
+  failure, which it shows itself, and an answer that still arrives
+  goes to `onLateAnswer`), and the button reads "Asking an
   agent…", disabled, until it settles, then shows a failure under itself,
   with "Report a bug" for that failure when it asks for one, and takes a late
   answer in place of a not-answered one. The connection's `startWithText`,
   for a request that goes to the main chat (such as "Ask an agent to free up
-  space"), answers the same way through `shell:start-with-text-result`.
+  space"), answers the same way through `shell:start-with-text-result`. A
+  call without `{showsOutcome: true}` leaves a failure to the shell's toast.
   `ReportBugButton` asks the
   shell to open Imbue Studio's bug report about the failure it is given (a
   `ReportedFailure`: the sentence on screen and what its "See details" holds,
@@ -107,7 +110,11 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   askButton.onclick = async () => {
     askButton.disabled = true;
     askButton.textContent = "Asking an agent…";
-    const outcome = await askAgentToFix(connection, { whatFailed: "The terminal couldn't start", details: output });
+    const outcome = await askAgentToFix(
+      connection,
+      { whatFailed: "The terminal couldn't start", details: output },
+      { showsOutcome: true },
+    );
     askButton.disabled = false;
     askButton.textContent = "Ask an agent to fix this";
     if (!outcome.isOpened) showFailure(outcome.failure);

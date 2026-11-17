@@ -20,7 +20,7 @@ function host(): AppHost & { locations: [string, string][]; navigated: string[] 
     locations,
     navigated,
     reportLocation: (path, title) => locations.push([path, title]),
-    startWithText: () => Promise.resolve({ isOpened: true }),
+    startWithText: () => undefined,
     confirmRemove: () => Promise.resolve(true),
     navigate: (path) => navigated.push(path),
   };
@@ -177,24 +177,6 @@ describe("AppModel", () => {
     const model = new AppModel("/", host(), () => undefined);
     await model.load();
     expect(model.loaded).toEqual({ kind: "error", message: "the ledger is unreadable" });
-    model.dispose();
-  });
-
-  it("says in a toast why the shell couldn't start the chat the list's field asked for", async () => {
-    const failure = {
-      message: "No app in this workspace can start a chat.",
-      details: "no free-text row",
-      isReportable: false,
-    };
-    const model = new AppModel(
-      "/",
-      { ...host(), startWithText: () => Promise.resolve({ isOpened: false, failure }) },
-      () => undefined,
-    );
-    await model.startWithText("Add a routine that syncs my news");
-    expect(model.toasts.current().map((toast) => [toast.message, toast.details])).toEqual([
-      [failure.message, failure.details],
-    ]);
     model.dispose();
   });
 

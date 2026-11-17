@@ -54,8 +54,11 @@ export const AskAgentToFixButton: m.ClosureComponent<AskAgentToFixButtonAttrs> =
     const thisAsk = latestAsk;
     isAsking = true;
     failure = null;
-    const outcome = await askAgentToFix(attrs.connection, attrs.failure, (late) => {
-      if (thisAsk === latestAsk && !isAsking) show(late);
+    const outcome = await askAgentToFix(attrs.connection, attrs.failure, {
+      showsOutcome: true,
+      onLateAnswer: (late) => {
+        if (thisAsk === latestAsk && !isAsking) show(late);
+      },
     });
     isAsking = false;
     show(outcome);

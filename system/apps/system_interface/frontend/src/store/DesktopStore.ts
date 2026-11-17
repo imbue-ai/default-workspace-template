@@ -698,6 +698,12 @@ export class DesktopStore {
     this.showFailure(failureSentence(describeRequestFailure(error), whatFailed), options);
   }
 
+  /** Toast a failed start of a page that does not show the outcome itself: lasting when there is more to it than the
+   *  sentence (a launch's reason, a bug report to ask for), a plain note otherwise (no app takes text, a refusal). */
+  showStartFailure(failure: FailureMessage): void {
+    this.showFailure(failure, { isLasting: failure.details !== null || failure.isReportable });
+  }
+
   /** ``toastFailure`` for a failure already worded. */
   private showFailure(told: FailureMessage, { isLasting }: { readonly isLasting: boolean }): void {
     if (!isLasting && !told.isReportable) {

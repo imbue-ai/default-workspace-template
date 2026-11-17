@@ -1301,7 +1301,7 @@ describe("the contract", () => {
     );
   });
 
-  it("answers a page's shell:start-new-with-text with the failure when the launch is refused, toasting nothing", async () => {
+  it("answers a page that shows the outcome with the failure when the launch is refused, toasting nothing", async () => {
     offerApps(api, socket, [
       appRecord("docs", {
         url: "http://127.0.0.1:7001",
@@ -1311,7 +1311,12 @@ describe("the contract", () => {
     ]);
     api.refusal = "docs refused the launch: no account is signed in";
     const spy = spyOnFrame("win-1");
-    messageFromPage("win-1", { type: SHELL_START_NEW_WITH_TEXT, text: "Fix this.", requestId: "req-2" });
+    messageFromPage("win-1", {
+      type: SHELL_START_NEW_WITH_TEXT,
+      text: "Fix this.",
+      requestId: "req-2",
+      showsOutcome: true,
+    });
     await settle();
     expect(spy).toHaveBeenCalledWith(
       {
@@ -1327,6 +1332,41 @@ describe("the contract", () => {
       "*",
     );
     expect(store.toasts.current()).toEqual([]);
+  });
+
+  it("toasts a refused start itself when the page does not show the outcome, as for Routines' add field", async () => {
+    offerApps(api, socket, [
+      appRecord("docs", {
+        url: "http://127.0.0.1:7001",
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+      notes,
+    ]);
+    api.refusal = "docs refused the launch: no account is signed in";
+    const spy = spyOnFrame("win-1");
+    messageFromPage("win-1", {
+      type: SHELL_START_WITH_TEXT,
+      text: "Add a routine: water the plants",
+      requestId: "r-1",
+    });
+    await settle();
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ requestId: "r-1", isOpened: false }), "*");
+    expect(store.toasts.current()).toMatchObject([
+      {
+        message: "Docs couldn't open that.",
+        details: "HTTP 400\ndocs refused the launch: no account is signed in",
+        isLasting: true,
+      },
+    ]);
+  });
+
+  it("toasts a start it has no app for as a plain note when the page does not show the outcome", async () => {
+    offerApps(api, socket, [notes]);
+    messageFromPage("win-1", { type: SHELL_START_WITH_TEXT, text: "Build me a page", requestId: "r-2" });
+    await settle();
+    expect(store.toasts.current()).toMatchObject([
+      { message: "No app in this workspace can start a chat.", details: null, isLasting: false },
+    ]);
   });
 
   it("answers a page's shell:start-new-with-text with the fallback failure when the launch throws", async () => {
@@ -1348,6 +1388,14 @@ describe("the contract", () => {
       },
       "*",
     );
+    // Not shown by the page, so the shell's own toast carries it, reportable (with Report a bug where it can open).
+    expect(store.toasts.current()).toMatchObject([
+      {
+        message: "The workspace couldn't do that. Try again. If this persists, report a bug.",
+        isLasting: true,
+        isReportable: true,
+      },
+    ]);
     error.mockRestore();
   });
 

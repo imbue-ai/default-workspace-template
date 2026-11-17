@@ -83,6 +83,8 @@ describe("Ask an agent to fix this", () => {
     }
 
     render(view())?.click();
+    const [request] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect(request).toMatchObject({ type: SHELL_START_NEW_WITH_TEXT, showsOutcome: true });
     const pending = render(view());
     expect(pending?.textContent).toBe("Asking an agent…");
     expect(pending?.disabled).toBe(true);
