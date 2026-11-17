@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from agents_shared.testing import add_linked_worktree
 
 from update_app_skill import preview_app as mod
 from update_app_skill import preview_boot as boot
@@ -178,7 +179,7 @@ def test_up_hands_the_manifests_table_to_the_shared_script_with_its_own_placehol
         health_path="/api/health",
         service_name="chat-preview-app",
         preview_service_name="chat-preview",
-        preview_title="Chat (worktree)",
+        preview_title="Chat (preview)",
         inner_path="/?chat=agent-1",
         theming_mode=None,
         project=None,
@@ -258,6 +259,88 @@ def test_an_app_with_no_table_previews_by_the_scaffold_convention(
     assert spec.health_path == "/health"
     assert spec.inner_path == "/"
     assert spec.command == [*boot.LAUNCHER, "notes"]
+
+
+def _worktree_of_a_live_checkout(tmp_path: Path) -> Path:
+    """A linked git worktree of a checkout at ``tmp_path / "live"``, holding the fixture apps."""
+    add_linked_worktree(tmp_path / "live", tmp_path / "worktree")
+    return _write_worktree(tmp_path)
+
+
+def test_a_preview_booted_from_a_worktree_is_refused_unless_private(
+    tmp_path: Path,
+) -> None:
+    worktree = _worktree_of_a_live_checkout(tmp_path)
+    instances = _RecordingInstances(worktree)
+
+    with pytest.raises(mod.PreviewError, match="pass --private"):
+        boot.up(
+            "notes",
+            worktree,
+            worktree,
+            instances=instances,
+            dump_registry=_dump_registry,
+        )
+
+    assert instances.specs == []
+
+
+def test_a_private_instance_from_a_worktree_registers_nothing_and_reads_the_live_secrets(
+    tmp_path: Path,
+) -> None:
+    worktree = _worktree_of_a_live_checkout(tmp_path)
+    (worktree / "system" / "apps" / "notes" / "app.toml").write_text(
+        _NOTES_MANIFEST
+        + '\n[[secrets]]\nfile = "notes-api"\nvariables = ["NOTES_API_KEY"]\n'
+    )
+    instances = _RecordingInstances(worktree)
+
+    assert (
+        boot.up(
+            "notes",
+            worktree,
+            worktree,
+            is_private=True,
+            instances=instances,
+            dump_registry=_dump_registry,
+        )
+        == 0
+    )
+
+    spec = instances.up_spec("notes-preview")
+    assert (spec.service_name, spec.preview_service_name, spec.preview_title) == (
+        None,
+        None,
+        None,
+    )
+    live = (tmp_path / "live").resolve()
+    assert spec.command == [
+        *boot.LAUNCHER,
+        "python3",
+        str(live / "system" / "scripts" / "with_secrets.py"),
+        str(live / "data" / ".secrets" / "notes-api.env"),
+        "--",
+        "notes",
+    ]
+
+
+def test_a_private_instance_cannot_frame_siblings(tmp_path: Path) -> None:
+    worktree = _worktree_of_a_live_checkout(tmp_path)
+    instances = _RecordingInstances(worktree)
+
+    with pytest.raises(mod.PreviewError, match="registers none"):
+        boot.up(
+            "system_interface",
+            worktree,
+            worktree,
+            with_apps=["chat"],
+            instance_key="agent-1",
+            is_private=True,
+            instances=instances,
+            dump_registry=_dump_registry,
+        )
+
+    assert instances.specs == []
 
 
 def test_an_app_that_runs_under_secret_files_previews_under_the_same_wrapper(

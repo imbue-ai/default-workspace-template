@@ -38,7 +38,9 @@ The shapes:
   Registered names become hostname labels, so they must be DNS-safe: lowercase
   letters/digits with single hyphens (e.g. ``preview-1``, not ``preview_1``),
   not ``localhost``, and not starting with ``host-`` or ``agent-``. ``down``
-  kills both servers and deregisters both services.
+  kills both servers and deregisters both services. A registration from a git
+  worktree is refused: it would land in the worktree's own registry, which the
+  workspace never reads.
 - **Frame only** (``frame``, called by ``build-app``'s ``mock_frame.py``). The
   same labeled frame around a service something else already runs -- a new app's
   live program while it is still a mock -- with a banner kind and note of its own.
@@ -69,8 +71,10 @@ instance is given (a bare ``ENVVAR`` is the ``main`` port, the one probed for
 health; ``sidecar=MYSVC_API_PORT`` adds a second), and ``--port <name>`` gives it
 one that no env var carries, reachable only by placeholder (what a manifest's
 ``[preview]`` table declares). ``--copy KEY=SOURCE`` copies
-a directory (repo-relative or absolute) into the instance's scratch space on disk
-before boot, so the instance can write to it freely, and ``down`` removes it. A
+a directory (absolute, or relative to the live checkout -- the user's, even when
+``--repo-root`` is a git worktree, which has no ``data/`` of its own) into the
+instance's scratch space on disk before boot, so the instance can write to it
+freely, and ``down`` removes it. A
 copy that would not leave the disk room to spare fails the boot before anything
 runs. The launch argv and every ``--env``
 value may carry ``{port:<name>}``, ``{copy:<key>}``, ``{scratch}`` (a fresh
@@ -712,6 +716,56 @@ def parse_copy_assignments(assignments: Sequence[str]) -> dict[str, str]:
     return parsed
 
 
+def main_checkout_of_linked_worktree(path: Path) -> Path | None:
+    """The checkout that the linked git worktree holding ``path`` was added from, or None
+    when ``path`` is not in a linked worktree.
+
+    The user's data, secrets, and app registry live only in that main checkout: a
+    worktree has its own ``data/``, which nothing in the workspace reads.
+    """
+    git_dirs = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(path),
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-dir",
+            "--git-common-dir",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if git_dirs.returncode != 0:
+        return None
+    git_dir, common_dir = (Path(line) for line in git_dirs.stdout.splitlines())
+    if git_dir == common_dir:
+        return None
+    return common_dir.parent
+
+
+def live_checkout(path: Path) -> Path:
+    """The checkout whose ``data/`` is the user's: ``path`` itself, or the checkout its worktree was added from."""
+    return main_checkout_of_linked_worktree(path) or path
+
+
+def _refuses_registering_from_a_worktree(
+    repo_root: Path, verb: str, alternative: str
+) -> bool:
+    """Whether ``repo_root`` is in a linked worktree, saying why a registration from it is refused."""
+    main_checkout = main_checkout_of_linked_worktree(repo_root)
+    if main_checkout is None:
+        return False
+    sys.stderr.write(
+        f"{verb}: {repo_root} is a git worktree of {main_checkout}, so a window registered "
+        f"from here would go into {forward_port.apps_file(repo_root)}, which the workspace "
+        f"never reads, and nobody could open it. Run from {main_checkout} (or pass "
+        f"--repo-root {main_checkout}) to show it to the user{alternative}.\n"
+    )
+    return True
+
+
 def _make_copies(
     repo_root: Path,
     state_dir: Path,
@@ -720,16 +774,19 @@ def _make_copies(
 ) -> dict[str, str]:
     """Copy each source directory into the instance's scratch space; return key -> copy path.
 
+    A relative source is the live checkout's, even when ``repo_root`` is a worktree:
+    an instance booted to exercise a worktree's code still runs over the user's data.
     A source that does not exist yet (an app that has never written its store) becomes
     an empty directory rather than an error: the instance creates what it needs there,
     exactly as the live app would on its first run. A copy that would not fit on the
     disk is refused before it is written.
     """
+    copy_root = live_checkout(repo_root)
     copy_by_key: dict[str, str] = {}
     for key, source in copy_sources.items():
         source_path = Path(source)
         if not source_path.is_absolute():
-            source_path = repo_root / source_path
+            source_path = copy_root / source_path
         destination = state_dir / COPIES_DIRNAME / key
         if source_path.is_dir():
             try:
@@ -1095,6 +1152,12 @@ def up(
         # spend its whole budget on the dead wrapper before saying so.
         sys.stderr.write(f"up: --inner-path must start with '/', got {inner_path!r}.\n")
         return 1
+    if service_name is not None and _refuses_registering_from_a_worktree(
+        repo_root,
+        "up",
+        ", or drop --service-name for an instance only you reach on its loopback port",
+    ):
+        return 1
     if not _link_project_venv(venv_linker, cwd, project, "up"):
         return 1
     if project is not None:
@@ -1388,6 +1451,8 @@ def frame(
         sys.stderr.write(
             f"frame: the inner path must start with '/', got {inner_path!r}.\n"
         )
+        return 1
+    if _refuses_registering_from_a_worktree(repo_root, "frame", ""):
         return 1
     state_path = _state_path(repo_root, name)
     previous_port: int | None = None

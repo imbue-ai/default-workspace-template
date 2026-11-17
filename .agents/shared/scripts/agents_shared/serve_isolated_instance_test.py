@@ -32,6 +32,7 @@ from app_registration import forward_port
 from agents_shared import preview_wrapper_server as wrapper_mod
 from agents_shared import serve_isolated_instance as mod
 from agents_shared.preview_wrapper_server import FrameKind
+from agents_shared.testing import add_linked_worktree
 
 _SCRIPT = Path(__file__).resolve().parent / "serve_isolated_instance.py"
 
@@ -1086,6 +1087,45 @@ def test_copies_land_in_the_scratch_space_and_fill_their_placeholder(
     assert state["scratch"] == str(scratch)
 
 
+def test_an_instance_booted_from_a_worktree_copies_the_live_checkouts_data(
+    tmp_path: Path,
+) -> None:
+    live = tmp_path / "live"
+    worktree = tmp_path / "worktree"
+    add_linked_worktree(live, worktree)
+    store = live / "data" / ".apps" / "my-service"
+    store.mkdir(parents=True)
+    (store / "records.json").write_text("[7, 8]")
+
+    code = _up(
+        worktree,
+        copy_sources={"store": "data/.apps/my-service"},
+        free_space=_plenty_of_disk,
+    )
+
+    assert code == 0
+    copy_path = mod._state_dir(worktree, _NAME) / mod.COPIES_DIRNAME / "store"
+    assert (copy_path / "records.json").read_text() == "[7, 8]"
+
+
+def test_up_refuses_to_register_an_instance_from_a_worktree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    live = tmp_path / "live"
+    worktree = tmp_path / "worktree"
+    add_linked_worktree(live, worktree)
+    registry = _RecordingRegistry()
+    spawner = _FakeSpawner()
+
+    code = _up_preview(worktree, registry=registry, spawner=spawner)
+
+    assert code == 1
+    assert registry.registered == []
+    assert spawner.detached_spawns == []
+    assert not _state_path(worktree).exists()
+    assert f"Run from {live.resolve()}" in capsys.readouterr().err
+
+
 def test_a_copy_that_would_not_fit_on_disk_fails_the_boot_before_anything_runs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1483,6 +1523,18 @@ def _frame(
 
 def _wrapper_arg(argv: list[str], flag: str) -> str:
     return argv[argv.index(flag) + 1]
+
+
+def test_frame_refuses_to_register_a_frame_from_a_worktree(tmp_path: Path) -> None:
+    worktree = tmp_path / "worktree"
+    add_linked_worktree(tmp_path / "live", worktree)
+    registry = _RecordingRegistry()
+    spawner = _FakeSpawner()
+
+    assert _frame(worktree, registry=registry, spawner=spawner) == 1
+    assert registry.registered == []
+    assert spawner.detached_spawns == []
+    assert mod.read_frame(_FRAME_NAME, worktree) is None
 
 
 def test_frame_boots_only_a_mock_wrapper_and_registers_only_the_frame(

@@ -20,12 +20,17 @@ the root venv):
 
     uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py up \\
         --app <name> --worktree <dir> [--with <name>]... [--instance-key <key>] \\
-        [--title <label>] [--repo-root PATH]
+        [--title <label> | --private] [--repo-root PATH]
     uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py refresh --app <name> [--repo-root PATH]
     uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name> [--repo-root PATH]
 
 ``up`` prints the preview's app name (``<name>-preview``) on stdout; open a window
-of it with ``uv run --no-sync workspace-layout open <name>-preview``. ``refresh``
+of it with ``uv run --no-sync workspace-layout open <name>-preview``. A preview the
+user opens is booted from the live checkout: from a git worktree ``up`` refuses,
+since the window would be registered where the workspace never looks. ``--private``
+boots the same instance with no window, for an agent to drive on its loopback port
+from wherever it runs; its data copies and secrets still come from the live
+checkout. ``refresh``
 re-boots the inner process in place after a rebuild, leaving the ports, the wrapper,
 the registrations, and the window untouched. ``down`` tears the preview down together
 with the siblings it booted, and verifies the processes died.
@@ -83,9 +88,10 @@ class InstanceSpec:
     env_overrides: dict[str, str]
     copy_sources: dict[str, str]
     health_path: str
-    service_name: str
-    preview_service_name: str
-    preview_title: str
+    # The three registrations a preview surfaces itself through; None for a private instance.
+    service_name: str | None
+    preview_service_name: str | None
+    preview_title: str | None
     inner_path: str
     theming_mode: str | None
     project: str | None
@@ -345,10 +351,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="The instance the window opens on, for an app whose open_path takes one.",
     )
-    up_parser.add_argument(
+    surfacing = up_parser.add_mutually_exclusive_group()
+    surfacing.add_argument(
         "--title",
         default=None,
-        help="The label shown in the preview frame (default: the app and the worktree).",
+        help="The label shown in the preview frame (default: '<app> (preview)').",
+    )
+    surfacing.add_argument(
+        "--private",
+        action="store_true",
+        help=(
+            "Register no window: an instance only you reach on its loopback port, e.g. a "
+            "worker checking its own build from its worktree."
+        ),
     )
     _add_repo_root_arg(up_parser)
 
@@ -379,6 +394,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 with_apps=args.with_apps,
                 instance_key=args.instance_key,
                 title=args.title,
+                is_private=args.private,
                 instances=Instances(),
             )
         if args.command == "refresh":

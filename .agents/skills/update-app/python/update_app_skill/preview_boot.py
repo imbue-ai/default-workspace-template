@@ -20,7 +20,6 @@ from app_manifest.manifest import (
     AppManifest,
     load_manifest,
 )
-from app_manifest.registry_location import registry_path
 from app_registration import forward_port
 from workspace_bare_scripts import user_packages
 
@@ -142,8 +141,9 @@ def _standalone_project(worktree: Path, manifest: AppManifest) -> str | None:
 def build_instance_spec(
     manifest: AppManifest,
     worktree: Path,
-    repo_root: Path,
-    title: str,
+    live_root: Path,
+    # The preview frame's label; None boots a private instance that registers nothing.
+    title: str | None,
     registry_copy: Path | None,
     inner_path: str,
 ) -> InstanceSpec:
@@ -156,8 +156,9 @@ def build_instance_spec(
     except serve_isolated_instance.InstanceError as exc:
         raise PreviewError(f"the [preview] table of {manifest.name!r}: {exc}") from exc
     command = list(preview.command) if preview.command else [str(manifest.program)]
-    launch = _under_declared_secrets(manifest, repo_root, [*command, *preview.args])
+    launch = _under_declared_secrets(manifest, live_root, [*command, *preview.args])
     project = _standalone_project(worktree, manifest)
+    is_surfaced = title is not None
     return InstanceSpec(
         name=instance_name(manifest.name),
         command=[
@@ -172,8 +173,8 @@ def build_instance_spec(
         },
         copy_sources={str(key): source for key, source in preview.copies.items()},
         health_path=preview.health_path,
-        service_name=f"{manifest.name}{INNER_SERVICE_SUFFIX}",
-        preview_service_name=instance_name(manifest.name),
+        service_name=f"{manifest.name}{INNER_SERVICE_SUFFIX}" if is_surfaced else None,
+        preview_service_name=instance_name(manifest.name) if is_surfaced else None,
         preview_title=title,
         inner_path=inner_path,
         theming_mode=_declared_theming_mode(worktree, manifest),
@@ -189,10 +190,25 @@ def up(
     with_apps: Sequence[str] = (),
     instance_key: str | None = None,
     title: str | None = None,
+    is_private: bool = False,
     instances: Instances,
     dump_registry: Callable[[list[dict[str, object]]], str] | None = None,
 ) -> int:
     """Boot the app's preview from ``worktree``, after the siblings named in ``with_apps``."""
+    main_checkout = serve_isolated_instance.main_checkout_of_linked_worktree(repo_root)
+    if main_checkout is not None and not is_private:
+        raise PreviewError(
+            f"{repo_root} is a git worktree of {main_checkout}, so a preview booted from here "
+            "would register its window where the workspace never looks, and the user could "
+            f"not open it. To show it to the user, run from {main_checkout} with --worktree "
+            f"{worktree}; for an instance only you reach on its loopback port, pass --private."
+        )
+    if is_private and with_apps:
+        raise PreviewError(
+            "a preview frames each --with sibling at the origin its window registers, and a "
+            "private instance registers none; preview from the live checkout instead."
+        )
+    live_root = main_checkout or repo_root
     other = live_preview_worktree(repo_root, app_name)
     if other is not None and not _is_same_worktree(other, worktree):
         sys.stderr.write(
@@ -232,12 +248,23 @@ def up(
     registry_copy: Path | None = None
     if _uses_placeholder(manifest, REGISTRY_PLACEHOLDER):
         registry_copy = _registry_copy_path(repo_root, app_name)
-        write_registry_copy(registry_path(), registry_copy, preview_url_by_app, dump)
+        write_registry_copy(
+            forward_port.apps_file(live_root),
+            registry_copy,
+            preview_url_by_app,
+            dump,
+        )
+    if is_private:
+        frame_title = None
+    else:
+        frame_title = (
+            title if title is not None else f"{manifest.display_name} (preview)"
+        )
     spec = build_instance_spec(
         manifest,
         worktree,
-        repo_root,
-        title if title is not None else f"{manifest.display_name} ({worktree.name})",
+        live_root,
+        frame_title,
         registry_copy,
         resolve_open_path(manifest, instance_key),
     )
