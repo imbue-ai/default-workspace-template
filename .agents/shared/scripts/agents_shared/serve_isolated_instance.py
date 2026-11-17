@@ -717,20 +717,14 @@ def parse_copy_assignments(assignments: Sequence[str]) -> dict[str, str]:
     return parsed
 
 
-def live_checkout(repo_root: Path) -> Path:
-    """The checkout whose ``data/`` is the user's: ``repo_root`` itself, or the checkout
-    its linked git worktree was added from.
+def main_checkout_of_linked_worktree(repo_root: Path) -> Path | None:
+    """The checkout the linked git worktree at ``repo_root`` was added from, or None when
+    ``repo_root`` is not a linked worktree.
 
     The user's data, secrets, and app registry live only in that main checkout: a
     worktree has its own ``data/``, which nothing in the workspace reads.
     """
-    return run_in_background.main_checkout(repo_root)
-
-
-def main_checkout_of_linked_worktree(repo_root: Path) -> Path | None:
-    """The checkout the linked git worktree at ``repo_root`` was added from, or None when
-    ``repo_root`` is not a linked worktree."""
-    main_checkout = live_checkout(repo_root)
+    main_checkout = run_in_background.main_checkout(repo_root)
     return None if main_checkout == repo_root else main_checkout
 
 
@@ -765,7 +759,7 @@ def _make_copies(
     exactly as the live app would on its first run. A copy that would not fit on the
     disk is refused before it is written.
     """
-    copy_root = live_checkout(repo_root)
+    copy_root = run_in_background.main_checkout(repo_root)
     copy_by_key: dict[str, str] = {}
     for key, source in copy_sources.items():
         source_path = Path(source)

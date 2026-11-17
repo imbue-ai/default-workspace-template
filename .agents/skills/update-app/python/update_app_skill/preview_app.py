@@ -79,6 +79,15 @@ class PreviewError(Exception):
 
 
 @dataclass(frozen=True)
+class PreviewWindow:
+    """How a preview surfaces: the inner app's registration, the frame's, and the frame's label."""
+
+    service_name: str
+    preview_service_name: str
+    title: str
+
+
+@dataclass(frozen=True)
 class InstanceSpec:
     """One preview's boot, as ``serve_isolated_instance.up`` takes it."""
 
@@ -89,11 +98,8 @@ class InstanceSpec:
     env_overrides: dict[str, str]
     copy_sources: dict[str, str]
     health_path: str
-    # The two registrations a preview surfaces itself through and its frame's label; None for a
-    # private instance.
-    service_name: str | None
-    preview_service_name: str | None
-    preview_title: str | None
+    # None for a private instance, which registers nothing.
+    window: PreviewWindow | None
     inner_path: str
     theming_mode: str | None
     project: str | None
@@ -103,6 +109,7 @@ class Instances:
     """Indirection over the shared isolated-instance substrate, so tests can stand in for it."""
 
     def up(self, spec: InstanceSpec, repo_root: Path) -> int:
+        window = spec.window
         return serve_isolated_instance.up(
             spec.name,
             spec.command,
@@ -112,9 +119,11 @@ class Instances:
             env_overrides=spec.env_overrides,
             copy_sources=spec.copy_sources,
             health_path=spec.health_path,
-            service_name=spec.service_name,
-            preview_service_name=spec.preview_service_name,
-            preview_title=spec.preview_title,
+            service_name=window.service_name if window is not None else None,
+            preview_service_name=(
+                window.preview_service_name if window is not None else None
+            ),
+            preview_title=window.title if window is not None else None,
             inner_path=spec.inner_path,
             theming_mode=spec.theming_mode,
             project=spec.project,
@@ -202,7 +211,8 @@ def live_preview_is_surfaced(repo_root: Path, app_name: str) -> bool:
 
 def live_registry_path(repo_root: Path) -> Path:
     """The workspace's registry: the live checkout's, even when ``repo_root`` is a git worktree."""
-    return forward_port.apps_file(serve_isolated_instance.live_checkout(repo_root))
+    main_checkout = serve_isolated_instance.main_checkout_of_linked_worktree(repo_root)
+    return forward_port.apps_file(main_checkout or repo_root)
 
 
 def write_registry_copy(

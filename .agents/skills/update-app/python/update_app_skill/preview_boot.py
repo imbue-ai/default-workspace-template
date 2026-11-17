@@ -28,6 +28,7 @@ from update_app_skill.preview_app import (
     Instances,
     InstanceSpec,
     PreviewError,
+    PreviewWindow,
     _preview_state_path,
     _recorded_siblings,
     _reframe_previews_naming,
@@ -144,8 +145,7 @@ def build_instance_spec(
     manifest: AppManifest,
     worktree: Path,
     live_root: Path,
-    # The preview frame's label; None boots a private instance that registers nothing.
-    title: str | None,
+    window: PreviewWindow | None,
     registry_copy: Path | None,
     inner_path: str,
 ) -> InstanceSpec:
@@ -160,7 +160,6 @@ def build_instance_spec(
     command = list(preview.command) if preview.command else [str(manifest.program)]
     launch = _under_declared_secrets(manifest, live_root, [*command, *preview.args])
     project = _standalone_project(worktree, manifest)
-    is_surfaced = title is not None
     return InstanceSpec(
         name=instance_name(manifest.name),
         command=[
@@ -175,9 +174,7 @@ def build_instance_spec(
         },
         copy_sources={str(key): source for key, source in preview.copies.items()},
         health_path=preview.health_path,
-        service_name=f"{manifest.name}{INNER_SERVICE_SUFFIX}" if is_surfaced else None,
-        preview_service_name=instance_name(manifest.name) if is_surfaced else None,
-        preview_title=title,
+        window=window,
         inner_path=inner_path,
         theming_mode=_declared_theming_mode(worktree, manifest),
         project=project,
@@ -281,18 +278,20 @@ def up(
         )
     # A private instance has no frame to open on a page, so it needs no instance key.
     if is_private:
-        frame_title = None
+        window = None
         inner_path = "/"
     else:
-        frame_title = (
-            title if title is not None else f"{manifest.display_name} (preview)"
+        window = PreviewWindow(
+            service_name=f"{manifest.name}{INNER_SERVICE_SUFFIX}",
+            preview_service_name=instance_name(manifest.name),
+            title=title if title is not None else f"{manifest.display_name} (preview)",
         )
         inner_path = resolve_open_path(manifest, instance_key)
     spec = build_instance_spec(
         manifest,
         worktree,
         live_root,
-        frame_title,
+        window,
         registry_copy,
         inner_path,
     )

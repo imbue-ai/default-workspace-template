@@ -117,11 +117,12 @@ class _RecordingInstances(mod.Instances):
         state_path = self._state_path(spec.name)
         state_path.parent.mkdir(parents=True, exist_ok=True)
         self.next_port += 1
-        services = [
-            name
-            for name in (spec.service_name, spec.preview_service_name)
-            if name is not None
-        ]
+        window = spec.window
+        services = (
+            [window.service_name, window.preview_service_name]
+            if window is not None
+            else []
+        )
         state_path.write_text(
             json.dumps(
                 {
@@ -188,9 +189,11 @@ def test_up_hands_the_manifests_table_to_the_shared_script_with_its_own_placehol
         },
         copy_sources={"data": "data/.apps/chat"},
         health_path="/api/health",
-        service_name="chat-preview-app",
-        preview_service_name="chat-preview",
-        preview_title="Chat (preview)",
+        window=mod.PreviewWindow(
+            service_name="chat-preview-app",
+            preview_service_name="chat-preview",
+            title="Chat (preview)",
+        ),
         inner_path="/?chat=agent-1",
         theming_mode=None,
         project=None,
@@ -325,11 +328,7 @@ def test_a_private_instance_from_a_worktree_registers_nothing_and_reads_the_live
     assert _up_from_worktree("notes", worktree, instances) == 0
 
     spec = instances.up_spec("notes-preview")
-    assert (spec.service_name, spec.preview_service_name, spec.preview_title) == (
-        None,
-        None,
-        None,
-    )
+    assert spec.window is None
     live = (tmp_path / "live").resolve()
     assert spec.command == [
         *boot.LAUNCHER,
@@ -349,7 +348,7 @@ def test_a_private_chat_from_a_worktree_boots_without_an_instance_key(
 
     assert _up_from_worktree("chat", worktree, instances) == 0
 
-    assert instances.up_spec("chat-preview").service_name is None
+    assert instances.up_spec("chat-preview").window is None
 
 
 def test_a_private_shell_from_a_worktree_reads_the_live_checkouts_registry(
