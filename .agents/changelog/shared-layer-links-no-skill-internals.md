@@ -1,6 +1,6 @@
 A skill's files have one reader, an agent following that skill: nothing outside a skill links a file inside it other than its `SKILL.md`. Knowledge two skills need lives in the shared layer, written for any reader. A flow that should take over is reached by naming the skill. What another party does is said in the skill's own terms, without a link.
 
-- **`validate_skill.py` has a sixth check, `boundary`**: a skill's markdown links no file inside another skill, other than that skill's `SKILL.md`. `skill_checks.py` also gains `outside_links_into_skills`, which lists every such link from `.agents/shared/` and `AGENTS.md`.
+- **`validate_skill.py` has a sixth check, `boundary`**: a skill's markdown links no markdown file inside another skill, other than that skill's `SKILL.md` (another skill's scripts may still be run). `skill_checks.py` also gains `outside_links_into_skills`, which lists every such link from `.agents/shared/` and `AGENTS.md`.
 
 - **`review-gates.md`** (new, under `.agents/shared/references/`) is how a worker runs its test gate, and what it does about a failing test, a test it would change, a suite the selector left out, a regression the gate let through and a command that dies from a signal. It was the "Review gates" section of the harden worker's `harden-creation.md`, which the update worker and `AGENTS.md` read too. `harden-creation.md` keeps what is a harden pass's own (selecting the gate from the scope file) and links it.
 
