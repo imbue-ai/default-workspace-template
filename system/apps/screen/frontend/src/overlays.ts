@@ -8,7 +8,7 @@
  *  and app contract). */
 
 import { askAgentToFix } from "@imbue/workspace-ui/src/app_contract";
-import type { AgentFixRequest, ShellConnection } from "@imbue/workspace-ui/src/app_contract";
+import type { AgentFixRequest, ReportedFailure, ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 import { REPORT_A_BUG_LABEL, failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure } from "@imbue/workspace-ui/src/models/failure";
 import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
@@ -18,7 +18,7 @@ import type { StreamStatus } from "./webrtc";
 export const ASK_AGENT_TO_FIX_LABEL = "Ask an agent to fix this";
 
 /** What the overlay needs of the shell connection for its failure buttons. */
-export type FailureHost = Pick<ShellConnection, "hasShell" | "startWithText" | "canReportBug" | "reportBug">;
+export type FailureHost = Pick<ShellConnection, "hasShell" | "startNewWithText" | "canReportBug" | "reportBug">;
 
 /** A failure the page itself ran into (a refused Start, a state it could not load): our sentence and its details. */
 export interface PageFailure {
@@ -173,6 +173,7 @@ export class Overlays {
   private readonly dimCancel = document.createElement("button");
   private host: FailureHost | null = null;
   private agentFix: AgentFixRequest | null = null;
+  private reported: ReportedFailure | null = null;
 
   constructor(onStart: () => void, onTakeControl: () => void, onCancelPendingUrl: () => void, onReload: () => void) {
     this.element.className = "screen-overlay";
@@ -203,7 +204,9 @@ export class Overlays {
     this.reportBugButton.className = "screen-button report-bug";
     this.reportBugButton.textContent = REPORT_A_BUG_LABEL;
     this.reportBugButton.dataset.screenReportBug = "true";
-    this.reportBugButton.addEventListener("click", () => this.host?.reportBug());
+    this.reportBugButton.addEventListener("click", () => {
+      if (this.host !== null && this.reported !== null) this.host.reportBug(this.reported);
+    });
     this.actions.append(this.startButton, this.reloadButton, this.askAgentButton, this.reportBugButton);
     this.element.append(this.title, this.body, this.details, this.actions);
     // Until the first state arrives, the page is loading: nothing to start, nothing failed.
@@ -282,6 +285,10 @@ export class Overlays {
     this.startButton.textContent = shown.startLabel ?? "";
     this.reloadButton.hidden = !shown.isReloadOffered;
     this.agentFix = shown.agentFix;
+    this.reported = {
+      message: shown.body === "" ? shown.title : `${shown.title} ${shown.body}`,
+      details: shown.details,
+    };
     this.askAgentButton.hidden = shown.agentFix === null || this.host === null || !this.host.hasShell();
     this.reportBugButton.hidden = !shown.isReportable || this.host === null || !this.host.canReportBug();
   }

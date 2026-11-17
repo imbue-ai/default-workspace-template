@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { Overlays, mayCancelPendingUrl } from "./overlays";
+import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import type { FailureHost } from "./overlays";
 import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
 
@@ -137,17 +138,15 @@ describe("Overlays", () => {
 /** A shell connection as the overlay's buttons see it, recording what they asked of it. */
 function fakeHost(fields: { hasShell?: boolean; canReportBug?: boolean } = {}): FailureHost & {
   started: string[];
-  reports: number;
+  reports: ReportedFailure[];
 } {
   const host = {
     started: [] as string[],
-    reports: 0,
+    reports: [] as ReportedFailure[],
     hasShell: () => fields.hasShell ?? true,
     canReportBug: () => fields.canReportBug ?? true,
-    startWithText: (text: string) => void host.started.push(text),
-    reportBug: () => {
-      host.reports += 1;
-    },
+    startNewWithText: (text: string) => void host.started.push(text),
+    reportBug: (failure: ReportedFailure) => void host.reports.push(failure),
   };
   return host;
 }
@@ -270,7 +269,9 @@ describe("Overlays for the stack's state", () => {
       buttons: ["Start", "Ask an agent to fix this", "Report a bug"],
     });
     overlays.element.querySelector<HTMLButtonElement>("[data-screen-report-bug]")?.click();
-    expect(host.reports).toBe(1);
+    expect(host.reports).toEqual([
+      { message: "The Screen stopped unexpectedly.", details: "screen-neko exited unexpectedly" },
+    ]);
   });
 
   it("names low memory for a member the memory guard shed, with no bug report for it", () => {
