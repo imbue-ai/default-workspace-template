@@ -166,8 +166,8 @@ interface LivePage {
   hasCapabilities: boolean;
   /** When focus landing in the page was last reported, for the throttle; 0 before any. */
   lastFocusReportedAt: number;
-  /** The watcher tick the shell last posted the page a message it may answer by taking the focus in; null before
-   *  any. */
+  /** The watcher tick the shell last posted the page, with no landing waiting in it, a message it may answer by
+   *  taking the focus in; null before any. */
   lastFocusPromptTick: number | null;
   /** The desktop the page was last introduced to; null before its first load. */
   greetedDesktopId: string | null;
@@ -1005,7 +1005,8 @@ export class LivePagesLayer implements PageDriver {
     // Nothing until the page has had its handshake: before its load there is nobody listening.
     if (page.greetedDesktopId === null || page.lastSentVisibility === isVisible) return;
     page.lastSentVisibility = isVisible;
-    if (isVisible) page.lastFocusPromptTick = this.watchedTicks;
+    // A landing already waiting in the page is no answer to this message.
+    if (isVisible && this.landedPage() !== page) page.lastFocusPromptTick = this.watchedTicks;
     sendToChildFrame(page.frame, isVisible ? SHELL_SHOWN : SHELL_HIDDEN);
   }
 

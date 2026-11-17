@@ -1518,11 +1518,70 @@ describe("raising the window the document's focus lands in", () => {
     expect(document.activeElement).toBe(host);
   });
 
+  it("takes a landing that answers a ttyd-focus posted while the page held the focus from an earlier one for no press", () => {
+    const grants = spyOnFrame("win-2");
+    vi.advanceTimersByTime(0);
+    expect(grantsSeen(grants)).toBe(1);
+    frameOf("win-2").focus();
+    const scheduleTicks = FOCUS_GRANT_SCHEDULE_MS / FOCUS_WATCH_INTERVAL_MS;
+    for (let count = 0; grantsSeen(grants) < 2 && count < scheduleTicks; count += 1) tick();
+    expect(grantsSeen(grants)).toBe(2);
+    store.raiseWindow("win-1");
+    layer.reconcile();
+    expect(document.activeElement).toBe(host);
+    const raise = vi.spyOn(store, "raiseWindow");
+    frameOf("win-2").focus();
+    tick();
+    expect(raise).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(host);
+  });
+
   it("raises for a landing that comes well after the shell's last message to the page", () => {
     load("win-1");
     pastThePromptSettle();
     blurIntoFrameOf("win-1");
     expect(topWindowId()).toBe("win-1");
+  });
+
+  it("raises for a press whose page loads again before the next tick, and leaves the focus in it", () => {
+    load("win-1");
+    pastThePromptSettle();
+    frameOf("win-2").focus();
+    tick();
+    // The press moves the focus into win-1's page, which goes to another page of its own.
+    frameOf("win-1").focus();
+    load("win-1");
+    tick();
+    expect(topWindowId()).toBe("win-1");
+    expect(document.activeElement).toBe(frameOf("win-1"));
+  });
+
+  it("raises for a press the hold set aside whose page loads again meanwhile, once the hold is over", () => {
+    load("win-2");
+    pastThePromptSettle();
+    blurIntoFrameOf("win-1");
+    layer.reconcile();
+    expect(topWindowId()).toBe("win-1");
+    frameOf("win-2").focus();
+    load("win-2");
+    tick(WATCHER_RAISE_HOLD_TICKS);
+    expect(topWindowId()).toBe("win-2");
+    expect(document.activeElement).toBe(frameOf("win-2"));
+  });
+
+  it("takes a landing that answers a shell:shown posted to a page while its window was the focused one for no press", () => {
+    frameOf("win-2").focus();
+    pastThePromptSettle();
+    load("win-2");
+    store.raiseWindow("win-1");
+    layer.reconcile();
+    expect(document.activeElement).toBe(host);
+    const raise = vi.spyOn(store, "raiseWindow");
+    frameOf("win-2").focus();
+    tick();
+    expect(raise).not.toHaveBeenCalled();
+    expect(topWindowId()).toBe("win-1");
+    expect(document.activeElement).toBe(host);
   });
 
   describe.each([

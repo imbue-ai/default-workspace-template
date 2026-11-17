@@ -1831,6 +1831,52 @@ def test_pressing_a_lower_window_moves_the_keyboard_to_its_page(e2e_server: E2ES
     assert page.evaluate(f"() => document.activeElement?.getAttribute('data-live-page') === {json.dumps(first)}")
 
 
+# Lays a link to ``href`` over the spot a lower window's page is pressed at (``_content_point``).
+_ADD_LINK_UNDER_THE_PRESS = """(href) => {
+  const link = document.createElement("a");
+  link.href = href;
+  link.style.cssText = "position: fixed; left: 0; bottom: 0; width: 80px; height: 80px";
+  document.body.appendChild(link);
+}"""
+
+# The presses the test below makes, each falling somewhere else between two reads of the shell's focus timer.
+_NAVIGATING_PRESSES = 3
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_press_that_takes_a_lower_windows_page_to_another_page_raises_the_window(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """With the focus in the top window's page, a press on a link in a lower window's page moves the focus there and
+    takes that page to another page of its app. The shell tells the page that loads that it is shown, and the focus
+    that was in the frame before that is the press and no answer to it: the window is raised and keeps the focus."""
+    _land(page, e2e_server)
+    first, second = _open_a_second_window_over_the_first(page, e2e_server)
+    point = _content_point(page, first)
+    first_frame = _page_frame(page, first)
+    second_frame = _page_frame(page, second)
+    for press in range(_NAVIGATING_PRESSES):
+        path = f"/?pressed={press}"
+        first_frame.evaluate(_ADD_LINK_UNDER_THE_PRESS, path)
+        second_frame.click("#held")
+        page.wait_for_function(
+            "(id) => document.activeElement?.getAttribute('data-live-page') === id", arg=second, timeout=15000
+        )
+        _wait_out_the_prompt_settle(page, _now_ms(page))
+
+        page.mouse.click(*point)
+        expect(_window(page, first)).to_have_attribute("data-focused", "true", timeout=15000)
+        first_frame.wait_for_function(
+            "(path) => location.pathname + location.search === path && window.__handshake !== undefined",
+            arg=path,
+            timeout=15000,
+        )
+        assert page.evaluate("(id) => document.activeElement?.getAttribute('data-live-page') === id", first)
+
+        _taskbar_entry(page, second).click()
+        expect(_window(page, second)).to_have_attribute("data-focused", "true", timeout=15000)
+
+
 @pytest.mark.timeout(90, func_only=False)
 @pytest.mark.parametrize("how", ["press", "taskbar", "op"])
 def test_a_late_focus_grant_to_a_raised_terminal_does_not_undo_a_later_raise_of_another_window(
