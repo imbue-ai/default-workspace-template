@@ -197,10 +197,16 @@ describe("the provisional chats over the socket", () => {
   });
 
   it("drops a discarded chat and rejects a held send as one no agent is behind", async () => {
-    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
+    const discarded: ProvisionalChat[] = [];
+    manager.addProvisionalChatDiscardedListener((record) => discarded.push(record));
+    const held = { ...proto("agent-1", "creating"), held_sends: [{ message_id: "m-1", text: "hello" }] };
+    push({ type: "provisional_chat_created", ...held });
     const registered = manager.whenChatRegistered("agent-1");
 
     push({ type: "provisional_chat_completed", chat_id: "agent-1", success: false, error: null });
+
+    // The composer hears what the chat still held when it went, to put back.
+    expect(discarded).toEqual([held]);
 
     // The composer offers neither Retry nor Restart for it: there is no agent to send to or restart.
     await expect(registered).rejects.toBeInstanceOf(manager.ChatNotStartedError);
@@ -209,6 +215,8 @@ describe("the provisional chats over the socket", () => {
   });
 
   it("drops a record a reconnect's replay does not carry and releases the send held for it", async () => {
+    const discarded: string[] = [];
+    manager.addProvisionalChatDiscardedListener((record) => discarded.push(record.chat_id));
     push({ type: "chats_updated", chats: [] });
     push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     push({ type: "provisional_chat_created", ...proto("agent-2", "creating") });
@@ -226,6 +234,8 @@ describe("the provisional chats over the socket", () => {
     expect(manager.getProvisionalChat("agent-1")).toBeUndefined();
     expect(manager.getProvisionalChat("agent-2")?.phase).toBe("creating");
     await expect(registered).resolves.toBeUndefined();
+    // Its discard was missed while the socket was down, so the composer hears it now.
+    expect(discarded).toEqual(["agent-1"]);
   });
 
   it("keeps a record a reconnect's replay carries, and the send held for it", async () => {

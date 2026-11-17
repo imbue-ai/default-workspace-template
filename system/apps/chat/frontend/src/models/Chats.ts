@@ -253,8 +253,9 @@ export type ChatActivityListener = (chatId: string, previous: string | null, cur
  */
 export type ChatActiveAgentListener = (chatId: string, previousAgentId: string, currentAgentId: string) => void;
 
-/** Told when a chat still being created is discarded (deleted from any page) before its agent lands, with its last
- *  record: the sends that record still holds are the ones dropped with it. */
+/** Told when a chat still being created is discarded (deleted from any page, or gone when a reconnect's replay no
+ *  longer carries it) before its agent lands, with its last record: the sends that record still holds are the ones
+ *  dropped with it. */
 export type ProvisionalChatDiscardedListener = (discarded: ProvisionalChat) => void;
 
 let chats: ChatSnapshot[] = [];
@@ -389,13 +390,18 @@ function handleEvent(event: WsEvent): void {
       for (const chatId of registeredIds) settleRegistration(chatId, null);
       if (replayedProvisionalIds !== null) {
         // The list ends a (re)connect's replay. A record the app did not replay is one it no
-        // longer holds (it restarted while the create ran), so no push is coming for it: the
-        // record goes, and a send held for it proceeds to report the backend's refusal.
+        // longer holds (it was deleted while the socket was down, or the app restarted while the
+        // create ran), so no push is coming for it: the record goes as a discarded one, and a send
+        // waiting on it proceeds to report the backend's refusal.
         const replayed = replayedProvisionalIds;
         replayedProvisionalIds = null;
+        const vanished = provisionalChats.filter((p) => !replayed.has(p.chat_id));
         provisionalChats = provisionalChats.filter((p) => replayed.has(p.chat_id));
         for (const chatId of [...registrationWaiters.keys()]) {
           if (getProvisionalChat(chatId) === undefined) settleRegistration(chatId, null);
+        }
+        for (const discarded of vanished) {
+          for (const listener of provisionalChatDiscardedListeners) listener(discarded);
         }
       }
       for (const listener of chatsUpdatedListeners) {
