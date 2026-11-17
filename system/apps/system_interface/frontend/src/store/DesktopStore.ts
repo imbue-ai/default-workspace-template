@@ -27,9 +27,9 @@ import {
   isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
-import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import { failureSentence, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
-import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
+import type { ReportedFailure, StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { couldNotStartRequest, isRetryable, refusalKindOf, stoppedSentence } from "../model/failures";
 import type { FailureNotice } from "../model/failures";
@@ -749,16 +749,15 @@ export class DesktopStore {
   }
 
   /**
-   * Show ``notice`` in a toast. A call site whose retry is the control just pressed asks for a plain note; any other
-   * shows one that stays, with its details and buttons, and so does any notice that asks for a bug report or carries
-   * a button, which a note that leaves on its own cannot hold. A toast that asks for a bug report offers "Report a
-   * bug" wherever the embedder opens one when the toast is drawn (``reportBugAction``).
+   * Show ``notice`` in a toast. A call site whose retry is the control just pressed asks for a plain note, which
+   * still holds the details behind "See details"; any other shows one that stays, with its details and buttons, and
+   * so does any notice that asks for a bug report or carries a button, which a note that leaves on its own cannot
+   * hold. A toast that asks for a bug report offers "Report a bug" wherever the embedder opens one when the toast is
+   * drawn (``reportBugAction``).
    */
   private toastNotice(notice: FailureNotice, { isLasting }: { readonly isLasting: boolean }): void {
     if (!isLasting && !notice.isReportable && notice.actions.length === 0) {
-      // A plain note has no room for the details, so they go to the log rather than nowhere.
-      if (notice.details !== null) console.warn(`[si] ${notice.message}`, notice.details);
-      this.toast(notice.message);
+      this.toasts.show(notice.message, { isLasting: false, details: notice.details });
       return;
     }
     this.toasts.show(notice.message, {
@@ -2998,7 +2997,13 @@ export class DesktopStore {
    *  path bound) or the shell refused, each told to ``report`` when the surface that ran it shows it (the launcher,
    *  which keeps the text in its field), else in a toast. A send the shell refused leaves the pinned window where it
    *  was. */
-  async runFreeText(appName: string, launchId: string, text: string, report?: FailureReport): Promise<boolean> {
+  async runFreeText(
+    appName: string,
+    launchId: string,
+    text: string,
+    report?: FailureReport,
+    whatFailed?: string,
+  ): Promise<boolean> {
     const toReport = report ?? ((notice: FailureNotice) => this.toastNotice(notice, { isLasting: false }));
     const found = this.launchOf(appName, launchId, toReport);
     if (found === null) return false;
@@ -3007,7 +3012,13 @@ export class DesktopStore {
       toReport(this.plainNotice(disabledReason));
       return false;
     }
-    return this.launchPinnedFirst(found.app.name, found.launchPath.id, freeTextParams(found.launchPath, text), report);
+    return this.launchPinnedFirst(
+      found.app.name,
+      found.launchPath.id,
+      freeTextParams(found.launchPath, text),
+      report,
+      whatFailed,
+    );
   }
 
   /** Run a launch path with ``params`` into the app's pinned window on the active desktop when there is one (the
@@ -3018,6 +3029,7 @@ export class DesktopStore {
     launchId: string,
     params: Record<string, string>,
     report?: FailureReport,
+    whatFailed?: string,
   ): Promise<boolean> {
     const pinned = pinnedWindowOf(this.state, appName);
     if (pinned !== null) {
@@ -3029,18 +3041,19 @@ export class DesktopStore {
         { kind: "window", windowId: pinned.id },
         {
           whatFailed:
-            report === undefined
+            whatFailed ??
+            (report === undefined
               ? `Couldn't send that to ${name}`
-              : `Couldn't send that to ${name}, so your text is still in the box`,
+              : `Couldn't send that to ${name}, so your text is still in the box`),
           report,
-          retry: () => void this.launchPinnedFirst(appName, launchId, params, report),
+          retry: () => void this.launchPinnedFirst(appName, launchId, params, report, whatFailed),
         },
       );
       if (launched === null) return false;
       this.restoreWindow(pinned.id);
       return true;
     }
-    return (await this.launchAt(appName, launchId, params, { kind: "new" }, { report })) !== null;
+    return (await this.launchAt(appName, launchId, params, { kind: "new" }, { whatFailed, report })) !== null;
   }
 
   /** A page's ``shell:draft-text`` (element-reference-menu plan section 6): the text is drafted into the pinned
@@ -3067,15 +3080,34 @@ export class DesktopStore {
   }
 
   /** A page's ``shell:start-new-with-text`` ("Ask an agent to fix this"): the secondary text action runs with the
-   *  text (Chat's New Chat on a stock machine), else the primary one; with no free-text row on the machine the user
-   *  is told. */
-  async startNewWithText(text: string): Promise<boolean> {
+   *  text (Chat's New Chat on a stock machine), else the primary one. Settles once the window is on the desktop, or
+   *  with the failure for the caller to show where the press was: nothing is toasted. */
+  async startNewWithText(text: string): Promise<StartNewOutcome> {
     const row = this.newTextRow();
     if (row === undefined) {
-      this.toast(NO_TEXT_APP_REASON);
-      return false;
+      return { isOpened: false, failure: { message: `${NO_TEXT_APP_REASON}.`, details: null, isReportable: false } };
     }
-    return this.runFreeText(row.app.name, row.launchPath.id, text);
+    const whatFailed = `${row.app.display_name} couldn't open that`;
+    let failure: FailureNotice | null = null;
+    const isOpened = await this.runFreeText(
+      row.app.name,
+      row.launchPath.id,
+      text,
+      (notice) => {
+        failure = notice;
+      },
+      whatFailed,
+    );
+    if (isOpened) return { isOpened: true };
+    const told: FailureMessage = failure ?? {
+      message: fallbackSentence(whatFailed),
+      details: null,
+      isReportable: true,
+    };
+    return {
+      isOpened: false,
+      failure: { message: told.message, details: told.details, isReportable: told.isReportable },
+    };
   }
 
   /** The desktop an open goes to: the active one, or on a phone the first, where a window opened out of sight

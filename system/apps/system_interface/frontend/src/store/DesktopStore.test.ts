@@ -722,10 +722,8 @@ describe("opening", () => {
     );
   });
 
-  it("shell:start-new-with-text runs the secondary text action, else the primary, and says so when there is none", async () => {
+  it("shell:start-new-with-text runs the secondary text action, else the primary, and answers once the window opened", async () => {
     const store = await startedStore();
-    expect(await store.startNewWithText("Fix this.")).toBe(false);
-    expect(last(notices())).toBe("No app in this workspace can start a chat");
     const notes = (launchIds: readonly string[]): ReturnType<typeof appRecord> =>
       appRecord("notes", {
         launch_paths: launchIds.map((id) =>
@@ -733,15 +731,39 @@ describe("opening", () => {
         ),
       });
     offerApps(api, socket, [notes(["main", "new", "send"])]);
-    expect(await store.startNewWithText("Fix this.")).toBe(true);
+    expect(await store.startNewWithText("Fix this.")).toEqual({ isOpened: true });
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
       `launch:home:notes:new:{"message":"Fix this."}:new`,
     );
+    expect(store.getState().desktops[0].windows.some((window) => window.app === "notes")).toBe(true);
     offerApps(api, socket, [notes(["main"])]);
-    expect(await store.startNewWithText("Fix this.")).toBe(true);
+    expect(await store.startNewWithText("Fix this.")).toEqual({ isOpened: true });
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
       `launch:home:notes:main:{"message":"Fix this."}:new`,
     );
+  });
+
+  it("shell:start-new-with-text answers a failure for the page to show, and leaves no toast of its own", async () => {
+    const store = await startedStore();
+    expect(await store.startNewWithText("Fix this.")).toEqual({
+      isOpened: false,
+      failure: { message: "No app in this workspace can start a chat.", details: null, isReportable: false },
+    });
+    offerApps(api, socket, [
+      appRecord("notes", {
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+    ]);
+    api.refusal = "notes refused the launch: no account is signed in";
+    expect(await store.startNewWithText("Fix this.")).toEqual({
+      isOpened: false,
+      failure: {
+        message: "Notes couldn't open that.",
+        details: "HTTP 400\nnotes refused the launch: no account is signed in",
+        isReportable: false,
+      },
+    });
+    expect(notices()).toEqual([]);
   });
 
   it("shell:draft-text drafts through the first draft row when no pinned window takes one, and says so with none", async () => {
@@ -779,7 +801,7 @@ describe("opening", () => {
     api.refusal = null;
     await store.runLaunch("gone", "new", "new");
     expect(store.toasts.current().map((toast) => [toast.message, toast.details])).toEqual([
-      ["Docs couldn't be opened.", null],
+      ["Docs couldn't be opened.", "HTTP 400\nthe shell is restarting"],
       ["This shortcut's app is no longer part of this workspace.", null],
     ]);
   });
@@ -795,9 +817,12 @@ describe("opening", () => {
       "launch_path_gone",
     );
     await store.runLaunch("docs", "new", "new");
-    // The open is a plain note, its details in the log; the launch's toast stays, with them behind See details.
+    // The open is a plain note and the launch's toast stays, each with the reason behind See details.
     expect(store.toasts.current().map((toast) => [toast.message, toast.details])).toEqual([
-      ["Docs isn't available in this workspace right now, so nothing was changed.", null],
+      [
+        "Docs isn't available in this workspace right now, so nothing was changed.",
+        "HTTP 400\nNo registered app named 'docs'",
+      ],
       [
         "Docs no longer offers “New docs”, so nothing was changed.",
         "HTTP 400\nApp 'docs' declares no launch path 'new'",
@@ -1465,19 +1490,18 @@ describe("failure toasts", () => {
     });
   });
 
-  it("leaves a plain note where the control just pressed is the retry, its reason in the log", async () => {
+  it("leaves a plain note where the control just pressed is the retry, its reason behind See details", async () => {
     const store = await startedStore();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     api.refusal = refusedWith(409, { detail: "Window win-1 is pinned and cannot be closed" });
     await store.closeWindow("win-1");
     expect(store.toasts.current()).toMatchObject([
-      { message: "This window couldn't be closed.", details: null, actions: [], isLasting: false },
+      {
+        message: "This window couldn't be closed.",
+        details: "HTTP 409\nWindow win-1 is pinned and cannot be closed",
+        actions: [],
+        isLasting: false,
+      },
     ]);
-    expect(warn).toHaveBeenCalledWith(
-      "[si] This window couldn't be closed.",
-      "HTTP 409\nWindow win-1 is pinned and cannot be closed",
-    );
-    warn.mockRestore();
     vi.advanceTimersByTime(TOAST_DURATION_MS);
     expect(notices()).toEqual([]);
   });
@@ -2473,6 +2497,7 @@ describe("embedder messages", () => {
       ]);
     api.refusal = "Nothing in this workspace handles 'open:url'";
     expect(await store.relayEmbedderMessage({ type: "open:url", url: "http://localhost:3000/" }, "chat")).toBe(false);
+    expect(await store.relayEmbedderMessage({ type: "open:url", url: "http://localhost:3001/" }, "chat")).toBe(false);
     api.refusal = "buddy did not take it: could not be reached";
     expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" }, null)).toBe(false);
     api.refusal = "files did not take it: answered 500";
@@ -2503,9 +2528,9 @@ describe("embedder messages", () => {
     expect(await store.relayEmbedderMessage({ type: "open:slack", url: "slack://open" }, "chat")).toBe(false);
 
     expect(store.toasts.current().map((toast) => [toast.message, toast.details, toast.isLasting])).toEqual([
-      ["Couldn't open this link.", null, false],
-      ["Couldn't show that chat.", null, false],
-      ["Couldn't open that file.", null, false],
+      ["Couldn't open this link.", "HTTP 400\nNothing in this workspace handles 'open:url'", false],
+      ["Couldn't show that chat.", "HTTP 400\nbuddy did not take it: could not be reached", false],
+      ["Couldn't open that file.", "HTTP 400\nfiles did not take it: answered 500", false],
       ["Web Browser couldn't open this link. Try again. If this persists, report a bug.", `HTTP 502\n${detail}`, true],
       ["Slack couldn't open this link. Try again. If this persists, report a bug.", `HTTP 502\n${slackDetail}`, true],
     ]);
@@ -2620,7 +2645,7 @@ describe("links Imbue Studio hands over", () => {
     expect(api.calls.filter((call) => call.startsWith("openWindow:"))).toEqual([]);
   });
 
-  it("names the app by its display name when the shell's show refuses a link, the reason in the log", async () => {
+  it("names the app by its display name when the shell's show refuses a link, the reason behind See details", async () => {
     const store = await startedStore();
     socket
       .deliver()
@@ -2628,16 +2653,13 @@ describe("links Imbue Studio hands over", () => {
         appRecord("docs"),
         chatLikeAppRecord("chat", { label: "chat-ab12cd34", display_name: "Chats" }),
       ]);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     api.refusal = "No chat agent-1";
 
     await store.openLink("http://chat-ab12cd34.localhost/?chat=agent-1", SHELL_HOST, "notes");
 
     expect(store.toasts.current()).toMatchObject([
-      { message: "Chats couldn't be opened.", details: null, actions: [], isLasting: false },
+      { message: "Chats couldn't be opened.", details: "HTTP 400\nNo chat agent-1", actions: [], isLasting: false },
     ]);
-    expect(warn).toHaveBeenCalledWith("[si] Chats couldn't be opened.", "HTTP 400\nNo chat agent-1");
-    warn.mockRestore();
   });
 
   it("focuses or opens a link to an app's pin page itself, or to its other pages, as any other page", async () => {

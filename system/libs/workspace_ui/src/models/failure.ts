@@ -5,6 +5,9 @@
  * (a status, the server's own text) behind "See details" rather than on the visible line.
  */
 
+import { CHANGE_NOT_ANSWERED_SENTENCE } from "../app_contract";
+import type { ShownFailure } from "../app_contract";
+
 /** Whether a failed request only read something (nothing it did can have changed) or asked for a change, which an
  *  unanswered request may have carried out anyway. */
 export type RequestKind = "read" | "change";
@@ -50,22 +53,13 @@ interface FailureFields {
 }
 
 /** A failure as a surface shows it. */
-export interface FailureMessage {
-  readonly message: string;
-  /** What goes behind "See details"; null when there is nothing beyond the sentence. */
-  readonly details: string | null;
-  /** The sentence asks for a bug report, so the surface offers "Report a bug" (where the embedder can open one). */
-  readonly isReportable: boolean;
-}
+export type FailureMessage = ShownFailure;
 
 /** What Imbue Studio's forward proxy and the workspace's own front door answer when the server behind them did not.
  *  Neither tells whether the request reached the server first. */
 const GATEWAY_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
 
 const READ_NOT_ANSWERED = "The workspace didn't answer. Try again in a moment.";
-// Never "nothing was changed": a gateway status can arrive after the request was carried out, and a connection that
-// dropped after the request was sent looks the same as one that never opened.
-const CHANGE_NOT_ANSWERED = "The workspace didn't answer, so Imbue Studio can't tell whether this went through.";
 
 /** What failed, for a surface that has not said in its own words yet. */
 export const DEFAULT_WHAT_FAILED = "The workspace couldn't do that";
@@ -80,7 +74,7 @@ const RAW_BODY_LIMIT = 2000;
 
 /** The sentence for a request nothing answered (a gateway status, a dropped connection, a timeout). */
 export function notAnsweredSentence(kind: RequestKind): string {
-  return kind === "read" ? READ_NOT_ANSWERED : CHANGE_NOT_ANSWERED;
+  return kind === "read" ? READ_NOT_ANSWERED : CHANGE_NOT_ANSWERED_SENTENCE;
 }
 
 /** The fallback for a failure with no explanation of its own: what failed, then the bug-report ending. */
