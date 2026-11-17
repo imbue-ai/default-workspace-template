@@ -401,8 +401,10 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
   var askButton = document.getElementById("ask-agent-button");
   if (isAgentOffered) {
     document.getElementById("ask-agent").hidden = false;
+    var askLabel = askButton.textContent;
     askButton.addEventListener("click", function () {
       askButton.disabled = true;
+      askButton.textContent = "Asking an agent\u2026";
       document.getElementById("ask-agent-failure-message").hidden = true;
       document.getElementById("ask-agent-failure-reason").hidden = true;
       launch("repair_agent", "Couldn't start an agent").then(function (answer) {
@@ -419,6 +421,7 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
         }
       }, function (failure) {
         askButton.disabled = false;
+        askButton.textContent = askLabel;
         var message = document.getElementById("ask-agent-failure-message");
         message.textContent = failure.sentence;
         message.hidden = false;

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from playwright.sync_api import Page
+from playwright.sync_api import Route
 from playwright.sync_api import expect
 from workspace_layout.identity import ANONYMOUS_OWNER
 
@@ -53,9 +54,21 @@ def test_the_not_built_page_asks_an_agent_and_frames_its_chat_and_a_terminal_ses
         page.goto(f"http://shell-z.{_COORDINATE}:{served.port}/")
         # The command and the terminal wait behind "See details"; the agent is the way out on the page.
         expect(page.locator("#repair-command")).not_to_be_visible()
-        ask = page.get_by_role("button", name="Ask an agent to fix this")
+        ask = page.locator("#ask-agent-button")
+        expect(ask).to_have_text("Ask an agent to fix this")
 
+        # While the launch is out the button says so and takes no second press; it comes back with the failure.
+        held: list[Route] = []
+        page.route("**/api/not-built/launch", lambda route: held.append(route))
         ask.click()
+        expect(ask).to_have_text("Asking an agent…")
+        expect(ask).to_be_disabled()
+        expect(page.locator("#ask-agent-failure-message")).to_be_hidden()
+        (launch,) = held
+        launch.continue_()
+        page.unroute("**/api/not-built/launch")
+        expect(ask).to_have_text("Ask an agent to fix this")
+        expect(ask).to_be_enabled()
         expect(page.locator("#ask-agent-failure-message")).to_have_text(
             "Couldn't start an agent. Try again. If this persists, report a bug."
         )
