@@ -926,11 +926,8 @@ def _send_to_chat(
             logger.info("Agent {} was destroyed while a message to it was in flight: {}", agent_info.name, e)
             return _SendRefused(answer=_chat_not_found_error(str(chat_id)), status=404)
         except SendFailedError as send_failure:
-            # The harness's reason goes back as the detail, with its kind beside it: the page says what the kind
-            # means in its own words and decides what to offer (trying again can clear a blocked input, where only a
-            # restart is left for an agent that would not start), keeping the reason behind its details. A /compact
-            # the chat declines is its own refusal, not a failure, and its reason is the chat's sentence for the
-            # person.
+            # The page words the failure from its kind and keeps the harness's reason behind its details. A /compact
+            # the chat declines is a refusal, not a failure, and its reason is the chat's sentence for the person.
             logger.info("Send to chat {} failed: {}", chat_id, send_failure.kind)
             is_declined = send_failure.kind in _DECLINED_SEND_FAILURE_KINDS
             status_code = 409 if is_declined else 500
