@@ -1240,7 +1240,7 @@ export function App(): m.Component<AppAttrs> {
           ? null
           : () => {
               themeDialogDesktopId = null;
-              void current.draftIntoPinnedWindow(THEME_DESIGN_PROMPT);
+              void current.draftIntoPinnedWindow(THEME_DESIGN_PROMPT, true, "theme-request");
             },
       onPreviewTheme: (choice) => current.previewDesktopTheme(desktop.id, choice),
       isDesktopShown: activeDesktop(current.getState())?.id === desktop.id,

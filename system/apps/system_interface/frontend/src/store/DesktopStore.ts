@@ -310,7 +310,7 @@ interface LaunchFailureCopy {
 }
 
 /** What a page's draft into the pinned window was for, which its failure names. */
-export type DraftPurpose = "page-draft" | "avatar-request";
+export type DraftPurpose = "page-draft" | "avatar-request" | "theme-request";
 /** Why a click on a person's tray entry went nowhere: no app takes a mention of them. */
 export const NO_MENTION_APP_REASON = "No app in this workspace can open a chat with them";
 /** Why a window's "Chat about this app" went nowhere: no app declares a launch path about an app. */
@@ -2181,8 +2181,7 @@ export class DesktopStore {
     const target = draftTargetOf(this.state);
     if (target === null) return false;
     const name = this.displayNameOf(target.window.app);
-    const whatFailed =
-      purpose === "avatar-request" ? `Couldn't start the avatar request in ${name}` : `Couldn't put that into ${name}`;
+    const whatFailed = draftWhatFailed(purpose, name);
     const launched = await this.launchAt(
       target.window.app,
       target.launchPath.id,
@@ -3915,6 +3914,19 @@ export function chooseInitialDesktopId(
   if (deepLinkDesktopId !== null && ids.has(deepLinkDesktopId)) return deepLinkDesktopId;
   if (arrivalDesktopId !== null && ids.has(arrivalDesktopId)) return arrivalDesktopId;
   return desktops[0].id;
+}
+
+/** What failed when a draft for ``purpose`` into ``appName``'s pinned window did, as a sentence stem: a chooser's
+ *  request is named, since its dialog has closed and nothing on screen says what was asked. */
+function draftWhatFailed(purpose: DraftPurpose, appName: string): string {
+  switch (purpose) {
+    case "page-draft":
+      return `Couldn't put that into ${appName}`;
+    case "avatar-request":
+      return `Couldn't start the avatar request in ${appName}`;
+    case "theme-request":
+      return `Couldn't start the theme request in ${appName}`;
+  }
 }
 
 /** The first app a refused relay names as not having taken the message, from the shell's answer; null with none. */

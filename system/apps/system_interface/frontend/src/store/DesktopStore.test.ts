@@ -2054,11 +2054,19 @@ describe("pinned entries", () => {
       activePlacements(store.getState()).find((placement) => placement.window_id === "win-9")?.is_minimized;
     expect(isWin9Minimized()).toBe(true);
     const [toast] = store.toasts.current();
+    expect(toast.message).toMatch(/^Couldn't put that into Buddy\. /);
     expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
     api.refusal = null;
     toast.actions[0].run();
     await settle();
     expect(isWin9Minimized()).toBe(false);
+    // A chooser's request, whose dialog has closed by the time it fails, is named in its failure.
+    api.refusal = refusedWith(502, { detail: "buddy answered the launch with 500: boom" });
+    expect(await store.draftIntoPinnedWindow("Draw me", false, "avatar-request")).toBe(false);
+    expect(last(store.toasts.current())?.message).toMatch(/^Couldn't start the avatar request in Buddy\. /);
+    expect(await store.draftIntoPinnedWindow("Theme me", true, "theme-request")).toBe(false);
+    expect(last(store.toasts.current())?.message).toMatch(/^Couldn't start the theme request in Buddy\. /);
+    api.refusal = null;
     // A desktop with no pinned app taking a draft has nowhere to put one.
     socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("buddy")]);
     expect(await store.draftIntoPinnedWindow("Draw me")).toBe(false);
