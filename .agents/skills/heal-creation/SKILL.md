@@ -27,25 +27,6 @@ Standing instructions:
 - **After a compaction**, re-read the shared references below before you handle
   the worker's next report.
 
-Three shared references carry the detail, and each step names the section it
-needs:
-
-- `.agents/shared/references/harden-lead.md`: the dispatch steps this skill
-  shares with `update-creation` and `crystallize-creation`.
-- `.agents/shared/references/harden-contention.md`: one pass per creation, and
-  the checks before a merge.
-- `.agents/shared/references/lead-proxy.md`: polling, answering gates, acting
-  on the worker's terminal status.
-
-## Steps
-
-- When NOT to heal; Names, and a critical app: settle these first
-- Step 1: Open a tracking ticket, after the single-flight check
-- Step 2: Write the task file
-- Step 3: Launch the worker and poll (end your turn each time the poll is
-  armed)
-- Step 4: Merge and go live, on `done`
-
 ## When NOT to heal
 
 - The creation worked fine; the request was genuinely out of its scope -- that
@@ -58,8 +39,9 @@ needs:
 
 `$CREATIONS` lists every creation the pass heals as `<type>:<name>`, and
 `$SLUG` names the pass: the creation's own name when there is one, otherwise a
-short kebab-case name for the failure (`roadmap-sync`). `harden-lead.md`
-("Names and paths") has the format and every path that follows from them:
+short kebab-case name for the failure (`roadmap-sync`).
+`.agents/shared/references/harden-lead.md` ("Names and paths") has the format
+and every path that follows from them:
 
 - Worker and branch: `heal-$SLUG` / `mngr/heal-$SLUG`
 - Runtime dir and task file: `data/.tasks/harden/heal-$SLUG/` and
@@ -72,6 +54,23 @@ a wrong fix takes the user's surface down with nothing to undo it but your next
 edit. The safe path is `update-app`'s careful flow
 (`.agents/skills/update-app/references/critical-app.md`); take it whenever the
 fix can wait for a preview.
+
+## Steps
+
+1. Open a tracking ticket, after the single-flight check
+2. Write the task file
+3. Launch the worker and poll. *Ends the turn each time the poll is armed.*
+4. Merge and go live, on `done`
+
+Three shared references carry the detail, and each step names the section it
+needs:
+
+- `.agents/shared/references/harden-lead.md`: the dispatch steps this skill
+  shares with `update-creation` and `crystallize-creation`.
+- `.agents/shared/references/harden-contention.md`: one pass per creation, and
+  the checks before a merge.
+- `.agents/shared/references/lead-proxy.md`: polling, answering gates, acting
+  on the worker's terminal status.
 
 ## Step 1: Open a tracking ticket
 

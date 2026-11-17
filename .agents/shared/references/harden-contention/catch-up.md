@@ -1,20 +1,14 @@
 # Contention between passes: catching up a stale pass
 
-A conditional path of the harden-contention reference. Read it when a check
-before a merge found the pass stale (a moved base, a conflicted merge, an apply
-refused because `HEAD` moved), or when a note on the pass's ticket names a
-creation the pass does not cover. It names the lead-proxy reference by role:
-the shared file, in this directory, a lead follows to poll and answer its
-worker.
-
-The pass goes back to its worker, which you keep: the harden-contention
-reference's "Catching up a stale pass" says why. Ask the worker with a reply
-naming your current `HEAD` and what moved, then re-arm the poll exactly as for
-a gate (the lead-proxy reference):
+The pass goes back to its worker, which you keep
+(`.agents/shared/references/harden-contention.md`, "Catching up a stale pass",
+says why). Ask the worker with a reply naming your current `HEAD` and what
+moved, then re-arm the poll exactly as for a gate
+(`.agents/shared/references/lead-proxy.md`):
 
 ```bash
 uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
-    --task-file <TASK_FILE> -m "Catch up to $(git rev-parse HEAD) per 'Catching up to a moved base' in harden-creation.md: merge it into your branch, resolve any conflict, harden and verify what it brings in, and report done again. What moved: <the \$BASE..HEAD commits touching its creations, a conflicted path, and any notes on the ticket>. Add to the pass: <each creation a note names that the pass does not cover, as type:name>."
+    --task-file <TASK_FILE> -m "Catch up to $(git rev-parse HEAD) per 'Catching up to a moved base' in catching-up.md: merge it into your branch, resolve any conflict, harden and verify what it brings in, and report done again. What moved: <the \$BASE..HEAD commits touching its creations, a conflicted path, and any notes on the ticket>. Add to the pass: <each creation a note names that the pass does not cover, as type:name>."
 ```
 
 Leave out the `Add to the pass:` sentence when no note names one. When one
@@ -30,7 +24,7 @@ sed -i "s|^creations: .*|& $ADDED|" <TASK_FILE>
 sed -i "0,/^# /s|^# .*|& $ADDED|" "$TICKETS_DIR/<ticket-id>.md"
 ```
 
-The worker's side is `.agents/skills/harden-worker/references/harden-creation.md`
+The worker's side is `.agents/skills/harden-worker/references/catching-up.md`
 ("Catching up to a moved base"), or its own flow's catch-up section where one
 exists (`update-self`'s worker has its own). It merges your `HEAD` into its
 branch, so merging that branch back into yours conflicts with nothing. It
@@ -48,5 +42,5 @@ asks a `question`, handled as on any run.
 
 A provisional milestone you reverted needs nothing more here: its worker
 already brought the milestone's work back on its own branch when you handed it
-the revert ("Rolling back a provisional merge", in the lead-proxy reference's
-milestone file).
+the revert ("Rolling back a provisional merge", in
+`.agents/shared/references/lead-proxy/milestones.md`).

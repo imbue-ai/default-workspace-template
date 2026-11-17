@@ -6,16 +6,14 @@ its operation, carries each command with its own names filled in, and says what
 goes in the task body and which gates and terminal statuses to expect. This
 file carries what is the same for all three, in the order a pass meets it.
 
-It names two other shared references by role, without sending you to them: the
-harden-contention reference (one pass per creation, the checks before a merge,
-catching a stale pass up) and the lead-proxy reference (polling, answering
-gates, acting on a terminal status). Your skill names their paths at the steps
-that need them.
+Two other shared references sit beside it: `harden-contention.md` (one pass
+per creation, the checks before a merge, catching a stale pass up) and
+`lead-proxy.md` (polling, answering gates, acting on a terminal status).
 
 ## Contents
 
 - Names and paths
-- Single-flight check: before the ticket, for an update or heal pass
+- Single-flight check
 - The tracking ticket
 - The task file
 - Launching the worker
@@ -51,14 +49,14 @@ and the slug:
 | Report the poll waits for | `reports/report.md` in the runtime dir |
 | Reports dir | `reports/` in the runtime dir. `await` archives each report it prints under `reports/consumed/` (a milestone keeps its own file name there, so a deferred one can still be merged later), and milestones arrive under `reports/milestones/` |
 
-These are the substitutions the lead-proxy reference asks its caller for.
+These are the substitutions `lead-proxy.md` asks its caller for.
 
 ## Single-flight check
 
 At most one harden pass per creation may be in flight, and an `update` and a
 `heal` pass on the same creation count against each other. So before an update
-or heal pass opens its ticket, run the pre-dispatch check in the
-harden-contention reference ("Before dispatch: one pass per creation
+or heal pass opens its ticket, run the pre-dispatch check in
+`harden-contention.md` ("Before dispatch: one pass per creation
 (single-flight)") for every creation in `$CREATIONS`, and act on what it
 finds:
 
@@ -150,13 +148,15 @@ You own this poll for as long as the worker runs, even if you reached this step
 from another skill and moved on to other work: without it, gate reports never
 reach the user and the worker deadlocks.
 
-Handle every report as the lead-proxy reference says: the "do not interrupt
-more recent user work" rule, gate decisions, milestones, terminal statuses, and
-a poll that ends without a report. Re-arm the poll after every gate and every
+Handle every report as `lead-proxy.md` says: the "do not interrupt more
+recent user work" rule, gate decisions, milestones, terminal statuses, and a
+poll that ends without a report. Re-arm the poll after every gate and every
 milestone. Your skill lists the gates and terminal statuses its operation
 produces. On `stuck`, follow the failure flow in
 `.agents/skills/launch-task/references/worker-failure.md`, which stops the
-worker and leaves the ticket open with a note.
+worker and leaves the ticket open with a note. The stopped worker stays until
+the user overrides the failure, which resumes it, or a later pass over the
+same creations supersedes this one (`harden-contention/supersede.md`).
 
 The pass is non-blocking for the user: their request was already delivered
 before you dispatched, and the worker produces a quieter follow-up commit.
@@ -164,14 +164,12 @@ before you dispatched, and the worker produces a quieter follow-up commit.
 ## Before the merge
 
 Before any merge from the worker's branch (the merge on `done`, or a
-provisional milestone merge), run the three checks in the harden-contention
-reference ("Before merge: lease, freshness, conflicts"), in order:
+provisional milestone merge), run the three checks in `harden-contention.md`
+("Before merge: lease, freshness, conflicts"), in order:
 
 1. Wait out any foreground editing lease on an app or service in the pass.
 2. Confirm the branch is still fresh: no creation's footprint has changed since
-   the worker branched. A creation that is not on your branch yet (the skill a
-   crystallize pass is building, before the first merge that brings it) is left
-   out of this check, as that reference says.
+   the worker branched.
 3. Never resolve a conflicted merge yourself.
 
 A stale or conflicted pass goes back to its worker to catch up to your `HEAD`
@@ -180,8 +178,8 @@ these same checks.
 
 ## Merge, then go live by type
 
-Merge the worker's branch and destroy the worker as the lead-proxy reference
-says for `done` ("Terminal status: act and stop polling"), which also has the
+Merge the worker's branch and destroy the worker as `lead-proxy.md` says for
+`done` ("Terminal status: act and stop polling"), which also has the
 venv sync a merge that changed a `pyproject.toml` or `uv.lock` needs. Then go
 live for each creation in the pass, by its type:
 

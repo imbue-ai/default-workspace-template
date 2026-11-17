@@ -1,10 +1,5 @@
 # Lead-side proxy flow: milestone reports
 
-A conditional path of the lead-proxy flow. Read it when `await` returns a
-`type: milestone` report, and again when the user rejects a milestone you
-merged. It names the harden-contention reference by role: the shared file of
-that name beside this one, which holds the checks before a merge.
-
 ## Contents
 
 - How a milestone reaches you
@@ -36,15 +31,12 @@ what is usable, what `## Tested` covers at that commit, and what is
   more recent user work" rule applies -- handle the milestone once their
   request is finished).
 
-Before merging, run the three checks before a merge in the harden-contention
-reference ("Before merge: lease, freshness, conflicts"), exactly as for `done`.
-Every lead runs them, a harden lead or not. A lead whose task names no
-creations (a plain `launch-task` task) has nothing for the freshness check to
-read, so it runs the other two: it does not merge while another agent holds the
-editing lease on an app or service the milestone's commit changes, and when the
-merge conflicts it aborts the merge and leaves the milestone unmerged rather
-than resolving it. Do not re-run a check `## Tested` names as passing at this
-commit; you may run ones it does not name.
+Before merging, run the checks before a merge exactly as for `done`: the two
+in `.agents/shared/references/lead-proxy.md` ("Before a merge"), and any your
+skill adds to them. A milestone whose merge conflicts is never resolved,
+whatever your skill: abort the merge and leave the milestone unmerged. Do not
+re-run a check `## Tested` names as passing at this commit; you may run ones
+it does not name.
 
 Merge the **pinned sha, never the branch tip** (the tip keeps moving):
 
@@ -94,7 +86,7 @@ the second command printed:
 
 ```bash
 uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
-    --task-file <TASK_FILE> -m "<why the milestone was reverted, in the user's voice> I reverted it as <the revert commit>: bring it back on your branch per 'A milestone the lead reverted' in the worker-reporting reference, then fix it."
+    --task-file <TASK_FILE> -m "<why the milestone was reverted, in the user's voice> I reverted it as <the revert commit>: bring it back on your branch per 'A milestone the lead reverted' in worker-reporting.md, then fix it."
 ```
 
 The reverted commits remain ancestors of your `HEAD`, so a later merge from
@@ -102,7 +94,3 @@ that branch would **silently omit** them. The worker brings them back on its
 own branch, as a revert of your revert, so they reach yours again only with
 its next merged report, fixed. Never reinstate them on your branch yourself:
 that puts the work the user rejected back in front of them.
-
-A pass is superseded instead only once its worker is gone, and its new task
-then names the revert (the harden-contention reference, "Superseding a pass
-whose worker is gone").

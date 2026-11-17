@@ -7,11 +7,6 @@ Left uncoordinated this produces two failure shapes: two agents' harden
 workers hardening the same creation at once, and a hardened branch getting
 merged after the base it was verified against has moved.
 
-This file names one other shared reference by role, without sending you to
-it: the lead-proxy reference, which a lead follows to poll and answer its
-worker. The skill that sent you here names its path. The three files this one
-does send you to sit beside it.
-
 Three principles drive every rule below:
 
 - **A hardened branch is only trustworthy against the exact base it was
@@ -28,17 +23,9 @@ Three principles drive every rule below:
 
 ## Contents
 
-- Before dispatch: one pass per creation (single-flight): before you open a
-  pass's ticket
-- Before merge: lease, freshness, conflicts: before any merge from a worker's
-  branch
-- Catching up a stale pass: when a check before the merge fails, or a ticket
-  note names a creation the pass does not cover; detail in
-  `harden-contention-catch-up.md`
-- Taking over a pass whose holder is gone: detail in
-  `harden-contention-takeover.md`
-- Superseding a pass whose worker is gone: detail in
-  `harden-contention-supersede.md`
+- Before dispatch: one pass per creation (single-flight)
+- Before merge: lease, freshness, conflicts
+- Catching up a stale pass
 
 ## Before dispatch: one pass per creation (single-flight)
 
@@ -98,11 +85,14 @@ done
     note still names all of yours, so the catch-up widens the pass to the
     whole change rather than the half that overlapped.
   - **Orphaned** (holder gone, worker still there -- often waiting on a gate
-    nobody relayed): become its holder rather than replacing it. See "Taking
-    over a pass whose holder is gone".
+    nobody relayed): the pass is neither stale nor abandoned, since the worker
+    holds verified work and is waiting for a lead. Become that lead rather
+    than replacing the pass, as
+    `.agents/shared/references/harden-contention/takeover.md` says.
   - **Abandoned** (holder and worker both gone): replace it with your own
-    pass covering the union, keeping whatever it committed. See "Superseding
-    a pass whose worker is gone".
+    pass covering the union, keeping whatever it committed, as
+    `.agents/shared/references/harden-contention/supersede.md` says. Read it
+    before you destroy anything.
 
 Do not queue a second pass behind a live one. Queued passes verify obsolete
 states; the live pass, caught up, covers the union instead.
@@ -112,13 +102,10 @@ states; the live pass, caught up, covers the union instead.
 Run these in order before any merge from a worker branch -- the merge on `done`
 or a provisional milestone merge:
 
-1. **Wait out the foreground lease (apps and services only).** If a creation in
-   the pass is an app or service and another agent holds its editing lease (an
-   open/in-progress `editing service <name>` ticket in `tk ready`, or `editing
-   critical app <name>` for a critical app -- see `update-app`'s "One editor at
-   a time"), do not merge or refresh mid-edit. Re-check about once a minute
-   until the lease is released, then continue -- their edit will usually make
-   your pass stale anyway, which the next check catches.
+1. **Wait out the foreground lease (apps and services only)**, as
+   `.agents/shared/references/lead-proxy.md` ("Before a merge") says, for
+   every app or service in the pass. Their edit will usually make your pass
+   stale anyway, which the next check catches.
 
 2. **Freshness check.** The pass is mergeable only if no creation in it has
    changed since the worker branched. The paths to diff are every creation's
@@ -150,15 +137,6 @@ or a provisional milestone merge:
    output means fresh: merge normally. Any output means the base moved under
    the worker: the pass is stale -- do not merge; catch it up (below).
 
-   One creation cannot be checked at all: one that is not on your branch yet,
-   which is a skill a crystallize pass is building, at every merge before the
-   first that brings it. `pass-scope` refuses a creation that does not exist,
-   and nothing on your branch could have moved under it. Leave such a creation
-   out of `$CREATIONS` for this check, and when that leaves none, skip the
-   check: the pass is fresh. If its directory does exist on your branch (an
-   earlier milestone brought it, or another chat made one of that name), it is
-   checked like any other.
-
    No shared *authored* file remains in that footprint -- a creation's
    supervisord program lives in its own drop-in rather than in the shared
    config, and the root `pyproject.toml` needs no per-creation entry -- so two
@@ -184,11 +162,12 @@ or a provisional milestone merge:
    make two concurrent creations collide on a generated file and force one of
    them into a catch-up. See step 3.
 
-3. **Never resolve a conflicted hardened branch on your side.** If the merge
-   itself conflicts, `git merge --abort` and catch the pass up (below): the
-   worker resolves the conflict on its own branch and verifies the result, so
-   the resolution lands tested. Resolving it here would ship exactly the
-   unverified state the pass exists to prevent.
+3. **Never resolve a conflicted hardened branch on your side.** Catching the
+   pass up (below) is the catch-up rule `lead-proxy.md` ("Before a merge")
+   asks for: if the merge itself conflicts, `git merge --abort` and catch the
+   pass up, so the worker resolves the conflict on its own branch and verifies
+   the result. Resolving it here would ship exactly the unverified state the
+   pass exists to prevent.
 
    One carve-out: a conflict confined to a **generated lockfile** (`uv.lock`,
    `package-lock.json`). Those are derived, not authored, and every creation's
@@ -205,10 +184,9 @@ or a provisional milestone merge:
 ### Provisional milestone merges
 
 A worker can declare a **milestone** mid-pass: a commit it says is already worth
-using (the lead's side is "Milestone reports: provisional merge" in the
-lead-proxy reference). Merging one runs the
-same three checks above, with the target pinned to the milestone's `commit:`
-rather than the branch tip. A milestone that fails them is simply not merged:
+using (the lead's side is `.agents/shared/references/lead-proxy/milestones.md`).
+Merging one runs the same three checks above, with the target pinned to the
+milestone's `commit:` rather than the branch tip. A milestone that fails them is simply not merged:
 the worker is still mid-pass, and its `done` is caught up as usual.
 
 This is the **one sanctioned way not-yet-hardened work reaches the lead's
@@ -231,27 +209,12 @@ you merge. **Keep the worker**: its branch, its worktree and anything it
 built (a critical app's bundles) are the verified work the catch-up builds on.
 Never destroy it to make room for a new pass.
 
-Read `harden-contention-catch-up.md` when a pass is stale, or a note on its
-ticket names a creation it does not cover: it has the reply that asks the
-worker to catch up, how to add a creation to the pass, what the worker does,
-and what happens to its next `done`.
+`.agents/shared/references/harden-contention/catch-up.md` has the reply that
+asks the worker to catch up, how to add a creation to the pass, what the
+worker does, and what happens to its next `done`.
 
-## Taking over a pass whose holder is gone
-
-A pass whose holder stopped while its worker is still there is neither stale
-nor abandoned: the worker holds verified work and is waiting for a lead, often
-on a gate nobody relayed. Become that lead; do not replace the pass. Read
-`harden-contention-takeover.md` when the single-flight check reports an
-orphaned pass: it has how to locate the pass's task file, take its ticket and
-its worker, read the last report the worker sent, and act on it.
-
-## Superseding a pass whose worker is gone
-
-When there is no worker left to catch up -- an abandoned pass, one stopped
-after a failure the user did not override, or an orphaned pass whose reports
-cannot reach you -- replace it with **one** new pass that carries whatever
-work the old one left unmerged. That work is never dropped. Read
-`harden-contention-supersede.md` before you destroy anything: it has how to
-commit and keep the old pass's work, the destroy, what
-the new pass's task names under `## Carried work`, and the two wrinkles of a
-pass that had already delivered a provisional milestone merge.
+A pass with no worker left to catch up (one stopped after a failure the user
+did not override, say) is superseded instead: replace it with **one** new pass
+that carries whatever work the old one left unmerged, as `supersede.md` in the
+same directory says. That work is never dropped, so read it before you destroy
+anything.

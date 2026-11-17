@@ -7,36 +7,19 @@ off the interactive path. This contract is the part that is identical across
 every operation (crystallize, update, heal) and every creation (a reusable
 skill, an app, a service).
 
-You follow this file from the start of the pass to its last report: after a
-compaction, re-read it, and your operation and type references, before you go
-on.
+A reference this file names without a directory sits beside it.
 
 ## Contents
 
-Every pass reads the sections marked "every pass". Each of the others opens
-with the condition that sends you to it, and all but the last hand off to a
-file of their own, which sits beside this one.
-
-- The premise and the bar (every pass)
-- Isolation (every pass)
-- Reporting back to the lead (every pass)
-- Parallelism & Sequencing (every pass)
-- The scope file (every pass)
-- Splitting the pass across workers of your own (the rule every pass applies;
-  how to split is in `splitting-the-pass.md`)
-- Testing and hardening contract (every pass)
-- Concurrent work, pipelines and stored data (a creation that runs
-  independent I/O-bound operations, works through many items, captures data,
-  or keeps anything on disk; detail in `data-and-storage.md`)
-- Review gates (every pass; a run that is not a clean pass continues in
-  `test-gate-cases.md`)
-- Carried work from a superseded pass (a task body with `## Carried work`;
-  detail in `carried-work.md`)
-- Catching up to a moved base (the lead asks you to catch up; detail in
-  `catching-up.md`)
-- A reverted milestone (the lead reverted a milestone it merged; detail in
-  `catching-up.md`)
-- If you need to give up (you cannot reach a tested, clean state)
+- The premise and the bar
+- Isolation
+- Reporting back to the lead
+- Parallelism & Sequencing
+- The scope file
+- Splitting the pass across workers of your own
+- Testing and hardening contract
+- Review gates
+- If you need to give up
 
 ## The premise and the bar
 
@@ -162,44 +145,11 @@ merge and verify their work as their lead.
   only for purely visual things not worth a permanent test, and do not duplicate
   the same coverage in both.
 - **Run every suite that applies** plus the relevant ratchets.
-
-## Concurrent work, pipelines and stored data
-
-Five rules, each with its own condition. They hold **whenever** the condition
-is true: when you first build the creation, and equally when an `update` makes
-it true or enlarges a store the creation already had. Read
-`data-and-storage.md` before you harden a creation any of them applies to; it
-has each rule in full under the same heading.
-
-### Optimize independent work -- parallelize what the incremental pass left serial
-
-Applies when the creation performs multiple independent I/O-bound operations:
-data fetches, API calls, subprocess invocations. They run concurrently rather
-than in a serial loop, with bounded concurrency and a deterministic output
-order.
-
-### Tolerate partial failure and support resumption
-
-Applies to any multi-item pipeline. One failed item never sinks the whole run,
-and results are written as they complete so a re-run resumes.
-
-### Preserve and surface captured data
-
-Applies when the creation captures data. Each record keeps its raw payload and
-a reference to its source, durably, not only the processed fields (the
-preserve-and-surface principle in AGENTS.md).
-
-### Bound disk growth -- evict what the creation no longer needs
-
-Applies whenever the creation persists anything across runs. Every store it
-writes has an explicit retention bound, enforced by the same run that writes
-and covered by a test.
-
-### Keep rebuildable data out of the backup
-
-Applies whenever the creation keeps a store it can rebuild (downloads,
-extracted archives, clones, caches). The store lives in its own directory,
-with an empty `.nobackup` file the code creates along with the directory.
+- **Harden concurrency, pipelines and stored data to `data-and-storage.md`**
+  whenever the creation performs multiple independent I/O-bound operations,
+  works through many items, captures data, or keeps anything on disk across
+  runs: when you first build it, and equally when an `update` makes one of
+  those true or enlarges a store the creation already had.
 
 ## Review gates
 
@@ -222,8 +172,8 @@ files some creation's footprint accounts for, and every one of the pass's own
 changes, inside a footprint or not: what your branch changed and the files of
 the change you are hardening ("The scope file" above). Other work that landed in the window (the
 scope file's `others`) selects nothing, except that the lead's work you merged
-in runs the suites of the pass's creations it reaches ("Catching up to a moved
-base"). The selector reads commits, like the
+in runs the suites of the pass's creations it reaches (`catching-up.md`).
+The selector reads commits, like the
 scope file. It refuses to run while the working tree holds an uncommitted or
 untracked change, naming it, and refuses a scope file whose diff does not run
 to `HEAD`; regenerate the file and run it again.
@@ -268,33 +218,9 @@ If your own task file says your lead runs this verification on the merged
 result -- you are one of the workers a pass was split across -- run your own
 scope's tests and skip the rest of this section.
 
-When complete, report back to the lead.
-
-## Carried work from a superseded pass
-
-A task body with a `## Carried work` section replaces an earlier pass that
-ended without being merged, and names the branches its lead kept that pass's
-commits on. That work is part of your change: you merge each branch into yours
-before you start hardening, harden it like the rest, and list it under
-`Carried:` in your `done` report. Read `carried-work.md` before you start when
-your task body has that section.
-
-## Catching up to a moved base
-
-After your `done`, the lead may find that its `HEAD` moved before it could
-merge you, and reply asking you to catch up to a named commit. Your verified
-work stands; extend it to the new base rather than starting over: merge the
-commit into your branch, resolve every conflict there, harden what came in,
-re-run the test gate over what the catch-up changed for the pass, and report
-`done` again with a `Caught up:` section. Read `catching-up.md` when that reply
-arrives, and follow its "Catching up to a moved base".
-
-## A reverted milestone
-
-When the lead reverts a milestone it merged, its reply names the revert commit
-and says why. You bring the milestone back on your own branch, as a revert of
-that revert, and fix its work there. Read `catching-up.md` when that reply
-arrives, and follow its "A reverted milestone".
+When complete, report back to the lead. Your `done` may not be the end of the
+pass: when the lead's reply asks you to catch up to a commit, or names a revert
+of a milestone it merged, read `catching-up.md` and follow it.
 
 ## If you need to give up
 

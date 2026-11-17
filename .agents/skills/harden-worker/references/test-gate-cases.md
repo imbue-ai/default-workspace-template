@@ -1,10 +1,7 @@
 # The test gate: when its run is not a clean pass
 
-A conditional part of the harden contract (`harden-creation.md`, beside this
-file; its "The test gate" has the gate itself). Read it when a test of the gate
-fails, when a gate command dies from a signal, when you have reason to think a
-suite the selector left out can observe your change, or when your task fixes a
-break an earlier change made.
+Part of the harden contract (`harden-creation.md`, beside this file; its "The
+test gate" has the gate itself).
 
 ## Contents
 

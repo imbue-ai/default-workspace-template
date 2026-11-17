@@ -31,6 +31,48 @@ Standing instructions:
 - **After a compaction**, re-read the shared references below before you handle
   the worker's next report.
 
+## When to invoke (skill, standalone)
+
+Read `references/when-to-crystallize.md` if you haven't, for the full
+guidelines. Summary: invoke when (1) the just-finished work was a single
+cohesive unit, (2) a re-run with different inputs would follow a recognizably
+similar process, and (3) the task is likely to recur. Model-judgement steps in
+the middle of a flow do not disqualify it -- they are scripted as `[ai-script]`
+calls. **Default to asking the user**, not deciding silently; if you can name
+any plausible skill shape, propose it and let them decide.
+
+## Names
+
+Pick a short kebab-case slug `$NAME` for the creation (e.g. `migrate-config`).
+If the skill that invoked you handed you a slug (and a `source_artifacts_dir`),
+reuse it. `$CREATIONS`, where a shared reference uses it, is the one creation
+as the task file names it: `skill:$NAME`, `app:<app name>` or
+`service:<package>`. `.agents/shared/references/harden-lead.md` ("Names and
+paths") has every path that follows:
+
+- Worker and branch: `crystallize-$NAME` / `mngr/crystallize-$NAME`
+- Runtime dir and task file: `data/.tasks/harden/crystallize-$NAME/` and
+  `data/.tasks/harden/crystallize-$NAME/task.md`
+
+## Steps
+
+How you got here decides where you start:
+
+| You were invoked | Creation | Start at |
+|---|---|---|
+| on your own, after a turn | a **skill** reconstructed from the transcript (the common case) | "When to invoke" above, then Step 1 |
+| by the user ("crystallize this", `/crystallize-creation`) | the same | Step 2 |
+| by `build-app`, with `type=app` | an **app** `build-app` already built and the user confirmed live | Step 2 |
+| by `fetch-process-show`, with `type=skill` and a `source_artifacts_dir` of staged scripts and `sample.json` | a **skill** from a confirmed data sample | Step 2 |
+
+1. Confirm (skill, standalone only)
+2. Open a tracking ticket
+3. Write the task file
+4. Launch the worker
+5. Background-poll for worker reports. *Ends the turn each time the poll is
+   armed.*
+6. Go live, on `done`
+
 Three shared references carry the detail, and each step names the section it
 needs:
 
@@ -41,39 +83,8 @@ needs:
 - `.agents/shared/references/harden-contention.md`: the checks before any merge
   from the worker's branch.
 
-## Steps
-
-How you got here decides where you start:
-
-| You were invoked | Creation | Start at |
-|---|---|---|
-| on your own, after a turn | a **skill** reconstructed from the transcript (the common case) | "When to invoke", then Step 1 |
-| by the user ("crystallize this", `/crystallize-creation`) | the same | Step 2 |
-| by `build-app`, with `type=app` | an **app** `build-app` already built and the user confirmed live | Step 2 |
-| by `fetch-process-show`, with `type=skill` and a `source_artifacts_dir` of staged scripts and `sample.json` | a **skill** from a confirmed data sample | Step 2 |
-
-- When to invoke (skill, standalone): whether to propose crystallizing at all
-- Step 1: Confirm (skill, standalone only)
-- Names
-- Step 2: Open a tracking ticket
-- Step 3: Write the task file
-- Step 4: Launch the worker
-- Step 5: Background-poll for worker reports (end your turn each time the poll
-  is armed)
-- Step 6: Go live, on `done`
-
 The creation's type drives which **gates** the worker emits (Step 5) and the
 **go-live** after the merge (Step 6).
-
-## When to invoke (skill, standalone)
-
-Read `references/when-to-crystallize.md` if you haven't, for the full
-guidelines. Summary: invoke when (1) the just-finished work was a single
-cohesive unit, (2) a re-run with different inputs would follow a recognizably
-similar process, and (3) the task is likely to recur. Model-judgement steps in
-the middle of a flow do not disqualify it -- they are scripted as `[ai-script]`
-calls. **Default to asking the user**, not deciding silently; if you can name
-any plausible skill shape, propose it and let them decide.
 
 ## Step 1: Confirm (skill, standalone only)
 
@@ -88,19 +99,6 @@ Otherwise send a one-line pre-gate question to the user:
 > "I just did X and Y. Worth crystallizing into a reusable skill? (yes/no)"
 
 Wait for the reply. If no, stop.
-
-## Names
-
-Pick a short kebab-case slug `$NAME` for the creation (e.g. `migrate-config`).
-If the skill that invoked you handed you a slug (and a `source_artifacts_dir`),
-reuse it. `$CREATIONS`, where a shared reference uses it, is the one creation
-as the task file names it: `skill:$NAME`, `app:<app name>` or
-`service:<package>`. `harden-lead.md` ("Names and paths") has every path that
-follows:
-
-- Worker and branch: `crystallize-$NAME` / `mngr/crystallize-$NAME`
-- Runtime dir and task file: `data/.tasks/harden/crystallize-$NAME/` and
-  `data/.tasks/harden/crystallize-$NAME/task.md`
 
 ## Step 2: Open a tracking ticket
 
@@ -243,7 +241,7 @@ crystallize pass:
   **app** → none, since the user confirmed the live app already (the worker
   goes straight to `done`). A `question` gate can arrive at any point.
 - Milestones: any name, non-blocking → provisional merge per
-  `.agents/shared/references/lead-proxy-milestones.md`, after the checks before
+  `.agents/shared/references/lead-proxy/milestones.md`, after the checks before
   a merge (below). Provisional go-live is the minimum that makes the creation
   usable: **skill** → it is on disk at `.agents/skills/$NAME/` and invocable;
   **app** → refresh the window. Step 6 still runs only on `done`.
@@ -253,10 +251,14 @@ crystallize pass:
 
 Before any merge from the worker's branch, a milestone's or the one on `done`,
 run the checks in `.agents/shared/references/harden-contention.md` ("Before
-merge: lease, freshness, conflicts"). A skill that is not on your branch yet
-(`.agents/skills/$NAME/` does not exist: every merge before the first that
-brings it) has no freshness check to run, as that section says; never resolving
-a conflicted merge yourself holds for every merge.
+merge: lease, freshness, conflicts"), with one exception. A skill that is not
+on your branch yet (`.agents/skills/$NAME/` does not exist, which is every
+merge before the first that brings it) has no freshness check to run:
+`pass-scope` refuses a creation that does not exist, and nothing on your
+branch could have moved under it. Skip that check for such a merge. Once the
+directory exists on your branch (an earlier milestone brought it, or another
+chat made a skill of that name), run it like any other. The lease wait and
+never resolving a conflicted merge yourself hold for every merge.
 
 ## Step 6: Go live
 

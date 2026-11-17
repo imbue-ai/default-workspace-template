@@ -12,14 +12,42 @@ Pick a short kebab-case slug `$NAME` for this dispatch (e.g.
 its branch (`mngr/$NAME`), and the local runtime path
 (`data/.tasks/launch-task/$NAME/`). Names must be unique.
 
-## Contents
+## Guidelines
 
-- 0. Open a single tk step for the whole delegation
-- 1. Write the task file
-- 2. Launch the worker
-- 3. Background-poll for the worker's report
-- 4. Handle the report
-- Guidelines
+- After a compaction, re-read `.agents/shared/references/lead-proxy.md` before
+  you handle the worker's next report.
+- Always include clear success criteria in the task description.
+- Background-poll the report file -- never block on it. The reply you
+  need is a file appearing on disk, not the worker process exiting.
+- Do not use `mngr wait` for completion signaling on these workers;
+  it does not interact reliably with stop hooks or worker-spawned
+  sub-agents. The report file is the contract.
+- If a task fails (stuck report, or 30m poll timeout with no report and
+  the worker wedged, or dead and not brought back by
+  `references/dead-worker-recovery.md`), see `references/worker-failure.md`
+  -- do not silently retry.
+- If a worker is `STOPPED` with uncommitted work and its `archived_at` label
+  is absent or empty, message it to continue with `create_worker.py reply`,
+  which restarts it -- the worktree is preserved across the restart. One
+  whose `archived_at` is set was stopped on purpose by its lead
+  after a failure; leave it. See `references/dead-worker-recovery.md` for the manual
+  salvage fallback when restart isn't viable.
+- If `launch` refuses a taken name, destroy that worker
+  (`create_worker.py destroy --name <name>`) if it is finished with, or pick
+  another name.
+- If the task references gitignored files outside the runtime dir,
+  declare them with `source_artifacts_dir: <dir>` in the task
+  frontmatter -- `create_worker.py launch` pushes that directory automatically.
+- A worker's report is written for you, not the user: say what they can now do,
+  never what was tested, found or fixed.
+
+## Steps
+
+0. Open a single tk step for the whole delegation
+1. Write the task file
+2. Launch the worker
+3. Background-poll for the worker's report
+4. Handle the report
 
 ## 0. Open a single tk step for the whole delegation
 
@@ -185,37 +213,10 @@ Flow-specific substitutions when reading `lead-proxy.md`:
 - Milestones dir: `data/.tasks/launch-task/$NAME/reports/milestones/`
 - Gate names: `question` (mid-flight; default-escalate to the user
   unless you can answer from context).
-- Milestone names: any name; non-blocking -- handle per `lead-proxy.md`'s
-  "Milestone reports: provisional merge" (provisionally merge the pinned
+- Milestone names: any name; non-blocking -- handle per
+  `.agents/shared/references/lead-proxy/milestones.md` (provisionally merge the pinned
   `commit:` or defer it, then re-arm the poll; `await` has already archived
   the file either way, and the worker keeps working regardless).
 - Terminal statuses: `done` (merge, then `create_worker.py destroy --name
   $NAME`); `stuck` (failure flow, ending in `create_worker.py stop --name
   $NAME`).
-
-## Guidelines
-
-- Always include clear success criteria in the task description.
-- Background-poll the report file -- never block on it. The reply you
-  need is a file appearing on disk, not the worker process exiting.
-- Do not use `mngr wait` for completion signaling on these workers;
-  it does not interact reliably with stop hooks or worker-spawned
-  sub-agents. The report file is the contract.
-- If a task fails (stuck report, or 30m poll timeout with no report and
-  the worker wedged, or dead and not brought back by
-  `references/dead-worker-recovery.md`), see `references/worker-failure.md`
-  -- do not silently retry.
-- If a worker is `STOPPED` with uncommitted work and its `archived_at` label
-  is absent or empty, message it to continue with `create_worker.py reply`,
-  which restarts it -- the worktree is preserved across the restart. One
-  whose `archived_at` is set was stopped on purpose by its lead
-  after a failure; leave it. See `references/dead-worker-recovery.md` for the manual
-  salvage fallback when restart isn't viable.
-- If `launch` refuses a taken name, destroy that worker
-  (`create_worker.py destroy --name <name>`) if it is finished with, or pick
-  another name.
-- If the task references gitignored files outside the runtime dir,
-  declare them with `source_artifacts_dir: <dir>` in the task
-  frontmatter -- `create_worker.py launch` pushes that directory automatically.
-- A worker's report is written for you, not the user: say what they can now do,
-  never what was tested, found or fixed.

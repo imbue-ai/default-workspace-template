@@ -1,8 +1,6 @@
 # Catching up after your lead's branch changed
 
-A conditional part of the harden contract (`harden-creation.md`, beside this
-file). Read it when your lead's reply asks you to catch up to a commit, or
-names a revert of a milestone it had merged.
+Part of the harden contract (`harden-creation.md`, beside this file).
 
 ## Contents
 
@@ -12,10 +10,8 @@ names a revert of a milestone it had merged.
 ## Catching up to a moved base
 
 After your `done`, the lead may find that its `HEAD` moved before it could
-merge you, and reply asking you to catch up to a named commit (the lead's side
-is "Catching up a stale pass", in the shared harden-contention reference). Your
-verified work stands; extend it to the new base rather than
-starting over.
+merge you, and reply asking you to catch up to a named commit. Your verified
+work stands; extend it to the new base rather than starting over.
 
 1. Commit anything outstanding and merge the lead's commit into your branch:
 

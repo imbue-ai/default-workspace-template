@@ -1,8 +1,5 @@
 # Lead-side proxy flow: diagnosing worker liveness
 
-A rare path of the lead-proxy flow. Read it when a poll timed out (`await` exit
-124) or exited 76 with no report, before you invoke the failure flow.
-
 ## A poll that timed out
 
 If the timeout trips without a report appearing, the worker may still be
@@ -11,7 +8,7 @@ implementations) can legitimately exceed 30 minutes on a healthy worker.
 Before invoking the failure flow, check the worker session:
 
 ```bash
-tmux capture-pane -t minds-<WORKER_NAME>:claude -p -S -100 | tail -40
+mngr capture <WORKER_NAME> --full --no-start | tail -40
 ```
 
 If the output shows ongoing tool use, an active spinner / "Running…" line,

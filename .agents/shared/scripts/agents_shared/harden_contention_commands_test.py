@@ -16,8 +16,8 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _REFERENCES = _REPO_ROOT / ".agents" / "shared" / "references"
 _DOC = _REFERENCES / "harden-contention.md"
-_CATCH_UP_DOC = _REFERENCES / "harden-contention-catch-up.md"
-_TAKEOVER_DOC = _REFERENCES / "harden-contention-takeover.md"
+_CATCH_UP_DOC = _REFERENCES / "harden-contention" / "catch-up.md"
+_TAKEOVER_DOC = _REFERENCES / "harden-contention" / "takeover.md"
 _TK = _REPO_ROOT / "system" / "vendor" / "tk" / "ticket"
 _BASH_BLOCK = re.compile(r"```bash\n(.*?)```", re.DOTALL)
 

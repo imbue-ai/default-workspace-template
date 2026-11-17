@@ -1,20 +1,12 @@
 # Contention between passes: superseding a pass whose worker is gone
 
-A rare path of the harden-contention reference. Read it when a pass has no
-worker left to catch up: the single-flight check found an abandoned pass, a
-pass was stopped after a failure the user did not override, or an orphaned
-pass's task file names another checkout as `lead_work_dir`. It names the
-lead-proxy reference by role: the shared file, in this directory, a lead
-follows to poll and answer its worker. `harden-creation.md` is the harden
-worker's contract, `.agents/skills/harden-worker/references/harden-creation.md`.
-
 When there is no worker left to catch up -- an abandoned pass, or one stopped
 after a failure (a `stuck` on the catch-up itself included) whose user did not
 override it -- replace it with **one** new pass. A worker the user's override
-resumes is kept (the lead-proxy reference, "Resuming after the user overrides a
-failure"). An orphaned pass whose task file names another checkout as
-`lead_work_dir` is replaced the same way although its worker is still there:
-its reports can never reach you, so no one here can lead it.
+resumes is kept (`.agents/shared/references/lead-proxy.md`, "Resuming after
+the user overrides a failure"). An orphaned pass whose task file names another
+checkout as `lead_work_dir` is replaced the same way although its worker is
+still there: its reports can never reach you, so no one here can lead it.
 
 A pass that is gone can still have left work no one merged: commits on its
 branch or on a branch of one of its own workers, a fix it finished before its
@@ -53,11 +45,11 @@ holder stopped answering. That work is never dropped. The new pass carries it:
    those in the task body under a `## Carried work` heading, one per line with
    its commits (`git log --oneline HEAD..<branch>`). The worker merges them
    into its own branch before hardening and treats them as part of the change
-   (`harden-creation.md`, "Carried work from a superseded pass"). They are
+   (`.agents/skills/harden-worker/references/carried-work.md`). They are
    merged there and not into your branch, because nothing has verified them
    yet. One superseding pass validates the union of all pending changes
    together -- which is the only combination that will actually run. A worker
-   that follows its own guide rather than `harden-creation.md` (update-self's,
+   that follows its own guide rather than the harden worker's (update-self's,
    migrate-workspace's) has no such step, so its new pass carries nothing:
    leave each kept branch for the user to decide on, and say so in step 4.
 4. **Tell the user** what was kept, in a sentence about the work itself (from
@@ -85,7 +77,7 @@ merge:
   its branch, which carrying the branch then carries, or on yours, through a
   later report of its you merged. When it had not, name the revert commit
   under `## Carried work` as well, and the new worker reverts it on its own
-  branch (`harden-creation.md`, "Carried work from a superseded pass"). Never
+  branch (the same `carried-work.md`). Never
   reinstate it on your branch yourself. Check your `HEAD` together with each
   kept branch (with none kept, `HEAD` alone):
 

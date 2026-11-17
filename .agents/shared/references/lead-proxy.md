@@ -10,29 +10,28 @@ merges, review gates and worker names are how the work gets done, not what got
 done, so they belong in no chat message and no progress step -- "Fresh, no lease.
 Merging the milestone" names plumbing nobody can see. Say what changed, or nothing.
 
-You follow this file for as long as the worker runs: after a compaction,
-re-read it before you handle the next report.
+Two things to settle before you launch, when they apply:
+
+- **You are a worker yourself**, leading a worker of your own (an intermediate
+  lead). Everything below holds unchanged, and
+  `.agents/shared/references/lead-proxy/intermediate-lead.md` adds four rules:
+  read it before you launch.
+- **The launcher's copy of the runtime dir to the worker went wrong, or you are
+  writing a sync of your own.** `launch` makes that copy itself, so no lead
+  runs `mngr rsync` by hand;
+  `.agents/shared/references/lead-proxy/rsync.md` has the command and why each
+  flag is there.
+
+A reference this file names without a directory sits beside it.
 
 ## Contents
 
-Every lead reads the sections marked "every pass". The others open with the
-condition that sends you to them, and four of them hand off to a file of their
-own. Those files, and every other reference this one names without a
-directory, sit beside it.
-
-- Polling for the next report (every pass)
-- Diagnose worker liveness before invoking failure flow (a poll that timed out
-  or exited 76; detail in `lead-proxy-liveness.md`)
-- Do not interrupt more recent user work (every pass)
-- Parsing the report (every pass)
-- Deciding: answer gate yourself vs. escalate (on `type: gate`)
-- Milestone reports: provisional merge (on `type: milestone`; detail in
-  `lead-proxy-milestones.md`)
-- Terminal status: act and stop polling (on `type: status`)
-- When you are a worker yourself (a worker that launched its own worker; detail
-  in `lead-proxy-intermediate-lead.md`)
-- `mngr rsync` rationale (debugging the launcher's transfer; detail in
-  `lead-proxy-rsync.md`)
+- Polling for the next report
+- Do not interrupt more recent user work
+- Parsing the report
+- Deciding: answer gate yourself vs. escalate
+- Before a merge
+- Terminal status: act and stop polling
 
 ## Polling for the next report
 
@@ -62,11 +61,13 @@ YAML frontmatter (`type`, `name`) plus a body. The chat shows the user only its
 one-line summary. Read the exit code first:
 
 - **0** -- a report was printed and archived. Go to "Parsing the report". A
-  milestone file under `<REPORTS_DIR>/milestones/` comes back the same way
-  ("Milestone reports: provisional merge").
-- **124** -- the timeout tripped with no report. Do *not* treat it as a
-  terminal failure yet: see "Diagnose worker liveness before invoking failure
-  flow".
+  milestone file under `<REPORTS_DIR>/milestones/` comes back the same way.
+- **124** -- the timeout tripped with no report. That has not shown a failure:
+  a long stage (the test gate, a large implementation) can legitimately exceed
+  30 minutes on a healthy worker, and a worker whose session died is a crash to
+  recover, not a failure to surface. Read
+  `.agents/shared/references/lead-proxy/liveness.md` and follow it before you
+  invoke the failure flow.
 - **76** -- `await` watched the worker end its turn with no report and nothing
   pending. Diagnose it the same way, at once rather than after the timeout.
 - **75** -- the worker's own agent was **shed by the OOM daemon** to relieve
@@ -97,23 +98,13 @@ worker that is busy, or has a live worker of its own, never counts as idle,
 so the liveness check will not mistake you for a wedged one.
 
 **A worker's report is never polled.** Sleeping on a `find` over its reports
-directory, on `mngr list`, or on `tmux capture-pane` against its pane is the
+directory, on `mngr list`, or on `mngr capture` of its pane is the
 same guess in a different command; an armed `await` plus ending the turn is the
 only sanctioned wait on a worker.
 
 With several workers out, arm one poll per worker before ending the turn. Each
 poll's message wakes you separately, so you act on whichever reports first and
 merge it while the others are still running.
-
-## Diagnose worker liveness before invoking failure flow
-
-A poll that timed out (exit 124) or exited 76 has not shown a failure. Long
-stages (the test gate, a large implementation) can legitimately exceed 30
-minutes on a healthy worker, and a worker whose session died is a crash to
-recover, not a failure to surface. Before invoking the failure flow, read
-`lead-proxy-liveness.md` and follow it: it has the check of the worker's
-session, what counts as alive, the recovery of a dead worker, and what exit 76
-does and does not mean.
 
 ## Do not interrupt more recent user work
 
@@ -125,7 +116,16 @@ user's current request is complete.
 
 Parse the YAML frontmatter: `type` (`gate`, `milestone`, or `status`) and `name`
 (skill-specific). The body is the message the user needs to see. A `milestone`
-report also carries `commit:` and `branch:`.
+report also carries `commit:` and `branch:`. Then, by `type`:
+
+- `gate`: "Deciding: answer gate yourself vs. escalate".
+- `milestone`: the worker is not asking for anything; it committed something
+  usable and carried on. Read
+  `.agents/shared/references/lead-proxy/milestones.md` and follow it: by
+  default you merge the commit the report pins, make it usable, tell the user
+  in one line, and re-arm the poll. Its "Rolling back a provisional merge" is
+  what you follow when the user rejects a milestone you merged.
+- `status`: "Terminal status: act and stop polling".
 
 If the file does not parse (no frontmatter, unknown type, truncated), treat it
 as a terminal failure.
@@ -175,16 +175,22 @@ way.
 
 After forwarding, re-arm the background poll and end your turn.
 
-## Milestone reports: provisional merge
+## Before a merge
 
-On `type: milestone` the worker is not asking for anything: it committed
-something usable and carried on. The default is to merge the commit the report
-pins, make it usable, tell the user in one line, and re-arm the poll; the
-worker's gates and terminal status are still coming. Read
-`lead-proxy-milestones.md` when a milestone report arrives: it has when not to
-merge, the checks before the merge, the merge itself, and the provisional
-go-live. Its "Rolling back a provisional merge" is what you follow when the
-user rejects a milestone you merged.
+Two rules hold before any merge from the worker's branch, the one on `done` and
+a milestone's. Your skill may add checks of its own, and says where they run.
+
+- **Wait out an editing lease.** If the merge changes an app or a service and
+  another agent holds its editing lease (an open or in-progress `editing
+  service <name>` ticket in `tk ready`, or `editing critical app <name>` for a
+  critical app; see `update-app`'s "One editor at a time"), do not merge or
+  refresh mid-edit. Re-check about once a minute until the lease is released,
+  then continue.
+- **Abort a conflicted merge when your skill has a catch-up rule.** If the
+  merge itself conflicts and your skill says how a worker catches its branch
+  up, `git merge --abort` and follow that rule: the worker resolves the
+  conflict on its own branch and verifies the result, so the resolution lands
+  tested. With no such rule, resolve the conflict manually.
 
 ## Terminal status: act and stop polling
 
@@ -204,7 +210,7 @@ On `type: status`:
   rather than lost with the report. If its `Phone:` or `Sharing:` line names
   something the worker could not fix, that goes in a regular ticket the same
   way.
-  Then merge the worker's branch:
+  Then, after the checks in "Before a merge", merge the worker's branch:
   ```bash
   git merge --no-ff <WORKER_BRANCH>
   ```
@@ -212,10 +218,8 @@ On `type: status`:
   repository, so its branch already exists in the shared ref store (and a
   `git fetch . <WORKER_BRANCH>:<WORKER_BRANCH>` would be refused anyway while
   the worker's worktree has the branch checked out).
-  Any commits you already provisionally merged from this branch (see "Milestone
-  reports: provisional merge") are ancestors of HEAD, so this merge brings only
-  the remainder and the freshness check covers exactly the window since that
-  provisional merge.
+  Any commits you already provisionally merged from this branch at a milestone
+  are ancestors of HEAD, so this merge brings only the remainder.
   If the merge changed a `pyproject.toml` or `uv.lock` (a new skill's `python/`
   project, a dependency added to a skill or an app), bring the venv up to date
   before running anything from it; `uv run --no-sync` never installs:
@@ -235,11 +239,7 @@ On `type: status`:
   launched, relocated into your tree at the same paths. It prints one outcome
   line per agent and exits non-zero if any could not be destroyed; report that
   rather than retrying blindly.
-  On a conflict, recovery depends on your skill: if it defines a staleness rule
-  (the harden skills do, in the harden-contention reference),
-  abort the merge and follow that rule -- the worker catches its branch up and
-  resolves the conflict there -- rather than resolving it yourself; otherwise
-  resolve the conflict manually.
+  A merge that conflicts is handled as "Before a merge" says.
 
 - `name: stuck`, or the 30m timeout tripped without a report arriving -- follow
   `.agents/skills/launch-task/references/worker-failure.md`: surface the report
@@ -278,18 +278,3 @@ intact, and `reply` blanks the `archived_at` label the stop set, so a later
 crash of it is restarted like any other
 (`.agents/skills/launch-task/references/dead-worker-recovery.md`). Then re-arm
 the `await` poll and end your turn.
-
-## When you are a worker yourself
-
-Everything above holds unchanged when you are an intermediate lead: a worker
-that launched its own worker. Four rules are yours alone, about answering your
-worker's `question`, merging one level, destroying or stopping it, and how long
-you await it. Read `lead-proxy-intermediate-lead.md` before you launch a
-worker from a worker.
-
-## `mngr rsync` rationale
-
-The launcher copies the runtime directory to the worker itself at `launch`, at
-whatever level of the dispatch is launching, so no lead runs `mngr rsync` by
-hand. Read `lead-proxy-rsync.md` when you are debugging that transfer, or
-writing a sync of your own.

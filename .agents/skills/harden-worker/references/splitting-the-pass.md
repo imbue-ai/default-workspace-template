@@ -1,8 +1,7 @@
 # Splitting the pass across workers of your own
 
-A conditional part of the harden contract (`harden-creation.md`, beside this
-file; its section of the same name has the rule for when to split). Read it
-once you have decided to split.
+Part of the harden contract (`harden-creation.md`, beside this file; its
+section of the same name has the rule for when to split).
 
 Launch each worker with the launch-task skill exactly as a chat agent would
 (`.agents/skills/launch-task/SKILL.md`). Name each one with your own worker
@@ -12,7 +11,7 @@ the same names only after the old pass has been superseded and destroyed. You
 are its lead, so you follow the lead-proxy flow
 (`.agents/shared/references/lead-proxy.md`) for it, and the rules that are
 yours alone are in
-`.agents/shared/references/lead-proxy-intermediate-lead.md`: answer your
+`.agents/shared/references/lead-proxy/intermediate-lead.md`: answer your
 worker's `question` yourself or re-raise it to your own lead, merge exactly one
 level with `--no-ff`, destroy a merged worker and stop a stuck one, and await
 it with `--timeout 60m`.

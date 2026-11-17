@@ -207,8 +207,8 @@ git merge --no-ff "$RESTORED" -m "Catch up to <the revert commit's short sha>"
 ```
 
 The work reaches the lead again only with the next report of yours it
-merges. A harden pass does this as `harden-creation.md`'s "A reverted
-milestone" says, which adds what its test gate then covers.
+merges. A harden pass does this as its `catching-up.md` ("A reverted
+milestone") says, which adds what its test gate then covers.
 
 ## Terminal status report bodies
 

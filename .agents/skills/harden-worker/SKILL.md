@@ -33,8 +33,9 @@ Standing instructions, for the whole pass:
 
 1. Read your task file and resolve inputs
 2. Load the references that define your pass
-3. Report back to the lead (each gate, and the terminal status that ends the
-   pass)
+3. Do the pass as those references say
+4. Report back to the lead, at each gate and with the terminal status that
+   ends the pass
 
 ## Step 1: Read your task file and resolve inputs
 
@@ -78,10 +79,10 @@ Every pass:
 
 | Load when | Reference | What it gives you |
 |---|---|---|
-| every pass | `harden-creation.md` | the universal contract: the bar, isolation, reporting, the scope file, when to split the pass, testing and hardening, the review gates and the test gate, give-up. It names the conditional files below at the point each applies |
+| every pass | `harden-creation.md` | the universal contract: the bar, isolation, reporting, the scope file, when to split the pass, testing and hardening, the review gates and the test gate, give-up. |
 | every pass | the one of `op-crystallize.md`, `op-update.md` and `op-heal.md` named for your operation | your operation's spine: pre-work, stages, which gates fire and their `name:` values, gate report templates |
 | every pass, once per type among your creations | the one of `type-skill.md`, `type-app.md` and `type-service.md` named for the type (`type-skill.md` for a `shared` creation) | the creation itself: where it lives, how to run and test it in isolation, how to edit it safely |
-| every pass | `.agents/shared/references/worker-reporting.md` | the report-file procedure and task-file frontmatter schema (Step 3 uses it) |
+| every pass | `.agents/shared/references/worker-reporting.md` | the report-file procedure and task-file frontmatter schema (Step 4 uses it) |
 
 By what the pass is:
 
@@ -122,7 +123,14 @@ operation-agnostic description of the thing you are hardening. Where the
 operation reference needs a type-specific value (a gate template's field list,
 the crystallize shape), it carries that itself, keyed by type.
 
-## Step 3: Report back to the lead
+## Step 3: Do the pass as those references say
+
+Follow your operation reference from its first stage to its last, under
+`harden-creation.md`'s contract and with your type references for the creation
+itself. Stop wherever it names a gate, report it (Step 4), and go on when the
+lead's reply arrives.
+
+## Step 4: Report back to the lead
 
 Report with the launcher's `report` subcommand -- write the body to a file and
 hand that file over -- exactly as

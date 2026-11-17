@@ -1,13 +1,10 @@
 # Carried work from a superseded pass
 
-A conditional part of the harden contract (`harden-creation.md`, beside this
-file). Read it when your task body has a `## Carried work` section, before you
-start hardening.
+Part of the harden contract (`harden-creation.md`, beside this file).
 
 A task body with a `## Carried work` section replaces an earlier pass that
 ended without being merged, and names the branches its lead kept that pass's
-commits on (the lead's side is "Superseding a pass whose worker is gone", in
-the shared harden-contention reference). That work is part of your change.
+commits on. That work is part of your change.
 When the section also names a
 revert of a milestone the earlier pass had merged, revert that revert first: a
 merge cannot bring back commits the lead's `HEAD` already holds, and a carried

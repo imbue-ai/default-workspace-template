@@ -31,26 +31,6 @@ Standing instructions:
 - **After a compaction**, re-read the shared references below before you handle
   the worker's next report.
 
-Three shared references carry the detail, and each step names the section it
-needs:
-
-- `.agents/shared/references/harden-lead.md`: the dispatch steps this skill
-  shares with `heal-creation` and `crystallize-creation`.
-- `.agents/shared/references/harden-contention.md`: one pass per creation, and
-  the checks before a merge.
-- `.agents/shared/references/lead-proxy.md`: polling, answering gates, acting
-  on the worker's terminal status.
-
-## Steps
-
-- Before Step 1, settle the pass's scope (One change, one pass), its origin
-  (The two origins) and its Names
-- Step 1: Open a tracking ticket, after the single-flight check
-- Step 2: Capture the change and write the task file
-- Step 3: Launch the worker and poll (end your turn each time the poll is
-  armed)
-- Step 4: Merge and go live, on `done`
-
 ## One change, one pass
 
 A pass hardens a *change*, not a creation. Its scope is what this chat
@@ -99,12 +79,30 @@ exploratory work is NOT an update candidate.
 
 `$CREATIONS` lists every creation the pass covers as `<type>:<name>`, and
 `$SLUG` names the pass: the creation's own name when there is one, otherwise a
-short kebab-case name for the change (`roadmap-sync`). `harden-lead.md`
-("Names and paths") has the format and every path that follows from them:
+short kebab-case name for the change (`roadmap-sync`).
+`.agents/shared/references/harden-lead.md` ("Names and paths") has the format
+and every path that follows from them:
 
 - Worker and branch: `update-$SLUG` / `mngr/update-$SLUG`
 - Runtime dir and task file: `data/.tasks/harden/update-$SLUG/` and
   `data/.tasks/harden/update-$SLUG/task.md`
+
+## Steps
+
+1. Open a tracking ticket, after the single-flight check
+2. Capture the change and write the task file
+3. Launch the worker and poll. *Ends the turn each time the poll is armed.*
+4. Merge and go live, on `done`
+
+Three shared references carry the detail, and each step names the section it
+needs:
+
+- `.agents/shared/references/harden-lead.md`: the dispatch steps this skill
+  shares with `heal-creation` and `crystallize-creation`.
+- `.agents/shared/references/harden-contention.md`: one pass per creation, and
+  the checks before a merge.
+- `.agents/shared/references/lead-proxy.md`: polling, answering gates, acting
+  on the worker's terminal status.
 
 ## Step 1: Open a tracking ticket
 

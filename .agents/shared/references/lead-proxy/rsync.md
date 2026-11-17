@@ -1,8 +1,7 @@
 # Lead-side proxy flow: `mngr rsync` rationale
 
-A rare path of the lead-proxy flow. The launcher makes this transfer itself at
-`launch`, at whatever level of the dispatch is launching. Read this when you
-are debugging one, or writing a sync of your own:
+The launcher makes this transfer itself at `launch`, at whatever level of the
+dispatch is launching:
 
 ```bash
 mngr rsync ./<SOURCE_DIR>/ <WORKER>:<DEST_DIR>/ \
