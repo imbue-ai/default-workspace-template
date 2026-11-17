@@ -103,10 +103,11 @@ export const PAGE_FRAME_SANDBOX =
 // integration spec, section 5.5).
 export const PAGE_FRAME_ALLOW = "clipboard-read; clipboard-write; fullscreen";
 
-/** What ``app``'s frames may do: the grant every page gets, plus the microphone for an app whose manifest says its
- *  pages listen (the chat's dictation), which no other app's frame is handed. */
+/** What ``app``'s frames may do: the grant every page gets, plus, for an app whose manifest says its pages listen
+ *  (the chat's dictation), the microphone and the screen wake lock that keeps a phone awake while they do, which
+ *  no other app's frame is handed. */
 export function pageFrameAllow(app: AppRecord): string {
-  return app.uses_microphone ? `${PAGE_FRAME_ALLOW}; microphone` : PAGE_FRAME_ALLOW;
+  return app.uses_microphone ? `${PAGE_FRAME_ALLOW}; microphone; screen-wake-lock` : PAGE_FRAME_ALLOW;
 }
 // The page's bottom corners follow the chrome's rounding, which a fullscreen window has none of.
 const PAGE_CORNERS_CLASS = "rounded-b-(--desk-window-radius)";
