@@ -6,6 +6,7 @@ import os
 import secrets
 import shutil
 import stat
+import threading
 import urllib.parse
 import zipfile
 from collections.abc import Iterator
@@ -15,6 +16,7 @@ from typing import Final
 from flask import Response
 from flask import send_file
 from loguru import logger
+from werkzeug.datastructures import ETags
 from werkzeug.datastructures import Headers
 
 from files_app.sources import EntryRecord
@@ -30,9 +32,18 @@ _TEXT_SNIFF_BYTES: Final[int] = 8 * 1024
 _CHUNK: Final[int] = 64 * 1024
 
 
+def version_of(target: Path) -> str:
+    """The version a file is at: its ETag, which moves whenever it is written (a save swaps in a new file, so the inode
+    moves too even when the clock does not)."""
+    status = target.stat()
+    return f"{status.st_ino:x}-{status.st_mtime_ns:x}-{status.st_size:x}"
+
+
 class LocalFiles:
     def __init__(self, root: Path) -> None:
         self._root = root
+        # Saves that name the version they started from are checked and written one at a time.
+        self._conditional_write_lock = threading.Lock()
 
     def _on_disk(self, path: str) -> Path:
         return self._root / path.lstrip("/")
@@ -64,7 +75,10 @@ class LocalFiles:
             # Taken before the read, so a change during it moves the stamp past what is listed.
             stamp = self._stamp(path)
             return FolderData(entries=tuple(_entries_of(target)), stamp=stamp)
-        return FileData(is_text=_is_text(target))
+        if not target.is_file():
+            return FileData(is_text=False)
+        final = Path(os.path.realpath(target))
+        return FileData(is_text=_is_text(target), size=final.stat().st_size, version=version_of(final))
 
     def read(self, path: str, headers: Headers) -> Response | None:
         target = self._existing(path)
@@ -74,9 +88,21 @@ class LocalFiles:
             raise FilesError(404, f"{path} isn't a file that can be read.")
         # Conditional, so a Range is honoured and an unchanged file is answered 304; always revalidated, so a file
         # changed on disk is never shown from the browser's cache.
-        response = send_file(target, conditional=True, max_age=None)
+        response = send_file(target, conditional=True, max_age=None, etag=version_of(target))
         response.headers["Cache-Control"] = "no-cache"
         return response
+
+    def write_if_unchanged(self, path: str, body: Iterator[bytes], length: int | None, expected: ETags) -> str:
+        """Write the file only when it is still at a version ``expected`` names (an ``If-Match``), and answer the
+        version it is at now. A file changed since, or gone, is refused with 412, so an editor never saves over a
+        change it has not seen (an agent rewriting the file while it is open)."""
+        with self._conditional_write_lock:
+            target = Path(os.path.realpath(self._on_disk(path)))
+            current = version_of(target) if target.is_file() else None
+            if current is None or not expected.contains(current):
+                raise FilesError(412, f"{path} was changed since it was opened.")
+            self.write(path, body, length)
+            return version_of(target)
 
     def write(self, path: str, body: Iterator[bytes], length: int | None) -> None:
         target = self._on_disk(path)

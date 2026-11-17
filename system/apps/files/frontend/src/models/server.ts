@@ -19,8 +19,17 @@ export interface EntryRecord {
 }
 
 /** What the server says of a path: a folder and its entries, or a file and whether it is small and reads as text. */
-export type PageData =
-  { kind: "folder"; entries: EntryRecord[]; stamp?: string | null } | { kind: "file"; is_text: boolean };
+export type PageData = { kind: "folder"; entries: EntryRecord[]; stamp?: string | null } | FileData;
+
+/** What the server says of a file: whether it is small and reads as text, its size, and the version a save with
+ *  `If-Match` names (null where saves can't be checked, as on a computer). The size and version come in this body
+ *  because a proxy in front of the server may drop a HEAD answer's headers. */
+export interface FileData {
+  kind: "file";
+  is_text: boolean;
+  size?: number | null;
+  version?: string | null;
+}
 
 /** An entry of a folder as the app holds it. */
 export interface Entry {
@@ -119,6 +128,15 @@ export async function folderStamps(folders: readonly string[]): Promise<Record<s
   const response = await fetch(`/__files/api/stamps?${query}`);
   if (!response.ok) throw await failureOf(response, "Couldn't check the folders");
   return ((await response.json()) as { stamps: Record<string, string | null> }).stamps;
+}
+
+/** What the server says of the file at `path`, read afresh (never from the browser's cache). */
+export async function describeFile(path: string): Promise<FileData> {
+  const response = await fetch(`${urlOf(path)}?json`, { cache: "no-store" });
+  if (!response.ok) throw await failureOf(response, `Couldn't read ${path}`);
+  const data = (await response.json()) as PageData;
+  if (data.kind !== "file") throw new ServerError(`Couldn't read ${path}: it is a folder`, 400);
+  return data;
 }
 
 /** Whether anything, file or folder, is at `path`. Asked without the trailing slash, so it is the same question for

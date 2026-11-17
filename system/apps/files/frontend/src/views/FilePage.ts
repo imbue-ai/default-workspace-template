@@ -1,6 +1,7 @@
 /**
- * A file's own page: `?view` shows it (a picture, a player, a PDF, or its text), `?edit` opens its text in an editor
- * that saves back with Cmd/Ctrl+S. It is a window of its own, closed when done with, so the header names the file and
+ * A file's own page: `?view` shows it (a picture, a player, a PDF, or its text; a markdown file formatted, to suggest
+ * edits to and comment on, `markdown/MarkdownDocument.ts`), `?edit` opens its text in an editor that saves back with
+ * Cmd/Ctrl+S. It is a window of its own, closed when done with, so the header names the file and
  * carries what can be done to it, with no way off to the folder.
  */
 
@@ -16,10 +17,12 @@ import { startDownload } from "@imbue/workspace-ui/src/download";
 
 import { isLiveShared } from "../models/connections";
 import * as server from "../models/server";
-import { isTextLike, previewKindOf } from "../models/fileKinds";
+import { isMarkdown, isTextLike, previewKindOf } from "../models/fileKinds";
 import { formatSize } from "../models/format";
 import { matchesKeybinding } from "../models/keybindings";
 import { childPath, nameOf, parentOf } from "../models/paths";
+import { loadIsMarkdownFormatted, saveIsMarkdownFormatted } from "../models/preferences";
+import type { MarkdownDocument } from "../markdown/MarkdownDocument";
 import { Dialogs } from "./dialogs";
 import { FileIcon } from "./FileIcon";
 import { iconButton } from "./iconButton";
@@ -41,8 +44,51 @@ export class FilePageModel {
   isDeleted = false;
   size: number | null = null;
   readonly dialogs = new Dialogs();
+  /** Whether this is a markdown file's view page, which offers the formatted view. */
+  readonly isMarkdownFile: boolean;
+  /** Whether that page shows the file formatted (drawing and saving it itself) rather than as plain text: the
+   *  person's choice, kept per browser. */
+  readonly isMarkdownView: boolean;
+  /** That page's editor, once its code (loaded only for it) has arrived. */
+  markdown: MarkdownDocument | null = null;
 
-  constructor(readonly options: FilePageOptions) {}
+  constructor(readonly options: FilePageOptions) {
+    const name = nameOf(options.path);
+    this.isMarkdownFile =
+      options.page === "view" && previewKindOf(name, options.isText) === "text" && isMarkdown(name);
+    this.isMarkdownView = this.isMarkdownFile && loadIsMarkdownFormatted(window.localStorage);
+  }
+
+  /** Show markdown files formatted or as plain text from now on, starting with this one. */
+  async setMarkdownFormatted(isFormatted: boolean): Promise<void> {
+    if (this.markdown?.isDirty) await this.markdown.saveNow();
+    saveIsMarkdownFormatted(window.localStorage, isFormatted);
+    window.location.reload();
+  }
+
+  private async refreshSize(): Promise<void> {
+    try {
+      this.size = (await server.describeFile(this.options.path)).size ?? null;
+    } catch {
+      // The size is a nicety; the page works without it.
+    }
+    m.redraw();
+  }
+
+  /** Load the markdown editor's code and open the file in it, inside `host`. */
+  async mountMarkdown(host: HTMLElement): Promise<void> {
+    const { MarkdownDocument } = await import("../markdown/MarkdownDocument");
+    this.markdown = new MarkdownDocument({
+      path: this.options.path,
+      canSave: !isLiveShared(this.options.path),
+      onChange: () => {
+        // A save just finished: the file's size moved.
+        if (this.markdown?.isDirty === false) void this.refreshSize();
+        m.redraw();
+      },
+    });
+    await this.markdown.mount(host);
+  }
 
   get isDirty(): boolean {
     return this.text.status === "ready" && this.draft !== this.text.saved;
@@ -53,14 +99,9 @@ export class FilePageModel {
   }
 
   async load(): Promise<void> {
-    void fetch(server.urlOf(this.options.path), { method: "HEAD" })
-      .then((response) => {
-        const length = response.headers.get("content-length");
-        this.size = length === null ? null : Number(length);
-        m.redraw();
-      })
-      .catch(() => undefined);
-    if (!this.showsText) return;
+    // From the page data, a body: a proxy in front of the server may drop a HEAD answer's Content-Length.
+    void this.refreshSize();
+    if (!this.showsText || this.isMarkdownView) return;
     try {
       const text = await server.readText(this.options.path);
       this.text = { status: "ready", saved: text };
@@ -72,6 +113,7 @@ export class FilePageModel {
   }
 
   async save(): Promise<void> {
+    if (this.markdown !== null) return this.markdown.saveNow();
     if (!this.isDirty || this.isSaving) return;
     const content = this.draft;
     this.isSaving = true;
@@ -141,6 +183,13 @@ function body(page: FilePageModel): m.Children {
       m("div", { class: "type-helper text-faint" }, "You can close this window."),
     ]);
   }
+  if (page.isMarkdownView) {
+    return m("div.files-markdown-host", {
+      class: "h-full overflow-auto",
+      oncreate: ({ dom }: m.VnodeDOM) => void page.mountMarkdown(dom as HTMLElement),
+      onremove: () => page.markdown?.destroy(),
+    });
+  }
   switch (preview) {
     case "image":
       return m(
@@ -205,7 +254,8 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
         }
       };
       onBeforeUnload = (event) => {
-        if (page.isDirty) event.preventDefault();
+        if (page.markdown?.isDirty) void page.markdown.saveNow();
+        if (page.isDirty || page.markdown?.isDirty) event.preventDefault();
       };
       document.addEventListener("keydown", onKeydown);
       window.addEventListener("beforeunload", onBeforeUnload);
@@ -220,7 +270,8 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
       const { path, page: kind } = page.options;
       const name = nameOf(path);
       // The server calls any small file that decodes as text editable; Edit is offered only on one named as text.
-      const canEdit = page.showsText && page.text.status === "ready" && isTextLike(name);
+      // A markdown file's view page draws the file itself; Edit opens its source.
+      const canEdit = isTextLike(name) && (page.isMarkdownView || (page.showsText && page.text.status === "ready"));
       return m("div.files-file-page", { class: "flex h-screen min-h-0 flex-col bg-surface text-primary" }, [
         m("header.files-toolbar", { class: "flex shrink-0 items-center gap-2 px-3 py-1" }, [
           m("div", { class: "flex min-w-0 flex-1 items-center gap-2" }, [
@@ -265,6 +316,23 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
                   m.trust(icon("edit", { size: 16 })),
                 )
               : null,
+          page.isMarkdownFile
+            ? m(
+                Button,
+                {
+                  variant: "ghost",
+                  sm: true,
+                  "data-action": "markdown-format",
+                  ...hoverTooltipAttrs(
+                    page.isMarkdownView
+                      ? "Show markdown files as plain text"
+                      : "Show markdown files formatted, to suggest edits and comment",
+                  ),
+                  onclick: () => void page.setMarkdownFormatted(!page.isMarkdownView),
+                },
+                page.isMarkdownView ? "Plain text" : "Formatted",
+              )
+            : null,
           iconButton("Download", "download", { "data-action": "download", onclick: () => downloadFile(page, path) }),
           m("div", { class: "flex shrink-0" }, [
             iconButton("More", "ellipsis", { "data-action": "more", ...menu.triggerAttrs() }),

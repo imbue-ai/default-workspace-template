@@ -129,10 +129,21 @@ def test_a_files_page_says_whether_it_reads_as_text(tmp_path: Path) -> None:
     (root / "notes.md").write_text("# hi\n" + "\u00e9" * 5000)
     (root / "photo.png").write_bytes(b"\x89PNG\x00\x00")
     (root / "big.txt").write_bytes(b"a" * (4 * 1024 * 1024 + 1))
-    assert _page_data(client.get("/notes.md?view")) == {"kind": "file", "is_text": True}
-    assert _page_data(client.get("/notes.md?edit")) == {"kind": "file", "is_text": True}
-    assert _page_data(client.get("/photo.png?view")) == {"kind": "file", "is_text": False}
-    assert _page_data(client.get("/big.txt?view")) == {"kind": "file", "is_text": False}
+    notes = _page_data(client.get("/notes.md?view"))
+    assert (notes["kind"], notes["is_text"]) == ("file", True)
+    assert _page_data(client.get("/notes.md?edit"))["is_text"] is True
+    assert _page_data(client.get("/photo.png?view"))["is_text"] is False
+    assert _page_data(client.get("/big.txt?view"))["is_text"] is False
+
+
+def test_a_files_page_data_carries_its_size_and_version_in_the_body(tmp_path: Path) -> None:
+    # A proxy in front of the server may drop a HEAD answer's Content-Length (a page then said "0 bytes"), so the
+    # size and the version a save names come in the page data, which is a body.
+    client = _app(None, tmp_path)
+    (tmp_path / "root" / "plan.md").write_text("# Plan\n")
+    data = json_of(client.get("/plan.md?json"))
+    assert data["size"] == 7
+    assert data["version"] == client.get("/plan.md").headers["ETag"].strip('"')
 
 
 def test_a_file_is_served_as_its_bytes_with_ranges_and_a_safe_name_header(tmp_path: Path) -> None:
@@ -214,6 +225,43 @@ def test_a_put_writes_the_file_creating_its_folders_and_keeping_its_mode(tmp_pat
     assert script.stat().st_mode & 0o777 == 0o755
     # Nothing is left beside it.
     assert sorted(path.name for path in root.iterdir()) == ["new", "run.sh"]
+
+
+def test_a_save_naming_its_version_writes_only_over_that_version_and_answers_the_new_one(tmp_path: Path) -> None:
+    client = _app(None, tmp_path)
+    plan = tmp_path / "root" / "plan.md"
+    plan.write_text("# Plan\n")
+    opened = client.get("/plan.md")
+    version = opened.headers["ETag"]
+    assert client.head("/plan.md").headers["ETag"] == version
+
+    saved = client.put("/plan.md", data=b"# Plan{++ v2++}\n", headers={"If-Match": version})
+    assert saved.status_code == 201
+    assert plan.read_text() == "# Plan{++ v2++}\n"
+    assert saved.headers["ETag"] != version
+    assert saved.get_json() == {"version": saved.headers["ETag"].strip('"')}
+    assert json_of(client.get("/plan.md?json"))["version"] == saved.get_json()["version"]
+    assert client.head("/plan.md").headers["ETag"] == saved.headers["ETag"]
+
+    # An agent rewrote the file after the editor last read it: the editor's save, from the older version, is refused.
+    stale = client.put("/plan.md", data=b"lost\n", headers={"If-Match": version})
+    assert stale.status_code == 412
+    assert stale.get_data(as_text=True) == "/plan.md was changed since it was opened."
+    assert plan.read_text() == "# Plan{++ v2++}\n"
+    # A file that is gone is refused too, rather than made again.
+    plan.unlink()
+    assert client.put("/plan.md", data=b"back\n", headers={"If-Match": version}).status_code == 412
+    assert not plan.exists()
+
+
+def test_a_save_naming_its_version_is_refused_on_a_computer(tmp_path: Path) -> None:
+    computer = FakeComputer(permissions=["minds-file-server-write-/Users/kim/plan.md"], folders={})
+    computer.files["/Users/kim/plan.md"] = b"old"
+    response = _app(computer, tmp_path).put(
+        f"/__remote/{DEVICE}/Users/kim/plan.md", data=b"new", headers={"If-Match": '"anything"'}
+    )
+    assert response.status_code == 501
+    assert computer.files["/Users/kim/plan.md"] == b"old"
 
 
 def test_saving_a_linked_file_writes_the_file_it_names_and_keeps_the_link(tmp_path: Path) -> None:

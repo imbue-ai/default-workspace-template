@@ -1,0 +1,1 @@
+The `system/` npm lockfile carries the Files frontend's new dependencies for its markdown view: Tiptap 3 (`@tiptap/core`, `@tiptap/markdown`, `@tiptap/starter-kit` and the table, link, list and blockquote extensions), `@handlewithcare/prosemirror-suggest-changes`, and `marked`.

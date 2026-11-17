@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { memoryStorage } from "../testing/records";
-import { DEFAULT_PREFERENCES, loadPreferences, savePreferences } from "./preferences";
+import {
+  DEFAULT_PREFERENCES,
+  loadIsMarkdownFormatted,
+  loadPreferences,
+  saveIsMarkdownFormatted,
+  savePreferences,
+} from "./preferences";
 
 describe("preferences", () => {
   it("start at icons by name with system files hidden", () => {
@@ -35,5 +41,16 @@ describe("preferences", () => {
     expect(loadPreferences(storage).sidebarWidth).toBe(360);
     storage.setItem("files-sidebar-width", "12");
     expect(loadPreferences(storage).sidebarWidth).toBe(140);
+  });
+});
+
+describe("the markdown view", () => {
+  it("is formatted until turned off, and remembers either choice", () => {
+    const storage = memoryStorage();
+    expect(loadIsMarkdownFormatted(storage)).toBe(true);
+    saveIsMarkdownFormatted(storage, false);
+    expect(loadIsMarkdownFormatted(storage)).toBe(false);
+    saveIsMarkdownFormatted(storage, true);
+    expect(loadIsMarkdownFormatted(storage)).toBe(true);
   });
 });

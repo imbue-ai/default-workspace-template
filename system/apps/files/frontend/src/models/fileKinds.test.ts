@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { badgeOf, familyOf, isTextLike, kindLabelOf, previewKindOf } from "./fileKinds";
+import { badgeOf, familyOf, isMarkdown, isTextLike, kindLabelOf, previewKindOf } from "./fileKinds";
 
 describe("file kinds", () => {
   it("names a kind for the Kind column", () => {
@@ -33,5 +33,18 @@ describe("file kinds", () => {
     expect(familyOf("a", true)).toBe("folder");
     expect(badgeOf("archive.tar.gz")).toBe("GZ");
     expect(badgeOf("deck.pptx")).toBe("PPTX");
+  });
+});
+
+describe("markdown", () => {
+  it("is told by its extension, whatever its case", () => {
+    expect(["plan.md", "README.MD", "notes.markdown", "a.mdown", "b.mkd"].map(isMarkdown)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+    expect(["notes.txt", "md", "plan.md.bak", "page.mdx"].map(isMarkdown)).toEqual([false, false, false, false]);
   });
 });

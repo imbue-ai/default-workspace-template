@@ -42,6 +42,12 @@ class FileData(FrozenModel):
     kind: Literal["file"] = "file"
     # Whether the file is small and reads as text, so its page offers to edit it.
     is_text: bool
+    # The file's size in bytes, in the body rather than a header, since a proxy in front of the server may drop a
+    # HEAD answer's Content-Length; None where it is not known.
+    size: int | None = None
+    # The version the file is at (its ETag), which a save with ``If-Match`` names; None where saves can't be checked,
+    # as on a computer.
+    version: str | None = None
 
 
 PageData = FolderData | FileData

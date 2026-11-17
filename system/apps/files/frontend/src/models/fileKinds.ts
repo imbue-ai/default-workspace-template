@@ -152,6 +152,13 @@ export function previewKindOf(name: string, isText: boolean): PreviewKind {
   return isText ? "text" : "none";
 }
 
+const MARKDOWN = new Set(["md", "markdown", "mdown", "mkd"]);
+
+/** Whether a file is markdown, which its view page shows formatted, to suggest edits to and comment on. */
+export function isMarkdown(name: string): boolean {
+  return MARKDOWN.has(extensionOf(name));
+}
+
 /** Binary formats in otherwise textual families. */
 const BINARY_DATA = new Set(["db", "sqlite", "parquet"]);
 
