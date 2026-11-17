@@ -1,27 +1,55 @@
 // @vitest-environment jsdom
 //
 // "Report a bug" against the real embed endpoint: a press goes to the page's parent (in jsdom a top-level page is its
-// own parent) as OPEN_HELP.
+// own parent) as OPEN_HELP, with the failure it is about as its errorDetails.
 
 import { afterEach, describe, expect, it } from "vitest";
-import { resetEmbedEndpointForTesting } from "./embed";
+import { MAX_HELP_ERROR_DETAILS_LENGTH, resetEmbedEndpointForTesting } from "./embed";
+import type { ReportedFailure } from "./app_contract";
 import { openBugReport } from "./report-bug";
 
 afterEach(() => {
   resetEmbedEndpointForTesting();
 });
 
+/** What the embedder was sent for one press on "Report a bug" about ``failure``. */
+async function openHelpSentFor(failure: ReportedFailure | null): Promise<Record<string, unknown>> {
+  const posted: Record<string, unknown>[] = [];
+  const record = (event: MessageEvent): void => void posted.push(event.data as Record<string, unknown>);
+  window.addEventListener("message", record);
+  try {
+    openBugReport(failure);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  } finally {
+    window.removeEventListener("message", record);
+  }
+  const sent = posted.filter((message) => message.type === "minds:open-help");
+  expect(sent).toHaveLength(1);
+  return sent[0];
+}
+
 describe("Report a bug", () => {
-  it("asks the embedder to open its bug report", async () => {
-    const posted: unknown[] = [];
-    const record = (event: MessageEvent): void => void posted.push(event.data);
-    window.addEventListener("message", record);
-    try {
-      openBugReport();
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      expect(posted).toContainEqual(expect.objectContaining({ type: "minds:open-help" }));
-    } finally {
-      window.removeEventListener("message", record);
-    }
+  it("asks the embedder to open its bug report with the failure's sentence and details attached", async () => {
+    const sent = await openHelpSentFor({
+      message: "This window couldn't be closed. Try again. If this persists, report a bug.",
+      details: "HTTP 500\nboom",
+    });
+    expect(sent.errorDetails).toBe(
+      "This window couldn't be closed. Try again. If this persists, report a bug.\n\nHTTP 500\nboom",
+    );
+  });
+
+  it("cuts details longer than the embedder takes, keeping their start", async () => {
+    const details = `HTTP 500\n${"x".repeat(MAX_HELP_ERROR_DETAILS_LENGTH)}`;
+    const sent = await openHelpSentFor({ message: "Docs couldn't save.", details });
+    const attached = sent.errorDetails as string;
+    expect(attached).toHaveLength(MAX_HELP_ERROR_DETAILS_LENGTH);
+    expect(attached.startsWith("Docs couldn't save.\n\nHTTP 500\nxxx")).toBe(true);
+    expect(attached.endsWith("\n[...]")).toBe(true);
+  });
+
+  it("opens the bug report with nothing attached when there is no failure to attach", async () => {
+    const sent = await openHelpSentFor(null);
+    expect(sent).not.toHaveProperty("errorDetails");
   });
 });

@@ -12,7 +12,7 @@
  * whichever app registered its type), ``shell:open-link`` (a clicked link or script popup the
  * app contract hands on -- a local URL, another app's address, a ``file:`` URL, an external web,
  * ``mailto:`` or ``tel:`` link -- which the shell opens where it belongs), and a failure's
- * ``shell:start-with-text`` ("Ask an agent to fix this") and ``shell:report-bug``.
+ * ``shell:start-new-with-text`` ("Ask an agent to fix this"), ``shell:start-with-text`` and ``shell:report-bug``.
  * One ``shell:open`` is the root's own business: a page asking for a sibling chat names the
  * root's path for it (``/?chat=<id>``), and the root that already frames a chat list selects
  * that chat in place, exactly as its own New chat button does, rather than asking the shell for
@@ -46,6 +46,7 @@ import {
   SHELL_OPEN,
   SHELL_OPEN_LINK,
   SHELL_REPORT_BUG,
+  SHELL_START_NEW_WITH_TEXT,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
@@ -61,6 +62,7 @@ const FORWARDED_SHELL_TYPES: ReadonlySet<string> = new Set([
   SHELL_MESSAGE,
   SHELL_OPEN_LINK,
   SHELL_START_WITH_TEXT,
+  SHELL_START_NEW_WITH_TEXT,
   SHELL_REPORT_BUG,
 ]);
 const FORWARDED_TO_INNER_TYPES: ReadonlySet<string> = new Set([
