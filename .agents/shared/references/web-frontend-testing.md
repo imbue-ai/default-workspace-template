@@ -1,11 +1,9 @@
 # Testing a web frontend
 
-Shared testing guidance for any creation that serves a web UI -- a scaffolded
-app, or one of the workspace's critical apps (both `type-app.md`; the shell,
-the chat, and the terminal have their own section there). Apply it alongside
-the universal contract in
-`harden-creation.md`; your creation reference adds the specifics (where the app
-lives, its stack, its test entry points).
+Testing guidance for anything that serves a web UI: an app the workspace
+built, or one of the workspace's own apps (the shell, the chat, the terminal).
+Your own guide adds the specifics: where the app lives, its stack, its test
+entry points.
 
 ## Drive an isolated instance, never the live one
 
@@ -27,8 +25,8 @@ reaches, use its `module_browser` fixture (and `phone_context` for a
 phone-sized touch context): it launches Fortress, the workspace's browser,
 which is installed before any agent starts, and it fails a test that asks for
 pytest-playwright's `page` / `context` / `browser` instead. A user-built app's
-suite is its own pytest root, which that conftest does not reach: `type-app.md`'s
-"On a phone" says how its browser test gets Playwright and launches Fortress.
+suite is its own pytest root, which that conftest does not reach: its browser
+test adds Playwright to the app's own dev group and launches Fortress itself.
 The chat app's and the shell's suites are their own pytest roots too, and
 their own conftests point `page` / `context` / `browser` at Fortress, so use
 those there. Where a conftest provides the browser, do not write your own

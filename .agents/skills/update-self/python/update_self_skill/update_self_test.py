@@ -1792,7 +1792,7 @@ def test_prose_outside_the_skill_is_read_from_the_staged_copy_after_the_hand_off
                 outside.append((name, path))
     # The files this guard exists for; without them it is vacuous.
     assert any(path.endswith("references/lead-proxy.md") for _, path in outside)
-    assert any("harden-worker/references/" in path for _, path in outside)
+    assert any(path.endswith("references/review-gates.md") for _, path in outside)
 
     assert [found for found in outside if not found[1].startswith(staged_prefix)] == []
     assert [

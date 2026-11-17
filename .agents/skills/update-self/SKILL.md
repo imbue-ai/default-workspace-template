@@ -3,7 +3,7 @@ name: update-self
 description: Safely pull updates from the upstream template repo. Use to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 metadata:
   author: imbue
-  exempt-checks: size depth paths contents
+  exempt-checks: size paths contents
   exempt-reason: awaiting-restructure
 ---
 
@@ -329,8 +329,7 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
     stage-shared-prose --ref "$REF" || exit 1
 ```
 
-It puts the target release's `.agents/shared/` and `harden-worker` skill
-beside the staged skill. From here to the end of the
+It puts the target release's `.agents/shared/` beside the staged skill. From here to the end of the
 pass, this document and its references name those files by their staged path,
 because the workspace's own copies may be older than this flow. When a staged
 file names a further `.agents/...` path, read the copy under
@@ -838,7 +837,7 @@ that no longer imports, a consumer the report names that the update broke:
 2. Dispatch a repair worker with the evidence (the program's status and the
    tail of its stderr log, the failing check's output, what the update changed
    that it touches), through `launch-task` as in Step 4, with
-   `references/python-packaging-migration.md` named when the failure is one of
+   `data/.tasks/update-self/skill-at-target/.agents/shared/references/python-packaging-migration.md` named when the failure is one of
    its symptoms.
 3. Finish the run (the rest of this step, then Step 6) once it is fixed, or once
    the worker gives up. A give-up is still recorded as `UPDATED`, with a

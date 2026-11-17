@@ -35,9 +35,7 @@ from typing import NamedTuple
 
 PACKAGE_PARENTS = ("system/apps", "system/services", "system/libs")
 SUPERVISORD_DROPIN_DIR = "system/supervisord.conf.d"
-MIGRATION_REFERENCE = (
-    ".agents/skills/update-self/references/python-packaging-migration.md"
-)
+MIGRATION_REFERENCE = ".agents/shared/references/python-packaging-migration.md"
 
 SHELLS = frozenset({"bash", "sh", "zsh", "dash"})
 _STEP_SEPARATOR = re.compile(r"&&|\|\||;|\n")

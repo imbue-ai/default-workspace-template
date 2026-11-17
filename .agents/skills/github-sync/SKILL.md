@@ -52,9 +52,9 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
    unhealthy). Also run `supervisorctl status github-sync` (it errors when no
    such program exists -- expected before enable).
 
-2. **Request GitHub permissions** through latchkey (see
-   `.agents/skills/connect-external-service/references/latchkey.md` for the
-   permission-request mechanics). GitHub exposes two latchkey scopes
+2. **Request GitHub permissions** through latchkey (the
+   `connect-external-service` skill has the permission-request
+   mechanics). GitHub exposes two latchkey scopes
    and a permission request carries exactly one scope, so this is two
    requests. A request must be the **only** command in its tool call, so these
    are two calls -- send them back to back; you do not have to wait for the

@@ -10,7 +10,7 @@ metadata:
   exempt-reason: awaiting-restructure
 ```
 
-The checks are `size`, `reachability`, `depth`, `paths` and `contents`. There are two reasons:
+The checks are `size`, `reachability`, `depth`, `paths`, `contents` and `boundary`. There are two reasons:
 
 | Reason | Meaning | Who writes it | Who clears it |
 |---|---|---|---|

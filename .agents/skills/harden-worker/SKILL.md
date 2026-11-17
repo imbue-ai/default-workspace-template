@@ -53,8 +53,9 @@ type's reference once however many creations share it.
 
 Read these top to bottom, then follow them.
 
-Filenames are relative to `.agents/skills/harden-worker/references/`, except the two
-marked **[shared]**, which live in `.agents/shared/references/`.
+Filenames are relative to `.agents/skills/harden-worker/references/`, except the ones
+marked **[shared]**, which live in `.agents/shared/references/`. Inside the
+references, those names always mean the shared files.
 
 | Load when | Reference | What it gives you |
 |---|---|---|
@@ -62,11 +63,12 @@ marked **[shared]**, which live in `.agents/shared/references/`.
 | every run | the one of `op-crystallize.md`, `op-update.md` and `op-heal.md` named for your operation | your operation's spine: pre-work, stages, which gates fire and their `name:` values, gate report templates |
 | every run, once per type among your creations | the one of `type-skill.md`, `type-app.md` and `type-service.md` named for the type (`type-skill.md` for a `shared` creation) | the creation itself: where it lives, how to run/test it in isolation, how to edit it safely |
 | every run | `worker-reporting.md` **[shared]** | the report-file procedure and task-file frontmatter schema (Step 3 uses it) |
+| every run | `review-gates.md` **[shared]** | running the test gate, and what to do about a failing test, a suite the selector left out, and a command that dies from a signal |
 | you reconstruct the work from the lead's session | `transcript-exploration.md` | how to find the work in the lead's transcript |
 | a creation is a `skill` | `spec-summary.md` **[shared]** | the agentskills.io layout/spec authority |
 | a creation is a `skill`, and your operation runs an outline gate | `skill-outline-fields.md` | what goes inside the outline gate |
 | a creation is a `skill`, on an emergent `update` | `update-vs-create-new.md` | update-in-place vs. split-a-new-sibling |
-| a creation is an `app` | `web-frontend-testing.md` | isolated-instance and rendered-page rules |
+| a creation is an `app` | `web-frontend-testing.md` **[shared]** | isolated-instance and rendered-page rules |
 
 The two conditional cases that need defining:
 
