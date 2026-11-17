@@ -1303,7 +1303,7 @@ describe("a launch into an app that is not running", () => {
   });
 
   it("takes the stopped app's note down once the app list says the app is running again", async () => {
-    const store = await storeWithTerminalStoppedNote();
+    await storeWithTerminalStoppedNote();
     expect(notices()).toEqual(["Terminal isn't running."]);
 
     socket.deliver().onAppsUpdated([chat, { ...terminal, is_running: false }]);
