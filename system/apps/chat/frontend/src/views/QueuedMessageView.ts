@@ -119,7 +119,6 @@ function tapFailureNotice(chatId: string, error: unknown): Parameters<typeof rai
     error,
     kind: describeRequestErrorKind(error),
     // Try again here means "flush the queue again", which is exactly what the user clicked in the first place.
-    // The finally above has already cleared the in-flight marker by the time this can run.
     retry: () => shoulderTapQueuedMessages(chatId),
   };
 }
