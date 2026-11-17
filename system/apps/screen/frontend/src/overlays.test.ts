@@ -300,7 +300,7 @@ describe("Overlays for the stack's state", () => {
       null,
     );
     expect(shown(overlays)).toEqual({
-      title: "Couldn't start the Screen. Try again. If this persists, report a bug.",
+      title: "The Screen couldn't start. Try again. If this persists, report a bug.",
       body: null,
       details: "the stack did not start: neko never answered",
       buttons: ["Try again", "Ask an agent to fix this", "Report a bug"],
@@ -308,6 +308,26 @@ describe("Overlays for the stack's state", () => {
     overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]")?.click();
     expect(host.started[0]).toContain("The Screen couldn't start.");
     expect(host.started[0]).toContain("neko never answered");
+  });
+
+  it("says a Start refused again after a failed start once, not twice", () => {
+    const overlays = overlaysWith(fakeHost());
+    overlays.update(
+      state({ ...STOPPED, stop_reason: "neko never answered", stop_cause: "start_failed" }),
+      "idle",
+      null,
+      null,
+      {
+        message: "The Screen couldn't start. Try again. If this persists, report a bug.",
+        details: "HTTP 500\nsupervisord refused the start",
+        isReportable: true,
+      },
+    );
+    expect(shown(overlays)).toMatchObject({
+      title: "The Screen couldn't start. Try again. If this persists, report a bug.",
+      body: null,
+      details: "HTTP 500\nsupervisord refused the start\nneko never answered",
+    });
   });
 
   it("offers Report a bug only where the shell says one opens, and an agent only under a shell", () => {

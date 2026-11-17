@@ -9,7 +9,7 @@
 
 import { askAgentToFix } from "@imbue/workspace-ui/src/app_contract";
 import type { AgentFixRequest, ReportedFailure, ShellConnection } from "@imbue/workspace-ui/src/app_contract";
-import { REPORT_A_BUG_LABEL, failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import { REPORT_A_BUG_LABEL, fallbackSentence, failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
 import { isOwnSessionController } from "./state";
@@ -74,7 +74,7 @@ function stoppedView(state: ScreenStateDocument, startFailure: FailureMessage | 
   let stopped: OverlayView;
   switch (state.stop_cause) {
     case "start_failed":
-      stopped = view("Couldn't start the Screen. Try again. If this persists, report a bug.", {
+      stopped = view(fallbackSentence(START_FAILED_STEM), {
         details,
         startLabel: "Try again",
         agentFix: { whatFailed: START_FAILED_STEM, details },
@@ -106,7 +106,8 @@ function stoppedView(state: ScreenStateDocument, startFailure: FailureMessage | 
   if (startFailure === null) return stopped;
   return {
     ...stopped,
-    body: startFailure.message,
+    // A refused Start after a failed start would repeat the title word for word.
+    body: startFailure.message === stopped.title ? stopped.body : startFailure.message,
     details: joinDetails([startFailure.details, details]),
     isReportable: stopped.isReportable || startFailure.isReportable,
   };
