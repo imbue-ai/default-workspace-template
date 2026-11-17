@@ -4,8 +4,9 @@
  * into "reports"") and then, when the server explained the refusal, why: in Files' own words for the refusals that
  * depend on which folder refused (the server's ``kind``), else in the server's sentence, which names only the cause.
  * A failure whose sentence asks for a bug report leaves a toast that stays, with "See details" and, where the shell
- * says Imbue Studio opens one when the toast is drawn, "Report a bug"; a full disk leaves one that stays with "Ask an agent to free up space";
- * any other leaves a plain note, its retry being the control just used, and its details go to the log.
+ * says Imbue Studio opens one when the toast is drawn, "Report a bug"; a full disk leaves one that stays with "Ask an
+ * agent to free up space"; any other leaves a plain note, its retry being the control just used, and its details go to
+ * the log.
  */
 
 import type { ReportedFailure, ShellConnection } from "@imbue/workspace-ui/src/app_contract";
