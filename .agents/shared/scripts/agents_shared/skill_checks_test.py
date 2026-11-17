@@ -146,7 +146,7 @@ def test_another_skills_file_ends_a_link_instead_of_being_read_on_from(
     _write(other, "references/far.md", "Read `references/farther.md`.\n")
     _write(other, "references/farther.md", "Read `system/missing.py`.\n")
     skill = _skill(tmp_path, "near", "See `.agents/skills/other/references/far.md`.\n")
-    assert _failed(skill) == set()
+    assert _failed(skill) == {Check.BOUNDARY}
 
 
 def test_a_missing_tracked_path_fails_and_untracked_kinds_are_skipped(
