@@ -256,10 +256,7 @@ def up(
                 sibling,
                 worktree,
                 repo_root,
-                with_apps=(),
                 instance_key=instance_key,
-                title=None,
-                is_private=False,
                 instances=instances,
                 dump_registry=dump,
             )
