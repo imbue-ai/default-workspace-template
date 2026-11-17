@@ -30,6 +30,7 @@ import { StalePlacementsSaveError } from "../model/api";
 import { DEFAULT_WHAT_FAILED, failureSentence, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import type { ReportedFailure, StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
+import type { TextAction } from "../reducers/launcherRows";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { refreshShellKeybindings } from "../model/keybindings";
 import {
@@ -1761,7 +1762,14 @@ export class DesktopStore {
   async openAgentChat(): Promise<boolean> {
     if (this.refuseWhileViewing("show the agent's chat")) return false;
     const pinned = avatarPinnedEntryOf(this.state);
-    if (pinned === null) return this.startWithText("");
+    if (pinned === null) {
+      const [primary] = freeTextRowsOf(openableApps(this.state));
+      if (primary === undefined) {
+        this.toast(NO_TEXT_APP_REASON);
+        return false;
+      }
+      return this.runFreeText(primary.app.name, primary.launchPath.id, "");
+    }
     this.showWindow(pinned.window.id);
     return true;
   }
@@ -2741,30 +2749,30 @@ export class DesktopStore {
     return this.runFreeText(draftRow.app.name, draftRow.launchPath.id, text);
   }
 
-  /** A page's ``shell:start-with-text`` (launcher plan section 3.7): the primary text action runs with the text;
-   *  with no free-text row on the machine the user is told. */
-  async startWithText(text: string): Promise<boolean> {
-    const [primary] = freeTextRowsOf(openableApps(this.state));
-    if (primary === undefined) {
-      this.toast(NO_TEXT_APP_REASON);
-      return false;
-    }
-    return this.runFreeText(primary.app.name, primary.launchPath.id, text);
+  /** A page's ``shell:start-with-text`` (launcher plan section 3.7), and the shell's own "Ask an agent to free up
+   *  space": the primary text action runs with the text (the main chat on a stock machine). Settles as
+   *  ``startNewWithText`` does, toasting nothing. */
+  async startWithText(text: string): Promise<StartNewOutcome> {
+    return this.startTextRow(text, "primary");
   }
 
   /** A page's ``shell:start-new-with-text`` ("Ask an agent to fix this"): the secondary text action runs with the
    *  text (Chat's New Chat on a stock machine), else the primary one. Settles once the window is on the desktop, or
    *  with the failure for the caller to show where the press was: nothing is toasted. */
   async startNewWithText(text: string): Promise<StartNewOutcome> {
+    return this.startTextRow(text, "secondary");
+  }
+
+  private async startTextRow(text: string, textAction: TextAction): Promise<StartNewOutcome> {
     if (this.viewedDesktop() !== null) {
-      console.info("[si] refused to start a new chat while viewing somebody else's desktop");
+      console.info("[si] refused to start a chat while viewing somebody else's desktop");
       return {
         isOpened: false,
         failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
       };
     }
     const [primary, secondary] = freeTextRowsOf(openableApps(this.state));
-    const row = secondary ?? primary;
+    const row = textAction === "secondary" ? (secondary ?? primary) : primary;
     if (row === undefined) {
       return { isOpened: false, failure: { message: `${NO_TEXT_APP_REASON}.`, details: null, isReportable: false } };
     }
