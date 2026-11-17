@@ -383,7 +383,8 @@ def revive(app_name: str, repo_root: Path, *, instances: Instances) -> int:
     preview again where it was, over a fresh copy of the live data. A preview whose
     processes all still run is left alone, and two revives at once boot it once.
     Returns 1, saying why on stderr, when no preview of the app is recorded or the boot
-    fails (a worktree that is gone, a build that no longer boots).
+    fails (a build that no longer boots). Raises PreviewError when the recorded worktree
+    is gone or no longer holds the app's manifest.
     """
     siblings = _recorded_siblings(repo_root, app_name)
     # Every instance this boots, its siblings' included, so a sibling's own revive waits for
