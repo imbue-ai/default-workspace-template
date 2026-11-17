@@ -70,7 +70,6 @@ export interface GalleryState {
   readonly apps: readonly AppRecord[];
 }
 
-/** The gallery of the theme `requested` names, or null when the catalog has no such theme. */
 /** Why the gallery could not load its themes or apps, with a Try again that loads the page again. */
 export function galleryFailureNotice(error: unknown, reload: () => void): FailureNotice {
   return {
@@ -79,6 +78,7 @@ export function galleryFailureNotice(error: unknown, reload: () => void): Failur
   };
 }
 
+/** The gallery of the theme `requested` names, or null when the catalog has no such theme. */
 export function galleryStateOf(
   catalog: ThemeCatalog,
   requested: string,
