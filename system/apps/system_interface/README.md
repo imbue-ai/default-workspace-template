@@ -660,8 +660,10 @@ the foot of the screen (the shared toasts of `system/libs/workspace_ui`) rather
 than a browser alert. A toast whose sentence asks for a bug report offers
 "Report a bug" whenever the Imbue Studio chrome says it opens one, decided as
 the toast draws, and the report it opens carries the toast's sentence and
-details (`minds:open-help {errorDetails}`); a page's `shell:report-bug` does
-the same with the failure the page sent.
+details (`minds:open-help {errorDetails}`); a failure told in place (a dialog's
+line, the launcher, the backdrop, a stopped window) does the same, and so does a
+page's `shell:report-bug` with the failure the page sent. "Ask an agent to ..."
+and "Report a bug" leave their toast up; Try again takes it down.
 
 ### The phone layout
 
@@ -799,10 +801,11 @@ bundle, it still works when nothing else does.
 The placeholder is the workspace's general recovery surface, so it hands over
 an **agent** and a **terminal** rather than a repair. "Ask an agent to fix
 this" sends the agent the message the command below carries, through the
-workspace's primary text action (Chat's New Chat on a stock workspace), and
-frames the agent's chat on the page. Behind "See details" are the command, for
-whoever would rather run it themselves, and a session of the already-running
-terminal app in a frame, made when the details are first opened. With no app to
+workspace's secondary text action (Chat's New Chat on a stock workspace, so the
+repair gets a chat of its own), and frames the agent's chat on the page. Behind
+"See details" are the command, for whoever would rather run it themselves, a
+session of the already-running terminal app in a frame, made when the details
+are first opened, and, after a refused attempt, why the agent didn't start. With no app to
 ask an agent through, the button is not offered and the details start open; with
 no terminal, the details say so. The page cannot post to another app's origin,
 so both launches go through the shell's `POST /api/not-built/launch` (desktop
