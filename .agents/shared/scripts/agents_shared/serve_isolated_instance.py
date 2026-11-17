@@ -1110,7 +1110,8 @@ def up(
     mode, recorded on the inner service's row so the workspace themes it as it
     would the app. ``project`` names a standalone project, relative to ``cwd``, that
     ``command`` boots from: its venv is linked before each boot and ``command`` runs
-    behind ``project_launcher``.
+    behind ``project_launcher``. A ``service_name`` from a ``repo_root`` that is a
+    linked git worktree is refused before anything boots.
 
     On any failure the partial state is torn down and 1 is returned. On success a
     state file records the servers + services so ``down`` can find them later.
@@ -1426,9 +1427,9 @@ def frame(
     Returns 1 on failure. A failed boot is torn down, a re-frame's row deregistered
     with it; a failed re-frame keeps only its record (``read_frame``), so a later
     call can boot it again on a fresh port without being told the note. An inner
-    path without a leading ``/``, an unreadable state file, or a previous wrapper
-    that survives SIGKILL is refused before anything changes, leaving a previous
-    frame as it was.
+    path without a leading ``/``, a ``repo_root`` that is a linked git worktree, an
+    unreadable state file, or a previous wrapper that survives SIGKILL is refused
+    before anything changes, leaving a previous frame as it was.
     """
     if not inner_path.startswith("/"):
         sys.stderr.write(
