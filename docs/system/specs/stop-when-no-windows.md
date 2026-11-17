@@ -131,7 +131,7 @@ On the first accepted connection it:
 3. answers the accepted connection with the loading page (section 5.3) and `Connection: close`, and closes it.
 
 It reads the request only far enough to answer sensibly (the first line and headers, bounded), never proxies anything, and answers every method and path the same way.
-Connections left in the backlog when the listener closes are reset by the kernel; whoever sent them sees a connection error and retries (`mngr forward`'s loader polls every second; caddy's error handler serves its own loading page).
+Connections left in the backlog when the listener closes are reset by the kernel; whoever sent them sees a connection error and retries (`mngr forward`'s loader polls every second; caddy's error handler serves the gateway's not-responding page, which reloads for up to a minute, section 5.7).
 
 Two facts make the handoff safe.
 Every failure mode between "the app stopped" and "the app answers" lands on a loading page that retries: a refused connection lands on the proxy's, and a connection the parker accepted lands on the parker's.
