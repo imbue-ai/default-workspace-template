@@ -109,6 +109,66 @@ describe("Ask an agent to fix this", () => {
     expect(root.querySelector(".ask-agent-failure")).toBeNull();
   });
 
+  it("offers Report a bug for a reportable failure it shows, where the shell can open one, carrying that failure", async () => {
+    root = document.createElement("div");
+    const parent = framed();
+    const live = connectToShell({});
+    connection = live;
+    handshake(parent, { canReportBug: true });
+    const view = (): m.Children => m(AskAgentToFixButton, { connection: live, failure: FAILURE });
+    render(view())?.click();
+    const [asked] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    const failure = {
+      message: "Chat couldn't open that. Try again. If this persists, report a bug.",
+      details: "HTTP 502\nchat answered 500",
+      isReportable: true,
+    };
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId: asked.requestId, isOpened: false, failure },
+        source: parent as unknown as Window,
+      }),
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    m.render(root, view());
+
+    const reportBug = root.querySelector<HTMLButtonElement>(".ask-agent-failure .report-bug");
+    expect(reportBug?.textContent).toBe("Report a bug");
+    reportBug?.click();
+    expect(parent.postMessage).toHaveBeenLastCalledWith(
+      { type: SHELL_REPORT_BUG, message: failure.message, details: failure.details },
+      "*",
+    );
+
+    handshake(parent, { canReportBug: false });
+    m.render(root, view());
+    expect(root.querySelector(".ask-agent-failure .report-bug")).toBeNull();
+  });
+
+  it("takes an answer that comes after a restarted shell settled its request as not answered", async () => {
+    root = document.createElement("div");
+    const parent = framed();
+    const live = connectToShell({});
+    connection = live;
+    handshake(parent, { shellId: "shell-1" });
+    const view = (): m.Children => m(AskAgentToFixButton, { connection: live, failure: FAILURE });
+    render(view())?.click();
+    const [asked] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    handshake(parent, { shellId: "shell-2" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    render(view());
+    expect(root.querySelector(".ask-agent-failure-message")?.textContent).toContain("didn't answer");
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId: asked.requestId, isOpened: true },
+        source: parent as unknown as Window,
+      }),
+    );
+    render(view());
+    expect(root.querySelector(".ask-agent-failure")).toBeNull();
+  });
+
   it("renders nothing on a page opened on its own", () => {
     root = document.createElement("div");
     connection = connectToShell({});

@@ -55,6 +55,8 @@ import {
   SHELL_START_WITH_TEXT,
   reportedFailureOf,
 } from "@imbue/workspace-ui/src/app_contract";
+import type { StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
+import { DEFAULT_WHAT_FAILED, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { viewportRect } from "../geometry/frames";
 import type { PixelRect } from "../geometry/frames";
@@ -233,6 +235,11 @@ export class LivePagesLayer implements PageDriver {
   private mountPolicy: MountPolicy = { kind: "all" };
   /** The overview's tiles while it is up, else null. */
   private overview: OverviewPresentation | null = null;
+  /** This load of the shell, in every handshake: a page settles the requests it is still waiting on only when a
+   *  handshake names another load (the shell started again and forgot them). */
+  private readonly shellId = Array.from(crypto.getRandomValues(new Uint32Array(2)), (part) =>
+    part.toString(16).padStart(8, "0"),
+  ).join("");
 
   constructor(
     private readonly host: HTMLElement,
@@ -896,6 +903,7 @@ export class LivePagesLayer implements PageDriver {
       canReportBug: this.store.getCanReportBug(),
       opensLocalFiles: this.store.getOpensLocalFiles(),
       isViewing,
+      shellId: this.shellId,
     });
     page.greetedDesktopId = desktopId;
     page.greetedIsViewing = isViewing;
@@ -1006,9 +1014,22 @@ export class LivePagesLayer implements PageDriver {
       console.warn(`[si] ${SHELL_START_NEW_WITH_TEXT} ignored: it carried no request id (${JSON.stringify(payload)})`);
       return;
     }
-    void this.store.startNewWithText(text).then((outcome) => {
-      sendToChildFrame(frame, SHELL_START_NEW_WITH_TEXT_RESULT, { requestId, ...outcome });
-    });
+    void this.store
+      .startNewWithText(text)
+      .catch((error: unknown): StartNewOutcome => {
+        console.error(`[si] ${SHELL_START_NEW_WITH_TEXT} failed`, error);
+        return {
+          isOpened: false,
+          failure: {
+            message: fallbackSentence(DEFAULT_WHAT_FAILED),
+            details: error instanceof Error ? error.message : String(error),
+            isReportable: true,
+          },
+        };
+      })
+      .then((outcome) => {
+        sendToChildFrame(frame, SHELL_START_NEW_WITH_TEXT_RESULT, { requestId, ...outcome });
+      });
   }
 
   /** ``shell:draft-text {text}`` from a page (element-reference-menu plan section 5): the text is drafted into the
