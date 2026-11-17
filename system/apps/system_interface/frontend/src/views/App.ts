@@ -1317,6 +1317,7 @@ export function App(): m.Component<AppAttrs> {
         void current.runFreeText(row.app.name, row.launchPath.id, row.text, report).then(clearIfUnchanged);
         return;
       case "tour":
+        launcherQuery = "";
         tour?.start();
         return;
     }

@@ -1113,6 +1113,23 @@ describe("the desktop shortcut rows", () => {
   });
 });
 
+describe("the launcher field", () => {
+  it("lets go of a search once the tour row it found has run", () => {
+    store.openLauncher();
+    m.redraw.sync();
+    const field = (): HTMLTextAreaElement =>
+      document.querySelector("[data-launcher-field] textarea") as HTMLTextAreaElement;
+    field().value = "tour";
+    field().dispatchEvent(new Event("input", { bubbles: true }));
+    m.redraw.sync();
+
+    (document.querySelector("[data-launcher-overlay] [data-tour-row]") as HTMLElement).click();
+    m.redraw.sync();
+
+    expect(field().value).toBe("");
+  });
+});
+
 describe("a press outside what is open", () => {
   it("closes an open menu through its own sheet, with the focused page shielded under it", () => {
     expect(focusedShield()).toBeNull();
