@@ -153,7 +153,7 @@ recent user work" rule, gate decisions, milestones, terminal statuses, and a
 poll that ends without a report. Re-arm the poll after every gate and every
 milestone. Your skill lists the gates and terminal statuses its operation
 produces. On `stuck`, follow the failure flow in
-`.agents/skills/launch-task/references/worker-failure.md`, which stops the
+`.agents/shared/references/lead-proxy/worker-failure.md`, which stops the
 worker and leaves the ticket open with a note. The stopped worker stays until
 the user overrides the failure, which resumes it, or a later pass over the
 same creations supersedes this one (`harden-contention/supersede.md`).

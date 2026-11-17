@@ -15,9 +15,9 @@ If the output shows ongoing tool use, an active spinner / "Running…" line,
 or recent timestamps within the last few minutes, the worker is alive --
 re-arm the poll with a longer timeout (e.g. `60m`) and continue. A session
 that is dead is a crash: recover the worker
-(`.agents/skills/launch-task/references/dead-worker-recovery.md`) and re-arm
+(`.agents/shared/references/lead-proxy/dead-worker-recovery.md`) and re-arm
 the poll. Only invoke the failure flow
-(`.agents/skills/launch-task/references/worker-failure.md`) if that recovery
+(`.agents/shared/references/lead-proxy/worker-failure.md`) if that recovery
 does not bring it back, the agent is wedged on the same operation for an
 extended period, or output has been static.
 

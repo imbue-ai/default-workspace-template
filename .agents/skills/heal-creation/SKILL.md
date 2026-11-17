@@ -174,7 +174,7 @@ re-arm this poll after every gate. For a heal:
 - The only user-approval gate is `final-creation` -- a heal has no outline
   gate. A `question` gate can arrive at any point.
 - Terminal statuses: `done` (Step 4); `stuck` (the failure flow in
-  `.agents/skills/launch-task/references/worker-failure.md`, which stops the
+  `.agents/shared/references/lead-proxy/worker-failure.md`, which stops the
   worker).
 
 ## Step 4: Merge and go live

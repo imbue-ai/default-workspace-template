@@ -9,8 +9,9 @@ is not where worker bugs get fixed.
 ## What counts as a failure
 
 A worker that crashed (`STOPPED` with no `archived_at` label, or an empty one)
-is recovered first, per `dead-worker-recovery.md`. Its crash counts as a
-failure below only once that recovery has not brought it back.
+is recovered first, per
+`.agents/shared/references/lead-proxy/dead-worker-recovery.md`. Its crash
+counts as a failure below only once that recovery has not brought it back.
 
 - Worker state is `STOPPED` without reaching a normal completion.
 - Worker state is `DONE` but its final message says it gave up, could not

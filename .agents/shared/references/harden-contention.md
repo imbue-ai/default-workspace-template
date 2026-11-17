@@ -68,7 +68,7 @@ done
   there when it has a record whose `archived_at` is absent or empty (a
   revived worker's is blanked; a STOPPED one without it crashed, and the next
   message restarts it; see
-  `.agents/skills/launch-task/references/dead-worker-recovery.md`). No record,
+  `.agents/shared/references/lead-proxy/dead-worker-recovery.md`). No record,
   or one stopped on purpose (a non-empty `archived_at`), means the worker is
   gone.
   Then:

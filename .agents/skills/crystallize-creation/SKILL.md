@@ -246,7 +246,7 @@ crystallize pass:
   usable: **skill** → it is on disk at `.agents/skills/$NAME/` and invocable;
   **app** → refresh the window. Step 6 still runs only on `done`.
 - Terminal statuses: `done` (Step 6); `stuck` (the failure flow in
-  `.agents/skills/launch-task/references/worker-failure.md`, which stops the
+  `.agents/shared/references/lead-proxy/worker-failure.md`, which stops the
   worker).
 
 Before any merge from the worker's branch, a milestone's or the one on `done`,

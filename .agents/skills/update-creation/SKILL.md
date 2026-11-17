@@ -232,7 +232,7 @@ re-arm this poll after every gate. For an update:
 - Terminal statuses: `done` (Step 4); `no-update-needed` (no change -- destroy
   the worker per `lead-proxy.md` and close the ticket, with no merge); `stuck`
   (the failure flow in
-  `.agents/skills/launch-task/references/worker-failure.md`, which stops the
+  `.agents/shared/references/lead-proxy/worker-failure.md`, which stops the
   worker).
 - The committed origin's worker may produce no new commits of its own if
   verification is clean. That is expected -- the substantive change is already

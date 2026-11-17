@@ -242,7 +242,7 @@ On `type: status`:
   A merge that conflicts is handled as "Before a merge" says.
 
 - `name: stuck`, or the 30m timeout tripped without a report arriving -- follow
-  `.agents/skills/launch-task/references/worker-failure.md`: surface the report
+  `.agents/shared/references/lead-proxy/worker-failure.md`: surface the report
   body (or its absence) to the user, point at the branch and worker agent, then
   stop the worker (and its own workers) so no process stays behind:
   ```bash
@@ -276,5 +276,5 @@ uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
 The send brings the stopped worker back in its worktree with its conversation
 intact, and `reply` blanks the `archived_at` label the stop set, so a later
 crash of it is restarted like any other
-(`.agents/skills/launch-task/references/dead-worker-recovery.md`). Then re-arm
+(`.agents/shared/references/lead-proxy/dead-worker-recovery.md`). Then re-arm
 the `await` poll and end your turn.

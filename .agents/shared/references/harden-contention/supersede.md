@@ -17,7 +17,7 @@ holder stopped answering. That work is never dropped. The new pass carries it:
    `work_dir` from its `mngr list --format jsonl` record and run `git -C
    <work_dir> status --porcelain`; commit anything there on that worktree's
    branch, per steps 1-3 of "Last resort: manual worktree salvage" in
-   `.agents/skills/launch-task/references/dead-worker-recovery.md`.
+   `.agents/shared/references/lead-proxy/dead-worker-recovery.md`.
 2. **Destroy it, keeping its commits.**
 
    ```bash
@@ -44,10 +44,9 @@ holder stopped answering. That work is never dropped. The new pass carries it:
    which the new pass covers too), and each `superseded/` branch you kept. Name
    those in the task body under a `## Carried work` heading, one per line with
    its commits (`git log --oneline HEAD..<branch>`). The worker merges them
-   into its own branch before hardening and treats them as part of the change
-   (`.agents/skills/harden-worker/references/carried-work.md`). They are
-   merged there and not into your branch, because nothing has verified them
-   yet. One superseding pass validates the union of all pending changes
+   into its own branch before hardening and treats them as part of the
+   change. They are merged there and not into your branch, because nothing has
+   verified them yet. One superseding pass validates the union of all pending changes
    together -- which is the only combination that will actually run. A worker
    that follows its own guide rather than the harden worker's (update-self's,
    migrate-workspace's) has no such step, so its new pass carries nothing:
@@ -77,8 +76,7 @@ merge:
   its branch, which carrying the branch then carries, or on yours, through a
   later report of its you merged. When it had not, name the revert commit
   under `## Carried work` as well, and the new worker reverts it on its own
-  branch (the same `carried-work.md`). Never
-  reinstate it on your branch yourself. Check your `HEAD` together with each
+  branch. Never reinstate it on your branch yourself. Check your `HEAD` together with each
   kept branch (with none kept, `HEAD` alone):
 
   ```bash

@@ -8,7 +8,7 @@ moved, then re-arm the poll exactly as for a gate
 
 ```bash
 uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
-    --task-file <TASK_FILE> -m "Catch up to $(git rev-parse HEAD) per 'Catching up to a moved base' in catching-up.md: merge it into your branch, resolve any conflict, harden and verify what it brings in, and report done again. What moved: <the \$BASE..HEAD commits touching its creations, a conflicted path, and any notes on the ticket>. Add to the pass: <each creation a note names that the pass does not cover, as type:name>."
+    --task-file <TASK_FILE> -m "Catch up to $(git rev-parse HEAD) as your own guide's catch-up says: merge it into your branch, resolve any conflict, harden and verify what it brings in, and report done again. What moved: <the \$BASE..HEAD commits touching its creations, a conflicted path, and any notes on the ticket>. Add to the pass: <each creation a note names that the pass does not cover, as type:name>."
 ```
 
 Leave out the `Add to the pass:` sentence when no note names one. When one
@@ -24,9 +24,7 @@ sed -i "s|^creations: .*|& $ADDED|" <TASK_FILE>
 sed -i "0,/^# /s|^# .*|& $ADDED|" "$TICKETS_DIR/<ticket-id>.md"
 ```
 
-The worker's side is `.agents/skills/harden-worker/references/catching-up.md`
-("Catching up to a moved base"), or its own flow's catch-up section where one
-exists (`update-self`'s worker has its own). It merges your `HEAD` into its
+The worker catches up as its own guide says. It merges your `HEAD` into its
 branch, so merging that branch back into yours conflicts with nothing. It
 resolves every conflict on its side, regenerating lockfiles rather than
 choosing sides. The commits it brings in that touch a creation in the pass get
