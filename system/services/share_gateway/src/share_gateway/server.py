@@ -31,6 +31,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import urlencode
+from urllib.parse import urlsplit
 
 from flask import Flask
 from flask import Response
@@ -102,11 +103,15 @@ _PAGE_STYLE = (
 _PAGE_STYLE_HASH = base64.b64encode(hashlib.sha256(_PAGE_STYLE.encode("utf-8")).digest()).decode("ascii")
 
 
-def page_content_security_policy(auth_origin: str) -> str:
+def page_content_security_policy(auth_origin: str, broker_origin: str) -> str:
     """The gateway's own pages load nothing but their inline stylesheet, and their one form (switching account)
-    posts to the auth origin. Stated in full because the frame-ancestors policy caddy adds governs embedding only;
-    the two headers compose by intersection."""
-    return f"default-src 'none'; style-src 'sha256-{_PAGE_STYLE_HASH}'; base-uri 'none'; form-action {auth_origin}"
+    posts to the auth origin, which redirects to the broker: a browser holds that redirect to form-action too.
+    Stated in full because the frame-ancestors policy caddy adds governs embedding only; the two headers compose by
+    intersection."""
+    return (
+        f"default-src 'none'; style-src 'sha256-{_PAGE_STYLE_HASH}'; base-uri 'none'; "
+        f"form-action {auth_origin} {broker_origin}"
+    )
 
 
 def _render_page(title: str, body_html: str, refresh_seconds: int | None = None) -> str:
@@ -325,7 +330,8 @@ def build_gateway_app(
     chrome_origin = materials.chrome_origin
 
     auth_host = f"{auth_label}.{workspace_domain}"
-    page_policy = page_content_security_policy(auth_origin)
+    broker_parts = urlsplit(materials.broker_url)
+    page_policy = page_content_security_policy(auth_origin, f"{broker_parts.scheme}://{broker_parts.netloc}")
 
     def _html_page(page: str, status: int) -> Response:
         """One of the gateway's own pages, under the policy that admits exactly its contents."""
