@@ -12,7 +12,7 @@ A skill's files have one reader, an agent following that skill: nothing outside 
 
 - **Pointers that now name a skill.** A latchkey permission request in `github-sync`, `migrate-workspace`, `update-installed-template`, `update-published-template`, `use-template` and `datalib` names the `connect-external-service` skill, as does the visiting agent's primer. `build-app` and `interactive-delivery.md` name the `harden-worker` skill, and `freeing-memory.md` the `update-self` skill.
 
-- **Pointers dropped, with the fact stated where it is used**: `build-app`'s `.nobackup` rule, `update-creation` on a worker splitting its pass and on the critical-app handoff, and `harden-contention.md` on how a worker catches up.
+- **Pointers dropped, with the fact stated where it is used**: `build-app`'s `.nobackup` rule, `update-creation` on a worker splitting its pass and on the critical-app handoff, `harden-contention.md` on how a worker catches up, and `freeing-memory.md` on the files that send a lead to it.
 
 - **`spec-summary.md`** no longer links `user-facing-language.md`, which `AGENTS.md` names, so a skill that links the migration reference reaches nothing three links away.
 
