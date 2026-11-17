@@ -920,6 +920,32 @@ describe("opening", () => {
     expect(last(store.toasts.current())?.isReportable).toBe(true);
   });
 
+  it("words a dialog's failed save as a toast would, so a full disk offers an agent and a Try again that saves again", async () => {
+    const store = await startedStore();
+    const full = shellRefusal(
+      500,
+      "cannot write shell state file desktops.json: [Errno 28] No space left on device",
+      "This workspace is out of space, so your change could not be saved.",
+      "out_of_space",
+    );
+    const retry = vi.fn();
+    const notice = store.changeFailureNotice("The wallpaper couldn't be changed", full, retry);
+    expect(notice.message).toBe("This workspace is out of space, so your change could not be saved.");
+    expect(notice.actions.map((action) => [action.label, action.keepsToast === true])).toEqual([
+      ["Ask an agent to free up space", true],
+      ["Try again", false],
+    ]);
+    notice.actions[1].run();
+    expect(retry).toHaveBeenCalledTimes(1);
+    // A refusal with its reason is not one to try again.
+    const refused = store.changeFailureNotice(
+      "The wallpaper couldn't be changed",
+      refusedWith(400, { detail: "no such wallpaper" }),
+      retry,
+    );
+    expect(refused).toMatchObject({ message: "The wallpaper couldn't be changed.", actions: [] });
+  });
+
   it("opens a page's shell:open on the posting window's app and desktop", async () => {
     const store = await startedStore();
     await store.switchDesktop("work");
