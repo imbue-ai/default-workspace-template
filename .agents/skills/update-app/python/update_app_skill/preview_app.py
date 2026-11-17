@@ -38,7 +38,9 @@ with the siblings it booted, and verifies the processes died.
 Exit codes:
     0  Success.
     1  The manifest could not be read, the table could not be resolved, another
-       pass's preview is up, or the shared boot failed (which quotes the boot log).
+       pass's preview is up, a preview with a window was asked for from a git
+       worktree, ``--private`` was given with ``--with`` or over a preview that has
+       a window, or the shared boot failed (which quotes the boot log).
 """
 
 from __future__ import annotations
