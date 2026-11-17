@@ -198,6 +198,7 @@ def _plenty_of_disk(_path: Path) -> int:
 def _up(
     tmp_path: Path,
     *,
+    name: str = _NAME,
     runner: _RecordingRunner | None = None,
     registry: _RecordingRegistry | None = None,
     http: _FakeHttp | None = None,
@@ -207,7 +208,7 @@ def _up(
     **kwargs,
 ) -> int:
     return mod.up(
-        _NAME,
+        name,
         _LAUNCH,
         str(cwd if cwd is not None else tmp_path),
         tmp_path,
@@ -2020,20 +2021,7 @@ def test_two_revives_at_once_boot_the_instance_once(tmp_path: Path) -> None:
 def test_revive_boots_the_siblings_a_preview_frames_first(tmp_path: Path) -> None:
     spawner = _FakeSpawner()
     runner = _RecordingRunner()
-    sibling_code = mod.up(
-        "chat-preview",
-        _LAUNCH,
-        str(tmp_path),
-        tmp_path,
-        port_env_by_name={mod.MAIN_PORT_NAME: _PORT_ENV},
-        runner=runner,
-        registry=_RecordingRegistry(),
-        http=_FakeHttp(_all_healthy),
-        spawner=spawner,
-        venv_linker=_RecordingVenvLinker(),
-        sleeper=lambda _seconds: None,
-    )
-    assert sibling_code == 0
+    assert _up(tmp_path, name="chat-preview", runner=runner, spawner=spawner) == 0
     assert (
         _up(tmp_path, runner=runner, spawner=spawner, revive_first=["chat-preview"])
         == 0
