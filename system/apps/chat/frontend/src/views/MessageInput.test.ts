@@ -2031,6 +2031,20 @@ describe("MessageInput switching harness", () => {
     expect(findByTag(after, "textarea")?.attrs?.value).toBe("Carry on in Codex");
   });
 
+  it("says a switch a gateway gave up on may have moved the chat, not that it is still where it was", async () => {
+    mocks.switching.target = TARGET;
+    mocks.switchChat.mockRejectedValueOnce(refusal(502, { error: "upstream connection reset" }));
+    const component = MessageInput();
+    press(findByAttr(typeDraft(component, "agent-1", "Carry on in Codex"), "aria-label", "Switch and send"));
+    await flushAsync();
+
+    const text = renderedText(
+      findByClass(component.view!({ attrs: { chatId: "agent-1" } } as never), "modal-message"),
+    );
+    expect(text).toContain("The workspace didn't answer, so Imbue Studio can't tell whether this chat moved to");
+    expect(text).not.toContain("still running where it was");
+  });
+
   it("offers a new chat on the target, not another try, when the chat can't be moved to that account", async () => {
     mocks.switching.target = TARGET;
     mocks.switchChat.mockRejectedValueOnce(

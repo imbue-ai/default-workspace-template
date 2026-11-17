@@ -103,7 +103,7 @@ export function describeLaunchFailure(error: unknown): FailureLines {
 export function describeSwitchFailure(error: unknown, target: string, isSendPath: boolean): FailureLines {
   const failure = describeRequestFailure(error);
   const backInTheBox = isSendPath ? ". Your message is back in the box" : "";
-  if (failure.cause === "not_answered") {
+  if (isUnanswered(error, failure)) {
     return {
       body: [`The workspace didn't answer, so Imbue Studio can't tell whether this chat moved to ${target}.`],
       details: failure.details,
