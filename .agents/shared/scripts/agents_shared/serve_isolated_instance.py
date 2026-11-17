@@ -163,8 +163,9 @@ _HOST_PLACEHOLDER_KIND = "host"
 # still exists when the agent goes to read more of it.
 FAILED_LOG_SUFFIX = "-failed.log"
 # What ``revive`` exits with when the instance cannot come back as it was (no record, a
-# record from before revives, a port another process holds, a copy or its checkout gone):
-# only a fresh ``up`` brings it back, so a caller should not offer to try again.
+# record it cannot read or from before revives, a port another process holds, a copy or
+# its checkout gone): only a fresh ``up`` brings it back, so a caller should not offer to
+# try again.
 REVIVE_IMPOSSIBLE_EXIT_CODE = 3
 # Held by a ``revive`` from its first look at an instance until its state is written, so
 # two at once (two windows, or a window and an agent) boot it once.
@@ -1848,8 +1849,9 @@ def revive(
     ``revive_first`` names come back first, and a frame is booted again from its
     record. Two revives of one instance at once boot it once. Returns 1 when a boot
     fails, and ``REVIVE_IMPOSSIBLE_EXIT_CODE`` when only a fresh ``up`` can bring it
-    back: no record, a record from before revives, a recorded port another process now
-    holds, or a copy or the checkout it was booted from that is gone.
+    back: no record, a record it cannot read, a record from before revives, a recorded
+    port another process now holds, or a copy or the checkout it was booted from that
+    is gone.
     """
     lock_path = repo_root / STATE_ROOT / f"{name}{REVIVE_LOCK_SUFFIX}"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
