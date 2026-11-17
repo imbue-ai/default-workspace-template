@@ -3114,17 +3114,16 @@ export class DesktopStore {
    *  text (Chat's New Chat on a stock machine), else the primary one. Settles once the window is on the desktop, or
    *  with the failure for the caller to show where the press was: nothing is toasted. */
   async startNewWithText(text: string): Promise<StartNewOutcome> {
-    const row = this.newTextRow();
-    if (row === undefined) {
-      return { isOpened: false, failure: { message: `${NO_TEXT_APP_REASON}.`, details: null, isReportable: false } };
-    }
     // The launch's own refusal while viewing tells the user in a note and hands nothing over.
-    if (this.viewedDesktop() !== null) {
-      this.refuseWhileViewing("ask an agent");
+    if (this.refuseWhileViewing("ask an agent")) {
       return {
         isOpened: false,
         failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
       };
+    }
+    const row = this.newTextRow();
+    if (row === undefined) {
+      return { isOpened: false, failure: { message: `${NO_TEXT_APP_REASON}.`, details: null, isReportable: false } };
     }
     const whatFailed = `${row.app.display_name} couldn't open that`;
     let failure: FailureNotice | null = null;

@@ -4594,6 +4594,15 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([]);
   });
 
+  it("answers an agent asked for while viewing with the stop-viewing note even with no app to take the ask", async () => {
+    const store = await viewerStore();
+    socket.deliver().onAppsUpdated([]);
+    await store.switchDesktop("alice");
+
+    await store.askAgent("Please look at this.", true);
+    expect(notices()).toEqual([STOP_VIEWING_FIRST_NOTICE]);
+  });
+
   it("never views on the phone: a window shrunk to phone width while viewing lands on the way back", async () => {
     api.ownerLayoutClientId = "alice-laptop";
     api.ownerViewport = { width: 2000, height: 1600 };
