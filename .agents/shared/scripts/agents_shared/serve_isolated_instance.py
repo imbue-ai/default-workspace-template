@@ -976,8 +976,7 @@ def _teardown(
 def _pids_still_ours(state: dict, runner: Runner) -> list[int]:
     """The pids ``state`` records, less any no longer the process it started.
 
-    A state that records ``pid_starts`` (a frame's, which outlives restarts) can name a
-    pid a reboot or a restore into a new container has handed to an unrelated process
+    A state that records ``pid_starts`` outlives restarts, so it can name a pid a reboot or a restore into a new container has handed to an unrelated process
     group; signalling that group would kill it. So a pid whose recorded start time is
     known and no longer matches is dropped; a pid with none recorded is kept.
     """
