@@ -1829,7 +1829,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Register the instance as a service under this name (needed to "
         "surface it as a window; the name becomes a hostname label, so it must be "
         "DNS-safe: lowercase letters/digits and single hyphens, no underscores, "
-        "not starting with 'host-' or 'agent-'). Omit for a bare instance "
+        "not starting with 'host-' or 'agent-'). Refused from a git worktree, whose "
+        "registry the workspace never reads. Omit for a bare instance "
         "reached directly on its port.",
     )
     up_parser.add_argument(
