@@ -152,17 +152,20 @@ values (5000 and 3000), i.e. the model chooses per call. The guard is still live
 shim sits on the command before any of that; but the `--backgrounded` arm is not provably
 unreachable, and an agent that wants to background a command can.
 
-**No harness has a cwd Stop hook, and a Stop hook must not depend on its cwd.** claude runs
-every hook in the session's current directory, and its `Bash` tool keeps one shell cwd ACROSS
-calls, so an agent whose last call `cd`ed into a subfolder has its Stop hooks run there. Every
-Stop hook a workspace agent runs finds its files from `MNGR_AGENT_WORK_DIR`,
-`MNGR_AGENT_STATE_DIR` or its own location instead, and code-guardian's (which workers run for
-its uncommitted-changes gate) `cd`s to `CLAUDE_PROJECT_DIR` first. claude's settings used to
-carry `[ -e .git ] || "Be sure to return to the repo root..."`, which refused the stop until the
-agent went back. It protected nothing here, and answering it cost the agent a second reply after
-its real one (the extra-reply problem described under P8), which broke the chat's turn, so it
-was removed. agy's `Cwd` and codex's `workdir` are required per-call parameters, so they never
-had the question.
+**A claude hook never takes its files from the directory it runs in.** claude runs every hook in
+the session's current directory, and its `Bash` tool keeps one shell cwd ACROSS calls, so a hook
+fires wherever the agent last `cd`ed to. A hook command names its script as
+`"${CLAUDE_PROJECT_DIR}"/...` (the project root the session started in, which claude sets for
+every hook); the scripts find the rest from `MNGR_AGENT_WORK_DIR`, `MNGR_AGENT_STATE_DIR` or
+their own location, and a plugin's from `${CLAUDE_PLUGIN_ROOT}` (code-guardian's, which workers
+run for its uncommitted-changes gate, `cd`s to `CLAUDE_PROJECT_DIR` first). A hook that needs to
+know where the agent's shell is reads the `cwd` field of its input rather than its own directory.
+`agent_hook_wiring_test.py` holds the commands to this; what a script does inside is review's to
+check. claude's settings used to carry `[ -e .git ] || "Be sure to return to the repo root..."`,
+which refused the stop until the agent went back. It protected nothing once the hooks followed
+this rule, and answering it cost the agent a second reply after its real one (the extra-reply
+problem described under P8), which broke the chat's turn, so it was removed. agy's `Cwd` and
+codex's `workdir` are required per-call parameters, so they never had the question.
 
 ### pi  (wiring: `.pi/extensions/policy_guards.ts` in this repo)
 Pi has **no shell-hook surface** — its only extension point is a TypeScript module, which pi

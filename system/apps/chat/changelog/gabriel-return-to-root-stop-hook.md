@@ -1,1 +1,1 @@
-The harness contract notes now say that no harness has a cwd Stop hook and that a Stop hook must not depend on the folder it runs in. They also explain why Claude's former repo-root hook was removed.
+The harness contract notes state the rule for Claude hooks: a hook names its files from `${CLAUDE_PROJECT_DIR}` and never from the folder it runs in. A hook that wants to know where the agent's shell is reads the `cwd` field of its input. The notes also explain why the former repo-root Stop hook was removed.

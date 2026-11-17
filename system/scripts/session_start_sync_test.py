@@ -35,18 +35,22 @@ def _cache_dir(root: Path) -> Path:
     return root.parent / "cache" / "uv"
 
 
-def _run_hook(root: Path) -> subprocess.CompletedProcess[str]:
+def _run_hook(root: Path, shell_dir: Path | None = None) -> subprocess.CompletedProcess[str]:
     # Offline: the probe project has no dependencies, so nothing here needs an index. The
     # cache is the test's own, so the venv the hook links lands beside it, not in the real one.
+    # The probe is the session's project; an agent's own work dir must not leak in from the env.
+    env = {
+        **os.environ,
+        "UV_OFFLINE": "1",
+        "VIRTUAL_ENV": "",
+        "UV_CACHE_DIR": str(_cache_dir(root)),
+        "CLAUDE_PROJECT_DIR": str(root),
+    }
+    env.pop("MNGR_AGENT_WORK_DIR", None)
     return subprocess.run(
         ["bash", str(_HOOK)],
-        cwd=root,
-        env={
-            **os.environ,
-            "UV_OFFLINE": "1",
-            "VIRTUAL_ENV": "",
-            "UV_CACHE_DIR": str(_cache_dir(root)),
-        },
+        cwd=shell_dir or root,
+        env=env,
         capture_output=True,
         text=True,
         timeout=120,
@@ -76,6 +80,21 @@ def test_a_drifted_lock_is_left_alone_and_reported_once(tmp_path: Path) -> None:
     assert len(result.stdout.splitlines()) == 1
     assert (tmp_path / "uv.lock").read_text() == lock_before
     _assert_linked_venv(tmp_path)
+
+
+def test_a_session_resumed_with_the_shell_in_a_subfolder_syncs_the_project(
+    tmp_path: Path,
+) -> None:
+    """SessionStart also fires on resume and after a compaction, wherever the agent last `cd`ed to."""
+    _locked_project(tmp_path)
+    subfolder = tmp_path / "apps" / "web"
+    subfolder.mkdir(parents=True)
+
+    result = _run_hook(tmp_path, shell_dir=subfolder)
+
+    assert result.returncode == 0, result.stderr
+    _assert_linked_venv(tmp_path)
+    assert not (subfolder / ".venv").exists()
 
 
 def _assert_linked_venv(root: Path) -> None:
