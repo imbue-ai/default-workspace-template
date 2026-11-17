@@ -1601,7 +1601,7 @@ describe("MessageInput send failure notice", () => {
     expect(localStorage.getItem("message-text:agent-1") ?? "").not.toContain("hello");
   });
 
-  it("says a send the chat app never answered may not have been sent, offering only Send again, and takes it out of the composer once its turn lands", async () => {
+  it("says a send the chat app never answered may not have been sent, offering only Send again, which sends it again under the same id", async () => {
     // The chat app may have delivered it before its answer was lost: Restart could cut that turn off and send it
     // twice, while Send again repeats the id the chat app answers once.
     stubShellConnection(true);
