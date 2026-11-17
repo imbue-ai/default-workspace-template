@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import threading
 import tomllib
 from collections.abc import Sequence
@@ -711,6 +712,33 @@ def test_main_routes_the_verbs(tmp_path: Path) -> None:
         )
         == 1
     )
+
+
+def test_a_refusal_from_the_script_run_directly_is_a_message_not_a_traceback(
+    tmp_path: Path,
+) -> None:
+    """Run as a script, the module is ``__main__``, which must still catch the refusals the
+    modules it imports raise."""
+    refused = subprocess.run(
+        [
+            sys.executable,
+            mod.__file__,
+            "up",
+            "--app",
+            "notes",
+            "--worktree",
+            str(tmp_path / "nowhere"),
+            "--repo-root",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert refused.returncode == 1
+    assert refused.stderr.startswith("preview: ")
+    assert "Traceback" not in refused.stderr
 
 
 def _up_shell_with_chat(

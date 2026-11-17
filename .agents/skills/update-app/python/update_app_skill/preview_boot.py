@@ -23,11 +23,11 @@ from app_manifest.manifest import (
 from app_registration import forward_port
 from workspace_bare_scripts import user_packages
 
+from update_app_skill.errors import PreviewError
 from update_app_skill.preview_app import (
     INNER_SERVICE_SUFFIX,
     Instances,
     InstanceSpec,
-    PreviewError,
     PreviewWindow,
     _instance_locks,
     _instance_state_path,

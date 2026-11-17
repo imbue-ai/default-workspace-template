@@ -232,9 +232,14 @@ def up(
     """Frame the app as a mock with ``note``, then open (``surface="open"``) or reload (``"refresh"``) its window.
 
     A ``note`` or ``inner_path`` left out is the one the app's frame was last booted
-    with (the page defaults to ``/``); a first frame needs a note. Holds the frame's lock,
-    so a ``revive`` asked for meanwhile waits.
+    with (the page defaults to ``/``); a first frame needs a note. Refused from a git
+    worktree, whose registry the workspace never reads. Holds the frame's lock, so a
+    ``revive`` asked for meanwhile waits.
     """
+    if serve_isolated_instance.refuses_registering_from_a_worktree(
+        repo_root, "mock frame", ""
+    ):
+        return 1
     with serve_isolated_instance.instance_lock(repo_root, frame_name(app_name)):
         code = _up_locked(
             app_name,

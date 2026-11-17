@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 from agents_shared import serve_isolated_instance
+from agents_shared.testing import add_linked_worktree
 from app_registration import forward_port
 
 from build_app_skill import mock_frame, scaffold_flask_lib
@@ -196,6 +197,27 @@ def test_a_frame_that_does_not_come_up_leaves_the_app_an_ordinary_app(
     assert code == 1
     assert _row(registry) == plain_row
     assert layout.ops == []
+
+
+def test_up_from_a_git_worktree_says_to_frame_from_the_live_checkout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The worktree's own registry lacks the live app, so the reason must be the worktree,
+    not an app that is not registered."""
+    live = tmp_path / "live"
+    worktree = tmp_path / "worktree"
+    add_linked_worktree(live, worktree)
+    frames = _RecordingFrames()
+
+    code = mock_frame.up(
+        _APP, _NOTE, worktree, frames=frames, layout=_RecordingLayout()
+    )
+
+    assert code == 1
+    assert frames.ups == []
+    err = capsys.readouterr().err
+    assert f"Pass --repo-root {live.resolve()}" in err
+    assert "not registered" not in err
 
 
 def test_up_refuses_an_app_that_is_not_running(

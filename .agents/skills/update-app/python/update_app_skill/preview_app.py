@@ -62,6 +62,8 @@ from agents_shared import serve_isolated_instance
 from app_manifest.errors import ManifestLoadError
 from app_registration import forward_port
 
+from update_app_skill.errors import PreviewError
+
 # Where the shared substrate files each instance, and where this script keeps what it
 # adds: the registry copy and the sibling list.
 INSTANCES_ROOT = serve_isolated_instance.STATE_ROOT
@@ -77,10 +79,6 @@ PREVIEW_SERVICE_SUFFIX = "-preview"
 
 # The shell's app name: the one preview whose registry copy other previews are framed through.
 SHELL_APP_NAME = "system_interface"
-
-
-class PreviewError(Exception):
-    """A preview could not be described or booted."""
 
 
 @dataclass(frozen=True)
