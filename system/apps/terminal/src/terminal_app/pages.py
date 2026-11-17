@@ -348,7 +348,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     const outcome = await askAgentToFix(
       connection,
       { whatFailed: `The terminal ${current} couldn't start`, details: endedDetail || null },
-      showOutcome,
+      { showsOutcome: true, onLateAnswer: showOutcome },
     );
     if (askingAbout === askedAbout && askPresses === press) askingAbout = null;
     syncAskButton();
@@ -726,7 +726,7 @@ _FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
     const outcome = await askAgentToFix(
       connection,
       { whatFailed: config.agent_fix.what_failed, details: config.agent_fix.details },
-      show,
+      { showsOutcome: true, onLateAnswer: show },
     );
     if (askPresses === press) {
       ask.disabled = false;

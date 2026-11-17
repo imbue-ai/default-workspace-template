@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { Overlays, mayCancelPendingUrl } from "./overlays";
-import type { ReportedFailure, StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
+import type { ReportedFailure, StartNewOutcome, StartOptions } from "@imbue/workspace-ui/src/app_contract";
 import type { FailureHost } from "./overlays";
 import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
 
@@ -142,18 +142,22 @@ function fakeHost(fields: { hasShell?: boolean; canReportBug?: boolean } = {}): 
   answers: ((outcome: StartNewOutcome) => void)[];
   /** Hands each ask an answer that came after it settled as not answered. */
   lateAnswers: ((outcome: StartNewOutcome) => void)[];
+  /** Whether each ask told the shell the page shows its outcome (so the shell toasts nothing). */
+  showsOutcome: boolean[];
   reports: ReportedFailure[];
 } {
   const host = {
     started: [] as string[],
     answers: [] as ((outcome: StartNewOutcome) => void)[],
     lateAnswers: [] as ((outcome: StartNewOutcome) => void)[],
+    showsOutcome: [] as boolean[],
     reports: [] as ReportedFailure[],
     hasShell: () => fields.hasShell ?? true,
     canReportBug: () => fields.canReportBug ?? true,
-    startNewWithText: (text: string, onLateAnswer?: (outcome: StartNewOutcome) => void) => {
+    startNewWithText: (text: string, options?: StartOptions) => {
       host.started.push(text);
-      host.lateAnswers.push(onLateAnswer ?? (() => undefined));
+      host.showsOutcome.push(options?.showsOutcome === true);
+      host.lateAnswers.push(options?.onLateAnswer ?? (() => undefined));
       return new Promise<StartNewOutcome>((resolve) => host.answers.push(resolve));
     },
     reportBug: (failure: ReportedFailure) => void host.reports.push(failure),
@@ -295,6 +299,7 @@ describe("Overlays for the stack's state", () => {
 
     ask?.click();
     expect([ask?.textContent, ask?.disabled]).toEqual(["Asking an agent…", true]);
+    expect(host.showsOutcome).toEqual([true]);
     // A state that arrives while the shell is starting the chat leaves the press pending.
     overlays.update(crashed, "idle", null, null, null);
     expect([ask?.textContent, ask?.disabled]).toEqual(["Asking an agent…", true]);

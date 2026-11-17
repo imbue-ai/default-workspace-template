@@ -130,6 +130,7 @@ def test_a_crash_offers_an_agent_and_a_bug_report_through_the_shell(desktop_cont
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
     started = shell_messages(page, "shell:start-new-with-text")
     assert len(started) == 1
+    assert started[0]["showsOutcome"] is True
     assert "The Screen stopped unexpectedly." in str(started[0]["text"])
     assert _CRASH_REASON in str(started[0]["text"])
     [reported] = shell_messages(page, "shell:report-bug")

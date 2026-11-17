@@ -520,7 +520,7 @@ describe("telling a failed change", () => {
     toast.actions[0].run();
     expect(host.startWithText).toHaveBeenCalledWith(
       expect.stringContaining("out of disk space"),
-      expect.any(Function),
+      expect.objectContaining({ showsOutcome: true }),
     );
   });
 
@@ -528,8 +528,8 @@ describe("telling a failed change", () => {
     const { model, host } = harness();
     const answers: ((outcome: StartNewOutcome) => void)[] = [];
     const lateAnswers: ((outcome: StartNewOutcome) => void)[] = [];
-    vi.mocked(host.startWithText).mockImplementation((_text, onLateAnswer) => {
-      lateAnswers.push(onLateAnswer ?? (() => undefined));
+    vi.mocked(host.startWithText).mockImplementation((_text, options) => {
+      lateAnswers.push(options?.onLateAnswer ?? (() => undefined));
       return new Promise((resolve) => answers.push(resolve));
     });
     vi.mocked(server.createFolder).mockRejectedValueOnce(

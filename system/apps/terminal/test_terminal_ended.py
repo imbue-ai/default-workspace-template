@@ -148,6 +148,8 @@ def test_a_terminal_tmux_would_not_start_says_so_and_offers_try_again_an_agent_a
     ended.get_by_role("button", name="Ask an agent to fix this").click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:start-new-with-text')")
     [asked] = shell_messages(page, "shell:start-new-with-text")
+    # The page shows the outcome under the button, so the shell toasts nothing of its own.
+    assert asked["showsOutcome"] is True
     task = str(asked["text"])
     assert task.startswith("The terminal terminal-1 couldn't start.\n\nDetails:\n```\n")
     assert "no server running on /tmp/tmux-1000/default\n```" in task
@@ -290,6 +292,8 @@ def test_a_failure_page_for_unreadable_saved_terminals_asks_an_agent_through_the
 
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:start-new-with-text')")
     [asked] = shell_messages(page, "shell:start-new-with-text")
+    # The page shows the outcome under the button, so the shell toasts nothing of its own.
+    assert asked["showsOutcome"] is True
     task = str(asked["text"])
     assert task.startswith("The Terminal app can't open terminals: it can't read this workspace's saved terminals.")
     assert "the terminal store /x/instances.json is not valid JSON: x\n```" in task

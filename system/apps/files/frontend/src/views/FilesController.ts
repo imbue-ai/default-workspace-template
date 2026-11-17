@@ -122,7 +122,7 @@ export class FilesController {
         confirmReplace: (names) => this.dialogs.confirmReplace(names),
         askNewName: (suggested, isFolder) => this.dialogs.askNewName(suggested, isFolder),
         hasShell: () => connection.hasShell(),
-        startWithText: (text, onLateAnswer) => connection.startWithText(text, onLateAnswer),
+        startWithText: (text, options) => connection.startWithText(text, options),
         canReportBug: () => connection.canReportBug(),
         reportBug: (failure) => connection.reportBug(failure),
       },

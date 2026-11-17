@@ -319,7 +319,7 @@ export class Overlays {
         this.showAskFailure(outcome.isOpened ? null : outcome.failure);
       }
     };
-    const outcome = await askAgentToFix(this.host, this.agentFix, show);
+    const outcome = await askAgentToFix(this.host, this.agentFix, { showsOutcome: true, onLateAnswer: show });
     if (this.askingAbout === askedAbout && this.askPresses === press) this.askingAbout = null;
     this.syncAskButton();
     show(outcome);

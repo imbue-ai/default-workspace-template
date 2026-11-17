@@ -134,7 +134,10 @@ function freeUpSpaceAction(toasts: ToastQueue, host: FailureHost, redraw: () => 
     const press = presses;
     isAsking = true;
     redraw();
-    const outcome = await host.startWithText(FREE_SPACE_REQUEST, (late) => tell(press, late));
+    const outcome = await host.startWithText(FREE_SPACE_REQUEST, {
+      showsOutcome: true,
+      onLateAnswer: (late) => tell(press, late),
+    });
     if (press === presses) isAsking = false;
     tell(press, outcome);
   };

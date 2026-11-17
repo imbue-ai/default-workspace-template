@@ -4,7 +4,7 @@ import "@imbue/workspace-ui/src/testing/dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
-import type { ShellConnection, StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
+import type { ShellConnection, StartNewOutcome, StartOptions } from "@imbue/workspace-ui/src/app_contract";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 
 import { fileEntry } from "../testing/records";
@@ -104,8 +104,8 @@ describe("asking an agent to free up space", () => {
     const lateAnswers: ((outcome: StartNewOutcome) => void)[] = [];
     const connection: ShellConnection = {
       ...framedConnection(),
-      startWithText: vi.fn(async (_text: string, onLateAnswer?: (outcome: StartNewOutcome) => void) => {
-        if (onLateAnswer !== undefined) lateAnswers.push(onLateAnswer);
+      startWithText: vi.fn(async (_text: string, options?: StartOptions) => {
+        if (options?.onLateAnswer !== undefined) lateAnswers.push(options.onLateAnswer);
         return { isOpened: false, failure: { message: "No answer came.", details: null, isReportable: false } };
       }),
     };
