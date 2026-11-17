@@ -99,9 +99,9 @@ Exit codes:
        ``up --service-name``, ``--repo-root`` is a git worktree (refused before
        anything boots); or a bad argument / unreadable state file.
     3  For ``revive``: the instance cannot come back as it was -- no record, a
-       record from before revives, a recorded port another process now holds, a
-       copy that is gone, or a checkout it was booted from that is gone -- so only
-       a fresh ``up`` brings it back.
+       record it cannot read, a record from before revives, a recorded port another
+       process now holds, a copy that is gone, or a checkout it was booted from
+       that is gone -- so only a fresh ``up`` brings it back.
 """
 
 from __future__ import annotations
