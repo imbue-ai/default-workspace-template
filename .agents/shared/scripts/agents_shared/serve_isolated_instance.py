@@ -565,8 +565,10 @@ def wait_healthy(
     attempts: int,
     interval: float,
     sleeper: Callable[[float], None],
+    is_alive: Callable[[], bool] = lambda: True,
 ) -> ProbeResult:
-    """Poll ``url`` until it returns HTTP 200, up to ``attempts`` times.
+    """Poll ``url`` until it returns HTTP 200, up to ``attempts`` times, or until
+    ``is_alive`` says the server has exited, which no further wait would change.
 
     Returns the *last* probe rather than a bare bool, so a caller reporting the
     failure can say what the final attempt actually got back.
@@ -574,7 +576,7 @@ def wait_healthy(
     result = ProbeResult(None, "")
     for index in range(attempts):
         result = http.get(url, timeout=5.0)
-        if result.is_healthy:
+        if result.is_healthy or not is_alive():
             return result
         if index < attempts - 1:
             sleeper(interval)
@@ -1260,12 +1262,14 @@ def up(
             )
         )
         inner_url = f"http://{LOOPBACK_HOST}:{inner_port}"
+        inner_pid = pids[0]
         probe = wait_healthy(
             http,
             f"{inner_url}{health_path}",
             _HEALTH_ATTEMPTS,
             _HEALTH_INTERVAL_SECONDS,
             sleeper,
+            is_alive=lambda: runner.process_group_alive(inner_pid),
         )
         if not probe.is_healthy:
             raise InstanceError(
@@ -1711,7 +1715,10 @@ def is_running(name: str, repo_root: Path, *, runner: Runner) -> bool:
     """Whether every process instance ``name`` recorded is still the one it started.
 
     False with no readable state, with nothing recorded running, or once any of its
-    processes has exited or had its pid handed to another process by a restart.
+    processes has exited or had its pid handed to another process by a restart. A pid
+    recorded with no start time, where start times can be read, is from a state older
+    than them and cannot be told from a pid a restart reused, so it does not count as
+    running; only where none can be read (macOS) does a live process group.
     """
     try:
         state = json.loads(_state_path(repo_root, name).read_text())
@@ -1723,10 +1730,11 @@ def is_running(name: str, repo_root: Path, *, runner: Runner) -> bool:
         return False
     for index, pid in enumerate(pids):
         recorded = str(starts[index]) if index < len(starts) else ""
+        current = runner.process_start_time(pid)
         if recorded:
-            if runner.process_start_time(pid) != recorded:
+            if current != recorded:
                 return False
-        elif not runner.process_group_alive(pid):
+        elif current or not runner.process_group_alive(pid):
             return False
     return True
 
@@ -1869,6 +1877,7 @@ def refresh(
         _HEALTH_ATTEMPTS,
         _HEALTH_INTERVAL_SECONDS,
         sleeper,
+        is_alive=lambda: runner.process_group_alive(new_pid),
     )
     if not probe.is_healthy:
         sys.stderr.write(

@@ -2,6 +2,8 @@
 
 - Booting an instance again (`serve_isolated_instance.py up` over an earlier one, or a re-frame) now updates the rows its window shows in place instead of removing and re-adding them, and a boot that fails keeps those rows recorded, so `down` still removes them and a later boot can try again.
 
-- `up` now records each process's start time, so `down`, `refresh`, and a re-`up` never signal a process that a restart handed the same pid.
+- `up` now records each process's start time, so `down`, `refresh`, and a re-`up` never signal a process that a restart handed the same pid, and a revive never takes a pid a restart reused for the preview still running.
+
+- An `up` or `refresh` whose server exits before it answers (a build that crashes on start) fails as soon as the process is gone, instead of after the full minute-long health wait.
 
 - The row a preview's or UI sketch's window shows now names the app it previews or frames, and its kind (`isolated_instance`), which is how the shell offers **Start it again** in the window.

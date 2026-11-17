@@ -1884,3 +1884,42 @@ def test_an_instance_runs_while_every_process_it_recorded_is_still_its_own(
     assert mod.is_running(_NAME, tmp_path, runner=runner)
     runner.start_times[4243] = "after-restart"
     assert not mod.is_running(_NAME, tmp_path, runner=runner)
+
+
+def test_a_server_that_exits_before_answering_fails_the_boot_at_once(
+    tmp_path: Path,
+) -> None:
+    """A build that crashes on start fails the boot as soon as its process is gone, rather
+    than after the whole health budget, which a window's Start would sit out."""
+    exited = _FakeHttp(lambda _url: None)
+    assert _up(tmp_path, http=exited, runner=_RecordingRunner()) == 1
+    still_booting = _FakeHttp(lambda _url: None)
+    assert (
+        _up(
+            tmp_path,
+            http=still_booting,
+            runner=_RecordingRunner(alive_pids={4242}),
+        )
+        == 1
+    )
+
+    assert len(exited.get_urls) == 1
+    assert len(still_booting.get_urls) == mod._HEALTH_ATTEMPTS
+
+
+def test_a_pid_from_a_state_older_than_start_times_is_not_taken_for_a_running_instance(
+    tmp_path: Path,
+) -> None:
+    """After a restart, an instance booted before start times were kept names pids that
+    may now be other processes; where start times can be read, it is not running."""
+    assert _up(tmp_path) == 0
+    state = json.loads(_state_path(tmp_path).read_text())
+    del state["pid_starts"]
+    _state_path(tmp_path).write_text(json.dumps(state))
+    [pid] = state["pids"]
+
+    reused = _RecordingRunner(alive_pids={pid}, start_times={pid: "after-restart"})
+    no_start_times = _RecordingRunner(alive_pids={pid})
+
+    assert not mod.is_running(_NAME, tmp_path, runner=reused)
+    assert mod.is_running(_NAME, tmp_path, runner=no_start_times)
