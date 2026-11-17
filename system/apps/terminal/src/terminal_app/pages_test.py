@@ -145,6 +145,8 @@ def test_a_window_whose_saved_terminals_cannot_be_read_offers_to_ask_an_agent(
     response = pages_client.get("/?session=terminal-1")
 
     assert response.status_code == 500
+    # The buttons are wired by the page's inline scripts, which run only if the policy admits them.
+    assert_document_policy_admits_page(response)
     message, details, is_retryable, shell_buttons = _failure_page_parts(response.text)
     assert message == "This workspace's saved terminals can't be read, so terminals can't open."
     assert "is not valid JSON" in details
