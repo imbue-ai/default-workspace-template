@@ -29,8 +29,8 @@ of it with ``uv run --no-sync workspace-layout open <name>-preview``. A preview 
 user opens is booted from the live checkout: from a git worktree ``up`` refuses,
 since the window would be registered where the workspace never looks. ``--private``
 boots the same instance with no window, for an agent to drive on its loopback port
-from wherever it runs; its data copies and secrets still come from the live
-checkout. ``refresh``
+from wherever it runs, and prints that loopback URL on stdout in place of the app
+name; its data copies and secrets still come from the live checkout. ``refresh``
 re-boots the inner process in place after a rebuild, leaving the ports, the wrapper,
 the registrations, and the window untouched. ``down`` tears the preview down together
 with the siblings it booted, and verifies the processes died.
