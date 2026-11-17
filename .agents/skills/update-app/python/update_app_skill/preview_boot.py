@@ -183,19 +183,11 @@ def build_instance_spec(
     )
 
 
-def up(
-    app_name: str,
-    worktree: Path,
-    repo_root: Path,
-    *,
-    with_apps: Sequence[str] = (),
-    instance_key: str | None = None,
-    title: str | None = None,
-    is_private: bool = False,
-    instances: Instances,
-    dump_registry: Callable[[list[dict[str, object]]], str] | None = None,
-) -> int:
-    """Boot the app's preview from ``worktree``, after the siblings named in ``with_apps``."""
+def _live_root(
+    repo_root: Path, worktree: Path, *, is_private: bool, with_apps: Sequence[str]
+) -> Path:
+    """The live checkout a preview from ``repo_root`` runs over; raises PreviewError for a
+    preview that would register a window nobody could open."""
     main_checkout = serve_isolated_instance.main_checkout_of_linked_worktree(repo_root)
     if main_checkout is not None and not is_private:
         raise PreviewError(
@@ -209,7 +201,25 @@ def up(
             "a preview frames each --with sibling at the origin its window registers, and a "
             "private instance registers none; preview from the live checkout instead."
         )
-    live_root = main_checkout or repo_root
+    return main_checkout or repo_root
+
+
+def up(
+    app_name: str,
+    worktree: Path,
+    repo_root: Path,
+    *,
+    with_apps: Sequence[str] = (),
+    instance_key: str | None = None,
+    title: str | None = None,
+    is_private: bool = False,
+    instances: Instances,
+    dump_registry: Callable[[list[dict[str, object]]], str] | None = None,
+) -> int:
+    """Boot the app's preview from ``worktree``, after the siblings named in ``with_apps``."""
+    live_root = _live_root(
+        repo_root, worktree, is_private=is_private, with_apps=with_apps
+    )
     other = live_preview_worktree(repo_root, app_name)
     if other is not None and not _is_same_worktree(other, worktree):
         sys.stderr.write(
