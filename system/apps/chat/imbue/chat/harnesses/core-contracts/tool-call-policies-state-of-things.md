@@ -156,10 +156,11 @@ unreachable, and an agent that wants to background a command can.
 the session's current directory, and its `Bash` tool keeps one shell cwd ACROSS calls, so a hook
 fires wherever the agent last `cd`ed to. A hook command names its script as
 `"${CLAUDE_PROJECT_DIR}"/...` (the project root the session started in, which claude sets for
-every hook); the scripts find the rest from `MNGR_AGENT_WORK_DIR`, `MNGR_AGENT_STATE_DIR` or
-their own location, and a plugin's from `${CLAUDE_PLUGIN_ROOT}` (code-guardian's, which workers
-run for its uncommitted-changes gate, `cd`s to `CLAUDE_PROJECT_DIR` first). A hook that needs to
-know where the agent's shell is reads the `cwd` field of its input rather than its own directory.
+every hook); the scripts find the rest from `MNGR_AGENT_WORK_DIR` (else `CLAUDE_PROJECT_DIR`),
+`MNGR_AGENT_STATE_DIR` or their own location, and a plugin's from `${CLAUDE_PLUGIN_ROOT}`
+(code-guardian's, which workers run for its uncommitted-changes gate, `cd`s to
+`CLAUDE_PROJECT_DIR` first). A hook that needs to know where the agent's shell is reads the
+`cwd` field of its input rather than its own directory.
 `agent_hook_wiring_test.py` holds the commands to this; what a script does inside is review's to
 check. claude's settings used to carry `[ -e .git ] || "Be sure to return to the repo root..."`,
 which refused the stop until the agent went back. It protected nothing once the hooks followed
