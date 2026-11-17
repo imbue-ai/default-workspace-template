@@ -76,7 +76,9 @@ def _read_store_document(path: Path) -> TerminalStoreDocument | None:
     try:
         data = json.loads(raw_text)
     except json.JSONDecodeError as e:
-        raise TerminalStoreError(f"the terminal store {path} is not valid JSON: {e}") from e
+        raise TerminalStoreError(
+            f"the terminal store {path} is not valid JSON: {e}"
+        ) from e
     try:
         return TerminalStoreDocument.model_validate(data)
     except ValidationError as e:
@@ -90,11 +92,17 @@ def _write_store_document(path: Path, document: TerminalStoreDocument) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        raise TerminalStoreError(f"cannot create the terminal store directory {path.parent}: {e}") from e
+        raise TerminalStoreError(
+            f"cannot create the terminal store directory {path.parent}: {e}"
+        ) from e
     try:
-        temp_fd, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+        temp_fd, temp_name = tempfile.mkstemp(
+            dir=path.parent, prefix=f"{path.name}.", suffix=".tmp"
+        )
     except OSError as e:
-        raise TerminalStoreError(f"cannot create a temporary file beside the terminal store {path}: {e}") from e
+        raise TerminalStoreError(
+            f"cannot create a temporary file beside the terminal store {path}: {e}"
+        ) from e
     try:
         with os.fdopen(temp_fd, "w", encoding="utf-8") as temp_file:
             json.dump(document.model_dump(mode="json"), temp_file, indent=2)

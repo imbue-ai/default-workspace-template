@@ -62,7 +62,9 @@ def desktop_context(module_browser: Browser) -> Iterator[BrowserContext]:
     context.close()
 
 
-def _serve(context: BrowserContext, wrapper_html: str, can_report_bug: bool = False) -> list[str]:
+def _serve(
+    context: BrowserContext, wrapper_html: str, can_report_bug: bool = False
+) -> list[str]:
     """Serve a shell stand-in saying ``can_report_bug`` and framing ``wrapper_html``, the real ttyd client, the shell's
     built contract, and the wrapper's ``new`` and session routes; answers the methods ``new`` was asked with."""
     client = add_pty_page_script(gzip.decompress(load_ttyd_web_client(None) or b""))
@@ -82,7 +84,10 @@ def _serve(context: BrowserContext, wrapper_html: str, can_report_bug: bool = Fa
             route.fulfill(content_type="text/javascript", body=contract_source)
         elif url == f"http://{_WRAPPER_HOST}/new":
             launched.append(route.request.method)
-            route.fulfill(content_type="application/json", body=json.dumps({"path": "/?session=terminal-2"}))
+            route.fulfill(
+                content_type="application/json",
+                body=json.dumps({"path": "/?session=terminal-2"}),
+            )
         elif url == f"http://{_WRAPPER_HOST}/api/sessions/terminal-2":
             body = {
                 "name": "terminal-2",
@@ -100,25 +105,36 @@ def _serve(context: BrowserContext, wrapper_html: str, can_report_bug: bool = Fa
 
 
 def _shell_messages(page: Page, message_type: str) -> list[dict[str, object]]:
-    return [message for message in page.evaluate("window.shellMessages") if message["type"] == message_type]
+    return [
+        message
+        for message in page.evaluate("window.shellMessages")
+        if message["type"] == message_type
+    ]
 
 
 def _open(context: BrowserContext) -> tuple[Page, Frame, Frame]:
     page = context.new_page()
     pty_url = f"http://{_PTY_LABEL}.{_WRAPPER_HOST}/?arg=_&arg=session&arg=terminal-1"
     # A framed wrapper points its pty only once the shell's handshake has said whether the window is viewed.
-    with page.expect_event("framenavigated", predicate=lambda frame: frame.url == pty_url) as navigated:
+    with page.expect_event(
+        "framenavigated", predicate=lambda frame: frame.url == pty_url
+    ) as navigated:
         page.goto(_SHELL_URL)
     pty = navigated.value
     wrapper = page.frame(url=_WRAPPER_URL)
     assert wrapper is not None
-    pty.wait_for_function("window.term !== undefined && window.term.element !== undefined", timeout=5000)
+    pty.wait_for_function(
+        "window.term !== undefined && window.term.element !== undefined", timeout=5000
+    )
     return page, wrapper, pty
 
 
 def _print_end(pty: Frame, kind: str, detail: str) -> None:
     encoded = base64.b64encode(detail.encode()).decode()
-    pty.evaluate("(text) => new Promise((resolve) => term.write(text, resolve))", f"\x1b]{TERMINAL_ENDED_OSC};{kind};{encoded}\x07")
+    pty.evaluate(
+        "(text) => new Promise((resolve) => term.write(text, resolve))",
+        f"\x1b]{TERMINAL_ENDED_OSC};{kind};{encoded}\x07",
+    )
 
 
 def test_a_terminal_tmux_would_not_start_says_so_and_offers_try_again_an_agent_and_a_bug_report(
@@ -135,18 +151,30 @@ def test_a_terminal_tmux_would_not_start_says_so_and_offers_try_again_an_agent_a
     )
     expect(wrapper.locator("#pty")).to_be_hidden()
     ended.get_by_text("See details").click()
-    expect(ended.locator("#ended-details-text")).to_have_text("no server running on /tmp/tmux-1000/default")
+    expect(ended.locator("#ended-details-text")).to_have_text(
+        "no server running on /tmp/tmux-1000/default"
+    )
     expect(ended.get_by_role("button", name="Start a new terminal")).to_be_hidden()
 
     ended.get_by_role("button", name="Ask an agent to fix this").click()
-    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:start-with-text')")
-    [asked] = _shell_messages(page, "shell:start-with-text")
+    page.wait_for_function(
+        "window.shellMessages.some((message) => message.type === 'shell:start-new-with-text')"
+    )
+    [asked] = _shell_messages(page, "shell:start-new-with-text")
     task = str(asked["text"])
     assert task.startswith("The terminal terminal-1 couldn't start.\n\nDetails:\n```\n")
     assert "no server running on /tmp/tmux-1000/default\n```" in task
 
     ended.get_by_role("button", name="Report a bug").click()
-    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
+    page.wait_for_function(
+        "window.shellMessages.some((message) => message.type === 'shell:report-bug')"
+    )
+    [reported] = _shell_messages(page, "shell:report-bug")
+    assert (
+        reported["message"]
+        == "This terminal couldn't start. Try again. If this persists, report a bug."
+    )
+    assert reported["details"] == "no server running on /tmp/tmux-1000/default"
 
     ended.get_by_role("button", name="Try again").click()
     expect(ended).to_be_hidden()
@@ -163,7 +191,9 @@ def test_a_terminal_whose_folder_is_gone_says_so_and_starts_a_new_one_in_the_sam
 
     ended = wrapper.locator("#ended")
     expect(ended.locator("#ended-message")).to_have_text("This terminal closed.")
-    expect(ended.locator("#ended-cause")).to_have_text("This terminal's folder no longer exists, so it can't open.")
+    expect(ended.locator("#ended-cause")).to_have_text(
+        "This terminal's folder no longer exists, so it can't open."
+    )
     expect(ended.get_by_role("button", name="Try again")).to_be_hidden()
     expect(ended.get_by_role("button", name="Ask an agent to fix this")).to_be_hidden()
 
@@ -174,13 +204,23 @@ def test_a_terminal_whose_folder_is_gone_says_so_and_starts_a_new_one_in_the_sam
         "src", f"http://{_PTY_LABEL}.{_WRAPPER_HOST}/?arg=_&arg=session&arg=terminal-2"
     )
     assert launched == ["POST"]
-    page.wait_for_function("window.shellMessages.some((message) => message.path === '/?session=terminal-2')")
+    page.wait_for_function(
+        "window.shellMessages.some((message) => message.path === '/?session=terminal-2')"
+    )
     locations = _shell_messages(page, "shell:location")
-    assert locations[-1] == {"type": "shell:location", "path": "/?session=terminal-2", "title": "Terminal 2"}
+    assert locations[-1] == {
+        "type": "shell:location",
+        "path": "/?session=terminal-2",
+        "title": "Terminal 2",
+    }
 
 
-def _open_failure_page(context: BrowserContext, error: TerminalAppError, can_report_bug: bool) -> tuple[Page, Frame]:
-    _serve(context, render_failure_page(page_failure(error, "terminal-1")), can_report_bug)
+def _open_failure_page(
+    context: BrowserContext, error: TerminalAppError, can_report_bug: bool
+) -> tuple[Page, Frame]:
+    _serve(
+        context, render_failure_page(page_failure(error, "terminal-1")), can_report_bug
+    )
     page = context.new_page()
     page.goto(_SHELL_URL)
     wrapper = page.frame(url=_WRAPPER_URL)
@@ -192,7 +232,9 @@ def _open_failure_page(context: BrowserContext, error: TerminalAppError, can_rep
 def test_a_failure_page_for_unreadable_saved_terminals_asks_an_agent_through_the_shell(
     desktop_context: BrowserContext,
 ) -> None:
-    error = TerminalStoreError("the terminal store /x/instances.json is not valid JSON: x")
+    error = TerminalStoreError(
+        "the terminal store /x/instances.json is not valid JSON: x"
+    )
     page, wrapper = _open_failure_page(desktop_context, error, can_report_bug=True)
 
     # Saved terminals an agent can repair do not ask for a bug report.
@@ -200,41 +242,71 @@ def test_a_failure_page_for_unreadable_saved_terminals_asks_an_agent_through_the
     expect(wrapper.get_by_role("button", name="Report a bug")).to_be_hidden()
     wrapper.get_by_role("button", name="Ask an agent to fix this").click()
 
-    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:start-with-text')")
-    [asked] = _shell_messages(page, "shell:start-with-text")
+    page.wait_for_function(
+        "window.shellMessages.some((message) => message.type === 'shell:start-new-with-text')"
+    )
+    [asked] = _shell_messages(page, "shell:start-new-with-text")
     task = str(asked["text"])
-    assert task.startswith("The Terminal app can't open terminals: it can't read this workspace's saved terminals.")
+    assert task.startswith(
+        "The Terminal app can't open terminals: it can't read this workspace's saved terminals."
+    )
     assert "the terminal store /x/instances.json is not valid JSON: x\n```" in task
 
 
-def test_a_failure_page_while_tmux_does_not_answer_offers_only_try_again(desktop_context: BrowserContext) -> None:
+def test_a_failure_page_while_tmux_does_not_answer_offers_only_try_again(
+    desktop_context: BrowserContext,
+) -> None:
     error = TmuxCommandError("tmux did not finish list-sessions within 5.0s")
     _page, wrapper = _open_failure_page(desktop_context, error, can_report_bug=True)
 
     expect(wrapper.get_by_role("button", name="Try again")).to_be_visible()
-    expect(wrapper.get_by_role("button", name="Ask an agent to fix this")).to_be_hidden()
+    expect(
+        wrapper.get_by_role("button", name="Ask an agent to fix this")
+    ).to_be_hidden()
     expect(wrapper.get_by_role("button", name="Report a bug")).to_be_hidden()
 
 
-@pytest.mark.parametrize("can_report_bug", [True, False], ids=["embedder-opens-reports", "no-bug-report"])
+@pytest.mark.parametrize(
+    "can_report_bug", [True, False], ids=["embedder-opens-reports", "no-bug-report"]
+)
 def test_a_failure_page_that_asks_for_a_bug_report_offers_one_only_where_the_shell_can_open_it(
     desktop_context: BrowserContext, can_report_bug: bool
 ) -> None:
-    page, wrapper = _open_failure_page(desktop_context, TerminalAppError("unexpected"), can_report_bug)
+    page, wrapper = _open_failure_page(
+        desktop_context, TerminalAppError("unexpected"), can_report_bug
+    )
 
     expect(wrapper.get_by_role("button", name="Try again")).to_be_visible()
-    expect(wrapper.get_by_role("button", name="Ask an agent to fix this")).to_be_hidden()
+    expect(
+        wrapper.get_by_role("button", name="Ask an agent to fix this")
+    ).to_be_hidden()
     report = wrapper.get_by_role("button", name="Report a bug")
     if not can_report_bug:
         expect(report).to_be_hidden()
         return
     report.click()
-    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
+    page.wait_for_function(
+        "window.shellMessages.some((message) => message.type === 'shell:report-bug')"
+    )
+    [reported] = _shell_messages(page, "shell:report-bug")
+    assert (
+        reported["message"]
+        == "This terminal couldn't be opened. Try again. If this persists, report a bug."
+    )
+    assert reported["details"] == "unexpected"
 
 
-def test_a_failure_page_opened_on_its_own_offers_no_agent(desktop_context: BrowserContext) -> None:
-    error = TerminalStoreError("the terminal store /x/instances.json is not valid JSON: x")
-    _serve(desktop_context, render_failure_page(page_failure(error, "terminal-1")), can_report_bug=True)
+def test_a_failure_page_opened_on_its_own_offers_no_agent(
+    desktop_context: BrowserContext,
+) -> None:
+    error = TerminalStoreError(
+        "the terminal store /x/instances.json is not valid JSON: x"
+    )
+    _serve(
+        desktop_context,
+        render_failure_page(page_failure(error, "terminal-1")),
+        can_report_bug=True,
+    )
     page = desktop_context.new_page()
 
     page.goto(_WRAPPER_URL)

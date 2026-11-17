@@ -28,10 +28,14 @@ SWEEP_THREAD_JOIN_SECONDS: Final[float] = 5.0
 class WindowSweeper(MutableModel):
     """The sweep thread: one sweep per interval, and one for every hint, never two at once."""
 
-    source: TmuxSessionSource = Field(frozen=True, description="The terminals, which mark and delete themselves")
+    source: TmuxSessionSource = Field(
+        frozen=True, description="The terminals, which mark and delete themselves"
+    )
     shell_url: str = Field(frozen=True, description="The shell's loopback base URL")
     app_name: AppName = Field(frozen=True, description="Whose windows to read")
-    interval_seconds: float = Field(frozen=True, description="How long a quiet sweeper waits between sweeps")
+    interval_seconds: float = Field(
+        frozen=True, description="How long a quiet sweeper waits between sweeps"
+    )
     _wake: threading.Event = PrivateAttr(default_factory=threading.Event)
     _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _thread: threading.Thread | None = PrivateAttr(default=None)
@@ -41,8 +45,12 @@ class WindowSweeper(MutableModel):
 
         The mark is what lets a terminal whose window closed before any sweep observed it be collected at all.
         """
-        if closed_terminal is not None and self.source.mark_window_seen(closed_terminal):
-            logger.debug("Marked {} window-seen from the shell's close hint", closed_terminal)
+        if closed_terminal is not None and self.source.mark_window_seen(
+            closed_terminal
+        ):
+            logger.debug(
+                "Marked {} window-seen from the shell's close hint", closed_terminal
+            )
         self._wake.set()
 
     def sweep_once(self) -> list[TmuxSessionName] | None:
@@ -52,14 +60,20 @@ class WindowSweeper(MutableModel):
             return None
         collected = self.source.sweep_windows(window_paths)
         if collected:
-            logger.info("Collected {} terminal(s) no window shows: {}", len(collected), ", ".join(collected))
+            logger.info(
+                "Collected {} terminal(s) no window shows: {}",
+                len(collected),
+                ", ".join(collected),
+            )
         return collected
 
     def start(self) -> None:
         """Start sweeping; the first quiet sweep is one interval away, so a shell still booting is not asked yet."""
         if self._thread is not None:
             return
-        thread = threading.Thread(target=self._run, name="terminal-window-sweep", daemon=True)
+        thread = threading.Thread(
+            target=self._run, name="terminal-window-sweep", daemon=True
+        )
         self._thread = thread
         thread.start()
 
@@ -82,4 +96,6 @@ class WindowSweeper(MutableModel):
         try:
             self.sweep_once()
         except TerminalAppError as e:
-            logger.opt(exception=e).warning("A window sweep failed; the next one will retry")
+            logger.opt(exception=e).warning(
+                "A window sweep failed; the next one will retry"
+            )

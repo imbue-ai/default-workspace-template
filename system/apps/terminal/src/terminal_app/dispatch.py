@@ -222,9 +222,9 @@ def _report_end_function() -> str:
 
 @pure
 def render_workdir_script() -> str:
-    return _WORKDIR_SCRIPT_TEMPLATE.replace("{report_end}", _report_end_function()).replace(
-        "{missing_folder}", ENDED_MISSING_FOLDER
-    )
+    return _WORKDIR_SCRIPT_TEMPLATE.replace(
+        "{report_end}", _report_end_function()
+    ).replace("{missing_folder}", ENDED_MISSING_FOLDER)
 
 
 def warn_if_oom_tag_script_is_missing(oom_tag_script: Path) -> None:
@@ -279,7 +279,8 @@ def install_dispatch_scripts(paths: TerminalPaths, oom_tag_script: Path) -> None
     if not workdir_script.exists():
         _write_executable(workdir_script, render_workdir_script())
     _write_executable(
-        paths.commands_dir / SESSION_SCRIPT_FILENAME, render_session_script(paths.sessions_dir, oom_tag_script)
+        paths.commands_dir / SESSION_SCRIPT_FILENAME,
+        render_session_script(paths.sessions_dir, oom_tag_script),
     )
 
 
@@ -294,7 +295,11 @@ def load_ttyd_web_client(override: Path | None) -> bytes | None:
     there, so ttyd falls back to its stock client and the terminal still starts.
     """
     if override is None:
-        return importlib.resources.files(ttyd_resources).joinpath(TTYD_WEB_CLIENT_RESOURCE).read_bytes()
+        return (
+            importlib.resources.files(ttyd_resources)
+            .joinpath(TTYD_WEB_CLIENT_RESOURCE)
+            .read_bytes()
+        )
     if not override.is_file():
         logger.warning(
             "Skipped installing the ttyd web client: {} is missing; using the stock client",
@@ -318,7 +323,9 @@ def install_ttyd_web_client(compressed_client: bytes, destination: Path) -> bool
         client_html = gzip.decompress(compressed_client)
         destination.write_bytes(_with_pty_page_script(client_html))
     except (OSError, EOFError, zlib.error) as e:
-        logger.warning("Failed to decompress the ttyd web client: {}; using the stock client", e)
+        logger.warning(
+            "Failed to decompress the ttyd web client: {}; using the stock client", e
+        )
         destination.unlink(missing_ok=True)
         return False
     return True
@@ -329,7 +336,9 @@ def _with_pty_page_script(client_html: bytes) -> bytes:
     try:
         return add_pty_page_script(client_html)
     except ClientHasNoBodyCloseError:
-        logger.warning("The ttyd web client has no closing body tag; serving it without the phone keys")
+        logger.warning(
+            "The ttyd web client has no closing body tag; serving it without the phone keys"
+        )
         return client_html
 
 

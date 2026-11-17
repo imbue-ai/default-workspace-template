@@ -254,6 +254,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   };
   let endedActions = [];
   let endedDetail = "";
+  let endedSentence = "";
 
   function showEnding(ending, detail) {
     frame.hidden = true;
@@ -261,6 +262,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     empty.hidden = true;
     endedActions = ending.actions;
     endedDetail = detail;
+    endedSentence = ending.cause === "" ? ending.message : `${ending.message} ${ending.cause}`;
     document.getElementById("ended-message").textContent = ending.message;
     const cause = document.getElementById("ended-cause");
     cause.textContent = ending.cause;
@@ -294,7 +296,9 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   endedAsk.addEventListener("click", () => {
     askAgentToFix(connection, { whatFailed: `The terminal ${current} couldn't start`, details: endedDetail || null });
   });
-  endedReport.addEventListener("click", () => connection.reportBug());
+  endedReport.addEventListener("click", () =>
+    connection.reportBug({ message: endedSentence, details: endedDetail || null }),
+  );
   endedNew.addEventListener("click", async () => {
     endedNew.disabled = true;
     try {
@@ -632,12 +636,18 @@ _FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
   ask.addEventListener("click", () =>
     askAgentToFix(connection, { whatFailed: config.agent_fix.what_failed, details: config.agent_fix.details }),
   );
-  report.addEventListener("click", () => connection.reportBug());
+  // The report carries what this page says and what its "See details" holds.
+  report.addEventListener("click", () => {
+    const details = document.querySelector("details pre").textContent;
+    connection.reportBug({ message: document.querySelector(".failure-message").textContent, details: details || null });
+  });
 </script>
 </body>
 </html>
 """
-_FAILURE_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(MESSAGE|RETRY_HIDDEN|DETAILS|CONFIG|CONTRACT_PATH)__")
+_FAILURE_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(
+    r"__(MESSAGE|RETRY_HIDDEN|DETAILS|CONFIG|CONTRACT_PATH)__"
+)
 
 
 class AgentFix(FrozenModel):
@@ -653,8 +663,12 @@ class PageFailure(FrozenModel):
     message: str = Field(description="Our sentence")
     details: str = Field(description="The raw reason, behind See details")
     is_retryable: bool = Field(description="Whether a Try again (a reload) can help")
-    agent_fix: AgentFix | None = Field(description="What an agent is asked to fix; None where none can")
-    is_reportable: bool = Field(description="Whether the sentence asks the person to report a bug")
+    agent_fix: AgentFix | None = Field(
+        description="What an agent is asked to fix; None where none can"
+    )
+    is_reportable: bool = Field(
+        description="Whether the sentence asks the person to report a bug"
+    )
     status: int = Field(description="The HTTP status the page is answered with")
 
 
@@ -723,7 +737,9 @@ def page_failure(error: TerminalAppError, raw_session: str) -> PageFailure:
 @pure
 def render_failure_page(failure: PageFailure) -> str:
     config = {
-        "agent_fix": None if failure.agent_fix is None else failure.agent_fix.model_dump(mode="json"),
+        "agent_fix": None
+        if failure.agent_fix is None
+        else failure.agent_fix.model_dump(mode="json"),
         "is_reportable": failure.is_reportable,
     }
     # `</` cannot appear inside a script element's text, whatever the JSON quoting says.
@@ -735,7 +751,9 @@ def render_failure_page(failure: PageFailure) -> str:
         "CONFIG": encoded,
         "CONTRACT_PATH": APP_CONTRACT_ROUTE,
     }
-    return _FAILURE_PLACEHOLDER.sub(lambda match: values[match.group(1)], _FAILURE_PAGE_TEMPLATE)
+    return _FAILURE_PLACEHOLDER.sub(
+        lambda match: values[match.group(1)], _FAILURE_PAGE_TEMPLATE
+    )
 
 
 class SessionPage(FrozenModel):
@@ -964,7 +982,9 @@ def build_pages_blueprint(
     def failure_page(error: TerminalAppError) -> ResponseReturnValue:
         """A page of ours for a window whose page could not be served: a JSON body would be the whole window."""
         failure = page_failure(error, request.args.get(SESSION_QUERY_KEY, ""))
-        response = Response(render_failure_page(failure), status=failure.status, mimetype="text/html")
+        response = Response(
+            render_failure_page(failure), status=failure.status, mimetype="text/html"
+        )
         response.headers["Cache-Control"] = "no-store"
         return response
 

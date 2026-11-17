@@ -66,7 +66,9 @@ class _TerminalPtyUnderTest(FrozenModel):
 
     app_name: AppName = Field(description="The unique name the pty registers")
     ttyd_port: int = Field(description="The port the fake ttyd is told to serve on")
-    paths: TerminalPaths = Field(description="The state directory layout, shared with the app")
+    paths: TerminalPaths = Field(
+        description="The state directory layout, shared with the app"
+    )
     ttyd_record_dir: Path = Field(description="Where the fake ttyd records its argv")
     log_path: Path = Field(description="Where the process's stderr is captured")
     command: tuple[str, ...] = Field(description="The full command line")
@@ -75,7 +77,9 @@ class _TerminalPtyUnderTest(FrozenModel):
     )
 
 
-def _process_environment(environment: TerminalEnvironment, fake_tmux: FakeTmux) -> dict[str, str]:
+def _process_environment(
+    environment: TerminalEnvironment, fake_tmux: FakeTmux
+) -> dict[str, str]:
     return {
         **os.environ,
         "PATH": f"{fake_tmux.bin_dir}{os.pathsep}{os.environ['PATH']}",
@@ -155,7 +159,10 @@ def _prepare_pty(
             str(environment.scratch_dir / "fake-ttyd" / "bin" / "ttyd"),
             *(() if is_registered else ("--no-register",)),
         ),
-        environment={**_process_environment(environment, fake_tmux), ENV_FAKE_TTYD_DIR: str(ttyd_record_dir)},
+        environment={
+            **_process_environment(environment, fake_tmux),
+            ENV_FAKE_TTYD_DIR: str(ttyd_record_dir),
+        },
     )
 
 
@@ -163,7 +170,9 @@ def _read_log(log_path: Path) -> str:
     return log_path.read_text() if log_path.exists() else ""
 
 
-def _spawn(command: tuple[str, ...], environment: Mapping[str, str], log_path: Path) -> subprocess.Popen[bytes]:
+def _spawn(
+    command: tuple[str, ...], environment: Mapping[str, str], log_path: Path
+) -> subprocess.Popen[bytes]:
     # A session of its own puts the process and anything it starts in one process group, so a
     # failed test can kill both rather than orphan a fake on its port.
     with log_path.open("wb") as log_file:
@@ -189,7 +198,9 @@ def test_terminal_app_registers_serves_pages_and_sessions_and_stops_on_sigterm(
     fake_tmux = install_fake_tmux(tmp_path / "fake-tmux")
     fake_tmux.set_sessions(
         [
-            make_tmux_session("terminal-2", "$5", datetime(2026, 9, 3, tzinfo=timezone.utc)),
+            make_tmux_session(
+                "terminal-2", "$5", datetime(2026, 9, 3, tzinfo=timezone.utc)
+            ),
             make_tmux_session("mngr-alice", "$1"),
         ]
     )
@@ -198,15 +209,25 @@ def test_terminal_app_registers_serves_pages_and_sessions_and_stops_on_sigterm(
     try:
         # The assertion message reads the log only once the wait has failed, so it quotes the startup error.
         assert poll_until(
-            terminal_environment.registry_path.exists, timeout=_STARTUP_TIMEOUT_SECONDS, poll_interval=0.1
+            terminal_environment.registry_path.exists,
+            timeout=_STARTUP_TIMEOUT_SECONDS,
+            poll_interval=0.1,
         ), f"the app never registered: {_read_log(app.log_path)}"
         assert is_port_accepting(app.pages_port), _read_log(app.log_path)
 
         # The startup work: the discovery event and the registration.
-        events = (app.agent_state_dir / "events" / "servers" / "events.jsonl").read_text().splitlines()
-        assert [json.loads(line)["url"] for line in events] == [f"http://localhost:{app.pages_port}"]
+        events = (
+            (app.agent_state_dir / "events" / "servers" / "events.jsonl")
+            .read_text()
+            .splitlines()
+        )
+        assert [json.loads(line)["url"] for line in events] == [
+            f"http://localhost:{app.pages_port}"
+        ]
         rows = read_registry(terminal_environment.registry_path)
-        assert [(row.name, row.url) for row in rows] == [(app.app_name, f"http://localhost:{app.pages_port}")]
+        assert [(row.name, row.url) for row in rows] == [
+            (app.app_name, f"http://localhost:{app.pages_port}")
+        ]
         assert [launch_path.path for launch_path in rows[0].launch_paths] == ["/new"]
 
         # The wrapper pages: the session page frames the pty by the path the dispatch reads, ``POST /new``
@@ -219,9 +240,20 @@ def test_terminal_app_registers_serves_pages_and_sessions_and_stops_on_sigterm(
         allocated = httpx.post(f"{pages_url}/new", json={}, timeout=5.0)
         assert allocated.status_code == 200
         assert allocated.json() == {"path": "/?session=terminal-1"}
-        assert [session.name for session in fake_tmux.sessions()] == ["terminal-2", "mngr-alice", "terminal-1"]
+        assert [session.name for session in fake_tmux.sessions()] == [
+            "terminal-2",
+            "mngr-alice",
+            "terminal-1",
+        ]
         create_call = fake_tmux.creates()[0]
-        assert create_call[:6] == ["new-session", "-d", "-s", "terminal-1", "-c", os.getcwd()]
+        assert create_call[:6] == [
+            "new-session",
+            "-d",
+            "-s",
+            "terminal-1",
+            "-c",
+            os.getcwd(),
+        ]
         assert create_call[-5:] == [
             "python3",
             str(Path("system/services/oom_priority/bin/oom_tag_service.py").absolute()),
@@ -229,17 +261,27 @@ def test_terminal_app_registers_serves_pages_and_sessions_and_stops_on_sigterm(
             "bash",
             "-l",
         ]
-        assert (app.paths.sessions_dir / "terminal-1").read_text() == expected_session_id_file("$6")
+        assert (
+            app.paths.sessions_dir / "terminal-1"
+        ).read_text() == expected_session_id_file("$6")
         assert [
-            (session["name"], session["session_id"]) for session in json.loads(app.store_path.read_text())["sessions"]
+            (session["name"], session["session_id"])
+            for session in json.loads(app.store_path.read_text())["sessions"]
         ] == [("terminal-1", "$6")]
         session = httpx.get(f"{pages_url}/api/sessions/terminal-1", timeout=5.0).json()
         workdir_argument = urllib.parse.quote(os.getcwd(), safe="")
-        assert session["pty_path"] == f"/?arg=_&arg=session&arg=terminal-1&arg={workdir_argument}"
-        assert httpx.get(f"{pages_url}/api/health", timeout=5.0).json() == {"status": "ok"}
+        assert (
+            session["pty_path"]
+            == f"/?arg=_&arg=session&arg=terminal-1&arg={workdir_argument}"
+        )
+        assert httpx.get(f"{pages_url}/api/health", timeout=5.0).json() == {
+            "status": "ok"
+        }
 
         process.send_signal(signal.SIGTERM)
-        assert process.wait(timeout=_EXIT_TIMEOUT_SECONDS) == 143, _read_log(app.log_path)
+        assert process.wait(timeout=_EXIT_TIMEOUT_SECONDS) == 143, _read_log(
+            app.log_path
+        )
         assert not is_port_accepting(app.pages_port)
     finally:
         _kill_if_running(process)
@@ -288,7 +330,9 @@ def test_terminal_pty_installs_dispatch_registers_and_becomes_ttyd(
         assert f'SCRIPT="{pty.paths.commands_dir}/$KEY.sh"' in "\n".join(ttyd_argv)
 
         process.send_signal(signal.SIGTERM)
-        assert process.wait(timeout=_EXIT_TIMEOUT_SECONDS) == -signal.SIGTERM, _read_log(pty.log_path)
+        assert process.wait(timeout=_EXIT_TIMEOUT_SECONDS) == -signal.SIGTERM, (
+            _read_log(pty.log_path)
+        )
     finally:
         _kill_if_running(process)
 
@@ -304,11 +348,21 @@ def test_an_unregistered_terminal_and_pty_serve_but_register_and_sweep_nothing(
     fake_tmux = install_fake_tmux(tmp_path / "fake-tmux")
     # A remembered terminal a window once showed: the live app's sweep would collect it, since no
     # window of the shell shows it; an unregistered boot leaves it alone.
-    fake_tmux.set_sessions([make_tmux_session("terminal-1", "$6", datetime(2026, 9, 3, tzinfo=timezone.utc))])
+    fake_tmux.set_sessions(
+        [
+            make_tmux_session(
+                "terminal-1", "$6", datetime(2026, 9, 3, tzinfo=timezone.utc)
+            )
+        ]
+    )
     app = _prepare_app(terminal_environment, fake_tmux, is_registered=False)
     JsonTerminalSessionStore(store_path=app.store_path).save_record(
         TerminalSessionRecord(
-            name=TmuxSessionName("terminal-1"), title=None, workdir=None, session_id=TmuxSessionId("$6"), is_window_seen=True
+            name=TmuxSessionName("terminal-1"),
+            title=None,
+            workdir=None,
+            session_id=TmuxSessionId("$6"),
+            is_window_seen=True,
         )
     )
     pty = _prepare_pty(terminal_environment, fake_tmux, is_registered=False)
@@ -316,7 +370,9 @@ def test_an_unregistered_terminal_and_pty_serve_but_register_and_sweep_nothing(
     pty_process = _spawn(pty.command, pty.environment, pty.log_path)
     try:
         assert poll_until(
-            lambda: is_port_accepting(app.pages_port), timeout=_STARTUP_TIMEOUT_SECONDS, poll_interval=0.1
+            lambda: is_port_accepting(app.pages_port),
+            timeout=_STARTUP_TIMEOUT_SECONDS,
+            poll_interval=0.1,
         ), _read_log(app.log_path)
         assert poll_until(
             lambda: read_fake_ttyd_argv(pty.ttyd_record_dir) is not None,
@@ -324,16 +380,24 @@ def test_an_unregistered_terminal_and_pty_serve_but_register_and_sweep_nothing(
             poll_interval=0.1,
         ), f"ttyd never started: {_read_log(pty.log_path)}"
         pages_url = f"http://{LOOPBACK_HOST}:{app.pages_port}"
-        assert httpx.get(f"{pages_url}/api/health", timeout=5.0).json() == {"status": "ok"}
+        assert httpx.get(f"{pages_url}/api/health", timeout=5.0).json() == {
+            "status": "ok"
+        }
         # A close hint is taken, but with no sweep running it collects nothing.
         closed = httpx.post(
             f"{pages_url}/api/window-closed",
-            json={"path": "/?session=terminal-1", "window_id": "win-0000000000000001", "desktop_id": "home"},
+            json={
+                "path": "/?session=terminal-1",
+                "window_id": "win-0000000000000001",
+                "desktop_id": "home",
+            },
             timeout=5.0,
         )
         assert closed.status_code == 204
         assert not terminal_environment.registry_path.exists()
-        assert not (app.agent_state_dir / "events" / "servers" / "events.jsonl").exists()
+        assert not (
+            app.agent_state_dir / "events" / "servers" / "events.jsonl"
+        ).exists()
         assert [session.name for session in fake_tmux.sessions()] == ["terminal-1"]
     finally:
         _kill_if_running(app_process)
