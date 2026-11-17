@@ -89,6 +89,11 @@ _POLL_SECONDS: Final[float] = 0.2
 # How long a human verb waits for the lease to reach neko before answering, so that "controller: nobody" in its
 # answer means the next session's first input is a request neko grants, not a non-host's input it drops.
 _PROJECTION_WAIT_SECONDS: Final[float] = 5.0
+# How long a member that left waits for the memory guard's shed record before it is called a crash: the record
+# comes from a hook earlyoom spawns after polling (every 100 ms) for the process to be gone, and the watcher's notice
+# arrives under the watcher's own 5-second timeout.
+_SHED_RECORD_GRACE_SECONDS: Final[float] = 3.0
+_SHED_RECORD_POLL_SECONDS: Final[float] = 0.1
 
 DEFAULT_SCREENSHOT_QUALITY: Final[int] = 90
 
@@ -201,6 +206,9 @@ class ScreenService(MutableModel):
         default=was_shed_recently,
         frozen=True,
         description="Whether the workspace's memory guard just shed a pid, for a member that left on its own",
+    )
+    sleep: Callable[[float], None] = Field(
+        default=time.sleep, frozen=True, description="Waits between reads of the memory guard's ledger"
     )
 
     title: str = Field(default=DEFAULT_TITLE, description="The frontmost window's title")
@@ -392,10 +400,20 @@ class ScreenService(MutableModel):
         if self.stack.lifecycle == Lifecycle.STOPPED:
             # The first member to go names the reason; the others leaving afterwards is the group ending as designed.
             return True
-        cause = StopCause.OUT_OF_MEMORY if pid is not None and self.was_shed(pid) else StopCause.CRASHED
+        cause = StopCause.OUT_OF_MEMORY if pid is not None and self._was_shed_by_now(pid) else StopCause.CRASHED
         logger.warning("The Screen stopped: {} ({}, {})", reason, member, cause.value.lower())
         self.stack.mark_stopped(reason, cause)
         self.broadcaster.broadcast({"type": "stopped", "reason": reason, "member": member})
+        return True
+
+    def _was_shed_by_now(self, pid: int) -> bool:
+        """Whether the memory guard shed ``pid``, waiting a moment for its record: earlyoom writes it from a hook it
+        runs only once it has seen the process gone, which can be after supervisord's exit event reached us."""
+        deadline = self.clock() + _SHED_RECORD_GRACE_SECONDS
+        while not self.was_shed(pid):
+            if self.clock() >= deadline:
+                return False
+            self.sleep(_SHED_RECORD_POLL_SECONDS)
         return True
 
     # sessions (spec section 6.3)

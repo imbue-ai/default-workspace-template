@@ -171,7 +171,8 @@ def service(
         is_event_subscription_enabled=False,
         is_clipboard_monitor_enabled=False,
         clock=manual_clock,
-        was_shed=lambda pid: pid in fake_install.shed_pids,
+        was_shed=fake_install.was_shed,
+        sleep=manual_clock.advance,
     )
     fleet = BrowserFleet(
         launcher=fake_chromium_launcher,

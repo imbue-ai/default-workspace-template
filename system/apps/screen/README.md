@@ -46,7 +46,8 @@ other route (`/api/run`, the agent verbs, the screenshot, the window tools, a se
   boot), `starting` while the group comes up, `running`, or `stopped` with the
   `stop_reason` and the `stop_cause`: `requested` (Quit, the service's own shutdown),
   `start_failed`, `crashed` (a member left on its own), or `out_of_memory` (a member the
-  memory guard's shed ledger names by pid). `title` follows the frontmost X window ("Browser"
+  memory guard's shed ledger names by pid; the service waits up to 3 seconds for that
+  record, which earlyoom writes only after it has seen the process gone). `title` follows the frontmost X window ("Browser"
   for a Chromium window, the window's title otherwise, "Screen" for an empty desktop);
   `video_id` is the profile every viewer selects (below); `chromium` is the browser's
   `{"state", "name", "pending_url"}` (see "The browser").

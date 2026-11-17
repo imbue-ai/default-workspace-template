@@ -351,6 +351,14 @@ def test_the_stopped_state_says_what_kind_of_end_it_was(
     stopped = client.get("/api/state").get_json()
     assert (stopped["stop_cause"], stopped["stop_reason"]) == ("out_of_memory", "screen-neko exited")
 
+    # earlyoom records a shed only once it has seen the process gone, so its record can land after the watcher's
+    # notice: still a shed.
+    fake_install.ledger_reads_before_shed[53] = 3
+    start_service_stack(service)
+    _stop_every_member(fake_supervisor)
+    client.post("/api/internal/stopped", json={"member": "screen-neko", "reason": "screen-neko exited", "pid": 53})
+    assert client.get("/api/state").get_json()["stop_cause"] == "out_of_memory"
+
     fake_supervisor.failing_programs.add("screen-neko")
     service.ensure_started()
     assert wait_until(lambda: service.stack.lifecycle == Lifecycle.STOPPED)
