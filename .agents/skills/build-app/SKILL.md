@@ -52,9 +52,8 @@ existing app, use the `update-app` skill.
 
 ## Other tasks
 
-- **Renaming an app, or pinning a window of it**: `references/app-manifest.md`.
-- **Removing an app**: the `update-app` skill's "Removing an app or service".
-  This skill's `references/cleanup.md` has the teardown steps it sends you to.
+- **Renaming an app, or pinning a window of it**:
+  `.agents/shared/references/apps/manifest.md`.
 - **The shared (public) URL** of an app: `references/public-url.md`.
 - **`forward_port.py`'s flags**, for a registration written by hand:
   `references/forward-port-cli.md`.
@@ -172,7 +171,8 @@ again. Never accept feedback and move on having only said you will apply it.
 Each later round is the same call without `--screenshot`, ending in
 `mock_frame.py refresh --app <name>` in place of `mock_frame.py up ... --open`.
 Why every restart needs it, and the frame's other commands (a new note, a
-closed window, taking it down), are in `references/mock-frame.md`.
+closed window, taking it down), are in
+`.agents/shared/references/apps/mock-frame.md`.
 
 **Hard gate.** Loop until the user **explicitly confirms** the look and feel;
 no real routes, data or state before that. The confirmed mock is the source of
@@ -185,14 +185,16 @@ Replace the mock with real routes and wire in the data and state decisions
 recorded in step 1. The goal is a *usable* app the user can try, not a hardened
 one.
 
-- Read `references/api-schema.md` before adding a route: each owes the app's
+- Read `.agents/shared/references/apps/api-schema.md` before adding a route:
+  each owes the app's
   API document a docstring and a route-table entry ("The app describes its own
   API"). A visiting agent (`.agents/shared/references/visiting-agents.md`)
   learns the app from that document.
 - `references/app-code.md` has the other rules: state under `DATA_DIR`, the
   content-security policy, a "view raw" control on derived data, calling
   Claude.
-- `references/app-manifest.md` says when an app that works between requests
+- `.agents/shared/references/apps/manifest.md` says when an app that works
+  between requests
   needs `stop_when_no_windows = false`, and how to register what you build for
   the app outside its directory.
 
@@ -204,7 +206,7 @@ however real its routes are. Each time a piece becomes real, say what still is
 not in a new note ("Your real inbox loads now; archive doesn't work yet.").
 Once the app reads its real data and does what the user will use it for, take
 the frame down and open the app in its place. Both commands are in
-`references/mock-frame.md`.
+`.agents/shared/references/apps/mock-frame.md`.
 
 ## Step 6: Verify, then show
 
@@ -215,11 +217,11 @@ beside the chat:
 uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<expected-heading-or-text>" --screenshot /tmp/app.png --open
 ```
 
-- `references/verify.md` has the call's other forms (an app already on screen
+- `.agents/shared/references/apps/verify.md` has the call's other forms (an app already on screen
   is refreshed, not opened; a framed app takes neither flag) and the manual
   checks. Always refresh after a change, so the user sees it.
 - For a symptom in the window (stuck on the loading page, broken WebSockets),
-  read `references/cross-flow-gotchas.md`, which is indexed by symptom.
+  read `.agents/shared/references/apps/gotchas.md`.
 
 Skip the window only for an app with no UI (a JSON API, a webhook receiver).
 When the check was done another way, the window commands are

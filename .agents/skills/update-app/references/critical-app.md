@@ -325,15 +325,15 @@ poll) with these specifics:
   ```
 
 - **Task body: one of two handoff shapes**, named as such so the worker knows
-  which (its update guide calls this the critical-app handoff):
+  which:
   - *Implement for real, then harden:* the branch carries an approved but
     deliberately rough edit.
   - *Harden only:* the branch already carries the real, user-approved change;
     verify and harden it, do not re-implement it.
 
   There is **no `## Change origin` marker and no worker gate**: the user already
-  approved the shape in your live loop. Name the apps (the worker's own guide
-  tells it to build every bundle at the npm root and report each path). Include
+  approved the shape in your live loop. Name the apps: the worker builds every
+  bundle at the npm root and reports each path. Include
   a `## Real scenario` section when a real
   conversation motivated the change, naming the motivating chat (usually your
   own, `${MINDS_CHAT_ID:-$MNGR_AGENT_ID}`) and what looked wrong, so the worker opens *that*
@@ -437,9 +437,9 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    *settle* healthy, refreshes every open view, and **auto-rolls-back the entire
    merge on any failure**. `--keep-rollback-point` keeps the snapshots and a
    record of what it touched afterwards, which is what the notice below offers
-   back; any later apply replaces them. Interpret the exit code and report it,
-   per `.agents/skills/update-self/references/apply-outcomes.md`, which says
-   what each exit leaves behind and what else it can mean:
+   back; any later apply replaces them. Interpret the exit code and report it.
+   The apply's closing stderr lines say what it did and name any follow-up it
+   left, so read them before you report:
 
    - `0`: applied; the live app is updated and healthy.
    - `2`: the change was bad and was **automatically rolled back**; the live

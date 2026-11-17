@@ -31,7 +31,7 @@ placeholder with your routes.
 - Those two overrides are what let a later edit boot a throwaway instance on a
   spare port against a copy of the data (the `update-app` skill).
 - A route the app adds owes the app's API document a docstring and a route
-  table entry: `api-schema.md`.
+  table entry: `.agents/shared/references/apps/api-schema.md`.
 
 ## The app owns its origin
 
@@ -51,8 +51,7 @@ workers and redirects (`Location: /login`) all work exactly as written.
   paths for state.
 - **A store the app can rebuild** (downloads, extracted archives, clones,
   caches) gets its own directory under `DATA_DIR` with an empty `.nobackup`
-  file in it, so the hourly backup skips it. See "Keep rebuildable data out of
-  the backup" in `.agents/skills/harden-worker/references/harden-creation.md`.
+  file in it, so the hourly backup skips it.
 - **Static assets shipped beside the code** (templates, default configs,
   bundled JSON): `Path(__file__).parent / "assets/..."` is the right pattern.
 

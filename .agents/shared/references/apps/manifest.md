@@ -1,9 +1,8 @@
 # The app's manifest (`app.toml`)
 
-Every app has a manifest at `system/apps/<package>/app.toml`. Read this when
-you write or edit one: to decide `stop_when_no_windows`, to register something
-you built for the app outside its directory, to pin a window, or to rename the
-app.
+Every app has a manifest at `system/apps/<package>/app.toml`. This file covers
+what the scaffolder writes there, `stop_when_no_windows`, registering something
+built for the app outside its directory, a pinned window, and renaming the app.
 
 The app's program registers the manifest at every start, so a restart is what
 applies an edit. After editing it, check it:
@@ -57,9 +56,8 @@ drives it, a script, a doc -- is registered in the manifest under
 `[[references]]`, with a `note` naming the surface it uses. That is how it
 travels with the app through hardening, testing and publishing.
 
-A credential the app needs is declared under `[[secrets]]`; `scaffold-output.md`,
-"An app that needs a credential", has the block and the program command that
-goes with it.
+A credential the app needs is declared under `[[secrets]]`; the `build-app`
+skill has the block and the program command that goes with it.
 
 ## A pinned window (`[pin]`)
 

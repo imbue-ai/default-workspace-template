@@ -49,7 +49,7 @@ window keeps showing the old page until it is refreshed. The live change loop
   `manage-desktop` skill.
 - **Removing an app or service**: for a service, follow "Removing a service"
   in `.agents/shared/references/service-processes.md`; for an app, follow
-  `.agents/skills/build-app/references/cleanup.md`, which also drops its
+  `references/removing-an-app.md`, which also drops its
   registration and its package. Teardown stops at the code and the process.
   **Leave the data (`data/.apps/<name>/`) in place**: removing an app or
   service is not license to delete the user's records. Delete the data
@@ -58,7 +58,7 @@ window keeps showing the old page until it is refreshed. The live change loop
   `<name>-sketch` in its place): its window is the frame's, so wherever a step
   below says `--refresh` or `--open`, end the call with a `mock_frame.py`
   command instead, from
-  `.agents/skills/build-app/references/mock-frame.md`.
+  `.agents/shared/references/apps/mock-frame.md`.
 
 ## Standing instructions
 
@@ -177,12 +177,12 @@ command points. Three things the change may owe:
   directory is registered under `[[references]]`. If the change gives the app
   work between requests, or takes it away, `stop_when_no_windows` changes
   with it. Both rules are in
-  `.agents/skills/build-app/references/app-manifest.md`; the restart in step 4
+  `.agents/shared/references/apps/manifest.md`; the restart in step 4
   is what applies a manifest edit.
 - **The API document.** For an app with an `api_schema_path`, each new or
   changed route owes a docstring and a route-table entry, and the app's own
   test (`runner_test.py` in a scaffolded app) checks them, so run it with the
-  change. The contract is `.agents/skills/build-app/references/api-schema.md`.
+  change. The contract is `.agents/shared/references/apps/api-schema.md`.
 - **Claude.** If the change calls Claude, follow the `use-ai-integration`
   skill.
 
@@ -204,9 +204,9 @@ uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart
 - A frontend-only change (templates, static files served fresh on each
   request) needs no restart: drop `--restart`.
 - The recipe, and the manual checks for a call that fails (connection
-  refused), are `.agents/skills/build-app/references/verify.md`. Symptoms in
+  refused), are `.agents/shared/references/apps/verify.md`. Symptoms in
   the window (stuck on the loading page, broken WebSockets) are in
-  `.agents/skills/build-app/references/cross-flow-gotchas.md`.
+  `.agents/shared/references/apps/gotchas.md`.
 
 **Anything else** is in `references/applying-a-change.md`: a dependency or
 entry-point change, a service with no port, a change to the program's

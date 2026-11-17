@@ -6,10 +6,6 @@ app's pages and a note under the banner saying what is not real yet. While the
 frame is up, `uv run --no-sync workspace-layout list` lists `<name>-sketch` in
 the app's place, and the bare app stays out of the launcher.
 
-Read this when a round needs more than SKILL.md's two step-4 calls: the note
-changed, the frame's window is closed, the app has become real, or you are
-changing a framed app from another skill.
-
 ## The commands
 
 The window the user has is the frame's, so the app itself is never opened and
@@ -21,8 +17,8 @@ with one of the first three commands below, which put the frame back.
 `MOCK_FRAME` stands for
 `uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py`.
 Chain each of those three after the restart with `&&`, in the same tool call;
-`down` alone goes before the restart, as shown under the table. The first
-framing is SKILL.md's step 4 call.
+`down` alone goes before the restart, as shown under the table. The `build-app`
+skill makes the first framing.
 
 | When | Command |
 |---|---|

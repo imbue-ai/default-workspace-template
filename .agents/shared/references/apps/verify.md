@@ -1,7 +1,7 @@
 # Verifying an app
 
 Verify against `http://127.0.0.1:<port>/`, the port registered with
-`forward_port.py`. The browser-facing origin (`public-url.md`) is served by the
+`forward_port.py`. The browser-facing origin is served by the
 host-side forwarder and is **not reachable from inside the container**, so a
 check from inside targets the local port directly.
 
@@ -77,7 +77,7 @@ curl --retry 20 --retry-connrefused --retry-delay 0.1 -sf http://127.0.0.1:<port
   `supervisorctl status <name>` and `/var/log/supervisor/<name>-stderr.log`.
 - **200 here but the window shows the loading page**: the registered URL does
   not match the port the app bound, or the name in `apps.toml` does not match
-  the window's app. See `cross-flow-gotchas.md`.
+  the window's app. See `gotchas.md`.
 
 **A Playwright script of your own.** Playwright is installed in the root venv and drives Fortress, the workspace's
 Chromium build, when it is installed. Use these flags and `domcontentloaded`

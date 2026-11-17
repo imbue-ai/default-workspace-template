@@ -57,4 +57,4 @@ The script is standard-library only and runs under a plain `python3`.
   (previews, `serve_isolated_instance.py` test servers): those own their own
   teardown and must not offer a Stop that supervisord cannot honor.
 - `--remove`: remove the named entry from `data/.state/apps.toml`. Use it when
-  tearing an app down (`cleanup.md`).
+  tearing an app down (the `update-app` skill).

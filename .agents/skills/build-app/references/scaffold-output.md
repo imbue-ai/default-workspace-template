@@ -87,7 +87,7 @@ packages), so the app's dependencies never move the chat's or another app's.
 - `app.toml` -- the app's manifest: its registered `name`, `display_name`,
   `description`, `api_schema_path`, `icon`, `priority`, `program` and
   `stop_when_no_windows`. What each field means and when to change it is in
-  `app-manifest.md`.
+  `.agents/shared/references/apps/manifest.md`.
 - `icon.svg` -- the icon passed as `--icon-file`, named by the manifest and
   registered on every start.
 - `pyproject.toml` -- the app is a **standalone uv project**, not a root
@@ -110,7 +110,7 @@ packages), so the app's dependencies never move the chat's or another app's.
   sets up and the rules its code follows are in `app-code.md`.
 - `src/<package>/runner_test.py` -- the one test every app starts with: its API
   document at `/api/schema` says what its manifest says and covers every route
-  (`api-schema.md`).
+  (`.agents/shared/references/apps/api-schema.md`).
 - `test_<package>_ratchets.py` -- the standard ratchets at zero, plus
   `test_no_type_errors`, which fails on any `ty` error in the app.
 - `README.md` -- the one-line description.

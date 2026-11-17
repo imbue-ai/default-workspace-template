@@ -1,9 +1,8 @@
 # App gotchas
 
 Read this when verification surfaces something odd; skim for the symptom that
-matches. Most apps just work: the app owns its own browser origin (`app-code.md`,
-"The app owns its origin"), on shares too, and the scaffolder's defaults
-sidestep the remaining traps.
+matches. Most apps just work: the app owns its own browser origin, on shares
+too, and the scaffolder's defaults sidestep the remaining traps.
 
 ## "The window is stuck on the loading page"
 
@@ -29,7 +28,7 @@ window's app, then run the checks in `verify.md`.
 ## A registration fails loudly at startup
 
 Check the name first: `forward_port.py` refuses one that cannot be a hostname
-label. The naming rule is step 2's in SKILL.md.
+label. The `build-app` skill states the naming rule.
 
 ## Don't hardcode `localhost:<port>` in browser-facing code
 
@@ -64,5 +63,5 @@ If the port is bound by something else, the start command fails loudly: the
 framework prints an error and exits. Supervisord retries a few times and then
 leaves the program in `FATAL`, so the failure shows in
 `supervisorctl status <name>` and `/var/log/supervisor/<name>-stderr.log`. Pick
-a different port. The scaffolder's own pick avoids this; a port chosen by hand
-follows `wrap-existing-server.md`, "Pick a port and bind loopback".
+a different port. The scaffolder's own pick avoids this; the `build-app` skill
+says how to pick one by hand.

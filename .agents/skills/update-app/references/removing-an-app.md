@@ -1,7 +1,7 @@
 # Removing an app
 
 The teardown steps for an app. What to leave behind (the app's data) is
-`update-app`'s rule, under "Removing an app or service".
+SKILL.md's rule, under "Removing an app or service".
 
 1. If the app is still framed as a mock, take the frame down first, which closes
    the mock window and removes the `<name>-sketch` app:
