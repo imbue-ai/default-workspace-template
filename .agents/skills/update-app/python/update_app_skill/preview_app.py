@@ -256,7 +256,8 @@ def _reframe_previews_naming(
     written when it booted, and it watches that file. A sibling re-upped on its own
     moves to new ports, and one taken down on its own is gone; either way the copy
     is rewritten with where every recorded sibling is now, so the framing preview
-    follows without a re-up of its own.
+    follows without a re-up of its own. A sibling re-upped as a private instance
+    registers no origin to be framed at, so its row goes back to the live app.
     """
     for state_path in sorted(
         (repo_root / INSTANCES_ROOT).glob(f"*{PREVIEW_STATE_SUFFIX}")
@@ -279,7 +280,8 @@ def _reframe_previews_naming(
         preview_url_by_app = {
             str(name): url
             for name in recorded
-            if (url := live_preview_url(repo_root, str(name))) is not None
+            if live_preview_is_surfaced(repo_root, str(name))
+            and (url := live_preview_url(repo_root, str(name))) is not None
         }
         write_registry_copy(
             live_registry_path(repo_root),

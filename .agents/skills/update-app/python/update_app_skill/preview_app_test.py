@@ -764,12 +764,28 @@ def test_re_upping_a_framed_sibling_on_its_own_moves_the_shells_registry_copy_wi
         mod.down("chat", tmp_path, instances=instances, dump_registry=_dump_registry)
         == 0
     )
-    rows = _shell_registry_rows(tmp_path)
-    assert rows["chat"] == {
+    live_chat_row = {
         "name": "chat",
         "url": "http://localhost:8010",
         "label": "chat-live",
     }
+    assert _shell_registry_rows(tmp_path)["chat"] == live_chat_row
+
+    # Re-upped as a private instance, the chat has no origin the shell could frame it at.
+    assert (
+        boot.up(
+            "chat",
+            worktree,
+            tmp_path,
+            instance_key="agent-1",
+            is_private=True,
+            instances=instances,
+            dump_registry=_dump_registry,
+        )
+        == 0
+    )
+    assert _shell_registry_rows(tmp_path)["chat"] == live_chat_row
+    assert mod.down("chat", tmp_path, instances=instances) == 0
     # The shell's own record still names the chat, so a later ``down`` of the shell is unchanged.
     assert mod._recorded_siblings(tmp_path, "system_interface") == ["chat"]
 
