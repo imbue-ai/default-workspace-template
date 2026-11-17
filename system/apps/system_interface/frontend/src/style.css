@@ -27,11 +27,11 @@
    stands in for, and a selected design cell's is a border, so on either the outline still shows
    the focus beside the selection. */
 .modal-card button[aria-pressed]:focus-visible {
-  outline: 2px solid var(--c-accent);
+  outline: 2px solid var(--c-accent-surface);
   outline-offset: 2px;
   box-shadow:
-    0 0 0 2px var(--c-surface),
-    0 0 0 4px var(--c-accent);
+    0 0 0 2px var(--c-body-surface-raised),
+    0 0 0 4px var(--c-accent-surface);
 }
 
 /* The taskbar's entries scroll sideways with no scrollbar of their own; a cut-off entry is what

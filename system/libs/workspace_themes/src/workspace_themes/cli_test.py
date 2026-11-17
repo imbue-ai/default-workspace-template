@@ -428,11 +428,11 @@ def test_lint_app_finds_literal_looks_in_a_tokens_mode_app(tmp_path: Path) -> No
     source = root / "system" / "apps" / "files" / "frontend" / "src"
     source.mkdir(parents=True)
     (source / "view.ts").write_text(
-        'const OK = "bg-surface text-primary";\n// a #fff comment is fine\nconst BAD = "bg-[#ff0000]";\n',
+        'const OK = "bg-body-surface-raised text-body-content";\n// a #fff comment is fine\nconst BAD = "bg-[#ff0000]";\n',
         encoding="utf-8",
     )
     (source / "style.css").write_text(
-        ".x { font-family: Comic Sans; }\n.y { color: var(--c-accent); }\n"
+        ".x { font-family: Comic Sans; }\n.y { color: var(--c-accent-surface); }\n"
         ".z { font-family: var(--font-sans); }\nbutton { font-family: inherit; }\n"
         ".r { box-shadow: var(--c-shadow-raised); }\n.n { box-shadow: none; }\n"
         ".s { box-shadow: 0 1px 2px black; }\n* { box-shadow: 0 0 2px black; }\n"
@@ -466,10 +466,10 @@ def test_lint_app_lints_an_outside_mode_app_and_accepts_the_fallbacks_its_tokens
     assets = app / "assets"
     assets.mkdir()
     (assets / "app.css").write_text(
-        ".card { background: var(--c-surface, #ffffff); color: var(--c-text-primary, rgb(42, 37, 34)); }\n"
+        ".card { background: var(--c-body-surface-raised, #ffffff); color: var(--c-body-content, rgb(42, 37, 34)); }\n"
         ".lift { box-shadow: var(--c-shadow-raised, 0 1px 2px rgba(0, 0, 0, 0.2)); }\n"
-        "--accent: var(--c-accent, #d26645);\n"
-        ".edge { border: 1px solid var(--c-border, #e1e6df); color: #123456; }\n"
+        "--accent: var(--c-accent-surface, #d26645);\n"
+        ".edge { border: 1px solid var(--c-border-default, #e1e6df); color: #123456; }\n"
         "#add-form, #fade-in { display: flex; }\n",
         encoding="utf-8",
     )

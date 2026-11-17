@@ -12,7 +12,8 @@
     "apps/screen/frontend",
     "apps/files/frontend",
     "apps/routines/frontend",
-    "apps/style_guide/frontend"
+    "apps/style_guide/frontend",
+    "apps/system_monitor/frontend"
   ],
   "scripts": {
     "prebuild": "bash scripts/fetch_mngr_assets.sh",

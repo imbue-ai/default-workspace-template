@@ -8,12 +8,18 @@
 
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { cardClass } from "@imbue/workspace-ui/src/components/card";
+import { Checkbox } from "@imbue/workspace-ui/src/components/formControls";
 import { MODAL_LABEL_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
 import { TILE_PART } from "@imbue/workspace-ui/src/themes/parts";
 import type { AppRecord, Desktop } from "../model/records";
 import { availableTheme, resolveDesktopTheme, type ThemeCatalog, type ThemeRecord } from "../model/themes";
 import { appIconMarkupForApp } from "./components/appIcon";
 import { glyph as genericGlyph } from "./glyphs";
+
+/** A choice is a card: the chosen one wears the focus colour round its edge. */
+const TILE_CLASS =
+  "flex w-28 shrink-0 flex-col items-center gap-1 p-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus";
 
 export interface ThemeChooserDialogAttrs {
   readonly desktop: Desktop;
@@ -94,7 +100,7 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
     if (url === null || icons === null) {
       return m(
         "span",
-        { class: "flex h-8 w-8 items-center justify-center text-secondary" },
+        { class: "flex h-8 w-8 items-center justify-center text-body-content-secondary" },
         m.trust(genericGlyph("app", 28)),
       );
     }
@@ -122,10 +128,11 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
         type: "button",
         "data-theme": value ?? "workspace-default",
         ...TILE_PART,
-        class:
-          "flex w-28 shrink-0 flex-col items-center gap-1 rounded-md border bg-transparent p-2 " +
-          (isDisabled ? "cursor-not-allowed opacity-50 " : "cursor-pointer ") +
-          (isSelected ? "border-accent ring-2 ring-accent" : "border-default"),
+        class: cardClass({
+          interactive: !isDisabled,
+          selected: isSelected,
+          extra: `${TILE_CLASS}${isDisabled ? " cursor-not-allowed opacity-50" : ""}`,
+        }),
         "aria-pressed": isSelected ? "true" : "false",
         "aria-disabled": isDisabled ? "true" : undefined,
         title: unavailableReason ?? undefined,
@@ -135,7 +142,10 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
           attrs.onPreviewTheme(theme);
         },
       },
-      [themePicture(record, attrs.previewApp), m("span", { class: "type-helper text-center text-primary" }, label)],
+      [
+        themePicture(record, attrs.previewApp),
+        m("span", { class: "type-helper text-center text-body-content" }, label),
+      ],
     );
   }
 
@@ -149,18 +159,19 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
         type: "button",
         "data-make-theme": "",
         ...TILE_PART,
-        class:
-          "flex w-28 shrink-0 cursor-pointer flex-col items-center gap-1 rounded-md border border-dashed " +
-          "border-default bg-transparent p-2",
+        class: cardClass({ interactive: true, extra: `${TILE_CLASS} border-dashed` }),
         onclick: onMakeTheme,
       },
       [
         m(
           "span",
-          { "aria-hidden": "true", class: "flex h-8 w-8 items-center justify-center text-2xl text-secondary" },
+          {
+            "aria-hidden": "true",
+            class: "flex h-8 w-8 items-center justify-center text-2xl text-body-content-secondary",
+          },
           "+",
         ),
-        m("span", { class: "type-helper text-center text-primary" }, "Make your own..."),
+        m("span", { class: "type-helper text-center text-body-content" }, "Make your own..."),
       ],
     );
   }
@@ -172,7 +183,7 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
     const name = catalog.themes.find((record) => record.id === chosen)?.name ?? chosen;
     return m(
       "p",
-      { "data-theme-unavailable": "", class: "mb-2 type-helper text-secondary" },
+      { "data-theme-unavailable": "", class: "mb-2 type-helper text-body-content-secondary" },
       `This desktop's theme, ${name}, is not available, so it wears the standard look.`,
     );
   }
@@ -180,7 +191,11 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
   function themeRow(attrs: ThemeChooserDialogAttrs): m.Children {
     const catalog = attrs.themes;
     if (catalog === null) {
-      return m("p", { "data-themes-loading": "", class: "mb-3 type-helper text-faint" }, "Loading themes…");
+      return m(
+        "p",
+        { "data-themes-loading": "", class: "mb-3 type-helper text-body-content-tertiary" },
+        "Loading themes…",
+      );
     }
     const defaultTheme = resolveDesktopTheme(catalog, null);
     const tiles = [
@@ -198,25 +213,28 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
     return [
       m("div", { class: "mb-2 flex flex-wrap gap-2" }, [...tiles, makeThemeTile(attrs)]),
       attrs.onMakeTheme === null
-        ? m("p", { "data-make-theme-hint": "", class: "mb-2 type-helper text-secondary" }, MAKE_THEME_IN_CHAT_HINT)
+        ? m(
+            "p",
+            { "data-make-theme-hint": "", class: "mb-2 type-helper text-body-content-secondary" },
+            MAKE_THEME_IN_CHAT_HINT,
+          )
         : null,
       attrs.isDesktopShown
         ? null
         : m(
             "p",
-            { "data-theme-preview-hint": "", class: "mb-2 type-helper text-secondary" },
+            { "data-theme-preview-hint": "", class: "mb-2 type-helper text-body-content-secondary" },
             THEME_PREVIEW_ELSEWHERE_HINT,
           ),
       unavailableChoiceNote(catalog),
       availableTheme(catalog, theme) === null
         ? null
-        : m("label", { class: "mb-3 flex items-center gap-2 type-helper text-primary" }, [
-            m("input", {
-              type: "checkbox",
-              "data-theme-as-workspace-default": "",
+        : m("label", { class: "mb-3 flex items-center gap-2 type-helper text-body-content" }, [
+            m(Checkbox, {
               checked: isWorkspaceDefault,
-              onchange(event: Event) {
-                isWorkspaceDefault = (event.target as HTMLInputElement).checked;
+              input: { "data-theme-as-workspace-default": "" },
+              onchange(checked: boolean) {
+                isWorkspaceDefault = checked;
               },
             }),
             "Make this the workspace default",
@@ -257,7 +275,7 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
         [
           m("label", { class: MODAL_LABEL_CLASS }, `Theme of ${attrs.desktop.name}`),
           themeRow(attrs),
-          error ? m("p", { class: "type-helper mt-1 text-danger" }, error) : null,
+          error ? m("p", { class: "type-helper mt-1 text-danger-surface" }, error) : null,
         ],
       );
     },

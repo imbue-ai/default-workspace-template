@@ -5,6 +5,7 @@
  */
 
 import m from "mithril";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { Bubble, BubbleStack } from "../../model/Bubbles";
 import { foldedLabel } from "../../model/Bubbles";
@@ -66,8 +67,8 @@ export const BubbleLayer: m.Component<BubbleLayerAttrs> = {
             "data-bubble-mention": bubble.isMention ? "true" : null,
             class:
               "bubble pointer-events-auto absolute flex max-w-(--desk-bubble-width) cursor-pointer items-start gap-1 rounded-(--desk-bubble-radius) " +
-              "border bg-surface px-3 py-2 text-(length:--font-size-row) text-primary shadow-overlay " +
-              (bubble.isMention ? "border-accent border-2 " : "border-default "),
+              "border bg-body-surface-raised px-3 py-2 text-(length:--font-size-body-dense) text-body-content shadow-overlay " +
+              (bubble.isMention ? "border-accent-surface border-2 " : "border-default "),
             style: { right: `${right}px`, bottom, zIndex: String(index + 1) },
             onclick: () => attrs.onOpen(bubble.speaker),
           },
@@ -75,23 +76,28 @@ export const BubbleLayer: m.Component<BubbleLayerAttrs> = {
             m("div", { class: "flex min-w-0 flex-1 flex-col" }, [
               m(
                 "div",
-                { class: "truncate text-(length:--font-size-helper) text-faint" },
+                { class: "truncate text-(length:--font-size-helper) text-body-content-tertiary" },
                 `${speakerName(bubble, entry)} in ${bubble.chatTitle}`,
               ),
               bubble.lines.map((line, lineIndex) =>
                 m("div", { key: lineIndex, class: "whitespace-pre-wrap break-words", "data-bubble-line": "" }, line),
               ),
               bubble.foldedCount > 0
-                ? m("div", { class: "text-(length:--font-size-helper) text-faint" }, foldedLabel(bubble.foldedCount))
+                ? m(
+                    "div",
+                    { class: "text-(length:--font-size-helper) text-body-content-tertiary" },
+                    foldedLabel(bubble.foldedCount),
+                  )
                 : null,
             ]),
             m(
-              "button",
+              Button,
               {
-                type: "button",
+                variant: "ghost",
+                icon: true,
+                xs: true,
+                extra: "shrink-0",
                 "data-bubble-dismiss": "",
-                class:
-                  "flex shrink-0 cursor-pointer items-center rounded border-0 bg-transparent p-0.5 text-faint hover:bg-fill-hover hover:text-primary",
                 "aria-label": "Dismiss",
                 onclick: (event: MouseEvent) => {
                   event.stopPropagation();
@@ -102,8 +108,8 @@ export const BubbleLayer: m.Component<BubbleLayerAttrs> = {
             ),
             m("span", {
               class:
-                "bubble-arrow pointer-events-none absolute -bottom-1.5 right-4 size-3 rotate-45 border-r border-b bg-surface " +
-                (bubble.isMention ? "border-accent" : "border-default"),
+                "bubble-arrow pointer-events-none absolute -bottom-1.5 right-4 size-3 rotate-45 border-r border-b bg-body-surface-raised " +
+                (bubble.isMention ? "border-accent-surface" : "border-default"),
             }),
           ],
         );

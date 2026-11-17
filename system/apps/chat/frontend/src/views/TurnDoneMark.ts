@@ -53,7 +53,7 @@ export function TurnDoneMark(): m.Component<{ chatId: string; events: Transcript
       return m(
         "div",
         {
-          class: `turn-done-mark -mt-3.5 mb-5 ${AGENT_TEXT_EDGE_CLASS} font-mono text-[11px] text-faint`,
+          class: `turn-done-mark -mt-3.5 mb-5 ${AGENT_TEXT_EDGE_CLASS} font-mono text-[11px] text-body-content-tertiary`,
           role: "status",
         },
         m("span", { class: "turn-done-mark__label" }, label),

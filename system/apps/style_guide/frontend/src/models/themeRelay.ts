@@ -10,6 +10,7 @@ export interface ThemeMessage {
   readonly theme: string;
   readonly revision: string;
   readonly isPreview: boolean;
+  readonly workspaceColor: string | null;
 }
 
 /** Marks a frame that wants the page's theme. */

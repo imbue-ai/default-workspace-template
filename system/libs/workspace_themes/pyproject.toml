@@ -40,7 +40,7 @@ layers = [
     "workspace_themes.flask_routes",
     "workspace_themes.serving | workspace_themes.icons | workspace_themes.lint",
     "workspace_themes.catalog",
-    "workspace_themes.interfaces | workspace_themes.validation",
+    "workspace_themes.interfaces | workspace_themes.validation | workspace_themes.migration | workspace_themes.workspace_color",
     "workspace_themes.contract",
     "workspace_themes.data_types",
     "workspace_themes.primitives",

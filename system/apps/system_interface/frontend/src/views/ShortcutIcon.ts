@@ -105,7 +105,7 @@ function shortcutContent(app: AppRecord | undefined, label: string, isLifted: bo
       m(
         "span",
         {
-          class: "line-clamp-2 rounded text-(length:--font-size-body) leading-tight font-bold text-on-accent",
+          class: "line-clamp-2 rounded text-(length:--font-size-body) leading-tight font-bold text-body-content",
         },
         label,
       ),
@@ -182,7 +182,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
             (isSliding && lift === null
               ? "motion-safe:transition-[left,top] duration-(--desk-shortcut-slide) ease-out "
               : "") +
-            (isStopped || isConnecting ? "text-faint" : "text-primary"),
+            (isStopped || isConnecting ? "text-body-content-tertiary" : "text-body-content"),
           style: { ...rectStyle(rect), ...liftStyle(lift) },
           ...hoverTooltipAttrs(shortcutTooltip(label, isStopped, isConnecting)),
           onclick: isRunOnClick ? onRun : onSelect,
@@ -210,8 +210,8 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
           {
             class:
               "shortcut-highlight flex w-full flex-col items-center gap-3 rounded-lg p-1 " +
-              "group-focus-visible:outline-2 group-focus-visible:outline-accent " +
-              (isSelected ? "bg-accent/15 outline-1 outline-accent" : ""),
+              "group-focus-visible:outline-2 group-focus-visible:outline-focus " +
+              (isSelected ? "bg-accent-surface/15 outline-1 outline-accent-surface" : ""),
           },
           shortcutContent(app, label, lift !== null),
         ),

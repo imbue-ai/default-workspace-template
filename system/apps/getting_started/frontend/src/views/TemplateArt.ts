@@ -26,7 +26,7 @@ export function TemplateArt(): m.Component<TemplateArtAttrs> {
       const hasArt = template.thumbnail_url !== "" && brokenSlug !== template.slug;
       return m(
         "span",
-        { class: `new-tab-template-art block aspect-[3/2] overflow-hidden bg-page ${frameClass}` },
+        { class: `new-tab-template-art block aspect-[3/2] overflow-hidden bg-body-surface ${frameClass}` },
         hasArt
           ? m("img", {
               src: template.thumbnail_url,
@@ -39,7 +39,7 @@ export function TemplateArt(): m.Component<TemplateArtAttrs> {
             })
           : m(
               "span",
-              { class: "flex h-full w-full items-center justify-center text-faint" },
+              { class: "flex h-full w-full items-center justify-center text-body-content-tertiary" },
               m.trust(icon("box", { size: glyphSize })),
             ),
       );

@@ -36,7 +36,7 @@ describe("participantPicture", () => {
     const colored = render(participantPicture({ name: "Bob", pictureUrl: null, color: "#3b5ba9", size: 24 }));
     const frame = colored.querySelector<HTMLElement>("[data-participant-picture]");
     expect(frame?.style.backgroundColor).toBe("rgb(59, 91, 169)");
-    expect(frame?.className).toContain("text-on-accent");
+    expect(frame?.className).toContain("text-accent-content");
     expect(frame?.textContent).toBe("B");
     const neutral = render(participantPicture({ name: "Bob", pictureUrl: null, color: null, size: 24 }));
     expect(neutral.querySelector<HTMLElement>("[data-participant-picture]")?.className).toContain("bg-fill-hover");

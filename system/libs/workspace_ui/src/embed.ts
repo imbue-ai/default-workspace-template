@@ -71,6 +71,11 @@ export const DETACHED_WINDOWS: "minds:detached-windows" =
 // OPEN_EXTERNAL, custom-scheme links there, OPEN_LOCAL_FILES, and IMMERSIVE_REQUEST.
 export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities" =
   "EMBEDDER_CAPABILITIES" in embedContract ? embedContract.EMBEDDER_CAPABILITIES : "minds:embedder-capabilities";
+// Embedder -> workspace: the user picked a new workspace color; the shell re-reads the color label and every page
+// re-colors. Sent after the pick is written, and again after WORKSPACE_READY. Payload: { hex }, a hint only: the
+// label is what the shell trusts.
+export const WORKSPACE_COLOR: "minds:workspace-color" =
+  "WORKSPACE_COLOR" in embedContract ? embedContract.WORKSPACE_COLOR : "minds:workspace-color";
 // Embedder -> workspace: return a pulled-out window to the desktop. Payload: { windowId, frame? }.
 export const REATTACH_WINDOW: "minds:reattach-window" =
   "REATTACH_WINDOW" in embedContract ? embedContract.REATTACH_WINDOW : "minds:reattach-window";
@@ -143,6 +148,7 @@ const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   PROVIDER_SIGN_IN_ACK,
   OPEN_LINK,
   IMMERSIVE_CHANGED,
+  WORKSPACE_COLOR,
 ];
 
 // One replaceable handler per embedder->workspace type, registered by the

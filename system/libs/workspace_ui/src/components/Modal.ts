@@ -16,9 +16,9 @@
 
 import { partAttrs } from "../themes/parts";
 import m from "mithril";
+import { FORM_LABEL_CLASS } from "./formControls";
 import { omitClassAttrs } from "./attrs";
 import { backdropDismissAttrs } from "./modalBackdrop";
-import { TEXT_BODY_SIZE } from "./typography";
 
 /* Modal shell recipe.
  * The dimmed overlay + centered card + header/title + body copy + actions row
@@ -32,23 +32,23 @@ import { TEXT_BODY_SIZE } from "./typography";
 // chooser's resizing multi-screen panel) but must still scrim and stack like
 // every other modal.
 export const MODAL_OVERLAY_CLASS =
-  "modal-overlay fixed inset-0 z-(--z-overlay) flex items-center justify-center bg-black/40 " +
+  "modal-overlay fixed inset-0 z-(--z-overlay) flex items-center justify-center bg-overlay-scrim " +
   "animate-[modal-overlay-in_150ms_ease-out]";
 
 export const MODAL_CARD_CLASS =
-  "modal-card w-[420px] max-w-[90vw] p-6 bg-surface border border-default rounded-lg shadow-overlay " +
+  "modal-card w-[420px] max-w-[90vw] p-6 bg-overlay-surface border border-default rounded-2xl shadow-overlay " +
   "animate-[modal-card-in_var(--dur-slow)_cubic-bezier(0.16,1,0.3,1)]";
 
 export const MODAL_HEADER_CLASS = "modal-header mb-4 flex items-center gap-2";
 
-export const MODAL_TITLE_CLASS = "modal-title m-0 type-heading text-primary";
+export const MODAL_TITLE_CLASS = "modal-title m-0 type-heading text-body-content";
 
 // Dialog body copy reads at full strength by default -- it is the point of the
 // dialog. A genuinely secondary line (a footnote, a hint) opts into
-// text-secondary / text-faint at its own call site.
-export const MODAL_MESSAGE_CLASS = "modal-message type-body mb-4 text-primary";
+// text-body-content-secondary / text-body-content-tertiary at its own call site.
+export const MODAL_MESSAGE_CLASS = "modal-message type-body mb-4 text-body-content";
 
-export const MODAL_LABEL_CLASS = `modal-label mb-1 block ${TEXT_BODY_SIZE} font-medium text-secondary`;
+export const MODAL_LABEL_CLASS = `modal-label ${FORM_LABEL_CLASS}`;
 
 export const MODAL_ACTIONS_CLASS = "modal-actions flex flex-wrap justify-end gap-2";
 

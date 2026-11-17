@@ -42,6 +42,7 @@ from workspace_themes.icons import (
     render_pixel_grid,
 )
 from workspace_themes.lint import lint_app_frontend
+from workspace_themes.migration import migrate_theme_folder
 from workspace_themes.primitives import (
     HexColor,
     IconFormat,
@@ -263,6 +264,42 @@ def new_theme(
         _STARTER_PARTS.format(name=_css_comment_text(parsed_name)), encoding="utf-8"
     )
     click.echo(str(folder))
+
+
+@main.command("migrate")
+@click.argument("theme_ids", nargs=-1)
+@click.option(
+    "--all",
+    "is_all",
+    is_flag=True,
+    help="Every theme in the workspace's themes/ folder",
+)
+@_REPO_ROOT_OPTION
+def migrate_themes(theme_ids: Sequence[str], is_all: bool, repo_root: str) -> None:
+    """Rewrite contract-1 themes in themes/ to contract 2's token names. A theme already on contract 2 is left as is."""
+    themes_root = Path(repo_root).resolve() / WORKSPACE_THEMES_DIRECTORY
+    if is_all:
+        folders = (
+            sorted(path for path in themes_root.iterdir() if path.is_dir())
+            if themes_root.is_dir()
+            else []
+        )
+    else:
+        folders = [themes_root / theme_id for theme_id in theme_ids]
+    for folder in folders:
+        if not (folder / THEME_MANIFEST_FILENAME).is_file():
+            raise click.ClickException(
+                f"{folder.name}: no theme folder has this id in {themes_root}"
+            )
+        migration = migrate_theme_folder(folder)
+        note = (
+            f" (dropped {', '.join(dict.fromkeys(migration.dropped))}: hover is computed now)"
+            if migration.dropped
+            else ""
+        )
+        click.echo(f"{folder.name}: on contract {CONTRACT_VERSION}{note}")
+        for warning in migration.warnings:
+            click.echo(f"{folder.name}: check: {warning}")
 
 
 @main.command("bundle")

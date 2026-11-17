@@ -312,8 +312,8 @@ describe("followShellTheme", () => {
     deliver({ type: SHELL_THEME, theme: "standard", revision: "r3" }, parent);
 
     expect(onTheme.mock.calls).toEqual([
-      ["windows-2000", "r1", false],
-      ["mac-classic", "", false],
+      ["windows-2000", "r1", false, null],
+      ["mac-classic", "", false, null],
     ]);
     expect(parent.postMessage).not.toHaveBeenCalled();
   });
@@ -332,9 +332,9 @@ describe("connectToShell's theme", () => {
     deliver({ type: SHELL_THEME, theme: "ink", revision: "r4" }, {});
 
     expect(onTheme.mock.calls).toEqual([
-      ["windows-2000", "r1", false],
-      ["mac-classic", "", false],
-      ["paper", "r2", true],
+      ["windows-2000", "r1", false, null],
+      ["mac-classic", "", false, null],
+      ["paper", "r2", true, null],
     ]);
   });
 });

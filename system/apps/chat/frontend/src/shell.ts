@@ -114,7 +114,8 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     onHandshake,
     onShown,
     onHidden,
-    onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
+    onTheme: (theme, revision, isPreview, workspaceColor) =>
+      void wearThemeFromMessage({ theme, revision, isPreview, workspaceColor }),
     onKeybindingsChanged: () => void refreshKeybindings(),
   });
   void refreshKeybindings();

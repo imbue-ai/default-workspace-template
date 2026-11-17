@@ -475,6 +475,12 @@ export async function quitApp(appName: string): Promise<void> {
   await postJson<void>(apiUrl(`/api/apps/${encodeURIComponent(appName)}/quit`), {});
 }
 
+/** Ask the shell to re-read the workspace color label (Imbue Studio said it changed to ``hex``, which the shell waits
+ *  for the label to say); a change comes back to every window as ``themes_changed``. */
+export async function refreshWorkspaceColor(hex: string | null): Promise<void> {
+  await postJson<unknown>(apiUrl("/api/workspace-color/refresh"), { hex });
+}
+
 /** Ask the shell to deliver a message this client's page received, from the Imbue Studio chrome or from an app's frame
  *  (``sender`` says which: ``embedder`` or the app), to the apps registered for its type (contracts.md section 5.6);
  *  answers what each app did with it, and throws with the shell's detail when an app did not take it. */

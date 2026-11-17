@@ -13,7 +13,7 @@ from workspace_themes.contract import (
 
 TEST_ICON_SIZE: Final[int] = 32
 
-_STANDARD_MANIFEST: Final[str] = """contract = 1
+_STANDARD_MANIFEST: Final[str] = """contract = 2
 id = "standard"
 name = "Standard"
 description = "The workspace's own look."
@@ -79,7 +79,7 @@ def write_test_theme(
     (folder / "icons").mkdir(parents=True, exist_ok=True)
     base_line = f'base = "{base}"\n' if base is not None else ""
     (folder / THEME_MANIFEST_FILENAME).write_text(
-        f'contract = 1\nid = "{theme_id}"\nname = "Test {theme_id}"\ndescription = "A theme for tests."\n'
+        f'contract = 2\nid = "{theme_id}"\nname = "Test {theme_id}"\ndescription = "A theme for tests."\n'
         f'{base_line}\n[styles]\nfiles = ["parts.css"]\n\n[chrome]\ntitle_align = "center"\n'
         f'leading = ["close", "title", "refresh", "menu"]\ntrailing = ["minimize", "maximize"]\n\n'
         f'[icons]\nguide = "icons/guide.md"\nformat = "png"\nsize = {TEST_ICON_SIZE}\nrendering = "pixelated"\n'

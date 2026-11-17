@@ -64,9 +64,16 @@ describe("parseThemeCatalog", () => {
     expect(chromeOf(broken)).toEqual(STANDARD_CHROME);
   });
 
+  it("reads the workspace color's revision the shell names", () => {
+    expect(parseThemeCatalog({ default: null, themes: [], workspace_color: "#0b292b" }).workspaceColor).toBe(
+      "#0b292b",
+    );
+    expect(parseThemeCatalog({ default: null, themes: [], workspace_color: 7 }).workspaceColor).toBeNull();
+  });
+
   it("reads anything that is not a catalog as an empty one", () => {
-    expect(parseThemeCatalog(null)).toEqual({ default: null, themes: [] });
-    expect(parseThemeCatalog({ themes: "nope" })).toEqual({ default: null, themes: [] });
+    expect(parseThemeCatalog(null)).toEqual({ default: null, themes: [], workspaceColor: null });
+    expect(parseThemeCatalog({ themes: "nope" })).toEqual({ default: null, themes: [], workspaceColor: null });
   });
 });
 
@@ -85,6 +92,6 @@ describe("resolveDesktopTheme", () => {
     expect(resolveDesktopTheme(catalog, "broken").id).toBe("standard");
     expect(resolveDesktopTheme(catalog, "deleted").id).toBe("standard");
     expect(resolveDesktopTheme({ ...catalog, default: null }, null).id).toBe("standard");
-    expect(resolveDesktopTheme({ default: null, themes: [] }, null).id).toBe("standard");
+    expect(resolveDesktopTheme({ default: null, themes: [], workspaceColor: null }, null).id).toBe("standard");
   });
 });

@@ -9,6 +9,7 @@
 
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { cardClass } from "@imbue/workspace-ui/src/components/card";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { Modal } from "@imbue/workspace-ui/src/components/Modal";
 import { startDownload } from "@imbue/workspace-ui/src/download";
@@ -74,10 +75,13 @@ function designCell(design: AvatarDesign, attrs: AvatarChooserDialogAttrs): m.Vn
       "data-avatar-design": design.id,
       ...TILE_PART,
       "aria-pressed": isSelected ? "true" : "false",
-      class:
-        "flex min-w-0 cursor-pointer flex-col items-center gap-1 rounded-md border p-2 text-center type-helper " +
-        "hover:bg-fill-hover focus-visible:outline-accent " +
-        (isSelected ? "border-accent bg-fill-active text-primary" : "border-transparent text-secondary"),
+      class: cardClass({
+        interactive: true,
+        selected: isSelected,
+        extra:
+          "flex min-w-0 flex-col items-center gap-1 p-2 text-center type-helper focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus " +
+          (isSelected ? "text-body-content" : "text-body-content-secondary"),
+      }),
       onclick: () => attrs.onSelect(design.id),
     },
     [designPicture(design), m("span", { class: "w-full truncate" }, design.label)],
@@ -86,9 +90,10 @@ function designCell(design: AvatarDesign, attrs: AvatarChooserDialogAttrs): m.Vn
 
 function designGrid(attrs: AvatarChooserDialogAttrs): m.Children {
   if (attrs.loadError !== null) {
-    return m("p", { class: "type-helper text-danger", role: "alert" }, attrs.loadError);
+    return m("p", { class: "type-helper text-danger-surface", role: "alert" }, attrs.loadError);
   }
-  if (attrs.designs === null) return m("p", { class: "type-helper text-faint", role: "status" }, "Loading designs…");
+  if (attrs.designs === null)
+    return m("p", { class: "type-helper text-body-content-tertiary", role: "status" }, "Loading designs…");
   return m(
     "div",
     { class: "grid grid-cols-4 gap-1" },
@@ -114,7 +119,7 @@ function designOwnRow(attrs: AvatarChooserDialogAttrs): m.Children {
     ),
     m(
       "p",
-      { class: "type-helper mt-1 text-secondary" },
+      { class: "type-helper mt-1 text-body-content-secondary" },
       "Puts a request to draw your avatar into your chat, for you to edit and send.",
     ),
   ]);
@@ -152,7 +157,7 @@ export const AvatarChooserDialog: m.Component<AvatarChooserDialogAttrs> = {
           : m(
               "a",
               {
-                class: "type-helper mt-2 inline-block text-secondary underline",
+                class: "type-helper mt-2 inline-block text-body-content-secondary underline",
                 "data-avatar-source": "",
                 href: avatarSourceUrl(selected.id),
                 ...hoverTooltipAttrs(selected.source_path),

@@ -17,6 +17,8 @@ import { caption, code, type CatalogGroup, type CatalogSection } from "./catalog
 export const PART_SECTIONS: Partial<Record<Part, string>> = {
   button: "buttons",
   field: "fields",
+  checkbox: "fields",
+  switch: "fields",
   select: "pickers",
   menu: "menu",
   "menu-item": "menu",
@@ -68,13 +70,13 @@ function partsSection(labelOf: (sectionId: string) => string): CatalogSection {
           return [
             m("div", { id: `part-${part}` }, caption(part)),
             section === undefined
-              ? m("span", { class: "type-helper text-faint" }, drawnBy(part))
+              ? m("span", { class: "type-helper text-body-content-tertiary" }, drawnBy(part))
               : m(
                   "a",
                   {
                     href: `#${section}`,
                     "data-part-section": section,
-                    class: "type-helper text-accent hover:underline",
+                    class: "type-helper text-accent-surface hover:underline",
                     onclick: jumpTo(section),
                   },
                   `Shown under ${labelOf(section)}`,
@@ -103,7 +105,7 @@ function pageKitSection(): CatalogSection {
         src: "/page-kit-sample",
         title: "A plain page wearing the page kit",
         [THEME_RELAY_ATTRIBUTE]: "",
-        class: "block h-[620px] w-full rounded-lg border border-default bg-page",
+        class: "block h-[620px] w-full rounded-lg border border-default bg-body-surface",
         onload: (event: Event) => relayToLoadedFrame(event.currentTarget as HTMLIFrameElement),
       }),
   };

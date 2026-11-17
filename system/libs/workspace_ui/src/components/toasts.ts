@@ -9,8 +9,17 @@
 
 import m from "mithril";
 
-import type { Toast } from "../models/toasts";
+import type { Toast, ToastTone } from "../models/toasts";
 import { icon } from "./icons";
+
+// A plain note is the dark chip; a status is its tint one step deeper than a notice's, in the status's text.
+const TOAST_TONES: Record<ToastTone, string> = {
+  default: "bg-inverse-surface text-inverse-content",
+  info: "bg-accent-4 text-accent-subtle-content",
+  success: "bg-success-4 text-success-subtle-content",
+  warn: "bg-warn-4 text-warn-subtle-content",
+  danger: "bg-danger-4 text-danger-subtle-content",
+};
 
 export interface ToastsAttrs {
   readonly toasts: readonly Toast[];
@@ -38,11 +47,11 @@ export const Toasts: m.Component<ToastsAttrs> = {
           {
             key: toast.id,
             "data-toast": "",
-            // A pill on one line, and still a card once a longer note wraps.
+            "data-tone": toast.tone,
             class:
               "toast flex max-w-[min(480px,100%)] animate-[toast-rise_var(--dur-slow)_ease-out] items-start gap-3 " +
-              "rounded-[20px] bg-inverse px-4 py-2.5 text-(length:--font-size-body) whitespace-pre-line " +
-              `text-on-accent shadow-overlay ${onDismiss === undefined ? "" : "pointer-events-auto"}`,
+              "rounded-xl px-4 py-2.5 text-(length:--font-size-body) whitespace-pre-line shadow-overlay " +
+              `${TOAST_TONES[toast.tone]} ${onDismiss === undefined ? "" : "pointer-events-auto"}`,
           },
           [
             m("span", { class: "min-w-0 flex-1" }, toast.message),
@@ -54,7 +63,7 @@ export const Toasts: m.Component<ToastsAttrs> = {
                     type: "button",
                     "aria-label": "Dismiss",
                     "data-toast-dismiss": "",
-                    class: "flex h-5 shrink-0 cursor-pointer items-center text-white/70 hover:text-white",
+                    class: "flex h-5 shrink-0 cursor-pointer items-center opacity-70 hover:opacity-100",
                     onclick: () => onDismiss(toast.id),
                   },
                   m.trust(icon("close", { size: 14 })),

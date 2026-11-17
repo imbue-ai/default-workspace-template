@@ -54,7 +54,8 @@ const CONTRACT_TOKENS: Record<string, string> = {
 describe("the theme file", () => {
   it("declares the contract's default metrics on :root", () => {
     for (const [token, value] of Object.entries(CONTRACT_TOKENS)) expect(rootToken(token), token).toBe(value);
-    expect(rootToken("--desk-default-wallpaper")).toMatch(/^url\(\/wallpapers\/bundled\/[a-z0-9-]+\)$/);
+    expect(rootToken("--desk-default-wallpaper")).toBe("var(--desk-studio-wallpaper)");
+    expect(rootToken("--desk-studio-wallpaper")).toMatch(/^url\(\/wallpapers\/bundled\/[a-z0-9-]+\)$/);
   });
 
   it("redeclares the touch values under their attribute", () => {

@@ -25,6 +25,9 @@ function appIconMarkupByName(name: string | null, sizePx: number, fallback: stri
 }
 
 const FALLBACK = '<svg class="generic-glyph"></svg>';
+/** The shell's tile: the workspace's Honey step under its primary key, with the brand's own pair for an image. */
+const TILE_FILL = "fill: var(--c-wallpaper-5, #F5D6A0)";
+const TILE_INK_COLOR = "color: var(--c-primary-key, #492222)";
 
 /** Parse sanitized markup back into an element, so assertions read attributes
  *  and elements rather than substrings of a serialization. */
@@ -95,10 +98,10 @@ describe("sanitizeIconMarkup", () => {
     );
     expect([root.getAttribute("viewBox"), root.getAttribute("width")]).toEqual(["0 0 216 216", "16"]);
     const tile = root.querySelector("rect");
-    expect([tile?.getAttribute("width"), tile?.getAttribute("rx"), tile?.getAttribute("fill")]).toEqual([
+    expect([tile?.getAttribute("width"), tile?.getAttribute("rx"), tile?.getAttribute("style")]).toEqual([
       "216",
       "69.12",
-      "#F5D6A0",
+      TILE_FILL,
     ]);
     const glyph = root.querySelector("svg");
     expect([
@@ -108,13 +111,16 @@ describe("sanitizeIconMarkup", () => {
       glyph?.getAttribute("height"),
       glyph?.getAttribute("viewBox"),
     ]).toEqual(["36", "36", "144", "144", "0 0 24 24"]);
-    expect(glyph?.getAttribute("stroke")).toBe("#492222");
+    // The glyph keeps taking the colour around it, which the tile sets to its ink.
+    expect(glyph?.getAttribute("stroke")).toBe("currentColor");
+    expect(root.getAttribute("style")).toBe(TILE_INK_COLOR);
   });
 
   it("inks a glyph that named no colour at all in the tile's ink too", () => {
     const root = parsed(sanitizeIconMarkup('<svg viewBox="0 0 24 24"><path d="M0 0h4v4H0z"/></svg>', 16)!);
-    expect(root.querySelector("rect")?.getAttribute("fill")).toBe("#F5D6A0");
-    expect(root.querySelector("svg")?.getAttribute("fill")).toBe("#492222");
+    expect(root.querySelector("rect")?.getAttribute("style")).toBe(TILE_FILL);
+    expect(root.querySelector("svg")?.getAttribute("fill")).toBe("currentColor");
+    expect(root.getAttribute("style")).toBe(TILE_INK_COLOR);
   });
 
   it("leaves an icon that paints itself alone", () => {
@@ -380,9 +386,9 @@ describe("appIconMarkupByName", () => {
     const tile = root.querySelector("rect");
     expect(tile?.getAttribute("width")).toBe("216");
     expect(tile?.getAttribute("rx")).toBe("69.12");
-    expect(tile?.getAttribute("fill")).toBe("#F5D6A0");
+    expect(tile?.getAttribute("style")).toBe(TILE_FILL);
     const letter = root.querySelector("text");
-    expect(letter?.getAttribute("fill")).toBe("#492222");
+    expect(letter?.getAttribute("style")).toBe("fill: var(--c-primary-key, #492222)");
     expect(letter?.getAttribute("stroke")).toBeNull();
   });
 

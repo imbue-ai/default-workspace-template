@@ -5,6 +5,9 @@
  */
 
 import m from "mithril";
+import { Checkbox, FIELD_ERROR_CLASS, Switch } from "@imbue/workspace-ui/src/components/formControls";
+import { noticeClass } from "@imbue/workspace-ui/src/components/notice";
+import { cardClass } from "@imbue/workspace-ui/src/components/card";
 
 import { DestroyConfirmDialog } from "@imbue/workspace-ui/src/DestroyConfirmDialog";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
@@ -27,6 +30,7 @@ import { caption, code, demoRow, type CatalogGroup, type CatalogSection } from "
 
 export const BUTTON_VARIANTS: readonly ButtonVariant[] = [
   "primary",
+  "accent",
   "secondary",
   "ghost",
   "destructive",
@@ -57,6 +61,8 @@ export class ComponentDemos {
   model = "claude-sonnet";
   showHidden = false;
   showPreview = true;
+  isNotifying = true;
+  isFieldInError = true;
   lastMenuPick = "nothing yet";
   openDialog: OpenDialog = null;
   readonly toasts = new ToastQueue(() => m.redraw());
@@ -130,8 +136,8 @@ function buttonsSection(demos: ComponentDemos): CatalogSection {
     toc: "Buttons",
     title: "Buttons",
     desc: [
-      code("m(Button, { variant, sm, icon, round, selected, readonly, quiet, block })"),
-      " renders a real button. A dialog's confirming action is primary, a lone dismiss stays secondary, a destructive confirm is destructive.",
+      code("m(Button, { variant, sm, lg, icon, round, selected, readonly, quiet, block })"),
+      " renders a real button. A dialog's confirming action is primary, in the workspace color; an action that carries the brand (send) is accent; a lone dismiss stays secondary; a destructive confirm is destructive.",
     ],
     body: () => [
       demoRow(
@@ -140,7 +146,7 @@ function buttonsSection(demos: ComponentDemos): CatalogSection {
       ),
       demoRow(
         "On a dark surface",
-        m("div", { class: "flex items-center gap-2 rounded-lg bg-inverse p-3" }, [
+        m("div", { class: "flex items-center gap-2 rounded-lg bg-inverse-surface p-3" }, [
           m(Button, { variant: "ghost-inverse", id: "button-ghost-inverse" }, "ghost-inverse"),
           m(
             Button,
@@ -150,7 +156,8 @@ function buttonsSection(demos: ComponentDemos): CatalogSection {
         ]),
       ),
       demoRow("Sizes", [
-        m(Button, { variant: "primary" }, "Default (34px)"),
+        m(Button, { variant: "primary", lg: true }, "Large (36px)"),
+        m(Button, { variant: "primary" }, "Default (32px)"),
         m(Button, { variant: "primary", sm: true }, "Small (28px)"),
         m(Button, { icon: true, "aria-label": "Settings" }, m.trust(icon("settings", { size: 16 }))),
         m(Button, { icon: true, sm: true, "aria-label": "Refresh" }, m.trust(icon("refresh", { size: 14 }))),
@@ -162,7 +169,7 @@ function buttonsSection(demos: ComponentDemos): CatalogSection {
         m(Button, { round: true }, "Round"),
         m(
           Button,
-          { variant: "primary", icon: true, round: true, "aria-label": "Send" },
+          { variant: "accent", icon: true, round: true, "aria-label": "Send" },
           m.trust(icon("send", { size: 16 })),
         ),
       ]),
@@ -215,7 +222,15 @@ function fieldsSection(demos: ComponentDemos): CatalogSection {
     title: "Text fields",
     desc: [
       code("inputClass({ mono, withAction })"),
-      " styles an input or a textarea; the accent ring shows on every focus.",
+      " styles an input or a textarea: 36px, a ring in the focus color on every focus, and an error as the edge (",
+      code("aria-invalid"),
+      ") with ",
+      code("FIELD_ERROR_CLASS"),
+      " under it. ",
+      code("Checkbox"),
+      " and ",
+      code("Switch"),
+      " show on in the primary color.",
     ],
     body: () =>
       m("div", { class: "grid max-w-[480px] gap-4" }, [
@@ -274,6 +289,34 @@ function fieldsSection(demos: ComponentDemos): CatalogSection {
             { ...FIELD_PART, id: "field-textarea", class: inputClass({ extra: "resize-y" }), rows: 3 },
             "Some text",
           ),
+        ]),
+        m("label", { class: "block" }, [
+          m("span", { class: MODAL_LABEL_CLASS }, "In error"),
+          m("input", {
+            ...FIELD_PART,
+            id: "field-error",
+            class: inputClass(),
+            value: "report/.md",
+            "aria-invalid": demos.isFieldInError ? "true" : undefined,
+            oninput: () => (demos.isFieldInError = false),
+          }),
+          demos.isFieldInError ? m("p", { class: FIELD_ERROR_CLASS }, "A name cannot end in a slash.") : null,
+        ]),
+        m("div", { class: "flex flex-wrap items-center gap-6" }, [
+          m("label", { id: "field-checkbox", class: "flex items-center gap-2 type-body" }, [
+            m(Checkbox, { checked: demos.showHidden, onchange: (checked: boolean) => (demos.showHidden = checked) }),
+            "Show hidden files",
+          ]),
+          m("label", { class: "flex items-center gap-2 type-body text-body-content-tertiary" }, [
+            m(Checkbox, { checked: true, disabled: true, onchange: () => undefined }),
+            "Disabled",
+          ]),
+          m(Switch, {
+            on: demos.isNotifying,
+            label: "Notify me",
+            onToggle: () => (demos.isNotifying = !demos.isNotifying),
+            extra: "type-body",
+          }),
         ]),
       ]),
   };
@@ -344,7 +387,10 @@ function menuSection(demos: ComponentDemos): CatalogSection {
           "Open the menu",
           m.trust(icon("chevron-down", { size: 14 })),
         ]),
-        m("span", { class: "type-helper text-secondary" }, ["Last pick: ", m("strong", demos.lastMenuPick)]),
+        m("span", { class: "type-helper text-body-content-secondary" }, [
+          "Last pick: ",
+          m("strong", demos.lastMenuPick),
+        ]),
         demos.menu.view(demos.menuRows()),
       ]),
   };
@@ -419,9 +465,11 @@ function badgesSection(): CatalogSection {
 function statusSection(): CatalogSection {
   return {
     id: "status",
-    toc: "Banners & activity",
-    title: "Banners, activity dots and spinners",
+    toc: "Notices & activity",
+    title: "Notices, banners, activity dots and spinners",
     desc: [
+      code("noticeClass(tone)"),
+      " is a note set in among a page's content, tinted with a matching edge; ",
       code("bannerClass(marker, tone)"),
       " is the full-width strip above a pane's content; ",
       code("activityDotClass"),
@@ -430,6 +478,16 @@ function statusSection(): CatalogSection {
       " the one ring spinner.",
     ],
     body: () => [
+      demoRow(
+        "Notices",
+        m("div", { class: "grid max-w-[480px] gap-2" }, [
+          m("div", { id: "notice-neutral", class: noticeClass("neutral") }, "A one-time tip about something new."),
+          m("div", { id: "notice-info", class: noticeClass("info") }, "This copy is read-only."),
+          m("div", { id: "notice-success", class: noticeClass("success") }, "Everything is backed up."),
+          m("div", { id: "notice-warn", class: noticeClass("warn") }, "Syncing stopped: the folder moved."),
+          m("div", { id: "notice-danger", class: noticeClass("danger") }, "The routine failed its last run."),
+        ]),
+      ),
       demoRow(
         "Banners",
         m("div", { class: "flex w-full max-w-[560px] flex-col gap-2" }, [
@@ -444,11 +502,11 @@ function statusSection(): CatalogSection {
         ]),
       ),
       demoRow("Activity dots", [
-        m("span", { class: "flex items-center gap-2 type-body text-secondary" }, [
+        m("span", { class: "flex items-center gap-2 type-body text-body-content-secondary" }, [
           m("span", { class: activityDotClass("h-2 w-2") }),
           "Working",
         ]),
-        m("span", { class: "flex items-center gap-2 type-body text-secondary" }, [
+        m("span", { class: "flex items-center gap-2 type-body text-body-content-secondary" }, [
           m("span", { class: activityDotClass("h-2 w-2", "warning") }),
           "Waiting to come up",
         ]),
@@ -456,11 +514,12 @@ function statusSection(): CatalogSection {
       demoRow("Spinners", [
         m("span", { class: "spinner" }),
         m("span", { class: "spinner spinner--sm" }),
-        m("span", { class: "text-accent" }, m.trust(spinnerIcon(24))),
-        m("span", { class: "flex items-center gap-2 rounded-md bg-inverse px-3 py-2 text-on-accent type-body" }, [
-          m("span", { class: "spinner spinner--sm spinner--current" }),
-          "On a colored surface",
-        ]),
+        m("span", { class: "text-accent-surface" }, m.trust(spinnerIcon(24))),
+        m(
+          "span",
+          { class: "flex items-center gap-2 rounded-md bg-inverse-surface px-3 py-2 text-inverse-content type-body" },
+          [m("span", { class: "spinner spinner--sm spinner--current" }), "On a colored surface"],
+        ),
       ]),
     ],
   };
@@ -485,10 +544,14 @@ function overlaysSection(demos: ComponentDemos): CatalogSection {
           { id: "open-destroy", variant: "ghost-destructive", onclick: () => (demos.openDialog = "destroy") },
           "Open a delete confirmation",
         ),
+        m(Button, { id: "show-toast", onclick: () => demos.toasts.show("The link is copied.") }, "Show a toast"),
         m(
           Button,
-          { id: "show-toast", onclick: () => demos.toasts.show("Couldn't save the file: the disk is full.") },
-          "Show a toast",
+          {
+            id: "show-failure-toast",
+            onclick: () => demos.toasts.show("Couldn't save the file: the disk is full.", "danger"),
+          },
+          "Show a failure",
         ),
       ]),
       demos.openDialog === "modal"
@@ -551,37 +614,55 @@ function surfacesSection(): CatalogSection {
     ],
     body: () =>
       m("div", { class: "flex h-56 overflow-hidden rounded-lg border border-default" }, [
-        m("div", { id: "surface-sidebar", class: "flex w-48 flex-col gap-0.5 bg-sidebar p-2" }, [
+        m("div", { id: "surface-sidebar", class: "flex w-48 flex-col gap-0.5 bg-body-surface-secondary p-2" }, [
           m(
             "div",
-            { class: "rounded-md px-2 py-1.5 text-(length:--font-size-row) text-primary hover:bg-fill-hover" },
+            {
+              class:
+                "rounded-md px-2 py-1.5 text-(length:--font-size-body-dense) text-body-content hover:bg-fill-hover",
+            },
             "A row (hover me)",
           ),
           m(
             "div",
-            { class: "rounded-md bg-fill-active px-2 py-1.5 text-(length:--font-size-row) text-primary" },
+            { class: "rounded-md bg-fill-active px-2 py-1.5 text-(length:--font-size-body-dense) text-body-content" },
             "The current row",
           ),
           m(
             "div",
-            { class: "rounded-md px-2 py-1.5 text-(length:--font-size-row) text-secondary hover:bg-fill-hover" },
+            {
+              class:
+                "rounded-md px-2 py-1.5 text-(length:--font-size-body-dense) text-body-content-secondary hover:bg-fill-hover",
+            },
             "Another row",
           ),
-          caption("bg-sidebar", "mt-auto"),
+          caption("bg-body-surface-secondary", "mt-auto"),
         ]),
-        m("div", { id: "surface-page", class: "flex flex-1 flex-col gap-3 border-l border-default bg-page p-4" }, [
-          m("div", { class: "rounded-lg border border-default bg-surface p-4 shadow-raised" }, [
-            m("p", { class: "type-label text-primary" }, "A card"),
-            m("p", { class: "type-helper text-secondary" }, "bg-surface, border-default, shadow-raised"),
-          ]),
-          m(
-            "div",
-            { class: "rounded-lg bg-surface-secondary p-3 type-helper text-secondary" },
-            "bg-surface-secondary",
-          ),
-          m("div", { class: "rounded-lg bg-code p-3 font-mono type-helper text-primary" }, "bg-code: const x = 1;"),
-          caption("bg-page", "mt-auto"),
-        ]),
+        m(
+          "div",
+          { id: "surface-page", class: "flex flex-1 flex-col gap-3 border-l border-default bg-body-surface p-4" },
+          [
+            m("div", { class: cardClass({ extra: "p-4 shadow-raised" }) }, [
+              m("p", { class: "type-title-sm text-body-content" }, "A card"),
+              m(
+                "p",
+                { class: "type-helper text-body-content-secondary" },
+                "bg-body-surface-raised, border-default, shadow-raised",
+              ),
+            ]),
+            m(
+              "div",
+              { class: "rounded-lg bg-body-surface-secondary p-3 type-helper text-body-content-secondary" },
+              "bg-body-surface-secondary",
+            ),
+            m(
+              "div",
+              { class: "rounded-lg bg-body-surface-secondary p-3 font-mono type-helper text-body-content" },
+              "bg-body-surface-secondary: const x = 1;",
+            ),
+            caption("bg-body-surface", "mt-auto"),
+          ],
+        ),
       ]),
   };
 }

@@ -2,31 +2,32 @@
    headings, as it did on the Mac; body text is Geneva and code Monaco. The theme ships no fonts: each face
    is used where the machine has it, and otherwise the nearest installed one stands in. */
 :root {
-  --c-bg: #ffffff;
-  --c-bg-sidebar: #ffffff;
-  --c-bg-chat: #ffffff;
-  --c-bg-composer: #ffffff;
-  --c-bg-code: #ffffff;
-  --c-bg-user-bubble: #ffffff;
+  --c-body-surface: #ffffff;
+  --c-body-surface-secondary: #ffffff;
+  --c-body-surface-raised: #ffffff;
+  --c-body-content: #000000;
+  --c-body-content-secondary: #000000;
+  --c-body-content-tertiary: #555555;
+  --c-inverse-surface: #000000;
+  --c-inverse-content: #ffffff;
+  /* One ink: every role is black on white, and its tint a light gray. */
+  --c-primary-surface: #000000;
+  --c-primary-content: #ffffff;
+  --c-primary-subtle-surface: rgb(0 0 0 / 0.08);
+  --c-primary-subtle-content: #000000;
+  --c-accent-surface: #000000;
+  --c-accent-content: #ffffff;
+  --c-accent-subtle-surface: rgb(0 0 0 / 0.08);
+  --c-accent-subtle-content: #000000;
   --c-fill-hover: rgb(0 0 0 / 0.08);
   --c-fill-active: rgb(0 0 0 / 0.16);
-  --c-text-primary: #000000;
-  --c-text-secondary: #000000;
-  --c-text-faint: #555555;
-  --c-border: #000000;
-  --c-border-faint: #000000;
-  --c-border-strong: #000000;
-  --c-border-code: #000000;
-  --c-accent: #000000;
-  --c-accent-hover: #000000;
-  --c-accent-light: rgb(0 0 0 / 0.08);
-  --c-text-on-accent: #ffffff;
-  --c-surface: #ffffff;
-  --c-surface-secondary: #ffffff;
-  --c-inverse-surface: #000000;
-  --c-inverse-surface-hover: #000000;
+  --c-border-default: #000000;
+  --c-border-subtle: #000000;
+  --c-border-focus: #000000;
   --c-shadow-raised: 1px 1px 0 #000000;
   --c-shadow-overlay: 2px 2px 0 #000000;
+  /* A one-bit screen has no shade between black and white: a control looks the same under the pointer. */
+  --state-ratio: 1;
   --font-sans: Geneva, "Helvetica Neue", sans-serif;
   --font-mono: Monaco, Menlo, ui-monospace, monospace;
   --font-display: Chicago, Charcoal, Geneva, "Helvetica Neue", sans-serif;
@@ -36,6 +37,7 @@
   --radius-md: 0px;
   --radius-lg: 0px;
   --radius-xl: 0px;
+  --radius-2xl: 0px;
 
   /* The 50% gray of the System 6 desktop: a one-pixel checker. An SVG with no size of its own takes the
      backdrop's, and its pattern tiles in CSS pixels, so the wallpaper's cover sizing cannot stretch it. */

@@ -25,22 +25,28 @@ export const RunPage: m.ClosureComponent<RunPageAttrs> = () => {
       const { run } = detail;
       return m("div", { class: "mx-auto flex max-w-[1040px] flex-col gap-5 px-4 py-6 sm:px-7" }, [
         m("nav", { class: "type-helper" }, [
-          m("a", { href: "/", class: "text-secondary hover:underline" }, "All routines"),
-          m("span", { class: "mx-2 text-faint" }, "/"),
-          m("a", { href: routinePathOf(run.routine_id), class: "text-secondary hover:underline" }, routineTitle),
+          m("a", { href: "/", class: "text-body-content-secondary hover:underline" }, "All routines"),
+          m("span", { class: "mx-2 text-body-content-tertiary" }, "/"),
+          m(
+            "a",
+            { href: routinePathOf(run.routine_id), class: "text-body-content-secondary hover:underline" },
+            routineTitle,
+          ),
         ]),
         m("header", { class: "flex flex-col gap-1" }, [
-          m("h1", { class: "type-heading-lg text-primary" }, `${run.outcome_text}, ${run.when_text}`),
-          m("p", { class: "type-body text-secondary" }, [
+          m("h1", { class: "type-heading-lg text-body-content" }, `${run.outcome_text}, ${run.when_text}`),
+          m("p", { class: "type-body text-body-content-secondary" }, [
             run.trigger === "MANUAL" ? "Started by you" : "Started on its schedule",
             run.duration_text === "" ? "" : `, took ${run.duration_text}`,
             run.exit_code === null ? "" : `, exit code ${run.exit_code}`,
           ]),
-          run.summary === "" ? null : m("p", { class: "type-body text-primary", "data-summary": "" }, run.summary),
+          run.summary === ""
+            ? null
+            : m("p", { class: "type-body text-body-content", "data-summary": "" }, run.summary),
           run.warnings.includes("RESTARTED_PREVIOUS_RUN")
             ? m(
                 "p",
-                { class: "type-helper text-warning" },
+                { class: "type-helper text-warn-surface" },
                 "The previous run was still going and was cut off so this one could start.",
               )
             : null,
@@ -52,27 +58,36 @@ export const RunPage: m.ClosureComponent<RunPageAttrs> = () => {
                 ? null
                 : m(
                     "li",
-                    m("a", { href: chatUrlOf(run.chat_id), class: "text-accent hover:underline" }, "Open its chat"),
+                    m(
+                      "a",
+                      { href: chatUrlOf(run.chat_id), class: "text-accent-surface hover:underline" },
+                      "Open its chat",
+                    ),
                   ),
               detail.links.map((link) =>
-                m("li", m("a", { href: link.url, class: "text-accent hover:underline" }, link.label)),
+                m("li", m("a", { href: link.url, class: "text-accent-surface hover:underline" }, link.label)),
               ),
             ]),
         m("section", [
           m("div", { class: "flex items-baseline justify-between" }, [
-            m("h2", { class: "type-section mb-1 text-faint" }, "Log"),
+            m("h2", { class: "type-section mb-1 text-body-content-tertiary" }, "Log"),
             m(
               "a",
-              { href: logPathOf(run.routine_id, run.run_id), class: "type-helper text-secondary hover:underline" },
+              {
+                href: logPathOf(run.routine_id, run.run_id),
+                class: "type-helper text-body-content-secondary hover:underline",
+              },
               "Whole log",
             ),
           ]),
-          detail.is_log_truncated ? m("p", { class: "type-helper text-faint" }, "Only the end is shown here.") : null,
+          detail.is_log_truncated
+            ? m("p", { class: "type-helper text-body-content-tertiary" }, "Only the end is shown here.")
+            : null,
           m(
             "pre",
             {
               class:
-                "max-h-[70vh] overflow-auto rounded-lg bg-inverse p-3 font-mono text-(length:--font-size-helper) whitespace-pre-wrap text-on-accent",
+                "max-h-[70vh] overflow-auto rounded-lg bg-inverse-surface p-3 font-mono text-(length:--font-size-helper) whitespace-pre-wrap text-inverse-content",
               "data-log": "",
               oncreate: ({ dom }) => {
                 dom.scrollTop = dom.scrollHeight;

@@ -1,4 +1,4 @@
-"""Tests for the routes: the page on each of its views with the shell script injected, the stats, history and disk
+"""Tests for the routes: the page on each of its views and its bundle, the theme files, the stats, history and disk
 endpoints, the shell modules, health, and the API document."""
 
 import threading
@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from app_manifest.testing import assert_document_policy_admits_page
 from app_schema.testing import (
     CROSS_SITE_FETCH_HEADERS,
     assert_api_schema_describes_app,
@@ -22,17 +23,52 @@ def client() -> FlaskClient:
 
 
 @pytest.mark.parametrize("path", ["/", "/cpu", "/memory", "/disk"])
-def test_the_page_is_served_on_every_view_with_the_shell_script_before_the_closing_body(
-    client: FlaskClient, path: str
+def test_every_view_says_the_page_is_not_built_until_the_bundle_exists_and_then_serves_it(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str
 ) -> None:
-    response = client.get(path)
+    monkeypatch.setattr(runner, "STATIC_DIR", tmp_path / "static")
 
-    assert response.status_code == 200
-    page = response.get_data(as_text=True)
-    assert "<title>System Monitor</title>" in page
-    assert page.index(
-        'import { connectToShell } from "/_static/app_contract.js"'
-    ) < page.index("</body>")
+    unbuilt = client.get(path)
+    assert unbuilt.status_code == 200
+    assert "has not been built" in unbuilt.get_data(as_text=True)
+    assert_document_policy_admits_page(unbuilt)
+
+    (tmp_path / "static" / "assets").mkdir(parents=True)
+    # The build puts the theme boot inline in the head (workspace_ui's themeBoot), so the policy must admit it.
+    built_page = "<!doctype html><title>System Monitor</title><script>wearRememberedTheme()</script>"
+    (tmp_path / "static" / "index.html").write_text(built_page)
+    built = client.get(path)
+    assert built.get_data(as_text=True) == built_page
+    assert built.headers["Cache-Control"] == "no-store"
+    assert_document_policy_admits_page(built)
+
+
+def test_the_bundle_is_served_with_hashed_files_cached_for_good(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(runner, "STATIC_DIR", tmp_path)
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "index-BaHKTKM-.js").write_text("console.log(1)")
+    (tmp_path / "assets" / "font.woff2").write_text("font")
+
+    hashed = client.get("/assets/index-BaHKTKM-.js")
+    unhashed = client.get("/assets/font.woff2")
+
+    assert hashed.data == b"console.log(1)"
+    assert "max-age=31536000" in hashed.headers["Cache-Control"]
+    assert (unhashed.data, unhashed.headers["Cache-Control"]) == (b"font", "no-cache")
+    assert client.get("/assets/missing.js").status_code == 404
+    assert client.get("/assets/../index.html").status_code == 404
+
+
+def test_the_workspace_color_and_the_theme_bundles_are_served_from_this_origin(
+    client: FlaskClient,
+) -> None:
+    color = client.get("/_static/workspace_color.css")
+
+    assert color.status_code == 200
+    assert color.mimetype == "text/css"
+    assert client.get("/_static/themes/no-such-theme/theme.css").status_code == 404
 
 
 def test_the_stats_endpoint_answers_the_snapshot_uncached(

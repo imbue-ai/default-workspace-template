@@ -26,23 +26,23 @@ export interface CatalogGroup {
 
 /** An inline token or class name inside a blurb. */
 export function code(text: string): m.Vnode {
-  return m("code", { class: "font-mono text-(length:--font-size-helper) text-primary" }, text);
+  return m("code", { class: "font-mono text-(length:--font-size-helper) text-body-content" }, text);
 }
 
 /** The monospace caption under a demo: a class name, a variable, a value. */
 export function caption(text: string, extra = ""): m.Vnode {
-  return m("code", { class: `block font-mono type-helper text-secondary select-all ${extra}` }, text);
+  return m("code", { class: `block font-mono type-helper text-body-content-secondary select-all ${extra}` }, text);
 }
 
 /** A quieter second caption line (a raw value under its name). */
 export function subCaption(text: string): m.Vnode {
-  return m("code", { class: "block font-mono type-helper text-faint break-all" }, text);
+  return m("code", { class: "block font-mono type-helper text-body-content-tertiary break-all" }, text);
 }
 
 /** A row of demos with a label on the left, for a component's variants or states. */
 export function demoRow(label: string, children: m.Children): m.Vnode {
   return m("div", { class: "demo-row flex flex-col gap-2 py-3 border-t border-subtle first:border-t-0" }, [
-    m("span", { class: "type-section text-faint" }, label),
+    m("span", { class: "type-section text-body-content-tertiary" }, label),
     m("div", { class: "flex flex-wrap items-center gap-3" }, children),
   ]);
 }
@@ -50,8 +50,14 @@ export function demoRow(label: string, children: m.Children): m.Vnode {
 /** A section as the catalog draws it. */
 export function renderSection(section: CatalogSection): m.Vnode {
   return m("section", { id: section.id, class: "catalog-section mb-12 scroll-mt-8" }, [
-    m("h2", { class: `type-heading text-primary ${section.desc === undefined ? "mb-3" : "mb-1"}` }, section.title),
-    section.desc === undefined ? null : m("p", { class: "type-body text-secondary mb-4 max-w-[640px]" }, section.desc),
+    m(
+      "h2",
+      { class: `type-heading text-body-content ${section.desc === undefined ? "mb-3" : "mb-1"}` },
+      section.title,
+    ),
+    section.desc === undefined
+      ? null
+      : m("p", { class: "type-body text-body-content-secondary mb-4 max-w-[640px]" }, section.desc),
     section.body(),
   ]);
 }

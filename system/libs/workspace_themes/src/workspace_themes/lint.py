@@ -33,7 +33,7 @@ _LITERAL_PATTERNS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
         re.compile(
             r"(?<![\w&/-])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})(?![\w-])"
         ),
-        "a literal color; use a color token (text-primary, bg-surface, var(--c-...))",
+        "a literal color; use a color token (text-body-content, bg-body-surface-raised, var(--c-...))",
     ),
     (
         re.compile(r"\b(?:rgba?|hsla?|oklch|oklab)\("),

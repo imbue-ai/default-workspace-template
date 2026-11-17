@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import m from "mithril";
+import type { Toast } from "../models/toasts";
 import { Toasts } from "./toasts";
 
-const TOASTS = [
-  { id: 1, message: "Could not move it" },
-  { id: 2, message: "Could not copy it" },
+const TOASTS: readonly Toast[] = [
+  { id: 1, message: "Could not move it", tone: "danger" },
+  { id: 2, message: "Could not copy it", tone: "danger" },
 ];
 
 describe("Toasts", () => {
@@ -25,6 +26,16 @@ describe("Toasts", () => {
     expect(toasts.map((toast) => toast.textContent)).toEqual(["Could not move it", "Could not copy it"]);
     expect(toasts.every((toast) => !toast.className.includes("pointer-events-auto"))).toBe(true);
     expect(root.querySelector("[data-toast-dismiss]")).toBeNull();
+  });
+
+  it("tints a status toast and leaves a plain note the dark chip", () => {
+    const root = document.createElement("div");
+    const toasts: readonly Toast[] = [...TOASTS, { id: 3, message: "Copied", tone: "default" }];
+    m.render(root, m(Toasts, { toasts, placementClass: "" }));
+    const [failure, , note] = Array.from(root.querySelectorAll<HTMLElement>("[data-toast]"));
+    expect(failure.dataset.tone).toBe("danger");
+    expect(failure.className).toContain("bg-danger-4");
+    expect(note.className).toContain("bg-inverse-surface");
   });
 
   it("gives each toast a close button that dismisses that toast", () => {

@@ -461,7 +461,7 @@ export class FilesModel {
       this.navigate(parentOf(enclosing) ?? ROOT, { history: "replace" });
     }
     await Promise.all([...new Set(entries.map((entry) => parentOf(entry.path) ?? ROOT))].map((f) => this.load(f)));
-    if (failures.length > 0) this.toasts.show(failures.join("\n"));
+    if (failures.length > 0) this.toasts.show(failures.join("\n"), "danger");
   }
 
   /** Make an "untitled folder" in the folder on show and start naming it. */
@@ -490,7 +490,7 @@ export class FilesModel {
       if (isFolder) await server.createFolder(path);
       else await server.writeFile(path, "");
     } catch (error) {
-      this.toasts.show(messageOf(error));
+      this.toasts.show(messageOf(error), "danger");
       return;
     }
     await this.load(folder);
@@ -525,7 +525,7 @@ export class FilesModel {
     this.selection = this.selection.filter((path) => !moved.has(path));
     const touched = new Set([folder, ...moving.map((path) => parentOf(path) ?? ROOT)]);
     await Promise.all([...touched].filter((f) => this.folders.has(f)).map((f) => this.load(f)));
-    if (failures.length > 0) this.toasts.show([...new Set(failures)].join("\n"));
+    if (failures.length > 0) this.toasts.show([...new Set(failures)].join("\n"), "danger");
   }
 
   /** Send files into a folder, asking first about names that are already taken there. */

@@ -64,19 +64,22 @@ Replace each literal in the app's CSS, markup, and scripts with the matching tok
 today's value as the fallback, so the app looks as it does now when no theme is on the page:
 
 ```css
-.card { background: var(--c-surface, #ffffff); color: var(--c-text-primary, #2a2522); }
+.card { background: var(--c-body-surface-raised, #ffffff); color: var(--c-body-content, #2a2522); }
 ```
 
-- Colors: every `--c-*` in `system/libs/workspace_ui/src/base.css`: `--c-bg`, `--c-surface`,
-  `--c-text-primary`, `--c-text-secondary`, `--c-border`, `--c-accent`, `--c-danger`, and the
-  rest there.
+- Colors: the roles in `system/libs/workspace_ui/src/base.css`: `--c-body-surface`,
+  `--c-body-surface-raised`, `--c-body-content`, `--c-body-content-secondary`, `--c-border-default`,
+  `--c-accent-surface`, `--c-danger-surface`, and the rest there. A color no role names (a chart's
+  series, a file type's tint) is a ramp step, `--c-<ramp>-<1..12>`, so it follows the workspace color
+  too. There is no hover token: shade a hovered surface with the `-hover` utility, or leave the hover
+  to the shared library's controls.
 - Type: `--font-sans` for text, `--font-display` for headings, `--font-mono` for code, and the
   `--font-size-*` and `--weight-*` steps.
 - Shape: `--radius-sm`, `--radius-md`, `--radius-lg`, `--radius-xl`, and the `--c-shadow-*`
   shadows.
 
 Pick each token by what the value means, not by matching colors: the app's own accent is
-`--c-accent`, its page background `--c-bg`. Never copy the current theme's values into the app;
+`--c-accent-surface`, its page background `--c-body-surface`. Never copy the current theme's values into the app;
 the point is that the app changes when the theme does.
 
 Never define a workspace token yourself (no `--c-*`, `--font-*`, or `--radius-*` declared in the
@@ -85,7 +88,7 @@ own would stand wherever the theme's does not reach, so the app would look the s
 theme it does not fully cover. The fallback inside `var()` is the only place today's value belongs.
 
 An app that defines its own variables (`--accent: #d26645;`) can keep them, defined from the
-tokens: `--accent: var(--c-accent, #d26645);`.
+tokens: `--accent: var(--c-accent-surface, #d26645);`.
 
 ## Keep controls plain
 

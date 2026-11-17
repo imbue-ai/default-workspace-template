@@ -162,12 +162,12 @@ describe("ShortcutIcon", () => {
   it("draws an unknown app as connecting only while no app list has landed", () => {
     const connecting = render({ app: undefined, isAppsLoaded: false });
     expect(connecting.getAttribute("data-connecting")).toBe("true");
-    expect(connecting.className).toContain("text-faint");
+    expect(connecting.className).toContain("text-body-content-tertiary");
     expect(connecting.querySelector(".shortcut-label")?.textContent).toBe("docs");
     unmountViews();
     const unregistered = render({ app: undefined, isAppsLoaded: true });
     expect(unregistered.hasAttribute("data-connecting")).toBe(false);
-    expect(unregistered.className).toContain("text-primary");
+    expect(unregistered.className).toContain("text-body-content");
     unmountViews();
     expect(render().hasAttribute("data-connecting")).toBe(false);
   });

@@ -33,6 +33,8 @@ declare module "@minds/embed-contract" {
   export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities";
   export const REATTACH_WINDOW: "minds:reattach-window";
   export const TEAR_OUT: "minds:tear-out";
+  // The workspace color (the brand design system). Probed like the ones above.
+  export const WORKSPACE_COLOR: "minds:workspace-color";
   // The provider sign-in set (contract v7). Probed like the ones above.
   export const PROVIDER_SIGN_IN: "minds:provider-sign-in";
   export const PROVIDER_SIGN_IN_ACK: "minds:provider-sign-in-ack";

@@ -191,7 +191,7 @@ export function renderQueuedMessages(chatId: string, run: PendingBubbleRun = clo
         "span",
         {
           class:
-            "queued-header-label min-w-0 truncate text-(length:--font-size-helper) font-medium tracking-[0.02em] text-secondary",
+            "queued-header-label min-w-0 truncate text-(length:--font-size-helper) font-medium tracking-[0.02em] text-body-content-secondary",
         },
         "Queued messages",
       ),
@@ -201,7 +201,7 @@ export function renderQueuedMessages(chatId: string, run: PendingBubbleRun = clo
         "span",
         {
           class:
-            "queued-info shrink-0 cursor-help text-(length:--font-size-helper) leading-none text-secondary opacity-70 hover:opacity-100",
+            "queued-info shrink-0 cursor-help text-(length:--font-size-helper) leading-none text-body-content-secondary opacity-70 hover:opacity-100",
           tabindex: 0,
           ...hoverTooltipAttrs(QUEUED_INFO_TOOLTIP, "above"),
           "aria-label": QUEUED_INFO_TOOLTIP,

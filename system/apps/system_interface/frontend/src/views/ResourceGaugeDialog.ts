@@ -140,7 +140,7 @@ export function ResourceGaugeDialog(): m.Component<ResourceGaugeDialogAttrs> {
 
   function warningRow(resource: GaugeResource): m.Vnode {
     return m("div", { key: resource, class: "flex items-center gap-2 py-1", "data-gauge-warning": resource }, [
-      m("label", { class: "flex flex-1 cursor-pointer items-center gap-2 text-primary" }, [
+      m("label", { class: "flex flex-1 cursor-pointer items-center gap-2 text-body-content" }, [
         m("input", {
           type: "checkbox",
           "data-gauge-warning-enabled": resource,
@@ -165,7 +165,7 @@ export function ResourceGaugeDialog(): m.Component<ResourceGaugeDialogAttrs> {
           },
         }),
       ]),
-      m("span", { class: "w-6 text-secondary" }, UNITS[resource]),
+      m("span", { class: "w-6 text-body-content-secondary" }, UNITS[resource]),
     ]);
   }
 
@@ -228,11 +228,13 @@ export function ResourceGaugeDialog(): m.Component<ResourceGaugeDialogAttrs> {
           ),
           m(
             "p",
-            { class: "mt-2 mb-0 text-secondary type-body" },
+            { class: "mt-2 mb-0 text-body-content-secondary type-body" },
             "A warning sends one notification to Imbue Studio and tells the agents working here. The disk also " +
               "warns when it is on course to fill within 15 minutes.",
           ),
-          error === null ? null : m("p", { class: "mt-2 mb-0 text-danger type-body", "data-gauge-error": "" }, error),
+          error === null
+            ? null
+            : m("p", { class: "mt-2 mb-0 text-danger-surface type-body", "data-gauge-error": "" }, error),
         ],
       );
     },

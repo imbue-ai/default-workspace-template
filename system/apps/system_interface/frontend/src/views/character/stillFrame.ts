@@ -18,7 +18,9 @@
 import { REST_TILT } from "./poses";
 import { createBlobRig } from "./rig";
 
-/** The character's fill: imbue red. */
+/** The character's fill: imbue red, the brand's Confidence red that `--desk-avatar-color` also holds. A literal,
+ *  since the still is served as an image no page variable reaches; the live rig takes it only as that token's
+ *  fallback. */
 export const CHARACTER_COLOR = "#F50D00";
 
 /** The grid every avatar design is drawn on. */

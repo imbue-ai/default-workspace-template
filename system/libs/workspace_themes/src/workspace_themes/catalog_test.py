@@ -62,7 +62,7 @@ def _write_dark_paper(repo_root: Path, manifest_tables: str) -> Path:
     folder = repo_root / WORKSPACE_THEMES_DIRECTORY / "dark-paper"
     folder.mkdir(parents=True)
     (folder / THEME_MANIFEST_FILENAME).write_text(
-        'contract = 1\nid = "dark-paper"\nname = "Dark paper"\ndescription = "Paper at night."\n'
+        'contract = 2\nid = "dark-paper"\nname = "Dark paper"\ndescription = "Paper at night."\n'
         f'base = "paper"\n{manifest_tables}',
         encoding="utf-8",
     )
@@ -79,7 +79,9 @@ def test_a_theme_resolves_through_its_bases_style_files_chrome_and_icons(
         tmp_path,
         '\n[styles]\nfiles = ["dark.css"]\n\n[chrome]\ntrailing = ["minimize", "maximize"]\n',
     )
-    (child / "dark.css").write_text(":root { --c-bg: #000000; }\n", encoding="utf-8")
+    (child / "dark.css").write_text(
+        ":root { --c-body-surface: #000000; }\n", encoding="utf-8"
+    )
 
     entry = _catalog(tmp_path).find_available("dark-paper")
 

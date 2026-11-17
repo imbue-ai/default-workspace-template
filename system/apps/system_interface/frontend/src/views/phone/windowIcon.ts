@@ -23,7 +23,7 @@ export function windowIcon(
     {
       class:
         `${sizeClass} flex shrink-0 items-center justify-center overflow-hidden [&>svg]:size-full ` +
-        (isAvatar ? "rounded-full bg-surface" : "rounded-(--desk-icon-radius)"),
+        (isAvatar ? "rounded-full bg-body-surface-raised" : "rounded-(--desk-icon-radius)"),
     },
     isAvatar
       ? m(AvatarImage, {

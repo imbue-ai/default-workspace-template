@@ -238,9 +238,9 @@ describe("the tool chip row", () => {
     setBlockExpanded("chip:c1", false);
     setBlockExpanded("chip:c2", false);
     mount([chip(read), chip(exec)], [result({ tool_call_id: "c2", is_error: true })]);
-    expect(chipButtons()[0].className).toContain("text-faint");
-    expect(chipButtons()[1].className).toContain("text-faint");
-    expect(chipButtons()[1].className).not.toContain("text-danger");
+    expect(chipButtons()[0].className).toContain("text-body-content-tertiary");
+    expect(chipButtons()[1].className).toContain("text-body-content-tertiary");
+    expect(chipButtons()[1].className).not.toContain("text-danger-surface");
   });
 });
 

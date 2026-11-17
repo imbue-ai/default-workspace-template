@@ -27,7 +27,7 @@ export const STRETCH_PIECES_CLASS = "flex flex-col gap-3";
 /** A prose bubble, as wide as its text and capped a little past a person's: 80% of the column plus its own padding. */
 const AGENT_BUBBLE_CLASS =
   "machine-bubble w-fit min-w-0 max-w-[calc(80%+2rem)] rounded-[18px] bg-fill-active/75 px-4 py-2.5 " +
-  "text-(length:--font-size-body) leading-normal text-primary wrap-break-word";
+  "text-(length:--font-size-body) leading-normal text-body-content wrap-break-word";
 
 /** Where the agent's prose sits: a bubble of its own in a stretch, or plain text inside a piece that holds it (a
  *  step's unfurled work, a handoff's summary turn). */
@@ -75,7 +75,7 @@ export function renderAgentTurn(parts: m.Children[]): m.Children {
       {
         class:
           `machine-bubbles-header mb-1 ${FACE_COLUMN_CLASS} ${STRETCH_TEXT_EDGE_CLASS} ` +
-          "text-(length:--font-size-helper) leading-[1.4] text-faint",
+          "text-(length:--font-size-helper) leading-[1.4] text-body-content-tertiary",
         "data-machine-header": "",
       },
       name,

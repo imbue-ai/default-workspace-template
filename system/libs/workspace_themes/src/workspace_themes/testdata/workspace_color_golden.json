@@ -1,0 +1,182 @@
+{
+ "#0b292b": {
+  "--c-neutral-key": "oklch(73% 0.016 351.3)",
+  "--c-primary-key": "#0b292b",
+  "--c-accent-key": "#a7673f",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#edfeff",
+  "--c-success-key": "#008768",
+  "--c-warn-key": "#a16c00",
+  "--c-danger-key": "#cc4e00"
+ },
+ "#492222": {
+  "--c-neutral-key": "oklch(73% 0.016 171.1)",
+  "--c-primary-key": "#492222",
+  "--c-accent-key": "#267fa5",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#fff8f8",
+  "--c-success-key": "#40852f",
+  "--c-warn-key": "#c0581f",
+  "--c-danger-key": "#d73e40"
+ },
+ "#3c3d06": {
+  "--c-neutral-key": "oklch(73% 0.016 260.7)",
+  "--c-primary-key": "#3c3d06",
+  "--c-accent-key": "#95659e",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#fafcec",
+  "--c-success-key": "#40852f",
+  "--c-warn-key": "#a16c00",
+  "--c-danger-key": "#cc4e00"
+ },
+ "#9fbbd3": {
+  "--c-neutral-key": "oklch(73% 0.016 34.3)",
+  "--c-primary-key": "#9fbbd3",
+  "--c-accent-key": "#8a7526",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#131c23",
+  "--c-success-key": "#008768",
+  "--c-warn-key": "#c0581f",
+  "--c-danger-key": "#d63c5d"
+ },
+ "#e8a7a8": {
+  "--c-neutral-key": "oklch(73% 0.016 167.9)",
+  "--c-primary-key": "#e8a7a8",
+  "--c-accent-key": "#1f7fa3",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#231717",
+  "--c-success-key": "#40852f",
+  "--c-warn-key": "#c0581f",
+  "--c-danger-key": "#d73e45"
+ },
+ "#cecd0c": {
+  "--c-neutral-key": "oklch(73% 0.016 259.4)",
+  "--c-primary-key": "#cecd0c",
+  "--c-accent-key": "#a853be",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#1b1b11",
+  "--c-success-key": "#40852f",
+  "--c-warn-key": "#a16c00",
+  "--c-danger-key": "#cc4e00"
+ },
+ "#cfc7b3": {
+  "--c-neutral-key": "oklch(73% 0.016 238.8)",
+  "--c-primary-key": "#cfc7b3",
+  "--c-accent-key": "#816bac",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#1e1a10",
+  "--c-success-key": "#40852f",
+  "--c-warn-key": "#a26b00",
+  "--c-danger-key": "#cc4e00"
+ },
+ "#f5d6a0": {
+  "--c-neutral-key": "oklch(73% 0.016 231.2)",
+  "--c-primary-key": "#f5d6a0",
+  "--c-accent-key": "#796eaf",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#1f1a10",
+  "--c-success-key": "#40852f",
+  "--c-warn-key": "#a66900",
+  "--c-danger-key": "#cc4e00"
+ },
+ "#e9ecd9": {
+  "--c-neutral-key": "oklch(73% 0.016 264.2)",
+  "--c-primary-key": "#e9ecd9",
+  "--c-accent-key": "#97659c",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#1a1c11",
+  "--c-success-key": "#40852f",
+  "--c-warn-key": "#a16c00",
+  "--c-danger-key": "#cc4e00"
+ },
+ "#fcefd4": {
+  "--c-neutral-key": "oklch(73% 0.016 235.3)",
+  "--c-primary-key": "#fcefd4",
+  "--c-accent-key": "#7e6cae",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#1f1a10",
+  "--c-success-key": "#40852f",
+  "--c-warn-key": "#a46a00",
+  "--c-danger-key": "#cc4e00"
+ },
+ "#0000ff": {
+  "--c-neutral-key": "oklch(73% 0.016 54.1)",
+  "--c-primary-key": "#0000ff",
+  "--c-accent-key": "#757c00",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#f8faff",
+  "--c-success-key": "#008768",
+  "--c-warn-key": "#c0581f",
+  "--c-danger-key": "#d63c5d"
+ },
+ "#ffff00": {
+  "--c-neutral-key": "oklch(73% 0.016 259.8)",
+  "--c-primary-key": "#ffff00",
+  "--c-accent-key": "#b247cb",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#1b1b11",
+  "--c-success-key": "#40852f",
+  "--c-warn-key": "#a16c00",
+  "--c-danger-key": "#cc4e00"
+ },
+ "#00ff00": {
+  "--c-neutral-key": "oklch(73% 0.016 292.5)",
+  "--c-primary-key": "#00ff00",
+  "--c-accent-key": "#e3008f",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#151d14",
+  "--c-success-key": "#238740",
+  "--c-warn-key": "#a16c00",
+  "--c-danger-key": "#cc4e00"
+ },
+ "#ff00ff": {
+  "--c-neutral-key": "oklch(73% 0.016 118.4)",
+  "--c-primary-key": "#ff00ff",
+  "--c-accent-key": "#008674",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#ffffff",
+  "--c-success-key": "#008768",
+  "--c-warn-key": "#c0581f",
+  "--c-danger-key": "#d63c5d"
+ },
+ "#808080": {
+  "--c-neutral-key": "oklch(73% 0.016 239.9)",
+  "--c-primary-key": "#808080",
+  "--c-accent-key": "#836bac",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#fafafa",
+  "--c-success-key": "#40852f",
+  "--c-warn-key": "#a16c00",
+  "--c-danger-key": "#cc4e00"
+ },
+ "#111111": {
+  "--c-neutral-key": "oklch(73% 0.016 239.9)",
+  "--c-primary-key": "#111111",
+  "--c-accent-key": "#836bac",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#fafafa",
+  "--c-success-key": "#40852f",
+  "--c-warn-key": "#a16c00",
+  "--c-danger-key": "#cc4e00"
+ },
+ "#fefefe": {
+  "--c-neutral-key": "oklch(73% 0.016 239.9)",
+  "--c-primary-key": "#fefefe",
+  "--c-accent-key": "#836bac",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#1b1b1b",
+  "--c-success-key": "#40852f",
+  "--c-warn-key": "#a16c00",
+  "--c-danger-key": "#cc4e00"
+ },
+ "#f50d00": {
+  "--c-neutral-key": "oklch(73% 0.016 179.7)",
+  "--c-primary-key": "#f50d00",
+  "--c-accent-key": "#007db9",
+  "--c-wallpaper-key": "var(--c-primary-key)",
+  "--c-primary-content": "#fff8f7",
+  "--c-success-key": "#40852f",
+  "--c-warn-key": "#c0581f",
+  "--c-danger-key": "#d73f33"
+ }
+}

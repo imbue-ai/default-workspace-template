@@ -80,7 +80,7 @@ export function ScheduleDialog(): m.Component<ScheduleDialogAttrs> {
               ])
             : [
                 m("div", { class: "flex flex-wrap items-center gap-2" }, [
-                  m("span", { class: "type-body text-secondary" }, "Run every"),
+                  m("span", { class: "type-body text-body-content-secondary" }, "Run every"),
                   m("input", {
                     class: inputClass({ extra: "w-20 text-right" }),
                     type: "number",
@@ -153,7 +153,10 @@ export function ScheduleDialog(): m.Component<ScheduleDialogAttrs> {
               ],
           m(
             "p",
-            { class: `type-helper mt-4 ${problem === null ? "text-secondary" : "text-danger"}`, "data-reads": "" },
+            {
+              class: `type-helper mt-4 ${problem === null ? "text-body-content-secondary" : "text-danger-surface"}`,
+              "data-reads": "",
+            },
             problem ?? (sentence === "" ? "" : `${sentence}.`),
           ),
         ],

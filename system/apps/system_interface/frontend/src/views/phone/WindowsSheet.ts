@@ -7,6 +7,7 @@
  */
 
 import m from "mithril";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { matchesQuery } from "@imbue/workspace-ui/src/search";
 import type { AvatarState } from "../../reducers/desktopState";
@@ -33,8 +34,8 @@ export interface WindowsSheetAttrs {
   readonly onDismiss: () => void;
 }
 
-const ROW_ACTION_CLASS =
-  "flex size-9 shrink-0 items-center justify-center rounded-full text-faint active:bg-fill-active";
+/** A row's kebab and X: round icon buttons at the large step, a finger's target in a sheet row. */
+const ROW_ACTION = { variant: "ghost", icon: true, lg: true, round: true, extra: "shrink-0" } as const;
 
 export const WindowsSheet: m.Component<WindowsSheetAttrs> = {
   view(vnode) {
@@ -51,14 +52,13 @@ export const WindowsSheet: m.Component<WindowsSheetAttrs> = {
         name: "windows",
         onDismiss,
         head: m("div", { class: "flex items-center justify-between px-4 pt-1.5 pb-2.5" }, [
-          m("h2", { class: "m-0 text-lg font-bold text-primary" }, "Windows"),
+          m("h2", { class: "m-0 text-lg font-bold text-body-content" }, "Windows"),
           m(
-            "button",
+            Button,
             {
-              type: "button",
+              variant: "ghost-destructive",
               "data-phone-close-all": "",
               disabled: closable === 0,
-              class: "py-1.5 text-sm font-semibold text-danger disabled:text-faint",
               onclick: onCloseAll,
             },
             "Close all",
@@ -71,8 +71,8 @@ export const WindowsSheet: m.Component<WindowsSheetAttrs> = {
               "label",
               {
                 class:
-                  "mx-3 mb-1.5 flex h-11 shrink-0 items-center gap-2.5 rounded-xl border border-strong bg-surface px-3 " +
-                  "text-faint",
+                  "mx-3 mb-1.5 flex h-11 shrink-0 items-center gap-2.5 rounded-xl border border-default bg-body-surface-raised px-3 " +
+                  "text-body-content-tertiary",
               },
               [
                 m.trust(icon("search", { size: ACTION_GLYPH_SIZE + 2 })),
@@ -81,7 +81,7 @@ export const WindowsSheet: m.Component<WindowsSheetAttrs> = {
                   type: "search",
                   placeholder: "Find a window",
                   value: query,
-                  class: "min-w-0 flex-1 bg-transparent text-(length:--font-size-body) text-primary outline-none",
+                  class: "min-w-0 flex-1 bg-transparent text-(length:--font-size-body) text-body-content outline-none",
                   oninput: (event: InputEvent) => onQuery((event.target as HTMLInputElement).value),
                 }),
               ],
@@ -113,14 +113,17 @@ export const WindowsSheet: m.Component<WindowsSheetAttrs> = {
               },
               [
                 windowIcon(row.window, row.app, avatar, "size-(--desk-phone-row-icon)", ROW_GLYPH_SIZE),
-                m("span", { class: "min-w-0 flex-1 truncate text-(length:--font-size-body) text-primary" }, row.title),
                 m(
-                  "button",
+                  "span",
+                  { class: "min-w-0 flex-1 truncate text-(length:--font-size-body) text-body-content" },
+                  row.title,
+                ),
+                m(
+                  Button,
                   {
-                    type: "button",
+                    ...ROW_ACTION,
                     "data-phone-window-menu": row.window.id,
                     "aria-label": `Menu of ${row.title}`,
-                    class: ROW_ACTION_CLASS,
                     onclick: (event: MouseEvent) => {
                       event.stopPropagation();
                       onMenu(row.window.id, event.currentTarget as HTMLElement);
@@ -132,12 +135,11 @@ export const WindowsSheet: m.Component<WindowsSheetAttrs> = {
                   ? // Where the X would be, so the kebabs line up down the list.
                     m("span", { class: "size-9 shrink-0" })
                   : m(
-                      "button",
+                      Button,
                       {
-                        type: "button",
+                        ...ROW_ACTION,
                         "data-phone-window-close": row.window.id,
                         "aria-label": `Close ${row.title}`,
-                        class: ROW_ACTION_CLASS,
                         onclick: (event: MouseEvent) => {
                           event.stopPropagation();
                           onClose(row.window.id);

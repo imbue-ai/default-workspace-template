@@ -10,7 +10,7 @@ import m from "mithril";
 import type { ChatActivity } from "../../model/records";
 import type { AvatarState } from "../../reducers/desktopState";
 import { AvatarImage } from "../AvatarImage";
-import { TrayCardFrame } from "./TrayCard";
+import { TRAY_CARD_ROW_CLASS, TrayCardFrame } from "./TrayCard";
 import type { TrayCardFrameAttrs } from "./TrayCard";
 
 const CARD_FACE_SIZE_PX = 36;
@@ -33,9 +33,7 @@ function actionRow(label: string, dataAttr: string, onclick: () => void): m.Vnod
     {
       type: "button",
       [dataAttr]: "",
-      class:
-        "flex w-full cursor-pointer items-center rounded-md border-0 bg-transparent px-1 py-0.5 text-left " +
-        "text-primary hover:bg-fill-hover",
+      class: `${TRAY_CARD_ROW_CLASS} w-full text-body-content`,
       onclick,
     },
     label,
@@ -50,7 +48,7 @@ function chatRows(
 ): m.Children {
   if (chats.length === 0) return null;
   return m("div", { class: "flex flex-col gap-0.5", "data-tray-card-chats": label }, [
-    m("div", { class: "text-(length:--font-size-helper) text-faint" }, label),
+    m("div", { class: "text-(length:--font-size-helper) text-body-content-tertiary" }, label),
     chats.map((chat) =>
       m(
         "button",
@@ -58,8 +56,7 @@ function chatRows(
           key: chat.chat_id,
           type: "button",
           "data-tray-card-chat": chat.chat_id,
-          class:
-            "flex cursor-pointer items-center gap-1.5 rounded-md border-0 bg-transparent px-1 py-0.5 text-left text-primary hover:bg-fill-hover",
+          class: `${TRAY_CARD_ROW_CLASS} text-body-content`,
           onclick: () => onOpenChat(chat.chat_id),
         },
         [
@@ -93,14 +90,20 @@ export const AgentCard: m.Component<AgentCardAttrs> = {
         ),
         m("div", { class: "flex min-w-0 flex-col" }, [
           m("span", { class: "truncate font-semibold", "data-tray-card-name": "" }, name),
-          m("div", { class: "flex items-center gap-1.5 text-(length:--font-size-helper) text-secondary" }, [
-            m("span", { class: `inline-block size-2 shrink-0 rounded-full ${isWorking ? "bg-accent" : "bg-faint"}` }),
-            m("span", { "data-tray-card-status": "" }, isWorking ? "Working" : "Idle"),
-          ]),
+          m(
+            "div",
+            { class: "flex items-center gap-1.5 text-(length:--font-size-helper) text-body-content-secondary" },
+            [
+              m("span", {
+                class: `inline-block size-2 shrink-0 rounded-full ${isWorking ? "bg-accent-surface" : "bg-body-content-tertiary"}`,
+              }),
+              m("span", { "data-tray-card-status": "" }, isWorking ? "Working" : "Idle"),
+            ],
+          ),
         ]),
       ]),
-      chatRows("Working on", attrs.workingOn, "bg-accent", attrs.onOpenChat),
-      chatRows("Needs you", attrs.needsYou, "bg-warning", attrs.onOpenChat),
+      chatRows("Working on", attrs.workingOn, "bg-accent-surface", attrs.onOpenChat),
+      chatRows("Needs you", attrs.needsYou, "bg-warn-surface", attrs.onOpenChat),
       m("div", { class: "flex flex-col gap-0.5 border-t border-subtle pt-1.5", "data-tray-card-actions": "" }, [
         actionRow("Change avatar...", "data-tray-card-change-avatar", attrs.onChangeAvatar),
         actionRow("Float", "data-tray-card-float", attrs.onFloat),

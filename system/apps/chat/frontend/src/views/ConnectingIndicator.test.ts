@@ -51,7 +51,7 @@ describe("Connecting, on the status row at the end of the transcript", () => {
     expect(root.querySelector(`${CONNECTING_ROW} .agent-activity-indicator__label`)?.textContent).toBe("Connecting…");
     const dotClass =
       root.querySelector(`${CONNECTING_ROW} .agent-activity-indicator__dot`)?.getAttribute("class") ?? "";
-    expect(dotClass).toContain("bg-warning");
+    expect(dotClass).toContain("bg-warn-surface");
     expect(dotClass).toContain("agent-activity-pulse");
   });
 

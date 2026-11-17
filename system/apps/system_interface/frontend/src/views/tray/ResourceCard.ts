@@ -47,17 +47,17 @@ function resourceRow(attrs: ResourceCardAttrs, resource: GaugeResource): m.Vnode
       "data-severity": alert?.severity ?? "none",
       class:
         "flex w-full cursor-pointer flex-col rounded-md border-0 bg-transparent px-1 py-1 text-left " +
-        "text-primary hover:bg-fill-hover",
+        "text-body-content hover:bg-fill-hover",
       onclick: () => attrs.onOpen(resource),
     },
     [
       m("span", { class: "flex items-baseline justify-between gap-2" }, [
-        m("span", { class: "text-secondary" }, RESOURCE_LABELS[resource]),
+        m("span", { class: "text-body-content-secondary" }, RESOURCE_LABELS[resource]),
         m("span", { class: "font-semibold", "data-resource-card-figure": "" }, figure),
       ]),
       capacity === ""
         ? null
-        : m("span", { class: "text-right text-(length:--font-size-helper) text-faint" }, capacity),
+        : m("span", { class: "text-right text-(length:--font-size-helper) text-body-content-tertiary" }, capacity),
       alert === null
         ? null
         : m(
@@ -66,8 +66,8 @@ function resourceRow(attrs: ResourceCardAttrs, resource: GaugeResource): m.Vnode
               "data-resource-card-alert": "",
               class:
                 alert.severity === "critical"
-                  ? "text-(length:--font-size-helper) font-medium text-danger"
-                  : "text-(length:--font-size-helper) font-medium text-primary",
+                  ? "text-(length:--font-size-helper) font-medium text-danger-surface"
+                  : "text-(length:--font-size-helper) font-medium text-body-content",
             },
             `! ${alert.headline}`,
           ),
@@ -92,7 +92,11 @@ export const ResourceCard: m.Component<ResourceCardAttrs> = {
               "div",
               { class: "flex flex-col gap-0.5 border-t border-subtle pt-1.5", "data-resource-card-stops": "" },
               [
-                m("div", { class: "px-1 text-(length:--font-size-helper) text-faint" }, "Stopped to free memory"),
+                m(
+                  "div",
+                  { class: "px-1 text-(length:--font-size-helper) text-body-content-tertiary" },
+                  "Stopped to free memory",
+                ),
                 stops.map((stop) =>
                   m(
                     "button",
@@ -101,14 +105,14 @@ export const ResourceCard: m.Component<ResourceCardAttrs> = {
                       type: "button",
                       class:
                         "flex w-full cursor-pointer items-baseline justify-between gap-2 rounded-md border-0 " +
-                        "bg-transparent px-1 py-0.5 text-left text-primary hover:bg-fill-hover",
+                        "bg-transparent px-1 py-0.5 text-left text-body-content hover:bg-fill-hover",
                       onclick: () => attrs.onOpen("memory"),
                     },
                     [
                       m("span", { class: "min-w-0 flex-1 first-letter:uppercase" }, stop.what),
                       m(
                         "span",
-                        { class: "shrink-0 text-(length:--font-size-helper) text-faint" },
+                        { class: "shrink-0 text-(length:--font-size-helper) text-body-content-tertiary" },
                         formatAgo(stop.at, attrs.now.getTime()),
                       ),
                     ],
@@ -119,7 +123,7 @@ export const ResourceCard: m.Component<ResourceCardAttrs> = {
         m("div", { class: "flex flex-col gap-0.5 border-t border-subtle pt-1.5" }, [
           m(
             "div",
-            { class: "px-1 text-(length:--font-size-helper) text-faint" },
+            { class: "px-1 text-(length:--font-size-helper) text-body-content-tertiary" },
             "Click a row to see what is using it.",
           ),
           attrs.canChangeSettings
@@ -130,7 +134,7 @@ export const ResourceCard: m.Component<ResourceCardAttrs> = {
                   "data-resource-card-settings": "",
                   class:
                     "flex w-full cursor-pointer items-center rounded-md border-0 bg-transparent px-1 py-0.5 " +
-                    "text-left text-primary hover:bg-fill-hover",
+                    "text-left text-body-content hover:bg-fill-hover",
                   onclick: attrs.onOpenSettings,
                 },
                 "Warnings and settings...",

@@ -23,7 +23,8 @@ export const PAGE_TITLE = "Getting Started";
 function bootstrap(): void {
   let handshake: ShellHandshake | null = null;
   const connection = connectToShell({
-    onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
+    onTheme: (theme, revision, isPreview, workspaceColor) =>
+      void wearThemeFromMessage({ theme, revision, isPreview, workspaceColor }),
     onHandshake: (received) => {
       handshake = received;
       connection.location(PAGE_PATH, PAGE_TITLE);

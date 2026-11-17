@@ -8,6 +8,7 @@ import m from "mithril";
 
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
+import { FIELD_ERROR_CLASS } from "@imbue/workspace-ui/src/components/formControls";
 import { MODAL_MESSAGE_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
 
 import type { Entry } from "../models/server";
@@ -34,7 +35,7 @@ const LISTED_NAMES = 5;
 function listedNames(names: readonly string[]): m.Children {
   const shown = names.slice(0, LISTED_NAMES);
   const more = names.length - shown.length;
-  return m("ul.files-dialog-names.mb-4.list-none.p-0.type-body.text-secondary", [
+  return m("ul.files-dialog-names.mb-4.list-none.p-0.type-body.text-body-content-secondary", [
     shown.map((name) => m("li.truncate", { key: name }, name)),
     more > 0 ? m("li", `and ${more} more`) : null,
   ]);
@@ -191,8 +192,9 @@ export class Dialogs {
       },
       [
         m("input", {
-          class: inputClass({ extra: "mb-2" }),
+          class: inputClass(),
           value: dialog.draft,
+          "aria-invalid": dialog.error === null ? undefined : "true",
           "aria-label": dialog.isNew ? "Name" : "New name",
           oncreate: ({ dom }: { dom: Element }) => {
             const input = dom as HTMLInputElement;
@@ -207,7 +209,7 @@ export class Dialogs {
             if (event.key === "Enter") submit();
           },
         }),
-        m("p.type-helper.mb-2.min-h-4.text-danger", dialog.error ?? ""),
+        m("p", { class: `${FIELD_ERROR_CLASS} mb-2 min-h-4` }, dialog.error ?? ""),
       ],
     );
   }

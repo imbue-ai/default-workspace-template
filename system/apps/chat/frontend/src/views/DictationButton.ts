@@ -147,7 +147,7 @@ export function DictationButton(): m.Component<DictationButtonAttrs> {
       [
         m("circle", { class: "stroke-default", cx: 14, cy: 14, r: RING_RADIUS, fill: "none", "stroke-width": 2 }),
         m("circle", {
-          class: "dictation-ring-arc stroke-accent",
+          class: "dictation-ring-arc stroke-accent-surface",
           cx: 14,
           cy: 14,
           r: RING_RADIUS,
@@ -171,7 +171,7 @@ export function DictationButton(): m.Component<DictationButtonAttrs> {
           variant: "ghost",
           icon: true,
           sm: true,
-          pressed: state === "listening",
+          selected: state === "listening",
           // A download or a spinner is not a press: the button waits, explained by its tooltip.
           readonly: state === "loading" || isBusy,
           disabled,
@@ -236,7 +236,7 @@ export function dictationNotice(problem: DictationProblem, actions: DictationNot
     {
       class:
         "message-input-dictation-notice mb-2 flex flex-row items-center justify-between gap-3 rounded-[13px] border " +
-        "border-default bg-surface-secondary py-3 pr-3 pl-5 text-(length:--font-size-body) text-secondary",
+        "border-default bg-body-surface-secondary py-3 pr-3 pl-5 text-(length:--font-size-body) text-body-content-secondary",
       role: "alert",
       "data-dictation-problem": problem.kind,
     },

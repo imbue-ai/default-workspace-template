@@ -11,7 +11,7 @@ from imbue.system_interface.avatar.testing import png_size
 from imbue.system_interface.avatar.testing import png_top_left_rgba
 from imbue.system_interface.shell.errors import InvalidShellValueError
 
-# The shell's page colour (base.css ``--c-bg``), opaque.
+# The shell's page colour (base.css ``--c-body-surface``), opaque.
 _PAGE_COLOR_RGBA = (0xFA, 0xFA, 0xF8, 0xFF)
 
 

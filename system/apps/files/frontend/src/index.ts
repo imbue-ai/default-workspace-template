@@ -63,7 +63,8 @@ function bootstrap(): void {
   let filesApp: FilesController | null = null;
   void refreshKeybindings();
   const connection = connectToShell({
-    onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
+    onTheme: (theme, revision, isPreview, workspaceColor) =>
+      void wearThemeFromMessage({ theme, revision, isPreview, workspaceColor }),
     onKeybindingsChanged: () => void refreshKeybindings(),
     onHandshake: (received) => {
       handshake = received;

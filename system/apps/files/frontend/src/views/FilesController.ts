@@ -241,7 +241,7 @@ export class FilesController {
     try {
       await this.win.navigator.clipboard.writeText(paths.join("\n"));
     } catch {
-      this.model.toasts.show("Couldn't copy to the clipboard.");
+      this.model.toasts.show("Couldn't copy to the clipboard.", "danger");
     }
   }
 

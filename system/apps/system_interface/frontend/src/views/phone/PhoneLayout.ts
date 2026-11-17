@@ -230,7 +230,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
         {
           "data-phone-layout": "",
           class:
-            "app-layout phone-layout fixed inset-x-0 top-0 flex h-dvh flex-col overflow-hidden bg-page " +
+            "app-layout phone-layout fixed inset-x-0 top-0 flex h-dvh flex-col overflow-hidden bg-body-surface " +
             "pt-[env(safe-area-inset-top)]",
         },
         [

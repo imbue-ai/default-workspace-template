@@ -6,8 +6,8 @@
 export type ActivityDotTone = "accent" | "warning";
 
 const TONE_CLASS: Record<ActivityDotTone, string> = {
-  accent: "bg-accent",
-  warning: "bg-warning",
+  accent: "bg-accent-surface",
+  warning: "bg-warn-surface",
 };
 
 export function activityDotClass(extra = "", tone: ActivityDotTone = "accent"): string {

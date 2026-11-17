@@ -112,3 +112,14 @@ def test_a_page_of_another_origin_and_a_header_less_request_off_loopback_are_ref
     assert_request_guard_refuses_unknown_provenance(client, "GET", "/api/health")
     framed = client.get("/", headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate"})
     assert framed.status_code == 200
+
+
+def test_a_workspace_color_preview_is_the_stylesheet_that_color_would_make(client: FlaskClient) -> None:
+    teal = client.get("/api/workspace-color/preview?hex=%230b292b")
+    courage = client.get("/api/workspace-color/preview?hex=%23492222")
+
+    assert teal.status_code == 200
+    assert teal.mimetype == "text/css"
+    assert "--c-primary-key: #0b292b;" in teal.get_data(as_text=True)
+    assert "--c-primary-key" not in courage.get_data(as_text=True)
+    assert client.get("/api/workspace-color/preview?hex=teal").status_code == 400

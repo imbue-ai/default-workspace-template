@@ -14,6 +14,7 @@ from app_manifest.primitives import LaunchPathId
 from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
 from flask import Flask
+from flask import Response
 from flask import request
 from flask import send_file
 from flask.typing import ResponseReturnValue
@@ -142,11 +143,14 @@ from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.theme_routes import ThemeChoiceRequest
 from imbue.system_interface.shell.theme_routes import require_available_theme
 from imbue.system_interface.shell.wallpapers import BUNDLED_WALLPAPERS_DIRNAME
+from imbue.system_interface.shell.wallpapers import SVG_MIMETYPE
 from imbue.system_interface.shell.wallpapers import WALLPAPER_ROUTE_PREFIX
 from imbue.system_interface.shell.wallpapers import WallpaperDirectories
 from imbue.system_interface.shell.wallpapers import WallpapersListing
+from imbue.system_interface.shell.wallpapers import is_studio_wallpaper
 from imbue.system_interface.shell.wallpapers import list_wallpapers
 from imbue.system_interface.shell.wallpapers import resolve_wallpaper_file
+from imbue.system_interface.shell.wallpapers import studio_wallpaper_svg
 
 
 class DesktopMetadataRequest(FrozenModel):
@@ -457,6 +461,12 @@ def serve_wallpaper(kind: str, name: str) -> ResponseReturnValue:
     except ValueError as e:
         logger.debug("Refused a wallpaper request for kind {!r} and name {!r}: {}", kind, name, e)
         return detail_response(f"No wallpaper of kind {kind!r} named {name!r}", HTTP_NOT_FOUND)
+    if is_studio_wallpaper(wallpaper):
+        response = Response(studio_wallpaper_svg(_shell().workspace_color.read()), mimetype=SVG_MIMETYPE)
+        # Revalidated on each use: the drawing follows the workspace color.
+        response.headers["Cache-Control"] = "no-cache"
+        response.add_etag()
+        return response.make_conditional(request)
     path = resolve_wallpaper_file(wallpaper, _wallpaper_directories())
     if path is None:
         return detail_response(f"No {wallpaper.kind.value} wallpaper named {str(wallpaper.name)!r}", HTTP_NOT_FOUND)

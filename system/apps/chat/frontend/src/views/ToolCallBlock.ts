@@ -28,11 +28,11 @@ export const TOOL_CALL_PART = appPartAttrs("chat", "tool-call");
 
 /** The class names are bare markers (markdown.ts drives the same state class;
  *  the inspector reads them); the utilities beside them carry the look. */
-const BLOCK_CLASS = "tool-call-block group/tool overflow-hidden rounded-md border bg-sidebar";
+const BLOCK_CLASS = "tool-call-block group/tool overflow-hidden rounded-md border bg-body-surface-secondary";
 
 const HEADER_CLASS =
   "tool-call-header flex cursor-pointer items-center gap-1.5 px-2.5 py-[3px] font-mono " +
-  "text-(length:--font-size-helper) text-secondary select-none transition-colors duration-(--dur-base) hover:bg-fill-hover";
+  "text-(length:--font-size-helper) text-body-content-secondary select-none transition-colors duration-(--dur-base) hover:bg-fill-hover";
 
 // text-[10px]: icon glyph (the chevron), sized independently of the text scale.
 const CHEVRON_CLASS =
@@ -69,7 +69,7 @@ function renderPaneNote(marker: string, state: "loading" | "unavailable", extra 
     "div",
     {
       class:
-        `${marker} tool-call-payload-note ${PANE_CLASS} text-(length:--font-size-helper) italic text-secondary ${extra}`.trim(),
+        `${marker} tool-call-payload-note ${PANE_CLASS} text-(length:--font-size-helper) italic text-body-content-secondary ${extra}`.trim(),
     },
     state === "loading" ? "Loading…" : "No longer available",
   );
@@ -126,7 +126,7 @@ export function renderToolBlock(options: {
     outputState,
     // The hairline between the panes exists exactly when both do --
     // resolved here instead of by a sibling-combinator rule.
-    `${inputSection ? "border-t border-subtle " : ""}${isError ? "text-danger" : ""}`.trim(),
+    `${inputSection ? "border-t border-subtle " : ""}${isError ? "text-danger-surface" : ""}`.trim(),
   );
   return m("div", { class: `${BLOCK_CLASS}${startExpanded ? " tool-call-block--expanded" : ""} ${extra}`.trim() }, [
     m(
@@ -157,7 +157,7 @@ export function renderToolBlock(options: {
           "div",
           {
             class:
-              "tool-call-error-snippet border-t px-2.5 py-[3px] font-mono text-(length:--font-size-helper) text-danger",
+              "tool-call-error-snippet border-t px-2.5 py-[3px] font-mono text-(length:--font-size-helper) text-danger-surface",
           },
           errorSnippet,
         )

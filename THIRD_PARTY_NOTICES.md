@@ -35,6 +35,19 @@ rules in `docs/system/app-icons.md`, and the Classic Mac and Windows 2000 themes
 icons under `system/themes/<theme>/icons/` were drawn for the workspace, most with
 Retro Diffusion and the Routines icons by hand.
 
+## Atkinson Hyperlegible Next, Atkinson Hyperlegible Mono, and Besley
+
+The workspace's type is three open fonts, copied into
+`system/libs/workspace_ui/src/fonts/` and served by every app from its own
+origin: Atkinson Hyperlegible Next and Atkinson Hyperlegible Mono (the Braille
+Institute's faces, by The Atkinson Hyperlegible Next Project Authors and The
+Atkinson Hyperlegible Mono Project Authors), and Besley's Medium weight (by The
+Besley Project Authors), which the shared stylesheet names `Besley Display`.
+All three are under the SIL Open Font License 1.1. Each licence sits in
+`licenses/` as its project publishes it: `atkinson-hyperlegible-next-OFL.txt`
+and `atkinson-hyperlegible-mono-OFL.txt` from the Google Fonts repository, and
+`besley-OFL.txt` from the Besley project.
+
 ## The dictation's model and detector
 
 The chat's dictation (`system/libs/workspace_voice/`) runs two models on the

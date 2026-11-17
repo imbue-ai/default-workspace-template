@@ -93,7 +93,7 @@ export const RenameField: m.Component<RenameFieldAttrs> = {
     const rename = app.model.rename;
     if (rename === null) return null;
     const fieldAttrs = {
-      class: `files-rename-field block w-full rounded-[4px] border border-accent bg-surface px-1 text-primary outline-none ${extraClass}`,
+      class: `files-rename-field block w-full rounded-[4px] border border-accent-surface bg-body-surface-raised px-1 text-body-content outline-none ${extraClass}`,
       value: rename.draft,
       spellcheck: false,
       disabled: rename.isSaving,
@@ -124,7 +124,7 @@ export const RenameField: m.Component<RenameFieldAttrs> = {
             "div.files-rename-error",
             {
               class:
-                "absolute top-full left-0 z-(--z-sticky) mt-1 w-max max-w-[240px] rounded-md bg-danger px-2 py-1 text-left type-helper text-on-accent shadow-overlay",
+                "absolute top-full left-0 z-(--z-sticky) mt-1 w-max max-w-[240px] rounded-md bg-danger-surface px-2 py-1 text-left type-helper text-danger-content shadow-overlay",
             },
             rename.error,
           ),

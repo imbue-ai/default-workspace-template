@@ -92,29 +92,29 @@ export function TemplateDetail(): m.Component<TemplateDetailAttrs> {
             m(TemplateArt, { template, frameClass: "w-full rounded-lg", glyphSize: ART_FALLBACK_GLYPH_SIZE }),
           ),
           m("div", { class: "min-w-0 flex-1" }, [
-            m("h2", { class: "type-heading m-0 text-primary" }, template.title),
+            m("h2", { class: "type-heading m-0 text-body-content" }, template.title),
             template.author === ""
               ? null
-              : m("p", { class: "type-helper m-0 mt-1 text-secondary" }, `by ${template.author}`),
+              : m("p", { class: "type-helper m-0 mt-1 text-body-content-secondary" }, `by ${template.author}`),
             (paragraphs.length > 0 ? paragraphs : [template.description]).map((paragraph) =>
-              m("p", { class: "type-body mt-4 text-primary" }, paragraph),
+              m("p", { class: "type-body mt-4 text-body-content" }, paragraph),
             ),
             requirements.length === 0
               ? null
               : m("section", { class: "mt-5" }, [
-                  m("h4", { class: "type-section m-0 text-faint" }, "Needs"),
+                  m("h4", { class: "type-section m-0 text-body-content-tertiary" }, "Needs"),
                   m(
                     "ul",
                     { class: "m-0 mt-2 list-none p-0" },
                     requirements.map((requirement) =>
-                      m("li", { class: "flex items-baseline gap-2 py-1 type-body text-primary" }, [
+                      m("li", { class: "flex items-baseline gap-2 py-1 type-body text-body-content" }, [
                         m(
                           "span",
-                          { class: "flex shrink-0 items-center self-center text-faint" },
+                          { class: "flex shrink-0 items-center self-center text-body-content-tertiary" },
                           m.trust(icon("key", { size: REQUIREMENT_GLYPH_SIZE })),
                         ),
                         m("span", requirement.label),
-                        m("span", { class: "type-helper text-secondary" }, requirement.detail),
+                        m("span", { class: "type-helper text-body-content-secondary" }, requirement.detail),
                       ]),
                     ),
                   ),
@@ -122,7 +122,8 @@ export function TemplateDetail(): m.Component<TemplateDetailAttrs> {
             m(
               "a",
               {
-                class: "mt-5 inline-flex items-center gap-1.5 type-helper text-secondary hover:text-primary",
+                class:
+                  "mt-5 inline-flex items-center gap-1.5 type-helper text-body-content-secondary hover:text-body-content",
                 href: template.repository_url,
                 target: "_blank",
                 rel: "noopener noreferrer",

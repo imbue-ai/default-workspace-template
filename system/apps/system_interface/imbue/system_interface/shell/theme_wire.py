@@ -10,6 +10,8 @@ from workspace_themes.contract import FALLBACK_ICON_STEM
 from workspace_themes.data_types import ResolvedChrome
 from workspace_themes.data_types import ThemeCatalog
 from workspace_themes.data_types import ThemeEntry
+from workspace_themes.workspace_color import WorkspaceColorRecord
+from workspace_themes.workspace_color import workspace_color_revision
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
@@ -59,6 +61,10 @@ class ThemeCatalogWire(FrozenModel):
 
     default: str | None = Field(description="The workspace's default theme; null wears the standard one")
     themes: list[ThemeWire] = Field(description="Every theme folder the workspace has")
+    workspace_color: str = Field(
+        description="Changes whenever the workspace color does: the color, or imbue for Imbue's own; a page "
+        "re-fetches /_static/workspace_color.css with it"
+    )
 
 
 @pure
@@ -99,15 +105,20 @@ def theme_wire(entry: ThemeEntry) -> ThemeWire:
 
 
 @pure
-def theme_catalog_wire(catalog: ThemeCatalog, choices: ThemeChoices) -> ThemeCatalogWire:
+def theme_catalog_wire(
+    catalog: ThemeCatalog, choices: ThemeChoices, workspace_color: WorkspaceColorRecord
+) -> ThemeCatalogWire:
     """The body of ``GET /api/themes`` and of a ``themes_changed`` message."""
     return ThemeCatalogWire(
         default=None if choices.default is None else str(choices.default),
         themes=[theme_wire(entry) for entry in catalog.entries],
+        workspace_color=workspace_color_revision(workspace_color),
     )
 
 
 @pure
-def theme_catalog_wire_json(catalog: ThemeCatalog, choices: ThemeChoices) -> dict[str, Any]:
+def theme_catalog_wire_json(
+    catalog: ThemeCatalog, choices: ThemeChoices, workspace_color: WorkspaceColorRecord
+) -> dict[str, Any]:
     """``theme_catalog_wire`` as the JSON a ``themes_changed`` message carries."""
-    return theme_catalog_wire(catalog, choices).model_dump(mode="json")
+    return theme_catalog_wire(catalog, choices, workspace_color).model_dump(mode="json")

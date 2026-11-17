@@ -87,7 +87,7 @@ function renderExplanation(cause: CompactionCause | null): m.Vnode {
     // same element it would beat these utilities with its body size and primary colour.
     m(
       "div",
-      { class: "py-0.5 text-(length:--font-size-helper) leading-normal text-secondary" },
+      { class: "py-0.5 text-(length:--font-size-helper) leading-normal text-body-content-secondary" },
       m.trust(renderMarkdown(compactionExplanation(cause))),
     ),
   );

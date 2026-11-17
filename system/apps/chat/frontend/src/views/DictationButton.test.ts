@@ -60,7 +60,7 @@ describe("DictationButton", () => {
     const { button, attrs } = mountButton({ state: "listening" });
     expect(button.getAttribute("aria-pressed")).toBe("true");
     expect(button.classList.contains("bg-fill-active")).toBe(true);
-    expect(button.classList.contains("bg-accent-light")).toBe(false);
+    expect(button.classList.contains("bg-accent-subtle-surface")).toBe(false);
     const onMeter = attrs.onMeter as ReturnType<typeof vi.fn>;
     const setLevel = onMeter.mock.calls[0][0] as (level: number) => void;
     const rect = button.querySelector<SVGRectElement>("rect.dictation-level")!;

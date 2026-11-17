@@ -22,9 +22,11 @@ anything.
 """
 
 import os
+import re
 from collections.abc import Callable
 from pathlib import Path
 
+from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.registry import SHELL_MODULE_PATHS
 from app_schema.api_schema import (
     DEFAULT_API_SCHEMA_PATH,
@@ -37,9 +39,13 @@ from app_schema.api_schema import (
 )
 from app_schema.request_guard import install_request_guard
 from app_schema.routes import model_response, parse_request_body
-from flask import Flask, Response, abort, request, send_file
+from flask import Flask, Response, abort, request, send_file, send_from_directory
 from host_backup.config import get_events_dir
 from werkzeug.serving import run_simple
+from workspace_themes.flask_routes import (
+    THEME_STATIC_ROUTE_TABLE,
+    register_workspace_theme_route,
+)
 
 from system_monitor import actions, backups, cpu, disk, memory, stats
 from system_monitor.data_types import (
@@ -72,27 +78,22 @@ APP_DESCRIPTION = (
 # menu whose last rows hand the clicked element to a chat).
 SHELL_MODULES = {path.name: path for path in SHELL_MODULE_PATHS}
 
-# The script every page serves (keep it on every page): it connects the page to
-# the shell, reports where the page is on the handshake so the shell can reopen
-# this app's window at the same place, and installs the element context menu.
-# A page visited outside the shell runs it harmlessly: nothing arrives, and the
-# menu's Explain and Modify rows grey out.
-SHELL_PAGE_SCRIPT = """<script type="module">
-  import { connectToShell } from "/_static/app_contract.js";
-  import { installElementContextMenu } from "/_static/context_menu.js";
-  let handshake = null;
-  const connection = connectToShell({
-    onHandshake: (received) => {
-      handshake = received;
-      connection.location(location.pathname + location.search, document.title);
-    },
-  });
-  installElementContextMenu({ connection, handshake: () => handshake });
-</script>"""
-
+# The frontend's build (system/apps/system_monitor/frontend): the one document every view is a path of, which
+# connects itself to the shell, and its bundle under assets/.
 STATIC_DIR = Path(__file__).parent / "static"
+PAGE_DOCUMENT_FILENAME = "index.html"
 # The views of the one page: the overview at the root and one per resource.
 VIEW_PATHS = ("/", "/cpu", "/memory", "/disk")
+# A bundle file Vite named from its content, which may be cached for good; the rest is checked on every load.
+_HASHED_ASSET = re.compile(r"-[A-Za-z0-9_-]{8}\.(js|css)$")
+_A_YEAR_IN_SECONDS = 365 * 24 * 60 * 60
+
+# Served in place of the page while the frontend has not been built (``static/`` is build output).
+_NOT_BUILT_PAGE = (
+    '<!doctype html><html><head><meta charset="utf-8"><title>System Monitor</title></head>'
+    "<body><p>The System Monitor page has not been built yet (run <code>npm run build</code> in "
+    "<code>system/</code>).</p></body></html>"
+)
 
 # Every open window polls /api/stats; they all share one snapshot, taken at most once per few
 # seconds, so a second or third window adds almost no work.
@@ -116,6 +117,9 @@ ROUTE_TABLE: RouteTable = {
     ("GET", "/disk"): SchemalessRoute(
         reason="the System Monitor page, on its disk view"
     ),
+    ("GET", "/assets/{filename}"): SchemalessRoute(
+        reason="one file of the page's built bundle"
+    ),
     ("GET", "/api/stats"): RouteModels(response_model=StatsResponse),
     ("GET", "/api/history"): RouteModels(response_model=HistoryResponse),
     ("GET", "/api/disk"): RouteModels(response_model=DiskResponse),
@@ -134,6 +138,7 @@ ROUTE_TABLE: RouteTable = {
         reason="a browser-side module the shell builds"
     ),
     ("GET", "/health"): RouteModels(response_model=HealthResponse),
+    **THEME_STATIC_ROUTE_TABLE,
 }
 
 app = Flask("system_monitor", static_folder=None)
@@ -146,12 +151,23 @@ register_api_schema_route(
     description=APP_DESCRIPTION,
     route_table=ROUTE_TABLE,
 )
+# The workspace's themes and the workspace color's keys, from this app's own origin (/_static/themes/ and
+# /_static/workspace_color.css), which the page wears as the shell names them.
+register_workspace_theme_route(app)
+attach_document_policy(app, None)
 
 
 def _page() -> Response:
-    page = (STATIC_DIR / "index.html").read_text()
+    document = STATIC_DIR / PAGE_DOCUMENT_FILENAME
+    if not document.is_file():
+        return Response(
+            _NOT_BUILT_PAGE, mimetype="text/html", headers={"Cache-Control": "no-store"}
+        )
+    # Read rather than streamed, so the document policy can admit the page's inline theme boot by its hash.
     return Response(
-        page.replace("</body>", SHELL_PAGE_SCRIPT + "\n</body>"), mimetype="text/html"
+        document.read_text(),
+        mimetype="text/html",
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -177,6 +193,20 @@ def memory_view() -> Response:
 def disk_view() -> Response:
     """The System Monitor page, on its disk view."""
     return _page()
+
+
+@app.route("/assets/<path:filename>")
+def asset(filename: str) -> Response:
+    """One file of the page's built bundle, by name; one named from its content is cached for good."""
+    is_hashed = _HASHED_ASSET.search(filename) is not None
+    response = send_from_directory(
+        (STATIC_DIR / "assets").absolute(),
+        filename,
+        max_age=_A_YEAR_IN_SECONDS if is_hashed else None,
+    )
+    if not is_hashed:
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 @app.route("/api/stats")

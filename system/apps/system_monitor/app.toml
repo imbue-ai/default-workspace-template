@@ -26,6 +26,11 @@ system = true
 launch = "open"
 mode = "focus"
 
+# Built only from the shared components and the design tokens, so every theme and the workspace color style it with
+# no work of its own (docs/system/blueprint/workspace-themes/, section 7).
+[theming]
+mode = "tokens"
+
 # A resource warning from the shell's tray gauge (a resource past the level the user set) lands on that resource's
 # view: the desktop posts this message into the shell, which shows the page for the declaring app.
 [[message_handlers]]

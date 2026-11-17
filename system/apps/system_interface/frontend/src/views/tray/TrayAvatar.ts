@@ -37,7 +37,7 @@ export const TrayAvatar: m.ClosureComponent<TrayAvatarAttrs> = () => {
         return m(
           "span",
           {
-            class: `${BASE_CLASS}rounded-full border border-dashed border-strong bg-surface text-faint`,
+            class: `${BASE_CLASS}rounded-full border border-dashed border-default bg-body-surface-raised text-body-content-tertiary`,
             style,
             "data-tray-avatar": "invited",
           },
@@ -48,7 +48,7 @@ export const TrayAvatar: m.ClosureComponent<TrayAvatarAttrs> = () => {
         return m(
           "span",
           {
-            class: `${BASE_CLASS}rounded-[32%] bg-surface-secondary text-(length:--font-size-helper) font-semibold text-secondary`,
+            class: `${BASE_CLASS}rounded-[32%] bg-body-surface-secondary text-(length:--font-size-helper) font-semibold text-body-content-secondary`,
             style,
             "data-tray-avatar": "visiting-agent",
           },
@@ -59,7 +59,7 @@ export const TrayAvatar: m.ClosureComponent<TrayAvatarAttrs> = () => {
         return m(
           "span",
           {
-            class: `${BASE_CLASS}rounded-full bg-surface-secondary text-secondary`,
+            class: `${BASE_CLASS}rounded-full bg-body-surface-secondary text-body-content-secondary`,
             style,
             "data-tray-avatar": "owner",
           },
@@ -74,8 +74,8 @@ export const TrayAvatar: m.ClosureComponent<TrayAvatarAttrs> = () => {
         "span",
         {
           class:
-            `${BASE_CLASS}rounded-full bg-surface text-(length:--font-size-helper) font-semibold ` +
-            (hasPicture ? "text-secondary" : "text-on-accent"),
+            `${BASE_CLASS}rounded-full bg-body-surface-raised text-(length:--font-size-helper) font-semibold ` +
+            (hasPicture ? "text-body-content-secondary" : "text-accent-content"),
           style,
           "data-tray-avatar": "person",
         },

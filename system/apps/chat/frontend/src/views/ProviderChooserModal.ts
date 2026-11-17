@@ -418,7 +418,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       signedIn,
       // Removing an account can fail -- a row with no folder, a store that will not write --
       // and without this the row simply stays put with no explanation.
-      error !== null ? m("p", { class: `${css.HINT} text-red-600` }, error) : null,
+      error !== null ? m("p", { class: css.HINT_ERROR }, error) : null,
       signedIn !== null ? m("div", { class: `${css.SECTION_LABEL} mt-6` }, "Add more") : null,
       m("div", { class: css.ROW_STACK }, getLanes().map(laneRow)),
       roomRow(),
@@ -442,7 +442,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             onclick: () => pickRoom(),
           },
           [
-            m("span", { class: "flex w-6 shrink-0 items-center justify-center text-secondary" }, peopleGlyph(20)),
+            m(
+              "span",
+              { class: "flex w-6 shrink-0 items-center justify-center text-body-content-secondary" },
+              peopleGlyph(20),
+            ),
             m("span", { class: `${css.OPTION_ROW_NAME} min-w-0 flex-1 truncate` }, "Chat room (no provider)"),
           ],
         ),

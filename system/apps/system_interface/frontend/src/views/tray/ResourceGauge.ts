@@ -36,17 +36,17 @@ export interface ResourceGaugeAttrs {
 }
 
 const BAR_FILL_CLASS: Readonly<Record<GaugeLevel, string>> = {
-  normal: "bg-accent",
-  warning: "bg-warning",
-  critical: "bg-danger",
+  normal: "bg-accent-surface",
+  warning: "bg-warn-surface",
+  critical: "bg-danger-surface",
   unknown: "bg-transparent",
 };
 
 const BAR_LABEL_CLASS: Readonly<Record<GaugeLevel, string>> = {
-  normal: "text-secondary",
-  warning: "font-semibold text-primary",
-  critical: "font-semibold text-danger",
-  unknown: "text-faint",
+  normal: "text-body-content-secondary",
+  warning: "font-semibold text-body-content",
+  critical: "font-semibold text-danger-surface",
+  unknown: "text-body-content-tertiary",
 };
 
 function bar(
@@ -68,7 +68,7 @@ function bar(
       "data-level": level,
       class:
         "flex w-9 shrink-0 cursor-pointer flex-col items-stretch gap-1 rounded-md border-0 bg-transparent px-1 py-1 " +
-        "outline-none hover:bg-fill-hover focus-visible:ring-2 focus-visible:ring-accent",
+        "outline-none hover:bg-fill-hover focus-visible:ring-2 focus-visible:ring-accent-surface",
       "aria-label": describeBar(view, resource, isStale),
       onclick: () => onOpen(resource),
     },
@@ -83,7 +83,7 @@ function bar(
         {
           class:
             level === "unknown"
-              ? "relative block h-1 overflow-hidden rounded-full border border-dashed border-strong"
+              ? "relative block h-1 overflow-hidden rounded-full border border-dashed border-default"
               : "relative block h-1 overflow-hidden rounded-full bg-fill-active",
         },
         [
@@ -108,17 +108,19 @@ function pill(alert: ResourceAlert, extraCount: number, onOpen: (resource: Gauge
       "data-severity": alert.severity,
       class:
         "flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 outline-none " +
-        "text-(length:--font-size-row) font-medium focus-visible:ring-2 focus-visible:ring-accent " +
+        "text-(length:--font-size-body-dense) font-medium focus-visible:ring-2 focus-visible:ring-accent-surface " +
         (isCritical
-          ? "border-danger-border bg-danger-surface text-danger"
-          : "border-warning bg-warning-surface text-primary"),
+          ? "border-danger-4 bg-danger-subtle-surface text-danger-surface"
+          : "border-warn-surface bg-warn-subtle-surface text-body-content"),
       "aria-label": `${alert.headline}: ${alert.detail}`,
       onclick: () => onOpen(alert.resource),
     },
     [
       m("span", { "aria-hidden": "true", class: "font-bold" }, "!"),
       m("span", { class: "whitespace-nowrap" }, alert.headline),
-      extraCount > 0 ? m("span", { class: "text-secondary", "data-resource-gauge-more": "" }, `+${extraCount}`) : null,
+      extraCount > 0
+        ? m("span", { class: "text-body-content-secondary", "data-resource-gauge-more": "" }, `+${extraCount}`)
+        : null,
     ],
   );
 }

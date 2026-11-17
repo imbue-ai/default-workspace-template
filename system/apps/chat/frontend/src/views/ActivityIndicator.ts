@@ -200,7 +200,7 @@ function renderStrip(
     {
       class:
         `agent-activity-indicator ${columnClass} flex min-h-5 items-center gap-1.5 pr-1 ` +
-        "text-(length:--font-size-helper) text-secondary",
+        "text-(length:--font-size-helper) text-body-content-secondary",
       "data-state": state,
       role: "status",
       "aria-live": "polite",
@@ -215,7 +215,11 @@ function renderStrip(
       label === null ? null : m("span", { class: "agent-activity-indicator__label truncate" }, label),
       elapsed === null
         ? null
-        : m("span", { class: "agent-activity-indicator__elapsed shrink-0 tabular-nums text-faint" }, elapsed),
+        : m(
+            "span",
+            { class: "agent-activity-indicator__elapsed shrink-0 tabular-nums text-body-content-tertiary" },
+            elapsed,
+          ),
     ],
   );
 }

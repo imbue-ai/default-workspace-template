@@ -15,6 +15,7 @@
 import m from "mithril";
 import { deleteAccount, loadAccounts, renameAccount, setDefaultAccount } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import * as css from "./modelProviderMenuStyles";
@@ -179,61 +180,77 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
       ? m("span", { class: css.SUBMENU_CHECK_PINNED }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
       : null,
     m(
-      "button",
-      {
-        type: "button",
-        class: opts.isDefault ? css.rowStarPinnedClass(isCurrent) : css.ROW_STAR,
-        "aria-label": opts.isDefault
-          ? `Stop opening new chats on ${row.provider} by default`
-          : `Open new chats on ${row.provider} by default`,
-        "aria-pressed": opts.isDefault ? "true" : "false",
-        ...hoverTooltipAttrs(opts.isDefault ? "Remove as default" : "Set as default", "above"),
-        onclick: (event: MouseEvent) => {
-          event.stopPropagation();
-          // Same shape as the rename: a failure is reloaded over rather than left on screen as
-          // a star the server does not agree with.
-          void setDefaultAccount(row.id, !opts.isDefault)
-            .then(() => opts.onChanged?.())
-            .catch((error: unknown) => {
-              console.warn(`Could not change the default account ${row.id}`, error);
-              void loadAccounts();
-            })
-            .finally(() => {
-              m.redraw();
-            });
+      "span",
+      { class: opts.isDefault ? css.rowStarPinnedSlotClass(isCurrent) : css.ROW_STAR_SLOT },
+      m(
+        Button,
+        {
+          variant: "ghost",
+          xs: true,
+          icon: true,
+          extra: opts.isDefault ? css.ROW_STAR_PINNED_GLYPH : "",
+          "aria-label": opts.isDefault
+            ? `Stop opening new chats on ${row.provider} by default`
+            : `Open new chats on ${row.provider} by default`,
+          "aria-pressed": opts.isDefault ? "true" : "false",
+          ...hoverTooltipAttrs(opts.isDefault ? "Remove as default" : "Set as default", "above"),
+          onclick: (event: MouseEvent) => {
+            event.stopPropagation();
+            // Same shape as the rename: a failure is reloaded over rather than left on screen as
+            // a star the server does not agree with.
+            void setDefaultAccount(row.id, !opts.isDefault)
+              .then(() => opts.onChanged?.())
+              .catch((error: unknown) => {
+                console.warn(`Could not change the default account ${row.id}`, error);
+                void loadAccounts();
+              })
+              .finally(() => {
+                m.redraw();
+              });
+          },
         },
-      },
-      // Outlined always: the pinned class fills it in CSS, which keeps the stroke that `filled`
-      // would drop and with it the size the glyph reads at.
-      m.trust(icon("star", { size: 13 })),
+        // Outlined always: the pinned class fills it in CSS, which keeps the stroke that `filled`
+        // would drop and with it the size the glyph reads at.
+        m.trust(icon("star", { size: 13 })),
+      ),
     ),
     m(
-      "button",
-      {
-        type: "button",
-        class: css.ROW_TRASH,
-        "aria-label": `Sign out of ${row.provider}`,
-        ...hoverTooltipAttrs("Delete", "above"),
-        onclick: (event: MouseEvent) => {
-          event.stopPropagation();
-          state.confirmingRemoval = row.id;
+      "span",
+      { class: css.ROW_TRASH_SLOT },
+      m(
+        Button,
+        {
+          variant: "ghost-destructive",
+          xs: true,
+          icon: true,
+          "aria-label": `Sign out of ${row.provider}`,
+          ...hoverTooltipAttrs("Delete", "above"),
+          onclick: (event: MouseEvent) => {
+            event.stopPropagation();
+            state.confirmingRemoval = row.id;
+          },
         },
-      },
-      m.trust(icon("trash", { size: 13 })),
+        m.trust(icon("trash", { size: 13 })),
+      ),
     ),
     m(
-      "button",
-      {
-        type: "button",
-        class: css.ROW_PENCIL,
-        "aria-label": `Rename ${row.provider}`,
-        ...hoverTooltipAttrs("Rename", "above"),
-        onclick: (event: MouseEvent) => {
-          event.stopPropagation();
-          beginRename(state, row);
+      "span",
+      { class: css.ROW_PENCIL_SLOT },
+      m(
+        Button,
+        {
+          variant: "ghost",
+          xs: true,
+          icon: true,
+          "aria-label": `Rename ${row.provider}`,
+          ...hoverTooltipAttrs("Rename", "above"),
+          onclick: (event: MouseEvent) => {
+            event.stopPropagation();
+            beginRename(state, row);
+          },
         },
-      },
-      m.trust(icon("edit", { size: 13 })),
+        m.trust(icon("edit", { size: 13 })),
+      ),
     ),
     confirmingRemoval
       ? removeAccountDialog(
