@@ -767,7 +767,8 @@ export class DesktopStore {
       actions: notice.actions,
       isReportable: notice.isReportable,
     });
-    const shown = this.toasts.current().at(-1);
+    const toasts = this.toasts.current();
+    const shown = toasts[toasts.length - 1];
     if (notice.untilRunning !== undefined && shown !== undefined) {
       const app = appByName(this.state, notice.untilRunning);
       this.toastsUntilRunning.set(shown.id, { app: notice.untilRunning, isSeenStopped: app?.is_running === false });
