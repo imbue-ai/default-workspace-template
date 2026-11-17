@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -284,3 +285,27 @@ def test_read_session_ids_takes_the_first_word_and_skips_unsafe_ids(
 
     assert read_session_ids(history) == {"abc-123", "def-456"}
     assert read_session_ids(tmp_path / "missing") == set()
+
+
+def test_legacy_archive_without_manifest_ages_by_its_folder_time(
+    roots: SweepRoots,
+) -> None:
+    old_session, recent_session = str(uuid4()), str(uuid4())
+    old_copies = _write_session(roots, old_session)
+    recent_copies = _write_session(roots, recent_session)
+    old_archive = _write_archive(
+        roots, _new_agent_id(), [old_session], preserved_at=_NOW
+    )
+    recent_archive = _write_archive(
+        roots, _new_agent_id(), [recent_session], preserved_at=_NOW
+    )
+    for archive, age in ((old_archive, RETENTION), (recent_archive, timedelta(days=1))):
+        (archive / PRESERVATION_MANIFEST_FILENAME).unlink()
+        mtime = (_NOW - age).timestamp()
+        os.utime(archive, (mtime, mtime))
+
+    assert _planned(roots) == {
+        **{path: RemovalReason.ORPHANED_SESSION_COPY for path in old_copies},
+        old_archive: RemovalReason.EXPIRED_ARCHIVE,
+        **{path: RemovalReason.ORPHANED_SESSION_COPY for path in recent_copies},
+    }
