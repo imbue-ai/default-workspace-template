@@ -742,6 +742,13 @@ describe("a failure on the chooser's screens", () => {
     return Object.assign(new Error(message), { code, response });
   }
 
+  /** The part of a failure screen that scrolls: the body holding its status. */
+  function scrollingBodyOf(root: HTMLElement): Element {
+    const body = root.querySelector("[data-e2e='status-error']")?.closest(".overflow-y-auto") ?? null;
+    expect(body).not.toBeNull();
+    return body!;
+  }
+
   it("says the providers couldn't be loaded, with the status behind See details", async () => {
     state.loaded = false;
     loadLanesAndAccountsWithRetry.mockRejectedValue(rejection(500, null));
@@ -793,11 +800,25 @@ describe("a failure on the chooser's screens", () => {
     await settled();
     draw();
 
-    const body = root.querySelector("[data-e2e='status-error']")!.closest(".overflow-y-auto");
     const tryAgain = [...root.querySelectorAll("button")].find((button) => button.textContent === "Try again");
-    expect(body).not.toBeNull();
     expect(tryAgain).toBeDefined();
-    expect(body!.contains(tryAgain!)).toBe(false);
+    expect(scrollingBodyOf(root).contains(tryAgain!)).toBe(false);
+  });
+
+  it("keeps the failed provider list's buttons out of the scrolling body too", async () => {
+    state.loaded = false;
+    loadLanesAndAccountsWithRetry.mockRejectedValue(rejection(500, { detail: "a long reason" }));
+    const shell = framePageInShell(true);
+
+    const { root } = await mounted();
+
+    const tryAgain = root.querySelector("[data-e2e=retry-providers]");
+    const reportBug = root.querySelector(".report-bug");
+    expect(tryAgain).not.toBeNull();
+    expect(reportBug).not.toBeNull();
+    expect(scrollingBodyOf(root).contains(tryAgain)).toBe(false);
+    expect(scrollingBodyOf(root).contains(reportBug)).toBe(false);
+    shell.release();
   });
 
   it("says the workspace didn't answer when the provider list got a gateway answer", async () => {
