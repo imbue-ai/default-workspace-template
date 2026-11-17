@@ -109,8 +109,11 @@ TICKET_ID=$(tk create "update $CREATIONS" -t task -d "Worker: update-$SLUG" \
 echo "$TICKET_ID"
 ```
 
-Then start it with the id that printed, as its own tool call with nothing
-chained: `tk start <ticket-id>`.
+Then, in its own call:
+
+```bash
+tk start <ticket-id>
+```
 
 ## Step 2: Capture the change and write the task file
 
