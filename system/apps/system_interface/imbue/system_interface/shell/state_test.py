@@ -1,6 +1,7 @@
 """Tests for ``ShellState``: the stale-client prune it runs at start and on its interval, the close hints, the
 arrival, and the absolute-directory invariant it is built with."""
 
+import errno
 import itertools
 import queue
 import socket
@@ -27,6 +28,7 @@ from workspace_layout.primitives import WindowTitle
 from workspace_layout.records import Desktop
 from workspace_layout.records import DesktopShortcut
 from workspace_layout.records import StoredWindowPath
+from workspace_layout.records import Window
 from workspace_layout.windows import WindowClosedHint
 from workspace_themes.contract import WORKSPACE_THEMES_DIRECTORY
 from workspace_themes.testing import write_standard_theme
@@ -40,14 +42,19 @@ from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.app_lifecycle import WAKE_WAIT_SECONDS
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.close_hints import WindowClosedHintPost
+from imbue.system_interface.shell.data_types import LaunchRequest
+from imbue.system_interface.shell.data_types import LaunchTarget
 from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
+from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
+from imbue.system_interface.shell.desktops import DesktopStore
 from imbue.system_interface.shell.desktops import VISITOR_DESKTOPS_ADOPTED_FILENAME
 from imbue.system_interface.shell.desktops import default_desktop
 from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.errors import LaunchUnreachableError
+from imbue.system_interface.shell.errors import LaunchedNotOpenedError
 from imbue.system_interface.shell.errors import RefusalKind
 from imbue.system_interface.shell.errors import SupervisorProgramActionError
 from imbue.system_interface.shell.inventory import AppInventory
@@ -56,8 +63,10 @@ from imbue.system_interface.shell.launches import LaunchPostOutcome
 from imbue.system_interface.shell.launches import post_launch
 from imbue.system_interface.shell.liveness import SupervisorProgramState
 from imbue.system_interface.shell.ownership import is_desktop_owned_by
+from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
+from imbue.system_interface.shell.state_files import state_write_error
 from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_BEFORE_CHAT
 from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_WITH_CHAT
 from imbue.system_interface.shell.testing import FakeLivenessProber
@@ -405,6 +414,70 @@ def test_a_post_launch_nothing_listens_for_is_refused_as_one_to_a_stopped_app(
     assert stopped.value.user_facing_message == "Docs isn't running right now, so it couldn't open that."
     refreshed = shell.inventory.entry("docs")
     assert refreshed is not None and refreshed.is_running is False
+
+
+class _DesktopStoreOnAFullDisk(DesktopStore):
+    """Reads and writes the desktops as the real store does, except that writing a new window fails as a full
+    disk does."""
+
+    def open_window(self, desktop_id: str, window: Window) -> Desktop:
+        raise state_write_error(
+            self.state_directory / DESKTOPS_FILENAME, OSError(errno.ENOSPC, "No space left on device")
+        )
+
+
+def test_a_launch_the_app_took_whose_window_cannot_be_written_is_refused_as_launched_not_opened(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The app acted on the launch, so a new window the shell then cannot write is not answered as a failed launch
+    to try again (which would ask the app a second time) but as launched and not opened, saying a full disk is
+    one; nothing opens."""
+    registry_path = write_registry(
+        tmp_path / "apps.toml",
+        registry_row_toml(
+            "docs",
+            "http://127.0.0.1:7002",
+            program="docs",
+            display_name="Docs",
+            launch_paths=(("new", "New doc", "/api/intake"),),
+            launch_methods={"new": "POST"},
+        ),
+    )
+    posts: list[LaunchPost] = []
+
+    def poster(post: LaunchPost) -> LaunchPostOutcome:
+        posts.append(post)
+        return LaunchPostOutcome(status_code=200, body={"path": "/?doc=1"})
+
+    built = build_shell_state(
+        tmp_path / "state",
+        registry_path,
+        broadcaster,
+        inventory=build_inventory(registry_path, broadcaster),
+        launch_poster=poster,
+    )
+    shell = built.model_copy_update(
+        to_update(built.field_ref().desktops, _DesktopStoreOnAFullDisk(state_directory=tmp_path / "state"))
+    )
+    (home,) = shell.list_desktops()
+    request = LaunchRequest(
+        app=AppName("docs"),
+        launch=LaunchPathId("new"),
+        client_id=ClientId("c1"),
+        target=LaunchTarget(kind=LaunchTargetKind.NEW),
+    )
+
+    with pytest.raises(LaunchedNotOpenedError) as not_opened:
+        shell.launch(str(home.id), request)
+
+    assert not_opened.value.kind is RefusalKind.LAUNCHED_NOT_OPENED
+    assert not_opened.value.user_facing_message == (
+        "Docs got it, but this workspace is out of space, so its window couldn't be opened."
+    )
+    assert not_opened.value.reportable is False
+    assert len(posts) == 1
+    (still,) = shell.list_desktops()
+    assert still.windows == home.windows
 
 
 def _refusing_launch_poster(post: LaunchPost) -> LaunchPostOutcome:

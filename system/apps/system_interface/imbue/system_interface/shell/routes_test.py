@@ -1,7 +1,7 @@
 """Tests for the shell's HTTP routes (desktop contracts.md sections 5, 6, and 8) over a test state and the two-app registry."""
 
-import os
 import queue
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -3355,61 +3355,36 @@ def test_a_post_launch_to_an_app_that_turns_out_to_be_stopped_answers_its_kind(
     assert len(_desktop_windows(client)) == 1
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into a read-only directory")
-def test_a_launch_the_app_took_is_not_failed_by_a_state_write_that_fails_after_it(
+def test_a_send_the_app_took_is_not_failed_by_a_window_path_write_that_fails_after_it(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     """The app acts on a POST launch (a chat may already be started), so a shell write that then fails does not
-    answer the launch as failed, which would invite a second one: a send into the pinned window is answered with
-    the window at its new page and ``layout_saved`` false; a new window that could not be written is refused as
-    launched but not opened."""
-    poster = _RecordingLaunchPoster(
-        [
-            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-1"}),
-            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-2"}),
-        ]
-    )
+    answer the launch as failed, which would invite a second one: a send into the pinned window whose path for this
+    client cannot be written (a file where its directory should be, which stops root too) is answered with the
+    window at its new page and ``layout_saved`` false, and posted once."""
+    poster = _RecordingLaunchPoster([LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-1"})])
     app = _launching_shell(tmp_path, broadcaster, poster)
     client = app.test_client()
     _register_client(app, "c1", "home")
     (pinned,) = _desktop_windows(client)
-    state_directory = tmp_path / "state"
-    window_paths = state_directory / WINDOW_PATHS_DIRNAME
-    window_paths.mkdir(exist_ok=True)
-    window_paths.chmod(0o555)
-    try:
-        sent = _launch(
-            client,
-            {
-                "app": "buddy",
-                "launch": "new",
-                "params": {"message": "free up space"},
-                "target": {"kind": "window", "window_id": pinned["id"]},
-            },
-        )
-        assert sent.status_code == 200, sent.get_json()
-        assert sent.get_json()["layout_saved"] is False and sent.get_json()["unsaved_kind"] == "not_saved"
-        assert (sent.get_json()["window"]["id"], sent.get_json()["window"]["path"]) == (pinned["id"], "/?chat=agent-1")
+    window_paths = tmp_path / "state" / WINDOW_PATHS_DIRNAME
+    shutil.rmtree(window_paths, ignore_errors=True)
+    window_paths.write_text("a file where this client's window paths directory should be")
 
-        state_directory.chmod(0o555)
-        try:
-            opened = _launch(
-                client, {"app": "buddy", "launch": "new", "params": {"message": "hi"}, "target": {"kind": "new"}}
-            )
-        finally:
-            state_directory.chmod(0o755)
-    finally:
-        window_paths.chmod(0o755)
-
-    assert opened.status_code == 500
-    assert opened.get_json()["kind"] == "launched_not_opened"
-    assert opened.get_json()["user_facing_message"] == (
-        "Buddy got it, but its window couldn't be opened. If this persists, report a bug."
+    sent = _launch(
+        client,
+        {
+            "app": "buddy",
+            "launch": "new",
+            "params": {"message": "free up space"},
+            "target": {"kind": "window", "window_id": pinned["id"]},
+        },
     )
-    assert opened.get_json()["reportable"] is True
-    # Each launch was posted once, and no window opened for the second.
-    assert len(poster.posts) == 2
-    assert [window["id"] for window in _desktop_windows(client)] == [pinned["id"]]
+
+    assert sent.status_code == 200, sent.get_json()
+    assert sent.get_json()["layout_saved"] is False and sent.get_json()["unsaved_kind"] == "not_saved"
+    assert (sent.get_json()["window"]["id"], sent.get_json()["window"]["path"]) == (pinned["id"], "/?chat=agent-1")
+    assert len(poster.posts) == 1
 
 
 def test_a_refusal_for_something_this_window_held_says_it_is_gone_and_that_nothing_was_changed(
