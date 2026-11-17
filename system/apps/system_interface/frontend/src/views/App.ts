@@ -875,7 +875,8 @@ export function App(): m.Component<AppAttrs> {
     return rows;
   }
 
-  /** A subject's own rows, or null once it has gone. */
+  /** A subject's own rows, or null when it has none for the viewer: it has gone, or it is the resource gauge and
+   *  the viewer is not the owner. */
   function rowsOfSubject(current: DesktopStore, subject: MenuSubject): ContextMenuRow[] | null {
     switch (subject.kind) {
       case "entry":
@@ -914,7 +915,7 @@ export function App(): m.Component<AppAttrs> {
   }
 
   /** The subject a right-click on ``element`` is about, or null for one on chrome with no rows of its own. A
-   *  subject that has since gone (a shortcut taken off the desktop) is none. */
+   *  subject with no rows for the viewer (a shortcut taken off the desktop, another's resource gauge) is none. */
   function menuSubjectOf(current: DesktopStore, element: Element): MenuSubject | null {
     const subject = menuSubjectAt(current, element);
     return subject !== null && rowsOfSubject(current, subject) !== null ? subject : null;
