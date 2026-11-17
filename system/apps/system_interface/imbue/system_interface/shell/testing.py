@@ -57,6 +57,8 @@ from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILE
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION
 from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
 from imbue.system_interface.shell.inventory import AppInventory
+from imbue.system_interface.shell.launches import LaunchPost
+from imbue.system_interface.shell.launches import LaunchPostOutcome
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.primitives import PageId
 from imbue.system_interface.shell.state_files import write_json_atomic
@@ -383,6 +385,44 @@ def shell_application(
     return create_application(state)
 
 
+def not_built_shell(
+    tmp_path: Path, outcomes: list[LaunchPostOutcome], is_preview: bool = False, is_chat_registered: bool = True
+) -> tuple[Flask, list[LaunchPost]]:
+    """A shell with no built interface over the two-app registry (a terminal whose ``new`` is a GET, labelled
+    ``terminal-x1``) plus, unless told otherwise, a chat-shaped ``helper`` labelled ``helper-y2`` whose ``main`` and
+    ``new`` post typed text (to its main chat, and to a new one); its posts are answered from ``outcomes`` and kept in
+    the list returned beside it."""
+    helper = registry_row_toml(
+        "helper",
+        "http://localhost:7002",
+        display_name="Helper",
+        label="helper-y2",
+        launcher_rank=10,
+        launch_paths=(
+            ("root", "Helper", "/"),
+            ("main", "Send to main chat", "/api/intake"),
+            ("new", "New chat", "/api/intake"),
+        ),
+        launch_params={"main": ["message"], "new": ["message"]},
+        launch_text_params={"main": "message", "new": "message"},
+        launch_methods={"main": "POST", "new": "POST"},
+        launch_presets={"main": {"target": "main_chat"}, "new": {"target": "new_chat"}},
+    )
+    registry_path = write_two_app_registry(tmp_path, *([helper] if is_chat_registered else []))
+    registry_path.write_text(registry_path.read_text().replace('label = ""', 'label = "terminal-x1"', 1))
+    posts: list[LaunchPost] = []
+
+    def poster(post: LaunchPost) -> LaunchPostOutcome:
+        posts.append(post)
+        return outcomes.pop(0)
+
+    broadcaster = WebSocketBroadcaster()
+    application = shell_application(
+        tmp_path, build_inventory(registry_path, broadcaster), broadcaster, is_preview=is_preview, launch_poster=poster
+    )
+    return application, posts
+
+
 class FakeLivenessProber:
     """Answers the liveness sweep from a table; every app not in it counts as running."""
 
@@ -542,16 +582,17 @@ def write_rollback_point(
     needs_system_services_restart: bool = False,
     progress: str | None = None,
     outcome: str | None = None,
+    applied_at: float = 1_780_000_000.0,
 ) -> Path:
     """The record an apply run with ``--keep-rollback-point`` leaves, in the apply's own shape (its extra
-    fields included), under ``repo_root``."""
+    fields included), under ``repo_root``; ``applied_at`` is when the apply ran, in epoch seconds."""
     path = repo_root / LAST_GOOD_RECORD_REL
     write_json_atomic(
         path,
         {
             "merge_sha": "abc1234abc1234abc1234abc1234abc1234abc12",
             "rollback_to": "def5678def5678def5678def5678def5678def56",
-            "applied_at": 1_780_000_000.0,
+            "applied_at": applied_at,
             "driven_by": "mngr/update-widgets",
             "snapshots": [
                 {"name": "bundle", "source": "system/x", "copy": "data/.state/update-apply/snapshots/bundle"}

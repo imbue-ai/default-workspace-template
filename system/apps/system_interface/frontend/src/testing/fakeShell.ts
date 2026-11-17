@@ -88,6 +88,8 @@ export class FakeDesktopApi implements DesktopApi {
   refusal: string | Error | null = null;
   /** The page a POST launch path answers (as the app would); a GET launch path's page is built from its path. */
   postLaunchAnswer = "/launched";
+  /** What every launch answers of why the shell could not record where its window is (null: it could). */
+  launchUnsavedKind: LaunchOutcome["unsavedKind"] = null;
   /** While set, the inventory, the client records, a layout, and the avatar and theme catalogs answer only once
    *  this settles: a test holds those reads open. */
   readGate: Promise<void> | null = null;
@@ -390,7 +392,7 @@ export class FakeDesktopApi implements DesktopApi {
           ? (this.windowPaths.get(`${request.clientId}/${window.id}`)?.title ?? "")
           : window.title;
       const navigated = await this.reportWindowLocation(desktopId, window.id, request.clientId, path, title);
-      return { window: navigated, path, isNew: false };
+      return { window: navigated, path, isNew: false, unsavedKind: this.launchUnsavedKind };
     }
     if (target.kind === "show") return this.showLaunched(desktopId, request, path, target.besideWindowId);
     const opened = await this.openWindow(desktopId, {
@@ -400,7 +402,7 @@ export class FakeDesktopApi implements DesktopApi {
       ifPresent: target.kind,
       isMinimized: request.isMinimized,
     });
-    return { window: opened.window, path, isNew: opened.isNew };
+    return { window: opened.window, path, isNew: opened.isNew, unsavedKind: this.launchUnsavedKind };
   }
 
   /** Records the ask; which window the shell chooses is the shell's own tests' to check. */
@@ -460,7 +462,7 @@ export class FakeDesktopApi implements DesktopApi {
         withWindowState(beside, shown.id, isRight ? "SNAPPED_RIGHT" : "SNAPPED_LEFT"),
       );
     }
-    return { window: shown, path, isNew };
+    return { window: shown, path, isNew, unsavedKind: this.launchUnsavedKind };
   }
 
   async closeWindow(desktopId: string, windowId: string): Promise<void> {

@@ -245,7 +245,10 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                           hasAppChat: isAppChatOffered && app !== undefined && !app.internal,
                           sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
                           isShielded: window.id !== focusedWindowId || attrs.isOverlayOpen,
-                          isStopped: isAppShownStopped(state, app),
+                          stopped:
+                            app !== undefined && isAppShownStopped(state, app) ? store.stoppedNotice(app) : null,
+                          onReportBug: store.reportBugAction(),
+                          isAppGone: app === undefined && state.isAppsLoaded,
                           immersive: store.getCanImmerse()
                             ? {
                                 isOn: immersive !== null,
@@ -257,6 +260,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                           onRaise: () => store.raiseWindow(window.id),
                           onControl: (control, event) => attrs.onWindowControl(window.id, control, event),
                           onToggleMaximize: () => store.toggleMaximized(window.id),
+                          onClose: () => void store.closeOrMinimizeWindow(window.id),
                           chrome: store.shownChrome(),
                         }),
                       ];

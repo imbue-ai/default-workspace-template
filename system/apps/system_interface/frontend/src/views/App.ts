@@ -21,7 +21,9 @@ import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows"
 import { describeElement } from "@imbue/workspace-ui/src/element_reference";
 import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
-import { appShortcutsOf, launchPathOf } from "../model/launch";
+import { ONLY_DESKTOP_REASON } from "../model/failures";
+import type { FailureNotice } from "../model/failures";
+import { appShortcutsOf, draftRowsOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
 import {
   SYSTEM_MONITOR_APP_NAME,
@@ -62,6 +64,7 @@ import {
   effectiveWindowTitle,
   entryLook,
   floatingEntries,
+  openableApps,
   isEntryFloating,
   pinnedWindowOf,
 } from "../reducers/desktopState";
@@ -80,8 +83,9 @@ import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
 import type { MountPolicy } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
 import type { TourController } from "../model/tour";
-import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
+import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog, designOwnDisabledReason } from "./AvatarChooserDialog";
 import { Backdrop } from "./Backdrop";
+import { BootFailureNotice } from "./FailureLine";
 import type { BackdropLetterbox } from "./Backdrop";
 import { THEME_DESIGN_PROMPT, THEME_PREVIEW_APP, ThemeChooserDialog } from "./ThemeChooserDialog";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
@@ -191,8 +195,11 @@ interface OverviewTiling {
 interface AvatarChooserState {
   /** The designs the chooser lists; null until the catalog answers. */
   readonly designs: readonly AvatarDesign[] | null;
-  readonly loadError: string | null;
+  readonly loadError: FailureNotice | null;
 }
+
+/** What failed when the avatar chooser could not read its designs, which it says in place of them. */
+const DESIGNS_NOT_LOADED = "Avatar designs couldn't be loaded";
 
 export interface AppAttrs {
   readonly store: DesktopStore;
@@ -228,6 +235,8 @@ export function App(): m.Component<AppAttrs> {
   let launcherHighlight: number | null = null;
   // How far the launcher field stands above its one row, in px; the menu sits above it.
   let launcherFieldRise = 0;
+  // Why the last row the launcher ran failed, shown under its field until the text changes or the menu closes.
+  let launcherFailure: FailureNotice | null = null;
   let selectedShortcutKey: string | null = null;
   let pages: LivePagesLayer | null = null;
   // The window the last redraw painted as dragged, for one more paint once the gesture is gone.
@@ -308,6 +317,7 @@ export function App(): m.Component<AppAttrs> {
   }
 
   function closeLauncher(): void {
+    launcherFailure = null;
     store?.closeLauncher();
   }
 
@@ -871,11 +881,14 @@ export function App(): m.Component<AppAttrs> {
           },
         ]
       : [];
+    const isOnlyDesktop = current.getState().desktops.length <= 1;
     rows.push({
       kind: "action",
       key: "delete",
       label: "Delete desktop...",
       tone: "danger",
+      isDisabled: isOnlyDesktop,
+      tooltip: isOnlyDesktop ? ONLY_DESKTOP_REASON : undefined,
       onSelect: () => current.setOverviewDeletingId(desktopId),
     });
     return rows;
@@ -1104,7 +1117,7 @@ export function App(): m.Component<AppAttrs> {
       .catch((error: unknown) => {
         console.warn("[si] could not list the avatar designs", error);
         if (avatarChooser === opened) {
-          avatarChooser = { designs: null, loadError: `Could not list the designs: ${(error as Error).message}` };
+          avatarChooser = { designs: null, loadError: current.failureNotice(DESIGNS_NOT_LOADED, error) };
         }
       })
       .finally(() => m.redraw());
@@ -1116,14 +1129,17 @@ export function App(): m.Component<AppAttrs> {
     return m(AvatarChooserDialog, {
       designs: chooser.designs,
       loadError: chooser.loadError,
+      onReportBug: current.reportBugAction(),
+      onRetry: () => openAvatarChooser(current),
       selected: state.avatar.design,
       onSelect: (design) => void current.selectAvatar(design),
+      designOwnDisabledReason: designOwnDisabledReason(draftRowsOf(openableApps(state))[0]?.app.display_name ?? null),
       onDesignOwn:
         target === null
           ? null
           : () => {
               avatarChooser = null;
-              void current.draftIntoPinnedWindow(AVATAR_DESIGN_PROMPT, false);
+              void current.draftIntoPinnedWindow(AVATAR_DESIGN_PROMPT, false, "avatar-request");
             },
       onClose: () => {
         avatarChooser = null;
@@ -1138,6 +1154,8 @@ export function App(): m.Component<AppAttrs> {
     return m(WallpaperChooserDialog, {
       desktop,
       wallpapers,
+      wordFailure: (whatFailed, error, retry) => current.changeFailureNotice(whatFailed, error, retry),
+      onReportBug: current.reportBugAction(),
       onSave: async (wallpaper) => {
         if (!isSameWallpaper(wallpaper, desktop.wallpaper)) await current.setDesktopWallpaper(desktop.id, wallpaper);
         wallpaperDialogDesktopId = null;
@@ -1174,11 +1192,13 @@ export function App(): m.Component<AppAttrs> {
     void current.showAppPage(SYSTEM_MONITOR_APP_NAME, systemMonitorPathOf(resource), SYSTEM_MONITOR_PAGES);
   }
 
-  function resourceGaugeDialogView(): m.Children {
+  function resourceGaugeDialogView(current: DesktopStore): m.Children {
     const view = currentResourceGauge();
     if (view === null) return null;
     return m(ResourceGaugeDialog, {
       settings: view.settings,
+      wordFailure: (whatFailed, error, retry) => current.changeFailureNotice(whatFailed, error, retry),
+      onReportBug: current.reportBugAction(),
       onSave: (settings) => saveResourceGaugeSettings(settings, () => m.redraw()),
       onClose: () => {
         isResourceGaugeDialogOpen = false;
@@ -1186,8 +1206,10 @@ export function App(): m.Component<AppAttrs> {
     });
   }
 
-  function keyboardShortcutsDialogView(): m.Children {
+  function keyboardShortcutsDialogView(current: DesktopStore): m.Children {
     return m(KeyboardShortcutsDialog, {
+      wordFailure: (whatFailed, error, retry) => current.changeFailureNotice(whatFailed, error, retry),
+      onReportBug: current.reportBugAction(),
       onClose: () => {
         isKeyboardShortcutsDialogOpen = false;
       },
@@ -1199,6 +1221,8 @@ export function App(): m.Component<AppAttrs> {
     if (desktop === null) return null;
     return m(ThemeChooserDialog, {
       desktop,
+      wordFailure: (whatFailed, error, retry) => current.changeFailureNotice(whatFailed, error, retry),
+      onReportBug: current.reportBugAction(),
       onSave: async (themeChoice) => {
         // A theme made the workspace's default is worn by this desktop as the default, not as its own.
         if (themeChoice.isWorkspaceDefault) await current.setDefaultTheme(themeChoice.theme);
@@ -1216,12 +1240,27 @@ export function App(): m.Component<AppAttrs> {
           ? null
           : () => {
               themeDialogDesktopId = null;
-              void current.draftIntoPinnedWindow(THEME_DESIGN_PROMPT);
+              void current.draftIntoPinnedWindow(THEME_DESIGN_PROMPT, true, "theme-request");
             },
       onPreviewTheme: (choice) => current.previewDesktopTheme(desktop.id, choice),
       isDesktopShown: activeDesktop(current.getState())?.id === desktop.id,
       onClearPreview: () => current.clearThemePreview(),
     });
+  }
+
+  /** The backdrop with no desktop to draw: why the startup read failed (until a read succeeds), else that the
+   *  desktops are loading or that there is none. */
+  function emptyBackdrop(current: DesktopStore): m.Vnode {
+    const bootFailure = current.getBootFailure();
+    return m(
+      "div",
+      { class: "flex h-full items-center justify-center text-(length:--font-size-row) text-faint" },
+      bootFailure !== null
+        ? m(BootFailureNotice, { notice: bootFailure, onReportBug: current.reportBugAction() })
+        : current.getState().isDesktopsLoaded
+          ? "No desktop yet."
+          : "Loading…",
+    );
   }
 
   function replacedDesktopNotice(current: DesktopStore): m.Children {
@@ -1249,16 +1288,29 @@ export function App(): m.Component<AppAttrs> {
     return defaultHighlightIndex(rows);
   }
 
-  /** Run a row (plan section 4.3): the menu closes and the field is cleared first, whatever the row does. */
+  /** Run a row (plan section 4.3): the menu closes first, whatever the row does. The field keeps its text until the
+   *  row has run, and a row that failed opens the menu again with the failure under the field, so a typed message is
+   *  never lost to a refusal. */
   function runLauncherRow(current: DesktopStore, row: LauncherRow): void {
     closeLauncher();
-    launcherQuery = "";
     launcherHighlight = null;
+    const text = launcherQuery;
+    const report = (failure: FailureNotice): void => {
+      launcherFailure = failure;
+      current.openLauncher();
+      m.redraw();
+    };
+    const clearIfUnchanged = (isRun: boolean): void => {
+      if (!isRun || launcherQuery !== text) return;
+      launcherQuery = "";
+      m.redraw();
+    };
     switch (row.kind) {
       case "launch":
-        void current.runLaunchRow(row.app.name, row.launchPath.id);
+        void current.runLaunchRow(row.app.name, row.launchPath.id, report).then(clearIfUnchanged);
         return;
       case "window":
+        launcherQuery = "";
         if (row.desktopId !== current.getState().activeDesktopId) {
           void current.switchDesktop(row.desktopId).then(() => current.restoreWindow(row.window.id));
         } else {
@@ -1266,9 +1318,10 @@ export function App(): m.Component<AppAttrs> {
         }
         return;
       case "text":
-        void current.runFreeText(row.app.name, row.launchPath.id, row.text);
+        void current.runFreeText(row.app.name, row.launchPath.id, row.text, report).then(clearIfUnchanged);
         return;
       case "tour":
+        launcherQuery = "";
         tour?.start();
         return;
     }
@@ -1493,11 +1546,7 @@ export function App(): m.Component<AppAttrs> {
             },
             [
               desktop === null
-                ? m(
-                    "div",
-                    { class: "flex h-full items-center justify-center text-(length:--font-size-row) text-faint" },
-                    state.isDesktopsLoaded ? "No desktop yet." : "Loading…",
-                  )
+                ? emptyBackdrop(current)
                 : m(Backdrop, {
                     store: current,
                     desktop,
@@ -1545,6 +1594,8 @@ export function App(): m.Component<AppAttrs> {
                     highlightIndex: launcherHighlightIndex(launcher.rows),
                     isApplePlatform: isApplePlatform(),
                     bottomOffsetPx: launcherFieldRise,
+                    failure: launcherFailure,
+                    onReportBug: current.reportBugAction(),
                     onRun: (row) => runLauncherRow(current, row),
                     onHighlight: (index) => {
                       launcherHighlight = index;
@@ -1570,6 +1621,7 @@ export function App(): m.Component<AppAttrs> {
               onQuery: (query) => {
                 launcherQuery = query;
                 launcherHighlight = null;
+                launcherFailure = null;
               },
               onMoveHighlight: (delta) => {
                 const { rows } = launcherMenu(current);
@@ -1654,8 +1706,8 @@ export function App(): m.Component<AppAttrs> {
           menuRows === null ? null : menu.view(menuRows),
           wallpaperDialogDesktopId === null ? null : wallpaperDialogView(current, wallpaperDialogDesktopId),
           themeDialogDesktopId === null ? null : themeDialogView(current, themeDialogDesktopId),
-          isKeyboardShortcutsDialogOpen ? keyboardShortcutsDialogView() : null,
-          isResourceGaugeDialogOpen ? resourceGaugeDialogView() : null,
+          isKeyboardShortcutsDialogOpen ? keyboardShortcutsDialogView(current) : null,
+          isResourceGaugeDialogOpen ? resourceGaugeDialogView(current) : null,
           replacedDesktopNotice(current),
           avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
           tourCardView(current, vnode.attrs.tour),
