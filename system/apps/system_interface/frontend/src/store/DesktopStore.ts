@@ -30,8 +30,9 @@ import { StalePlacementsSaveError } from "../model/api";
 import { FOCUS_CHAT } from "@imbue/workspace-ui/src/embed";
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
+import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import { couldNotStartRequest, isRetryable, noticeOf, refusalKindOf, stoppedSentence } from "../model/failures";
+import { couldNotStartRequest, isRetryable, refusalKindOf, stoppedSentence } from "../model/failures";
 import type { FailureNotice } from "../model/failures";
 import { refreshShellKeybindings } from "../model/keybindings";
 import {
@@ -469,8 +470,9 @@ export interface StoreDependencies {
   readonly popOut?: PopOutBridge;
   /** Where external links open when no app takes them; absent opens none. */
   readonly outsideLinks?: OutsideLinkOpener;
-  /** Open the bug report a failure's "Report a bug" asks for; absent opens none. */
-  readonly reportBug?: () => void;
+  /** Open the bug report a failure's "Report a bug" asks for, with the failure attached (null: a page that sent
+   *  none); absent opens none. */
+  readonly reportBug?: (failure: ReportedFailure | null) => void;
   /** The immersive-mode conversation with the embedder; absent means no embedder. */
   readonly immersive?: ImmersiveBridge;
   /** The one window this shell shows edge to edge (a pulled-out window's own desktop window), else null. */
@@ -620,7 +622,7 @@ export class DesktopStore {
   private markAppsLoaded: () => void = () => undefined;
   private readonly popOut: PopOutBridge;
   private readonly outsideLinks: OutsideLinkOpener;
-  private readonly reportBug: () => void;
+  private readonly reportBug: (failure: ReportedFailure | null) => void;
   private readonly immersiveBridge: ImmersiveBridge;
   private readonly soloWindowId: string | null;
   /** Whether the embedder can pull a window out; off until it says so (an older chrome, a plain browser). */
@@ -718,10 +720,9 @@ export class DesktopStore {
     this.toasts.show(message);
   }
 
-  /** ``told`` as a surface shows it: ``actions``, then "Report a bug" where it asks for one and the embedder opens a
-   *  bug report. */
+  /** ``told`` as a surface shows it, with ``actions``. */
   private noticeOf(told: FailureMessage, actions: readonly ToastAction[] = []): FailureNotice {
-    return noticeOf(told, actions, this.canReportBug ? this.reportBug : null);
+    return { ...told, actions };
   }
 
   /** A sentence of the desktop's own that asks for no bug report, with ``actions``. */
@@ -730,15 +731,22 @@ export class DesktopStore {
   }
 
   /** ``error`` in ``failureSentence``'s words for ``whatFailed`` (a sentence stem naming what failed), as a surface
-   *  shows it: ``actions``, then "Report a bug" where the sentence asks for one. */
+   *  shows it, with ``actions``. */
   failureNotice(whatFailed: string, error: unknown, actions: readonly ToastAction[] = []): FailureNotice {
     return this.noticeOf(failureSentence(describeRequestFailure(error), whatFailed), actions);
+  }
+
+  /** A failed change in ``noticeFor``'s words for ``whatFailed``, for a surface that shows it itself (a dialog's
+   *  line), offering ``retry`` where the failure is one to try again. */
+  changeFailureNotice(whatFailed: string, error: unknown, retry: () => void): FailureNotice {
+    return this.noticeFor(whatFailed, error, { retry });
   }
 
   /**
    * Show ``notice`` in a toast. A call site whose retry is the control just pressed asks for a plain note; any other
    * shows one that stays, with its details and buttons, and so does any notice that asks for a bug report or carries
-   * a button, which a note that leaves on its own cannot hold.
+   * a button, which a note that leaves on its own cannot hold. A toast that asks for a bug report offers "Report a
+   * bug" wherever the embedder opens one when the toast is drawn (``reportBugAction``).
    */
   private toastNotice(notice: FailureNotice, { isLasting }: { readonly isLasting: boolean }): void {
     if (!isLasting && !notice.isReportable && notice.actions.length === 0) {
@@ -747,7 +755,12 @@ export class DesktopStore {
       this.toast(notice.message);
       return;
     }
-    this.toasts.show(notice.message, { isLasting: true, details: notice.details, actions: notice.actions });
+    this.toasts.show(notice.message, {
+      isLasting: true,
+      details: notice.details,
+      actions: notice.actions,
+      isReportable: notice.isReportable,
+    });
   }
 
   /** What users call the app, or "This app" for one this window no longer knows. */
@@ -787,7 +800,11 @@ export class DesktopStore {
         break;
       case "out_of_space":
         return this.noticeOf(failureSentence(failure, whatFailed), [
-          { label: "Ask an agent to free up space", run: () => void this.startWithText(FREE_SPACE_REQUEST) },
+          {
+            label: "Ask an agent to free up space",
+            run: () => void this.startWithText(FREE_SPACE_REQUEST),
+            keepsToast: true,
+          },
           ...tryAgain,
         ]);
       case "not_saved":
@@ -826,7 +843,11 @@ export class DesktopStore {
     }
     return this.noticeOf({ message: sentence, details, isReportable: false }, [
       ...actions,
-      { label: "Ask an agent to look at it", run: () => void this.startWithText(couldNotStartRequest(app)) },
+      {
+        label: "Ask an agent to look at it",
+        run: () => void this.startNewWithText(couldNotStartRequest(app)),
+        keepsToast: true,
+      },
     ]);
   }
 
@@ -903,11 +924,20 @@ export class DesktopStore {
     if (this.canReportBug === canReportBug) return;
     this.canReportBug = canReportBug;
     this.pageDriver?.greetAll();
+    // The toasts already up decide their "Report a bug" as they draw.
+    this.notifyListeners();
   }
 
-  /** A page's ``shell:report-bug``: the bug report opens, where the embedder opens one. */
-  reportBugFromPage(): void {
-    if (this.canReportBug) this.reportBug();
+  /** What a reportable toast's "Report a bug" runs: the bug report about its failure, or null while the embedder
+   *  opens none. */
+  reportBugAction(): ((failure: ReportedFailure) => void) | null {
+    return this.canReportBug ? (failure) => this.reportBug(failure) : null;
+  }
+
+  /** A page's ``shell:report-bug``: the bug report about ``failure`` opens, where the embedder opens one; null opens
+   *  it with nothing attached. */
+  reportBugFromPage(failure: ReportedFailure | null): void {
+    if (this.canReportBug) this.reportBug(failure);
   }
 
   /** Whether the embedder can take the app window immersive for a window of this desktop. */
@@ -1098,7 +1128,7 @@ export class DesktopStore {
     }
     const request = `${app.display_name} (${app.name}) isn't running in this workspace. Please start it again.`;
     return this.plainNotice(sentence, [
-      { label: "Ask an agent to start it", run: () => void this.startWithText(request) },
+      { label: "Ask an agent to start it", run: () => void this.startNewWithText(request), keepsToast: true },
     ]);
   }
 
@@ -2991,6 +3021,19 @@ export class DesktopStore {
       return false;
     }
     return this.runFreeText(primary.app.name, primary.launchPath.id, text);
+  }
+
+  /** A page's ``shell:start-new-with-text``, and the shell's own "Ask an agent to ...": the secondary text action
+   *  runs with the text (Chat's New Chat on a stock machine), else the primary one; with no free-text row on the
+   *  machine the user is told. */
+  async startNewWithText(text: string): Promise<boolean> {
+    const [primary, secondary] = freeTextRowsOf(openableApps(this.state));
+    const row = secondary ?? primary;
+    if (row === undefined) {
+      this.toast(NO_TEXT_APP_REASON);
+      return false;
+    }
+    return this.runFreeText(row.app.name, row.launchPath.id, text);
   }
 
   /** The desktop an open goes to: the active one, or on a phone the first, where a window opened out of sight

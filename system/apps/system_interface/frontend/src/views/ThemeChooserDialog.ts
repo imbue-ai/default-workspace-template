@@ -15,12 +15,16 @@ import type { AppRecord, Desktop } from "../model/records";
 import { availableTheme, resolveDesktopTheme, type ThemeCatalog, type ThemeRecord } from "../model/themes";
 import { appIconMarkupForApp } from "./components/appIcon";
 import { FailureLine } from "./FailureLine";
+import type { ReportBug } from "./FailureLine";
 import { glyph as genericGlyph } from "./glyphs";
 
 export interface ThemeChooserDialogAttrs {
   readonly desktop: Desktop;
-  /** A failed save as the dialog's line says it: what failed, a sentence stem, then the reason. */
-  readonly wordFailure: (whatFailed: string, error: unknown) => FailureNotice;
+  /** A failed save as the dialog's line says it, from what failed (a sentence stem) and the error, with ``retry``
+   *  where the failure is one to try again. */
+  readonly wordFailure: (whatFailed: string, error: unknown, retry: () => void) => FailureNotice;
+  /** Report a bug about a failed save where it asks for one; null where no bug report can be opened. */
+  readonly onReportBug: ReportBug;
   readonly onSave: (themeChoice: ThemeChoice) => Promise<void>;
   readonly onCancel: () => void;
   /** The workspace's themes; null until they have been read. */
@@ -77,7 +81,7 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
           isWorkspaceDefault && attrs.themes !== null && availableTheme(attrs.themes, theme) !== null,
       });
     } catch (e) {
-      error = attrs.wordFailure(THEME_NOT_SAVED, e);
+      error = attrs.wordFailure(THEME_NOT_SAVED, e, () => void save(attrs));
       isSaving = false;
     }
     m.redraw();
@@ -270,6 +274,7 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
                 { class: "mt-1" },
                 m(FailureLine, {
                   notice: error,
+                  onReportBug: attrs.onReportBug,
                   marker: "theme-chooser-error",
                   messageClass: "type-helper text-danger",
                 }),

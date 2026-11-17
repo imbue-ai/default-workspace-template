@@ -553,19 +553,24 @@ def _not_built_shell(
     tmp_path: Path, outcomes: list[LaunchPostOutcome], is_preview: bool = False, is_chat_registered: bool = True
 ) -> tuple[Flask, list[LaunchPost]]:
     """A shell with no built interface over the two-app registry (a terminal whose ``new`` is a GET, labelled
-    ``terminal-x1``) plus, unless told otherwise, a chat-shaped ``helper`` whose ``new`` posts typed text; its posts
-    are answered from ``outcomes`` and kept in the list returned beside it."""
+    ``terminal-x1``) plus, unless told otherwise, a chat-shaped ``helper`` whose ``main`` and ``new`` post typed text
+    (to its main chat, and to a new one); its posts are answered from ``outcomes`` and kept in the list returned
+    beside it."""
     helper = registry_row_toml(
         "helper",
         "http://localhost:7002",
         display_name="Helper",
         label="helper-y2",
         launcher_rank=10,
-        launch_paths=(("root", "Helper", "/"), ("new", "New chat", "/api/intake")),
-        launch_params={"new": ["message"]},
-        launch_text_params={"new": "message"},
-        launch_methods={"new": "POST"},
-        launch_presets={"new": {"target": "new_chat"}},
+        launch_paths=(
+            ("root", "Helper", "/"),
+            ("main", "Send to main chat", "/api/intake"),
+            ("new", "New chat", "/api/intake"),
+        ),
+        launch_params={"main": ["message"], "new": ["message"]},
+        launch_text_params={"main": "message", "new": "message"},
+        launch_methods={"main": "POST", "new": "POST"},
+        launch_presets={"main": {"target": "main_chat"}, "new": {"target": "new_chat"}},
     )
     registry_path = write_two_app_registry(tmp_path, *([helper] if is_chat_registered else []))
     registry_path.write_text(registry_path.read_text().replace('label = ""', 'label = "terminal-x1"', 1))
@@ -582,11 +587,12 @@ def _not_built_shell(
     return application, posts
 
 
-def test_the_not_built_page_asks_an_agent_through_the_primary_text_action_and_opens_a_terminal_session(
+def test_the_not_built_page_asks_a_new_agent_through_the_secondary_text_action_and_opens_a_terminal_session(
     tmp_path: Path,
 ) -> None:
-    """The placeholder's "Ask an agent to fix this" sends the repair message through the app the launcher's text goes
-    to and answers where that chat's page is; its "See details" terminal is a session of its own."""
+    """The placeholder's "Ask an agent to fix this" sends the repair message through the launcher's secondary text
+    action, a new chat rather than the main one, and answers where that chat's page is; its "See details" terminal is
+    a session of its own."""
     app, posts = _not_built_shell(
         tmp_path,
         [

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { failureSentence, readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import { noticeOf } from "../model/failures";
+import { isRetryable } from "../model/failures";
 import { appRecord, desktopRecord, themeCatalog, themeRecord } from "../testing/records";
 import { MAKE_THEME_IN_CHAT_HINT, THEME_PREVIEW_ELSEWHERE_HINT, ThemeChooserDialog } from "./ThemeChooserDialog";
 import type { ThemeChooserDialogAttrs } from "./ThemeChooserDialog";
@@ -18,8 +18,13 @@ const reportBug = vi.fn();
 function render(overrides: Partial<ThemeChooserDialogAttrs> = {}): ThemeChooserDialogAttrs {
   const attrs: ThemeChooserDialogAttrs = {
     desktop: desktopRecord("home", { name: "Home" }),
-    wordFailure: (whatFailed, error) =>
-      noticeOf(failureSentence(describeRequestFailure(error), whatFailed), [], reportBug),
+    // As the store words it: the sentence, with Try again where the failure is one to try again.
+    wordFailure: (whatFailed, error, retry) => {
+      const failure = describeRequestFailure(error);
+      const actions = isRetryable(failure) ? [{ label: "Try again", run: retry }] : [];
+      return { ...failureSentence(failure, whatFailed), actions };
+    },
+    onReportBug: reportBug,
     onSave: vi.fn(async () => undefined),
     onCancel: vi.fn(),
     onPreviewTheme: vi.fn(),
@@ -156,6 +161,18 @@ describe("ThemeChooserDialog", () => {
     expect(card().querySelector(".see-details pre")?.textContent).toBe("HTTP 400\nthemes are read-only here");
     expect((card().querySelector(".theme-chooser-save") as HTMLButtonElement).disabled).toBe(false);
     expect(attrs.onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Try again, which saves again, for a save with no reason, and no Report a bug where none opens", async () => {
+    const refusal = new HttpError(readFailure({ status: 500, body: null, rawText: "boom", requestKind: "change" }));
+    const attrs = render({ onSave: vi.fn(async () => Promise.reject(refusal)), onReportBug: null });
+    (card().querySelector(".theme-chooser-save") as HTMLButtonElement).click();
+    await settled();
+    const buttons = [...card().querySelectorAll<HTMLButtonElement>(".theme-chooser-error-action")];
+    expect(buttons.map((button) => button.textContent)).toEqual(["Try again"]);
+    buttons[0].click();
+    await settled();
+    expect(attrs.onSave).toHaveBeenCalledTimes(2);
   });
 
   it("Escape cancels", () => {

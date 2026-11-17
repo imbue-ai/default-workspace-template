@@ -46,6 +46,7 @@ function render(
     isApplePlatform: false,
     bottomOffsetPx: 0,
     failure: null,
+    onReportBug: null,
     onRun: vi.fn(),
     onHighlight: vi.fn(),
     onAppShortcutContextMenu: vi.fn(),

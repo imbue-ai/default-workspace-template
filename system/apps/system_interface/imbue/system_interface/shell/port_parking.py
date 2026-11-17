@@ -92,7 +92,7 @@ _PAGE_TEMPLATE: Final[str] = """<!DOCTYPE html>
 # The app contract's wire (system/libs/workspace_ui/src/app_contract.ts), which this page speaks without the
 # contract module: the parker answers every path with this page, so it cannot serve the module beside it.
 SHELL_HANDSHAKE_TYPE: Final[str] = "shell:handshake"
-SHELL_START_WITH_TEXT_TYPE: Final[str] = "shell:start-with-text"
+SHELL_START_NEW_WITH_TEXT_TYPE: Final[str] = "shell:start-new-with-text"
 
 # What a page that could not start offers: a Try again that asks once more, an agent asked to look at it (shown once
 # a shell that frames the page has greeted it, since only a shell can start one), and the log's command for whoever
@@ -110,7 +110,7 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     "if (event.source === window.parent && event.data && event.data.type === {handshake}) ask.hidden = false;"
     "});"
     'ask.addEventListener("click", function () {'
-    'window.parent.postMessage({ type: {start_with_text}, text: {request} }, "*");'
+    'window.parent.postMessage({ type: {start_new_with_text}, text: {request} }, "*");'
     "});"
     "})();</script>"
 )
@@ -165,7 +165,7 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
     failed_body = (
         _FAILED_BODY_TEMPLATE.replace("{program}", html.escape(program))
         .replace("{handshake}", _script_literal(SHELL_HANDSHAKE_TYPE))
-        .replace("{start_with_text}", _script_literal(SHELL_START_WITH_TEXT_TYPE))
+        .replace("{start_new_with_text}", _script_literal(SHELL_START_NEW_WITH_TEXT_TYPE))
         .replace("{request}", _script_literal(could_not_start_request(display_name, program)))
     )
     match kind:

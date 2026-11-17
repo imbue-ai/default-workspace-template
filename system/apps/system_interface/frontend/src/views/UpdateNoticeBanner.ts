@@ -146,7 +146,7 @@ export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
               {
                 sm: true,
                 extra: "update-notice-finish",
-                onclick: () => void store.startWithText(FINISH_ROLLBACK_REQUEST),
+                onclick: () => void store.startNewWithText(FINISH_ROLLBACK_REQUEST),
               },
               "Ask an agent to finish it",
             )
@@ -240,7 +240,12 @@ export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
             text(state, notice),
             error === null
               ? null
-              : m(FailureLine, { notice: error, marker: `${marker}-error`, messageClass: "text-danger" }),
+              : m(FailureLine, {
+                  notice: error,
+                  onReportBug: vnode.attrs.store.reportBugAction(),
+                  marker: `${marker}-error`,
+                  messageClass: "text-danger",
+                }),
           ]),
           m("span", { class: "flex flex-none items-center gap-1.5" }, verbs(vnode.attrs.store, notice)),
         ]),

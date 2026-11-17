@@ -9,6 +9,8 @@ declare module "@minds/embed-contract" {
 
   export const OPEN_REQUEST_MODAL: "minds:open-request-modal";
   export const OPEN_HELP: "minds:open-help";
+  // The longest errorDetails OPEN_HELP takes (contract v16). Probed like PERMISSION_RESOLUTIONS below.
+  export const MAX_HELP_ERROR_DETAILS_LENGTH: number;
   export const OPEN_AI_KEYS_PAGE: "minds:open-ai-keys-page";
   export const BRING_APP_TO_FRONT: "minds:bring-app-to-front";
   export const CLOSE_ACTIVE_TAB: "minds:close-active-tab";

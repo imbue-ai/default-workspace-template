@@ -165,7 +165,7 @@ _NOT_BUILT_POLL_SECONDS = 10
 #
 # Kept in sync with that builder by ``test_chat_system.py``, which also validates it
 # against the live CLI. The server never runs it: the page's "Ask an agent to fix
-# this" sends the same message through the workspace's primary text action
+# this" sends the same message through the workspace's secondary text action
 # instead (``_not_built_launch``), so an agent is created only if the reader
 # presses it.
 _NOT_BUILT_REPAIR_MNGR_COMMAND: Final[str] = (
@@ -580,7 +580,7 @@ def _frontend_not_built_response(missing_page: Path) -> Response:
 
 def _not_built_launch() -> ResponseReturnValue:
     """``POST /api/not-built/launch``: run one of the placeholder's launches -- a terminal session, or the repair
-    agent asked through the primary text action -- and answer where its page is: the app's origin label, the
+    agent asked through the secondary text action -- and answer where its page is: the app's origin label, the
     path, and the app's display name. 404 when no app offers it; a launch's own failures answer as the launch
     route's do. A preview refuses, since either would act on the live workspace."""
     if get_state().is_preview:

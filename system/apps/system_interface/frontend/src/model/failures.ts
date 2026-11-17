@@ -1,11 +1,11 @@
 /**
  * How the desktop shows a failure on its own surfaces (a toast, a dialog's line, the launcher, the backdrop, a
  * window's placeholder): a sentence, what goes behind "See details", and its buttons. A failed request's sentence is
- * ``failureSentence``'s; the store adds the buttons, "Report a bug" among them where the embedder opens one.
+ * ``failureSentence``'s; the store adds the buttons. "Report a bug" is not among them: the surface offers it as it
+ * draws, wherever the embedder opens a bug report by then (the store's ``reportBugAction``).
  */
 
-import { REPORT_A_BUG_LABEL } from "@imbue/workspace-ui/src/models/failure";
-import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
+import type { Failure } from "@imbue/workspace-ui/src/models/failure";
 import type { AppRecord } from "./records";
 import type { ToastAction } from "@imbue/workspace-ui/src/models/toasts";
 
@@ -17,21 +17,11 @@ export interface FailureNotice {
   readonly message: string;
   /** What goes behind "See details"; null when there is nothing beyond the sentence. */
   readonly details: string | null;
-  /** Its buttons, in order ("Report a bug" last). */
+  /** Its buttons, in order. */
   readonly actions: readonly ToastAction[];
-  /** The sentence asks for a bug report, so a toast of it stays even where "Report a bug" cannot be offered. */
+  /** The sentence asks for a bug report: the surface offers "Report a bug" after the buttons where it can, and a
+   *  toast of it stays even where it cannot. */
   readonly isReportable: boolean;
-}
-
-/** ``told`` as a surface shows it: ``actions``, then "Report a bug" where the sentence asks for one and a bug report
- *  can be opened (``reportBug`` is not null). */
-export function noticeOf(
-  told: FailureMessage,
-  actions: readonly ToastAction[],
-  reportBug: (() => void) | null,
-): FailureNotice {
-  const report = told.isReportable && reportBug !== null ? [{ label: REPORT_A_BUG_LABEL, run: reportBug }] : [];
-  return { ...told, actions: [...actions, ...report] };
 }
 
 /** What the shell's refusals name with ``kind`` (desktop contracts.md, the error body), for the desktop to word

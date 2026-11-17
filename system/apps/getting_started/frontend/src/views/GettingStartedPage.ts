@@ -159,7 +159,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
 
   /** The failure line, with the next steps in it: Try again (a fresh fetch) and Report a bug (where the shell says
    *  Imbue Studio opens one). */
-  function templatesFailure(attrs: GettingStartedPageAttrs): m.Vnode {
+  function templatesFailure(attrs: GettingStartedPageAttrs, details: string): m.Vnode {
     const action = (label: string, extra: string, onclick: () => void): m.Vnode =>
       m(Button, { variant: "ghost", sm: true, extra, onclick }, label);
     return m("div", { class: "getting-started-templates-failed flex flex-wrap items-center gap-x-1 py-1" }, [
@@ -169,6 +169,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
       action("Try again", "getting-started-templates-retry", attrs.onRetryTemplates),
       m(ReportBugButton, {
         connection: attrs.connection,
+        failure: { message: TEMPLATES_FAILED_MESSAGE, details },
         variant: "ghost",
         sm: true,
         extra: "getting-started-templates-report",
@@ -185,7 +186,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
         body = templatesStatus(TEMPLATES_LOADING_MESSAGE);
         break;
       case "failed":
-        body = templatesFailure(attrs);
+        body = templatesFailure(attrs, catalog.details);
         break;
       case "loaded":
         body = m(TemplateShelves, {

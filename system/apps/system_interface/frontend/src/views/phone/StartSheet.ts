@@ -9,6 +9,7 @@ import m from "mithril";
 import type { FailureNotice } from "../../model/failures";
 import type { LauncherMenuRows, LauncherRow } from "../../reducers/launcherRows";
 import { LAUNCHER_PLACEHOLDER, isLineBreakChord } from "../LauncherField";
+import type { ReportBug } from "../FailureLine";
 import { LauncherSections, launcherFailureLine } from "../LauncherMenu";
 import { Sheet } from "./Sheet";
 
@@ -25,12 +26,24 @@ export interface StartSheetAttrs {
   readonly onDismiss: () => void;
   /** Why the last row the sheet ran failed, shown under its field, which still holds its text. */
   readonly failure: FailureNotice | null;
+  /** Report a bug about that failure where it asks for one; null where no bug report can be opened. */
+  readonly onReportBug: ReportBug;
 }
 
 export const StartSheet: m.Component<StartSheetAttrs> = {
   view(vnode) {
-    const { menu, highlightIndex, query, onQuery, onRun, onHighlight, onRunHighlight, onDismiss, failure } =
-      vnode.attrs;
+    const {
+      menu,
+      highlightIndex,
+      query,
+      onQuery,
+      onRun,
+      onHighlight,
+      onRunHighlight,
+      onDismiss,
+      failure,
+      onReportBug,
+    } = vnode.attrs;
     return m(
       Sheet,
       {
@@ -64,7 +77,7 @@ export const StartSheet: m.Component<StartSheetAttrs> = {
             },
           }),
         ),
-        launcherFailureLine(failure),
+        launcherFailureLine(failure, onReportBug),
         m(
           "div",
           {

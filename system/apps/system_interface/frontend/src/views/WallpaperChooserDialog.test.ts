@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { failureSentence, readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import { noticeOf } from "../model/failures";
+import { isRetryable } from "../model/failures";
 import { desktopRecord } from "../testing/records";
 import { WallpaperChooserDialog, isSameWallpaper } from "./WallpaperChooserDialog";
 import type { WallpaperChooserDialogAttrs } from "./WallpaperChooserDialog";
@@ -27,8 +27,13 @@ function render(overrides: Partial<WallpaperChooserDialogAttrs> = {}): Wallpaper
   const attrs: WallpaperChooserDialogAttrs = {
     desktop: desktopRecord("home", { name: "Home" }),
     wallpapers: [ARCS, DAWN],
-    wordFailure: (whatFailed, error) =>
-      noticeOf(failureSentence(describeRequestFailure(error), whatFailed), [], reportBug),
+    // As the store words it: the sentence, with Try again where the failure is one to try again.
+    wordFailure: (whatFailed, error, retry) => {
+      const failure = describeRequestFailure(error);
+      const actions = isRetryable(failure) ? [{ label: "Try again", run: retry }] : [];
+      return { ...failureSentence(failure, whatFailed), actions };
+    },
+    onReportBug: reportBug,
     onSave: vi.fn(async () => undefined),
     onCancel: vi.fn(),
     ...overrides,
@@ -85,6 +90,21 @@ describe("WallpaperChooserDialog", () => {
     expect(card().querySelector(".see-details pre")?.textContent).toBe("HTTP 400\nno such wallpaper");
     expect((card().querySelector(".wallpaper-chooser-save") as HTMLButtonElement).disabled).toBe(false);
     expect(attrs.onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Try again, which saves again, and Report a bug about the line's failure, for a save with no reason", async () => {
+    const attrs = render({ onSave: vi.fn(async () => Promise.reject(refusedWith(500, null, "boom"))) });
+    save();
+    await settled();
+    const message = "The wallpaper couldn't be changed. Try again. If this persists, report a bug.";
+    expect(card().querySelector(".wallpaper-chooser-error-message")?.textContent).toBe(message);
+    const buttons = [...card().querySelectorAll<HTMLButtonElement>(".wallpaper-chooser-error-action")];
+    expect(buttons.map((button) => button.textContent)).toEqual(["Try again", "Report a bug"]);
+    buttons[1].click();
+    expect(reportBug).toHaveBeenCalledWith({ message, details: "HTTP 500\nboom" });
+    buttons[0].click();
+    await settled();
+    expect(attrs.onSave).toHaveBeenCalledTimes(2);
   });
 
   it("Escape cancels", () => {

@@ -9,6 +9,7 @@ import { getRoster, resetRosterForTesting } from "../model/Roster";
 import { TOAST_DURATION_MS } from "@imbue/workspace-ui/src/models/toasts";
 import { notAnsweredSentence, readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
+import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { activeFocusedWindowId, activePlacements, barEntries, isLayoutDirty } from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
@@ -725,6 +726,28 @@ describe("opening", () => {
     );
   });
 
+  it("shell:start-new-with-text runs the secondary text action, else the primary, and says so when there is none", async () => {
+    const store = await startedStore();
+    expect(await store.startNewWithText("Fix this.")).toBe(false);
+    expect(last(notices())).toBe("No app in this workspace can start a chat");
+    const notes = (launchIds: readonly string[]): ReturnType<typeof appRecord> =>
+      appRecord("notes", {
+        launch_paths: launchIds.map((id) =>
+          launchPathRecord({ id, path: `/${id}`, params: ["message"], text_param: "message" }),
+        ),
+      });
+    offerApps(api, socket, [notes(["main", "new", "send"])]);
+    expect(await store.startNewWithText("Fix this.")).toBe(true);
+    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
+      `launch:home:notes:new:{"message":"Fix this."}:new`,
+    );
+    offerApps(api, socket, [notes(["main"])]);
+    expect(await store.startNewWithText("Fix this.")).toBe(true);
+    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
+      `launch:home:notes:main:{"message":"Fix this."}:new`,
+    );
+  });
+
   it("shell:draft-text drafts through the first draft row when no pinned window takes one, and says so with none", async () => {
     const store = await startedStore();
     expect(await store.draftText("Explain this element:")).toBe(false);
@@ -861,7 +884,8 @@ describe("opening", () => {
       true,
     );
     await store.closeWindow("win-1");
-    expect(last(store.toasts.current())?.actions.map((action) => action.label)).toEqual(["Try again", "Report a bug"]);
+    expect(last(store.toasts.current())?.actions.map((action) => action.label)).toEqual(["Try again"]);
+    expect(last(store.toasts.current())?.isReportable).toBe(true);
   });
 
   it("opens a page's shell:open on the posting window's app and desktop", async () => {
@@ -1058,14 +1082,13 @@ describe("a stopped app's window", () => {
       `launch:home:chat:new:${JSON.stringify({ message: "Terminal (terminal) isn't running in this workspace. Please start it again." })}:new`,
     );
 
-    // Chat itself, stopped, has no agent to ask: it can only be reported, where the embedder opens a bug report.
-    expect(store.stoppedNotice({ ...chat, is_running: false }).actions).toEqual([]);
-    store.setCanReportBug(true);
-    const chatStopped = store.stoppedNotice({ ...chat, is_running: false });
-    expect(chatStopped.message).toBe("Chat is not running right now. If this persists, report a bug.");
-    expect(chatStopped.actions.map((action) => action.label)).toEqual(["Report a bug"]);
-    chatStopped.actions[0].run();
-    expect(bugReports).toBe(1);
+    // Chat itself, stopped, has no agent to ask: it can only be reported (the window offers Report a bug as it
+    // draws, where the embedder opens one).
+    expect(store.stoppedNotice({ ...chat, is_running: false })).toMatchObject({
+      message: "Chat is not running right now. If this persists, report a bug.",
+      actions: [],
+      isReportable: true,
+    });
   });
 });
 
@@ -1165,14 +1188,19 @@ describe("a launch into an app that is not running", () => {
     );
     await store.launchAt("chat", "new", { message: "hi" }, { kind: "new" });
     expect(toastsShown(store).map(([message, , actions]) => [message, actions])).toEqual([
-      ["Chat couldn't start. If this persists, report a bug.", ["Try again", "Report a bug"]],
+      ["Chat couldn't start. If this persists, report a bug.", ["Try again"]],
     ]);
+    expect(store.toasts.current()[0].isReportable).toBe(true);
   });
 });
 
 describe("failure toasts", () => {
-  async function storeReportingBugs(reportBug: () => void, isOpeningHelp: boolean): Promise<DesktopStore> {
-    const store = makeStore(() => undefined, { reportBug });
+  async function storeReportingBugs(
+    reportBug: (failure: ReportedFailure | null) => void,
+    isOpeningHelp: boolean,
+    redraw: () => void = () => undefined,
+  ): Promise<DesktopStore> {
+    const store = makeStore(redraw, { reportBug });
     store.setCanReportBug(isOpeningHelp);
     await store.start(NO_LINK);
     return store;
@@ -1193,7 +1221,7 @@ describe("failure toasts", () => {
     ]);
   });
 
-  it("words a launch the app could not answer as the fallback, which offers Try again and Report a bug", async () => {
+  it("words a launch the app could not answer as the fallback, with Try again, whose Report a bug files its failure", async () => {
     const reportBug = vi.fn();
     const store = await storeReportingBugs(reportBug, true);
     api.refusal = refusedWith(502, { detail: "docs answered the launch with 500: boom" });
@@ -1204,20 +1232,44 @@ describe("failure toasts", () => {
       message: "Docs couldn't open that. Try again. If this persists, report a bug.",
       details: "HTTP 502\ndocs answered the launch with 500: boom",
       isLasting: true,
+      isReportable: true,
     });
-    expect(toast.actions.map((action) => action.label)).toEqual(["Try again", "Report a bug"]);
-    toast.actions[1].run();
-    expect(reportBug).toHaveBeenCalledTimes(1);
+    expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
+    store.reportBugAction()?.({ message: toast.message, details: toast.details });
+    expect(reportBug).toHaveBeenCalledWith({
+      message: "Docs couldn't open that. Try again. If this persists, report a bug.",
+      details: "HTTP 502\ndocs answered the launch with 500: boom",
+    });
   });
 
-  it("offers no Report a bug while the embedder has not said it opens one", async () => {
-    const store = await storeReportingBugs(vi.fn(), false);
+  it("offers Report a bug on a toast already up once the embedder says it opens one, and redraws for it", async () => {
+    const reportBug = vi.fn();
+    const redraw = vi.fn();
+    const store = await storeReportingBugs(reportBug, false, redraw);
     api.refusal = refusedWith(502, { detail: "docs answered the launch with 500: boom" });
     await store.runLaunch("docs", "new", "new");
-    expect(store.toasts.current()[0].message).toBe(
-      "Docs couldn't open that. Try again. If this persists, report a bug.",
-    );
-    expect(store.toasts.current()[0].actions.map((action) => action.label)).toEqual(["Try again"]);
+    expect(store.toasts.current()[0].isReportable).toBe(true);
+    expect(store.reportBugAction()).toBeNull();
+
+    redraw.mockClear();
+    store.setCanReportBug(true);
+    expect(redraw).toHaveBeenCalled();
+    store.reportBugAction()?.({ message: "m", details: null });
+    expect(reportBug).toHaveBeenCalledWith({ message: "m", details: null });
+
+    store.setCanReportBug(false);
+    expect(store.reportBugAction()).toBeNull();
+  });
+
+  it("opens a page's bug report with its failure, or with none, only while the embedder opens one", async () => {
+    const reportBug = vi.fn();
+    const store = await storeReportingBugs(reportBug, false);
+    store.reportBugFromPage({ message: "Docs couldn't save.", details: "HTTP 500" });
+    expect(reportBug).not.toHaveBeenCalled();
+    store.setCanReportBug(true);
+    store.reportBugFromPage({ message: "Docs couldn't save.", details: "HTTP 500" });
+    store.reportBugFromPage(null);
+    expect(reportBug.mock.calls).toEqual([[{ message: "Docs couldn't save.", details: "HTTP 500" }], [null]]);
   });
 
   it("shows an app's own sentence as written, and offers Report a bug only when the app asks for one", async () => {
@@ -1234,11 +1286,9 @@ describe("failure toasts", () => {
     });
     await store.runLaunch("docs", "new", "new");
 
-    expect(
-      store.toasts.current().map((toast) => [toast.message, toast.actions.map((action) => action.label)]),
-    ).toEqual([
-      ["Docs is still starting. Try again in a few seconds.", []],
-      ["Docs couldn't read its notes. If this persists, report a bug.", ["Report a bug"]],
+    expect(store.toasts.current().map((toast) => [toast.message, toast.isReportable])).toEqual([
+      ["Docs is still starting. Try again in a few seconds.", false],
+      ["Docs couldn't read its notes. If this persists, report a bug.", true],
     ]);
   });
 
@@ -1280,10 +1330,11 @@ describe("failure toasts", () => {
         message: "This window couldn't be closed. Try again. If this persists, report a bug.",
         details: "HTTP 500\n<html>Internal Server Error</html>",
         isLasting: true,
+        isReportable: true,
       },
     ]);
     const [toast] = store.toasts.current();
-    expect(toast.actions.map((action) => action.label)).toEqual(["Try again", "Report a bug"]);
+    expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
     api.refusal = null;
     toast.actions[0].run();
     await settle();

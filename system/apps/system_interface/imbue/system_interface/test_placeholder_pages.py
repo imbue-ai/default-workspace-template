@@ -123,7 +123,7 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         ask.click()
         page.wait_for_function("window.received.length > 0")
         assert page.evaluate("window.received") == [
-            {"type": "shell:start-with-text", "text": could_not_start_request("Docs", "docs")}
+            {"type": "shell:start-new-with-text", "text": could_not_start_request("Docs", "docs")}
         ]
     finally:
         parked.release()
