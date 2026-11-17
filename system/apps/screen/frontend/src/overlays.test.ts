@@ -357,11 +357,15 @@ describe("Overlays for the stack's state", () => {
     expect([ask?.textContent, ask?.disabled, askFailure()]).toEqual(["Ask an agent to fix this", false, null]);
   });
 
-  it("replaces a not-answered ask with the shell's late answer, and offers Report a bug under a reportable one", async () => {
+  it("replaces a not-answered ask with the shell's late answer, and files both failures through one Report a bug", async () => {
     const host = fakeHost();
     const overlays = overlaysWith(host);
     const askFailure = (): HTMLElement | null =>
       overlays.element.querySelector<HTMLElement>("[data-screen-ask-failure]:not([hidden])");
+    const reportButtons = (): HTMLButtonElement[] =>
+      Array.from(overlays.element.querySelectorAll<HTMLButtonElement>("button")).filter(
+        (button) => !button.hidden && button.textContent === "Report a bug",
+      );
     overlays.update(
       state({ ...STOPPED, stop_reason: "screen-neko exited unexpectedly", stop_cause: "crashed" }),
       "idle",
@@ -380,11 +384,39 @@ describe("Overlays for the stack's state", () => {
     const late = { message: "The workspace couldn't do that.", details: "boom", isReportable: true };
     host.lateAnswers[0]({ isOpened: false, failure: late });
     expect(askFailure()?.querySelector("p")?.textContent).toBe(late.message);
-    askFailure()?.querySelector<HTMLButtonElement>("[data-screen-ask-failure-report]")?.click();
-    expect(host.reports).toEqual([{ message: late.message, details: "boom" }]);
+    expect(reportButtons()).toHaveLength(1);
+    reportButtons()[0].click();
+    expect(host.reports).toEqual([
+      {
+        message: "The Screen stopped unexpectedly.",
+        details:
+          "screen-neko exited unexpectedly\n\nAsking an agent to fix this failed too:\nThe workspace couldn't do that.\nboom",
+      },
+    ]);
 
     host.lateAnswers[0]({ isOpened: true });
     expect(askFailure()).toBeNull();
+  });
+
+  it("offers Report a bug for an ask that failed in a way to report, on a failure that asks for none itself", async () => {
+    const host = fakeHost();
+    const overlays = overlaysWith(host);
+    overlays.update(
+      state({ ...STOPPED, stop_reason: "screen-neko exited unexpectedly", stop_cause: "out_of_memory" }),
+      "idle",
+      null,
+      null,
+      null,
+    );
+    const report = overlays.element.querySelector<HTMLButtonElement>("[data-screen-report-bug]");
+    expect(report?.hidden).toBe(true);
+    overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]")?.click();
+    host.answers[0]({
+      isOpened: false,
+      failure: { message: "The workspace couldn't do that.", details: "boom", isReportable: true },
+    });
+    await Promise.resolve();
+    expect(report?.hidden).toBe(false);
   });
 
   it("drops a failed ask once the Screen runs again, and one that settles after it did", async () => {

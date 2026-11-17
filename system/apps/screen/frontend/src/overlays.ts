@@ -7,7 +7,7 @@
  *  shell's handshake says Imbue Studio opens one (the workspace's failure wording, workspace_ui's models/failure.ts
  *  and app contract). */
 
-import { askAgentToFix } from "@imbue/workspace-ui/src/app_contract";
+import { askAgentToFix, withAskFailure } from "@imbue/workspace-ui/src/app_contract";
 import type {
   AgentFixRequest,
   ReportedFailure,
@@ -177,7 +177,6 @@ export class Overlays {
   private readonly askFailure = document.createElement("div");
   private readonly askFailureMessage = document.createElement("p");
   private readonly askFailureDetails = document.createElement("details");
-  private readonly askFailureReport = document.createElement("button");
   private readonly askFailureDetailsText = document.createElement("pre");
   private readonly dim = document.createElement("div");
   private readonly dimTitle = document.createElement("div");
@@ -224,7 +223,9 @@ export class Overlays {
     this.reportBugButton.textContent = REPORT_A_BUG_LABEL;
     this.reportBugButton.dataset.screenReportBug = "true";
     this.reportBugButton.addEventListener("click", () => {
-      if (this.host !== null && this.reported !== null) this.host.reportBug(this.reported);
+      if (this.host !== null && this.reported !== null) {
+        this.host.reportBug(withAskFailure(this.reported, this.askFailureShown));
+      }
     });
     this.actions.append(this.startButton, this.reloadButton, this.askAgentButton, this.reportBugButton);
     const askFailureSummary = document.createElement("summary");
@@ -235,16 +236,7 @@ export class Overlays {
     this.askFailure.setAttribute("role", "alert");
     this.askFailure.dataset.screenAskFailure = "true";
     this.askFailure.hidden = true;
-    this.askFailureReport.className = "screen-button report-bug";
-    this.askFailureReport.textContent = REPORT_A_BUG_LABEL;
-    this.askFailureReport.dataset.screenAskFailureReport = "true";
-    this.askFailureReport.addEventListener("click", () => {
-      const failure = this.askFailureShown;
-      if (this.host !== null && failure !== null) {
-        this.host.reportBug({ message: failure.message, details: failure.details });
-      }
-    });
-    this.askFailure.append(this.askFailureMessage, this.askFailureDetails, this.askFailureReport);
+    this.askFailure.append(this.askFailureMessage, this.askFailureDetails);
     this.element.append(this.title, this.body, this.details, this.actions, this.askFailure);
     // Until the first state arrives, the page is loading: nothing to start, nothing failed.
     this.showLoading();
@@ -301,7 +293,9 @@ export class Overlays {
    *  shows; the shell's handshake can arrive after it was drawn. */
   syncShellButtons(): void {
     this.askAgentButton.hidden = this.agentFix === null || this.host === null || !this.host.hasShell();
-    this.reportBugButton.hidden = !this.isReportable || this.host === null || !this.host.canReportBug();
+    // One Report a bug files the overlay's failure and a failed ask's together.
+    const isReportable = this.isReportable || this.askFailureShown?.isReportable === true;
+    this.reportBugButton.hidden = !isReportable || this.host === null || !this.host.canReportBug();
   }
 
   /** "Ask an agent to fix this": pending until the shell says the chat opened, or why it could not. */
@@ -337,8 +331,7 @@ export class Overlays {
     this.askFailureMessage.textContent = failure?.message ?? "";
     this.askFailureDetails.hidden = failure?.details == null;
     this.askFailureDetailsText.textContent = failure?.details ?? "";
-    this.askFailureReport.hidden =
-      failure === null || !failure.isReportable || this.host === null || !this.host.canReportBug();
+    this.syncShellButtons();
   }
 
   /** The page could not load the state at all; the service's events bring it once the service answers. */
