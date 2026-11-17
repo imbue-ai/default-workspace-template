@@ -187,6 +187,8 @@ export class Overlays {
   private reported: ReportedFailure | null = null;
   private isReportable = false;
   private isAskingAgent = false;
+  /** Which failure the overlay shows: changes when it hides or shows another, so an ask settling later knows. */
+  private shownFailure = 0;
 
   constructor(onStart: () => void, onTakeControl: () => void, onCancelPendingUrl: () => void, onReload: () => void) {
     this.element.className = "screen-overlay";
@@ -293,10 +295,11 @@ export class Overlays {
     this.isAskingAgent = true;
     this.showAskFailure(null);
     this.syncAskButton();
+    const askedAbout = this.shownFailure;
     const outcome = await askAgentToFix(this.host, this.agentFix);
     this.isAskingAgent = false;
     this.syncAskButton();
-    if (!outcome.isOpened) this.showAskFailure(outcome.failure);
+    if (!outcome.isOpened && this.shownFailure === askedAbout) this.showAskFailure(outcome.failure);
   }
 
   private syncAskButton(): void {
@@ -322,13 +325,16 @@ export class Overlays {
   }
 
   private render(shown: OverlayView | null): void {
+    // A failed ask belongs to the failure it was asked about.
+    if (shown === null || this.element.hidden || shown.title !== this.title.textContent) {
+      this.shownFailure += 1;
+      this.showAskFailure(null);
+    }
     if (shown === null) {
       this.element.hidden = true;
       return;
     }
     this.element.hidden = false;
-    // A failed ask belongs to the failure it was asked about.
-    if (shown.title !== this.title.textContent) this.showAskFailure(null);
     this.title.textContent = shown.title;
     this.body.textContent = shown.body;
     this.body.hidden = shown.body === "";

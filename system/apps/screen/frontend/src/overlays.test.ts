@@ -311,6 +311,35 @@ describe("Overlays for the stack's state", () => {
     expect([ask?.textContent, ask?.disabled, askFailure()]).toEqual(["Ask an agent to fix this", false, null]);
   });
 
+  it("drops a failed ask once the Screen runs again, and one that settles after it did", async () => {
+    const host = fakeHost();
+    const overlays = overlaysWith(host);
+    const crashed = state({ ...STOPPED, stop_reason: "screen-neko exited unexpectedly", stop_cause: "crashed" });
+    const notOpened: StartNewOutcome = {
+      isOpened: false,
+      failure: { message: "Chat couldn't open that.", details: null, isReportable: false },
+    };
+    const askFailure = (): HTMLElement | null =>
+      overlays.element.querySelector<HTMLElement>("[data-screen-ask-failure]:not([hidden])");
+    const ask = (): void => overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]")?.click();
+
+    overlays.update(crashed, "idle", null, null, null);
+    ask();
+    host.answers[0](notOpened);
+    await Promise.resolve();
+    expect(askFailure()).not.toBeNull();
+    overlays.update(state({}), "connected", OWNER, null, null);
+    overlays.update(crashed, "idle", null, null, null);
+    expect(askFailure()).toBeNull();
+
+    ask();
+    overlays.update(state({}), "connected", OWNER, null, null);
+    host.answers[1](notOpened);
+    await Promise.resolve();
+    overlays.update(crashed, "idle", null, null, null);
+    expect(askFailure()).toBeNull();
+  });
+
   it("names low memory for a member the memory guard shed, with no bug report for it", () => {
     const overlays = overlaysWith(fakeHost());
     overlays.update(
