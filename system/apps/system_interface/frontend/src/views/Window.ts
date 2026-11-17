@@ -121,7 +121,7 @@ export interface StoppedInstanceVerbs {
 }
 
 /** What the chat is asked, in the user's words, for a stopped preview or UI sketch no start can bring back. */
-export function newInstancePrompt(displayName: string, kind: InstanceKind): string {
+function newInstancePrompt(displayName: string, kind: InstanceKind): string {
   return `"${displayName}" stopped and can't be started again. Make me a new ${instanceNoun(kind)}.`;
 }
 
@@ -143,7 +143,7 @@ export function stoppedInstanceActionsOf(
 }
 
 /** What the user calls the thing an isolated instance shows. */
-export function instanceNoun(kind: InstanceKind): string {
+function instanceNoun(kind: InstanceKind): string {
   return kind === "mock" ? "UI sketch" : "preview";
 }
 
