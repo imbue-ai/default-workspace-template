@@ -995,3 +995,59 @@ def test_two_revives_at_once_boot_the_preview_once(tmp_path: Path) -> None:
 
     assert codes == [0, 0]
     assert slow.ups() == ["notes-preview"]
+
+
+def test_a_siblings_own_revive_waits_for_the_revive_booting_it_and_boots_nothing(
+    tmp_path: Path,
+) -> None:
+    worktree = _write_worktree(tmp_path)
+    booting = threading.Event()
+    release = threading.Event()
+    chat_checked = threading.Event()
+
+    class _SlowInstances(_RecordingInstances):
+        def up(self, spec: mod.InstanceSpec, repo_root: Path) -> int:
+            booting.set()
+            assert release.wait(timeout=10)
+            return super().up(spec, repo_root)
+
+        def is_running(self, name: str, repo_root: Path) -> bool:
+            if booting.is_set():
+                chat_checked.set()
+            return super().is_running(name, repo_root)
+
+    instances = _RecordingInstances(tmp_path)
+    assert (
+        boot.up(
+            "system_interface",
+            worktree,
+            tmp_path,
+            with_apps=["chat"],
+            instance_key="agent-1",
+            instances=instances,
+            dump_registry=_dump_registry,
+        )
+        == 0
+    )
+    slow = _SlowInstances(tmp_path)
+    codes: list[int] = []
+    shell = threading.Thread(
+        target=lambda: codes.append(
+            boot.revive("system_interface", tmp_path, instances=slow)
+        )
+    )
+    shell.start()
+    assert booting.wait(timeout=10)
+    chat = threading.Thread(
+        target=lambda: codes.append(boot.revive("chat", tmp_path, instances=slow))
+    )
+    chat.start()
+    # Unlocked, the chat's revive checks the chat while the shell's is booting it; locked, it
+    # checks nothing until that boot is done, so this wait runs out.
+    assert not chat_checked.wait(timeout=1)
+    release.set()
+    shell.join(timeout=10)
+    chat.join(timeout=10)
+
+    assert codes == [0, 0]
+    assert slow.ups() == ["chat-preview", "system_interface-preview"]

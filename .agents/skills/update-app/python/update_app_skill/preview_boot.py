@@ -7,6 +7,7 @@ state, so they do not load the manifest library (and the pydantic it builds on) 
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sys
 import tomllib
@@ -351,7 +352,14 @@ def revive(app_name: str, repo_root: Path, *, instances: Instances) -> int:
     Returns 1, saying why on stderr, when no preview of the app is recorded or the boot
     fails (a worktree that is gone, a build that no longer boots).
     """
-    with serve_isolated_instance.instance_lock(repo_root, instance_name(app_name)):
+    siblings = _recorded_siblings(repo_root, app_name)
+    with contextlib.ExitStack() as locks:
+        # Every instance this boots, its siblings' included, so a sibling's own revive waits
+        # for this one; taken in one order, so two revives never hold each other's.
+        for name in sorted({app_name, *siblings}):
+            locks.enter_context(
+                serve_isolated_instance.instance_lock(repo_root, instance_name(name))
+            )
         record = _read_json(_preview_state_path(repo_root, app_name))
         if record is None:
             sys.stderr.write(
@@ -359,7 +367,6 @@ def revive(app_name: str, repo_root: Path, *, instances: Instances) -> int:
                 "start again; boot one with 'up'.\n"
             )
             return 1
-        siblings = _recorded_siblings(repo_root, app_name)
         if all(
             instances.is_running(instance_name(name), repo_root)
             for name in [app_name, *siblings]
