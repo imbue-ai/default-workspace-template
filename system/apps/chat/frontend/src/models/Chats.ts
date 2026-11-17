@@ -253,6 +253,9 @@ export type ChatActivityListener = (chatId: string, previous: string | null, cur
  */
 export type ChatActiveAgentListener = (chatId: string, previousAgentId: string, currentAgentId: string) => void;
 
+/** Told when a chat still being created is discarded (deleted from any page) before its agent lands. */
+export type ProvisionalChatDiscardedListener = (chatId: string) => void;
+
 let chats: ChatSnapshot[] = [];
 // The workspace's main chat (the backend's ``main_chat.py``): listed first, and where a text with no chat of its
 // own goes. It can be a chat that is still provisional. Null while the workspace has no chat to take it.
@@ -277,6 +280,7 @@ let chatsUpdatedListeners: ChatsUpdatedListener[] = [];
 let mentionsUpdatedListeners: (() => void)[] = [];
 let chatActivityListeners: ChatActivityListener[] = [];
 let chatActiveAgentListeners: ChatActiveAgentListener[] = [];
+const provisionalChatDiscardedListeners: ProvisionalChatDiscardedListener[] = [];
 let ws: WebSocket | null = null;
 // Whether the socket has opened before, so an open is a reconnect.
 let hasConnectedBefore = false;
@@ -439,6 +443,7 @@ function handleEvent(event: WsEvent): void {
         // Discarded before it launched: gone, with nothing to show.
         provisionalChats = provisionalChats.filter((p) => p.chat_id !== event.chat_id);
         settleRegistration(event.chat_id, new ChatNotStartedError("The chat was closed before it started"));
+        for (const listener of provisionalChatDiscardedListeners) listener(event.chat_id);
       } else {
         const error = event.error;
         provisionalChats = provisionalChats.map((p) =>
@@ -574,6 +579,10 @@ export function addChatActivityListener(listener: ChatActivityListener): void {
 
 export function removeChatActivityListener(listener: ChatActivityListener): void {
   chatActivityListeners = chatActivityListeners.filter((l) => l !== listener);
+}
+
+export function addProvisionalChatDiscardedListener(listener: ProvisionalChatDiscardedListener): void {
+  provisionalChatDiscardedListeners.push(listener);
 }
 
 export function addActiveAgentChangedListener(listener: ChatActiveAgentListener): void {

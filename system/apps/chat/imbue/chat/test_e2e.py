@@ -1918,6 +1918,47 @@ def test_a_message_sent_while_a_new_chat_starts_stays_where_it_is_and_is_the_cha
         assert box_once_landed["y"] == box_while_starting["y"]
 
 
+@pytest.mark.timeout(120, func_only=False)
+def test_a_message_held_for_a_new_chat_deleted_elsewhere_comes_back_to_the_composer(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A message the chat app holds for a chat still being created goes back into the box, with the not-delivered
+    notice, when the chat is deleted from somewhere else before its agent lands: the chat app drops what it held."""
+    release_create = tmp_path / "release-create"
+    monkeypatch.setenv("FAKE_MNGR_CREATE_RELEASE_FILE", str(release_create))
+    messenger = RecordingMngrMessenger()
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+        try:
+            chat = _start_new_chat(page, server)
+            expect(chat.locator(".message-list-creating")).to_have_count(1, timeout=45000)
+            chat.locator(".message-input-textbox").fill("hello")
+            chat.locator(".message-input-textbox").press("Enter")
+            expect(chat.locator(".outgoing-message")).to_be_visible(timeout=5000)
+            agent_manager = server.chat_state.agent_manager
+            (provisional,) = agent_manager.get_provisional_chats()
+            wait_for(
+                lambda: [held.text for held in agent_manager.get_provisional_chats()[0].held_sends] == ["hello"],
+                timeout=10.0,
+                error_message="the chat app never held the message",
+            )
+            request = urllib.request.Request(
+                f"{server.chat_url}/api/chats/{provisional.chat_id}/destroy",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                assert response.status == 200
+        finally:
+            release_create.touch()
+
+        notice = chat.locator(".modal-card")
+        expect(notice).to_contain_text("Your message wasn't delivered.", timeout=15000)
+        expect(chat.locator(".message-input-textbox")).to_have_value("hello")
+        expect(chat.locator(".outgoing-message")).to_have_count(0)
+        assert messenger.sent == []
+
+
 # Flaky: in CI the chat page's socket has twice taken about twenty seconds to connect while the create failed at
 # once, so the notice arrived after a twenty-second wait had given up; the wait below outlasts that stall.
 @pytest.mark.flaky

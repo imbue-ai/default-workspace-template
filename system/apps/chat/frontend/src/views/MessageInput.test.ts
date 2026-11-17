@@ -92,6 +92,7 @@ const mocks = vi.hoisted(() => {
     // Whether the chat is a room (a message log among the people here), which offers no model and no agent.
     isRoom: false,
     provisional: undefined as unknown,
+    discardListeners: [] as ((chatId: string) => void)[],
     launchChat: vi.fn(async (_chatId: string, _accountId: string, _message?: string, _kind?: string) => ({})),
     startChatOnAccount: vi.fn(async (_accountId: string) => {}),
     chooseFastMode: vi.fn(),
@@ -257,6 +258,7 @@ vi.mock("../models/Chats", async (importOriginal) => ({
     mocks.launchChat(chatId, accountId, message, kind),
   whenChatRegistered: (chatId: string) => mocks.whenChatRegistered(chatId),
   refuseSendToFailedChat: (chatId: string) => mocks.refuseSendToFailedChat(chatId),
+  addProvisionalChatDiscardedListener: (listener: (chatId: string) => void) => mocks.discardListeners.push(listener),
 }));
 vi.mock("../models/Providers", () => ({
   openProviderChooser: mocks.openProviderChooser,
@@ -1094,6 +1096,37 @@ describe("MessageInput send to a chat still being created", () => {
     const [calledChatId, calledText] = mocks.sendMessage.mock.calls[0] as unknown as [string, string];
     expect(calledChatId).toBe("agent-1");
     expect(calledText).toContain("hello");
+  });
+
+  it("puts a message the chat app held back in the box, with the not-delivered notice, when the chat is deleted before it lands", async () => {
+    mocks.isChatRegistered = false;
+    mocks.provisional = {
+      chat_id: "agent-1",
+      name: "Chat 2",
+      account_id: "acct-1",
+      phase: "creating",
+      error: null,
+      is_seeded: false,
+      held_sends: [],
+    };
+    mocks.sendMessage.mockResolvedValueOnce("held");
+    try {
+      const earlierBubbles = getOutgoingMessages("agent-1").map((outgoing) => outgoing.id);
+      const component = MessageInput();
+      const sent = await typeAndSend(component, "agent-1", "hello");
+      expect(findByTag(sent, "textarea")?.attrs?.value).toBe("");
+
+      for (const listener of mocks.discardListeners) listener("agent-1");
+
+      const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
+      expect(renderedText(findByClass(after, "modal-message"))).toContain("Your message wasn't delivered.");
+      expect(findByTag(after, "textarea")?.attrs?.value).toBe("hello");
+      expect(getOutgoingMessages("agent-1").map((outgoing) => outgoing.id)).toEqual(earlierBubbles);
+      expect(findButton(after, "Retry")).toBeUndefined();
+    } finally {
+      mocks.isChatRegistered = true;
+      mocks.provisional = undefined;
+    }
   });
 
   it("returns the message to the composer with the reason when the create has already failed", async () => {

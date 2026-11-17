@@ -42,6 +42,7 @@ import {
   sendMessage,
   sentUserTurnIds,
 } from "../models/Response";
+import type { SendStatus } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
 import { addModelChoiceFailureListener } from "../models/ModelSettings";
 import {
@@ -90,6 +91,8 @@ import {
 } from "../models/HarnessCatalog";
 import { chooseFastMode, parseFastModeCommand } from "./fast-mode-limit";
 import {
+  ChatNotStartedError,
+  addProvisionalChatDiscardedListener,
   getChatById,
   getProvisionalChat,
   refuseSendToFailedChat,
@@ -579,6 +582,45 @@ addModelChoiceFailureListener((chatId, error) =>
     error,
   }),
 );
+
+/** A message this page sent that the chat app holds for a chat still being created: the typed words and attachments
+ *  to put back if the chat is deleted before its agent lands, which drops what was held, and the bubble standing for
+ *  it. */
+interface SendHeldForCreation {
+  text: string;
+  attachments: readonly ComposerAttachment[];
+  outgoingId: string;
+}
+const sendsHeldForCreation = new Map<string, SendHeldForCreation[]>();
+let isListeningForDiscardedChats = false;
+
+function noteSendHeldForCreation(chatId: string, status: SendStatus | null, send: SendHeldForCreation): void {
+  if (status !== "held" || getProvisionalChat(chatId)?.phase !== "creating") return;
+  // The chats that landed since delivered what they held.
+  for (const heldChatId of [...sendsHeldForCreation.keys()]) {
+    if (getChatById(heldChatId) !== undefined) sendsHeldForCreation.delete(heldChatId);
+  }
+  sendsHeldForCreation.set(chatId, [...(sendsHeldForCreation.get(chatId) ?? []), send]);
+  if (!isListeningForDiscardedChats) {
+    isListeningForDiscardedChats = true;
+    addProvisionalChatDiscardedListener(putBackSendsHeldForDiscardedChat);
+  }
+}
+
+function putBackSendsHeldForDiscardedChat(chatId: string): void {
+  const held = sendsHeldForCreation.get(chatId);
+  if (held === undefined) return;
+  sendsHeldForCreation.delete(chatId);
+  for (const send of held) {
+    dropOutgoing(chatId, send.outgoingId);
+    restoreToComposer(chatId, send.text, send.attachments);
+  }
+  raiseFailureNotice(chatId, {
+    title: "Couldn't send your message",
+    describe: describeSendFailure,
+    error: new ChatNotStartedError("The chat was closed before it started"),
+  });
+}
 
 /** The provider chooser for a chat whose account was signed out: the account signed in to or picked is the one the
  *  chat's next message moves it to. */
@@ -1322,6 +1364,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).
           dropOutgoingNoTurnWillRetire(chatId, outgoingId, status);
           noteOutgoingAccepted(chatId, outgoingId);
+          noteSendHeldForCreation(chatId, status, { text: sentText, attachments: sentAttachments, outgoingId });
         } catch (err) {
           // A refusal means the message was NOT accepted; one nothing answered, or mngr could not
           // confirm, may have reached the agent anyway (KINDS_THAT_MAY_HAVE_ARRIVED). A /compact the server declined
@@ -1810,6 +1853,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           const status = await sendMessage(recovery.chatId, recovery.sentText, messageId, true);
           dropOutgoingNoTurnWillRetire(recovery.chatId, outgoingId, status);
           noteOutgoingAccepted(recovery.chatId, outgoingId);
+          noteSendHeldForCreation(recovery.chatId, status, {
+            text: recovery.text,
+            attachments: recovery.attachments,
+            outgoingId,
+          });
           // Landed, so take the restored copy back out of the composer.
           clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);
           stopWatchingUnconfirmedTurn(recovery);
