@@ -143,19 +143,13 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         expect(ask).to_have_text("Asking an agent…")
         expect(ask).to_be_disabled()
         reply = (
-            "document.getElementById('app').contentWindow.postMessage("
-            "Object.assign({ type: 'shell:start-new-with-text-result' }, arguments[0]), '*')"
+            "(answer) => document.getElementById('app').contentWindow.postMessage("
+            "Object.assign({ type: 'shell:start-new-with-text-result' }, answer), '*')"
         )
-        page.evaluate(
-            f"(answer) => {{ {reply.replace('arguments[0]', 'answer')} }}",
-            {
-                "requestId": "some-other-request",
-                "isOpened": True,
-            },
-        )
+        page.evaluate(reply, {"requestId": "some-other-request", "isOpened": True})
         expect(ask).to_be_disabled()
         page.evaluate(
-            f"(answer) => {{ {reply.replace('arguments[0]', 'answer')} }}",
+            reply,
             {
                 "requestId": asked["requestId"],
                 "isOpened": False,
