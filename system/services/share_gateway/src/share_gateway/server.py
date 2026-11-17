@@ -95,7 +95,8 @@ _PAGE_STYLE = (
     "body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;"
     "height:100vh;margin:0;color:#334155}div{text-align:center;max-width:32rem;padding:0 1rem}"
     "a.button{display:inline-block;margin-top:0.5rem;padding:0.5rem 1rem;border-radius:0.375rem;"
-    "background:#334155;color:#fff;text-decoration:none}"
+    "background:#334155;color:#fff;text-decoration:none;border:1px solid #334155}"
+    "a.button.secondary{background:#fff;color:#334155;margin-left:0.5rem}"
 )
 _PAGE_STYLE_HASH = base64.b64encode(hashlib.sha256(_PAGE_STYLE.encode("utf-8")).digest()).decode("ascii")
 
@@ -126,6 +127,7 @@ _LOADING_PAGE = _page_html(
 # A press reloads the address the visitor was opening: the gateway's pages are served in place of
 # an app's own page, at that page's address.
 _TRY_AGAIN_BUTTON = '<a class="button" href="">Try again</a>'
+_RELOAD_BUTTON = '<a class="button" href="">Reload</a>'
 
 _UNRESPONSIVE_WAITING_PAGE = _page_html(
     "Waiting for this page",
@@ -186,7 +188,8 @@ def _not_shared_with_account_page(switch_account_url: str) -> str:
         "<h1>Not shared with you</h1>\n"
         "<p>This page hasn't been shared with your account. "
         "Ask the person who shared it to give you access, then reload this page.</p>\n"
-        f'<p><a href="{html.escape(switch_account_url)}">Sign in with a different account</a></p>',
+        f"{_RELOAD_BUTTON}"
+        f'<a class="button secondary" href="{html.escape(switch_account_url)}">Sign in with a different account</a>',
     )
 
 

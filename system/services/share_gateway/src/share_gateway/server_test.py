@@ -288,6 +288,10 @@ def test_a_visitor_refused_by_the_grants_is_told_so_and_offered_another_account(
     assert resp.status_code == 403
     page = resp.get_data(as_text=True)
     assert "This page hasn't been shared with your account" in page
+    buttons = _buttons(page)
+    assert list(buttons) == ["Reload", "Sign in with a different account"]
+    # The page is served at the address the visitor was opening, so an empty href reloads it.
+    assert buttons["Reload"] == ""
     switch_link = _switch_account_link(page)
     assert switch_link.startswith(f"{_AUTH_ORIGIN}/_auth/switch-account?")
     assert parse_qs(urlsplit(switch_link).query)["next"] == [f"https://{_SHELL_HOST}/desk?view=2"]
@@ -518,10 +522,16 @@ def _cookie_attributes(set_cookie_header: str) -> set[str]:
     return {attribute for attribute in attributes if not attribute.startswith(("Max-Age=", "Expires="))}
 
 
+def _buttons(page: str) -> dict[str, str]:
+    """The page's buttons in order, each label to its unescaped href."""
+    return {
+        label: html.unescape(href)
+        for href, label in re.findall(r'<a class="button(?: [^"]*)?" href="([^"]*)">([^<]*)</a>', page)
+    }
+
+
 def _switch_account_link(page: str) -> str:
-    match = re.search(r'<a href="([^"]*)">Sign in with a different account</a>', page)
-    assert match is not None
-    return html.unescape(match.group(1))
+    return _buttons(page)["Sign in with a different account"]
 
 
 def _broker_query(response: TestResponse) -> dict[str, list[str]]:

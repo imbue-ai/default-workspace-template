@@ -138,8 +138,9 @@ refusal, and logs every denial (never the token) to the service's stderr:
   give you access, then reload this page."). So is one whose only grants are
   per-service grants on internal apps (see "Grants") or on apps not
   registered, since those admit it nowhere, and, on any later request, a
-  session with no grant for the app it is opening. The page links to
-  `/_auth/switch-account` on the auth origin, which expires both session
+  session with no grant for the app it is opening. The page has a Reload
+  button and a "Sign in with a different account" button, which opens
+  `/_auth/switch-account` on the auth origin; that expires both session
   cookies and sends the visitor through the broker without `confirmed=1`, so
   the broker asks which account to continue as and offers a different one.
 - An address that is not one of this workspace's origins (an old or mistyped
