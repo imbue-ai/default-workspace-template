@@ -410,7 +410,7 @@ function linesOf(text: string): FailureLines {
   return { body: [text], details: null, isReportable: false };
 }
 
-/** The composer for ``chatId`` with a way to turn its chat over, and how often it was asked to. */
+/** A composer with a way to turn its chat over, and how often it was asked to. */
 function composerWithSourceView(): { component: m.Component<MessageInputAttrs>; turned: () => number } {
   let turns = 0;
   const component = MessageInput();
