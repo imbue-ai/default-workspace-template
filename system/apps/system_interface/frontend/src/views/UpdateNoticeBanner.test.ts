@@ -14,7 +14,7 @@ import type { UpdateNoticeWire } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket } from "../testing/fakeShell";
 import { appRecord, desktopRecord, launchPathRecord, noticeWire, themeMetricsRecord } from "../testing/records";
-import { FINISH_ROLLBACK_REQUEST, SYSTEM_SERVICES_RESTART_DETAILS, UpdateNoticeBanner } from "./UpdateNoticeBanner";
+import { SYSTEM_SERVICES_RESTART_DETAILS, UpdateNoticeBanner, finishRollbackRequest } from "./UpdateNoticeBanner";
 
 const CLIENT = "client-1";
 const NO_LINK = { desktopId: null, open: null, launch: null };
@@ -228,7 +228,7 @@ describe("UpdateNoticeBanner", () => {
     );
   });
 
-  it("offers to ask an agent to finish a rollback that left the restart to one", async () => {
+  it("offers to ask an agent to finish a rollback that left the restart to one, telling it how the rollback ended", async () => {
     socket.deliver().onAppsUpdated([
       appRecord("chat", {
         display_name: "Chat",
@@ -239,14 +239,21 @@ describe("UpdateNoticeBanner", () => {
     deliverNotice(noticeWire(["chat"], { outcome: "Rolled back to the previous version." }));
     expect(root.querySelector(".update-notice-finish")).toBeNull();
 
-    deliverNotice(
-      noticeWire(["chat"], { outcome: "Rolled back to the previous version.", needs_system_services_restart: true }),
-    );
+    const restored =
+      "The previous version is restored, but ... Ask your agent to run `mngr start --restart system-services`.";
+    deliverNotice(noticeWire(["chat"], { outcome: restored, needs_system_services_restart: true }));
     click(root, ".update-notice-finish");
     await settled();
-    expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([
-      `launch:home:chat:new:${JSON.stringify({ message: FINISH_ROLLBACK_REQUEST })}:new`,
-    ]);
+    // A rollback that failed settles the same record: the agent is told what happened, not that the files are back.
+    const failed = "The update could not be reverted, so nothing was changed: conflict. Ask your agent to look at it.";
+    deliverNotice(noticeWire(["chat"], { outcome: failed, needs_system_services_restart: true }));
+    click(root, ".update-notice-finish");
+    await settled();
+    expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual(
+      [restored, failed].map(
+        (outcome) => `launch:home:chat:new:${JSON.stringify({ message: finishRollbackRequest(outcome) })}:new`,
+      ),
+    );
   });
 
   it("shows a running rollback's progress with no verbs, then the outcome with Close", async () => {

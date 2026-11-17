@@ -36,11 +36,14 @@ export const SYSTEM_SERVICES_RESTART_DETAILS =
   "the workspace to finish. This notice then offers to ask one.";
 const ROLLBACK_FAILED = "Couldn't roll back";
 const NOTICE_NOT_CLOSED = "Couldn't close this notice";
-/** What an agent asked to finish a rollback is told. */
-export const FINISH_ROLLBACK_REQUEST =
-  "The rollback of the last workspace update has restored its files, and the update had changed the workspace's own " +
-  "setup. Please restart the workspace's system services (mngr start --restart system-services) so the previous " +
-  "version runs.";
+/** What an agent asked to finish a rollback is told: how the rollback ended, as the notice shows it, which names what
+ *  is left to do (the restart that finishes it, or that a failed one needs looking at). */
+export function finishRollbackRequest(outcome: string): string {
+  return (
+    "The rollback of the last workspace update, which had changed the workspace's own setup, ended with this " +
+    `note: "${outcome}" Please finish what it leaves to do.`
+  );
+}
 
 /** The shell's display name is "Workspace", which reads as the whole workspace in a sentence. */
 function displayName(state: DesktopState, appName: string): string {
@@ -146,7 +149,7 @@ export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
               {
                 sm: true,
                 extra: "update-notice-finish",
-                onclick: () => void store.startNewWithText(FINISH_ROLLBACK_REQUEST),
+                onclick: () => void store.startNewWithText(finishRollbackRequest(notice.outcome ?? "")),
               },
               "Ask an agent to finish it",
             )
