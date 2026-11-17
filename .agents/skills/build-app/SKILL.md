@@ -381,8 +381,8 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
   the real build grows from.
 - The mock renders **static / hard-coded content** that demonstrates the proposed
   layout and interactions -- no real fetching, no persistence, no backend logic.
-  Read the reference `references/frontend-choices.md` for recommended design
-  choices.
+  Read the reference `references/frontend-choices.md` before writing markup: the
+  UI is built from daisyUI components, mock and real app alike.
 - If you were handed a confirmed `sample.json` (the `fetch-process-show` hybrid),
   render *that real data* in the mock so the user judges the UI against real
   content. Otherwise use representative placeholder data that covers the shapes

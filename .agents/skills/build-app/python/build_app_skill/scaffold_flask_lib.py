@@ -410,7 +410,8 @@ def inline_script_source(body: str) -> str:
 # Every HTML page is served under this policy (the app is reachable from the
 # internet once the workspace is shared): scripts only from this origin plus the
 # inline blocks listed here by hash, fetches, sockets and images only from this
-# origin, inline styles, frames of any http(s) page, no plugins. Anything else a
+# origin, inline styles, daisyUI and Tailwind from cdn.jsdelivr.net (the design system
+# ``references/frontend-choices.md`` names), frames of any http(s) page, no plugins. Anything else a
 # page pulls in (a CDN script, Google Fonts, an image hosted elsewhere, a
 # third-party API called from the browser) is blocked until its origin is added
 # to the matching directive; a new inline <script> needs its
@@ -421,8 +422,8 @@ def inline_script_source(body: str) -> str:
 # is and how it starts, since the report otherwise names it only as "inline".
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
-    f"script-src 'self' 'report-sample' {{inline_script_source(SHELL_PAGE_SCRIPT_BODY)}}; "
-    "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src http: https:; "
+    f"script-src 'self' 'report-sample' {{inline_script_source(SHELL_PAGE_SCRIPT_BODY)}} https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob:; frame-src http: https:; "
     "object-src 'none'; base-uri 'self'; form-action 'self'; "
     "report-uri /_csp-report"
 )

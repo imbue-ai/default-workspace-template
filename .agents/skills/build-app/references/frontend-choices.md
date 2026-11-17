@@ -5,6 +5,18 @@ Use these default choices unless the user has requested something different, or 
 ## Overall design
 Clean, modern, functional design. No unnecessary gimmicks.
 
+## Component library: daisyUI
+Build every page -- the mock and the real app -- from daisyUI components (https://daisyui.com/components/) on Tailwind CSS. Reach for a daisyUI component (`btn`, `card`, `navbar`, `menu`, `tabs`, `table`, `input`, `select`, `checkbox`, `toggle`, `badge`, `alert`, `modal`, `drawer`, `stat`, ...) before writing custom CSS, and use Tailwind utility classes for layout and spacing. Custom CSS is for what no component covers.
+
+Load both from the CDN in the page's `<head>`; the scaffold's Content-Security-Policy already admits `https://cdn.jsdelivr.net` for scripts and styles:
+
+```html
+<link href="https://cdn.jsdelivr.net/npm/daisyui@5.7.50/daisyui.css" rel="stylesheet" type="text/css" />
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.5"></script>
+```
+
+Set the theme on the root element, e.g. `<html data-theme="light">`. Look up a component's class names on its daisyUI page rather than guessing them.
+
 ## Default font choices
 Feel free to use different fonts if it helps the task at hand. However, the following are reasonable defaults you can just use:
 * For all text: `font-family: ui-sans-serif, system-ui, sans-serif;`

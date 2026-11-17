@@ -645,7 +645,7 @@ def test_the_runner_serves_the_shell_modules_and_nothing_else(
     )
     digest = base64.b64encode(hashlib.sha256(body.encode()).digest()).decode()
     policy = page.headers["Content-Security-Policy"]
-    assert f"script-src 'self' 'report-sample' 'sha256-{digest}';" in policy
+    assert f"script-src 'self' 'report-sample' 'sha256-{digest}' https://cdn.jsdelivr.net;" in policy
     assert policy.startswith("default-src 'self'; ")
     assert "; img-src 'self' data: blob:; " in policy
     assert policy.endswith("; report-uri /_csp-report")
