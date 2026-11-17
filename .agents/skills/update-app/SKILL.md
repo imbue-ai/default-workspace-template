@@ -28,159 +28,142 @@ If you're doing something *other* than editing an existing app or service:
 - **Creating a new app** -> `build-app`.
 - **Arranging windows** (open/place/focus/minimize/close) -> `manage-desktop`.
 
-## Match the flow to the scope of the change
+## Choose the flow for each change
 
-**First, find the app and read its manifest.** Locate the code the change
-touches and the `app.toml` of the app that owns it (`system/apps/<package>/app.toml`).
-If it says `critical = true` -- the shell (`system_interface`), the chat, the
-terminal, and any user app that declares it -- or if the change is under
-`system/libs/workspace_ui/` (the shared library both critical bundles are built
-from), `system/libs/workspace_layout/` (the layout wire contract the shell, the
-chat, and the terminal all run), or `system/libs/workspace_themes/` (the theme
-catalog and theme route the same three run), **follow [`references/critical-app.md`](references/critical-app.md) and
-stop reading here** -- for the whole change: when it also touches an ordinary
-app or a skill, those go through that flow with it. A critical app is never
-edited in the served tree: that
-flow runs the same live loop against an isolated worktree, with a preview window
-as the user's view, and goes live through the atomic update apply once a
-background worker has hardened the change. Everything below is for an app or
-service that is not critical.
+Run this before touching code, on every message that asks for a change to an
+existing app or service. Start at `choose_flow`; it is the only entry point.
+`confirm_shape` and `hand_off` are helpers that run only when step 5 of
+`choose_flow` calls them for a particular change, so a change that needs
+neither (a quick bug fix) never reaches them. Terms used below:
 
-### Size each change before touching code
+- **live loop**: "The live change loop" section below (make the change, apply
+  it, refresh the user's view, verify).
+- **worker**: one background worker launched through the `launch-task` skill;
+  it builds in its own worktree and follows the build-worker guide
+  (`.agents/shared/build-worker/SKILL.md`).
+- **few minutes**: the line between building it yourself and handing it off.
+  Work longer than that keeps the user's next messages waiting, because they
+  wait until you stop.
 
-A message can ask for several changes, a change can arrive on its own later in
-the conversation, or it can come mixed in with feedback on one already in
-progress. Split what the user asked for into separate changes and size each one
-on its own, as if it had arrived alone. A change that would not have been
-mocked on its own is not added to another change's mock or held back until that
-mock is approved.
+```
+PROCEDURE choose_flow(message)
 
-Size each change by two questions. Each answer is a point on a range, and the
-question draws one line through it:
+  1. paths    <- the files the requested changes touch
+     manifest <- app.toml of each app that owns them (system/apps/<package>/app.toml)
 
-1. How much does it change what the user sees? If substantially, or you can't
-   tell, confirm its shape with the user first.
-2. How long will it take to build? If more than a few minutes, hand it to
-   the background worker.
+  2. IF any manifest says critical = true
+        (the shell `system_interface`, the chat, the terminal, or any app that declares it)
+        OR any path is under system/libs/{workspace_ui, workspace_layout, workspace_themes}/:
+         FOLLOW references/critical-app.md for the WHOLE change
+           (this includes any ordinary app or skill the same change touches)
+         RETURN
 
-| | Builds in a few minutes or less | Takes longer |
-|---|---|---|
-| **Shape clear enough to build** | Build it yourself through the live change loop below | Hand it to the background worker |
-| **Shape needs the user's confirmation first** | Confirm its shape first (below), then build it yourself | Make a quick mock yourself and hand the change off right away; pass the user's feedback to the worker |
+  3. changes <- split the message into separate changes
+       # A message can ask for several; a change can also arrive alone later,
+       # or mixed into feedback on a change already in progress.
+       # Size each one as if it had arrived alone. A change that would not have
+       # been mocked on its own is never added to another change's mock, and is
+       # never held back until that mock is approved.
 
-- **Small / contained changes** usually have a clear shape: a bug fix, a copy
-  tweak, a new field, a backend logic fix, a config or `command` change, a
-  restart.
-- **Larger-scope changes** usually need confirming: a redesign, a new page or
-  view, a meaningful shift in look-and-feel, or a new user-facing capability.
-- Many fall in between, for example a new control on an existing page; decide
-  by how much it changes what the user sees.
-- For build time, "Hand large work to a background worker" below lists the
-  typical cases that take longer.
+  4. FOR EACH change IN changes:
+       a. SWITCH on how much it changes what the user sees:
+            CASE substantially, or you can't tell
+                 (redesign, new page or view, look-and-feel shift, new user-facing capability):
+                needs_shape <- YES
+            CASE little or not at all
+                 (bug fix, copy tweak, new field, backend logic, config or `command` change, restart):
+                needs_shape <- NO
+            CASE in between (e.g. a new control on an existing page):
+                decide by how much it changes what the user sees
+       b. SWITCH on how long it takes to build, planning and thinking included:
+            CASE a few minutes or less:
+                builder <- YOU
+            CASE longer, typically:
+                 - a feature spanning several files or many parts of the app
+                 - exploration needing web searches or several sources
+                 - reading or writing several pieces of data
+                 - processing a medium or large amount of data, or changing many records
+                 - a long command (a build, a test suite, a big install)
+                 - debugging a problem whose cause is unknown
+                builder <- WORKER
+       c. WRITE one line in your reply or plan: the change, needs_shape, builder
 
-Either way, the user sees every change through the same live loop. Before you
-touch code, write one line per change in your reply or your plan: the change,
-whether it needs its shape confirmed first, and whether you build it here or
-hand it to the background worker. Then act on those lines.
+  5. FOR EACH change, in parallel, without waiting on the others:
+       SWITCH (needs_shape, builder):
+         CASE (NO, YOU):     GOTO live_loop
+         CASE (NO, WORKER):  CALL hand_off(change)
+         CASE (YES, YOU):    CALL confirm_shape(change); build it to a usable state; GOTO live_loop
+         CASE (YES, WORKER): make a quick mock yourself (confirm_shape step c);
+                             CALL hand_off(change) at once, without waiting for confirmation;
+                             pass each piece of the user's feedback on the mock to the worker
 
-### Confirming the shape first
+  INVARIANT: every change reaches the user through the same live loop.
+  INVARIANT: a preview or verification may read the live data store, never write to it.
 
-For a larger-scope change, run the *same* mock-confirm flow `build-app` used to
-create the service: **read `.agents/shared/references/interactive-delivery.md`**,
-put a cheap, throwaway version of the *proposed* change in front of the user,
-loop until they **explicitly confirm** the shape, and only then build the real
-thing to a usable state. Never build heavy against an unconfirmed shape
-yourself.
 
-This is the demonstrative-prototype choice from
-[`interactive-delivery.md`](../../shared/references/interactive-delivery.md)
-phase 5, in app terms. A lighter **hand mock** (Type 2 -- a detached
-throwaway) is fastest for quick look-and-feel loops. When it won't convince --
-a redesign, or a data-touching change -- boot the *actually changed* app as a
-labeled preview window beside the live one (Type 1 -- the real edit shown
-through the real surface) with `preview_app.py` (invocation under "Protect
-the user's data while you verify"; the same preview mechanism the careful
-flow uses). Either way, *reading* the live store to render a preview is
-fine; never let a preview or verification *write* to it.
+PROCEDURE confirm_shape(change)
 
-**Does this change warrant a preview at all?** For an ordinary app a
-preview is the exception, not the default. If the change *works*, a taste
-mismatch is cheap to fix next round, so most changes can just go live and
-iterate. Reserve a preview for changes that are costly to redo -- a redesign,
-a data-touching change, a substantial visual shift. A routine tweak, a copy
-change, or a behavior-only change behind an unchanged surface doesn't need one.
-(A critical app leans the other way -- the careful flow previews by default,
-because the live app is off-limits. It still asks this same question before
-the *final* pre-merge preview: a change the user cannot observe gives them
-nothing to judge.)
+  a. READ .agents/shared/references/interactive-delivery.md
+  b. IF the change adds a new view or capability to an existing service
+        AND the message bundles it with unrelated changes:
+         deliver it alone, with its own feedback gate (interactive-delivery phase 8)
+  c. IF the change is costly to redo (redesign, touches data, substantial visual shift):
+         IF a hand-made throwaway mock would convince the user:
+             build the hand mock (Type 2, a detached throwaway)
+         ELSE:
+             run preview_app.py to show the actually changed app as a labelled
+             preview window beside the live one (Type 1; invocation under
+             "Protect the user's data while you verify")
+     ELSE:
+         # a routine tweak, copy change, or behaviour-only change needs no preview:
+         # a taste mismatch is cheap to fix next round
+         put a cheap throwaway version of the proposed change in front of the user
+  d. LOOP: show it, take feedback, revise so the change is visible
+     UNTIL the user explicitly confirms the shape
+  e. never build heavy against an unconfirmed shape yourself
 
-A new view or capability bolted onto an existing service is its own
-delivery with its own feedback gate (interactive-delivery phase 8):
-confirm and ship it on its own rather than bundling it with unrelated
-changes.
 
-## Hand large work to a background worker
+PROCEDURE hand_off(change)
 
-The goal is to keep you available and responsive to the user, and to deliver
-short changes fast while long ones are built at the same time. So do short work
-yourself and give long work to a background worker through the `launch-task`
-skill. While you work on something yourself, the user's new messages wait until
-you stop, so hand off any change that takes more than a few minutes, including
-long planning or thinking, whatever its size on screen. One message often asks
-for changes of different lengths; don't treat them as one large request.
-Typical long changes:
+  1. IF no worker is running for this app:
+         commit your pending edits
+         launch the worker as `launch-task` describes, with a brief that names:
+           - the app
+           - the changes handed to the worker, in the user's words
+           - the changes you are building yourself, so the worker does not build
+             them too (it may still edit the same files)
+           - the files and decisions you already know about
+           - what done looks like
+           - the build-worker guide; do not restate its rules in the brief
+     ELSE:
+         send the change to the same worker with `create_worker.py reply`
+       # One worker takes all long changes. It may combine them and build them
+       # together, in whatever order is fastest.
 
-- a feature or change that spans several files or many parts of the app;
-- exploration that needs web searches or reading several sources;
-- reading or writing several pieces of data;
-- processing a medium or large amount of data, or applying a change across
-  many records;
-- a long command, such as a build, a test suite or a big install;
-- debugging a problem whose cause is unknown.
+  2. SCOPE RULE for the brief:
+       decide the scope yourself, as if you were building it in the chat;
+       state what to build, no more and no less, with the context the worker needs
+       (the user's words, how the app works now, decisions already made).
+       Do not add targets you would not have built yourself.
+       Checks that the user's existing data survives still happen before it goes live.
 
-Use one worker for all such changes: hand it the first, and send
-each later one to the same worker with `create_worker.py reply`. The worker
-may combine its changes and build them together, in whatever order gets
-the work done fastest, without finishing one before starting the next. Build the rest yourself
-through the live loop while it runs, so they reach the user without waiting
-on the large ones. You stay available to answer the user's next messages and
-bring the worker's result in when it lands.
+  3. tell the user in one line that the change is being built and that they
+     can keep sending requests
 
-To hand work off:
+  4. WHILE the worker runs:
+         handle each new message with choose_flow (short changes through the
+         live loop yourself; long ones to the worker with `create_worker.py reply`)
+         # you and the worker may edit the same files; conflicts are resolved at merge
 
-1. Commit your pending edits and launch the worker as `launch-task` describes.
-   The brief names the app, the changes handed to the worker, in the user's
-   words, the changes you are building yourself so the worker does not build
-   them too (it may still edit the same files), the files and decisions you
-   already know about, and what done looks like. It names the
-   build-worker guide (`.agents/shared/build-worker/SKILL.md`), which carries
-   the standing rules for how the worker builds, checks and reports; do not
-   restate them in the brief. Hardening still happens at turn-end, as
-   described below.
-   Handing work to a worker does not change its scope. Decide the scope
-   yourself, as you would if you were building it in the chat, and state it in
-   the brief: what to build, no more and no less, with the context the worker
-   needs to build it (the user's words, how the app works now, decisions
-   already made). Do not add targets you would not have built yourself;
-   writing out a detailed plan tends to add work nobody asked for. Checks
-   that the user's existing data survives the change still happen before it
-   goes live.
-2. Tell the user in one line that the change is being built and that they can
-   keep sending requests.
-3. While the worker runs, keep handling new messages. Build a change
-   yourself, through the live loop below, unless it needs more than a few
-   minutes of building; send that one to the worker with
-   `create_worker.py reply`. You and the worker may edit the same files;
-   any conflicts are resolved when you merge its work.
-4. When a milestone or the final report arrives, merge it as
-   `.agents/shared/references/lead-proxy.md` describes, apply and refresh it
-   through steps 2 and 3 of the live loop, and tell the user what is now there.
+  5. ON a milestone or the final report:
+         take the service lease (next section)
+         merge it as `.agents/shared/references/lead-proxy.md` describes
+         apply and refresh it through steps 2 and 3 of the live loop
+         tell the user what is now there
 
-Take the service lease as usual (next section) before you merge the worker's
-work into the live app.
-
-If you are that worker, the build-worker guide
-(`.agents/shared/build-worker/SKILL.md`) and your brief override this skill.
+  Hardening still happens at turn-end, as "Turn-end" below describes.
+  If you ARE that worker: the build-worker guide and your brief override this skill.
+```
 
 ## One editor at a time: the service lease
 
