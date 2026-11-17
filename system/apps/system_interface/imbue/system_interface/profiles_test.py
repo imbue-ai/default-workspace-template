@@ -294,7 +294,8 @@ def test_resolve_many_does_not_serve_a_stale_profile_once_the_workspace_stops_sh
     resolver.resolve(_BOB, _T0)
 
     assert resolver.resolve_many([_BOB], _T0 + PROFILE_CACHE_TTL)["user-bob-4471"].display_name == "Bob"
-    # That stale answer starts a refresh, which stamps the entry with the wall clock, not with the ``now`` given.
+    # That stale answer started a refresh, which stamps what it fetches with the wall clock; it settles before the
+    # share goes, and staleness is judged from its stamp.
     wait_for(
         lambda: len(connector.requests) >= 2 and not _is_refresh_running(),
         timeout=10.0,
