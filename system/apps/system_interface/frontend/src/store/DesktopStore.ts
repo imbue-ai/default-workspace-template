@@ -3112,9 +3112,9 @@ export class DesktopStore {
 
   /** A page's ``shell:start-new-with-text`` ("Ask an agent to fix this"): the secondary text action runs with the
    *  text (Chat's New Chat on a stock machine), else the primary one. Settles once the window is on the desktop, or
-   *  with the failure for the caller to show where the press was: nothing is toasted. */
+   *  with the failure for the caller to show where the press was. Nothing is toasted but the "Stop viewing first"
+   *  note, which an ask while viewing raises as every change refused while viewing does. */
   async startNewWithText(text: string): Promise<StartNewOutcome> {
-    // The launch's own refusal while viewing tells the user in a note and hands nothing over.
     if (this.refuseWhileViewing("ask an agent")) {
       return {
         isOpened: false,
