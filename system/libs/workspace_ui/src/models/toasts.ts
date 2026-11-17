@@ -2,8 +2,8 @@
  * A page's toasts: a failed operation says so in a short note that rises at the foot of the page, instead of a
  * browser ``alert()`` that stops everything until it is dismissed. ``components/toasts.ts`` draws them. The caller
  * says which kind it shows: a plain note, which goes away on its own and is for a failure whose retry is the control
- * just pressed, or a lasting one, which stays until dismissed with its details and buttons, for a failure whose state
- * outlasts five seconds.
+ * just pressed (it may carry details, and stays once they are opened), or a lasting one, which stays until dismissed
+ * with its details and buttons, for a failure whose state outlasts five seconds.
  */
 
 export interface ToastAction {
@@ -16,7 +16,11 @@ export interface ToastAction {
 }
 
 export type ToastOptions =
-  | { readonly isLasting: false }
+  | {
+      readonly isLasting: false;
+      /** What goes behind "See details"; none when null or absent. */
+      readonly details?: string | null;
+    }
   | {
       readonly isLasting: true;
       /** What goes behind "See details"; none when null or absent. */
@@ -50,6 +54,7 @@ const MAX_LASTING_TOASTS = 3;
 export class ToastQueue {
   private toasts: readonly Toast[] = [];
   private nextId = 1;
+  private readonly leaveTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
   constructor(
     private readonly onChange: () => void,
@@ -57,7 +62,7 @@ export class ToastQueue {
   ) {}
 
   show(message: string, options: ToastOptions = { isLasting: false }): void {
-    const details = options.isLasting ? (options.details ?? null) : null;
+    const details = options.details ?? null;
     const actions = options.isLasting ? (options.actions ?? []) : [];
     const isReportable = options.isLasting && options.isReportable === true;
     const toast: Toast = { id: this.nextId, message, details, actions, isLasting: options.isLasting, isReportable };
@@ -70,11 +75,23 @@ export class ToastQueue {
       kept = kept.filter((other) => !dropped.has(other.id));
     }
     this.toasts = [...kept, toast];
-    if (!toast.isLasting) setTimeout(() => this.dismiss(toast.id), this.durationMs);
+    if (!toast.isLasting) {
+      this.leaveTimers.set(
+        toast.id,
+        setTimeout(() => this.dismiss(toast.id), this.durationMs),
+      );
+    }
     this.onChange();
   }
 
+  /** Keep a plain note up until it is dismissed: its reader opened its details. */
+  hold(id: number): void {
+    clearTimeout(this.leaveTimers.get(id));
+    this.leaveTimers.delete(id);
+  }
+
   dismiss(id: number): void {
+    this.hold(id);
     if (!this.toasts.some((toast) => toast.id === id)) return;
     this.toasts = this.toasts.filter((toast) => toast.id !== id);
     this.onChange();
