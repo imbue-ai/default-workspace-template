@@ -106,11 +106,10 @@ belong in tested code rather than agent prose:
 
 ``stage-shared-prose``
     Stage, beside the staged skill, the prose outside the skill's own directory
-    that the flow reads: ``.agents/shared/`` and the ``harden-worker`` skill.
-    They come from the same place the staged skill
-    did (the target ref, or the local tree when the ref predates the skill), so
-    the staged flow never reads a shared file from a workspace tree older than
-    itself.
+    that the flow reads: ``.agents/shared/``. It comes from the same place the
+    staged skill did (the target ref, or the local tree when the ref predates the
+    skill), so the staged flow never reads a shared file from a workspace tree
+    older than itself.
 
 ``bridge-history``
     Give ``HEAD`` a merge base with the target when the workspace predates the
@@ -289,10 +288,7 @@ STAGING_DIR_REL = "data/.tasks/update-self/skill-at-target"
 # beside it by ``stage-shared-prose``. A path the skill's markdown names outside
 # these and outside ``SKILL_DIR_REL`` would be read from the workspace's own tree,
 # which may be older than the flow following it.
-STAGED_PROSE_PATHS = (
-    ".agents/shared",
-    ".agents/skills/harden-worker",
-)
+STAGED_PROSE_PATHS = (".agents/shared",)
 
 # The runnable entry point beside this package: the module itself cannot be run by path.
 # own-process: outlives-caller -- restart-self's helper restarts the chat that started it, so it must outlive that chat's processes

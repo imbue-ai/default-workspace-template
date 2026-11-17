@@ -328,8 +328,9 @@ themselves are in
 and
 `data/.tasks/update-self/skill-at-target/.agents/shared/references/spec-summary.md`
 ("Packaging"). A workspace updating across that release has files of the
-user's in the old layout, and `python-packaging-migration.md` is the guide to
-converting them:
+user's in the old layout, and
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/python-packaging-migration.md`
+is the guide to converting them:
 
 - **A user package that is not standalone yet**
   (`system/test_user_packages_are_standalone.py` names it) is converted with
@@ -347,7 +348,8 @@ converting them:
   symptoms in that guide's table: the lead names the guide to its repair
   worker.
 
-CLEANUP: `python-packaging-migration.md`, the `user-package-migration`
-command and the items that name them in `worker-validation.md` and
-`after-the-apply.md` go when `user_package_migration.py`'s own marker says
-that module can.
+CLEANUP: this section, the `user-package-migration` command and the items
+that name them in `worker-validation.md` and `after-the-apply.md` go when
+`user_package_migration.py`'s own marker says that module can. The guide is a
+shared file other skills read, so it goes when the last of them stops naming
+it.

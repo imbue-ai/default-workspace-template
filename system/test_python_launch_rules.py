@@ -118,11 +118,11 @@ _DELIBERATE_SYNCS: tuple[tuple[str, str], ...] = (
     ),
     # The migration reference quotes the forms an existing workspace's files still use.
     (
-        ".agents/skills/update-self/references/python-packaging-migration.md",
+        ".agents/shared/references/python-packaging-migration.md",
         "runs `uv run <name>`",
     ),
     (
-        ".agents/skills/update-self/references/python-packaging-migration.md",
+        ".agents/shared/references/python-packaging-migration.md",
         "a plain `uv run X` becomes",
     ),
 )

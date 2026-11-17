@@ -13,8 +13,9 @@ imports; a consumer the report names that the update broke):
 2. Dispatch a repair worker with the evidence (the program's status and the
    tail of its stderr log, the failing check's output, what the update
    changed that it touches) through the `launch-task` skill, and proxy its
-   gates as `question-gates.md` does. Name `python-packaging-migration.md` to
-   it when the failure is one of that file's symptoms.
+   gates as `question-gates.md` does. Name
+   `data/.tasks/update-self/skill-at-target/.agents/shared/references/python-packaging-migration.md`
+   to it when the failure is one of that file's symptoms.
 3. Finish the pass (the rest of this file, then teardown) once it is fixed,
    or once the repair worker gives up. A give-up is still recorded as
    `UPDATED`, with a `--detail` line naming what is still broken and what was
