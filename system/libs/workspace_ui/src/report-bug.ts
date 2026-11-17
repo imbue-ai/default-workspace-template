@@ -12,10 +12,12 @@ import { MAX_HELP_ERROR_DETAILS_LENGTH, sendToEmbedder } from "./embed";
 
 const TRUNCATED_MARK = "\n[...]";
 
-/** ``text`` cut to what the embedder takes, its start kept: the sentence and the first lines say the most. */
+/** ``text`` cut to what the embedder takes, its start kept: the sentence and the first lines say the most. The cut
+ *  never leaves half of a character the bound counts as two. */
 function cappedErrorDetails(text: string): string {
   if (text.length <= MAX_HELP_ERROR_DETAILS_LENGTH) return text;
-  return `${text.slice(0, MAX_HELP_ERROR_DETAILS_LENGTH - TRUNCATED_MARK.length)}${TRUNCATED_MARK}`;
+  const kept = text.slice(0, MAX_HELP_ERROR_DETAILS_LENGTH - TRUNCATED_MARK.length).replace(/[\uD800-\uDBFF]$/, "");
+  return `${kept}${TRUNCATED_MARK}`;
 }
 
 /** Open the bug report about ``failure``; null opens it with nothing attached (a page that sent no failure). */

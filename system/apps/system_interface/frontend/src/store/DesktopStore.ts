@@ -875,7 +875,7 @@ export class DesktopStore {
    *  failure is toasted here (``startNewWithText`` leaves that to its caller), or in the main chat, whose launch
    *  toasts its own. */
   async askAgent(request: string, isNewChat: boolean): Promise<void> {
-    if (this.agentAsks.has(request)) return;
+    if (this.agentAsks.has(request) || this.refuseWhileViewing("ask an agent")) return;
     this.agentAsks.add(request);
     this.notifyListeners();
     try {
@@ -883,10 +883,8 @@ export class DesktopStore {
         await this.startWithText(request);
         return;
       }
-      const isViewing = this.viewedDesktop() !== null;
       const outcome = await this.startNewWithText(request);
-      // While viewing, the refusal's own note has already said so.
-      if (!outcome.isOpened && !isViewing) this.toastNotice({ ...outcome.failure, actions: [] }, { isLasting: true });
+      if (!outcome.isOpened) this.toastNotice({ ...outcome.failure, actions: [] }, { isLasting: true });
     } finally {
       this.agentAsks.delete(request);
       this.notifyListeners();
@@ -3112,10 +3110,10 @@ export class DesktopStore {
 
   /** A page's ``shell:start-new-with-text`` ("Ask an agent to fix this"): the secondary text action runs with the
    *  text (Chat's New Chat on a stock machine), else the primary one. Settles once the window is on the desktop, or
-   *  with the failure for the caller to show where the press was. Nothing is toasted but the "Stop viewing first"
-   *  note, which an ask while viewing raises as every change refused while viewing does. */
+   *  with the failure for the caller to show where the press was: nothing is toasted. */
   async startNewWithText(text: string): Promise<StartNewOutcome> {
-    if (this.refuseWhileViewing("ask an agent")) {
+    if (this.viewedDesktop() !== null) {
+      console.info("[si] refused to start a new chat while viewing somebody else's desktop");
       return {
         isOpened: false,
         failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },

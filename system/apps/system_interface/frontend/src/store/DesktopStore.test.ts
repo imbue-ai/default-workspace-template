@@ -4789,6 +4789,20 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect(notices()).toEqual([STOP_VIEWING_FIRST_NOTICE]);
   });
 
+  it("answers a page's Ask an agent while viewing with the refusal for the page to show, launching and toasting nothing", async () => {
+    api.apps = [chatLikeAppRecord("chat")];
+    const store = await viewerStore();
+    await store.switchDesktop("alice");
+    const callsBefore = api.calls.length;
+
+    expect(await store.startNewWithText("Fix this.")).toEqual({
+      isOpened: false,
+      failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
+    });
+    expect(api.calls.slice(callsBefore)).toEqual([]);
+    expect(notices()).toEqual([]);
+  });
+
   it("refuses every change to a viewed desktop with one note, and reloads the owner's layout on every poll", async () => {
     const shortcut = shortcutRecord("docs", { column: 0, row: 0 });
     const withWindows = desktopRecord("alice", {
