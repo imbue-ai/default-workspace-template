@@ -69,8 +69,9 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   `.../<id>/settings|wallpaper|delete|shortcuts|shortcuts/move|shortcuts/remove`),
   windows (`/api/desktops/<id>/windows`, `.../windows/<window>/close|location`),
   placements (`/api/placements/<desktop>`), wallpapers (`/api/wallpapers`,
-  `/wallpapers/<kind>/<name>`), the per-app Stop, Start, and Quit
-  (`/api/apps/<name>/stop|start|quit`), clients (`/api/clients`, and the arrival
+  `/wallpapers/<kind>/<name>`), the per-app Stop, Start, and Quit, and the
+  revive of a stopped preview or UI sketch
+  (`/api/apps/<name>/stop|start|quit|revive`), clients (`/api/clients`, and the arrival
   `/api/clients/<client>/arrive` a page posts first), client activity
   (`/api/client-activity`), the inventory (`/api/inventory`), each client's
   pinned-entry presentation
