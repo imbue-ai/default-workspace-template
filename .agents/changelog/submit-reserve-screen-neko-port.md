@@ -1,1 +1,1 @@
-A new app built with `build-app` is no longer given port 8091, the Screen's video server port. Taking it broke the Screen and the agent browser until the app was moved.
+A new app built with `build-app` is no longer given port 8091, the Screen's video server port. Taking it broke the Screen and the agent browser until the app was moved. An update now moves an app you built off any port the Screen needs (8083, 8090 or 8091) to a free one.
