@@ -64,6 +64,11 @@ def test_the_not_built_page_asks_an_agent_and_frames_its_chat_and_a_terminal_ses
         expect(ask).to_have_text("Asking an agent…")
         expect(ask).to_be_disabled()
         expect(page.locator("#ask-agent-failure-message")).to_be_hidden()
+        # The sync API hands the route over only while it is called.
+        for _ in range(50):
+            if held:
+                break
+            page.wait_for_timeout(100)
         (launch,) = held
         launch.continue_()
         page.unroute("**/api/not-built/launch")
