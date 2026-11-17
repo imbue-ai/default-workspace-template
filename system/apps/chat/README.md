@@ -104,8 +104,10 @@ observe`, its own supervised service) writes, and serves:
   per chat, the agent-level facts under `active_agent` and the epoch seconds of
   its last message as `last_messaged_at`, which the chat root's list orders on)
   the provisional-chat events (`provisional_chat_created`,
-  `provisional_chat_completed`), and `accounts_updated` whenever the account
-  index changes, whichever process wrote it.
+  `provisional_chat_completed`; a discard's carries the messages the chat held,
+  dropped with it, and is replayed for 15 minutes to a page that connects later,
+  so the page that sent them puts them back in the box), and `accounts_updated`
+  whenever the account index changes, whichever process wrote it.
 - `POST /api/focus-chat`: what the shell posts for the Imbue Studio app's `minds:focus-chat` (the user opened a
   chat's notification), since the manifest registers the type under `[[message_handlers]]`. It takes the
   message's `chatId` and the `client_id` the shell adds, and asks the shell's `show` op
