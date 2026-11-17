@@ -176,7 +176,7 @@ The budget is per shell process and resets with it.
 A GET launch path needs no special handling: the window's frame requests the page, the parker wakes the app, and the loading page reloads into it.
 A POST launch path is asked for its page by the shell itself (`shell/launches.py`), and a POST to the parker would be answered 503.
 So before posting a launch to a stoppable app that is not running, the shell wakes it and waits for the app's port to accept a connection (polled, up to 20 seconds; `startsecs` is supervisord's notion of "started" and says nothing about when the app binds), then posts.
-An app that does not come up in time fails the launch with the existing `502`.
+A wake that does not bring the app up fails the launch with a `502` whose `kind` says why, in the could-not-start page's words: `app_could_not_start` (supervisord could not start it, or it failed and was parked again), `app_start_budget_spent` (the wake budget refused it), or `app_still_starting` (it did not answer within the wait).
 
 ### 5.7 The share gateway
 
