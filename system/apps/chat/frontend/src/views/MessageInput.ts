@@ -596,7 +596,8 @@ const sendsHeldForCreation = new Map<string, SendHeldForCreation[]>();
 let isListeningForDiscardedChats = false;
 
 function noteSendHeldForCreation(chatId: string, status: SendStatus | null, send: SendHeldForCreation): void {
-  if (status !== "held" || getProvisionalChat(chatId)?.phase !== "creating") return;
+  // A chat still provisional holds a send only for its create, whatever phase this page last heard it in.
+  if (status !== "held" || getProvisionalChat(chatId) === undefined) return;
   // The chats that landed since delivered what they held.
   for (const heldChatId of [...sendsHeldForCreation.keys()]) {
     if (getChatById(heldChatId) !== undefined) sendsHeldForCreation.delete(heldChatId);
@@ -1335,8 +1336,15 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             }
             if (choice.kind === "account" && !awaiting.is_seeded) {
               priorTurnIds = sentUserTurnIds(chatId);
-              dropOutgoingNoTurnWillRetire(chatId, outgoingId, await sendMessage(chatId, finalText, messageId));
+              const firstStatus = await sendMessage(chatId, finalText, messageId);
+              dropOutgoingNoTurnWillRetire(chatId, outgoingId, firstStatus);
               noteOutgoingAccepted(chatId, outgoingId);
+              noteSendHeldForCreation(chatId, firstStatus, {
+                text: sentText,
+                attachments: sentAttachments,
+                outgoingId,
+                messageId,
+              });
               refocusAfterSend();
               return;
             }

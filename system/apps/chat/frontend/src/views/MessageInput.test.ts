@@ -1346,6 +1346,22 @@ describe("MessageInput first send of a chat with no seed", () => {
     expect(mocks.sendMessage.mock.calls[0]).toEqual(expect.arrayContaining(["agent-1", "Plan my week"]));
   });
 
+  it("puts a held first send back in the box when the chat it launched is deleted before it lands", async () => {
+    mocks.sendMessage.mockResolvedValueOnce("held");
+    const component = MessageInput();
+    await typeAndSend(component, "agent-1", "Plan my week");
+    const calls = mocks.sendMessage.mock.calls as unknown as [string, string, string][];
+    const messageId = calls[calls.length - 1][2];
+
+    const discarded = { ...(mocks.provisional as ProvisionalChat), phase: "creating" };
+    for (const listener of mocks.discardListeners)
+      listener({ ...discarded, held_sends: [{ message_id: messageId, text: "Plan my week" }] } as ProvisionalChat);
+
+    const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(renderedText(findByClass(after, "modal-message"))).toContain("Your message wasn't delivered.");
+    expect(findByTag(after, "textarea")?.attrs?.value).toBe("Plan my week");
+  });
+
   it("drops the bubble of a first send that Stop took back, which no turn will retire", async () => {
     mocks.sendMessage.mockResolvedValueOnce("withdrawn");
     await typeAndSend(MessageInput(), "agent-1", "Taken back");
