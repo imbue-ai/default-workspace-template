@@ -278,6 +278,28 @@ def _worktree_of_a_live_checkout(tmp_path: Path) -> Path:
     return _write_worktree(tmp_path)
 
 
+def _up_from_worktree(
+    app_name: str,
+    worktree: Path,
+    instances: _RecordingInstances,
+    *,
+    is_private: bool = True,
+    with_apps: Sequence[str] = (),
+    instance_key: str | None = None,
+) -> int:
+    """``up`` run inside ``worktree``, so the worktree is its own repo root."""
+    return boot.up(
+        app_name,
+        worktree,
+        worktree,
+        with_apps=with_apps,
+        instance_key=instance_key,
+        is_private=is_private,
+        instances=instances,
+        dump_registry=_dump_registry,
+    )
+
+
 def test_a_preview_booted_from_a_worktree_is_refused_unless_private(
     tmp_path: Path,
 ) -> None:
@@ -285,13 +307,7 @@ def test_a_preview_booted_from_a_worktree_is_refused_unless_private(
     instances = _RecordingInstances(worktree)
 
     with pytest.raises(mod.PreviewError, match="pass --private"):
-        boot.up(
-            "notes",
-            worktree,
-            worktree,
-            instances=instances,
-            dump_registry=_dump_registry,
-        )
+        _up_from_worktree("notes", worktree, instances, is_private=False)
 
     assert instances.specs == []
 
@@ -306,17 +322,7 @@ def test_a_private_instance_from_a_worktree_registers_nothing_and_reads_the_live
     )
     instances = _RecordingInstances(worktree)
 
-    assert (
-        boot.up(
-            "notes",
-            worktree,
-            worktree,
-            is_private=True,
-            instances=instances,
-            dump_registry=_dump_registry,
-        )
-        == 0
-    )
+    assert _up_from_worktree("notes", worktree, instances) == 0
 
     spec = instances.up_spec("notes-preview")
     assert (spec.service_name, spec.preview_service_name, spec.preview_title) == (
@@ -341,17 +347,7 @@ def test_a_private_chat_from_a_worktree_boots_without_an_instance_key(
     worktree = _worktree_of_a_live_checkout(tmp_path)
     instances = _RecordingInstances(worktree)
 
-    assert (
-        boot.up(
-            "chat",
-            worktree,
-            worktree,
-            is_private=True,
-            instances=instances,
-            dump_registry=_dump_registry,
-        )
-        == 0
-    )
+    assert _up_from_worktree("chat", worktree, instances) == 0
 
     assert instances.up_spec("chat-preview").service_name is None
 
@@ -371,14 +367,7 @@ def test_a_private_shell_from_a_worktree_reads_the_live_checkouts_registry(
     )
 
     assert (
-        boot.up(
-            "system_interface",
-            worktree,
-            worktree,
-            is_private=True,
-            instances=_RecordingInstances(worktree),
-            dump_registry=_dump_registry,
-        )
+        _up_from_worktree("system_interface", worktree, _RecordingInstances(worktree))
         == 0
     )
 
@@ -417,15 +406,12 @@ def test_a_private_instance_cannot_frame_siblings(tmp_path: Path) -> None:
     instances = _RecordingInstances(worktree)
 
     with pytest.raises(mod.PreviewError, match="registers none"):
-        boot.up(
+        _up_from_worktree(
             "system_interface",
             worktree,
-            worktree,
+            instances,
             with_apps=["chat"],
             instance_key="agent-1",
-            is_private=True,
-            instances=instances,
-            dump_registry=_dump_registry,
         )
 
     assert instances.specs == []
