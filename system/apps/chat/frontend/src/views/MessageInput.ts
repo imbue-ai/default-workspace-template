@@ -2023,7 +2023,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   },
                 ]
               : []),
-            ...reportBugActions(getShellConnection(), failure.isReportable),
+            // An unconfirmed send's notice is worded here, and its sentence asks for no bug report.
+            ...reportBugActions(getShellConnection(), !isUnconfirmed && failure.isReportable),
             ...(!isRestartOffered
               ? []
               : [

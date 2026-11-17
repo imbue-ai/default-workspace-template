@@ -1483,6 +1483,7 @@ describe("MessageInput send failure notice", () => {
     // The chat app has already sent it twice without confirmation, and the agent may have either
     // copy: a plain Retry or a Restart (restart and resend) could deliver it a third time.
     // mngr's reason is diagnostics, not copy.
+    stubShellConnection(true);
     mocks.sendMessage.mockRejectedValueOnce(
       refusal(500, {
         detail: "Timeout waiting for message submission evidence: pane content: ❯ hello",
@@ -1499,6 +1500,8 @@ describe("MessageInput send failure notice", () => {
     expect(findButton(after, "Send again")).toBeTruthy();
     expect(findButton(after, "Retry")).toBeUndefined();
     expect(findButton(after, "Restart")).toBeUndefined();
+    // The notice says what happened in its own words, which ask for no bug report.
+    expect(findButton(after, "Report a bug")).toBeUndefined();
     expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
   });
 
@@ -2810,9 +2813,12 @@ describe("MessageInput tells each way a send can fail", () => {
         kind: "input_blocked",
       }),
     );
+    stubShellConnection(true);
     const { component, turned } = composerWithSourceView();
 
     const after = await typeAndSend(component, "agent-1", "hello");
+    // Answering the dialog is the way forward, so this is no bug to report.
+    expect(findButton(after, "Report a bug")).toBeUndefined();
 
     expect(renderedText(findByClass(after, "modal-message"))).toContain(sentence);
     expect(renderedText(findByClass(after, "see-details"))).toContain("shell mode with an unsubmitted command");
