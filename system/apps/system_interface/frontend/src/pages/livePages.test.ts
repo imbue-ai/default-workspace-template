@@ -1643,6 +1643,55 @@ describe("raising the window the document's focus lands in", () => {
     });
   });
 
+  describe("by the clock, in milliseconds and counted ticks", () => {
+    it("reads which frame holds the focus once every 100 ms", () => {
+      // The store refuses the raise while win-2 is moved, so every read of the landing asks for it again.
+      store.beginWindowMove("win-2", { x: 100, y: 60 });
+      frameOf("win-1").focus();
+      const raise = vi.spyOn(store, "raiseWindow");
+      vi.advanceTimersByTime(99);
+      expect(raise).toHaveBeenCalledTimes(0);
+      vi.advanceTimersByTime(1);
+      expect(raise).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(900);
+      expect(raise).toHaveBeenCalledTimes(10);
+    });
+
+    it("takes a landing read at the second tick after the shell's message to the page for the page's answer", () => {
+      const raise = vi.spyOn(store, "raiseWindow");
+      frameOf("win-2").focus();
+      load("win-1");
+      vi.advanceTimersByTime(150);
+      frameOf("win-1").focus();
+      vi.advanceTimersByTime(50);
+      expect(raise).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(host);
+    });
+
+    it("raises for a landing read at the third tick after the shell's message to the page", () => {
+      frameOf("win-2").focus();
+      load("win-1");
+      vi.advanceTimersByTime(250);
+      frameOf("win-1").focus();
+      expect(topWindowId()).toBe("win-2");
+      vi.advanceTimersByTime(50);
+      expect(topWindowId()).toBe("win-1");
+    });
+
+    it("raises the next window at the third tick after a raise of the watcher's, and at neither tick before it", () => {
+      frameOf("win-2").focus();
+      frameOf("win-1").focus();
+      vi.advanceTimersByTime(100);
+      expect(topWindowId()).toBe("win-1");
+      layer.reconcile();
+      frameOf("win-2").focus();
+      vi.advanceTimersByTime(299);
+      expect(topWindowId()).toBe("win-1");
+      vi.advanceTimersByTime(1);
+      expect(topWindowId()).toBe("win-2");
+    });
+  });
+
   it("detects a press in a page the shell handed the focus back from", () => {
     load("win-1");
     blurIntoFrameOf("win-1");
