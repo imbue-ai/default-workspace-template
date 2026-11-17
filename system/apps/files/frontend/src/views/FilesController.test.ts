@@ -4,7 +4,7 @@ import "@imbue/workspace-ui/src/testing/dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
-import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
+import type { ShellConnection, StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 
 import { fileEntry } from "../testing/records";
@@ -81,6 +81,44 @@ describe("opening a file in a window of its own", () => {
     expect(app.model.toasts.current().map((toast) => toast.message)).toEqual([
       "This file's location is too long to open in a window of its own. Download it from the folder instead.",
     ]);
+  });
+});
+
+describe("asking an agent to free up space", () => {
+  it("replaces a not-answered note with the shell's late answer", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) =>
+        init?.method === "MKCOL"
+          ? new Response(
+              JSON.stringify({
+                detail: "MKCOL: [Errno 28]",
+                user_facing_message: "This workspace is out of disk space.",
+                kind: "out_of_space",
+              }),
+              { status: 507 },
+            )
+          : answered(url),
+      ),
+    );
+    const lateAnswers: ((outcome: StartNewOutcome) => void)[] = [];
+    const connection: ShellConnection = {
+      ...framedConnection(),
+      startWithText: vi.fn(async (_text: string, onLateAnswer?: (outcome: StartNewOutcome) => void) => {
+        if (onLateAnswer !== undefined) lateAnswers.push(onLateAnswer);
+        return { isOpened: false, failure: { message: "No answer came.", details: null, isReportable: false } };
+      }),
+    };
+    const app = new FilesController(HOME, { exists: true, entries: [] }, connection);
+    await app.model.createFolder();
+    const messages = (): string[] => app.model.toasts.current().map((toast) => toast.message);
+
+    app.model.toasts.current()[0].actions[0].run();
+    await vi.waitFor(() => expect(messages()).toContain("No answer came."));
+
+    expect(lateAnswers).toHaveLength(1);
+    lateAnswers[0]({ isOpened: true });
+    expect(messages()).not.toContain("No answer came.");
   });
 });
 
