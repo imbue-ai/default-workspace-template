@@ -132,7 +132,9 @@ type MenuSubject =
   | { readonly kind: "backdrop" }
   /** A desktop thumbnail's menu in the overview. */
   | { readonly kind: "overview-desktop"; readonly desktopId: string }
-  | { readonly kind: "tray-agent" };
+  | { readonly kind: "tray-agent" }
+  /** The tray's resource gauge, whose settings are the owner's alone. */
+  | { readonly kind: "resource-gauge" };
 
 /** Which menu is open and what it was opened for. Where it sits, and everything about taking it
  *  down, belongs to the menu component itself. A subject's menu reads the subject's own rows afresh on every
@@ -888,6 +890,10 @@ export function App(): m.Component<AppAttrs> {
         return rowsOfOverviewDesktopMenu(current, subject.desktopId);
       case "tray-agent":
         return trayAgentMenuRows(current);
+      case "resource-gauge": {
+        const rows = resourceGaugeSettingsRows("resource-gauge-settings", "Resource gauge settings...");
+        return rows.length === 0 ? null : rows;
+      }
     }
   }
 
@@ -918,6 +924,7 @@ export function App(): m.Component<AppAttrs> {
     // The bare backdrop alone: the grid covers it whole, and a right-click on a shortcut in it is the shortcut's.
     if (element.hasAttribute(SHORTCUT_GRID_ATTRIBUTE)) return { kind: "backdrop" };
     if (element.closest("[data-tray-agent]") !== null) return { kind: "tray-agent" };
+    if (element.closest("[data-resource-gauge]") !== null) return { kind: "resource-gauge" };
     const desktopId = element.closest("[data-overview-desktop]")?.getAttribute("data-overview-desktop");
     if (desktopId) return { kind: "overview-desktop", desktopId };
     // A launcher row that opens an app, not one that hands the typed text to it (which carries `data-launch` too).
@@ -1200,7 +1207,7 @@ export function App(): m.Component<AppAttrs> {
   }
 
   /** The row that opens the gauge's settings, for the owner once the gauge has arrived; no row otherwise. */
-  function resourceGaugeSettingsRows(key: string, label: string): MenuRow[] {
+  function resourceGaugeSettingsRows(key: string, label: string): ContextMenuRow[] {
     if (!isViewerOwner() || currentResourceGauge() === null) return [];
     return [
       {
@@ -1638,12 +1645,7 @@ export function App(): m.Component<AppAttrs> {
                 view: currentResourceGauge(),
                 isStale: isResourceGaugeStale(now.getTime()),
                 onOpen: (resource) => openSystemMonitorOn(current, resource),
-                onContextMenu: (x, y) => {
-                  const rows = resourceGaugeSettingsRows("resource-gauge-settings", "Resource gauge settings...");
-                  if (rows.length === 0) return;
-                  trayCard.close();
-                  openMenuAt({ kind: "element", rows }, anchorForPoint(x, y));
-                },
+                onContextMenu: () => trayCard.close(),
                 onHoverStart: (element) => trayCard.enterEntry({ kind: "resources" }, element),
                 onHoverEnd: trayCard.leaveEntry,
               },

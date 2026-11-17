@@ -62,8 +62,8 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   own origin, since a cross-origin module import carries no cookie and the
   forwarder refuses it. The desktop's own chrome draws the element menu too,
   for every right-click on it: on an entry, a shortcut, the launcher's row of
-  an app shortcut, the bare backdrop, an overview thumbnail, or the tray's
-  agent, the menu leads with that thing's own rows
+  an app shortcut, the bare backdrop, an overview thumbnail, the tray's
+  agent, or the resource gauge, the menu leads with that thing's own rows
   (`docs/system/blueprint/element-reference-menu/`). Where the Imbue Studio
   desktop app draws a native menu, a right-click on text being edited, on the
   selection, or on a plain link, and any with Shift held, is left to it

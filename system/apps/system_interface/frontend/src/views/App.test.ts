@@ -12,6 +12,7 @@ import type { AppRecord, Desktop, DesktopShortcut } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
 import { TourController } from "../model/tour";
 import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
+import { applyResourceGauge, resetResourceGaugeForTesting, viewFromWire } from "../model/resourceGauge";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import { FakeTourApi } from "../testing/fakeTour";
 import {
@@ -752,6 +753,23 @@ describe("the element menu", () => {
     (document.querySelector('[data-menu-row="float"]') as HTMLElement).click();
     await settle();
     expect(api.calls).toContain("setEntryPresentation:client-1:buddy:floating:avatar:-");
+  });
+
+  it("leads the resource gauge's menu with its settings row, then the reference rows, and opens the settings", () => {
+    applyResourceGauge(viewFromWire({ settings: { visibility: "always" } }), () => m.redraw());
+    try {
+      m.redraw.sync();
+      const gauge = document.querySelector("[data-resource-gauge]") as HTMLElement;
+      expect(rightClick(gauge).defaultPrevented).toBe(true);
+      const keys = menuRowKeys();
+      expect(keys[0]).toBe("resource-gauge-settings");
+      expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
+      (document.querySelector('[data-menu-row="resource-gauge-settings"]') as HTMLElement).click();
+      m.redraw.sync();
+      expect(document.querySelector("[data-resource-gauge-dialog]")).not.toBeNull();
+    } finally {
+      resetResourceGaugeForTesting();
+    }
   });
 
   it("ends a taskbar entry's menu with the reference rows, and drafts the reference through the store", async () => {
