@@ -51,8 +51,9 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   for every caller: what failed, the details verbatim, and what to do), and
   renders nothing where no shell frames the page. `askAgentToFix` answers a
   promise that settles on the shell's `shell:start-new-with-text-result`
-  (`{isOpened: true}`, or `{isOpened: false, failure}`; as not answered on a
-  fresh handshake), and the button reads "Asking an agent…", disabled, until
+  (`{isOpened: true}`, or `{isOpened: false, failure}`; as not answered at
+  once without a shell, and on a fresh handshake or `disconnect()`), and the
+  button reads "Asking an agent…", disabled, until
   it settles, then shows a failure under itself; `ReportBugButton` asks the
   shell to open Imbue Studio's bug report about the failure it is given (a
   `ReportedFailure`: the sentence on screen and what its "See details" holds,
@@ -70,7 +71,9 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   learned it can open a bug report gains the button once it does. Pressing a
   button dismisses its toast, except one marked `keepsToast` (a button that
   hands the failure on, "Ask an agent to ...", and "Report a bug"), after
-  which the toast's other buttons still apply. A plain toast may carry
+  which the toast's other buttons still apply. An action with `pending`
+  (`{isPending, label}`) is drawn disabled under `label` while `isPending()`
+  holds, read at each draw. A plain toast may carry
   details too: it then takes presses, shows "See details" and a close
   button, and stays once its details are opened (`ToastQueue.hold`, which
   `Toasts` calls through `onHold`).
