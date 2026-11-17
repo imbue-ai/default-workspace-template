@@ -8,6 +8,6 @@ The Screen says what happened in plain words when it cannot run, with the servic
 
 - Opening Browser or a link while the browser is still being set up, after its setup failed, with too many browsers open, or when the Screen's window could not be shown, now shows a sentence of ours on the desktop, with the reason behind "See details".
 
-- Report a bug appears only where Imbue Studio can open its bug report, and carries the overlay's sentence and what its "See details" holds. "Ask an agent to fix this" appears only inside the workspace's desktop, and starts a new chat; after a press it reads "Asking an agent…" and is disabled until the chat's window opens, and if it can't open, the button comes back with the reason under it.
+- Report a bug appears only where Imbue Studio can open its bug report, and carries the overlay's sentence and what its "See details" holds. "Ask an agent to fix this" appears only inside the workspace's desktop, and starts a new chat; after a press it reads "Asking an agent…" and is disabled until the chat's window opens, and if it can't open, the button comes back with the reason under it (with Report a bug where the reason asks for one); a press belongs to the failure it was made about, so a newer failure's button never reads "Asking an agent…" for it.
 
 - The test suite declares `app-manifest[testing]` (pytest and playwright for the shared shell stand-in helpers) in its dev dependencies.

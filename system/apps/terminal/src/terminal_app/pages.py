@@ -176,6 +176,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   <div id="ended-ask-failure" role="alert" hidden>
     <p id="ended-ask-failure-message"></p>
     <details id="ended-ask-failure-details" hidden><summary>See details</summary><pre id="ended-ask-failure-details-text"></pre></details>
+    <button type="button" id="ended-ask-failure-report" hidden>Report a bug</button>
   </div>
   <details id="ended-details" hidden><summary>See details</summary><pre id="ended-details-text"></pre></details>
 </div>
@@ -265,6 +266,13 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   let endedActions = [];
   let endedDetail = "";
   let endedSentence = "";
+  // An ask belongs to the ending it was made about (counted by showEnding) and to its press: an answer for an
+  // earlier ending or an earlier press changes nothing on screen.
+  let endingCount = 0;
+  let askPresses = 0;
+  let askingAbout = null;
+  let askFailure = null;
+
 
   function showEnding(ending, detail) {
     frame.hidden = true;
@@ -279,7 +287,9 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     cause.hidden = ending.cause === "";
     endedRetry.hidden = !endedActions.includes("retry");
     endedNew.hidden = !endedActions.includes("new");
+    endingCount += 1;
     showAskFailure(null);
+    syncAskButton();
     syncShellButtons();
     document.getElementById("ended-details-text").textContent = detail;
     document.getElementById("ended-details").hidden = detail === "";
@@ -305,25 +315,45 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     // The same address again: a fresh connection runs the dispatch again.
     frame.src = frame.src;
   });
-  // Under the button while the shell has not said the chat opened, or why it could not.
+  function syncAskButton() {
+    const isAsking = askingAbout === endingCount;
+    endedAsk.disabled = isAsking;
+    endedAsk.textContent = isAsking ? "Asking an agent…" : "Ask an agent to fix this";
+  }
+
+  // Under the button when the shell says the chat could not open.
   function showAskFailure(failure) {
+    askFailure = failure;
     document.getElementById("ended-ask-failure").hidden = failure === null;
     document.getElementById("ended-ask-failure-message").textContent = failure?.message ?? "";
     document.getElementById("ended-ask-failure-details").hidden = !failure?.details;
     document.getElementById("ended-ask-failure-details-text").textContent = failure?.details ?? "";
+    document.getElementById("ended-ask-failure-report").hidden =
+      !failure?.isReportable || connection === null || !connection.canReportBug();
   }
 
+  document.getElementById("ended-ask-failure-report").addEventListener("click", () => {
+    if (askFailure !== null) connection.reportBug({ message: askFailure.message, details: askFailure.details });
+  });
+
   endedAsk.addEventListener("click", async () => {
-    endedAsk.disabled = true;
-    endedAsk.textContent = "Asking an agent…";
+    const askedAbout = endingCount;
+    askPresses += 1;
+    const press = askPresses;
+    askingAbout = askedAbout;
     showAskFailure(null);
-    const outcome = await askAgentToFix(connection, {
-      whatFailed: `The terminal ${current} couldn't start`,
-      details: endedDetail || null,
-    });
-    endedAsk.disabled = false;
-    endedAsk.textContent = "Ask an agent to fix this";
-    if (!outcome.isOpened) showAskFailure(outcome.failure);
+    syncAskButton();
+    const show = (outcome) => {
+      if (endingCount === askedAbout && askPresses === press) showAskFailure(outcome.isOpened ? null : outcome.failure);
+    };
+    const outcome = await askAgentToFix(
+      connection,
+      { whatFailed: `The terminal ${current} couldn't start`, details: endedDetail || null },
+      show,
+    );
+    if (askingAbout === askedAbout && askPresses === press) askingAbout = null;
+    syncAskButton();
+    show(outcome);
   });
   endedReport.addEventListener("click", () =>
     connection.reportBug({ message: endedSentence, details: endedDetail || null }),
@@ -649,6 +679,7 @@ _FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <div data-ask-failure role="alert" hidden>
   <p data-ask-failure-message></p>
   <details data-ask-failure-details hidden><summary>See details</summary><pre></pre></details>
+  <button type="button" data-ask-failure-report hidden>Report a bug</button>
 </div>
 <script type="application/json" id="terminal-failure">__CONFIG__</script>
 <script>
@@ -668,22 +699,41 @@ _FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
   }
   const askFailure = document.querySelector("[data-ask-failure]");
   const askFailureDetails = document.querySelector("[data-ask-failure-details]");
-  // Pending until the shell says the chat opened; a failure comes back under the button.
+  const askFailureReport = document.querySelector("[data-ask-failure-report]");
+  let askPresses = 0;
+  let shownFailure = null;
+  function showAskFailure(failure) {
+    shownFailure = failure;
+    askFailure.hidden = failure === null;
+    document.querySelector("[data-ask-failure-message]").textContent = failure?.message ?? "";
+    askFailureDetails.hidden = !failure?.details;
+    askFailureDetails.querySelector("pre").textContent = failure?.details ?? "";
+    askFailureReport.hidden = !failure?.isReportable || !connection.canReportBug();
+  }
+  askFailureReport.addEventListener("click", () =>
+    connection.reportBug({ message: shownFailure.message, details: shownFailure.details }),
+  );
+  // Pending until the shell says the chat opened; a failure comes back under the button, and an answer the shell
+  // sends after a restart settled the ask replaces it unless the button was pressed again since.
   ask.addEventListener("click", async () => {
+    askPresses += 1;
+    const press = askPresses;
     ask.disabled = true;
     ask.textContent = "Asking an agent…";
-    askFailure.hidden = true;
-    const outcome = await askAgentToFix(connection, {
-      whatFailed: config.agent_fix.what_failed,
-      details: config.agent_fix.details,
-    });
-    ask.disabled = false;
-    ask.textContent = "Ask an agent to fix this";
-    if (outcome.isOpened) return;
-    document.querySelector("[data-ask-failure-message]").textContent = outcome.failure.message;
-    askFailureDetails.hidden = !outcome.failure.details;
-    askFailureDetails.querySelector("pre").textContent = outcome.failure.details ?? "";
-    askFailure.hidden = false;
+    showAskFailure(null);
+    const show = (outcome) => {
+      if (askPresses === press) showAskFailure(outcome.isOpened ? null : outcome.failure);
+    };
+    const outcome = await askAgentToFix(
+      connection,
+      { whatFailed: config.agent_fix.what_failed, details: config.agent_fix.details },
+      show,
+    );
+    if (askPresses === press) {
+      ask.disabled = false;
+      ask.textContent = "Ask an agent to fix this";
+    }
+    show(outcome);
   });
   // The report carries what this page says and what its "See details" holds.
   report.addEventListener("click", () => {

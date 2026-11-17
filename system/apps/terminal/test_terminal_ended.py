@@ -18,6 +18,7 @@ from app_manifest.testing import (
     SHELL_HANDSHAKE_COUNTER_SCRIPT,
     answer_start_new_with_text,
     built_app_contract_source,
+    resend_shell_handshake,
     shell_messages,
     shell_stand_in_page,
 )
@@ -215,6 +216,55 @@ def _expect_asking_then_told_why(page: Page, surface: Locator) -> None:
     expect(told).to_contain_text("Chat couldn't open that.")
     told.get_by_text("See details").click()
     expect(told.locator("pre")).to_have_text("HTTP 400")
+
+
+def test_a_pending_ask_survives_the_shell_greeting_again_and_takes_its_late_answer_after_a_restart(
+    desktop_context: BrowserContext,
+) -> None:
+    _serve(desktop_context, _wrapper_html("terminal-1"), can_report_bug=True)
+    page, wrapper, pty = _open(desktop_context)
+    _print_end(pty, ENDED_NOT_STARTED, "no server running on /tmp/tmux-1000/default")
+    ended = wrapper.locator("#ended")
+    ended.get_by_role("button", name="Ask an agent to fix this").click()
+    expect(ended.get_by_role("button", name="Asking an agent…")).to_be_disabled()
+
+    # The same shell greeting again (a window moved, viewing started) leaves the ask pending.
+    resend_shell_handshake(page)
+    wrapper.wait_for_function("window.shellHandshakes > 1")
+    expect(ended.get_by_role("button", name="Asking an agent…")).to_be_disabled()
+
+    # A shell that started again settles it as not answered, and its real answer still replaces that.
+    resend_shell_handshake(page, "restarted-shell")
+    expect(ended.get_by_role("alert")).to_contain_text("The workspace didn't answer")
+    expect(ended.get_by_role("button", name="Ask an agent to fix this")).to_be_enabled()
+    answer_start_new_with_text(
+        page,
+        {"isOpened": False, "failure": {"message": "The workspace couldn't do that.", "details": "boom", "isReportable": True}},
+    )
+    told = ended.get_by_role("alert")
+    expect(told).to_contain_text("The workspace couldn't do that.")
+    told.get_by_role("button", name="Report a bug").click()
+    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
+    [reported] = shell_messages(page, "shell:report-bug")
+    assert (reported["message"], reported["details"]) == ("The workspace couldn't do that.", "boom")
+
+
+def test_an_ask_about_an_earlier_ending_never_shows_under_a_later_one(desktop_context: BrowserContext) -> None:
+    _serve(desktop_context, _wrapper_html("terminal-1"), can_report_bug=True)
+    page, wrapper, pty = _open(desktop_context)
+    _print_end(pty, ENDED_NOT_STARTED, "first failure")
+    ended = wrapper.locator("#ended")
+    ended.get_by_role("button", name="Ask an agent to fix this").click()
+
+    ended.get_by_role("button", name="Try again").click()
+    _print_end(pty, ENDED_NOT_STARTED, "second failure")
+    expect(ended.get_by_role("button", name="Ask an agent to fix this")).to_be_enabled()
+    answer_start_new_with_text(
+        page,
+        {"isOpened": False, "failure": {"message": "Chat couldn't open that.", "details": None, "isReportable": False}},
+    )
+    expect(ended.get_by_role("button", name="Ask an agent to fix this")).to_be_enabled()
+    expect(ended.get_by_role("alert")).to_be_hidden()
 
 
 def _open_failure_page(context: BrowserContext, error: TerminalAppError, can_report_bug: bool) -> tuple[Page, Frame]:
