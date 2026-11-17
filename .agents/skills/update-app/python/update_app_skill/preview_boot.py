@@ -218,7 +218,12 @@ def up(
     instances: Instances,
     dump_registry: Callable[[list[dict[str, object]]], str] | None = None,
 ) -> int:
-    """Boot the app's preview from ``worktree``, after the siblings named in ``with_apps``."""
+    """Boot the app's preview from ``worktree``, after the siblings named in ``with_apps``.
+
+    ``is_private`` boots it with no registrations, title, or instance key, for an agent
+    to reach on its loopback port. Raises PreviewError for a preview with a window from a
+    ``repo_root`` that is a linked git worktree, and for ``is_private`` with ``with_apps``.
+    """
     live_root = _live_root(
         repo_root, worktree, is_private=is_private, with_apps=with_apps
     )
