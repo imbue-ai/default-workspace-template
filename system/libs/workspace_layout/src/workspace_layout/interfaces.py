@@ -71,8 +71,8 @@ class ShellLayoutInterface(MutableModel, ABC):
 
     @abstractmethod
     def post_bubble(self, bubble: BubblePost) -> None:
-        """Tell the shell somebody just said something, for the bubble over their tray entry (the multiplayer spec,
-        section 6.5); best-effort, never raises."""
+        """Tell the shell somebody just said something, or a chat notified the user, for their tray entry and its
+        bubble (the multiplayer spec, section 6.5); best-effort, never raises."""
 
     @abstractmethod
     def report_chats_activity(self, report: ChatsActivityReport) -> None:

@@ -11,7 +11,7 @@ import m from "mithril";
 import { createMenu } from "@imbue/workspace-ui/src/components/menu";
 import type { ContextMenuRow } from "@imbue/workspace-ui/src/context_menu_rows";
 import { kebabGlyph, listGlyph } from "../glyphs";
-import { BAR_ICON_BUTTON_CLASS, isDeleting, isRenaming, referenceRowsFor, renameField, rowMenuRows } from "./ChatRail";
+import { BAR_ICON_BUTTON_CLASS, isRenaming, referenceRowsFor, renameField, rowMenuRows } from "./ChatRail";
 import type { RowMenuContext, RowReferenceContext } from "./ChatRail";
 import type { ChatRow } from "./rows";
 
@@ -48,9 +48,6 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
     },
     view({ attrs }) {
       const { row } = attrs;
-      // A chat being deleted offers nothing more, as its row in the list does not.
-      const isRowDeleting = row !== null && isDeleting(row.chatId);
-      const hasVerbs = row !== null && !isRowDeleting;
       const triggerAttrs = menu.triggerAttrs();
       const buttonClass = attrs.isTouch ? BAR_ICON_BUTTON_CLASS : DENSE_BAR_ICON_BUTTON_CLASS;
       return m(
@@ -79,13 +76,12 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
                 "span",
                 {
                   class:
-                    "chat-header-title ml-1 min-w-0 flex-1 truncate font-semibold " +
-                    (attrs.isTouch ? "text-(length:--font-size-body) " : "text-(length:--font-size-row) ") +
-                    (isRowDeleting ? "text-danger line-through opacity-50" : "text-primary"),
+                    "chat-header-title ml-1 min-w-0 flex-1 truncate font-semibold text-primary " +
+                    (attrs.isTouch ? "text-(length:--font-size-body)" : "text-(length:--font-size-row)"),
                 },
                 row?.title ?? "Chats",
               ),
-          hasVerbs
+          row !== null
             ? m(
                 "button",
                 {
@@ -112,7 +108,7 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
                 kebabGlyph(attrs.isTouch ? 18 : 16),
               )
             : null,
-          hasVerbs ? menu.view(rowMenuRows(attrs.context, row, referenceRows)) : null,
+          row !== null ? menu.view(rowMenuRows(attrs.context, row, referenceRows)) : null,
         ],
       );
     },
