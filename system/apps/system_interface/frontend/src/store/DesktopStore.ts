@@ -2728,9 +2728,9 @@ export class DesktopStore {
     return this.runFreeText(primary.app.name, primary.launchPath.id, text);
   }
 
-  /** A page's ``shell:start-new-with-text``, and the shell's own "Ask an agent to ...": the secondary text action
-   *  runs with the text (Chat's New Chat on a stock machine), else the primary one; with no free-text row on the
-   *  machine the user is told. */
+  /** A page's ``shell:start-new-with-text`` ("Ask an agent to fix this"): the secondary text action runs with the
+   *  text (Chat's New Chat on a stock machine), else the primary one; with no free-text row on the machine the user
+   *  is told. */
   async startNewWithText(text: string): Promise<boolean> {
     const [primary, secondary] = freeTextRowsOf(openableApps(this.state));
     const row = secondary ?? primary;

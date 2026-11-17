@@ -19,7 +19,8 @@
  * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
  * this client's own stored path, which arrives with the layout), and the pages' own
  * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, ``shell:start-with-text``,
- * ``shell:start-new-with-text``, ``shell:message``, ``shell:open-link``, and ``shell:report-bug``. Messages cross through ``relay.ts``.
+ * ``shell:start-new-with-text``, ``shell:message``, ``shell:open-link``, and ``shell:report-bug``. Messages cross
+ * through ``relay.ts``.
  *
  * The phone layout mounts differently (plan-phone-interface.md): under the ``shown`` policy only the shown
  * window's page lives, laid over the whole host, plus the pages it keeps (the pinned chat window's, created
