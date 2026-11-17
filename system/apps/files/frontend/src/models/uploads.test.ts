@@ -74,23 +74,34 @@ describe("the upload panel's lifetime", () => {
 });
 
 describe("a failed upload's row", () => {
-  it("says why each failed: interrupted, a read-only folder, or no cause of its own, with the details behind it", async () => {
+  it("says why each failed from the refusal's kind, with the sentence and details behind it", async () => {
     const uploads = queue();
-    uploads.add("/home/", [file("a.txt"), file("b.txt"), file("c.txt")]);
+    uploads.add("/home/", [file("a.txt"), file("b.txt"), file("c.txt"), file("d.txt"), file("e.txt")]);
     settles[0].reject(httpFailure(0, null));
     const readOnly = "Your computer only shares this to read.";
-    settles[1].reject(httpFailure(403, { detail: readOnly, user_facing_message: readOnly }));
-    settles[2].reject(httpFailure(500, { detail: "No space left on device" }));
+    settles[1].reject(httpFailure(403, { detail: readOnly, user_facing_message: readOnly, kind: "shared_read_only" }));
+    const full = "This workspace is out of disk space.";
+    settles[2].reject(
+      httpFailure(507, { detail: "PUT /home/c.txt", user_facing_message: full, kind: "out_of_space" }),
+    );
+    // Three go up at once, so the last two start once these have settled.
+    await vi.advanceTimersByTimeAsync(0);
+    settles[3].reject(httpFailure(403, { detail: "forbidden" }));
+    settles[4].reject(httpFailure(500, { detail: "PUT /home/e.txt: [Errno 5] Input/output error" }));
     await vi.advanceTimersByTimeAsync(0);
 
     expect(uploads.items.map((item) => [item.status, item.failure?.line])).toEqual([
       ["failed", "Interrupted"],
       ["failed", "Failed — read-only folder"],
+      ["failed", "Failed — out of disk space"],
+      ["failed", "Failed"],
       ["failed", "Failed"],
     ]);
-    expect(uploads.items[1].failure?.explanation).toBe(`${readOnly}\nHTTP 403\n${readOnly}`);
-    expect(uploads.items[2].failure?.explanation).toBe(
-      '"c.txt" couldn\'t be uploaded. Try again. If this persists, report a bug.\nHTTP 500\nNo space left on device',
+    expect(uploads.items[1].failure?.explanation).toBe(
+      `"b.txt" couldn't be uploaded. ${readOnly}\nHTTP 403\n${readOnly}`,
+    );
+    expect(uploads.items[4].failure?.explanation).toBe(
+      '"e.txt" couldn\'t be uploaded. Try again. If this persists, report a bug.\nHTTP 500\nPUT /home/e.txt: [Errno 5] Input/output error',
     );
   });
 

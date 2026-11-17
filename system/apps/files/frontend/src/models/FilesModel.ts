@@ -5,7 +5,6 @@
  * dialogs) through a `FilesHost`.
  */
 
-import type { FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 
 import * as server from "./server";
@@ -33,7 +32,7 @@ import {
 } from "./preferences";
 import { UploadQueue, type UploadSource } from "./uploads";
 import { fetchConnections, isLiveShared, targetOf, type Connections } from "./connections";
-import { plainFailure, toastFailures, toldFailure, type BugReporter } from "./failures";
+import { plainFailure, toastFailures, toldFailure, type FailureHost, type FilesFailure } from "./failures";
 
 export const WORKSPACE = "/home/user/workspace/";
 
@@ -54,7 +53,8 @@ export interface FolderState {
   /** False for a folder that is not there. */
   exists: boolean;
   entries: Entry[];
-  error: string | null;
+  /** Why the last listing failed; null when it did not. */
+  error: FilesFailure | null;
 }
 
 export interface RenameState {
@@ -69,7 +69,7 @@ export type ConflictChoice = "replace" | "keep-both" | "cancel";
 
 export type HistoryMode = "push" | "replace";
 
-export interface FilesHost extends BugReporter {
+export interface FilesHost extends FailureHost {
   redraw(): void;
   /** Draw before returning, for a change the next keystroke must already find on the page. */
   redrawNow(): void;
@@ -115,10 +115,6 @@ export function compareEntries(a: Entry, b: Entry, sort: SortOrder): number {
   return sort.descending ? -order : order;
 }
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function isAbort(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
@@ -142,7 +138,7 @@ export class FilesModel {
   shortcuts: Shortcut[] = [];
   /** What the user has shared from their computers; null until it has been read. */
   connections: Connections | null = null;
-  connectionsError: string | null = null;
+  connectionsError: FilesFailure | null = null;
   private connectionsLoad: Promise<void> | null = null;
   historyIndex = 0;
   historyLength = 1;
@@ -445,27 +441,27 @@ export class FilesModel {
   }
 
   /** Rename `path` to `target` (named `name`); what went wrong, or null once it is done. */
-  private async renameOnServer(path: string, target: string, name: string): Promise<FailureMessage | null> {
+  private async renameOnServer(path: string, target: string, name: string): Promise<FilesFailure | null> {
     try {
       if (await server.exists(target)) return plainFailure(`"${name}" is already taken.`);
       await server.movePath(path, target);
       return null;
     } catch (error) {
-      return toldFailure(error, `Couldn't rename "${nameOf(path)}" to "${name}"`);
+      return toldFailure(error, `Couldn't rename "${nameOf(path)}" to "${name}"`, "item");
     }
   }
 
   async deleteEntries(paths: readonly string[]): Promise<void> {
     const entries = paths.map((path) => this.entryFor(path)).filter((entry): entry is Entry => entry !== undefined);
     if (entries.length === 0 || !(await this.host.confirmDelete(entries))) return;
-    const failures: FailureMessage[] = [];
+    const failures: FilesFailure[] = [];
     const deleted = new Set<string>();
     for (const entry of entries) {
       try {
         await server.deletePath(entry.path);
         deleted.add(entry.path);
       } catch (error) {
-        failures.push(toldFailure(error, `Couldn't delete "${entry.name}"`));
+        failures.push(toldFailure(error, `Couldn't delete "${entry.name}"`, "item"));
       }
     }
     this.selection = this.selection.filter((path) => !deleted.has(path));
@@ -518,7 +514,7 @@ export class FilesModel {
     name: string,
     isFolder: boolean,
     isLive: boolean,
-  ): Promise<FailureMessage | null> {
+  ): Promise<FilesFailure | null> {
     try {
       if (this.isNameTaken(folder, name) || (isLive && (await server.exists(path)))) {
         return plainFailure(`"${name}" is already taken.`);
@@ -527,7 +523,7 @@ export class FilesModel {
       else await server.writeFile(path, "");
       return null;
     } catch (error) {
-      return toldFailure(error, `Couldn't create "${name}"`);
+      return toldFailure(error, `Couldn't create "${name}"`, "into-folder");
     }
   }
 
@@ -536,7 +532,7 @@ export class FilesModel {
   async moveInto(paths: readonly string[], folder: string): Promise<void> {
     const moving = paths.filter((path) => parentOf(path) !== folder && !isWithin(folder, path));
     if (moving.length === 0) return;
-    const failures: FailureMessage[] = [];
+    const failures: FilesFailure[] = [];
     const moved = new Set<string>();
     for (const path of moving) {
       const failure = await this.moveOnServer(path, folder);
@@ -550,7 +546,7 @@ export class FilesModel {
   }
 
   /** Move `path` into `folder`; what went wrong, or null once it is there. */
-  private async moveOnServer(path: string, folder: string): Promise<FailureMessage | null> {
+  private async moveOnServer(path: string, folder: string): Promise<FilesFailure | null> {
     if (isLiveShared(path) || isLiveShared(folder)) return plainFailure(LIVE_MOVE_REFUSAL);
     const target = childPath(folder, nameOf(path), isFolderPath(path));
     try {
@@ -560,7 +556,7 @@ export class FilesModel {
       await server.movePath(path, target);
       return null;
     } catch (error) {
-      return toldFailure(error, `Couldn't move "${nameOf(path)}" into "${nameOf(folder) || folder}"`);
+      return toldFailure(error, `Couldn't move "${nameOf(path)}" into "${nameOf(folder) || folder}"`, "move");
     }
   }
 
@@ -621,7 +617,7 @@ export class FilesModel {
         status: "error",
         exists: previous?.exists ?? true,
         entries: previous?.entries ?? [],
-        error: messageOf(error),
+        error: toldFailure(error, "Couldn't open this folder", "open"),
       });
     } finally {
       if (this.loads.get(folder) === request) this.loads.delete(folder);
@@ -706,7 +702,7 @@ export class FilesModel {
       this.connections = await fetchConnections();
       this.connectionsError = null;
     } catch (error) {
-      this.connectionsError = messageOf(error);
+      this.connectionsError = toldFailure(error, "Couldn't read what your computers share", "open");
     }
     this.host.redraw();
   }

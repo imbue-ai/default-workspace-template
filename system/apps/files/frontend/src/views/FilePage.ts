@@ -13,14 +13,13 @@ import { createMenu, type Menu } from "@imbue/workspace-ui/src/components/menu";
 import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
-import type { FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import { startDownload } from "@imbue/workspace-ui/src/download";
 
 import { isLiveShared } from "../models/connections";
 import * as server from "../models/server";
-import { plainFailure, toastFailures, toldFailure, type BugReporter } from "../models/failures";
+import { plainFailure, toastFailures, toldFailure, type FailureHost, type FilesFailure } from "../models/failures";
 import { isTextLike, previewKindOf } from "../models/fileKinds";
 import { formatSize } from "../models/format";
 import { matchesKeybinding } from "../models/keybindings";
@@ -37,18 +36,19 @@ export interface FilePageOptions {
 }
 
 type TextState =
-  { status: "loading" } | { status: "ready"; saved: string } | { status: "error"; failure: FailureMessage };
+  { status: "loading" } | { status: "ready"; saved: string } | { status: "error"; failure: FilesFailure };
 
 /** Why a file's text could not be loaded: gone since the page was asked for, or anything else in words. */
-function loadFailureOf(error: unknown): FailureMessage {
+function loadFailureOf(error: unknown): FilesFailure {
   if (error instanceof HttpError && error.status === 404) {
     return {
       message: "This file is no longer there. It may have been moved or deleted.",
       details: error.failure.details,
       isReportable: false,
+      isOutOfSpace: false,
     };
   }
-  return toldFailure(error, "This file couldn't be opened");
+  return toldFailure(error, "This file couldn't be opened", "open");
 }
 
 export class FilePageModel {
@@ -62,8 +62,8 @@ export class FilePageModel {
 
   constructor(
     readonly options: FilePageOptions,
-    /** The shell's bug report, which a failure that asks for one offers. */
-    readonly reporter: BugReporter,
+    /** The shell connection a failure's buttons go through. */
+    readonly reporter: FailureHost,
   ) {}
 
   get isDirty(): boolean {
@@ -109,7 +109,11 @@ export class FilePageModel {
       this.text = { status: "ready", saved: content };
       this.size = new Blob([content]).size;
     } catch (error) {
-      toastFailures(this.toasts, [toldFailure(error, `Couldn't save "${nameOf(this.options.path)}"`)], this.reporter);
+      toastFailures(
+        this.toasts,
+        [toldFailure(error, `Couldn't save "${nameOf(this.options.path)}"`, "item")],
+        this.reporter,
+      );
     }
     this.isSaving = false;
     m.redraw();
@@ -130,13 +134,13 @@ export class FilePageModel {
     window.location.replace(server.pageUrlOf(target, this.options.page));
   }
 
-  private async renameOnServer(path: string, target: string, name: string): Promise<FailureMessage | null> {
+  private async renameOnServer(path: string, target: string, name: string): Promise<FilesFailure | null> {
     try {
       if (await server.exists(target)) return plainFailure(`"${name}" is already taken.`);
       await server.movePath(path, target);
       return null;
     } catch (error) {
-      return toldFailure(error, `Couldn't rename "${nameOf(path)}" to "${name}"`);
+      return toldFailure(error, `Couldn't rename "${nameOf(path)}" to "${name}"`, "item");
     }
   }
 
@@ -155,7 +159,7 @@ export class FilePageModel {
     try {
       await server.deletePath(path);
     } catch (error) {
-      toastFailures(this.toasts, [toldFailure(error, `Couldn't delete "${nameOf(path)}"`)], this.reporter);
+      toastFailures(this.toasts, [toldFailure(error, `Couldn't delete "${nameOf(path)}"`, "item")], this.reporter);
       m.redraw();
       return;
     }
@@ -225,7 +229,7 @@ function body(page: FilePageModel): m.Children {
 
 /** A file whose text could not be loaded, in place of the editor: the sentence, what the server said behind "See
  *  details", Try again, and Report a bug where the sentence asks for one. */
-function loadFailureView(page: FilePageModel, failure: FailureMessage, centred: string): m.Children {
+function loadFailureView(page: FilePageModel, failure: FilesFailure, centred: string): m.Children {
   return m("div.files-load-failure", { class: `${centred} flex-col gap-3 text-center` }, [
     m("div.files-load-failure-message", { class: "type-body text-danger" }, failure.message),
     m(SeeDetails, { details: failure.details }),

@@ -120,6 +120,8 @@ export class FilesController {
         confirmDelete: (entries) => this.dialogs.confirmDelete(entries),
         confirmReplace: (names) => this.dialogs.confirmReplace(names),
         askNewName: (suggested, isFolder) => this.dialogs.askNewName(suggested, isFolder),
+        hasShell: () => connection.hasShell(),
+        startWithText: (text) => connection.startWithText(text),
         canReportBug: () => connection.canReportBug(),
         reportBug: () => connection.reportBug(),
       },

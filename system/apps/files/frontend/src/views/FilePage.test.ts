@@ -6,6 +6,7 @@ import m from "mithril";
 
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 
+import type { FailureHost } from "../models/failures";
 import * as server from "../models/server";
 import { httpFailure } from "../testing/records";
 import { FilePage, FilePageModel } from "./FilePage";
@@ -18,8 +19,13 @@ vi.mock("../models/server", async (importOriginal) => ({
 
 const PATH = "/home/user/workspace/notes.md";
 
-function reporter(canReport: boolean): { canReportBug: () => boolean; reportBug: Mock<() => void> } {
-  return { canReportBug: () => canReport, reportBug: vi.fn<() => void>() };
+function reporter(canReport: boolean): FailureHost & { reportBug: Mock<() => void> } {
+  return {
+    hasShell: () => true,
+    startWithText: vi.fn<(text: string) => void>(),
+    canReportBug: () => canReport,
+    reportBug: vi.fn<() => void>(),
+  };
 }
 
 async function openedPage(canReport: boolean): Promise<{ page: FilePageModel; root: HTMLElement }> {

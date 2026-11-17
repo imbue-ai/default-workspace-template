@@ -51,6 +51,8 @@ function harness(): Harness {
     confirmDelete: vi.fn(async () => true),
     confirmReplace: vi.fn(async () => replaceAnswer.value),
     askNewName: vi.fn(async () => null),
+    hasShell: () => true,
+    startWithText: vi.fn(),
     canReportBug: () => bugReport.canReport,
     reportBug: vi.fn(),
   };
@@ -402,20 +404,85 @@ describe("loadConnections", () => {
 });
 
 describe("telling a failed change", () => {
-  const PERMISSION = "You don't have permission to change or read /home/zeta/b.txt.";
+  const PERMISSION = "You don't have permission to change this.";
+  const PERMISSION_DETAIL = "MOVE /home/b.txt: [Errno 13] Permission denied: '/home/zeta/b.txt'";
 
-  it("shows the server's own sentence as a note that goes, its details only in the log", async () => {
+  it("says what failed, then the cause the server gave, as a note that goes with its details only in the log", async () => {
     const { model } = harness();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const said = "Something with that name is already there.";
     vi.mocked(server.movePath).mockRejectedValueOnce(
-      httpFailure(403, { detail: PERMISSION, user_facing_message: PERMISSION }),
+      httpFailure(412, { detail: said, user_facing_message: said, kind: "already_exists" }),
     );
 
     await model.moveInto(["/home/b.txt"], "/home/zeta/");
 
-    expect(model.toasts.current().map((toast) => [toast.message, toast.isLasting])).toEqual([[PERMISSION, false]]);
-    expect(warn).toHaveBeenCalledWith(`[files] ${PERMISSION}`, `HTTP 403\n${PERMISSION}`);
+    const message = `Couldn't move "b.txt" into "zeta". ${said}`;
+    expect(model.toasts.current().map((toast) => [toast.message, toast.isLasting])).toEqual([[message, false]]);
+    expect(warn).toHaveBeenCalledWith(`[files] ${message}`, `HTTP 412\n${said}`);
     warn.mockRestore();
+  });
+
+  it("says which folder refused a move that could not be written", async () => {
+    const { model } = harness();
+    const said = "The folder it would move into is read-only.";
+    vi.mocked(server.movePath).mockRejectedValueOnce(
+      httpFailure(403, { detail: PERMISSION_DETAIL, user_facing_message: said, kind: "destination_not_writable" }),
+    );
+
+    await model.moveInto(["/home/b.txt"], "/home/zeta/");
+
+    expect(model.toasts.current().map((toast) => toast.message)).toEqual([
+      'Couldn\'t move "b.txt" into "zeta". That folder is read-only.',
+    ]);
+  });
+
+  it("says the folder on show is read-only when something can't be created in it", async () => {
+    const { model } = harness();
+    vi.mocked(server.createFolder).mockRejectedValueOnce(
+      httpFailure(403, { detail: "MKCOL /home/untitled folder", user_facing_message: PERMISSION, kind: "read_only" }),
+    );
+
+    await model.createFolder();
+
+    expect(model.toasts.current().map((toast) => toast.message)).toEqual([
+      'Couldn\'t create "untitled folder". This folder is read-only.',
+    ]);
+  });
+
+  it("keeps an out-of-space refusal up and asks an agent in the existing chat to free up space", async () => {
+    const { model, host } = harness();
+    const said = "This workspace is out of disk space.";
+    vi.mocked(server.createFolder).mockRejectedValueOnce(
+      httpFailure(507, { detail: "MKCOL: [Errno 28]", user_facing_message: said, kind: "out_of_space" }),
+    );
+
+    await model.createFolder();
+
+    const [toast] = model.toasts.current();
+    expect(toast.message).toBe(`Couldn't create "untitled folder". ${said}`);
+    expect(toast.isLasting).toBe(true);
+    expect(toast.actions.map((action) => action.label)).toEqual(["Ask an agent to free up space"]);
+    toast.actions[0].run();
+    expect(host.startWithText).toHaveBeenCalledWith(expect.stringContaining("out of disk space"));
+  });
+
+  it("says why a folder couldn't be listed, with the details kept", async () => {
+    const { model } = harness();
+    vi.mocked(server.listFolder).mockRejectedValueOnce(
+      httpFailure(
+        403,
+        { detail: "GET /home/zeta/: [Errno 13]", user_facing_message: PERMISSION, kind: "permission_denied" },
+        "read",
+      ),
+    );
+
+    await model.load("/home/zeta/");
+
+    expect(model.folderState("/home/zeta/")?.error).toMatchObject({
+      message: "Couldn't open this folder. You don't have permission to open it.",
+      details: "HTTP 403\nGET /home/zeta/: [Errno 13]",
+    });
   });
 
   it("names a move the server could not carry out, and keeps it up with the details and Report a bug", async () => {
@@ -459,17 +526,25 @@ describe("telling a failed change", () => {
     ]);
   });
 
-  it("says why a rename failed in the name field, in the server's words", async () => {
+  it("says why a rename failed in the name field, naming the folder that refused it", async () => {
     const { model } = harness();
     vi.mocked(server.movePath).mockRejectedValueOnce(
-      httpFailure(403, { detail: PERMISSION, user_facing_message: PERMISSION }),
+      httpFailure(403, {
+        detail: PERMISSION_DETAIL,
+        user_facing_message: PERMISSION,
+        kind: "destination_not_writable",
+      }),
     );
     model.startRename("/home/b.txt");
     model.setRenameDraft("c.txt");
 
     await model.commitRename();
 
-    expect(model.rename).toMatchObject({ path: "/home/b.txt", error: PERMISSION, isSaving: false });
+    expect(model.rename).toMatchObject({
+      path: "/home/b.txt",
+      error: 'Couldn\'t rename "b.txt" to "c.txt". The folder it\'s in is read-only.',
+      isSaving: false,
+    });
   });
 
   it("names a rename that failed for no reason of the server's", async () => {

@@ -12,6 +12,7 @@ import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverToolt
 import { alertDotIcon, icon, type IconName } from "@imbue/workspace-ui/src/components/icons";
 import { createMenu, type Menu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { SegmentedControl } from "@imbue/workspace-ui/src/components/segmentedControl";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 
 import { formatItemCount, formatSize } from "../models/format";
@@ -227,11 +228,16 @@ function Sidebar(): m.Component<{ app: FilesController; floating: boolean }> {
         connectedBody = shareRows.map((row) => sidebarRow(app, row, row.key === current));
       } else {
         // With the manage entry below, an empty list needs no word on how to share.
+        const failure = model.connectionsError;
         const empty =
-          model.connectionsError ??
-          (connections === null ? "Looking…" : app.opensLocalFiles ? null : NOTHING_CONNECTED);
+          failure?.message ?? (connections === null ? "Looking…" : app.opensLocalFiles ? null : NOTHING_CONNECTED);
         connectedBody =
-          empty === null ? null : m("div.files-connected-empty", { class: "px-2 py-1 type-helper text-faint" }, empty);
+          empty === null
+            ? null
+            : m("div.files-connected-empty", { class: "px-2 py-1 type-helper text-faint" }, [
+                empty,
+                m(SeeDetails, { details: failure?.details ?? null }),
+              ]);
       }
       return m(
         "nav.files-sidebar",
@@ -462,7 +468,7 @@ function FolderBody(): m.Component<{ app: FilesController }> {
       if (state === undefined || (state.status === "loading" && entries.length === 0)) {
         empty = m("div", { class: "flex justify-center pt-16" }, m("div.spinner"));
       } else if (state.status === "error" && entries.length === 0) {
-        empty = message("Couldn't open this folder", state.error ?? "", () => void model.load(model.folder));
+        empty = message(state.error?.message ?? "", "", () => void model.load(model.folder), state.error?.details);
       } else if (!state.exists) {
         empty = message("This folder doesn't exist", "It may have been moved or deleted.");
       } else if (notice !== null && entries.length === 0) {
@@ -499,10 +505,11 @@ export function syncBanner(notice: SyncNotice): m.Vnode {
   );
 }
 
-function message(title: string, detail: string, retry?: () => void): m.Vnode {
+function message(title: string, detail: string, retry?: () => void, seeDetails: string | null = null): m.Vnode {
   return m("div.files-empty", { class: "flex flex-col items-center gap-1 px-6 pt-20 text-center" }, [
     m("div", { class: "type-label text-secondary" }, title),
     detail === "" ? null : m("div", { class: "max-w-[360px] type-helper text-faint" }, detail),
+    m(SeeDetails, { details: seeDetails }),
     retry === undefined ? null : m(Button, { sm: true, extra: "mt-3", onclick: retry }, "Try again"),
   ]);
 }

@@ -3,9 +3,9 @@
  * they land in, and the queue that sends them a few at a time with progress.
  */
 
-import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 
+import { isNotWritable, toldFailure } from "./failures";
 import { uploadFile, type Upload } from "./server";
 
 /** A file to send and where it goes below the target folder: `a.png`, or `photos/2024/a.png` from a folder. */
@@ -35,12 +35,16 @@ export interface UploadFailure {
   readonly explanation: string;
 }
 
-/** What a failed upload's row says: a dropped connection was interrupted, a 403 is a folder that cannot be written,
- *  and any other refusal names no cause of its own. The sentence and what the server said go in the explanation. */
+/** What a failed upload's row says: a dropped connection was interrupted, a refusal of a kind that says the folder
+ *  cannot be written or the disk is full says so, and any other names no cause of its own. The sentence and what the
+ *  server said go in the explanation. */
 export function uploadFailureOf(error: unknown, name: string): UploadFailure {
-  const failure = describeRequestFailure(error, "change");
-  const told = failureSentence(failure, `"${name}" couldn't be uploaded`);
-  const line = failure.status === 0 ? "Interrupted" : failure.status === 403 ? "Failed — read-only folder" : "Failed";
+  const { status, kind } = describeRequestFailure(error, "change");
+  const told = toldFailure(error, `"${name}" couldn't be uploaded`, "into-folder");
+  let line = "Failed";
+  if (status === 0) line = "Interrupted";
+  else if (isNotWritable(kind)) line = "Failed — read-only folder";
+  else if (kind === "out_of_space") line = "Failed — out of disk space";
   return { line, explanation: [told.message, told.details].filter((part) => part !== null).join("\n") };
 }
 
