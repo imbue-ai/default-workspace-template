@@ -1458,8 +1458,19 @@ def read_frame(name: str, repo_root: Path) -> FrameRecord | None:
         raise InstanceError(f"{state_path} records no frame to read: {exc!r}") from exc
 
 
-def _keep_frame_record(repo_root: Path, name: str, record: FrameRecord) -> None:
-    """Leave a state for ``name`` holding only its frame record: nothing running, nothing registered."""
+def _keep_frame_record(
+    repo_root: Path,
+    name: str,
+    record: FrameRecord,
+    *,
+    wrapper_port: int | None = None,
+    services: Sequence[str] = (),
+) -> None:
+    """Leave a state for ``name`` holding its frame record and nothing running.
+
+    ``services`` are the rows still registered for it, with ``wrapper_port`` the port
+    they point at, so ``down`` removes them and the next boot takes that port again.
+    """
     state_path = _state_path(repo_root, name)
     try:
         state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1467,8 +1478,9 @@ def _keep_frame_record(repo_root: Path, name: str, record: FrameRecord) -> None:
             json.dumps(
                 {
                     "name": name,
+                    "wrapper_port": wrapper_port,
                     "pids": [],
-                    "services": [],
+                    "services": list(services),
                     FRAME_STATE_KEY: _frame_record_json(record),
                 },
                 indent=2,
@@ -1515,10 +1527,10 @@ def frame(
 
     Returns 1 on failure. A failed boot is torn down, a re-frame's row deregistered
     with it unless ``keeps_row_on_failure`` (a revive's, whose row is what an open
-    window and the shell find the instance by); a failed re-frame keeps only its
-    record (``read_frame``), so a later call can boot it again on a fresh port
-    without being told the note. An inner
-    path without a leading ``/``, a ``repo_root`` that is a linked git worktree, an
+    window and the shell find the instance by); a failed re-frame keeps its record
+    (``read_frame``), so a later call can boot it again without being told the note:
+    on a fresh port, or, when its row was kept, on the port that row points at. An
+    inner path without a leading ``/``, a ``repo_root`` that is a linked git worktree, an
     unreadable state file, or a previous wrapper that survives SIGKILL is refused
     before anything changes, leaving a previous frame as it was.
     """
@@ -1531,6 +1543,7 @@ def frame(
         return 1
     state_path = _state_path(repo_root, name)
     previous_port: int | None = None
+    recorded_port: int | None = None
     has_row = False
     is_reframe = state_path.exists()
     if is_reframe:
@@ -1554,7 +1567,8 @@ def frame(
                 f"{state_path} so it stays findable.\n"
             )
             return 1
-        previous_port = previous.get("wrapper_port")
+        recorded_port = previous.get("wrapper_port")
+        previous_port = recorded_port
         has_row = previous_port is not None
         # After a reboot the port can be another server's, which would answer the
         # health probe in place of a wrapper that could not bind it.
@@ -1641,7 +1655,11 @@ def frame(
             services=[] if keeps_row_on_failure else services,
             sleeper=sleeper,
         )
-        if is_reframe:
+        if is_reframe and keeps_row_on_failure:
+            _keep_frame_record(
+                repo_root, name, record, wrapper_port=recorded_port, services=services
+            )
+        elif is_reframe:
             _keep_frame_record(repo_root, name, record)
         return 1
     sys.stderr.write(

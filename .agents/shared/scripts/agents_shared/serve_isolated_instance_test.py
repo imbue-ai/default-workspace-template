@@ -2154,3 +2154,25 @@ def test_a_frame_that_does_not_come_back_leaves_its_app_registered_plainly(
     ]
     # The frame's row stays, so its window still offers to start it again.
     assert registry.removed == []
+
+
+def test_a_frame_whose_revive_failed_comes_back_on_its_port_and_down_still_removes_its_row(
+    tmp_path: Path,
+) -> None:
+    spawner = _FakeSpawner()
+    runner = _RecordingRunner(start_times={spawner.detached_pid: "boot"})
+    assert _frame(tmp_path, runner=runner, spawner=spawner) == 0
+    first_port = _wrapper_arg(spawner.detached_spawns[0], "--port")
+    _restart(runner, spawner)
+    assert (
+        _revive(tmp_path, _FRAME_NAME, runner=runner, http=_FakeHttp(lambda _url: 503))
+        == 1
+    )
+    retried = _FakeSpawner(detached_pid=8000)
+
+    assert _revive(tmp_path, _FRAME_NAME, runner=runner, spawner=retried) == 0
+
+    assert _wrapper_arg(retried.detached_spawns[0], "--port") == first_port
+    registry = _RecordingRegistry()
+    assert mod.down(_FRAME_NAME, tmp_path, runner=runner, registry=registry) == 0
+    assert registry.removed == [_FRAME_NAME]
