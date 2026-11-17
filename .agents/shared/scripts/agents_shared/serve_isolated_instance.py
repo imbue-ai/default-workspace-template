@@ -89,8 +89,9 @@ Exit codes:
     1  Failure to boot (partial state torn down); or, for ``refresh``, there was
        no refreshable instance, the old server survived SIGKILL, or the
        rebooted server never became healthy; or, for ``down``, a recorded process
-       survived SIGKILL (its state dir is kept so it stays findable); or a bad
-       argument / unreadable state file.
+       survived SIGKILL (its state dir is kept so it stays findable); or, for
+       ``up --service-name``, ``--repo-root`` is a git worktree (refused before
+       anything boots); or a bad argument / unreadable state file.
 """
 
 from __future__ import annotations
