@@ -3,6 +3,7 @@ import io
 import json
 import os
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import httpx
@@ -180,11 +181,16 @@ def test_a_file_asked_for_as_a_download_is_an_attachment_under_its_name_and_a_re
     missing_here = client.get("/missing.zip?download", headers={"Accept": "text/html,*/*"})
     assert missing_here.status_code == 404
     assert missing_here.content_type.startswith("text/plain")
-    assert missing_here.get_data(as_text=True) == "There's nothing at /missing.zip."
+    assert missing_here.get_data(as_text=True) == "It's no longer there."
     assert "Content-Disposition" not in missing_here.headers
     missing_there = client.get(f"/__remote/{DEVICE}/Users/kim/gone.png?download")
     assert missing_there.status_code == 404
     assert "Content-Disposition" not in missing_there.headers
+    # A folder's download loads in the same frame.
+    missing_folder = client.get("/missing/?zip", headers={"Accept": "text/html,*/*"})
+    assert missing_folder.status_code == 404
+    assert missing_folder.content_type.startswith("text/plain")
+    assert missing_folder.get_data(as_text=True) == "It's no longer there."
 
 
 def test_a_path_that_is_not_there_is_files_own_not_found_page_for_a_browser_and_plain_words_otherwise(
@@ -197,7 +203,8 @@ def test_a_path_that_is_not_there_is_files_own_not_found_page_for_a_browser_and_
 
     fetched = client.get("/missing/?json", headers={"Accept": "text/html,*/*"})
     assert fetched.status_code == 404
-    assert fetched.get_data(as_text=True) == "There's nothing at /missing/."
+    said = "It's no longer there."
+    assert fetched.get_json() == {"detail": said, "user_facing_message": said, "kind": "not_found"}
 
 
 def test_a_put_writes_the_file_creating_its_folders_and_keeping_its_mode(tmp_path: Path) -> None:
@@ -269,6 +276,98 @@ def test_a_move_never_replaces_what_is_there_nor_puts_a_folder_inside_itself(tmp
     assert (root / "box").is_dir()
 
 
+_IS_ROOT = os.geteuid() == 0
+
+
+@pytest.fixture
+def unwritable_folder(tmp_path: Path) -> Iterator[Path]:
+    """``/reports`` under the served root, which nothing can be written into; writable again afterwards so the
+    temporary tree can be removed."""
+    folder = tmp_path / "root" / "reports"
+    folder.mkdir(parents=True)
+    folder.chmod(0o555)
+    yield folder
+    folder.chmod(0o755)
+
+
+@pytest.mark.skipif(_IS_ROOT, reason="root writes into a folder whatever its mode")
+def test_a_move_into_a_folder_that_cannot_be_written_says_that_folder_refused_without_naming_the_file(
+    tmp_path: Path, unwritable_folder: Path
+) -> None:
+    client = _app(None, tmp_path)
+    (tmp_path / "root" / "notes.txt").write_text("a")
+
+    response = client.open("/notes.txt", method="MOVE", headers={"Destination": "http://localhost/reports/notes.txt"})
+
+    assert response.status_code == 403
+    answer = response.get_json()
+    assert answer["kind"] == "destination_not_writable"
+    assert "notes.txt" not in answer["user_facing_message"]
+    assert (tmp_path / "root" / "notes.txt").exists()
+
+
+@pytest.mark.skipif(_IS_ROOT, reason="root writes into a folder whatever its mode")
+def test_a_move_out_of_a_folder_that_cannot_be_written_says_the_folder_it_is_in_refused(
+    tmp_path: Path, unwritable_folder: Path
+) -> None:
+    client = _app(None, tmp_path)
+    unwritable_folder.chmod(0o755)
+    (unwritable_folder / "notes.txt").write_text("a")
+    unwritable_folder.chmod(0o555)
+
+    response = client.open("/reports/notes.txt", method="MOVE", headers={"Destination": "http://localhost/notes.txt"})
+
+    assert response.status_code == 403
+    assert response.get_json()["kind"] == "source_not_writable"
+
+
+@pytest.mark.skipif(_IS_ROOT, reason="root writes into a folder whatever its mode")
+def test_creating_in_a_folder_that_cannot_be_written_is_refused_in_words_for_people(
+    tmp_path: Path, unwritable_folder: Path
+) -> None:
+    client = _app(None, tmp_path)
+
+    response = client.open("/reports/drafts", method="MKCOL")
+
+    assert response.status_code == 403
+    answer = response.get_json()
+    assert answer["kind"] == "permission_denied"
+    assert answer["user_facing_message"] == "You don't have permission to change this."
+    assert "/reports/drafts" in answer["detail"]
+
+
+@pytest.mark.skipif(_IS_ROOT, reason="root reads a file whatever its mode")
+def test_a_download_that_cannot_be_read_says_it_cannot_be_opened(tmp_path: Path) -> None:
+    client = _app(None, tmp_path)
+    unreadable = tmp_path / "root" / "notes.txt"
+    unreadable.parent.mkdir(parents=True, exist_ok=True)
+    unreadable.write_text("a")
+    unreadable.chmod(0o000)
+
+    response = client.get("/notes.txt?download")
+
+    assert response.status_code == 403
+    # Plain text, which the page quotes as written after "Couldn't download notes.txt:".
+    assert response.get_data(as_text=True) == "You don't have permission to open this."
+
+
+@pytest.mark.skipif(_IS_ROOT, reason="root lists a folder whatever its mode")
+def test_a_window_opened_on_a_folder_that_cannot_be_listed_reads_the_refusal_while_the_frontend_gets_json(
+    tmp_path: Path, unwritable_folder: Path
+) -> None:
+    client = _app(None, tmp_path)
+    unwritable_folder.chmod(0o000)
+
+    page = client.get("/reports/", headers={"Accept": "text/html,*/*"})
+    fetched = client.get("/reports/?json", headers={"Accept": "*/*"})
+
+    assert page.status_code == 403
+    assert page.content_type.startswith("text/plain")
+    assert page.get_data(as_text=True) == "You don't have permission to open this."
+    assert fetched.status_code == 403
+    assert fetched.get_json()["kind"] == "permission_denied"
+
+
 def test_a_move_from_the_workspace_onto_a_computer_is_refused(tmp_path: Path) -> None:
     client = _app(None, tmp_path)
     (tmp_path / "root" / "notes.txt").write_text("a")
@@ -303,7 +402,11 @@ def test_a_path_that_climbs_with_dot_segments_is_refused(tmp_path: Path) -> None
     client = _app(None, tmp_path)
     (tmp_path / "secret.txt").write_text("outside the root")
     assert client.get("/..%2fsecret.txt").status_code == 400
-    assert client.get("/a/%2e%2e/%2e%2e/secret.txt").status_code == 400
+    climbing = client.get("/a/%2e%2e/%2e%2e/secret.txt")
+    assert climbing.status_code == 400
+    # The sentence names only the cause, as the page names what failed; the path stays under detail.
+    assert climbing.get_json()["user_facing_message"] == "That isn't a path to a file or folder."
+    assert "/a/../../secret.txt" in climbing.get_json()["detail"]
 
 
 def test_the_build_is_served_with_hashed_files_cached_for_good(tmp_path: Path) -> None:
@@ -540,8 +643,39 @@ def test_a_change_the_computer_refuses_is_answered_as_read_only(tmp_path: Path) 
     computer.files["/Users/kim/photo.png"] = b"\x89PNG"
     response = _app(computer, tmp_path).put(f"/__remote/{DEVICE}/Users/kim/photo.png", data=b"new")
     assert response.status_code == 403
-    assert response.get_data(as_text=True) == "Your computer only shares this to read."
+    said = "Your computer only shares this to read."
+    assert response.get_json() == {"detail": said, "user_facing_message": said, "kind": "shared_read_only"}
     assert computer.files["/Users/kim/photo.png"] == b"\x89PNG"
+
+
+def test_a_change_the_computer_refuses_in_its_own_words_keeps_them_behind_the_details(tmp_path: Path) -> None:
+    computer = FakeComputer(permissions=["minds-file-server-read-/Users/kim/Atkinson"], folders={})
+    response = _app(computer, tmp_path).delete(f"/__remote/{DEVICE}/Users/kim/Atkinson/gone.otf")
+    assert response.status_code == 404
+    assert response.get_json() == {
+        "detail": "DELETE /Users/kim/Atkinson/gone.otf: Not Found",
+        "user_facing_message": "It's no longer there.",
+        "kind": "not_found",
+    }
+
+
+def test_a_change_the_computer_fails_says_so_with_its_status_only_behind_the_details(tmp_path: Path) -> None:
+    computer = _FailingComputer(permissions=["minds-file-server-write-/Users/kim/notes.txt"], folders={})
+    response = _app(computer, tmp_path).put(f"/__remote/{DEVICE}/Users/kim/notes.txt", data=b"new")
+    assert response.status_code == 500
+    answer = response.get_json()
+    assert answer["user_facing_message"] == "Your computer couldn't do this."
+    assert "500" not in answer["user_facing_message"]
+    assert answer["detail"] == "PUT /Users/kim/notes.txt: disk error"
+
+
+class _FailingComputer(FakeComputer):
+    """A computer whose file server fails every write."""
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(500, text="disk error")
+        return super().handle(request)
 
 
 class _GarbledGateway(FakeComputer):

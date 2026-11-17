@@ -114,7 +114,7 @@ class FakeComputer:
         if request.method == "PUT":
             self.files[on_computer] = request.read()
             return httpx.Response(201)
-        return httpx.Response(404)
+        return httpx.Response(404, text="Not Found")
 
     def streamed(self, request: httpx.Request) -> httpx.Response:
         """The answer as the network gives it: a body still to be read, which the server relays as it arrives."""

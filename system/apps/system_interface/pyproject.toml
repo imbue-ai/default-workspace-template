@@ -46,6 +46,7 @@ license-files = [
 
 [dependency-groups]
 dev = [
+    "app-manifest[testing]",
     "app-schema[testing]",
     "playwright>=1.40",
     "pytest-playwright>=0.4",
