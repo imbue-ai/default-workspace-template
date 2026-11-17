@@ -1016,15 +1016,14 @@ nothing itself. The mic shows one of six states, named by its
 - `loading`: the load is shown. The mic eases into a `Loading voice model` label
   with the download's progress as a bar under it, the composer's box is marked
   `data-composer-state="blocked-loading"`, and the text box is disabled and
-  dimmed under a scrim while the paperclip and Send stay live.
+  dimmed while the paperclip and Send stay live.
 - `ready`: the model is loaded, and a press dictates at once.
 - `starting`, `listening`, `stopping`: a dictation is running (a spinner while
   starting and stopping, the neutral pressed tint with its capsule filling to the
   input level while listening). Two short bell tones say when the microphone is
   open.
 
-A shown load can be dismissed: a press on the label, a press on the dimmed text
-box (which puts the caret where the press landed), Escape, the mic's shortcut,
+A shown load can be dismissed: a press on the label, Escape, the mic's shortcut,
 or the page going out of view (a press right behind the one that asked for the
 load is that press landing twice, and dismisses nothing). Dismissing hands the
 box back for typing and calls off the dictation the load was to go on to, but

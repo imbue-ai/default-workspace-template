@@ -2613,11 +2613,10 @@ describe("MessageInput dictation", () => {
 
   function isLoadShown(tree: unknown): boolean {
     const isBlocked = composerBox(tree).attrs!["data-composer-state"] === "blocked-loading";
-    const isScrimDrawn = findByClass(tree, "message-input-scrim") !== undefined;
     const isTextboxDisabled = findByTag(tree, "textarea")?.attrs?.disabled === true;
     const isLabelLive = findByClass(tree, "dictation-morph-label")?.attrs?.disabled === false;
-    const shown = [micState(tree) === "loading", isBlocked, isScrimDrawn, isTextboxDisabled, isLabelLive];
-    // The mic's label, the box's mark, the scrim and the disabled text box come and go together.
+    const shown = [micState(tree) === "loading", isBlocked, isTextboxDisabled, isLabelLive];
+    // The mic's label, the box's mark and the disabled text box come and go together.
     expect(new Set(shown).size, `the loading look is drawn in part: ${shown.join(", ")}`).toBe(1);
     return shown[0];
   }
@@ -2820,10 +2819,7 @@ describe("MessageInput dictation", () => {
     expect(isLoadShown(render())).toBe(true);
     expect(lastWanted()).toBe(true);
     // A load left to run on in the background holds nothing.
-    (findByClass(render(), "message-input-scrim")!.attrs!.onclick as (event: unknown) => void)({
-      clientX: 0,
-      clientY: 0,
-    });
+    pageListener("keydown")({ key: "Escape", defaultPrevented: false, target: document, preventDefault: vi.fn() });
     expect(isLoadShown(render())).toBe(false);
     expect(lastWanted()).toBe(false);
     pressMic(render);
@@ -3009,7 +3005,7 @@ describe("MessageInput dictation", () => {
       expect(mic(tree).attrs!["data-hover-tooltip"]).toMatch(/^Dictate once the speech model has loaded \(/);
     });
 
-    it("asks for the load once at a press and shows it: the label, the blocked box, the scrim", async () => {
+    it("asks for the load once at a press and shows it: the label and the blocked box, with no wash over it", async () => {
       const { render } = await composerWithoutModel();
       pressMic(render);
       expect(mocks.speechModels.request).toHaveBeenCalledTimes(1);
@@ -3019,9 +3015,7 @@ describe("MessageInput dictation", () => {
       expect(isLoadShown(tree)).toBe(true);
       expect(composerBox(tree).attrs!["data-composer-state"]).toBe("blocked-loading");
       expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
-      // Positioned, so it lies over the dimmed text box, which paints over anything that is not and would take
-      // the press meant for it.
-      expect(findByClass(tree, "message-input-scrim")!.attrs!.className).toMatch(/(^| )relative( |$)/);
+      expect(findByClass(tree, "message-input-scrim")).toBeUndefined();
       expect(findByClass(tree, "dictation-setup-badge")).toBeUndefined();
       // The buttons beside the box stay live, and nothing listens.
       expect(findByAttr(tree, "aria-label", "Attach files")?.attrs?.disabled).toBe(false);
@@ -3053,16 +3047,6 @@ describe("MessageInput dictation", () => {
         trigger: "the mic's shortcut",
         repeatsThePress: true,
         dismiss: () => pageListener("keydown")(shortcutChord()),
-      },
-      {
-        trigger: "a press on the dimmed text box",
-        repeatsThePress: false,
-        dismiss: (render: () => unknown) => {
-          (findByClass(render(), "message-input-scrim")!.attrs!.onclick as (event: unknown) => void)({
-            clientX: 0,
-            clientY: 0,
-          });
-        },
       },
       {
         trigger: "Escape from the page",
@@ -3481,61 +3465,6 @@ describe("MessageInput dictation", () => {
         redraw.mockRestore();
       }
       expect((findByClass(render(), "dictation-morph-bar")!.attrs!.style as { width: string }).width).toBe("0%");
-    });
-
-    describe("a press on the dimmed text box", () => {
-      const page = document as unknown as { caretPositionFromPoint?: unknown };
-
-      afterEach(() => {
-        delete page.caretPositionFromPoint;
-      });
-
-      /** Show a load, then press the scrim at a point. ``locate`` is the browser's answer for where the caret
-       *  would go there, given the text box; undefined where the browser cannot be asked. */
-      async function pressScrim(locate: ((textbox: unknown) => unknown) | undefined) {
-        const { render } = await composerWithoutModel();
-        const { textarea } = withTextbox(render);
-        const caretPositionFromPoint = vi.fn((_x: number, _y: number) => locate?.(textarea));
-        if (locate !== undefined) page.caretPositionFromPoint = caretPositionFromPoint;
-        pressMic(render);
-        const drawNow = vi.spyOn(m.redraw, "sync");
-        try {
-          (findByClass(render(), "message-input-scrim")!.attrs!.onclick as (event: unknown) => void)({
-            clientX: 40,
-            clientY: 12,
-          });
-          return { render, textarea, caretPositionFromPoint, drawnAt: drawNow.mock.invocationCallOrder[0] };
-        } finally {
-          drawNow.mockRestore();
-        }
-      }
-
-      it("puts the caret where the press landed, once the text box is live again", async () => {
-        const { render, textarea, caretPositionFromPoint, drawnAt } = await pressScrim((textbox) => ({
-          offsetNode: textbox,
-          offset: 7,
-        }));
-        expect(isLoadShown(render())).toBe(false);
-        expect(caretPositionFromPoint).toHaveBeenCalledWith(40, 12);
-        expect(textarea.setSelectionRange).toHaveBeenCalledTimes(1);
-        expect(textarea.setSelectionRange).toHaveBeenCalledWith(7, 7);
-        // The page is drawn first, so the scrim is off the text box by the time the browser is asked.
-        expect(drawnAt).toBeLessThan(caretPositionFromPoint.mock.invocationCallOrder[0]);
-      });
-
-      it("leaves the caret where it was when the press landed outside the text, or the browser cannot say", async () => {
-        const outside = await pressScrim(() => ({ offsetNode: { tagName: "DIV" }, offset: 3 }));
-        expect(outside.caretPositionFromPoint).toHaveBeenCalledTimes(1);
-        expect(outside.textarea.setSelectionRange).not.toHaveBeenCalled();
-        const nowhere = await pressScrim(() => null);
-        expect(nowhere.caretPositionFromPoint).toHaveBeenCalledTimes(1);
-        expect(nowhere.textarea.setSelectionRange).not.toHaveBeenCalled();
-        delete page.caretPositionFromPoint;
-        const unsupported = await pressScrim(undefined);
-        expect(unsupported.textarea.setSelectionRange).not.toHaveBeenCalled();
-        expect(unsupported.drawnAt).toBeDefined();
-        expect(isLoadShown(unsupported.render())).toBe(false);
-      });
     });
   });
 

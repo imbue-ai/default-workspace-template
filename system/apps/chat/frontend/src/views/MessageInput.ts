@@ -534,7 +534,7 @@ function providerNotice(markerClass: string, sentence: string, onChoose: () => v
 }
 
 /** What the composer's box is in the middle of, which the parts inside it take their look from: blocked while
- *  the speech model's load is shown (the text box disabled under a scrim, the mic a label), or nothing. */
+ *  the speech model's load is shown (the text box disabled, the mic a label), or nothing. */
 type ComposerState = "blocked-loading";
 
 /** The composer's box, beside ``leading`` when there is one. The row is there either way, so the box (and the
@@ -901,7 +901,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
    *
    * This is the one place a shown load is dismissed: every trigger calls it, and a trigger added later should
    * too. The triggers: a press on the loading label, or on the mic or its shortcut while the load is shown
-   * (``handleLoadingPress``); a press on the dimmed text box (``handleScrimPress``); Escape from the page
+   * (``handleLoadingPress``); Escape from the page
    * (``handleLoadingEscape``); the page going out of view (``handlePageHidden``); and the composer turning to
    * another chat, or leaving the page.
    */
@@ -914,23 +914,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
 
   /** A press on what stands for the shown load, the label or the mic under it (which the shortcut presses),
    *  dismisses it. One right behind the press that asked for the load is that press landing twice, and does
-   *  nothing; Escape, the dimmed text box and the page hiding are other gestures, and dismiss at any time. */
+   *  nothing; Escape and the page hiding are other gestures, and dismiss at any time. */
   function handleLoadingPress(): void {
     if (modelLoadShownAtMs !== null && Date.now() - modelLoadShownAtMs < REPEATED_PRESS_WINDOW_MS) return;
     dismissModelLoad();
-  }
-
-  /** A press on the dimmed text box dismisses the load and puts the caret where the press landed. */
-  function handleScrimPress(event: MouseEvent): void {
-    dismissModelLoad();
-    // Drawn now rather than at the next frame: the scrim comes off the text box, which its own update enables
-    // and focuses, before the browser is asked what lies under the press.
-    m.redraw.sync();
-    const textarea = messageTextareaElement;
-    if (textarea === null || typeof document.caretPositionFromPoint !== "function") return;
-    const position = document.caretPositionFromPoint(event.clientX, event.clientY);
-    if (position === null || position.offsetNode !== textarea) return;
-    textarea.setSelectionRange(position.offset, position.offset);
   }
 
   /** Begin a dictation whose words land where the caret is now. The speech model is loaded; a load this
@@ -2253,7 +2240,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       const canSendNow = canSend && !isComposerDisabled;
       // The box is read-only while dictation owns it, from the press until the last words land.
       const isDictating = dictationState !== "idle";
-      // While the speech model's load is shown the box is blocked: the text box disabled and dimmed under a scrim,
+      // While the speech model's load is shown the box is blocked: the text box disabled and dimmed,
       // the mic the label that says why. The paperclip and Send stay live.
       const isBlockedByLoading = isModelLoadShown();
       const isTextboxDisabled = isComposerDisabled || isBlockedByLoading;
@@ -2400,18 +2387,6 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     onkeydown: handleKeydown,
                     onpaste: handlePaste,
                   }),
-                  // Over the text box, in its cell, so it follows the box into the full-width row when stacked,
-                  // and takes the press the disabled text box cannot. Positioned, because the dimmed text box is
-                  // less than opaque, and such an element paints over any that is not positioned.
-                  isBlockedByLoading
-                    ? m("div", {
-                        class:
-                          "message-input-scrim relative col-start-2 row-start-1 cursor-text self-stretch rounded-md " +
-                          "bg-fill-hover group-data-[stacked]/row:col-span-3 group-data-[stacked]/row:col-start-1",
-                        "aria-hidden": "true",
-                        onclick: handleScrimPress,
-                      })
-                    : null,
                   m(
                     Button,
                     {
