@@ -279,7 +279,7 @@ class Viewer {
     const failure = await postStart();
     if (failure === null) return;
     const told = failureSentence(failure, START_FAILED_STEM);
-    this.startFailure = { message: told.message, details: told.details };
+    this.startFailure = { message: told.message, details: told.details, isReportable: told.isReportable };
     this.render();
   }
 

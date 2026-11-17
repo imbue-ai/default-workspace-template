@@ -20,10 +20,12 @@ export const ASK_AGENT_TO_FIX_LABEL = "Ask an agent to fix this";
 /** What the overlay needs of the shell connection for its failure buttons. */
 export type FailureHost = Pick<ShellConnection, "hasShell" | "startNewWithText" | "canReportBug" | "reportBug">;
 
-/** A failure the page itself ran into (a refused Start, a state it could not load): our sentence and its details. */
+/** A failure the page itself ran into (a refused Start, a state it could not load): our sentence, its details, and
+ *  whether the sentence asks for a bug report. */
 export interface PageFailure {
   readonly message: string;
   readonly details: string | null;
+  readonly isReportable: boolean;
 }
 
 /** What the main overlay shows: hidden (null), or a title, a line under it, the details, and the offered actions. */
@@ -110,7 +112,12 @@ function stoppedView(state: ScreenStateDocument, startFailure: PageFailure | nul
   }
   // A Start that was refused or not answered says so under the title, its own details first.
   if (startFailure === null) return stopped;
-  return { ...stopped, body: startFailure.message, details: joinDetails([startFailure.details, details]) };
+  return {
+    ...stopped,
+    body: startFailure.message,
+    details: joinDetails([startFailure.details, details]),
+    isReportable: stopped.isReportable || startFailure.isReportable,
+  };
 }
 
 /** What the main overlay shows for the stack's state and this viewer's connection to it; null hides it. */

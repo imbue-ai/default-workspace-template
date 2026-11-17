@@ -327,12 +327,42 @@ describe("Overlays for the stack's state", () => {
       "idle",
       null,
       null,
-      { message: "The workspace didn't answer, so Imbue Studio can't tell whether this went through.", details: null },
+      {
+        message: "The workspace didn't answer, so Imbue Studio can't tell whether this went through.",
+        details: null,
+        isReportable: false,
+      },
     );
-    const seen = shown(overlays);
-    expect(seen.title).toBe("The Screen was stopped.");
-    expect(seen.body).toBe("The workspace didn't answer, so Imbue Studio can't tell whether this went through.");
-    expect(seen.details).toBe("Quit from the window menu");
+    expect(shown(overlays)).toEqual({
+      title: "The Screen was stopped.",
+      body: "The workspace didn't answer, so Imbue Studio can't tell whether this went through.",
+      details: "Quit from the window menu",
+      buttons: ["Start"],
+    });
+  });
+
+  it("offers Report a bug for a refused Start whose sentence asks for one, over a stop that asks for none", () => {
+    const host = fakeHost();
+    const overlays = overlaysWith(host);
+    overlays.update(
+      state({ ...STOPPED, stop_reason: "Quit from the window menu", stop_cause: "requested" }),
+      "idle",
+      null,
+      null,
+      {
+        message: "The Screen couldn't start. Try again. If this persists, report a bug.",
+        details: "HTTP 500\nsupervisord refused the start",
+        isReportable: true,
+      },
+    );
+    expect(shown(overlays).buttons).toEqual(["Start", "Report a bug"]);
+    overlays.element.querySelector<HTMLButtonElement>("[data-screen-report-bug]")?.click();
+    expect(host.reports).toEqual([
+      {
+        message: "The Screen was stopped. The Screen couldn't start. Try again. If this persists, report a bug.",
+        details: "HTTP 500\nsupervisord refused the start\nQuit from the window menu",
+      },
+    ]);
   });
 
   it("keeps a refused sign-in's reason behind See details while it retries", () => {
