@@ -28,6 +28,7 @@ import {
   themeRecord,
   windowRecord,
 } from "../testing/records";
+import { refusedWith } from "../testing/failures";
 import type { FailureNotice } from "../model/failures";
 import type { BubbleWire, GridCell } from "../model/records";
 import { STANDARD_CHROME, type ThemeChrome } from "../model/themes";
@@ -65,11 +66,6 @@ const APP_GONE_SENTENCE = "This app isn't available in this workspace right now,
  *  and the kind the desktop words it by. */
 function shellRefusal(status: number, detail: string, sentence: string, kind: string, reportable = false): HttpError {
   return refusedWith(status, { detail, user_facing_message: sentence, reportable, kind });
-}
-
-/** The error the REST helper throws for ``status`` answered with ``body`` to a change. */
-function refusedWith(status: number, body: unknown, rawText: string | null = null): HttpError {
-  return new HttpError(readFailure({ status, body, rawText, requestKind: "change" }));
 }
 
 /** A report that moves the client, as the store sends one: with an id minted for it, made at the newest revision

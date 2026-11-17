@@ -3,10 +3,7 @@ import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { failureSentence, readFailure } from "@imbue/workspace-ui/src/models/failure";
-import { HttpError } from "@imbue/workspace-ui/src/models/http";
-import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import { isRetryable } from "../model/failures";
+import { refusedWith, wordFailureAsTheStoreDoes } from "../testing/failures";
 import { desktopRecord } from "../testing/records";
 import { WallpaperChooserDialog, isSameWallpaper } from "./WallpaperChooserDialog";
 import type { WallpaperChooserDialogAttrs } from "./WallpaperChooserDialog";
@@ -15,11 +12,6 @@ afterEach(unmountViews);
 
 const reportBug = vi.fn();
 
-/** A refusal of a change as the REST helper throws it. */
-function refusedWith(status: number, body: unknown, rawText: string | null = null): HttpError {
-  return new HttpError(readFailure({ status, body, rawText, requestKind: "change" }));
-}
-
 const ARCS = { kind: "bundled" as const, name: "arcs", url: "/wallpapers/bundled/arcs" };
 const DAWN = { kind: "bundled" as const, name: "dawn", url: "/wallpapers/bundled/dawn" };
 
@@ -27,12 +19,7 @@ function render(overrides: Partial<WallpaperChooserDialogAttrs> = {}): Wallpaper
   const attrs: WallpaperChooserDialogAttrs = {
     desktop: desktopRecord("home", { name: "Home" }),
     wallpapers: [ARCS, DAWN],
-    // As the store words it: the sentence, with Try again where the failure is one to try again.
-    wordFailure: (whatFailed, error, retry) => {
-      const failure = describeRequestFailure(error);
-      const actions = isRetryable(failure) ? [{ label: "Try again", run: retry }] : [];
-      return { ...failureSentence(failure, whatFailed), actions };
-    },
+    wordFailure: wordFailureAsTheStoreDoes,
     onReportBug: reportBug,
     onSave: vi.fn(async () => undefined),
     onCancel: vi.fn(),
