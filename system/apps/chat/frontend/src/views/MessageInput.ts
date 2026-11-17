@@ -1954,8 +1954,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         }
         // The chat app already tried once more for an agent that was down and would not start,
         // and Restart is the stronger way to bring it up, so Retry is not offered; nor for a chat that is gone, whose
-        // account was signed out, or that never became an agent, which neither can clear. Every other kind -- and anything
-        // unclassified -- keeps it.
+        // account was signed out, or that never became an agent, which neither can clear. Every other kind -- and
+        // anything unclassified -- keeps it.
         const isResendable = !KINDS_NOTHING_HERE_CAN_CLEAR.has(actionFailureKind);
         const isRepeatable =
           isResendable &&
