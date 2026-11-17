@@ -8,8 +8,9 @@ import type { ButtonOptions, ButtonVariant } from "./Button";
 /**
  * The two buttons a failure in a framed app page offers beside its sentence, both of which go through the shell that
  * frames the page: "Ask an agent to fix this" starts a new chat with the failure as its task, and "Report a bug" opens
- * Imbue Studio's bug report with the failure attached. Each renders nothing where it could not work, so a surface draws both unconditionally;
- * it reads the connection at render time, so the page redraws when a handshake arrives (as every page does).
+ * Imbue Studio's bug report with the failure attached. Each renders nothing where it could not work, so a surface draws
+ * both unconditionally; it reads the connection at render time, so the page redraws when a handshake arrives (as every
+ * page does).
  */
 
 export const ASK_AGENT_TO_FIX_LABEL = "Ask an agent to fix this";
