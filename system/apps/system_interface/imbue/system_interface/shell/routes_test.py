@@ -3532,26 +3532,24 @@ def test_reviving_a_stopped_preview_runs_its_instances_revive_from_the_workspace
     assert Path(call["cwd"]).resolve() == repo_root.resolve()
 
 
-def test_a_revive_whose_boot_failed_says_to_try_again(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
-    write_stub_revive_script(tmp_path / "repo", exit_code=1)
-    client = _stopped_preview_application(tmp_path, broadcaster).test_client()
-
-    answer = client.post("/api/apps/inbox-sketch/revive")
-
-    assert answer.status_code == 502
-    assert answer.get_json()["detail"] == "This UI sketch didn't start. Try again in a moment."
-
-
-def test_a_preview_that_cannot_come_back_says_to_ask_for_a_new_one(
-    tmp_path: Path, broadcaster: WebSocketBroadcaster
+@pytest.mark.parametrize(
+    ("app", "exit_code", "status", "detail"),
+    [
+        ("inbox-sketch", 1, 502, "This UI sketch didn't start. Try again in a moment."),
+        ("today-preview", 3, 409, "This preview can't be started again. Ask in chat for a new one."),
+    ],
+    ids=["boot-failed", "cannot-come-back"],
+)
+def test_a_failed_revive_says_whether_to_try_again_or_ask_for_a_new_one(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, app: str, exit_code: int, status: int, detail: str
 ) -> None:
-    write_stub_revive_script(tmp_path / "repo", exit_code=3)
+    write_stub_revive_script(tmp_path / "repo", exit_code=exit_code)
     client = _stopped_preview_application(tmp_path, broadcaster).test_client()
 
-    answer = client.post("/api/apps/today-preview/revive")
+    answer = client.post(f"/api/apps/{app}/revive")
 
-    assert answer.status_code == 409
-    assert answer.get_json()["detail"] == "This preview can't be started again. Ask in chat for a new one."
+    assert answer.status_code == status
+    assert answer.get_json()["detail"] == detail
 
 
 def test_an_app_that_is_no_preview_is_not_revived(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
