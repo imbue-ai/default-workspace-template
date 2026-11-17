@@ -803,11 +803,12 @@ an **agent** and a **terminal** rather than a repair. "Ask an agent to fix
 this" sends the agent the message the command below carries, through the
 workspace's secondary text action (Chat's New Chat on a stock workspace, so the
 repair gets a chat of its own), and frames the agent's chat on the page. Behind
-"See details" are the command, for whoever would rather run it themselves, a
-session of the already-running terminal app in a frame, made when the details
-are first opened, and, after a refused attempt, why the agent didn't start. With no app to
-ask an agent through, the button is not offered and the details start open; with
-no terminal, the details say so. The page cannot post to another app's origin,
+"See details" are the command, for whoever would rather run it themselves,
+"Open this workspace's terminal", whose session of the already-running terminal
+app is made in a frame only when that section is first opened, and, after a
+refused attempt, why the agent didn't start. With no app to ask an agent
+through, the button is not offered and the details and the terminal start
+open; with no terminal, the details say so. The page cannot post to another app's origin,
 so both launches go through the shell's `POST /api/not-built/launch` (desktop
 contracts.md section 5.1), which answers where the launched page is. The command:
 

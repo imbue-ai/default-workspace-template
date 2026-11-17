@@ -294,14 +294,17 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
          stands on its own wherever the reader finds a shell, so it keeps its own
          introduction above and is never left orphaned when there is no terminal
          to offer. -->
-    <p id="terminal-intro" hidden>You can run that -- or do the repair yourself --
-       in this workspace's terminal, below.</p>
     <p id="no-terminal">The workspace's terminal isn't running yet, so there is
        nowhere to run this here.</p>
-    <p id="terminal-failure" hidden></p>
-    <div id="terminal-slot" hidden>
-      <iframe id="terminal" title="Workspace terminal"></iframe>
-    </div>
+    <details id="terminal-details" hidden>
+      <summary>Open this workspace's terminal</summary>
+      <p id="terminal-intro" hidden>You can run that -- or do the repair yourself --
+         in this workspace's terminal, below.</p>
+      <p id="terminal-failure" hidden></p>
+      <div id="terminal-slot" hidden>
+        <iframe id="terminal" title="Workspace terminal"></iframe>
+      </div>
+    </details>
   </details>
 </main>
 <script>
@@ -425,14 +428,19 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
     });
   }
 
-  // The terminal is a session of its own, made when the reader first opens the details rather than on every load
-  // of this page, so a page left open or reloaded does not pile up sessions nobody looks at.
+  // The terminal is a session of its own, made when the reader first opens its section rather than on every load
+  // of this page or every look at the details, so a page left open or reloaded does not pile up sessions nobody
+  // looks at.
   var details = document.getElementById("repair-details");
+  var terminalDetails = document.getElementById("terminal-details");
   var isTerminalOffered = Boolean(terminalLabel && appOrigin(terminalLabel));
-  if (isTerminalOffered) document.getElementById("no-terminal").hidden = true;
+  if (isTerminalOffered) {
+    document.getElementById("no-terminal").hidden = true;
+    terminalDetails.hidden = false;
+  }
   var isTerminalAsked = false;
-  details.addEventListener("toggle", function () {
-    if (!details.open || !isTerminalOffered || isTerminalAsked) return;
+  terminalDetails.addEventListener("toggle", function () {
+    if (!terminalDetails.open || !isTerminalOffered || isTerminalAsked) return;
     isTerminalAsked = true;
     launch("terminal", "The workspace's terminal couldn't be opened here").then(function (answer) {
       var page = pageAt(answer);
@@ -446,8 +454,11 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
       line.hidden = false;
     });
   });
-  // With no agent to offer, what is behind the details is the only way out, so it starts open.
-  if (!isAgentOffered) details.open = true;
+  // With no agent to offer, what is behind the details is the only way out, so it starts open, the terminal too.
+  if (!isAgentOffered) {
+    details.open = true;
+    if (isTerminalOffered) terminalDetails.open = true;
+  }
 
   // Ask whether the bundle is back rather than reloading blind. The reply
   // carries the same header the reveal flow's own health check reads, so a

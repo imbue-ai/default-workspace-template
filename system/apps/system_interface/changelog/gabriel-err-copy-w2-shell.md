@@ -20,4 +20,4 @@ The workspace desktop says what failed in its own words, names apps as people kn
 
 - A stopped app's page says "Starting <name>..." without guessing a cause; one that couldn't start waits for Try again instead of reloading on its own, offers an agent to look at it, and keeps the log command behind "See details".
 
-- The "interface needs to be rebuilt" page offers "Ask an agent to fix this", which starts a new chat and shows it; the command, a working terminal session and, after a refused attempt, its reason are behind the page's one "See details". A page load that fails shows a page of ours with Try again instead of raw JSON.
+- The "interface needs to be rebuilt" page offers "Ask an agent to fix this", which starts a new chat and shows it; the command, a working terminal session (made only when its own section is opened) and, after a refused attempt, its reason are behind the page's one "See details". A page load that fails shows a page of ours with Try again instead of raw JSON.

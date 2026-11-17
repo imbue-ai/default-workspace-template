@@ -43,6 +43,13 @@ def test_the_not_built_page_asks_an_agent_and_frames_its_chat_and_a_terminal_ses
         # The workspace's front door stamps every request it forwards with who sent it; a request under the
         # coordinate's host that carries none is refused.
         page.set_extra_http_headers(identity_headers(ANONYMOUS_OWNER))
+        terminal_launches: list[str] = []
+        page.on(
+            "request",
+            lambda request: terminal_launches.append(request.url)
+            if request.method == "POST" and '"terminal"' in (request.post_data or "")
+            else None,
+        )
         page.goto(f"http://shell-z.{_COORDINATE}:{served.port}/")
         # The command and the terminal wait behind "See details"; the agent is the way out on the page.
         expect(page.locator("#repair-command")).not_to_be_visible()
@@ -60,6 +67,9 @@ def test_the_not_built_page_asks_an_agent_and_frames_its_chat_and_a_terminal_ses
         expect(page.locator("#ask-agent-failure-reason")).to_contain_text("Why the agent didn't start:")
         expect(page.locator("#ask-agent-failure-details")).to_contain_text("HTTP 502")
         expect(page.locator("#ask-agent-failure-details")).to_contain_text("boom")
+        # Reading the reason opens no terminal session: that waits for the terminal's own section.
+        page.wait_for_timeout(500)
+        assert terminal_launches == []
         see_details.click()
 
         ask.click()
@@ -73,10 +83,13 @@ def test_the_not_built_page_asks_an_agent_and_frames_its_chat_and_a_terminal_ses
 
         page.get_by_text("See details", exact=True).click()
         expect(page.locator("#repair-command")).to_be_visible()
+        assert terminal_launches == []
+        page.get_by_text("Open this workspace's terminal", exact=True).click()
         expect(page.locator("#terminal")).to_have_attribute(
             "src", f"http://terminal-x1.{_COORDINATE}:{served.port}/new"
         )
         expect(page.locator("#no-terminal")).to_be_hidden()
+        assert len(terminal_launches) == 1
 
 
 def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(closed_port: int, page: Page) -> None:
