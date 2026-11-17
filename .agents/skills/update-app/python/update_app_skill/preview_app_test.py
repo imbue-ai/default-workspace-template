@@ -707,6 +707,53 @@ def test_re_upping_a_framed_sibling_on_its_own_moves_the_shells_registry_copy_wi
     assert mod._recorded_siblings(tmp_path, "system_interface") == ["chat"]
 
 
+def test_a_framed_siblings_re_up_rewrites_the_shells_copy_from_the_live_registry_whatever_the_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worktree = _write_worktree(tmp_path)
+    monkeypatch.delenv("MINDS_APPS_FILE", raising=False)
+    live_registry = tmp_path / "data" / ".state" / "apps.toml"
+    live_registry.parent.mkdir(parents=True)
+    live_registry.write_text(
+        _dump_registry(
+            [
+                {"name": "chat", "url": "http://localhost:8010", "label": "chat-live"},
+                {
+                    "name": "terminal",
+                    "url": "http://localhost:7681",
+                    "label": "terminal-live",
+                },
+                {
+                    "name": "chat-preview-app",
+                    "url": "http://localhost:1",
+                    "label": "chat-preview-x1y2",
+                },
+            ]
+        )
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    instances = _RecordingInstances(tmp_path)
+    _up_shell_with_chat(tmp_path, worktree, instances)
+
+    assert (
+        boot.up(
+            "chat",
+            worktree,
+            tmp_path,
+            instance_key="agent-1",
+            instances=instances,
+            dump_registry=_dump_registry,
+        )
+        == 0
+    )
+
+    rows = _shell_registry_rows(tmp_path)
+    assert rows["chat"]["url"] == mod.live_preview_url(tmp_path, "chat")
+    assert rows["terminal"]["url"] == "http://localhost:7681"
+
+
 def test_a_user_built_app_previews_from_its_own_projects_venv(tmp_path: Path) -> None:
     # A user-built app is a standalone project the root members do not name, so its
     # preview boots it the way its program does; a built-in keeps the root venv.

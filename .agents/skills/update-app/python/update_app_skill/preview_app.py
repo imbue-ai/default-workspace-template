@@ -53,7 +53,6 @@ from pathlib import Path
 
 from agents_shared import serve_isolated_instance
 from app_manifest.errors import ManifestLoadError
-from app_manifest.registry_location import registry_path
 from app_registration import forward_port
 
 # Where the shared substrate files each instance, and where this script keeps what it
@@ -192,6 +191,11 @@ def live_preview_url(repo_root: Path, app_name: str) -> str | None:
     return f"http://127.0.0.1:{int(str(port))}" if port else None
 
 
+def live_registry_path(repo_root: Path) -> Path:
+    """The workspace's registry: the live checkout's, even when ``repo_root`` is a git worktree."""
+    return forward_port.apps_file(serve_isolated_instance.live_checkout(repo_root))
+
+
 def write_registry_copy(
     live_registry: Path,
     destination: Path,
@@ -269,7 +273,10 @@ def _reframe_previews_naming(
             if (url := live_preview_url(repo_root, str(name))) is not None
         }
         write_registry_copy(
-            registry_path(), registry_copy, preview_url_by_app, dump_registry
+            live_registry_path(repo_root),
+            registry_copy,
+            preview_url_by_app,
+            dump_registry,
         )
 
 

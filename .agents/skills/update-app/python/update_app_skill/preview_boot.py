@@ -35,6 +35,7 @@ from update_app_skill.preview_app import (
     instance_name,
     live_preview_url,
     live_preview_worktree,
+    live_registry_path,
     write_registry_copy,
 )
 
@@ -249,7 +250,7 @@ def up(
     if _uses_placeholder(manifest, REGISTRY_PLACEHOLDER):
         registry_copy = _registry_copy_path(repo_root, app_name)
         write_registry_copy(
-            forward_port.apps_file(live_root),
+            live_registry_path(repo_root),
             registry_copy,
             preview_url_by_app,
             dump,
