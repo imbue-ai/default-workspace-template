@@ -5,8 +5,7 @@ how a skill's steps are scripted and how its Python is packaged and validated.
 How to write the skill itself (SKILL.md size and order, references,
 descriptions, version-bound text, paths) is in
 `docs/system/skill_authoring_guide.md`; read it before writing or restructuring
-a skill. `.agents/shared/references/user-facing-language.md` stays the authority
-for words the user reads.
+a skill.
 
 ## Contents
 

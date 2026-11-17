@@ -328,7 +328,7 @@ in your report.
   never by hand-editing its lock. A user package that is not standalone yet (the
   update that made them standalone; `system/test_user_packages_are_standalone.py`
   names it) is converted with the same command's `migrate`, after its `--dry-run`,
-  whose output goes in your report, per `references/python-packaging-migration.md`
+  whose output goes in your report, per `.agents/shared/references/python-packaging-migration.md`
   ("A user app, service or lib"). Each converted package then gets this step's
   suites, and an app or service its isolated boot, from its own venv. A failure here
   or in the suites below on the workspace's own skills, apps, services or docs
@@ -336,7 +336,7 @@ in your report.
   skill's PEP 723 script that `system/test_entry_point_import_cost.py` cannot
   import, a user service whose program line runs under `uv run`, or a type
   error in a user skill or app) is fixed by following
-  `references/python-packaging-migration.md`.
+  `.agents/shared/references/python-packaging-migration.md`.
   Separately, before any suite or boot below runs, sync the venv
   (`uv sync --all-packages --frozen`) whenever the merge changed a
   `pyproject.toml` or `uv.lock` at all, merged or pulled in
@@ -393,8 +393,8 @@ in your report.
   so a lock that upgraded a package selects the suites that depend on it. Run
   every printed line, in order, plus `uv run --no-sync ruff check` when a Python file is
   in the list, and handle a failing test and a shed command the way
-  `.agents/skills/harden-worker/references/harden-creation.md` ("The test gate")
-  says, naming a flaky test under your report's Validation; the tree before
+  `.agents/shared/references/review-gates.md` says, naming a flaky test under
+  your report's Validation; the tree before
   your change, for attributing a failure, is `$MERGE^1` (a test absent there
   arrived with the update). mngr's own suite runs in its repo, not here.
 - **Isolated-service boots** for each service with a file in the merged set,
@@ -416,7 +416,7 @@ in your report.
   system && npm ci && npm run build`: one npm workspace emits the shell's bundle,
   the chat app's, the Getting Started app's, the Files app's, the Routines
   app's, the Screen's, and the Style Guide's) and drive it per
-  `.agents/skills/harden-worker/references/web-frontend-testing.md`. Those seven bundles
+  `.agents/shared/references/web-frontend-testing.md`. Those seven bundles
   are what the lead's apply installs live (`--worker-bundle`, one per app,
   installed only as a set) -- name all seven locations in your report.
 - **Customization survival** -- for every user creation the update touches

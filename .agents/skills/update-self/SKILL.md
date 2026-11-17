@@ -3,7 +3,7 @@ name: update-self
 description: Safely pull updates from the upstream template repo. Use to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 metadata:
   author: imbue
-  exempt-checks: size depth paths contents
+  exempt-checks: size paths contents
   exempt-reason: awaiting-restructure
 ---
 
@@ -821,7 +821,7 @@ that no longer imports, a consumer the report names that the update broke:
 2. Dispatch a repair worker with the evidence (the program's status and the
    tail of its stderr log, the failing check's output, what the update changed
    that it touches), through `launch-task` as in Step 4, with
-   `references/python-packaging-migration.md` named when the failure is one of
+   `.agents/shared/references/python-packaging-migration.md` named when the failure is one of
    its symptoms.
 3. Finish the run (the rest of this step, then Step 6) once it is fixed, or once
    the worker gives up. A give-up is still recorded as `UPDATED`, with a

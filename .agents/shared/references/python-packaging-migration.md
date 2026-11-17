@@ -8,6 +8,17 @@ update's checks fail on them. The rules themselves are in
 `.agents/shared/references/running-python.md` and
 `.agents/shared/references/spec-summary.md` ("Packaging").
 
+## Contents
+
+- A skill that came from elsewhere
+- What fails, and where to fix it
+- A user skill with scripts
+- A user app, service or lib
+- A user service
+- Commands in the user's docs
+- Launches and import-path edits in the user's code
+- Type errors in the user's skills and apps
+
 ## A skill that came from elsewhere
 
 The checks cover every skill in `.agents/skills/` except the ones
@@ -156,8 +167,8 @@ it runs today:
    fails to start with `ModuleNotFoundError`, or its suite fails to import.
    Declare it at the version the shared lock had (`uv add '<package>==<version>'`
    in the package's directory, the version from `/var/tmp/pre-merge.uv.lock`),
-   and run its checks again. Anything that is not mechanical goes to the lead
-   as a question.
+   and run its checks again. Anything that is not mechanical is a question for
+   your lead, or for the user when you are working in their chat.
 4. **Its commands, run from elsewhere.** The command rewrites
    `uv run --no-sync <command>` to
    `uv run --no-sync --project system/<kind>/<package> <command>` in tracked
@@ -207,8 +218,9 @@ check sees it; after editing one, re-install it live with
   `preview_wrapper_server.py` are bare and run under `python3`, the rest under
   `uv run --no-sync`), a
   shared one is under `.agents/shared/scripts/agents_shared/`, and
-  `system/scripts/run_in_background.py`, `tool_env.py` and
-  `list_mngr_plugins.py` are under `system/scripts/workspace_bare_scripts/`;
+  `run_in_background.py`, `tool_env.py` and `list_mngr_plugins.py`, which sat
+  directly under `system/scripts/`, are under
+  `system/scripts/workspace_bare_scripts/`;
 - `from claude_p import ...` run from the root venv becomes
   `from use_ai_integration_skill.claude_p import ...` (a copy of `claude_p.py`
   inside the user's own app is theirs and stays as it is).
@@ -257,8 +269,8 @@ A site that one of the reasons in `.agents/shared/references/running-python.md`
 wrapper that hands secrets to the program it runs, say -- keeps its process with
 the marker that section shows. Name every marker you add, and every site you
 restructured, in your report. A restructure that would change what the user
-sees an app or skill do is a `question` (case (c) in `update-self-worker.md`),
-like a type error whose fix does.
+sees an app or skill do is a question for your lead (or the user), like a type
+error whose fix does.
 
 ## Type errors in the user's skills and apps
 
@@ -270,9 +282,9 @@ Fix these during the update, in the user's skills and apps alike, rather than
 handing them back: the update brought the check, so the update fixes what it
 finds. The exception is an error whose only fix changes behavior the user can
 see -- what a skill or command does or prints, or what an app shows or accepts.
-Leave that code as it is and raise it as a customization the update cannot keep
-(a `question`, case (c), in `update-self-worker.md`), naming the error, the
-behavior change the fix needs, and the options.
+Leave that code as it is and raise it with your lead (or the user) as a
+customization the update cannot keep, naming the error, the behavior change the
+fix needs, and the options.
 
 Fix each error in the code: narrow an `X | None` with a
 check that fails loudly where `None` cannot happen, give a dict the key type its
