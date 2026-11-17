@@ -42,7 +42,8 @@ def _ps() -> str:
 
 
 def _loadavg() -> str:
-    return Path("/proc/loadavg").read_text().strip()
+    p = Path("/proc/loadavg")
+    return p.read_text().strip() if p.exists() else "n/a"
 
 
 def _pressure() -> str:
@@ -81,7 +82,7 @@ def _timed_run(mode: str, cwd: Path) -> dict[str, object]:
     for r in readers:
         r.join()
     total = time.monotonic() - start
-    times = [0.0] + [float(line.split(" ", 1)[0]) for line in stderr_lines] + [total]
+    times = [0.0] + [float(line.split(None, 1)[0]) for line in stderr_lines] + [total]
     gap_at = max(range(1, len(times)), key=lambda i: times[i] - times[i - 1])
     before = stderr_lines[gap_at - 2] if gap_at >= 2 else "<start>"
     after = stderr_lines[gap_at - 1] if gap_at - 1 < len(stderr_lines) else "<exit>"
@@ -121,7 +122,7 @@ def _emit(capsys: pytest.CaptureFixture[str], name: str, header: dict[str, objec
 def _header() -> dict[str, object]:
     return {
         "host": socket.gethostname(),
-        "uptime": Path("/proc/uptime").read_text().split()[0],
+        "uptime": Path("/proc/uptime").read_text().split()[0] if Path("/proc/uptime").exists() else "n/a",
         "nproc": os.cpu_count(),
         "load": _loadavg(),
         "pressure": _pressure(),
