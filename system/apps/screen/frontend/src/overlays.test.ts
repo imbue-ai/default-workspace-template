@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { Overlays, mayCancelPendingUrl } from "./overlays";
-import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
+import type { ReportedFailure, StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
 import type { FailureHost } from "./overlays";
 import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
 
@@ -138,14 +138,20 @@ describe("Overlays", () => {
 /** A shell connection as the overlay's buttons see it, recording what they asked of it. */
 function fakeHost(fields: { hasShell?: boolean; canReportBug?: boolean } = {}): FailureHost & {
   started: string[];
+  /** Settles each ask in turn, as the shell's reply would. */
+  answers: ((outcome: StartNewOutcome) => void)[];
   reports: ReportedFailure[];
 } {
   const host = {
     started: [] as string[],
+    answers: [] as ((outcome: StartNewOutcome) => void)[],
     reports: [] as ReportedFailure[],
     hasShell: () => fields.hasShell ?? true,
     canReportBug: () => fields.canReportBug ?? true,
-    startNewWithText: (text: string) => void host.started.push(text),
+    startNewWithText: (text: string) => {
+      host.started.push(text);
+      return new Promise<StartNewOutcome>((resolve) => host.answers.push(resolve));
+    },
     reportBug: (failure: ReportedFailure) => void host.reports.push(failure),
   };
   return host;
@@ -272,6 +278,37 @@ describe("Overlays for the stack's state", () => {
     expect(host.reports).toEqual([
       { message: "The Screen stopped unexpectedly.", details: "screen-neko exited unexpectedly" },
     ]);
+  });
+
+  it("reads Asking an agent… until the chat opens, and says why when it could not", async () => {
+    const host = fakeHost();
+    const overlays = overlaysWith(host);
+    const crashed = state({ ...STOPPED, stop_reason: "screen-neko exited unexpectedly", stop_cause: "crashed" });
+    overlays.update(crashed, "idle", null, null, null);
+    const ask = overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]");
+    const askFailure = (): HTMLElement | null =>
+      overlays.element.querySelector<HTMLElement>("[data-screen-ask-failure]:not([hidden])");
+
+    ask?.click();
+    expect([ask?.textContent, ask?.disabled]).toEqual(["Asking an agent…", true]);
+    // A state that arrives while the shell is starting the chat leaves the press pending.
+    overlays.update(crashed, "idle", null, null, null);
+    expect([ask?.textContent, ask?.disabled]).toEqual(["Asking an agent…", true]);
+
+    host.answers[0]({
+      isOpened: false,
+      failure: { message: "Chat couldn't open that.", details: "HTTP 400\nbad launch", isReportable: false },
+    });
+    await Promise.resolve();
+    expect([ask?.textContent, ask?.disabled]).toEqual(["Ask an agent to fix this", false]);
+    expect(askFailure()?.querySelector("p")?.textContent).toBe("Chat couldn't open that.");
+    expect(askFailure()?.querySelector("pre")?.textContent).toBe("HTTP 400\nbad launch");
+
+    ask?.click();
+    expect(askFailure()).toBeNull();
+    host.answers[1]({ isOpened: true });
+    await Promise.resolve();
+    expect([ask?.textContent, ask?.disabled, askFailure()]).toEqual(["Ask an agent to fix this", false, null]);
   });
 
   it("names low memory for a member the memory guard shed, with no bug report for it", () => {

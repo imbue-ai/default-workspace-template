@@ -8,7 +8,12 @@
  *  and app contract). */
 
 import { askAgentToFix } from "@imbue/workspace-ui/src/app_contract";
-import type { AgentFixRequest, ReportedFailure, ShellConnection } from "@imbue/workspace-ui/src/app_contract";
+import type {
+  AgentFixRequest,
+  ReportedFailure,
+  ShellConnection,
+  ShownFailure,
+} from "@imbue/workspace-ui/src/app_contract";
 import { REPORT_A_BUG_LABEL, fallbackSentence, failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
@@ -16,6 +21,7 @@ import { isOwnSessionController } from "./state";
 import type { StreamStatus } from "./webrtc";
 
 export const ASK_AGENT_TO_FIX_LABEL = "Ask an agent to fix this";
+const ASKING_AN_AGENT_LABEL = "Asking an agent…";
 
 /** What the overlay needs of the shell connection for its failure buttons. */
 export type FailureHost = Pick<ShellConnection, "hasShell" | "startNewWithText" | "canReportBug" | "reportBug">;
@@ -167,6 +173,10 @@ export class Overlays {
   private readonly reloadButton = document.createElement("button");
   private readonly askAgentButton = document.createElement("button");
   private readonly reportBugButton = document.createElement("button");
+  private readonly askFailure = document.createElement("div");
+  private readonly askFailureMessage = document.createElement("p");
+  private readonly askFailureDetails = document.createElement("details");
+  private readonly askFailureDetailsText = document.createElement("pre");
   private readonly dim = document.createElement("div");
   private readonly dimTitle = document.createElement("div");
   private readonly dimPending = document.createElement("div");
@@ -176,6 +186,7 @@ export class Overlays {
   private agentFix: AgentFixRequest | null = null;
   private reported: ReportedFailure | null = null;
   private isReportable = false;
+  private isAskingAgent = false;
 
   constructor(onStart: () => void, onTakeControl: () => void, onCancelPendingUrl: () => void, onReload: () => void) {
     this.element.className = "screen-overlay";
@@ -200,9 +211,7 @@ export class Overlays {
     this.askAgentButton.className = "screen-button ask-agent-to-fix";
     this.askAgentButton.textContent = ASK_AGENT_TO_FIX_LABEL;
     this.askAgentButton.dataset.screenAskAgent = "true";
-    this.askAgentButton.addEventListener("click", () => {
-      if (this.host !== null && this.agentFix !== null) askAgentToFix(this.host, this.agentFix);
-    });
+    this.askAgentButton.addEventListener("click", () => void this.askAgent());
     this.reportBugButton.className = "screen-button report-bug";
     this.reportBugButton.textContent = REPORT_A_BUG_LABEL;
     this.reportBugButton.dataset.screenReportBug = "true";
@@ -210,7 +219,16 @@ export class Overlays {
       if (this.host !== null && this.reported !== null) this.host.reportBug(this.reported);
     });
     this.actions.append(this.startButton, this.reloadButton, this.askAgentButton, this.reportBugButton);
-    this.element.append(this.title, this.body, this.details, this.actions);
+    const askFailureSummary = document.createElement("summary");
+    askFailureSummary.textContent = "See details";
+    this.askFailureDetails.className = "screen-overlay__details see-details";
+    this.askFailureDetails.append(askFailureSummary, this.askFailureDetailsText);
+    this.askFailure.className = "screen-overlay__detail";
+    this.askFailure.setAttribute("role", "alert");
+    this.askFailure.dataset.screenAskFailure = "true";
+    this.askFailure.hidden = true;
+    this.askFailure.append(this.askFailureMessage, this.askFailureDetails);
+    this.element.append(this.title, this.body, this.details, this.actions, this.askFailure);
     // Until the first state arrives, the page is loading: nothing to start, nothing failed.
     this.showLoading();
     this.dim.className = "screen-overlay screen-overlay--dim";
@@ -269,6 +287,30 @@ export class Overlays {
     this.reportBugButton.hidden = !this.isReportable || this.host === null || !this.host.canReportBug();
   }
 
+  /** "Ask an agent to fix this": pending until the shell says the chat opened, or why it could not. */
+  private async askAgent(): Promise<void> {
+    if (this.host === null || this.agentFix === null || this.isAskingAgent) return;
+    this.isAskingAgent = true;
+    this.showAskFailure(null);
+    this.syncAskButton();
+    const outcome = await askAgentToFix(this.host, this.agentFix);
+    this.isAskingAgent = false;
+    this.syncAskButton();
+    if (!outcome.isOpened) this.showAskFailure(outcome.failure);
+  }
+
+  private syncAskButton(): void {
+    this.askAgentButton.textContent = this.isAskingAgent ? ASKING_AN_AGENT_LABEL : ASK_AGENT_TO_FIX_LABEL;
+    this.askAgentButton.disabled = this.isAskingAgent;
+  }
+
+  private showAskFailure(failure: ShownFailure | null): void {
+    this.askFailure.hidden = failure === null;
+    this.askFailureMessage.textContent = failure?.message ?? "";
+    this.askFailureDetails.hidden = failure?.details == null;
+    this.askFailureDetailsText.textContent = failure?.details ?? "";
+  }
+
   /** The page could not load the state at all; the service's events bring it once the service answers. */
   showLoadFailure(failure: Failure): void {
     this.render(describeLoadFailure(failure));
@@ -285,6 +327,8 @@ export class Overlays {
       return;
     }
     this.element.hidden = false;
+    // A failed ask belongs to the failure it was asked about.
+    if (shown.title !== this.title.textContent) this.showAskFailure(null);
     this.title.textContent = shown.title;
     this.body.textContent = shown.body;
     this.body.hidden = shown.body === "";
