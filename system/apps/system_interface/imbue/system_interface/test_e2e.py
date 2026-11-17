@@ -1745,6 +1745,7 @@ def test_the_wheel_over_an_unfocused_window_scrolls_its_page_without_raising_it(
     page.mouse.wheel(0, 300)
     first_frame.wait_for_function("() => window.__wheels > 0 && window.scrollY > 0", timeout=15000)
     assert _is_focus_out_of_page(page, first)
+    page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
     expect(_window(page, first)).to_have_attribute("data-focused", "false")
     expect(_window(page, second)).to_have_attribute("data-focused", "true")
 
