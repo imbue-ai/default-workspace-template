@@ -182,6 +182,18 @@ def test_a_terminal_whose_folder_is_gone_says_so_and_starts_a_new_one_in_the_sam
     assert locations[-1] == {"type": "shell:location", "path": "/?session=terminal-2", "title": "Terminal 2"}
 
 
+def test_an_unknown_kind_from_the_pty_reads_as_a_terminal_that_closed(desktop_context: BrowserContext) -> None:
+    _serve(desktop_context, _wrapper_html("terminal-1"))
+    _page, wrapper, pty = _open(desktop_context)
+
+    # Anything in the pty can print the sequence; a kind naming an Object member is not one of the endings.
+    _print_end(pty, "constructor", "printed by a program")
+
+    ended = wrapper.locator("#ended")
+    expect(ended.locator("#ended-message")).to_have_text("This terminal closed.")
+    expect(ended.get_by_role("button", name="Start a new terminal")).to_be_visible()
+
+
 def _open_failure_page(context: BrowserContext, error: TerminalAppError, can_report_bug: bool) -> tuple[Page, Frame]:
     _serve(context, render_failure_page(page_failure(error, "terminal-1")), can_report_bug)
     page = context.new_page()

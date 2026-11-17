@@ -282,8 +282,9 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     endedReport.hidden = !endedActions.includes("report") || connection === null || !connection.canReportBug();
   }
 
+  // The kind comes from the pty's output, so only ENDINGS' own keys count (not "constructor" and the like).
   function showEnded(kind, detail) {
-    showEnding(ENDINGS[kind] ?? ENDINGS.ended, detail);
+    showEnding(Object.hasOwn(ENDINGS, kind) ? ENDINGS[kind] : ENDINGS.ended, detail);
   }
 
   endedRetry.addEventListener("click", () => {
