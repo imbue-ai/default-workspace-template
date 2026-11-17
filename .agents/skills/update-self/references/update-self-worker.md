@@ -298,26 +298,10 @@ chains, `.mngr/**`) and **global-dependency bumps** always count as impacted
 even though nothing imports them; work them per
 `references/worker-provisioning-changes.md` and report each there.
 
-**A user app on a port the Screen needs is moved.** The Screen listens on
-`127.0.0.1` ports 8090 (its service), 8091 (neko, its video server) and 8083
-(its CDP proxy) (`SERVICE_PORT`, `NEKO_PORT` and `CDP_PROXY_PORT` in
-`system/apps/screen/src/screen/primitives.py` at the target). An app that holds
-one of them leaves the Screen and the agent browser unable to start, with
-nothing on screen saying why. Older scaffolds could hand out 8091. Whenever
-`has_local_footprint` is true, check every workspace-added app's port: the
-`--url http://localhost:<port>` in its `system/supervisord.conf.d/` program
-line, and its row in the lead's registry
-(`$LEAD_WORK_DIR/data/.state/apps.toml`, read as the cron paragraph above
-reads the lead's files), which also covers an app that registers itself from
-its entry point. For each app on one of those three ports, pick the lowest port
-at or above 8080 that is not one of the three, that no program line in the
-merged tree names, that no row in the lead's registry holds, and that nothing
-listens on (`ss -tln`). Then move the app in your branch: the `--url` in its
-program line, and every place in its own directory that means its own port
-(for a scaffolded app, the default of `PORT` in its runner). The apply re-reads
-changed program lines, and the app re-registers at the new port when it starts.
-The move is an edit of yours, so 4b's suites and isolated boot and 4c's gates
-cover the app. Name each move, old port and new, under **Impact analysis**.
+**A user app on port 8091 is moved.** That is the Screen's neko port, which
+older scaffolds could hand out, breaking the Screen. Move any workspace-added
+app on it to a free port in your branch (its program line's `--url` and its
+runner's `PORT` default), and name the move under **Impact analysis**.
 
 ### 4b. Validate
 
