@@ -544,9 +544,31 @@ function renderSignedInAgain(event: AssistantMessageEvent, chatId: string, text:
   ]);
 }
 
-/** What a failed turn says when the provider's own text is not a sentence for people, and under a provider's own
- *  sentence about its servers failing. No blame either way: the turn may have gone through Imbue's own model proxy. */
+/** What a failed turn says when the provider's servers failed or nothing named the cause, in place of text that is
+ *  not a sentence for people, and under a provider's own sentence about its servers failing. No blame either way:
+ *  the turn may have gone through Imbue's own model proxy. */
 const PROVIDER_TROUBLE_LINE = "The model provider is having trouble. Try again in a moment.";
+const CONTEXT_TOO_LONG_LINE =
+  "This conversation is too long for the model to take in. Start a new chat, or send /compact to shorten it.";
+/** A request the provider refused for a reason of ours rather than its servers'. */
+const REQUEST_REFUSED_LINE = "The model provider refused this request.";
+// The line for each kind (``api_error_kind``) of request the provider refused; a refused kind not named here gets
+// ``REQUEST_REFUSED_LINE``.
+const REFUSED_REQUEST_LINES: Readonly<Record<string, string>> = {
+  context_too_long: CONTEXT_TOO_LONG_LINE,
+  invalid_request: REQUEST_REFUSED_LINE,
+  permission: "The model provider says this account isn't allowed to make this request.",
+  not_found: "The model provider couldn't find the model this chat uses.",
+  request_too_large: "This message is too large for the model provider to take. Try sending less at once.",
+  rate_limit: "This account has reached the model provider's rate limit. Wait a little, then try again.",
+};
+
+/** The plain line a failed turn leads with when its text is not a sentence for people: "having trouble" only for a
+ *  provider fault or a failure nothing named, since trying again does not help a refused request. */
+function failedTurnLine(event: AssistantMessageEvent): string {
+  if (event.is_provider_fault || event.api_error_kind === null) return PROVIDER_TROUBLE_LINE;
+  return REFUSED_REQUEST_LINES[event.api_error_kind] ?? REQUEST_REFUSED_LINE;
+}
 
 /** Whether a failed turn's text is a response body or a status line (a 401 body, "API Error: 500 ...") rather than
  *  a sentence the provider wrote for people, so it belongs behind "See details" rather than on screen. */
@@ -763,17 +785,18 @@ function appendEventParts(
             isRaw
               ? event.is_auth_error
                 ? null
-                : m("p", { class: "message-api-error-lead" }, PROVIDER_TROUBLE_LINE)
+                : m("p", { class: "message-api-error-lead" }, failedTurnLine(event))
               : m(MarkdownContent, {
                   content: textContent,
                   requestedAt: event.timestamp,
                   expansionKeyPrefix: event.event_id,
                 }),
-            !isRaw && event.is_provider_fault
+            // A provider's own sentence says what went wrong but not, for these, what to do about it.
+            !isRaw && (event.is_provider_fault || event.api_error_kind === "context_too_long")
               ? m(
                   "div",
                   { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" },
-                  PROVIDER_TROUBLE_LINE,
+                  failedTurnLine(event),
                 )
               : null,
             event.is_auth_error ? renderReauthAction(chatId) : null,

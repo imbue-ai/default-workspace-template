@@ -101,6 +101,15 @@ def test_auth_wins_so_the_two_subtexts_cannot_stack() -> None:
 
 def test_an_ordinary_refused_request_is_an_invalid_request_not_a_dead_credential() -> None:
     kind = classify_api_error(
-        '400 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens"}}'
+        '400 {"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: must be at most 64000"}}'
     )
     assert kind == "invalid_request"
+
+
+def test_a_conversation_too_long_for_the_model_is_told_apart_from_other_refused_requests() -> None:
+    """Retrying cannot help a prompt too long for the model, so it gets its own kind and its own way forward."""
+    kind = classify_api_error(
+        '400 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens"}}'
+    )
+    assert kind == "context_too_long"
+    assert is_provider_fault(kind) is False
