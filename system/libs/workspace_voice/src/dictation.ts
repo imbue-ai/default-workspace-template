@@ -146,6 +146,12 @@ export function describeSpeechModelLoadError(error: unknown): DictationProblem {
   return { kind: "engine", message: `The speech model couldn't be loaded: ${detail}`, canRetry: true };
 }
 
+/** Whether ``problem`` is a failed load of the speech model, as ``describeSpeechModelLoadError`` tells one,
+ *  rather than a problem with the microphone or with held words. */
+export function isSpeechModelLoadProblem(problem: DictationProblem): boolean {
+  return problem.kind === "download" || problem.kind === "engine" || problem.kind === "lost";
+}
+
 export function createDictation(
   options: DictationOptions,
   events: DictationEvents,

@@ -3,10 +3,11 @@
  * every state of dictation, with no bar and no timer. While the model is not loaded the mic asks for it first:
  * the glyph faint, a warning badge on its corner, and a press that loads the model without listening. While
  * that load is shown the button eases into a label with the download's progress as a bar under it, and a press
- * on the label dismisses it, leaving the load to run on. Once the model is loaded a press dictates: a spinner
- * while starting and stopping, and while listening the capsule fills from the bottom with the input level, drawn
- * inside the glyph so nothing in the toolbar moves. The level is set imperatively, through the setter the button
- * hands its owner, since it changes every frame and a redraw per frame would redraw the whole page.
+ * on the label dismisses it, leaving the load to run on. The label takes over the keyboard's focus when the mic
+ * holds it, and the faded mic leaves the tab order. Once the model is loaded a press dictates: a spinner while
+ * starting and stopping, and while listening the capsule fills from the bottom with the input level, drawn inside
+ * the glyph so nothing in the toolbar moves. The level is set imperatively, through the setter the button hands
+ * its owner, since it changes every frame and a redraw per frame would redraw the whole page.
  *
  * Beside it, the notice the composer shows over itself when dictation has something to say, in the style of its
  * provider notice.
@@ -139,6 +140,8 @@ export function DictationButton(): m.Component<DictationButtonAttrs> {
   instanceCounter += 1;
   const clipId = `dictation-capsule-${instanceCounter}`;
   let levelRect: SVGRectElement | null = null;
+  // The state the last draw showed, which tells the update that enters ``loading`` from the ones after it.
+  let drawnState: DictationButtonState | null = null;
 
   const setLevel = (level: number): void => {
     if (levelRect === null) return;
@@ -256,6 +259,19 @@ export function DictationButton(): m.Component<DictationButtonAttrs> {
   };
 
   return {
+    oncreate(vnode) {
+      drawnState = vnode.attrs.state;
+    },
+    onupdate(vnode) {
+      const isEnteringLoading = vnode.attrs.state === "loading" && drawnState !== "loading";
+      drawnState = vnode.attrs.state;
+      if (!isEnteringLoading) return;
+      // The mic fades out under the label, so the focus it holds goes to the label: a press from the keyboard
+      // leaves its focus ring on the control that is on screen, where Space and Enter are the label's own press.
+      const mic = vnode.dom.querySelector(".message-input-dictate-button");
+      if (mic === null || document.activeElement !== mic) return;
+      vnode.dom.querySelector<HTMLElement>(".dictation-morph-label")?.focus({ preventScroll: true });
+    },
     view(vnode) {
       const { state, progress, download, shortcutLabel, disabled, onPress } = vnode.attrs;
       const isBusy = state === "starting" || state === "stopping";
@@ -283,6 +299,8 @@ export function DictationButton(): m.Component<DictationButtonAttrs> {
                 // A spinner is not a press, and while the load is shown the label over the mic takes the
                 // pointer's: the button waits, explained by its tooltip.
                 readonly: isLoading || isBusy,
+                // Faded out, it leaves the tab order to the label as well.
+                tabindex: isLoading ? -1 : undefined,
                 disabled,
                 extra: "message-input-dictate-button relative shrink-0 overflow-visible",
                 "aria-label": ARIA_LABELS[state],

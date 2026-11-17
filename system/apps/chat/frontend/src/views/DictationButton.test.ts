@@ -29,6 +29,12 @@ function mountButton(overrides: Partial<DictationButtonAttrs> = {}) {
   return { root, button, label, attrs };
 }
 
+/** Draw a mounted button again in another state, as its composer's redraw does. */
+function redrawIn(attrs: DictationButtonAttrs, state: DictationButtonState): void {
+  attrs.state = state;
+  m.redraw.sync();
+}
+
 afterEach(() => {
   unmountViews();
   vi.useRealTimers();
@@ -212,6 +218,67 @@ describe("DictationButton", () => {
       expect(attrs.onDismissLoading, state).not.toHaveBeenCalled();
       unmountViews();
     }
+  });
+
+  it("keeps the faded mic out of the tab order while the load is shown, and in it otherwise", () => {
+    const loading = mountButton({ state: "loading" });
+    expect(loading.button.getAttribute("tabindex")).toBe("-1");
+    unmountViews();
+    for (const state of EVERY_STATE.filter((each) => each !== "loading")) {
+      const { button } = mountButton({ state });
+      expect(button.hasAttribute("tabindex"), state).toBe(false);
+      unmountViews();
+    }
+  });
+
+  it("hands the focus the mic holds to the label as the load comes to be shown", () => {
+    const { button, label, attrs } = mountButton({ state: "load-needed" });
+    const focusLabel = vi.spyOn(label, "focus");
+    button.focus();
+    redrawIn(attrs, "loading");
+    expect(document.activeElement).toBe(label);
+    expect(focusLabel).toHaveBeenCalledTimes(1);
+    expect(focusLabel).toHaveBeenCalledWith({ preventScroll: true });
+    // A load dismissed and shown again from the mic hands its focus over again.
+    redrawIn(attrs, "load-needed");
+    button.focus();
+    redrawIn(attrs, "loading");
+    expect(document.activeElement).toBe(label);
+    expect(focusLabel).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves the focus alone when something other than the mic holds it", () => {
+    const { label, attrs } = mountButton({ state: "load-needed" });
+    const focusLabel = vi.spyOn(label, "focus");
+    const textbox = document.body.appendChild(document.createElement("textarea"));
+    try {
+      textbox.focus();
+      redrawIn(attrs, "loading");
+      expect(document.activeElement).toBe(textbox);
+      redrawIn(attrs, "load-needed");
+      textbox.blur();
+      redrawIn(attrs, "loading");
+      expect(document.activeElement).toBe(document.body);
+      expect(focusLabel).not.toHaveBeenCalled();
+    } finally {
+      textbox.remove();
+    }
+  });
+
+  it("moves the focus on the update that enters loading, and on no other", () => {
+    const { button, label, attrs } = mountButton({ state: "load-needed" });
+    const focusLabel = vi.spyOn(label, "focus");
+    redrawIn(attrs, "loading");
+    // Focus that reaches the mic while the load is shown stays through the load's own updates.
+    button.focus();
+    attrs.progress = { loadedBytes: 1, totalBytes: 4 };
+    m.redraw.sync();
+    expect(document.activeElement).toBe(button);
+    for (const state of EVERY_STATE.filter((each) => each !== "loading")) {
+      redrawIn(attrs, state);
+      expect(document.activeElement, state).toBe(button);
+    }
+    expect(focusLabel).not.toHaveBeenCalled();
   });
 
   it("gives the meter back when the glyph leaves", () => {

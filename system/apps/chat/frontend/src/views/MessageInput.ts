@@ -100,7 +100,11 @@ import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip
 import { keydownMatchesChords } from "@imbue/workspace-ui/src/keybindings";
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { QueryObserver, skipToken } from "@tanstack/query-core";
-import { createDictation, describeSpeechModelLoadError } from "@imbue/workspace-voice/src/dictation";
+import {
+  createDictation,
+  describeSpeechModelLoadError,
+  isSpeechModelLoadProblem,
+} from "@imbue/workspace-voice/src/dictation";
 import type { Dictation, DictationProblem, DictationState } from "@imbue/workspace-voice/src/dictation";
 import type { DeviceClass } from "@imbue/workspace-voice/src/engines";
 import { probeEngineDownload } from "@imbue/workspace-voice/src/downloadProbe";
@@ -481,6 +485,14 @@ let mountedDictationHide: (() => void) | null = null;
 // may hold and every open chat panel mounts a composer of its own.
 const readyChime = createReadyChime();
 
+// How long a composer waits, from its mount, to learn the speech model's state before it stops drawing the mic as
+// ready: a worker that neither answers nor fails would otherwise leave the state unknown for good.
+const SPEECH_MODEL_STATE_WAIT_MS = 5000;
+
+// How long after a press shows the speech model's load a second press is taken for the first one landing twice:
+// a double click, or a second click that finds the label where the mic was.
+const REPEATED_PRESS_WINDOW_MS = 500;
+
 /** The dictation this page runs; the page's own URL roots the runtime's files, and a document-less test has none. */
 function dictationPageOptions(): PageDictationOptions {
   const pageUrl = typeof location === "undefined" ? "" : location.href;
@@ -693,8 +705,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   // Whether this composer is showing the model's load: from the press that asked for it until the load settles
   // or the user dismisses it. The load is the page's, and runs on either way.
   let isWatchingModelLoad = false;
-  // Whether the page has found out, since the composer mounted, what state the model is in. Until then the mic
-  // is drawn as ready, so a model that is loaded never flashes the badge.
+  // When this composer last began showing the load, by ``Date.now``; null until it has.
+  let modelLoadShownAtMs: number | null = null;
+  // Whether the page has found out, since the composer mounted, what state the model is in, or has stopped
+  // waiting to. Until then the mic is drawn as ready, so a model that is loaded never flashes the badge.
   let isSpeechModelStateKnown = false;
   // Whether the model's files are on this device: what the probe at mount said (null until it answers), and true
   // once the model has been seen loaded. While false a load is a download, sized by the probe.
@@ -782,6 +796,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     return isSpeechModelLoaded() || !isSpeechModelStateKnown ? "ready" : "load-needed";
   }
 
+  /** The page knows what state the model is in, or has stopped waiting to. From here the mic is drawn as the
+   *  page's cache has the model, so a worker that answers late with a loaded one still turns it ready. */
+  function endSpeechModelStateWait(): void {
+    if (isSpeechModelStateKnown) return;
+    isSpeechModelStateKnown = true;
+    m.redraw();
+  }
+
   /** Follow the page's speech model from mount: observe its load and the load's progress in the page's cache,
    *  and find out what state it is in, on this device (the probe) and in the workspace's worker. */
   function observeSpeechModel(): void {
@@ -799,8 +821,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       queryFn: skipToken,
     });
     const stopObservingLoad = speechModelLoad.subscribe((result) => {
-      // A loaded model's files are on this device, whatever the probe said at mount.
-      if (result.status === "success") isSpeechModelDownloaded = true;
+      if (result.status === "success") {
+        // A loaded model's files are on this device, whatever the probe said at mount.
+        isSpeechModelDownloaded = true;
+        // A failed load's notice has nothing left to ask for again: its Retry is the mic pressed, which dictates
+        // once the model is loaded.
+        if (dictationProblem !== null && isSpeechModelLoadProblem(dictationProblem)) dictationProblem = null;
+      }
       m.redraw();
     });
     const stopObservingProgress = speechModelProgress.subscribe((result) => {
@@ -811,9 +838,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         m.redraw();
       }
     });
+    // A worker that neither greets nor fails never answers the discovery below.
+    const stateWaitTimer = setTimeout(endSpeechModelStateWait, SPEECH_MODEL_STATE_WAIT_MS);
     stopObservingSpeechModel = () => {
       stopObservingLoad();
       stopObservingProgress();
+      clearTimeout(stateWaitTimer);
     };
     probeEngineDownload(options)
       .then((probe) => {
@@ -821,13 +851,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         speechModelDownloadBytes = probe.totalBytes;
         return models.discover(options, probe.isDownloaded);
       })
-      .then(
-        () => {
-          isSpeechModelStateKnown = true;
-          m.redraw();
-        },
-        (error: unknown) => console.warn(`Could not tell what state the speech model is in: ${String(error)}`),
-      );
+      .catch((error: unknown) => console.warn(`Could not tell what state the speech model is in: ${String(error)}`))
+      .finally(() => {
+        clearTimeout(stateWaitTimer);
+        endSpeechModelStateWait();
+      });
   }
 
   /** Keep the screen awake while this composer has something running in front of the user: a dictation, or a
@@ -852,6 +880,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
    *  running is joined, and shown from where it has got to. */
   function watchModelLoad(): void {
     isWatchingModelLoad = true;
+    modelLoadShownAtMs = Date.now();
     dictationProblem = null;
     getSpeechModels()
       .request(dictationPageOptions())
@@ -868,16 +897,24 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
    * nothing cancels one, and the mic becomes ready by itself when it ends.
    *
    * This is the one place a shown load is dismissed: every trigger calls it, and a trigger added later should
-   * too. The triggers: a press on the loading label; a press on the dimmed text box (``handleScrimPress``);
-   * Escape from the page (``handleLoadingEscape``); the mic or its shortcut pressed while the load is shown
-   * (``handleMicPress``); the page going out of view (``handlePageHidden``); and the composer turning to another
-   * chat, or leaving the page.
+   * too. The triggers: a press on the loading label, or on the mic or its shortcut while the load is shown
+   * (``handleLoadingPress``); a press on the dimmed text box (``handleScrimPress``); Escape from the page
+   * (``handleLoadingEscape``); the page going out of view (``handlePageHidden``); and the composer turning to
+   * another chat, or leaving the page.
    */
   function dismissModelLoad(): void {
     if (!isWatchingModelLoad) return;
     isWatchingModelLoad = false;
     syncScreenWakeLock();
     m.redraw();
+  }
+
+  /** A press on what stands for the shown load, the label or the mic under it (which the shortcut presses),
+   *  dismisses it. One right behind the press that asked for the load is that press landing twice, and does
+   *  nothing; Escape, the dimmed text box and the page hiding are other gestures, and dismiss at any time. */
+  function handleLoadingPress(): void {
+    if (modelLoadShownAtMs !== null && Date.now() - modelLoadShownAtMs < REPEATED_PRESS_WINDOW_MS) return;
+    dismissModelLoad();
   }
 
   /** A press on the dimmed text box dismisses the load and puts the caret where the press landed. */
@@ -893,9 +930,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     textarea.setSelectionRange(position.offset, position.offset);
   }
 
-  /** The mic and the shortcut. While dictating, a press stops it. Otherwise a press dismisses a load that is
-   *  shown, dictates when the model is loaded, and asks for the model when it is not: a press that loads never
-   *  goes on to listen by itself. */
+  /** The mic and the shortcut. While dictating, a press stops it. Otherwise a press on a shown load is the
+   *  label's own (``handleLoadingPress``), a press on a loaded model dictates, and a press on one that is not
+   *  loaded asks for it: a press that loads never goes on to listen by itself. */
   function handleMicPress(): void {
     if (currentChatId === null || isComposerDisabledNow) return;
     if (dictation !== null && dictation.state !== "idle") {
@@ -903,7 +940,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       return;
     }
     if (isModelLoadShown()) {
-      dismissModelLoad();
+      handleLoadingPress();
       return;
     }
     // The press is the user gesture after which the browser lets the page sound.
@@ -935,8 +972,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   }
 
   /** Escape while the model's load is shown dismisses it. The text box is disabled then, so its own Escape
-   *  cannot; this one answers from the composer (the label, or the mic the press left focused) or from no control
-   *  at all, and leaves a key meant for another control (a menu, a dialog) alone. */
+   *  cannot; this one answers from the composer (the label, which takes the focus the mic held) or from no
+   *  control at all, and leaves a key meant for another control (a menu, a dialog) alone. */
   function handleLoadingEscape(event: KeyboardEvent): boolean {
     if (event.key !== "Escape" || event.defaultPrevented || !isModelLoadShown()) return false;
     const target = event.target;
@@ -954,6 +991,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     if (handleLoadingEscape(event)) return;
     if (!keydownMatchesChords(event, [dictationShortcutChord(isAppleKeyboard())])) return;
     event.preventDefault();
+    // A chord held down repeats: it stays the page's, and is one press.
+    if (event.repeat) return;
     handleMicPress();
   }
 
@@ -2432,7 +2471,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                           shortcutLabel: dictationShortcutLabel(isAppleKeyboard()),
                           disabled: isComposerDisabled,
                           onPress: handleMicPress,
-                          onDismissLoading: dismissModelLoad,
+                          onDismissLoading: handleLoadingPress,
                           onMeter: (setLevel) => {
                             setMeterLevel = setLevel;
                           },

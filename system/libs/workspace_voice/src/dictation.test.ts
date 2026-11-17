@@ -4,7 +4,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const pageSpeechModels = vi.hoisted(() => ({ engine: vi.fn() }));
 vi.mock("./speechModel", () => ({ getSpeechModels: () => pageSpeechModels }));
 
-import { createDictation, defaultDictationDeps, describeSpeechModelLoadError, smoothLevel } from "./dictation";
+import {
+  createDictation,
+  defaultDictationDeps,
+  describeSpeechModelLoadError,
+  isSpeechModelLoadProblem,
+  smoothLevel,
+} from "./dictation";
 import type {
   DictationChannel,
   DictationEvents,
@@ -12,6 +18,7 @@ import type {
   DictationProblem,
   DictationState,
 } from "./dictation";
+import { describeMicrophoneError } from "./microphone";
 import type { SpeechDetector, SpeechDetectorOptions } from "./speechDetector";
 import type { TranscriptionResult } from "./speechEngine";
 import { EngineLoadError, EngineWorkerLostError } from "./workerClient";
@@ -416,5 +423,42 @@ describe("describeSpeechModelLoadError", () => {
     expect(describeSpeechModelLoadError("out of memory").message).toBe(
       "The speech model couldn't be loaded: out of memory",
     );
+  });
+});
+
+describe("isSpeechModelLoadProblem", () => {
+  it("is true of every way a load of the speech model fails", () => {
+    const failures = [
+      new EngineLoadError("config.json does not match its pinned SHA-256", "config.json"),
+      new EngineLoadError("no WebGPU adapter", null),
+      new EngineWorkerLostError("The speech engine stopped answering"),
+      "out of memory",
+    ];
+    for (const failure of failures) {
+      const problem = describeSpeechModelLoadError(failure);
+      expect(isSpeechModelLoadProblem(problem), problem.kind).toBe(true);
+    }
+  });
+
+  it("is false of a problem with the microphone, and of held words", () => {
+    const microphoneErrors = ["NotAllowedError", "NotFoundError", "NotReadableError", "UnknownError"].map((name) =>
+      Object.assign(new Error("no microphone"), { name }),
+    );
+    const problems: DictationProblem[] = [
+      ...microphoneErrors.map((error) => describeMicrophoneError(error, true)),
+      describeMicrophoneError(microphoneErrors[0], false),
+      { kind: "held", message: "Some words are held.", canRetry: true },
+    ];
+    expect(problems.map((problem) => problem.kind)).toEqual([
+      "blocked",
+      "missing",
+      "busy",
+      "failed",
+      "frame_blocked",
+      "held",
+    ]);
+    for (const problem of problems) {
+      expect(isSpeechModelLoadProblem(problem), problem.kind).toBe(false);
+    }
   });
 });

@@ -279,15 +279,18 @@ vi.mock("../models/Providers", () => ({
   loadAccounts: () => mocks.loadAccounts(),
   whenAccountsReadyToChoose: () => Promise.resolve(),
 }));
-vi.mock("@imbue/workspace-voice/src/dictation", async (importOriginal) => ({
-  describeSpeechModelLoadError: (await importOriginal<typeof import("@imbue/workspace-voice/src/dictation")>())
-    .describeSpeechModelLoadError,
-  createDictation: (_options: unknown, events: NonNullable<typeof mocks.dictationEvents>) => {
-    mocks.dictation = mocks.makeFakeDictation();
-    mocks.dictationEvents = events;
-    return mocks.dictation;
-  },
-}));
+vi.mock("@imbue/workspace-voice/src/dictation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@imbue/workspace-voice/src/dictation")>();
+  return {
+    describeSpeechModelLoadError: actual.describeSpeechModelLoadError,
+    isSpeechModelLoadProblem: actual.isSpeechModelLoadProblem,
+    createDictation: (_options: unknown, events: NonNullable<typeof mocks.dictationEvents>) => {
+      mocks.dictation = mocks.makeFakeDictation();
+      mocks.dictationEvents = events;
+      return mocks.dictation;
+    },
+  };
+});
 vi.mock("../models/screenWakeLock", () => ({
   browserWakeLockHost: () => null,
   createScreenWakeLock: () => ({ setWanted: (isWanted: boolean) => mocks.screenWakeWanted.push(isWanted) }),
@@ -2536,9 +2539,15 @@ describe("MessageInput dictation", () => {
     localStorage.clear();
   });
 
+  // What takes each composer a test put on the page off it again, so none goes on waiting for the model's state
+  // into the tests that follow.
+  const leavePage: (() => void)[] = [];
+
   afterEach(() => {
+    for (const leave of leavePage.splice(0)) leave();
     mocks.isDictationSupported = false;
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   function unmountedComposer() {
@@ -2553,6 +2562,8 @@ describe("MessageInput dictation", () => {
     vi.stubGlobal("window", { addEventListener: () => undefined, removeEventListener: () => undefined });
     const root = findByClass(render(), "message-input mx-auto")!;
     (root.attrs!.oncreate as (() => void) | undefined)?.();
+    const leave = root.attrs!.onremove as (() => void) | undefined;
+    if (leave !== undefined) leavePage.push(leave);
   }
 
   /** A composer on a page whose speech model is loaded, as on one that has dictated before: the mic dictates at
@@ -2873,6 +2884,26 @@ describe("MessageInput dictation", () => {
     }
   });
 
+  it("keeps a held shortcut's repeats from the browser, and toggles nothing with them", () => {
+    composer();
+    const onShortcut = pageListener("keydown");
+    const heldBeforeAnyPress = { ...shortcutChord(), repeat: true };
+    onShortcut(heldBeforeAnyPress);
+    expect(heldBeforeAnyPress.preventDefault).toHaveBeenCalledTimes(1);
+    expect(mocks.dictation).toBeNull();
+    // The press itself toggles as ever; held on, it neither stops what it started nor starts it again.
+    onShortcut({ ...shortcutChord(), repeat: false });
+    expect(mocks.dictation!.start).toHaveBeenCalledTimes(1);
+    setDictationState("listening");
+    const heldWhileListening = { ...shortcutChord(), repeat: true };
+    onShortcut(heldWhileListening);
+    expect(heldWhileListening.preventDefault).toHaveBeenCalledTimes(1);
+    expect(mocks.dictation!.stop).not.toHaveBeenCalled();
+    onShortcut(shortcutChord());
+    expect(mocks.dictation!.stop).toHaveBeenCalledTimes(1);
+    expect(mocks.dictation!.start).toHaveBeenCalledTimes(1);
+  });
+
   describe("the speech model's load", () => {
     it("draws the plain mic until the page knows what state the model is in", async () => {
       const { render } = unmountedComposer();
@@ -2888,17 +2919,67 @@ describe("MessageInput dictation", () => {
       expect(micState(mounted.render())).toBe("load-needed");
     });
 
-    it("keeps the plain mic when the probe cannot answer", async () => {
+    it("asks for the model once the probe has failed, with no download to name", async () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       mocks.speechModelProbe.mockRejectedValue(new Error("no storage"));
       const { render } = unmountedComposer();
       putOnPage(render);
-      await settled();
       expect(micState(render())).toBe("ready");
-      expect(findByAttr(render(), "aria-label", "Dictate")).toBeTruthy();
+      await settled();
+      const tree = render();
+      expect(micState(tree)).toBe("load-needed");
+      expect(mic(tree).attrs!["aria-label"]).toBe("Set up dictation");
+      expect(mic(tree).attrs!["data-hover-tooltip"]).toMatch(/^Set up dictation: load the speech model \(/);
       expect(mocks.speechModels.discover).not.toHaveBeenCalled();
       expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("no storage"));
       warn.mockRestore();
+    });
+
+    it("asks for the model once discovery has failed", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      mocks.speechModels.discover.mockRejectedValue(new Error("no worker"));
+      const { render } = await composerWithoutModel({ isDownloaded: true, isDiscovered: false });
+      expect(mocks.speechModels.discover).toHaveBeenCalledTimes(1);
+      expect(micState(render())).toBe("load-needed");
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("no worker"));
+      warn.mockRestore();
+    });
+
+    it("stops waiting on a worker that neither answers nor fails, five seconds from the mount", async () => {
+      vi.useFakeTimers();
+      const { render } = unmountedComposer();
+      putOnPage(render);
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(mocks.speechModels.discover).toHaveBeenCalledTimes(1);
+      expect(micState(render())).toBe("ready");
+      const redraw = vi.spyOn(m, "redraw");
+      try {
+        await vi.advanceTimersByTimeAsync(1);
+        expect(redraw).toHaveBeenCalled();
+      } finally {
+        redraw.mockRestore();
+      }
+      const tree = render();
+      expect(micState(tree)).toBe("load-needed");
+      expect(mic(tree).attrs!["data-hover-tooltip"]).toMatch(/^Set up dictation: load the speech model \(/);
+      // The worker greeting late, with the model loaded, still turns the mic ready.
+      mocks.speechModels.finishDiscovery();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(micState(render())).toBe("load-needed");
+      mocks.voiceQueryClient.setQueryData(LOAD_KEY, LOADED);
+      expect(micState(render())).toBe("ready");
+    });
+
+    it("stops waiting on the model's state when the composer leaves the page", async () => {
+      vi.useFakeTimers();
+      const { render } = unmountedComposer();
+      putOnPage(render);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(vi.getTimerCount()).toBe(1);
+      (findByClass(render(), "message-input mx-auto")!.attrs!.onremove as () => void)();
+      expect(vi.getTimerCount()).toBe(0);
     });
 
     it("asks for a model that is not loaded, naming the download a first load is", async () => {
@@ -2957,15 +3038,25 @@ describe("MessageInput dictation", () => {
       expect(isLoadShown(render())).toBe(true);
     });
 
+    // ``repeatsThePress``: whether the trigger, coming right behind the press that asked for the load, is taken
+    // for that press landing twice.
     describe.each([
       {
         trigger: "a press on the label",
+        repeatsThePress: true,
         dismiss: (render: () => unknown) => {
           (findByClass(render(), "dictation-morph-label")!.attrs!.onclick as () => void)();
         },
       },
+      { trigger: "a press on the mic", repeatsThePress: true, dismiss: (render: () => unknown) => pressMic(render) },
+      {
+        trigger: "the mic's shortcut",
+        repeatsThePress: true,
+        dismiss: () => pageListener("keydown")(shortcutChord()),
+      },
       {
         trigger: "a press on the dimmed text box",
+        repeatsThePress: false,
         dismiss: (render: () => unknown) => {
           (findByClass(render(), "message-input-scrim")!.attrs!.onclick as (event: unknown) => void)({
             clientX: 0,
@@ -2975,6 +3066,7 @@ describe("MessageInput dictation", () => {
       },
       {
         trigger: "Escape from the page",
+        repeatsThePress: false,
         dismiss: () => {
           pageListener("keydown")({
             key: "Escape",
@@ -2984,10 +3076,14 @@ describe("MessageInput dictation", () => {
           });
         },
       },
-      { trigger: "the mic's shortcut", dismiss: () => pageListener("keydown")(shortcutChord()) },
-      { trigger: "the shell saying the page is hidden", dismiss: () => stopDictationWhenHidden() },
+      {
+        trigger: "the shell saying the page is hidden",
+        repeatsThePress: false,
+        dismiss: () => stopDictationWhenHidden(),
+      },
       {
         trigger: "the page going out of view",
+        repeatsThePress: false,
         dismiss: () => {
           const page = document as unknown as { visibilityState?: string };
           page.visibilityState = "hidden";
@@ -2998,13 +3094,16 @@ describe("MessageInput dictation", () => {
           }
         },
       },
-    ])("dismissed by $trigger", ({ dismiss }) => {
+    ])("dismissed by $trigger", ({ dismiss, repeatsThePress }) => {
       it("hands the box back, leaves the mic asking for the model, and lets the load run on", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
         const { render } = await composerWithoutModel();
         const { textarea, redraw } = withTextbox(render);
         pressMic(render);
         expect(isLoadShown(redraw())).toBe(true);
         expect(textarea.focus).toHaveBeenCalledTimes(1);
+        // Half a second on, no press is the first one landing twice.
+        vi.advanceTimersByTime(500);
 
         dismiss(render);
 
@@ -3021,6 +3120,49 @@ describe("MessageInput dictation", () => {
         expect(mocks.dictation).toBeNull();
         expect(findByClass(tree, "message-input-dictation-notice")).toBeUndefined();
       });
+
+      it(`${repeatsThePress ? "does nothing" : "dismisses all the same"} right behind the press that asked for the load`, async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        const { render } = await composerWithoutModel();
+        pressMic(render);
+        vi.advanceTimersByTime(499);
+
+        dismiss(render);
+
+        expect(isLoadShown(render())).toBe(repeatsThePress);
+        expect(mocks.speechModels.request).toHaveBeenCalledTimes(1);
+        expect(mocks.dictation).toBeNull();
+      });
+    });
+
+    it("takes a second press right behind one that shows a running load again for the same press too", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const { render } = await composerWithoutModel();
+      pressMic(render);
+      vi.advanceTimersByTime(5000);
+      stopDictationWhenHidden();
+      expect(isLoadShown(render())).toBe(false);
+      pressMic(render);
+      vi.advanceTimersByTime(100);
+      pressMic(render);
+      expect(isLoadShown(render())).toBe(true);
+      expect(mocks.speechModels.loads.length).toBe(1);
+    });
+
+    it("keeps a load shown through a held shortcut's repeats, however long it is held", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const { render } = await composerWithoutModel();
+      const onShortcut = pageListener("keydown");
+      onShortcut(shortcutChord());
+      expect(isLoadShown(render())).toBe(true);
+      vi.advanceTimersByTime(600);
+      const held = { ...shortcutChord(), repeat: true };
+      onShortcut(held);
+      expect(held.preventDefault).toHaveBeenCalledTimes(1);
+      expect(isLoadShown(render())).toBe(true);
+      // Let go and pressed again, the shortcut dismisses.
+      onShortcut(shortcutChord());
+      expect(isLoadShown(render())).toBe(false);
     });
 
     it("dismisses on Escape from the page or the composer, and leaves a key meant for another control alone", async () => {
@@ -3159,6 +3301,34 @@ describe("MessageInput dictation", () => {
       pressMic(render);
       expect(mocks.speechModels.loads.length).toBe(2);
       expect(isLoadShown(render())).toBe(true);
+    });
+
+    it("takes a failed load's notice down once the model is seen loaded", async () => {
+      const { render } = await composerWithoutModel();
+      pressMic(render);
+      mocks.speechModels.loads[0].reject(new EngineLoadError("no WebGPU adapter", null));
+      await settled();
+      expect(findByClass(render(), "message-input-dictation-notice")!.attrs!["data-dictation-problem"]).toBe("engine");
+      // What the worker's word that another panel's load finished does to the page's cache.
+      mocks.voiceQueryClient.setQueryData(LOAD_KEY, LOADED);
+      const tree = render();
+      expect(micState(tree)).toBe("ready");
+      expect(findByClass(tree, "message-input-dictation-notice")).toBeUndefined();
+      expect(mocks.dictation).toBeNull();
+    });
+
+    it("keeps a notice that is not a failed load's when the model is seen loaded", async () => {
+      mocks.voiceQueryClient.setQueryData(LOAD_KEY, LOADED);
+      const { render } = await composerWithoutModel({ isDownloaded: true });
+      startDictating(render, "idle");
+      mocks.dictationEvents!.onProblem({ kind: "missing", message: "No microphone was found.", canRetry: true });
+      // The worker lets the model go, and a load asked for elsewhere brings it back.
+      await mocks.voiceQueryClient.resetQueries({ queryKey: LOAD_KEY, exact: true });
+      expect(micState(render())).toBe("load-needed");
+      mocks.voiceQueryClient.setQueryData(LOAD_KEY, LOADED);
+      const tree = render();
+      expect(micState(tree)).toBe("ready");
+      expect(findByClass(tree, "message-input-dictation-notice")!.attrs!["data-dictation-problem"]).toBe("missing");
     });
 
     it("dictates at once at a press when the model is loaded, with no loading look on the way", async () => {
