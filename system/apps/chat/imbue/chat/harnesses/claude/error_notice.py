@@ -67,7 +67,7 @@ class ErrorNotice(FrozenModel):
     is_auth_error: bool = False
     # The turn failed against the model API: renders as a failure rather than as prose.
     is_api_error: bool = False
-    # Normalized kind, for the wording of the provider-fault note. None when the failure is
+    # Normalized kind, which picks how the failed turn is worded. None when the failure is
     # real but unclassified, which still renders -- just without a named cause.
     api_error_kind: str | None = None
 
