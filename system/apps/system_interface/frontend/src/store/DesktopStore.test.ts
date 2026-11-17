@@ -1291,6 +1291,34 @@ describe("a launch into an app that is not running", () => {
     expect(api.calls.filter((call) => call.startsWith("launch:home:docs:new"))).toHaveLength(4);
   });
 
+  it("offers an agent to free up space, and no Try again, for a launch the app took that a full disk left unopened", async () => {
+    api.apps = [chat, docs];
+    const store = await startedStore();
+    api.refusal = shellRefusal(
+      500,
+      "docs took the launch, but its window could not be recorded",
+      "Docs got it, but this workspace is out of space, so its window couldn't be opened.",
+      "launched_not_opened_out_of_space",
+    );
+    await store.runLaunch("docs", "new", "new");
+    api.refusal = shellRefusal(
+      500,
+      "docs took the launch, but its window could not be recorded",
+      "Docs got it, but its window couldn't be opened. If this persists, report a bug.",
+      "launched_not_opened",
+      true,
+    );
+    await store.runLaunch("docs", "new", "new");
+
+    expect(toastsShown(store).map(([message, , actions]) => [message, actions])).toEqual([
+      [
+        "Docs got it, but this workspace is out of space, so its window couldn't be opened.",
+        ["Ask an agent to free up space"],
+      ],
+      ["Docs got it, but its window couldn't be opened. If this persists, report a bug.", []],
+    ]);
+  });
+
   it("offers only a bug report when the app that could not start is the one agents are asked through", async () => {
     api.apps = [chat];
     const store = await startedStore();

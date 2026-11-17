@@ -6,7 +6,7 @@ The workspace desktop says what failed in its own words, names apps as people kn
 
 - A launch into an app that isn't running says what the app's window would ("Terminal is not running right now." with "Ask an agent to start it"), and a launch that woke a stopped app that didn't come up says what its could-not-start page says (couldn't start, failed several times so not started again, or still starting).
 
-- Once an app has taken a launch, a failed write of where its window is no longer fails the launch: the window shows the page, the launcher lets go of the text, and a note says the window's place wasn't saved (on a full disk, with an agent to free up space). When no window could be opened for it, the note says so and offers no Try again, which would ask the app a second time.
+- Once an app has taken a launch, a failed write of where its window is no longer fails the launch: the window shows the page, the launcher lets go of the text, and a note says the window's place wasn't saved (on a full disk, with an agent to free up space). When no window could be opened for it, the note says so (on a full disk, with an agent to free up space) and offers no Try again, which would ask the app a second time.
 
 - The launcher and the phone's start sheet keep the typed text until a row runs, and show a failure under the field ("Couldn't send that to Chat, so your text is still in the box."). Text sent into Chat that is refused leaves Chat's window where it was.
 

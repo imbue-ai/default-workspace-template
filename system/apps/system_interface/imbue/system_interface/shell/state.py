@@ -1223,7 +1223,7 @@ def _launched_not_opened(entry: AppInventoryEntry, error: ShellStateError) -> La
             if is_out_of_space
             else f"{name} got it, but its window couldn't be opened. If this persists, report a bug."
         ),
-        kind=RefusalKind.LAUNCHED_NOT_OPENED,
+        kind=RefusalKind.LAUNCHED_NOT_OPENED_OUT_OF_SPACE if is_out_of_space else RefusalKind.LAUNCHED_NOT_OPENED,
         reportable=not is_out_of_space,
     )
 

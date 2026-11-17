@@ -20,7 +20,9 @@ class RefusalKind(LowerCaseStrEnum):
     APP_COULD_NOT_START = auto()
     APP_START_BUDGET_SPENT = auto()
     APP_STILL_STARTING = auto()
-    # The app took the launch, but the shell could not write the window that would show it.
+    # The app took the launch, but the shell could not write the window that would show it: the disk was full (the
+    # frontend offers an agent to free up space), or another write failed.
+    LAUNCHED_NOT_OPENED_OUT_OF_SPACE = auto()
     LAUNCHED_NOT_OPENED = auto()
 
 

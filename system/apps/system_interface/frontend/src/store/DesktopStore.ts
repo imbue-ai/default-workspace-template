@@ -817,6 +817,8 @@ export class DesktopStore {
         return this.couldNotStartNotice(app, failureSentence(failure, whatFailed).message, failure.details, []);
       case "app_still_starting":
         return this.noticeOf(failureSentence(failure, whatFailed), tryAgain);
+      case "launched_not_opened_out_of_space":
+        return this.noticeOf(failureSentence(failure, whatFailed), [this.freeSpaceAction()]);
       case "launched_not_opened":
       case null:
         break;

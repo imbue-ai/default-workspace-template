@@ -470,7 +470,7 @@ def test_a_launch_the_app_took_whose_window_cannot_be_written_is_refused_as_laun
     with pytest.raises(LaunchedNotOpenedError) as not_opened:
         shell.launch(str(home.id), request)
 
-    assert not_opened.value.kind is RefusalKind.LAUNCHED_NOT_OPENED
+    assert not_opened.value.kind is RefusalKind.LAUNCHED_NOT_OPENED_OUT_OF_SPACE
     assert not_opened.value.user_facing_message == (
         "Docs got it, but this workspace is out of space, so its window couldn't be opened."
     )

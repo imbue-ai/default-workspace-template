@@ -34,6 +34,7 @@ const REFUSAL_KIND_VALUES = [
   "app_could_not_start",
   "app_start_budget_spent",
   "app_still_starting",
+  "launched_not_opened_out_of_space",
   "launched_not_opened",
 ] as const;
 
