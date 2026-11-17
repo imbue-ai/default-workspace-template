@@ -1,0 +1,1 @@
+`system/scripts/agent_resource_notice.sh` is a new prompt hook for claude and codex agents (`.claude/settings.json`, `.codex/hooks.json`): while the workspace is short of disk, memory or CPU it adds the resource monitor's notice to the agent's context. The lock file records that the workspace shell now depends on `disk-headroom` and `oom-priority`.
