@@ -214,9 +214,7 @@ def test_a_numbered_step_list_names_sections_whose_headings_carry_the_step_numbe
         pytest.param(
             "- Step 1: Fetch\n- Step 2: Report\n", set(), id="headings-written-out"
         ),
-        pytest.param(
-            "1. Fetch\n12. Report\n", {Check.CONTENTS}, id="a-longer-number"
-        ),
+        pytest.param("1. Fetch\n12. Report\n", {Check.CONTENTS}, id="a-longer-number"),
         pytest.param(
             "1. Report\n2. Fetch\n", {Check.CONTENTS}, id="numbered-differently"
         ),
