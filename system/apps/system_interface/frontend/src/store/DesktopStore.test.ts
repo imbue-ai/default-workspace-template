@@ -2320,7 +2320,13 @@ describe("embedder messages", () => {
 
   it("says what a message that did not reach every app was for, once for a refusal that says the same", async () => {
     const store = await startedStore();
-    socket.deliver().onAppsUpdated([HANDLING_APP, appRecord("browser", { display_name: "Web Browser" })]);
+    socket
+      .deliver()
+      .onAppsUpdated([
+        HANDLING_APP,
+        appRecord("browser", { display_name: "Web Browser" }),
+        appRecord("slack", { display_name: "Slack" }),
+      ]);
     api.refusal = "Nothing in this workspace handles 'open:url'";
     expect(await store.relayEmbedderMessage({ type: "open:url", url: "http://localhost:3000/" }, "chat")).toBe(false);
     api.refusal = "buddy did not take it: could not be reached";
@@ -2340,12 +2346,24 @@ describe("embedder messages", () => {
       }),
     );
     expect(await store.relayEmbedderMessage({ type: "open:web", url: "https://example.com/" }, "chat")).toBe(false);
+    // A link of any scheme is relayed as open:<scheme>, and is told as a link too.
+    const slackDetail = "slack did not take it: answered 500";
+    api.refusal = new HttpError(
+      readFailure({
+        status: 502,
+        body: { detail: slackDetail, deliveries: [{ app: "slack", status: 500, detail: "answered 500" }] },
+        rawText: null,
+        requestKind: "change",
+      }),
+    );
+    expect(await store.relayEmbedderMessage({ type: "open:slack", url: "slack://open" }, "chat")).toBe(false);
 
     expect(store.toasts.current().map((toast) => [toast.message, toast.details, toast.isLasting])).toEqual([
       ["Couldn't open this link.", null, false],
       ["Couldn't show that chat.", null, false],
       ["Couldn't open that file.", null, false],
       ["Web Browser couldn't open this link. Try again. If this persists, report a bug.", `HTTP 502\n${detail}`, true],
+      ["Slack couldn't open this link. Try again. If this persists, report a bug.", `HTTP 502\n${slackDetail}`, true],
     ]);
   });
 });

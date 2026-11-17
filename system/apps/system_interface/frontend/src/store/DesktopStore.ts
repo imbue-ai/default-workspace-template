@@ -283,8 +283,9 @@ export const BOOT_READ_WHAT_FAILED = "This workspace's desktops couldn't be load
 export const FREE_SPACE_REQUEST =
   "This workspace is out of disk space, so changes on its desktop can't be saved. Please free up some space.";
 
-/** The message types a link becomes when it is relayed to an app: a local URL, and an external one by its kind. */
-const LINK_MESSAGE_TYPES: ReadonlySet<string> = new Set([OPEN_URL_MESSAGE, "open:web", "open:mailto", "open:tel"]);
+/** The prefix of every message type a link becomes when it is relayed to an app: ``open:url`` for a local URL, and
+ *  ``open:<scheme>`` (``open:web`` for a web link) for an external one; ``open:file`` is the one that is no link. */
+const OPEN_MESSAGE_PREFIX = "open:";
 
 /** Where a failure of something a surface ran is told: under that surface (the launcher's field) rather than in a
  *  toast. */
@@ -2224,7 +2225,7 @@ export class DesktopStore {
   private relayWhatFailed(type: string, error: unknown): string {
     if (type === OPEN_FILE_MESSAGE) return "Couldn't open that file";
     if (type === FOCUS_CHAT) return "Couldn't show that chat";
-    if (!LINK_MESSAGE_TYPES.has(type)) return "Couldn't do that";
+    if (!type.startsWith(OPEN_MESSAGE_PREFIX)) return "Couldn't do that";
     const app = undeliveredAppOf(error);
     return app === null ? "Couldn't open this link" : `${this.displayNameOf(app)} couldn't open this link`;
   }
