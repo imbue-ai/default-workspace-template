@@ -108,7 +108,7 @@ PAGE_CONTENT_SECURITY_POLICY = (
 )
 
 
-def _page_html(title: str, body_html: str, refresh_seconds: int | None = None) -> str:
+def _render_page(title: str, body_html: str, refresh_seconds: int | None = None) -> str:
     """One of the gateway's own full-page answers: a heading and a few lines, centred."""
     refresh = f'<meta http-equiv="refresh" content="{refresh_seconds}">' if refresh_seconds is not None else ""
     return (
@@ -118,7 +118,7 @@ def _page_html(title: str, body_html: str, refresh_seconds: int | None = None) -
     )
 
 
-_LOADING_PAGE = _page_html(
+_LOADING_PAGE = _render_page(
     "Loading...",
     "<h1>Starting up&hellip;</h1>\n<p>This service is not ready yet. The page retries automatically.</p>",
     refresh_seconds=3,
@@ -128,45 +128,45 @@ _LOADING_PAGE = _page_html(
 # an app's own page, at that page's address.
 _TRY_AGAIN_BUTTON = '<a class="button" href="">Try again</a>'
 
-_UNRESPONSIVE_WAITING_PAGE = _page_html(
+_UNRESPONSIVE_WAITING_PAGE = _render_page(
     "Waiting for this page",
     "<h1>Waiting for this page</h1>\n<p>This page isn't responding yet. It will open as soon as it answers.</p>",
     refresh_seconds=3,
 )
 
-_UNRESPONSIVE_PAGE = _page_html(
+_UNRESPONSIVE_PAGE = _render_page(
     "This page isn't responding",
     "<h1>This page isn't responding</h1>\n"
     "<p>This page isn't responding right now. Let the person who shared it know, then try again.</p>\n"
     f"{_TRY_AGAIN_BUTTON}",
 )
 
-_UNRESPONSIVE_NOT_RESTARTED_PAGE = _page_html(
+_UNRESPONSIVE_NOT_RESTARTED_PAGE = _render_page(
     "This app isn't responding",
     "<h1>This app isn't responding</h1>\n"
     "<p>This app isn't responding. The workspace owner may need to restart it.</p>\n"
     f"{_TRY_AGAIN_BUTTON}",
 )
 
-_NOTHING_SHARED_HERE_PAGE = _page_html(
+_NOTHING_SHARED_HERE_PAGE = _render_page(
     "Nothing shared here",
     "<h1>Nothing shared here</h1>\n"
     "<p>Nothing is shared at this address right now. Check the link with the person who sent it.</p>",
 )
 
-_ORIGIN_REFUSED_PAGE = _page_html(
+_ORIGIN_REFUSED_PAGE = _render_page(
     "Not shared with you",
     "<h1>Not shared with you</h1>\n"
     "<p>This workspace exists, but your account has not been granted access to this page.</p>",
 )
 
-_EXPIRED_LOGIN_PAGE = _page_html(
+_EXPIRED_LOGIN_PAGE = _render_page(
     "Sign-in link expired",
     "<h1>Sign-in link expired</h1>\n"
     "<p>This sign-in link was already used or has expired. Open the workspace link again.</p>",
 )
 
-_MISCONFIGURED_PAGE = _page_html(
+_MISCONFIGURED_PAGE = _render_page(
     "Sharing is misconfigured",
     "<h1>Sharing is misconfigured</h1>\n"
     "<p>This workspace's sharing settings could not be read, so nobody can be let in right now.\n"
@@ -184,7 +184,7 @@ _UNRESPONSIVE_WAIT_GAP_SECONDS = 30.0
 def _not_shared_with_account_page(reload_url: str, switch_account_url: str) -> str:
     """The refusal of a signed-in account; ``reload_url`` is the page the visitor was opening ("" when this page is
     served at that page's own address)."""
-    return _page_html(
+    return _render_page(
         "Not shared with you",
         "<h1>Not shared with you</h1>\n"
         "<p>This page hasn't been shared with your account. "
