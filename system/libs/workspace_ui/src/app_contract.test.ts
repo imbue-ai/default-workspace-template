@@ -22,7 +22,9 @@ import {
   SHELL_SHOWN,
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_START_NEW_WITH_TEXT,
+  SHELL_START_NEW_WITH_TEXT_RESULT,
   SHELL_START_WITH_TEXT,
+  CHANGE_NOT_ANSWERED_SENTENCE,
   SHELL_THEME,
   ShellContractError,
   askAgentToFix,
@@ -209,18 +211,18 @@ describe("connectToShell", () => {
   });
 
   it("posts focused, location, openPath, the text starts, draftText, sendMessage, and openLink with the contract shapes", () => {
-    const parent = framed();
-    connection = connectToShell({});
+    const parent = shellFramed();
+    const live = connection as ShellConnection;
 
-    connection.focused();
-    connection.location("/docs", "Docs");
-    connection.openPath("/?chat=agent-3", "focus");
-    connection.openPath("/new", "new");
-    connection.startWithText("Free up space.");
-    connection.startNewWithText("Fix this.");
-    connection.draftText("Explain this element:");
-    connection.sendMessage("open:file", { path: "/home/user/plan.md", type: "ignored" });
-    connection.openLink("http://files-ab12cd34.host-0123.localhost:8421/");
+    live.focused();
+    live.location("/docs", "Docs");
+    live.openPath("/?chat=agent-3", "focus");
+    live.openPath("/new", "new");
+    live.startWithText("Free up space.");
+    live.startNewWithText("Fix this.");
+    live.draftText("Explain this element:");
+    live.sendMessage("open:file", { path: "/home/user/plan.md", type: "ignored" });
+    live.openLink("http://files-ab12cd34.host-0123.localhost:8421/");
 
     expect(sentAfterConnect(parent)).toEqual([
       [{ type: SHELL_FOCUSED }, "*"],
@@ -228,7 +230,7 @@ describe("connectToShell", () => {
       [{ type: SHELL_OPEN, path: "/?chat=agent-3", ifPresent: "focus" }, "*"],
       [{ type: SHELL_OPEN, path: "/new", ifPresent: "new" }, "*"],
       [{ type: SHELL_START_WITH_TEXT, text: "Free up space." }, "*"],
-      [{ type: SHELL_START_NEW_WITH_TEXT, text: "Fix this." }, "*"],
+      [{ type: SHELL_START_NEW_WITH_TEXT, text: "Fix this.", requestId: expect.any(String) }, "*"],
       [{ type: SHELL_DRAFT_TEXT, text: "Explain this element:" }, "*"],
       [{ type: SHELL_MESSAGE, message: { type: "open:file", path: "/home/user/plan.md" } }, "*"],
       [{ type: SHELL_OPEN_LINK, url: "http://files-ab12cd34.host-0123.localhost:8421/" }, "*"],
@@ -641,6 +643,69 @@ describe("askAgentToFix", () => {
     expect(text.startsWith("This window couldn't be closed.\n\n")).toBe(true);
     expect(text).not.toContain("`");
     expect(text).not.toContain("closed..");
+  });
+});
+
+describe("startNewWithText's answer", () => {
+  /** The request id of the last ``shell:start-new-with-text`` the page sent. */
+  function lastRequestId(parent: { postMessage: ReturnType<typeof vi.fn> }): string {
+    const [message] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect(message.type).toBe(SHELL_START_NEW_WITH_TEXT);
+    return message.requestId as string;
+  }
+
+  /** Whether ``promise`` has settled by the time the microtasks queued now have run. */
+  async function settledValue<T>(promise: Promise<T>): Promise<T | "pending"> {
+    return Promise.race([promise, new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0))]);
+  }
+
+  it("settles on the shell's answer to its own request, and on no other", async () => {
+    const parent = shellFramed();
+    const live = connection as ShellConnection;
+    const first = live.startNewWithText("Fix this.");
+    const firstId = lastRequestId(parent);
+    const second = live.startNewWithText("Fix that.");
+    const secondId = lastRequestId(parent);
+    expect(secondId).not.toBe(firstId);
+
+    deliver({ type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId: firstId, isOpened: true }, {});
+    deliver({ type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId: "someone-else", isOpened: true }, parent);
+    expect(await settledValue(first)).toBe("pending");
+
+    const failure = { message: "Chat couldn't open that.", details: "HTTP 400\nno account", isReportable: false };
+    deliver({ type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId: secondId, isOpened: false, failure }, parent);
+    deliver({ type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId: firstId, isOpened: true }, parent);
+    expect(await first).toEqual({ isOpened: true });
+    expect(await second).toEqual({ isOpened: false, failure });
+  });
+
+  it("settles a request the shell never answered as not answered once a fresh handshake arrives", async () => {
+    const parent = shellFramed();
+    const pending = (connection as ShellConnection).startNewWithText("Fix this.");
+    expect(await settledValue(pending)).toBe("pending");
+    deliver(HANDSHAKE, parent);
+    expect(await pending).toEqual({
+      isOpened: false,
+      failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isReportable: false },
+    });
+  });
+
+  it("settles at once as not answered on a page no shell frames", async () => {
+    connection = connectToShell({});
+    expect(await connection.startNewWithText("Fix this.")).toEqual({
+      isOpened: false,
+      failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isReportable: false },
+    });
+  });
+
+  it("is what askAgentToFix answers", async () => {
+    const parent = shellFramed();
+    const asked = askAgentToFix(connection as ShellConnection, {
+      whatFailed: "Docs couldn't open that",
+      details: null,
+    });
+    deliver({ type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId: lastRequestId(parent), isOpened: true }, parent);
+    expect(await asked).toEqual({ isOpened: true });
   });
 });
 

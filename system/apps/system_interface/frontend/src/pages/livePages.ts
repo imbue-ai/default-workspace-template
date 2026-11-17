@@ -51,6 +51,7 @@ import {
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   SHELL_START_NEW_WITH_TEXT,
+  SHELL_START_NEW_WITH_TEXT_RESULT,
   SHELL_START_WITH_TEXT,
   reportedFailureOf,
 } from "@imbue/workspace-ui/src/app_contract";
@@ -994,11 +995,20 @@ export class LivePagesLayer implements PageDriver {
     if (text !== null) void this.store.startWithText(text);
   }
 
-  /** ``shell:start-new-with-text {text}`` from a page ("Ask an agent to fix this"): the launcher's secondary text
-   *  action runs with it, as ``shell:start-with-text`` runs the primary one. */
+  /** ``shell:start-new-with-text {text, requestId}`` from a page ("Ask an agent to fix this"): the launcher's
+   *  secondary text action runs with it, as ``shell:start-with-text`` runs the primary one, and the page is answered
+   *  with ``shell:start-new-with-text-result`` once the window opened or the launch failed. */
   private takeStartNewWithText(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
     const text = this.textFromPage(frame, payload, SHELL_START_NEW_WITH_TEXT);
-    if (text !== null) void this.store.startNewWithText(text);
+    if (text === null) return;
+    const requestId = payload.requestId;
+    if (typeof requestId !== "string" || requestId === "") {
+      console.warn(`[si] ${SHELL_START_NEW_WITH_TEXT} ignored: it carried no request id (${JSON.stringify(payload)})`);
+      return;
+    }
+    void this.store.startNewWithText(text).then((outcome) => {
+      sendToChildFrame(frame, SHELL_START_NEW_WITH_TEXT_RESULT, { requestId, ...outcome });
+    });
   }
 
   /** ``shell:draft-text {text}`` from a page (element-reference-menu plan section 5): the text is drafted into the

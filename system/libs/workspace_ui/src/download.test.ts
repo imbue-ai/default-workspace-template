@@ -39,7 +39,7 @@ describe("startDownload", () => {
       body: { textContent: "There's nothing at /notes.txt.\n" },
     });
 
-    expect(onFailure).toHaveBeenCalledWith("Couldn't download notes.txt: There's nothing at /notes.txt.");
+    expect(onFailure).toHaveBeenCalledWith("Couldn't download \"notes.txt\". There's nothing at /notes.txt.");
     expect(document.querySelector("iframe")).toBeNull();
   });
 
@@ -54,6 +54,6 @@ describe("startDownload", () => {
     startDownload(document, "/report?zip", "report", onFailure);
     answerWith(null);
 
-    expect(onFailure.mock.calls).toEqual([["Couldn't download notes.txt."], ["Couldn't download report."]]);
+    expect(onFailure.mock.calls).toEqual([['Couldn\'t download "notes.txt".'], ['Couldn\'t download "report".']]);
   });
 });
