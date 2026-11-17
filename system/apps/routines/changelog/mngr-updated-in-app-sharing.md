@@ -1,0 +1,1 @@
+Routines is declared a system app (`system = true` in its manifest): it is part of every workspace rather than an app built on it, so the share panel lists it under System and the desktop app's home screen does not count it among the workspace's own apps.
