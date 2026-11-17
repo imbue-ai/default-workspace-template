@@ -171,8 +171,12 @@ time.
 ## Step 3: Make the change
 
 Edit the code under `system/apps/<package>/`, or wherever the program's
-command points. Three things the change may owe:
+command points. Four things the change may owe:
 
+- **The rules an app's code keeps.** Before a change to an app's code, read
+  `.agents/shared/references/apps/code.md`: state under `DATA_DIR`, the shell
+  page script on every page, the content-security policy, a "view raw" control
+  on derived data.
 - **The manifest.** Anything the change creates for the app outside its own
   directory is registered under `[[references]]`. If the change gives the app
   work between requests, or takes it away, `stop_when_no_windows` changes

@@ -1,8 +1,9 @@
 # App gotchas
 
 Read this when verification surfaces something odd; skim for the symptom that
-matches. Most apps just work: the app owns its own browser origin, on shares
-too, and the scaffolder's defaults sidestep the remaining traps.
+matches. Most apps just work: the app owns its own browser origin (`code.md`,
+"The app owns its origin"), on shares too, and the scaffolder's defaults
+sidestep the remaining traps.
 
 ## "The window is stuck on the loading page"
 

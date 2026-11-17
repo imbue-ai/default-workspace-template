@@ -107,7 +107,8 @@ packages), so the app's dependencies never move the chat's or another app's.
   (`system/scripts/workspace_bare_scripts/venv_links.py`).
 - `src/<package>/__init__.py` -- empty.
 - `src/<package>/runner.py` -- the app, a synchronous Flask starter. What it
-  sets up and the rules its code follows are in `app-code.md`.
+  sets up and the rules its code follows are in
+  `.agents/shared/references/apps/code.md`.
 - `src/<package>/runner_test.py` -- the one test every app starts with: its API
   document at `/api/schema` says what its manifest says and covers every route
   (`.agents/shared/references/apps/api-schema.md`).

@@ -1,7 +1,6 @@
-# Writing the app's code
+# The app's code
 
-Read this before you first edit a scaffolded app's `runner.py`, the mock
-included. It says what the starter sets up and the rules the app's code keeps.
+What a scaffolded app's starter sets up, and the rules the app's code keeps.
 
 ## Contents
 
@@ -17,9 +16,9 @@ included. It says what the starter sets up and the rules the app's code keeps.
 ## The starter
 
 `system/apps/<package>/src/<package>/runner.py` builds a `Flask` app and serves
-it with `werkzeug.serving.run_simple(..., threaded=True)`. It has `GET /` (a
-placeholder page) and `GET /health` (returns `{"status": "ok"}`); replace the
-placeholder with your routes.
+it with `werkzeug.serving.run_simple(..., threaded=True)`. A freshly scaffolded
+one has `GET /` (a placeholder page, which the app's own routes replace) and
+`GET /health` (returns `{"status": "ok"}`).
 
 - **Use sync handlers** (`def`, not `async def`). The threaded Werkzeug server
   handles concurrent requests on separate threads, so no asyncio is needed.
@@ -31,7 +30,7 @@ placeholder with your routes.
 - Those two overrides are what let a later edit boot a throwaway instance on a
   spare port against a copy of the data (the `update-app` skill).
 - A route the app adds owes the app's API document a docstring and a route
-  table entry: `.agents/shared/references/apps/api-schema.md`.
+  table entry: `api-schema.md`, beside this file.
 
 ## The app owns its origin
 
@@ -133,8 +132,8 @@ This is the surfacing half of the preserve-and-surface principle in
 extract, a rendering you did not anticipate), and the raw and source controls
 let the user bridge them without waiting for a rebuild. Design it in from the
 first version. It depends on the data layer having persisted the raw payload
-and the source reference (see the crystallize data-capture guidance), so
-confirm that is available and flag it if it is not. Keep it unobtrusive (a
+and the source reference, so confirm that is available and flag it if it is
+not. Keep it unobtrusive (a
 small per-record control, not clutter) and do not call it out in chat: always
 present, never announced.
 

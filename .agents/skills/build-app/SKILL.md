@@ -137,8 +137,8 @@ other than routes, or when a start fails.
 
 Serve a throwaway mock of the proposed UI as a route of the scaffolded app, so
 the user reacts to the real look and feel in a real window. Before you first
-edit the app's code, read `references/app-code.md` (what every page keeps) and
-`references/frontend-choices.md` (the design defaults).
+edit the app's code, read `.agents/shared/references/apps/code.md` (what every
+page keeps) and `references/frontend-choices.md` (the design defaults).
 
 - **A page, not a picture.** Never draw the screen as an image (an SVG, a PNG,
   a generated image) in place of the page: a picture cannot be clicked, so it
@@ -186,17 +186,16 @@ recorded in step 1. The goal is a *usable* app the user can try, not a hardened
 one.
 
 - Read `.agents/shared/references/apps/api-schema.md` before adding a route:
-  each owes the app's
-  API document a docstring and a route-table entry ("The app describes its own
-  API"). A visiting agent (`.agents/shared/references/visiting-agents.md`)
-  learns the app from that document.
-- `references/app-code.md` has the other rules: state under `DATA_DIR`, the
-  content-security policy, a "view raw" control on derived data, calling
-  Claude.
+  each owes the app's API document a docstring and a route-table entry ("The
+  app describes its own API"). A visiting agent
+  (`.agents/shared/references/visiting-agents.md`) learns the app from that
+  document.
+- `.agents/shared/references/apps/code.md` has the other rules: state under
+  `DATA_DIR`, the content-security policy, a "view raw" control on derived
+  data, calling Claude.
 - `.agents/shared/references/apps/manifest.md` says when an app that works
-  between requests
-  needs `stop_when_no_windows = false`, and how to register what you build for
-  the app outside its directory.
+  between requests needs `stop_when_no_windows = false`, and how to register
+  what you build for the app outside its directory.
 
 **The mock frame stays until the app is really hooked up.** Confirming the mock
 does not take it down. The app stays framed while any of it is not real, above
