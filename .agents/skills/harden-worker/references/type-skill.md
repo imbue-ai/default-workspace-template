@@ -103,7 +103,7 @@ belongs to the app itself is that app's own pass.
   checks). A new skill passes every check. For a skill that existed before your pass, pass
   `--edited` in place of `--no-exemptions`: when its frontmatter carries a `predates-checks`
   exemption, restructure it until those checks pass and remove the exemption
-  (`docs/system/skill_authoring_guide.md`); an `awaiting-restructure` one belongs to a
+  (`docs/system/skill_exemptions.md`); an `awaiting-restructure` one belongs to a
   built-in skill and stays, so leave that skill's structure alone.
 - Hand-craft and run 2-3 scenarios (template in `spec-summary.md`); they are
   **ephemeral** -- run them in your transcript, never saved as files. For a

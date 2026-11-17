@@ -1,6 +1,6 @@
 ---
 name: caretaker
-description: The weekly Caretaker, invoked via /caretaker whenever the weekly check wakes the agent. Scans the workspace's service logs for problems, checks basic system health (disk, memory and swap, CPU load, OOM shedding) and finished-but-uncommitted work, and proposes fixes, all with the user's permission. Its first run only looks, introduces itself and asks whether to keep checking.
+description: The weekly Caretaker. Scans the workspace's service logs for problems, checks basic system health (disk, memory and swap, CPU load, OOM shedding) and finished-but-uncommitted work, and proposes fixes, all with the user's permission. Its first run only looks, introduces itself and asks whether to keep checking. Only ever invoked explicitly, by /caretaker; never chosen for a request.
 metadata:
   author: imbue
   exempt-checks: size
@@ -31,9 +31,6 @@ user's very first interaction with you, then branch.
 - First, decide: is this the first-ever run?
 - How you talk to the user (read this first)
 - First run: scan once, then introduce yourself
-- Hi, I'm a Caretaker for your workspace
-- I took a first look
-- A couple of quick questions
 - Recording the user's choices
 - The run
 - If you are interrupted mid-run
@@ -112,8 +109,7 @@ first impression of you is that single message.
    **nothing of your own** around the message: no preamble, no narration of the
    scan, no sign-off.
 
----
-
+```markdown
 ## Hi, I'm a Caretaker for your workspace
 
 I look after this workspace in the background. Here's how it works: on a schedule (once a week by default), a quick automatic check quietly looks over the things running here -- whether any of your apps have crashed or started logging errors, whether disk space is filling up, and whether the machine has been running low on memory. That check is silent and doesn't involve me at all.
@@ -135,8 +131,7 @@ So I know how you'd like me to help from here on:
 2. **When I find something, what should I do** -- fix small things on my own (restart something that's stuck, correct a setting, safely record finished work in your project's history), or just tell you and let you decide? I can take on bigger fixes too, if you'd like.
 
 You're always in control: everything here is adjustable any time -- the schedule, what I'm allowed to do, other regular jobs you'd like me to take on, or turning me off completely. Just tell me.
-
----
+```
 
 That is the whole message. Right after sending it, silently surface your chat
 window so the user sees it: run
