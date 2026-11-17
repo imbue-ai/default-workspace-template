@@ -473,7 +473,12 @@ def test_render_page_leaves_a_placeholders_text_in_the_title_alone() -> None:
 
     assert f"<title>{title}</title>" in page_html
     start = page_html.index('id="terminal-config">') + len('id="terminal-config">')
-    assert json.loads(page_html[start : page_html.index("</script>", start)])["page"]["title"] == title
+    assert (
+        json.loads(page_html[start : page_html.index("</script>", start)])["page"][
+            "title"
+        ]
+        == title
+    )
     assert 'import("/_static/app_contract.js")' in page_html
 
 
