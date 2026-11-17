@@ -1827,7 +1827,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="append",
         default=[],
         metavar="KEY=SOURCE",
-        help="Copy a directory (repo-relative or absolute) into the instance's "
+        help="Copy a directory (absolute, or relative to the live checkout, even from "
+        "a git worktree) into the instance's "
         "scratch space on disk before boot (repeatable), refused if it would not fit; "
         "reachable as {copy:KEY} in --env values and the launch argv, and removed "
         "by 'down'. {scratch} names a fresh directory of the instance's own, and "
