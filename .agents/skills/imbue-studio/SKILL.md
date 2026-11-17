@@ -117,7 +117,7 @@ File exactly one permission request per tool call, with nothing else in that cal
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
-  -H 'Content-Type: application/json' -H 'X-Latchkey-Device: *' \
+  -H 'Content-Type: application/json' \
   -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "workspace",
        "payload": {"permissions": ["minds-workspaces-ssh", "minds-workspaces-backups-export"],
                    "target_workspace_id": "<TARGET_WORKSPACE_AGENT_ID>"},
@@ -128,10 +128,6 @@ latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
 Ask for the smallest set of verbs the task needs, with a rationale that names the workspace and the goal in plain language; the user sees them as checkboxes per workspace.
 
 ## 6. Acting on other workspaces from inside one
-
-Everything in this section is for the user's own workspaces only: those `GET /api/v1/workspaces` reports with `is_owned` true.
-Never SSH into, or use these routes on, a workspace that belongs to someone else, even one they have given the user access to.
-Reach it like any other website the user has an account on, through the `connect-external-service` skill.
 
 A workspace is addressed by the id of its primary agent (the one carrying the `is_primary` label).
 Your `$MNGR_AGENT_ID` is your own agent, one of the workspace's several, so from inside resolve your workspace's id with `mngr ls --include 'has(labels.is_primary)' --ids` (only this workspace's agents are visible from inside, so exactly one carries the label) and fall back to `$MNGR_AGENT_ID` when that is empty.
