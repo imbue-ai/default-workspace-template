@@ -669,6 +669,19 @@ def test_websocket_connect_sends_the_chats_activity_once_the_chat_app_has_report
     assert messages[6] == {"type": "chats_activity", **report}
 
 
+def test_websocket_connect_ends_with_the_resource_gauge(app: Flask) -> None:
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(7)]
+        finally:
+            close_ws(ws)
+
+    assert messages[6]["type"] == "resource_gauge_changed"
+    assert messages[6]["view"]["settings"]["disk_warning_free_gb"] == 5.0
+    assert messages[6]["view"]["alerts"] == []
+
+
 _VISITOR_IDENTITY = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
 _OWNER_IDENTITY = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
 

@@ -229,9 +229,12 @@ for an app the user wanted running, not shown) and
 windows is the `manage-desktop` skill.
 
 Then stop and hand the running app to the user: ask a plain "this generally
-looks good?". Start the test gate `AGENTS.md` asks for through
-`system/scripts/workspace_bare_scripts/run_in_background.py`: it is not the
-harden pass, but the worker may never be dispatched.
+looks good?". The test gate for the change (`uv run --no-sync app-manifest
+select-tests --diff-base <the commit before the change>`, once the change is
+committed) runs in the background, through
+`system/scripts/workspace_bare_scripts/run_in_background.py`: start it last,
+once the app is on the user's screen, and write your reply without waiting for
+it. It is not the harden pass, but the worker may never be dispatched.
 
 ## Step 7: Hand off to the harden pass
 
