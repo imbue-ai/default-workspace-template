@@ -40,6 +40,9 @@ dependencies = [
     # Agents run `uv run --no-sync disk-headroom` from the repo root where they would run df,
     # so its console script must survive a sync of the root closure too.
     "disk-headroom",
+    # The history-sweep routine runs `uv run --no-sync history-sweep` from the repo root, so its
+    # console script must survive a sync of the root closure too.
+    "history-sweep",
     "imbue-common",
     "tomlkit>=0.12",
     "playwright==1.58.0",
@@ -141,6 +144,7 @@ members = [
     "system/libs/disk_headroom",
     "system/libs/event_streams",
     "system/libs/github_sync",
+    "system/libs/history_sweep",
     "system/libs/latchkey_access",
     "system/libs/mngr_cli_contract",
     "system/libs/pytest_executable_tmp",
@@ -193,6 +197,7 @@ workspace-profile = { workspace = true }
 latchkey-access = { workspace = true }
 routines = { workspace = true }
 disk-headroom = { workspace = true }
+history-sweep = { workspace = true }
 # The built-in apps, which the root dependencies name so a root-closure sync keeps them.
 chat = { workspace = true }
 files-app = { workspace = true }

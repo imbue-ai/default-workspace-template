@@ -1,0 +1,8 @@
+# Frees the disk a deleted chat leaves behind: its session files at once, its preserved
+# transcripts 30 days after the delete. Never touches a chat the chat app still lists.
+title = "Clear deleted chats"
+what = "Removes what deleted chats leave on disk, keeping them for agents to look back on for 30 days."
+every = "1d"
+at = "04:00"
+command = ["uv", "run", "--no-sync", "history-sweep"]
+timeout = "30m"
