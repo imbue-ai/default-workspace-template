@@ -1,9 +1,12 @@
+import threading
 import time
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
 from app_registration import forward_port
+from disk_headroom.full import is_disk_full_error
 from loguru import logger
 from pydantic import AliasChoices
 from pydantic import ConfigDict
@@ -58,6 +61,9 @@ SHELL_MODULE_PATHS: Final[tuple[Path, ...]] = (
 
 # Registration is one local file write; past this it is suspicious.
 REGISTRATION_SLOW_SECONDS: Final[float] = 2.0
+# How long a registration the full disk refused waits before its first retry, and the most it waits between two.
+REGISTRATION_RETRY_FIRST_SECONDS: Final[float] = 2.0
+REGISTRATION_RETRY_MAX_SECONDS: Final[float] = 30.0
 
 
 class RegistryLaunchPath(FrozenModel):
@@ -245,8 +251,13 @@ def register_app(manifest_path: Path, app_url: AppUrl) -> None:
     AppRegistrationError when the manifest or the registration is refused.
 
     Every app's entry point calls this at startup, from the repo root (the supervisord program lines
-    of apps with no entry point run the script directly).
+    of apps with no entry point run the script directly). A disk too full to write the row is not a
+    refusal: the app starts with its row as it was, and a thread writes the row once there is room.
     """
+    register_or_retry_while_disk_full(lambda: _register_once(manifest_path, app_url), str(manifest_path))
+
+
+def _register_once(manifest_path: Path, app_url: AppUrl) -> None:
     started_at = time.monotonic()
     try:
         forward_port.register_manifest(registry_path(), manifest_path, app_url)
@@ -255,3 +266,54 @@ def register_app(manifest_path: Path, app_url: AppUrl) -> None:
     elapsed = time.monotonic() - started_at
     if elapsed > REGISTRATION_SLOW_SECONDS:
         logger.warning("Registered {} slowly, in {:.1f}s", manifest_path, elapsed)
+
+
+def register_or_retry_while_disk_full(
+    register: Callable[[], None],
+    description: str,
+    stop: threading.Event | None = None,
+    first_delay_seconds: float = REGISTRATION_RETRY_FIRST_SECONDS,
+    max_delay_seconds: float = REGISTRATION_RETRY_MAX_SECONDS,
+) -> threading.Thread | None:
+    """Run ``register`` now; when the disk is full, retry it on a daemon thread (returned) until it lands.
+
+    Any other AppRegistrationError raises at once. The thread backs off from ``first_delay_seconds`` to
+    ``max_delay_seconds`` and ends when the registration lands, fails some other way (logged), or
+    ``stop`` is set.
+    """
+    try:
+        register()
+    except AppRegistrationError as e:
+        if not is_disk_full_error(e):
+            raise
+        logger.warning("Could not register {}: the disk is full. Retrying until there is room.", description)
+        retry = threading.Thread(
+            target=_retry_registration,
+            args=(register, description, stop or threading.Event(), first_delay_seconds, max_delay_seconds),
+            name=f"register-retry-{description}",
+            daemon=True,
+        )
+        retry.start()
+        return retry
+    return None
+
+
+def _retry_registration(
+    register: Callable[[], None],
+    description: str,
+    stop: threading.Event,
+    first_delay_seconds: float,
+    max_delay_seconds: float,
+) -> None:
+    delay_seconds = first_delay_seconds
+    while not stop.wait(delay_seconds):
+        try:
+            register()
+        except AppRegistrationError as e:
+            if is_disk_full_error(e):
+                delay_seconds = min(delay_seconds * 2, max_delay_seconds)
+                continue
+            logger.opt(exception=e).error("Gave up registering {}", description)
+            return
+        logger.info("Registered {} once the disk had room", description)
+        return

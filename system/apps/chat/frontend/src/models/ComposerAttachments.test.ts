@@ -209,6 +209,18 @@ describe("while uploading", () => {
     expect(getComposerAttachments(chatId)[0]).toMatchObject({ status: "error", previewUrl: undefined });
   });
 
+  it("marks an upload the full disk refused, with the server's line to show", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const line = "The workspace's disk is full. Delete files you no longer need, then try again.";
+    uploadAnswers.push(() => Promise.resolve(new Response(JSON.stringify({ detail: line }), { status: 507 })));
+    uploadAnswers.push(() => Promise.resolve(new Response("nope", { status: 500 })));
+    uploadFilesToComposer(chatId, [new File(["a"], "full.txt"), new File(["b"], "broken.txt")]);
+    await settle();
+    const [full, broken] = getComposerAttachments(chatId);
+    expect(full).toMatchObject({ status: "error", isDiskFull: true, error: line });
+    expect(broken).toMatchObject({ status: "error", isDiskFull: false });
+  });
+
   it("lets an image's own pixels go when it is removed before its upload settles", () => {
     const revokeObjectURL = vi.fn();
     vi.stubGlobal(

@@ -23,6 +23,8 @@ whether the agent still exists:
   in `/home/user/.mngr/preserved/` until it is actually destroyed.
 - **Destroyed:**
   `/home/user/.mngr/preserved/<agent_name>--<agent_id>/events/<source>/common_transcript/events.jsonl`.
+  Kept for 30 days after the destroy, then removed by the daily `history-sweep`
+  routine; past that, the conversation is gone and you can say so.
 
 (Use `$MNGR_HOST_DIR` in place of `/home/user/.mngr` if this host's mngr root is elsewhere.)
 **Always check both** -- a past agent could be in either.

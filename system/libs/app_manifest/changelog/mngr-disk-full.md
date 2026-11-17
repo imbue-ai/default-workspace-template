@@ -1,0 +1,1 @@
+`register_app` no longer fails an app's start when the disk is too full to write its registry row. The app starts with its row as it was, and a background thread writes the row once there is room (`register_or_retry_while_disk_full`). Any other refused registration still raises.

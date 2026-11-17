@@ -15,6 +15,7 @@
 
 import m from "mithril";
 import { deleteAttachment } from "./attachments";
+import { DiskFullUploadError } from "./attachments";
 import { forgetLocalImage } from "./attachments";
 import { isImagePath } from "./attachments";
 import { rememberLocalImage } from "./attachments";
@@ -46,6 +47,8 @@ export interface ComposerAttachment {
   uploaded?: UploadedAttachment;
   /** Present when the upload failed. */
   error?: string;
+  /** Whether the upload failed because the workspace's disk is full; ``error`` is then the line to show. */
+  isDiskFull?: boolean;
   /** Resolves when the upload settles (ready or error); awaited at send time so
    *  an in-flight upload is included rather than dropped. */
   uploadSettled?: Promise<void>;
@@ -234,6 +237,7 @@ function _startUpload(chatId: string, file: File, summary: string | undefined): 
       _patchAttachment(chatId, localId, {
         status: "error",
         error: describeRequestError(error),
+        isDiskFull: error instanceof DiskFullUploadError,
         previewUrl: undefined,
       });
       releasePreview();
