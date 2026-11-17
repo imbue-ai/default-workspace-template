@@ -578,8 +578,9 @@ Two cases, two patterns:
   re-exposes the live data. Do NOT use `Path(__file__)`-based paths for
   state. A store the app can rebuild (downloads, extracted archives,
   clones, caches) gets its own directory under `DATA_DIR` with an
-  empty `.nobackup` file in it, created wherever the code creates the
-  directory, so the hourly backup skips it.
+  empty `.nobackup` file in it, so the hourly backup skips it; see "Keep
+  rebuildable data out of the backup" in
+  `.agents/skills/harden-worker/references/harden-creation.md`.
 - **Static assets shipped alongside the .py file** (templates,
   default configs, bundled JSON): `Path(__file__).parent / "assets/..."`
   is the right pattern.
@@ -691,8 +692,8 @@ extended tests, review gates -- runs in a **background harden worker**, never
 in the main agent. The test gate AGENTS.md has you run through
 `system/scripts/workspace_bare_scripts/run_in_background.py` checks the app against the tests it
 already has, so it is not this pass: run it anyway, since the worker may never
-be dispatched. This is skeleton phase 7: the harden pass (the
-`harden-worker` skill), here the **crystallize**
+be dispatched. This is skeleton phase 7: the harden pass
+(`.agents/skills/harden-worker/references/harden-creation.md`), here the **crystallize**
 operation with the **app** type -- the scaffolded app is already on
 disk and the user confirmed it live, so nothing needs reconstructing and there
 are no worker gates.
