@@ -4,7 +4,6 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { KeybindingAppView, KeybindingsCatalog, KeybindingsDeliveryOutcome } from "../model/api";
-import { wordFailureAsTheStoreDoes } from "../testing/failures";
 import { settle } from "../testing/fakeShell";
 import { KeyboardSettingsSection, chordsLabel, conflictingAction } from "./KeyboardSettingsSection";
 
@@ -67,9 +66,7 @@ function stubFetch(delivery: KeybindingsDeliveryOutcome): void {
 
 /** Mount the section and let its catalog read land. */
 async function mountSection(): Promise<HTMLElement> {
-  const root = mountView(() =>
-    m(KeyboardSettingsSection, { wordFailure: wordFailureAsTheStoreDoes, onReportBug: null }),
-  );
+  const root = mountView(() => m(KeyboardSettingsSection));
   await settle();
   m.redraw.sync();
   return root;
@@ -107,64 +104,5 @@ describe("the unsent saves' retry", () => {
 
     expect(root.textContent).not.toContain("Imbue Studio");
     expect(root.querySelector("[data-keybinding-unsent]")).not.toBeNull();
-  });
-});
-
-/** A fetch answering each call from ``answers`` in turn: a status and the JSON body the shell sends. */
-function stubFetchAnswers(answers: readonly { status: number; body: unknown }[]): ReturnType<typeof vi.fn> {
-  const queue = [...answers];
-  const fetchMock = vi.fn(async () => {
-    const answer = queue.shift() as { status: number; body: unknown };
-    return new Response(JSON.stringify(answer.body), { status: answer.status });
-  });
-  vi.stubGlobal("fetch", fetchMock);
-  return fetchMock;
-}
-
-describe("the section's failures", () => {
-  afterEach(() => {
-    unmountViews();
-    vi.unstubAllGlobals();
-  });
-
-  it("says the shortcuts couldn't be loaded, with the shell's reason behind See details, and reads them again on Try again", async () => {
-    stubFetchAnswers([
-      { status: 500, body: { detail: "the registry could not be read" } },
-      { status: 200, body: CATALOG_WITH_UNSENT },
-    ]);
-    const root = await mountSection();
-
-    expect(root.querySelector(".keyboard-settings-failure-message")?.textContent).toBe(
-      "Your keyboard shortcuts couldn't be loaded. Try again. If this persists, report a bug.",
-    );
-    expect(root.querySelector(".see-details pre")?.textContent).toBe("HTTP 500\nthe registry could not be read");
-
-    (root.querySelector(".keyboard-settings-failure-action") as HTMLButtonElement).click();
-    await settle();
-    m.redraw.sync();
-
-    expect(root.querySelector(".keyboard-settings-failure")).toBeNull();
-    expect(root.querySelector('[data-keybinding-action="files.rename"]')).not.toBeNull();
-  });
-
-  it("says which change failed, keeping the shortcuts listed, with the shell's refusal behind See details", async () => {
-    stubFetchAnswers([
-      { status: 200, body: CATALOG_WITH_UNSENT },
-      { status: 400, body: { detail: "no override of files.delete to reset" } },
-    ]);
-    const root = await mountSection();
-    const reset = Array.from(root.querySelectorAll('[data-keybinding-action="files.delete"] button')).find(
-      (button) => button.textContent === "Reset",
-    ) as HTMLButtonElement;
-
-    reset.click();
-    await settle();
-    m.redraw.sync();
-
-    expect(root.querySelector(".keyboard-settings-failure-message")?.textContent).toBe(
-      "This shortcut couldn't be reset.",
-    );
-    expect(root.querySelector(".see-details pre")?.textContent).toBe("HTTP 400\nno override of files.delete to reset");
-    expect(root.querySelector('[data-keybinding-action="files.rename"]')).not.toBeNull();
   });
 });
