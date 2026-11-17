@@ -38,11 +38,12 @@ something the user built is not a merge question; it is the hold below.
 
 ## 2. The worker's scope escape hatch
 
-A process question from its Step 4a, 4b or 4c: whether its impact analysis
-runs, whether a validation item runs, or whether and at what scope the review
-gates run. Answer it by the rule it names, as written. Where the rule is
-silent, the fallback is more coverage, never less. A `select-tests` output is
-not silence: what it printed for a commit is that commit's whole gate.
+A process question from its Step 4a, 4b, 4c or 4d: whether its impact
+analysis runs, whether a validation item runs, whether and at what scope the
+review gates run, or whether a changed file needs the agents restarted. Answer
+it by the rule it names, as written. Where the rule is silent, the fallback is
+more coverage, never less (for 4d, a restart). A `select-tests` output is not
+silence: what it printed for a commit is that commit's whole gate.
 Escalate to the user only if it contains a real question of their intent.
 
 ## 3. A gate command shed for memory

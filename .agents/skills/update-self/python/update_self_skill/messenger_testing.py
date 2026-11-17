@@ -11,8 +11,8 @@ from typing import Any
 class RecordingMessengers:
     """A recording ``mngr`` on PATH, and a recording ``message_chat.py`` to put in a tree.
 
-    Each call appends one JSON line to ``record``: which messenger ran, its argv, and the
-    text of the ``--message-file`` it was given.
+    Each call appends one JSON line to ``record``: which messenger ran, its argv, the
+    text of the ``--message-file`` it was given, and the ``MNGR_AGENT_ID`` it ran with.
     """
 
     def __init__(self, bin_dir: Path, record: Path) -> None:
@@ -33,10 +33,11 @@ class RecordingMessengers:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             "#!/usr/bin/env python3\n"
-            "import json, sys\n"
+            "import json, os, sys\n"
             "argv = sys.argv[1:]\n"
             "text = open(argv[argv.index('--message-file') + 1]).read() if '--message-file' in argv else None\n"
+            "agent_id = os.environ.get('MNGR_AGENT_ID')\n"
             f"with open({str(self.record)!r}, 'a') as handle:\n"
-            f"    handle.write(json.dumps({{'messenger': {name!r}, 'argv': argv, 'text': text}}) + '\\n')\n"
+            f"    handle.write(json.dumps({{'messenger': {name!r}, 'argv': argv, 'text': text, 'agent_id': agent_id}}) + '\\n')\n"
         )
         path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)

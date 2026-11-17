@@ -92,7 +92,7 @@ would satisfy the next pass's `await` at once, and `launch` refuses over it.
 mngr stop update-self
 ```
 
-**Release the leases and close the ticket last**, each as its own tool call:
+**Then release the leases and close the ticket**, each as its own tool call:
 
 1. `tk close` each `editing critical app <name>` lease Step 5b took.
 2. The `updating workspace` lease: `tk close "$UPDATE_LEASE_ID" "Update pass
@@ -100,6 +100,26 @@ mngr stop update-self
 3. The tracking ticket: `tk close <ticket-id> "Updated to <ref> -- worker
    branch merged and applied."`, adding the `archive/update-self-<timestamp>`
    name when the launch set a previous branch aside.
+
+**When the Step 4d verdict was `needed`, restart this chat too**, even when
+Step 5c restarted no other chat: after everything above, before showing the
+user this chat and ending the turn with the results message. It detaches a
+helper that waits for this turn to end, restarts this chat, and sends it a
+note asking you to confirm the restart to the user (and to repeat the offer
+for any chat left running or whose restart failed); when the restart does not
+happen, its note says so instead. `--reason` is the report's one-line **Agent
+restarts** summary of what the restart picks up, and `--restart-report` is the
+file Step 5c's `restart-agents` wrote (the note says the other chats were not
+restarted when it holds no report):
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    restart-self --reason "<what the restart picks up, one plain line>" \
+    --restart-report data/.tasks/update-self/agent-restarts.json
+```
+
+The results message then says this chat restarts right after it. Do nothing
+after the turn ends: the note starts your next turn.
 
 ## Show the user this chat
 

@@ -52,8 +52,13 @@ whichever of the two shows less headroom. A local docker workspace under runc
 publishes the same file for itself: the `publish_cgroup_meminfo` program
 (`bin/publish_cgroup_meminfo.py`, over `cgroup_meminfo`) reads the container's
 own cgroup v2 controller at `/sys/fs/cgroup` four times a second and writes the
-limit as MemTotal and the limit minus the usage plus the inactive file cache as
-MemAvailable, with the same formula as the gen-2 VM. It removes the
+limit as MemTotal and, as MemAvailable, the limit minus the usage plus what the
+kernel frees before it kills in the cgroup: the file cache no process has
+mapped, on both the inactive and the active list, and the reclaimable slab. The
+VM-side publishers add the inactive file cache alone, which is all a gVisor
+sandbox's cgroup holds; under runc a file read twice is on the active list, so
+a workspace whose backup walks a large tree every hour would otherwise read as
+full while its processes use a fraction of its cap. It removes the
 file while the container is uncapped (and keeps checking, since `mngr docker
 resize` can cap a running container), and touches nothing where it has no
 answer: no cgroup v2 memory controller (lima's root cgroup, gVisor's own

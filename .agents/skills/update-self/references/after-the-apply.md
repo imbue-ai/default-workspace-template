@@ -1,7 +1,5 @@
 # After the apply: the report-driven remainder (SKILL.md Steps 5c and 5d)
 
-Read this after an apply that exited 0, before teardown.
-
 ## Anything of the user's that is broken gets fixed, not reported
 
 This holds for every update. When something of theirs does not work on the
@@ -46,6 +44,36 @@ when a finding's class or wording is unclear.
 - **An `extra_provision_command` the update added.** Run that command live.
 - **A user app whose `app.toml` has no `stop_when_no_windows` field.** Decide
   it per `older-workspaces.md` ("Apps built before `stop_when_no_windows`").
+- **Agent restarts.** When the report's Step 4d verdict is `needed` (a
+  harness upgrade, new pi extensions, other config a harness loads once at
+  start), every running chat and background agent is still on what it loaded
+  before the apply. Restart the idle ones now; a restart keeps each
+  conversation. This chat and the update's worker are left out (this chat
+  restarts last, in teardown), and so is every chat and background agent Step
+  5b paused and brought back after the update landed, which started on what it
+  installed, and every chat room, whose agent runs no harness:
+
+  ```bash
+  python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+      restart-agents > data/.tasks/update-self/agent-restarts.json
+  cat data/.tasks/update-self/agent-restarts.json
+  ```
+
+  Its JSON lists what it `restarted`, what it `left_running` because the chat
+  app found it busy (`busy_with` says with what: working, waiting on a dialog,
+  switching to another agent, receiving a message, holding queued messages,
+  waiting on background work, or in a state the chat app cannot read), and
+  what `failed`. The chat app checks each chat at the moment of its restart,
+  so a chat mid-turn is left running, and so is one waiting on its harness's
+  own background work (a background shell, a subagent), which a restart would
+  end with no report. A restart does end a `run_in_background.py` command an
+  idle chat was waiting on; the command's runner outlives the restart and
+  sends the chat its report saying it was killed, so it can run it again. The
+  results message names each chat left running or failed, says it is still on
+  the previous version, and asks the user whether to interrupt and restart it
+  (`python3 system/scripts/message_chat.py <chat-id> --interrupt` on a yes). A
+  non-zero exit with no JSON means no chat was restarted; say so in the same
+  place.
 
 ## Escalating built-in defects
 

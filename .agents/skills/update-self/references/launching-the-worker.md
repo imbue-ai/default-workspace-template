@@ -65,7 +65,7 @@ Per Step 6 of the worker guide: the report shapes come from
 `data/.tasks/update-self/skill-at-target/.agents/shared/references/worker-reporting.md`, but you write the report
 and copy it into place by hand as Step 6 spells out -- not with the launcher's
 `report` subcommand. Valid `name:` values:
-`question` (mid-flight gate: a genuine, unresolvable conflict, the Step 4a/4b/4c
+`question` (mid-flight gate: a genuine, unresolvable conflict, the Step 4a/4b/4c/4d
 scope escape hatch, a gate command shed for memory, or a Step 4b customization the
 update cannot keep), `done` / `stuck` (terminal). `<TASK_FILE>` -> `data/.tasks/update-self/task.md`.
 BODY_EOF

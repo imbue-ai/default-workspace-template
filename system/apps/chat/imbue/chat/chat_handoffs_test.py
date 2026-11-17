@@ -96,6 +96,7 @@ class _FakeWorkspace(MutableModel):
     events_by_agent: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     delivered: list[tuple[str, str, str]] = Field(default_factory=list)
     applied: list[tuple[str, ModelPick]] = Field(default_factory=list)
+    launch_fast_applied: list[tuple[ChatId, str]] = Field(default_factory=list)
     # Every deliver and apply in the order they happened, so a test can assert the pick landed
     # before the successor's first message.
     steps: list[str] = Field(default_factory=list)
@@ -185,6 +186,9 @@ class _FakeWorkspace(MutableModel):
             raise ModelApplyError(f"Unknown model '{pick.model_id}'")
         self.applied.append((agent_info.id, pick))
         self.steps.append("apply")
+
+    def apply_launch_fast_mode(self, chat_id: ChatId, agent_info: AgentInfo) -> None:
+        self.launch_fast_applied.append((chat_id, agent_info.id))
 
     def delivered_prompt(self, handoff_id: str = "h-1") -> str:
         """The handoff prompt the successor received, the one send under the prompt's own id."""
@@ -346,6 +350,7 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> HandoffRunner:
         resolve_account=lambda account_id: _OPENAI_ACCOUNT,
         deliver=workspace.deliver,
         apply_model=workspace.apply_model,
+        apply_launch_fast_mode=workspace.apply_launch_fast_mode,
         drain_to_composer=workspace.drain_to_composer,
         ensure_watcher=workspace.ensure_watcher,
         get_background_tasks=lambda chat_id: (),
@@ -510,8 +515,9 @@ def test_a_handoff_runs_every_phase_and_the_successor_takes_over(tmp_path: Path)
         (successor, prompt, prompt_message_id("h-1")),
         (successor, "and also this", "m-2"),
     ]
-    # No pick was made, so the successor keeps its harness's default.
+    # No pick was made, so the successor keeps its harness's default model and is handed the chat's launch fast mode.
     assert workspace.applied == []
+    assert workspace.launch_fast_applied == [(chat_id, successor)]
 
 
 def test_a_summary_over_the_inline_limit_is_pointed_at_rather_than_carried(tmp_path: Path) -> None:
@@ -931,6 +937,8 @@ def test_a_model_pick_is_applied_to_the_successor_before_its_first_message(tmp_p
 
     assert workspace.record().handoff is None
     assert workspace.applied == [(successor, _PICK)]
+    # The pick names its own fast mode, so the chat's launch fast mode is not applied on top of it.
+    assert workspace.launch_fast_applied == []
     assert workspace.steps.index("apply") < workspace.steps.index(f"deliver:{prompt_message_id('h-1')}")
 
 

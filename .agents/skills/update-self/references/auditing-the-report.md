@@ -1,9 +1,9 @@
 # Auditing the worker's `done` report (SKILL.md Step 5a)
 
 There is no approval gate: the audit, not the user, authorizes the apply. The
-worker's impact analysis, validation scope and review gates are decided by
-rules (its guide's Steps 4a, 4b and 4c), and its report must show which
-branch of each rule applied, with the evidence. `worker-report.md` lists the
+worker's impact analysis, validation scope, review gates and agent-restart
+verdict are decided by rules (its guide's Steps 4a, 4b, 4c and 4d), and its
+report must show which branch of each rule applied, with the evidence. `worker-report.md` lists the
 sections a `done` body carries; you do not need the rest of the worker's
 guide to audit one.
 
@@ -23,6 +23,8 @@ guide to audit one.
   - the gate run's own evidence: the fix commits kept or reverted, or a clean
     run, plus the architecture-gate verdicts.
 - **A side-picked conflict** carries the discarded-side accounting.
+- **The 4d verdict**: the report's **Agent restarts**, `needed` or `not
+  needed`, with the changed files that decided it.
 - **The retired names** it searched for, when the impact analysis ran: the
   `retired-names` listing and what each search found.
 
