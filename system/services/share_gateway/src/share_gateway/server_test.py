@@ -1041,6 +1041,16 @@ def test_the_wait_starts_over_once_the_address_has_gone_quiet(tmp_path: Path) ->
     assert "isn't responding yet" in _unresponsive_page(harness, _WEB_HOST)
 
 
+def test_one_address_spelled_differently_is_one_wait(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _unresponsive_page(harness, f"{_WEB_HOST.upper()}:443")
+
+    last = _wait_out_a_minute(harness, _WEB_HOST)
+
+    assert "Let the person who shared it know" in last
+    assert "Let the person who shared it know" in _unresponsive_page(harness, f"{_WEB_HOST.upper()}:443")
+
+
 def test_each_address_waits_on_its_own(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
     _wait_out_a_minute(harness, _WEB_HOST)

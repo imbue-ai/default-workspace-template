@@ -250,17 +250,17 @@ class UnansweredAddressWaits:
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self._clock = clock
-        self._first_and_last_by_host: dict[str, tuple[float, float]] = {}
+        self._first_and_last_by_address: dict[str, tuple[float, float]] = {}
         self._lock = threading.Lock()
 
-    def seconds_waiting(self, host: str) -> float:
-        """Record one unanswered request for ``host``; answer how long its current wait has lasted."""
+    def seconds_waiting(self, address: str) -> float:
+        """Record one unanswered request for ``address``; answer how long its current wait has lasted."""
         now = self._clock()
         with self._lock:
-            first, last = self._first_and_last_by_host.get(host, (now, now))
+            first, last = self._first_and_last_by_address.get(address, (now, now))
             if now - last > _UNRESPONSIVE_WAIT_GAP_SECONDS:
                 first = now
-            self._first_and_last_by_host[host] = (first, now)
+            self._first_and_last_by_address[address] = (first, now)
         return now - first
 
 
@@ -405,12 +405,14 @@ def build_gateway_app(
         # still known here. Read raw: werkzeug's parsed host is empty for a label with an
         # underscore, which the shell's has.
         host = request.headers.get("Host", "")
-        if unanswered_waits.seconds_waiting(host) < _UNRESPONSIVE_GIVE_UP_SECONDS:
-            return _html_page(_UNRESPONSIVE_WAITING_PAGE, status=503)
         registered_apps = get_registered_apps()
         _is_ours, service_name = service_for_host(
             host, workspace_domain, build_label_to_name(registered_apps), auth_label
         )
+        # Counted per service rather than per spelling of its host (case, a port), which caddy passes on as sent.
+        address = service_name if service_name is not None else host.strip().lower()
+        if unanswered_waits.seconds_waiting(address) < _UNRESPONSIVE_GIVE_UP_SECONDS:
+            return _html_page(_UNRESPONSIVE_WAITING_PAGE, status=503)
         app_entry = next((entry for entry in registered_apps if entry.name == service_name), None)
         if app_entry is not None and not is_started_on_demand(app_entry, registered_apps):
             return _html_page(_UNRESPONSIVE_NOT_RESTARTED_PAGE, status=503)
