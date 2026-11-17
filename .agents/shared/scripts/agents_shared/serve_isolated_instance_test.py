@@ -1955,24 +1955,27 @@ def test_revive_refuses_a_port_another_process_took(
     assert str(booted["wrapper_port"]) in capsys.readouterr().err
 
 
-def test_revive_refuses_a_record_from_before_revives(tmp_path: Path) -> None:
-    runner, spawner, _booted = _booted_preview(tmp_path)
+def _drop_recorded_start_times(tmp_path: Path, _booted: dict) -> None:
+    """Leave a record as ``up`` wrote it before revives existed."""
     state = json.loads(_state_path(tmp_path).read_text())
     del state["pid_starts"]
     _state_path(tmp_path).write_text(json.dumps(state))
-    _restart(runner, spawner)
-    revived = _FakeSpawner(detached_pid=7000)
-
-    assert (
-        _revive(tmp_path, runner=runner, spawner=revived)
-        == mod.REVIVE_IMPOSSIBLE_EXIT_CODE
-    )
-    assert revived.detached_spawns == []
 
 
-def test_revive_refuses_to_boot_over_a_copy_that_is_gone(tmp_path: Path) -> None:
-    runner, spawner, booted = _booted_preview(tmp_path)
+def _remove_the_copy(_tmp_path: Path, booted: dict) -> None:
     shutil.rmtree(booted["copies"]["store"])
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [_drop_recorded_start_times, _remove_the_copy],
+    ids=["record-from-before-revives", "copy-gone"],
+)
+def test_revive_refuses_what_only_a_fresh_up_can_bring_back(
+    tmp_path: Path, damage: Callable[[Path, dict], None]
+) -> None:
+    runner, spawner, booted = _booted_preview(tmp_path)
+    damage(tmp_path, booted)
     _restart(runner, spawner)
     revived = _FakeSpawner(detached_pid=7000)
 
