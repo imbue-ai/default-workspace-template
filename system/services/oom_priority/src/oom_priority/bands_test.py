@@ -456,11 +456,10 @@ def test_the_climb_past_stale_ignores_engagement_and_spares_a_chat_mid_turn() ->
 
 def test_a_chat_never_reaches_a_stage_set_at_never() -> None:
     # Left forever, it stops at the last stage that has an idle time.
+    never_aged = _stages_with(aged=bands.NEVER)
+    assert _aged_under(never_aged, float("inf")) == never_aged["stale"].adj
+    only_fresh = _stages_with(stale=bands.NEVER, aged=bands.NEVER)
+    assert _aged_under(only_fresh, 3650 * _DAY) == only_fresh["fresh"].adj
     assert (
-        _aged_under(bands.CHAT_STAGES, float("inf")) == bands.CHAT_AGENT_STALE_CEILING
-    )
-    never_stale = _stages_with(stale=bands.NEVER)
-    assert _aged_under(never_stale, 3650 * _DAY) == bands.CHAT_AGENT_BASE
-    assert (
-        _aged_under(never_stale, 3650 * _DAY, is_engaged=True) == bands.CHAT_AGENT_FLOOR
+        _aged_under(only_fresh, 3650 * _DAY, is_engaged=True) == bands.CHAT_AGENT_FLOOR
     )
