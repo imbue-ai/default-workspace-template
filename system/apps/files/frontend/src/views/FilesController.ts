@@ -22,7 +22,7 @@ import { isTextLike } from "../models/fileKinds";
 import { decodePathname, titleOf } from "../models/paths";
 import { sourcesFromFileList } from "../models/uploads";
 import { isAnySyncMoving, isLiveShared } from "../models/connections";
-import { reportBugAction } from "../models/failures";
+import { reportBugAction, type FailureHost } from "../models/failures";
 import { Dialogs } from "./dialogs";
 
 /** How often the shares, and the folders on screen, are read again while the window is on screen: often while a sync
@@ -147,6 +147,11 @@ export class FilesController {
     setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) =>
       this.setOpensLocalFiles(message.opensLocalFiles === true),
     );
+  }
+
+  /** The shell connection a failure's buttons go through. */
+  get failureHost(): FailureHost {
+    return this.connection;
   }
 
   /** What the toasts' "Report a bug" does as they are drawn; null while Imbue Studio opens no bug report here. */

@@ -8,6 +8,7 @@
 import m from "mithril";
 
 import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { alertDotIcon, icon, type IconName } from "@imbue/workspace-ui/src/components/icons";
 import { createMenu, type Menu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
@@ -468,7 +469,21 @@ function FolderBody(): m.Component<{ app: FilesController }> {
       if (state === undefined || (state.status === "loading" && entries.length === 0)) {
         empty = m("div", { class: "flex justify-center pt-16" }, m("div.spinner"));
       } else if (state.status === "error" && entries.length === 0) {
-        empty = message(state.error?.message ?? "", "", () => void model.load(model.folder), state.error?.details);
+        const failure = state.error;
+        const report = failure?.isReportable
+          ? m(ReportBugButton, {
+              connection: app.failureHost,
+              failure: { message: failure.message, details: failure.details },
+              sm: true,
+            })
+          : null;
+        empty = message(
+          failure?.message ?? "",
+          "",
+          () => void model.load(model.folder),
+          failure?.details ?? null,
+          report,
+        );
       } else if (!state.exists) {
         empty = message("This folder doesn't exist", "It may have been moved or deleted.");
       } else if (notice !== null && entries.length === 0) {
@@ -505,12 +520,21 @@ export function syncBanner(notice: SyncNotice): m.Vnode {
   );
 }
 
-function message(title: string, detail: string, retry?: () => void, seeDetails: string | null = null): m.Vnode {
+/** A message in place of the folder's entries; `report` is a failure's Report a bug, beside Try again. */
+function message(
+  title: string,
+  detail: string,
+  retry?: () => void,
+  seeDetails: string | null = null,
+  report: m.Children = null,
+): m.Vnode {
   return m("div.files-empty", { class: "flex flex-col items-center gap-1 px-6 pt-20 text-center" }, [
     m("div", { class: "type-label text-secondary" }, title),
     detail === "" ? null : m("div", { class: "max-w-[360px] type-helper text-faint" }, detail),
     m(SeeDetails, { details: seeDetails }),
-    retry === undefined ? null : m(Button, { sm: true, extra: "mt-3", onclick: retry }, "Try again"),
+    retry === undefined
+      ? null
+      : m("div", { class: "mt-3 flex gap-2" }, [m(Button, { sm: true, onclick: retry }, "Try again"), report]),
   ]);
 }
 

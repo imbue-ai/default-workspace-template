@@ -182,7 +182,8 @@ shell says Imbue Studio opens one, "Report a bug"; a full disk leaves one that
 stays with "Ask an agent to free up space", which asks in the chat already
 running (a new agent would need disk); any other leaves a note that goes, its
 details logged. A rename says it in the name field, and a folder that cannot be
-listed says it in place of the listing, with Try again. A file whose text cannot
+listed says it in place of the listing, with Try again and, for a sentence that
+asks for a bug report, "Report a bug". A file whose text cannot
 be loaded says so in place of the editor, with Try again; an upload that failed
 says why in its row (interrupted, a read-only folder, out of disk space, or
 failed), with the details on hover; and a file whose location is too long for a
