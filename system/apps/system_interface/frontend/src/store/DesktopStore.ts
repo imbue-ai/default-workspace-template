@@ -2328,8 +2328,10 @@ export class DesktopStore {
     try {
       outcome = await this.deps.api.showPage(this.deps.clientId, { app, path, repoint });
     } catch (error) {
-      this.toastFailure(`Could not open ${appByName(this.state, app)?.display_name ?? app}`, error, {
+      this.toastFailure(`${this.displayNameOf(app)} couldn't be opened`, error, {
         isLasting: false,
+        app,
+        retry: () => void this.showAppPage(app, path, repoint),
       });
       return;
     }

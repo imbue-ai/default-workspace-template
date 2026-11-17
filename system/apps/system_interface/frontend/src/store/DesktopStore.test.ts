@@ -2515,9 +2515,9 @@ describe("links Imbue Studio hands over", () => {
     await store.openLink("http://chat-ab12cd34.localhost/?chat=agent-1", SHELL_HOST, "notes");
 
     expect(store.toasts.current()).toMatchObject([
-      { message: "Could not open Chats.", details: null, actions: [], isLasting: false },
+      { message: "Chats couldn't be opened.", details: null, actions: [], isLasting: false },
     ]);
-    expect(warn).toHaveBeenCalledWith("[si] Could not open Chats.", "HTTP 400\nNo chat agent-1");
+    expect(warn).toHaveBeenCalledWith("[si] Chats couldn't be opened.", "HTTP 400\nNo chat agent-1");
     warn.mockRestore();
   });
 
