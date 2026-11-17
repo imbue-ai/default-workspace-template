@@ -250,7 +250,8 @@ class Viewer {
   attachShell(reportLocation: (title: string) => void): void {
     this.reportLocation = reportLocation;
     if (this.state) reportLocation(this.state.title);
-    // A handshake decides which failure buttons the overlay offers.
+    // A handshake decides which failure buttons the overlay offers, a state or not.
+    this.overlays.syncShellButtons();
     this.render();
   }
 

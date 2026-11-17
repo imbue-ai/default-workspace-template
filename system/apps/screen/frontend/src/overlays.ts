@@ -174,6 +174,7 @@ export class Overlays {
   private host: FailureHost | null = null;
   private agentFix: AgentFixRequest | null = null;
   private reported: ReportedFailure | null = null;
+  private isReportable = false;
 
   constructor(onStart: () => void, onTakeControl: () => void, onCancelPendingUrl: () => void, onReload: () => void) {
     this.element.className = "screen-overlay";
@@ -260,6 +261,13 @@ export class Overlays {
     }
   }
 
+  /** Show "Ask an agent to fix this" and "Report a bug" as the host now says they can work, for what the overlay
+   *  shows; the shell's handshake can arrive after it was drawn. */
+  syncShellButtons(): void {
+    this.askAgentButton.hidden = this.agentFix === null || this.host === null || !this.host.hasShell();
+    this.reportBugButton.hidden = !this.isReportable || this.host === null || !this.host.canReportBug();
+  }
+
   /** The page could not load the state at all; the service's events bring it once the service answers. */
   showLoadFailure(failure: Failure): void {
     this.render(describeLoadFailure(failure));
@@ -289,7 +297,7 @@ export class Overlays {
       message: shown.body === "" ? shown.title : `${shown.title} ${shown.body}`,
       details: shown.details,
     };
-    this.askAgentButton.hidden = shown.agentFix === null || this.host === null || !this.host.hasShell();
-    this.reportBugButton.hidden = !shown.isReportable || this.host === null || !this.host.canReportBug();
+    this.isReportable = shown.isReportable;
+    this.syncShellButtons();
   }
 }

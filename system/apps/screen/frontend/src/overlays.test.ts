@@ -384,6 +384,21 @@ describe("Overlays for the stack's state", () => {
     });
   });
 
+  it("offers Report a bug on a load failure once a handshake that came after it says one opens", () => {
+    const canReportBug = { value: false };
+    const host = { ...fakeHost(), canReportBug: () => canReportBug.value };
+    const overlays = overlaysWith(host);
+    overlays.showLoadFailure(
+      readFailure({ status: 500, body: null, rawText: "Internal Server Error", requestKind: "read" }),
+    );
+    expect(shown(overlays).buttons).toEqual(["Try again"]);
+
+    canReportBug.value = true;
+    overlays.syncShellButtons();
+
+    expect(shown(overlays).buttons).toEqual(["Try again", "Report a bug"]);
+  });
+
   it("shows no agent dim before any state says an agent drives", () => {
     const overlays = overlaysWith(fakeHost());
     expect(overlays.dimElement.hidden).toBe(true);
