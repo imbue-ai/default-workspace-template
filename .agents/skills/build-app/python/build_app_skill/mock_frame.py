@@ -20,9 +20,9 @@ frame up it reloads the app's own windows. ``revive`` boots a frame a workspace 
 stopped again the same way, without touching the window (it is what a stopped UI sketch's
 window offers as "Start it again"), and leaves a frame still running alone. ``up``
 without ``--note`` keeps the current note too. ``down`` closes the mock window, removes
-the frame, and registers the app
-from its manifest again, so it is an ordinary app the user can open; for an app that has
-since been removed it takes the frame down and leaves the registry alone.
+the frame, and registers the app from its manifest again, so it is an ordinary app the
+user can open; for an app that has since been removed it takes the frame down and leaves
+the registry alone.
 
 Run from the repo root via ``uv run --no-sync``:
 
