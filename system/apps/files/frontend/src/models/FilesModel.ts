@@ -431,6 +431,13 @@ export class FilesModel {
     this.rename = { ...rename, isSaving: true };
     this.host.redraw();
     const failure = await renameOnServer(rename.path, target, name);
+    if (failure !== null && failure.isReportable) {
+      // No name typed can fix it, and the name field has no room for Report a bug: the rename ends, told as a toast.
+      this.rename = null;
+      toastFailures(this.toasts, [failure], this.host);
+      this.host.redraw();
+      return;
+    }
     if (failure !== null) {
       // The name field says it where the name was typed; it has no room for the details, which go to the log.
       if (failure.details !== null) console.warn(`[files] ${failure.message}`, failure.details);

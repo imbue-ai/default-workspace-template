@@ -568,16 +568,19 @@ describe("telling a failed change", () => {
     });
   });
 
-  it("names a rename that failed for no reason of the server's", async () => {
+  it("ends a rename that failed for no reason of the server's and keeps it up with Report a bug", async () => {
     const { model } = harness();
-    vi.mocked(server.movePath).mockRejectedValueOnce(httpFailure(500, null));
+    vi.mocked(server.movePath).mockRejectedValueOnce(httpFailure(500, { detail: "MOVE /home/b.txt: [Errno 5]" }));
     model.startRename("/home/b.txt");
     model.setRenameDraft("c.txt");
 
     await model.commitRename();
 
-    expect(model.rename?.error).toBe(
-      'Couldn\'t rename "b.txt" to "c.txt". Try again. If this persists, report a bug.',
-    );
+    expect(model.rename).toBeNull();
+    const [toast] = model.toasts.current();
+    expect(toast.message).toBe('Couldn\'t rename "b.txt" to "c.txt". Try again. If this persists, report a bug.');
+    expect(toast.isLasting).toBe(true);
+    expect(toast.isReportable).toBe(true);
+    expect(toast.details).toBe("HTTP 500\nMOVE /home/b.txt: [Errno 5]");
   });
 });
