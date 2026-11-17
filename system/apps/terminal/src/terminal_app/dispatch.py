@@ -144,13 +144,18 @@ fi
 {report_end}
 run_tmux() {
     local started_at=$SECONDS
+    # Read back through descriptors opened before the file is removed, so nothing is left in /tmp when ttyd hangs
+    # the script up (every window close); tmux gets neither descriptor.
     local error_file
     error_file="$(mktemp)"
-    local status=0
-    tmux "$@" 2>"$error_file" || status=$?
-    local error
-    error="$(cat "$error_file")"
+    exec 3>"$error_file" 4<"$error_file"
     rm -f "$error_file"
+    local status=0
+    tmux "$@" 2>&3 3>&- 4<&- || status=$?
+    exec 3>&-
+    local error
+    error="$(cat <&4)"
+    exec 4<&-
     if [ "$status" -eq 0 ] && [ -z "$error" ]; then
         exit 0
     fi

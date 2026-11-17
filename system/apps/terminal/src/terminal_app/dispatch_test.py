@@ -1,10 +1,14 @@
 import base64
+import contextlib
 import gzip
+import os
+import signal
 import stat
 import subprocess
 from pathlib import Path
 
 import pytest
+from imbue.mngr.utils.polling import poll_until
 from inline_snapshot import snapshot
 from loguru import logger
 
@@ -143,13 +147,18 @@ report_end() {
 
 run_tmux() {
     local started_at=$SECONDS
+    # Read back through descriptors opened before the file is removed, so nothing is left in /tmp when ttyd hangs
+    # the script up (every window close); tmux gets neither descriptor.
     local error_file
     error_file="$(mktemp)"
-    local status=0
-    tmux "$@" 2>"$error_file" || status=$?
-    local error
-    error="$(cat "$error_file")"
+    exec 3>"$error_file" 4<"$error_file"
     rm -f "$error_file"
+    local status=0
+    tmux "$@" 2>&3 3>&- 4<&- || status=$?
+    exec 3>&-
+    local error
+    error="$(cat <&4)"
+    exec 4<&-
     if [ "$status" -eq 0 ] && [ -z "$error" ]; then
         exit 0
     fi
@@ -221,6 +230,45 @@ def test_a_session_that_ends_cleanly_goes_back_to_ttyd_with_nothing_to_tell(
     assert ran.returncode == 0
     assert ran.stdout == ""
     assert fake_tmux.session_names() == ["terminal-1"]
+
+
+def test_a_session_ttyd_hangs_up_leaves_no_file_behind(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    attached = tmp_path / "attached"
+    fake_tmux = bin_dir / "tmux"
+    fake_tmux.write_text(f'#!/bin/bash\ntouch "{attached}"\nexec sleep 30\n')
+    fake_tmux.chmod(0o755)
+    temp_dir = tmp_path / "tmp"
+    temp_dir.mkdir()
+    # Where the script's temporary files go, on every platform (macOS's mktemp does not always follow TMPDIR).
+    fake_mktemp = bin_dir / "mktemp"
+    fake_mktemp.write_text(f'#!/bin/bash\nfile="{temp_dir}/tmp.$$"\n: > "$file"\necho "$file"\n')
+    fake_mktemp.chmod(0o755)
+    script = tmp_path / "script.sh"
+    script.write_text(render_session_script(tmp_path / "sessions", _OOM_TAG_SCRIPT))
+    environment = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+    session = subprocess.Popen(
+        ["bash", str(script), "terminal-1", str(tmp_path)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=environment,
+        start_new_session=True,
+    )
+    try:
+        assert poll_until(attached.exists, timeout=10.0, poll_interval=0.01)
+
+        # What ttyd sends the dispatch script when the window's connection closes.
+        session.send_signal(signal.SIGHUP)
+        session.wait(timeout=10.0)
+
+        assert list(temp_dir.iterdir()) == []
+    finally:
+        # The fake tmux outlives the script it was hung up with, as a real one would without its pty.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(session.pid, signal.SIGKILL)
+        session.wait(timeout=10.0)
 
 
 def test_a_workdir_that_is_not_there_tells_the_wrapper_the_folder_is_missing(tmp_path: Path) -> None:
