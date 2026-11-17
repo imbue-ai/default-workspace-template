@@ -268,7 +268,7 @@ worker in general is
 ## 5. Terminal status
 
 - **The worker died without reporting**: recover it per
-  `data/.tasks/update-self/skill-at-target/.agents/skills/launch-task/references/dead-worker-recovery.md`,
+  `data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy/dead-worker-recovery.md`,
   then re-arm the poll. It is stuck only once that has not brought it back.
 - **A `stuck` showing the merge cannot land without breaking the running
   workspace**: `references/apply-outcomes.md` ("Migration-required

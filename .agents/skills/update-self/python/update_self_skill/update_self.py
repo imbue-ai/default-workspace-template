@@ -106,8 +106,8 @@ belong in tested code rather than agent prose:
 
 ``stage-shared-prose``
     Stage, beside the staged skill, the prose outside the skill's own directory
-    that the flow reads: ``.agents/shared/``, the ``harden-worker`` skill and
-    ``launch-task``'s references. They come from the same place the staged skill
+    that the flow reads: ``.agents/shared/`` and the ``harden-worker`` skill.
+    They come from the same place the staged skill
     did (the target ref, or the local tree when the ref predates the skill), so
     the staged flow never reads a shared file from a workspace tree older than
     itself.
@@ -292,7 +292,6 @@ STAGING_DIR_REL = "data/.tasks/update-self/skill-at-target"
 STAGED_PROSE_PATHS = (
     ".agents/shared",
     ".agents/skills/harden-worker",
-    ".agents/skills/launch-task/references",
 )
 
 # The runnable entry point beside this package: the module itself cannot be run by path.

@@ -13,6 +13,7 @@ from agents_shared.skill_checks import (
     MAX_SKILL_MD_BYTES,
     Check,
     check_failures,
+    shared_links_into_skills,
     unreached_shared_files,
 )
 from agents_shared.skill_exemptions import (
@@ -599,4 +600,28 @@ def test_a_shared_file_is_reached_from_a_skill_agents_md_or_a_program_and_report
     assert unreached_shared_files(tmp_path) == [
         ".agents/shared/references/orphan.md",
         ".agents/shared/scripts",
+    ]
+
+
+def test_a_shared_file_may_name_a_skill_but_no_file_inside_one(tmp_path: Path) -> None:
+    skill = _skill(tmp_path, "user", "Read `references/own.md`.\n")
+    _write(skill, "references/own.md", "Text.\n")
+    _write(skill, "scripts/run.sh", "true\n")
+    _write(
+        tmp_path,
+        ".agents/shared/references/naming.md",
+        "Use the `user` skill (`.agents/skills/user/SKILL.md`), run "
+        "`.agents/skills/user/scripts/run.sh`, and read `reaching.md`.\n",
+    )
+    _write(
+        tmp_path,
+        ".agents/shared/references/reaching.md",
+        "Read `.agents/skills/user/references/own.md`.\n",
+    )
+
+    assert shared_links_into_skills(tmp_path) == [
+        (
+            ".agents/shared/references/reaching.md",
+            ".agents/skills/user/references/own.md",
+        )
     ]

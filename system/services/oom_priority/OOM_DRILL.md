@@ -98,7 +98,7 @@ mngr start <agent> --restart && mngr message <agent> -m continue
 
 A shed worker is surfaced to its lead automatically: the launch-task `await`
 poll returns exit code 75 with revive instructions (see
-`.agents/skills/launch-task/references/dead-worker-recovery.md`).
+`.agents/shared/references/lead-proxy/dead-worker-recovery.md`).
 
 ## 5. Confirm the protected processes survived
 
