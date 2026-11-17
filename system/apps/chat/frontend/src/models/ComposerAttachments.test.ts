@@ -271,12 +271,20 @@ describe("pasted text", () => {
     const [first, second] = getComposerAttachments(chatId);
     expect(first).toMatchObject({ fileName: "pasted-text-1.txt", summary: "Pasted text, 301 lines", isImage: false });
     expect(second).toMatchObject({ fileName: "pasted-text-2.txt", summary: "Pasted text, 2 lines" });
-    const uploadedFile = (vi.mocked(fetch).mock.calls[0][1]!.body as FormData).get("file") as File;
+    const [uploadUrl, uploadInit] = vi.mocked(fetch).mock.calls[0];
+    // A paste is stored in its chat's own folder, so it goes with the chat.
+    expect(uploadUrl).toBe(`/api/chats/${chatId}/uploads`);
+    const uploadedFile = (uploadInit!.body as FormData).get("file") as File;
     expect(await uploadedFile.text()).toBe(PASTE);
+
     await settle();
     expect(stored()).toHaveLength(2);
     // The text itself stays out of storage: only the uploaded copy holds it.
     expect(JSON.stringify(stored())).not.toContain("the last line");
+    // A picked file stays the workspace's.
+    uploadFilesToComposer(chatId, [new File(["mine"], "notes.txt")]);
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(calls[calls.length - 1][0]).toBe("/api/uploads");
   });
 
   it("gives the text back from memory and removes the attachment and its uploaded copy", async () => {

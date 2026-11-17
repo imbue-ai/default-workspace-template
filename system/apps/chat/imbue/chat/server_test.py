@@ -80,6 +80,7 @@ from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_records import ChatRecord
+from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_settings import FastModeMode
@@ -616,6 +617,73 @@ def test_delete_attachment_missing_is_ok(client: FlaskClient) -> None:
     response = client.delete("/api/uploads/deadbeef/missing.png")
 
     assert response.status_code == 200
+
+
+_UPLOAD_CHAT_ID = "agent-0000000000000000000000000000c4a7"
+
+
+def test_a_chat_upload_is_stored_in_the_chats_folder_served_and_deleted(client: FlaskClient, app: Flask) -> None:
+    """A chat's own upload lands under its folder in the chat files root, is served and deleted through the chat's
+    route, and is not reachable through the workspace uploads route."""
+    upload = client.post(
+        f"/api/chats/{_UPLOAD_CHAT_ID}/uploads",
+        data={"file": (io.BytesIO(b"pasted words"), "pasted-text-1.txt")},
+        content_type="multipart/form-data",
+    )
+
+    assert upload.status_code == 201
+    stored = Path(upload.get_json()["path"])
+    chats_root = state_of(app).agent_manager.chat_files_root.absolute()
+    assert stored.is_absolute()
+    assert stored.parent.parent == chats_root / _UPLOAD_CHAT_ID / "uploads"
+    assert stored.read_bytes() == b"pasted words"
+    relative_path = _upload_relative_path(str(stored))
+    assert client.get(f"/api/chats/{_UPLOAD_CHAT_ID}/uploads/{relative_path}").data == b"pasted words"
+    assert client.get(f"/api/uploads/{relative_path}").status_code == 404
+
+    assert client.delete(f"/api/chats/{_UPLOAD_CHAT_ID}/uploads/{relative_path}").status_code == 200
+    assert not stored.exists()
+
+
+def test_a_chat_upload_refuses_an_id_that_is_not_a_chats(client: FlaskClient) -> None:
+    """The chat id names a folder, so one not shaped like a chat's is refused before anything is written."""
+    response = client.post(
+        "/api/chats/not-a-chat/uploads",
+        data={"file": (io.BytesIO(b"x"), "pasted-text-1.txt")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 404
+    assert client.get("/api/chats/not-a-chat/uploads/abc/pasted-text-1.txt").status_code == 404
+    assert client.delete("/api/chats/not-a-chat/uploads/abc/pasted-text-1.txt").status_code == 404
+
+
+def test_a_chats_uploads_go_with_the_chat_when_it_is_destroyed(tmp_path: Path) -> None:
+    """A pasted text lives in the chat's folder, so the chat's destroy removes it with the rest of the chat."""
+    mngr_binary, _log_path = write_recording_mngr_binary(tmp_path)
+    chats_root = tmp_path / "chats"
+    manager = AgentManager.build(
+        WebSocketBroadcaster(),
+        messenger=RecordingMngrMessenger(),
+        mngr_binary=mngr_binary,
+        chat_record_store=FileChatRecordStore(root=chats_root),
+        chat_files_root=chats_root,
+    )
+    manager.note_agent_list_known()
+    seed_agent_state(manager, _UPLOAD_CHAT_ID, name="Chat-1")
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    upload = client.post(
+        f"/api/chats/{_UPLOAD_CHAT_ID}/uploads",
+        data={"file": (io.BytesIO(b"pasted words"), "pasted-text-1.txt")},
+        content_type="multipart/form-data",
+    )
+    stored = Path(upload.get_json()["path"])
+    assert stored.exists()
+
+    assert client.post(f"/api/chats/{_UPLOAD_CHAT_ID}/destroy").status_code == 200
+
+    assert not stored.exists()
+    assert not (chats_root / _UPLOAD_CHAT_ID).exists()
 
 
 def test_get_events_with_session_files(client: FlaskClient, app: Flask, tmp_path: Path) -> None:

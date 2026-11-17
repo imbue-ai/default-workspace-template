@@ -93,7 +93,8 @@ observe`, its own supervised service) writes, and serves:
   stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats/awaiting` (the chat an empty chat list opens on), `/api/chats`,
-  `/api/harnesses`, `/api/uploads`,
+  `/api/harnesses`, `/api/uploads` (and a chat's own uploads under
+  `/api/chats/<chat-id>/uploads`),
   `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/latchkey`, and
   `/api/secret-requests` (an agent's `request_secret.py` files a secret request;
   the transcript's secret card submits, declines, and re-reads it).
@@ -480,9 +481,13 @@ shell, its `shell:draft-text` relayed by the root.
 
 A long paste enters a composer as an attachment too (`models/pastedText.ts`):
 a paste of at least 4,000 characters or 80 lines is uploaded as a
-`pasted-text-<n>.txt` file through `/api/uploads` instead of going into the
-box, so the draft stays short enough to read and edit and the agent opens the
-whole text from the file the sent message names, whatever its harness. Its chip
+`pasted-text-<n>.txt` file instead of going into the box, so the draft stays
+short enough to read and edit and the agent opens the whole text from the file
+the sent message names, whatever its harness. The file is the chat's own
+content, so it goes to the chat's own folder
+(`data/.apps/chat/chats/<chat-id>/uploads/`, through
+`/api/chats/<chat-id>/uploads`) rather than the workspace's `data/uploads/`,
+and the chat's destroy removes it with the rest of the chat. Its chip
 says "Pasted text, N lines", and its "Paste as text" button puts the text back
 where the caret is (read from memory, or from the uploaded copy after a
 reload) and deletes the upload. A pasted image is still attached as an image,

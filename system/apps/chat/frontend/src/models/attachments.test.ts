@@ -60,6 +60,12 @@ describe("attachmentServeUrl", () => {
     expect(attachmentServeUrl(IMAGE_PATH)).toBe("/api/uploads/aaa/diagram.png");
   });
 
+  it("maps a chat's own upload to that chat's route", () => {
+    expect(
+      attachmentServeUrl("/home/user/workspace/data/.apps/chat/chats/agent-abc123/uploads/ddd/pasted-text-1.txt"),
+    ).toBe("/api/chats/agent-abc123/uploads/ddd/pasted-text-1.txt");
+  });
+
   it("percent-encodes each path segment", () => {
     expect(attachmentServeUrl("/x/uploads/id/na me.png")).toBe("/api/uploads/id/na%20me.png");
   });

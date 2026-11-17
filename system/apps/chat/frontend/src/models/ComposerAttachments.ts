@@ -222,7 +222,8 @@ function _startUpload(chatId: string, file: File, summary: string | undefined, p
   const releasePreview = (): void => {
     if (item.previewUrl !== undefined) URL.revokeObjectURL(item.previewUrl);
   };
-  item.uploadSettled = uploadAttachment(file)
+  // A paste is the chat's own content, so it lives and dies with the chat; a picked file stays the workspace's.
+  item.uploadSettled = uploadAttachment(file, pastedText === undefined ? null : chatId)
     .then((uploaded) => {
       // A chip that left the composer mid-upload (removed, or dropped by a clear or a rollback) names no
       // message, so its preview is let go.

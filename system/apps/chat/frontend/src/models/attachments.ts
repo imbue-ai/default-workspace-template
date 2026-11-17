@@ -63,14 +63,25 @@ export function attachmentBasename(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-export function attachmentServeUrl(path: string): string {
-  const markerIndex = path.indexOf(UPLOADS_PATH_MARKER);
-  const relativePath = markerIndex >= 0 ? path.slice(markerIndex + UPLOADS_PATH_MARKER.length) : path;
-  const encodedRelativePath = relativePath
+// A chat's own upload (a long paste) lives in the chat's folder, ``.../chats/<chat-id>/uploads/...``, and is
+// served by that chat's route.
+const CHAT_UPLOAD_PATH_RE = /\/chats\/(agent-[A-Za-z0-9_-]+)\/uploads\/(.+)$/;
+
+function encodedPath(relativePath: string): string {
+  return relativePath
     .split("/")
     .map((segment) => encodeURIComponent(segment))
     .join("/");
-  return apiUrl(`/api/uploads/${encodedRelativePath}`);
+}
+
+export function attachmentServeUrl(path: string): string {
+  const chatUpload = path.match(CHAT_UPLOAD_PATH_RE);
+  if (chatUpload !== null) {
+    return apiUrl(`/api/chats/${encodeURIComponent(chatUpload[1])}/uploads/${encodedPath(chatUpload[2])}`);
+  }
+  const markerIndex = path.indexOf(UPLOADS_PATH_MARKER);
+  const relativePath = markerIndex >= 0 ? path.slice(markerIndex + UPLOADS_PATH_MARKER.length) : path;
+  return apiUrl(`/api/uploads/${encodedPath(relativePath)}`);
 }
 
 /**
@@ -217,12 +228,14 @@ function makeUploadedAttachment(path: string, size: number): UploadedAttachment 
   };
 }
 
-/** Upload a single file to the agent VM, returning its stored metadata. Throws
- *  on a non-2xx response. */
-export async function uploadAttachment(file: File): Promise<UploadedAttachment> {
+/** Upload a single file to the agent VM, returning its stored metadata. Throws on a non-2xx response. A file
+ *  given ``ownerChatId`` is stored in that chat's folder, so it is destroyed with the chat; any other goes to
+ *  the workspace's uploads. */
+export async function uploadAttachment(file: File, ownerChatId: string | null = null): Promise<UploadedAttachment> {
   const formData = new FormData();
   formData.append("file", file, file.name);
-  const response = await fetch(apiUrl("/api/uploads"), { method: "POST", body: formData });
+  const route = ownerChatId === null ? "/api/uploads" : `/api/chats/${encodeURIComponent(ownerChatId)}/uploads`;
+  const response = await fetch(apiUrl(route), { method: "POST", body: formData });
   if (!response.ok) {
     throw new Error(`Upload failed (HTTP ${response.status})`);
   }

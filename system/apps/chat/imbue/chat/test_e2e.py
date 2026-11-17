@@ -1725,12 +1725,10 @@ def _paste(textbox: Locator, text: str) -> None:
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_a_long_paste_is_sent_as_an_attachment_the_agent_reads_whole(
-    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_long_paste_is_sent_as_an_attachment_the_agent_reads_whole(tmp_path: Path, page: Page) -> None:
     """A long paste becomes a chip saying how many lines it holds, the typed words stay in the box, and the agent is
-    sent those words with a line naming the uploaded file, which holds the whole paste."""
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path / "work"))
+    sent those words with a line naming the uploaded file, which holds the whole paste and lives in the chat's own
+    folder."""
     sent: list[str] = []
     messenger = scripted_send_mngr_messenger([], sent)
     with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
@@ -1751,19 +1749,18 @@ def test_a_long_paste_is_sent_as_an_attachment_the_agent_reads_whole(
         wait_for(lambda: len(sent) == 1, timeout=15.0, error_message="the message with the paste was never sent")
         match = re.fullmatch(r"Summarize this:\n\nSee attachment here: \[pasted-text-1\.txt\]\((\S+)\)", sent[0])
         assert match is not None, sent[0]
-        assert match.group(1).endswith("/pasted-text-1.txt")
-        assert Path(match.group(1)).read_text() == _LONG_PASTE
+        stored = Path(match.group(1))
+        assert stored.name == "pasted-text-1.txt"
+        assert stored.parent.parent == (tmp_path / "chats" / FIXTURE_AGENT_ID / "uploads").absolute()
+        assert stored.read_text() == _LONG_PASTE
         expect(chat.locator(".composer-attachment")).to_have_count(0)
         link = chat.locator(".message-user", has_text="Summarize this:").get_by_role("link", name="pasted-text-1.txt")
         expect(link).to_be_visible(timeout=15000)
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_a_long_paste_goes_back_into_the_box_as_text(
-    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The chip's "Paste as text" puts the whole paste back where the caret is and takes the chip away."""
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path / "work"))
+def test_a_long_paste_goes_back_into_the_box_as_text(tmp_path: Path, page: Page) -> None:
+    """The chip's "Paste as text" puts the whole paste back where the caret is and deletes its uploaded copy."""
     with running_workspace(tmp_path, find_free_port(), find_free_port()) as server:
         _open_fixture_chat(page, server)
         chat = _chat(page)
@@ -1779,7 +1776,7 @@ def test_a_long_paste_goes_back_into_the_box_as_text(
         expect(chat.locator(".composer-attachment")).to_have_count(0)
         expect(textbox).to_have_value(f"Before: {_LONG_PASTE}")
         wait_for(
-            lambda: not list((tmp_path / "work" / "data" / "uploads").rglob("pasted-text-1.txt")),
+            lambda: not list((tmp_path / "chats").rglob("pasted-text-1.txt")),
             timeout=15.0,
             error_message="the pasted text's uploaded copy was left behind",
         )
