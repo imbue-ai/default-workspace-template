@@ -115,10 +115,6 @@ export function compareEntries(a: Entry, b: Entry, sort: SortOrder): number {
   return sort.descending ? -order : order;
 }
 
-function isAbort(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError";
-}
-
 export class FilesModel {
   folder: string;
   readonly folders = new Map<string, FolderState>();
@@ -612,7 +608,8 @@ export class FilesModel {
       this.listedStamps.set(folder, listing.stamp ?? null);
       this.folders.set(folder, { status: "ready", exists: listing.exists, entries: listing.entries, error: null });
     } catch (error) {
-      if (isAbort(error)) return;
+      // A newer load of this folder took over; its abort reaches here as a request nothing answered.
+      if (request.signal.aborted) return;
       this.folders.set(folder, {
         status: "error",
         exists: previous?.exists ?? true,

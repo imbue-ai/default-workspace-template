@@ -366,6 +366,41 @@ describe("reloadChangedShown", () => {
   });
 });
 
+describe("loading a folder", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("never shows a load that a newer one took over as failed", async () => {
+    const actual = await vi.importActual<typeof import("./server")>("./server");
+    vi.mocked(server.listFolder).mockImplementation(actual.listFolder);
+    const listings: ((listing: object) => void)[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url === "/__files/api/connections") return Promise.resolve(new Response('{"devices":[],"shares":[]}'));
+        // As fetch does: an aborted request rejects with an AbortError.
+        return new Promise<Response>((resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+          listings.push((listing) => resolve(new Response(JSON.stringify(listing))));
+        });
+      }),
+    );
+    const { model } = harness();
+
+    const first = model.load("/home/zeta/");
+    const second = model.load("/home/zeta/");
+    await first;
+    expect(model.folderState("/home/zeta/")).toMatchObject({ status: "loading", error: null });
+
+    listings[1]({
+      kind: "folder",
+      entries: [{ name: "c.txt", is_folder: false, is_symlink: false, size: 1, mtime: 1 }],
+    });
+    await second;
+    expect(model.folderState("/home/zeta/")).toMatchObject({ status: "ready", error: null });
+    expect(model.visibleEntries("/home/zeta/").map((entry) => entry.name)).toEqual(["c.txt"]);
+  });
+});
+
 describe("loadConnections", () => {
   afterEach(() => vi.unstubAllGlobals());
 
