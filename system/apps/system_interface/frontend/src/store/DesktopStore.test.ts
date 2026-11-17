@@ -2018,6 +2018,19 @@ describe("pinned entries", () => {
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
       `launch:home:buddy:draft:{"message":"Draw me"}:window:win-9:without-page`,
     );
+    // A refused draft leaves the window where it was; its toast's Try again drafts again and shows the window.
+    store.minimizeWindow("win-9");
+    api.refusal = refusedWith(502, { detail: "buddy answered the launch with 500: boom" });
+    expect(await store.draftIntoPinnedWindow("Draw me")).toBe(false);
+    const isWin9Minimized = (): boolean | undefined =>
+      activePlacements(store.getState()).find((placement) => placement.window_id === "win-9")?.is_minimized;
+    expect(isWin9Minimized()).toBe(true);
+    const [toast] = store.toasts.current();
+    expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
+    api.refusal = null;
+    toast.actions[0].run();
+    await settle();
+    expect(isWin9Minimized()).toBe(false);
     // A desktop with no pinned app taking a draft has nowhere to put one.
     socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("buddy")]);
     expect(await store.draftIntoPinnedWindow("Draw me")).toBe(false);

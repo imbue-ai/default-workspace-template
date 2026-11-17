@@ -2186,7 +2186,7 @@ export class DesktopStore {
       target.launchPath.id,
       freeTextParams(target.launchPath, text),
       { kind: "window", windowId: target.window.id, sendsWindowPath: isAboutPage },
-      { whatFailed },
+      { whatFailed, retry: () => void this.draftIntoPinnedWindow(text, isAboutPage, purpose) },
     );
     // A refused draft leaves the window where it was: nothing in it changed.
     if (launched === null) return false;
