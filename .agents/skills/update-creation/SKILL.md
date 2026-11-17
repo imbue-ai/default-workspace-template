@@ -23,9 +23,8 @@ so are an app and the skill that drives it, or two unrelated tweaks made in
 the same turn. Never dispatch a pass per creation. Every worker pays its own
 environment setup before it does any work, and two passes over one change
 would each verify half of something that only works whole. When a change holds
-parts that are separate jobs, the worker splits them across its own sub-workers
-(`.agents/skills/harden-worker/references/harden-creation.md`, "Splitting the pass
-across sub-workers"); that is its call, not yours.
+parts that are separate jobs, the worker splits them across its own sub-workers;
+that is its call, not yours.
 
 ## The two origins
 
@@ -193,8 +192,8 @@ the worker fails loudly if it is missing.
 **One exception, and it lives here so you meet it where the format is defined:**
 a harden task dispatched from the careful flow for a critical app
 (`update-app/references/critical-app.md`) carries **no `## Change origin` marker
-and no worker gate** (see the critical-app handoff in
-`.agents/skills/harden-worker/references/op-update.md`). That flow already got the
+and no worker gate** (the `harden-worker` skill's critical-app handoff). That
+flow already got the
 user's approval through its live preview loop, so re-arming the gate would ask
 them to approve the same thing twice -- and writing the marker anyway, or
 telling the worker in the task body to follow it, puts the gate back. Every

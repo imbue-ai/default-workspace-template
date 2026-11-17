@@ -224,9 +224,8 @@ sed -i "s|^creations: .*|& $ADDED|" <TASK_FILE>
 sed -i "0,/^# /s|^# .*|& $ADDED|" "$TICKETS_DIR/<ticket-id>.md"
 ```
 
-The worker's side is `.agents/skills/harden-worker/references/harden-creation.md`
-("Catching up to a moved base"), or its own flow's catch-up section where one
-exists (`update-self`'s worker has its own). It merges your `HEAD` into its
+The worker's side is the `harden-worker` skill's catch-up to a moved base, or
+its own flow's catch-up section where one exists (`update-self`'s worker has its own). It merges your `HEAD` into its
 branch, so merging that branch back into yours conflicts with nothing. It
 resolves every conflict on its side, regenerating lockfiles rather than
 choosing sides. The commits it brings in that touch a creation in the pass get
