@@ -241,6 +241,7 @@ def create_app(
                 side = source.unwritable_side(path, _destination_path()[len(prefix) :])
                 if side is not None:
                     refusal = _MOVE_REFUSAL_BY_SIDE[side]
+            logger.debug("{} {} refused as {}: {}", request.method, path, refusal.kind, error)
             return _refusal(refusal.sentence, refusal.status, kind=refusal.kind, detail=detail)
 
     @app.get(f"{ASSETS_PREFIX}/<path:name>")
