@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 
-import { listFolder, movePath } from "./server";
+import { exists, listFolder, movePath } from "./server";
 
 function answering(status: number, body: string, contentType: string): void {
   vi.stubGlobal(
@@ -56,6 +56,17 @@ describe("a refused request to the Files server", () => {
       userFacingMessage: "It's a file, not a folder.",
       details: "HTTP 400\n/home/notes.txt/ is a file, not a folder.",
     });
+  });
+
+  it("reads a name check nothing answered as a read nothing answered", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Promise.reject(new TypeError("Failed to fetch"))),
+    );
+
+    const { failure } = await failureOf(exists("/home/zeta/b.txt"));
+
+    expect(failure).toMatchObject({ cause: "not_answered", requestKind: "read", details: "Failed to fetch" });
   });
 
   it("lists a folder that is not there as missing rather than failed", async () => {

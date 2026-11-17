@@ -110,7 +110,7 @@ export async function folderStamps(folders: readonly string[]): Promise<Record<s
 /** Whether anything, file or folder, is at `path`. Asked without the trailing slash, so it is the same question for
  *  a file and a folder, in the workspace or on a computer. */
 export async function exists(path: string): Promise<boolean> {
-  const response = await fetch(urlOf(path.replace(/\/+$/, "")), { method: "HEAD" });
+  const response = await fetchOrNotAnswered(urlOf(path.replace(/\/+$/, "")), { method: "HEAD" }, "read");
   return response.ok;
 }
 
