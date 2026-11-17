@@ -25,4 +25,6 @@ Internal documentation for the workspace machinery.
 - `skill_authoring_guide.md` - How to write and restructure a skill, a symlink
   to the copy fetched the same way. `validate_skill.py` checks its measurable
   rules and the `skill_hygiene` review category the rest.
+- `skill_exemptions.md` - How a skill records that it fails named checks for
+  now, the two reasons, and who may write or clear each.
 
