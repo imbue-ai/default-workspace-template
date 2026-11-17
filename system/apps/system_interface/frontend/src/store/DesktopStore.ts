@@ -775,10 +775,7 @@ export class DesktopStore {
   /**
    * The notice for ``error``, a failure of a request this window built from the apps and desktops it held, in
    * ``failureSentence``'s words for ``whatFailed``. A refusal for an app or a launch path that went in the meantime
-   * names them as this window last knew them; a launch into a window that has gone re-reads the desktops, so a second
-   * try finds the window as it is now; a change that could not be saved offers to try again (and, on a full disk, an
-   * agent to free up space); a launch into an app that is not running says what its window would; and a failure
-   * whose sentence ends in the fallback's "Try again", or a read nothing answered, offers ``asked.retry``.
+   * names them as this window last knew them.
    */
   private noticeFor(whatFailed: string, error: unknown, asked: AskedFor = {}): FailureNotice {
     const failure = describeRequestFailure(error);
