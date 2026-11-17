@@ -673,6 +673,8 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(
                 "python3 system/scripts/no_such_script.py",
                 "uv run --no-sync python3 .agents/shared/scripts/agents_shared/validate_skill.py skill-dir",
                 'command": "python3 \\"$MNGR_AGENT_WORK_DIR/system/scripts/agent_rewrite_bash_command.py\\""',
+                'command": "python3 \\"${CLAUDE_PROJECT_DIR}\\"/system/scripts/agent_rewrite_bash_command.py"',
+                'command": "python3 \\"${CLAUDE_PROJECT_DIR}\\"/system/scripts/no_such_hook.py"',
             ]
         )
     )
@@ -688,6 +690,7 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(
     assert offenders == [
         ".agents/shared/scripts/agents_shared/validate_skill.py",
         "system/scripts/no_such_script.py",
+        "${CLAUDE_PROJECT_DIR}/system/scripts/no_such_hook.py",
     ]
 
 
