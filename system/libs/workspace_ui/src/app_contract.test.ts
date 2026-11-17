@@ -690,6 +690,18 @@ describe("startNewWithText's answer", () => {
     });
   });
 
+  it("settles a pending request as not answered once the page disconnects", async () => {
+    shellFramed();
+    const live = connection as ShellConnection;
+    const pending = live.startNewWithText("Fix this.");
+    expect(await settledValue(pending)).toBe("pending");
+    live.disconnect();
+    expect(await pending).toEqual({
+      isOpened: false,
+      failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isReportable: false },
+    });
+  });
+
   it("settles at once as not answered on a page no shell frames", async () => {
     connection = connectToShell({});
     expect(await connection.startNewWithText("Fix this.")).toEqual({

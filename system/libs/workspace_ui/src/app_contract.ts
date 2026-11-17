@@ -227,8 +227,9 @@ export interface ShellConnection {
    *  machine). */
   startWithText(text: string): void;
   /** Ask the shell to start something new with ``text``: its launcher's secondary text action (a new chat on a stock
-   *  machine). Settles on the shell's answer; as not answered at once without a shell, and when a fresh handshake
-   *  comes first (the shell started again and forgot the request). */
+   *  machine). Settles on the shell's answer; as not answered at once without a shell, when a fresh handshake
+   *  comes first (the shell started again and forgot the request), and on ``disconnect``, after which no answer is
+   *  heard. */
   startNewWithText(text: string): Promise<StartNewOutcome>;
   /** Whether "Report a bug" would do anything: the shell's latest handshake said ``canReportBug``. */
   canReportBug(): boolean;
@@ -565,6 +566,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
         boundWindow.removeEventListener(type, onInput, { capture: true });
       }
       if (boundWindow.open === routedOpen) boundWindow.open = nativeOpen;
+      settlePendingStartsAsNotAnswered();
     },
   };
 }
