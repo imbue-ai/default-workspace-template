@@ -239,6 +239,7 @@ _MANIFEST_OWNED_KEYS = (
     "message_handlers",
     "keybindings",
     "theming_mode",
+    "isolated_instance",
 )
 
 # The optional keys of a manifest's ``[pin]`` table, each a string when present; ``path`` is
@@ -904,6 +905,14 @@ _MANIFEST_TABLE_ARRAY_COPIERS: tuple[tuple[str, _TableCopier], ...] = (
 )
 
 
+class IsolatedInstanceTag(TypedDict):
+    """The isolated instance a row's window shows (a preview, or a mock's frame), so the shell can offer to start it again."""
+
+    name: str
+    # What the frame shows, as ``preview_wrapper_server.FrameKind`` spells it: ``change`` or ``mock``.
+    kind: str
+
+
 def _upsert(
     path: Path,
     name: str,
@@ -914,6 +923,7 @@ def _upsert(
     display_name: str | None = None,
     manifest_fields: dict[str, object] | None = None,
     theming_mode: str | None = None,
+    isolated_instance: IsolatedInstanceTag | None = None,
 ) -> None:
     """Register ``name`` at ``url``, optionally setting its icon markup.
 
@@ -936,7 +946,8 @@ def _upsert(
     ``display_name`` is what users read instead of the raw service name, for a
     row with no manifest to carry one, and is authoritative the same way.
     ``theming_mode`` is the ``[theming]`` mode of the app such a row serves (a
-    preview of it), authoritative the same way.
+    preview of it), and ``isolated_instance`` the instance behind such a row's
+    window, both authoritative the same way.
 
     ``manifest_fields`` (a ``--manifest`` registration) is authoritative for
     every manifest-owned key the same way: each is set to the manifest's value
@@ -949,6 +960,7 @@ def _upsert(
         program=program,
         display_name=display_name,
         theming_mode=theming_mode,
+        isolated_instance=isolated_instance,
     )
 
     # Update an existing entry's URL in place, minting a label only if one was
@@ -993,6 +1005,7 @@ def _manifest_owned_values(
     program: str | None,
     display_name: str | None,
     theming_mode: str | None = None,
+    isolated_instance: IsolatedInstanceTag | None = None,
 ) -> dict[str, object]:
     """The manifest-owned keys a registration sets, from the manifest or from the plain flags."""
     if manifest_fields is not None:
@@ -1014,6 +1027,8 @@ def _manifest_owned_values(
         values["display_name"] = display_name
     if theming_mode is not None:
         values["theming_mode"] = theming_mode
+    if isolated_instance is not None:
+        values["isolated_instance"] = dict(isolated_instance)
     return values
 
 
@@ -1055,6 +1070,7 @@ def register(
     display_name: str | None = None,
     manifest_fields: dict[str, object] | None = None,
     theming_mode: str | None = None,
+    isolated_instance: IsolatedInstanceTag | None = None,
 ) -> None:
     """Register ``name`` at ``url`` in the registry at ``path``; raises RegistrationError when refused.
 
@@ -1108,6 +1124,7 @@ def register(
             display_name=display_name,
             manifest_fields=manifest_fields,
             theming_mode=theming_mode,
+            isolated_instance=isolated_instance,
         )
 
 

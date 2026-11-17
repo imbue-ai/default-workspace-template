@@ -60,11 +60,15 @@ Usage:
         [--preview-service-name <name> --preview-title <label> [--inner-path /path]] \\
         [--project system/<kind>/<package>] [--repo-root PATH] -- <launch argv...>
     uv run --no-sync serve_isolated_instance.py refresh --name <slug> [--repo-root PATH]
+    uv run --no-sync serve_isolated_instance.py revive --name <slug> [--repo-root PATH]
     uv run --no-sync serve_isolated_instance.py down --name <slug> [--repo-root PATH]
 
 ``refresh`` re-boots the inner server (only) on its existing port so a rebuild or
 edit is picked up in place -- the port, the wrapper frame, the service
-registrations, and the user's window all stay put.
+registrations, and the user's window all stay put. ``revive`` boots again whatever
+part of an instance has stopped (a workspace restart stops them all) on the same
+ports and over the same copies, so its window works again; the row a window shows
+names its instance, which is how the shell offers to do this from the window.
 
 Ports, copies, and placeholders: every ``--port-env`` names a free port the
 instance is given (a bare ``ENVVAR`` is the ``main`` port, the one probed for
@@ -85,10 +89,13 @@ placeholders an app's manifest ``[preview]`` table uses (``app_manifest``'s
 it knows before calling here.
 
 Exit codes:
-    0  Success (instance is up and healthy / rebooted in place / torn down).
+    0  Success (instance is up and healthy / rebooted in place / running again /
+       torn down).
     1  Failure to boot (partial state torn down); or, for ``refresh``, there was
        no refreshable instance, the old server survived SIGKILL, or the
-       rebooted server never became healthy; or, for ``down``, a recorded process
+       rebooted server never became healthy; or, for ``revive``, no such instance,
+       a record from before revives, a recorded port now held by another process,
+       or a boot that failed; or, for ``down``, a recorded process
        survived SIGKILL (its state dir is kept so it stays findable); or, for
        ``up --service-name``, ``--repo-root`` is a git worktree (refused before
        anything boots); or a bad argument / unreadable state file.
@@ -368,6 +375,7 @@ class Registry:
         internal: bool,
         display_name: str | None,
         theming_mode: str | None = None,
+        isolated_instance: forward_port.IsolatedInstanceTag | None = None,
     ) -> None:
         forward_port.register(
             forward_port.apps_file(repo_root),
@@ -378,6 +386,7 @@ class Registry:
             internal=internal,
             display_name=display_name,
             theming_mode=theming_mode,
+            isolated_instance=isolated_instance,
         )
 
     def remove(self, repo_root: Path, service_name: str) -> None:
@@ -887,6 +896,7 @@ def _register_service(
     internal: bool = False,
     display_name: str | None = None,
     theming_mode: str | None = None,
+    isolated_instance: forward_port.IsolatedInstanceTag | None = None,
 ) -> None:
     try:
         registry.register(
@@ -896,6 +906,7 @@ def _register_service(
             internal=internal,
             display_name=display_name,
             theming_mode=theming_mode,
+            isolated_instance=isolated_instance,
         )
     except forward_port.RegistryError as exc:
         raise InstanceError(f"{what} failed: {exc}") from exc
@@ -1083,6 +1094,7 @@ def up(
     inner_path: str = "/",
     theming_mode: str | None = None,
     project: str | None = None,
+    revive_first: Sequence[str] = (),
     runner: Runner,
     registry: Registry,
     http: HttpClient,
@@ -1106,7 +1118,9 @@ def up(
     would the app. ``project`` names a standalone project, relative to ``cwd``, that
     ``command`` boots from: its venv is linked before each boot and ``command`` runs
     behind ``project_launcher``. A ``service_name`` from a ``repo_root`` that is a
-    linked git worktree is refused before anything boots.
+    linked git worktree is refused before anything boots. ``revive_first`` names the
+    instances (a preview's siblings, which it frames) that ``revive`` brings back
+    before this one.
 
     On any failure the partial state is torn down and 1 is returned. On success a
     state file records the servers + services so ``down`` can find them later.
@@ -1208,7 +1222,11 @@ def up(
                 log_path=inner_log_path,
             )
 
-        # 2. Register it as a service (own browser origin), if asked.
+        # 2. Register it as a service (own browser origin), if asked. The row a window
+        #    shows names this instance, so the shell can start it again once it stops.
+        window_tag = forward_port.IsolatedInstanceTag(
+            name=name, kind=FrameKind.CHANGE.value
+        )
         if service_name is not None:
             _register_service(
                 registry,
@@ -1220,11 +1238,13 @@ def up(
                 # same page unmarked; unwrapped, the inner origin is the surface.
                 internal=preview_requested,
                 theming_mode=theming_mode,
+                isolated_instance=None if preview_requested else window_tag,
             )
             services.append(service_name)
 
         # 3. Wrap it in a labeled preview frame, if asked.
         wrapper_port: int | None = None
+        wrapper_args: list[str] | None = None
         if preview_requested:
             # Validated up front: a preview implies all three names are set. Re-assert
             # so the invariant is explicit (and the types narrow from ``str | None``).
@@ -1233,18 +1253,19 @@ def up(
                 and preview_service_name is not None
                 and preview_title is not None
             )
+            wrapper_args = [
+                "--inner-service",
+                service_name,
+                "--title",
+                preview_title,
+                "--inner-path",
+                inner_path,
+            ]
             wrapper_port = _boot_wrapper(
                 repo_root,
                 name,
                 wrapper_log_path,
-                [
-                    "--inner-service",
-                    service_name,
-                    "--title",
-                    preview_title,
-                    "--inner-path",
-                    inner_path,
-                ],
+                wrapper_args,
                 pids,
                 http=http,
                 spawner=spawner,
@@ -1257,6 +1278,7 @@ def up(
                 wrapper_port,
                 "forward_port register (wrapper)",
                 display_name=preview_title,
+                isolated_instance=window_tag,
             )
             services.append(preview_service_name)
 
@@ -1270,9 +1292,15 @@ def up(
             "wrapper_port": wrapper_port,
             "inner_path": inner_path if preview_requested else None,
             "pids": pids,
+            # Each pid's start time, so a later ``revive`` or ``down`` can tell the
+            # process it started from one a restart has handed the same pid.
+            "pid_starts": [runner.process_start_time(pid) for pid in pids],
             "services": services,
             "inner_log": str(inner_log_path),
             "wrapper_log": str(wrapper_log_path) if preview_requested else None,
+            # What ``revive`` boots the wrapper (pids[1]) with again, on ``wrapper_port``.
+            "wrapper_args": wrapper_args,
+            "revive_first": list(revive_first),
             # The rest of the recipe to re-boot the inner server (pids[0]) on the
             # same ports, so ``refresh`` can replay it without re-passing any of
             # it. Only what the keys above do not already record -- refresh reads
@@ -1517,6 +1545,9 @@ def frame(
             wrapper_port,
             "forward_port register (frame)",
             display_name=display_name,
+            isolated_instance=forward_port.IsolatedInstanceTag(
+                name=name, kind=kind.value
+            ),
         )
         if frame_service_name not in services:
             services.append(frame_service_name)
@@ -1653,17 +1684,6 @@ def refresh(
 
     old_pid = int(pids[0])
     port = int(state["inner_port"])
-    port_by_name = {
-        str(port_name): int(value)
-        for port_name, value in (state.get("ports") or {}).items()
-    }
-    copy_by_key = {
-        str(key): str(value) for key, value in (state.get("copies") or {}).items()
-    }
-    scratch_dir = str(
-        state.get("scratch") or _state_dir(repo_root, name) / SCRATCH_DIRNAME
-    )
-    inner_log = str(state["inner_log"])
     if not _link_project_venv(
         venv_linker, str(state["cwd"]), inner.get("project"), "refresh"
     ):
@@ -1679,6 +1699,55 @@ def refresh(
         return 1
 
     # 2. Relaunch the recorded inner command on the SAME ports.
+    if not _respawn_inner(
+        name,
+        repo_root,
+        state,
+        "refresh",
+        runner=runner,
+        http=http,
+        spawner=spawner,
+        sleeper=sleeper,
+    ):
+        return 1
+    sys.stderr.write(
+        f"refresh: inner server for '{name}' rebooted on port {port}; reload the "
+        "window to see the current build.\n"
+    )
+    return 0
+
+
+def _respawn_inner(
+    name: str,
+    repo_root: Path,
+    state: dict,
+    verb: str,
+    *,
+    runner: Runner,
+    http: HttpClient,
+    spawner: Spawner,
+    sleeper: Callable[[float], None],
+) -> bool:
+    """Launch the recorded inner command (``pids[0]``) on its recorded ports and wait until it is healthy.
+
+    The new pid and its start time are written to the state file before the health
+    wait, so ``down`` reaches the server even when it never becomes healthy. False,
+    said on stderr, when the recipe cannot be replayed, the launch fails, or the
+    server does not come up.
+    """
+    inner = state["inner"]
+    port = int(state["inner_port"])
+    port_by_name = {
+        str(port_name): int(value)
+        for port_name, value in (state.get("ports") or {}).items()
+    }
+    copy_by_key = {
+        str(key): str(value) for key, value in (state.get("copies") or {}).items()
+    }
+    scratch_dir = str(
+        state.get("scratch") or _state_dir(repo_root, name) / SCRATCH_DIRNAME
+    )
+    inner_log = str(state["inner_log"])
     try:
         env = _inner_env(
             inner["port_env_by_name"],
@@ -1691,9 +1760,9 @@ def refresh(
         )
     except InstanceError as exc:
         sys.stderr.write(
-            f"refresh: the recorded recipe for '{name}' cannot be replayed: {exc}\n"
+            f"{verb}: the recorded recipe for '{name}' cannot be replayed: {exc}\n"
         )
-        return 1
+        return False
     _append_boot_marker(Path(inner_log), name)
     try:
         new_pid = spawner.spawn_detached(
@@ -1703,13 +1772,16 @@ def refresh(
             log_path=inner_log,
         )
     except OSError as exc:
-        sys.stderr.write(f"refresh: failed to relaunch the inner server: {exc}\n")
-        return 1
-    # Record the new pid *before* the health wait so ``down`` can still kill it
-    # even if it never becomes healthy (no leaked server).
+        sys.stderr.write(f"{verb}: failed to relaunch the inner server: {exc}\n")
+        return False
+    pids = list(state["pids"])
     pids[0] = new_pid
     state["pids"] = pids
-    state_path.write_text(json.dumps(state, indent=2))
+    starts = list(state.get("pid_starts") or [])
+    if starts:
+        starts[0] = runner.process_start_time(new_pid)
+        state["pid_starts"] = starts
+    _state_path(repo_root, name).write_text(json.dumps(state, indent=2))
 
     probe = wait_healthy(
         http,
@@ -1720,18 +1792,213 @@ def refresh(
     )
     if not probe.is_healthy:
         sys.stderr.write(
-            f"refresh: inner server did not become healthy on port {port} after "
+            f"{verb}: inner server did not become healthy on port {port} after "
             "reboot. The preview window will show an error until the underlying "
-            "build boots; fix it and refresh again.\n"
+            f"build boots; fix it and {verb} again.\n"
             f"{probe.describe()}\n"
             f"{_log_excerpt(Path(inner_log))}"
         )
+        return False
+    return True
+
+
+def _is_recorded_process_running(runner: Runner, pid: int, recorded_start: str) -> bool:
+    """Whether ``pid`` is still the process the instance started: its start time matches the
+    recorded one, or, where none could be recorded, its process group is alive."""
+    if recorded_start:
+        return runner.process_start_time(pid) == recorded_start
+    return runner.process_group_alive(pid)
+
+
+def revive(
+    name: str,
+    repo_root: Path,
+    *,
+    runner: Runner,
+    registry: Registry,
+    http: HttpClient,
+    spawner: Spawner,
+    venv_linker: VenvLinker,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> int:
+    """Boot again whatever part of instance ``name`` is no longer running, as it was booted.
+
+    What a workspace restart stops comes back on its recorded ports, so its
+    registrations and any open window point at it again, and over its copies, so it
+    shows the data it had. Parts still running are left alone, the instances its
+    ``revive_first`` names come back first, and a frame is booted again from its
+    record. Returns 1 when no such instance is recorded, its record predates what a
+    revive needs, a recorded port now belongs to another process, or a boot fails.
+    """
+    state_path = _state_path(repo_root, name)
+    if not state_path.exists():
+        sys.stderr.write(
+            f"revive: no instance named '{name}' is recorded; boot it with `up`.\n"
+        )
         return 1
+    try:
+        state = json.loads(state_path.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        sys.stderr.write(f"error: could not read instance state {state_path}: {exc}\n")
+        return 1
+    if FRAME_STATE_KEY in state:
+        return _revive_frame(
+            name,
+            repo_root,
+            state,
+            runner=runner,
+            registry=registry,
+            http=http,
+            spawner=spawner,
+            sleeper=sleeper,
+        )
+    for sibling in state.get("revive_first") or []:
+        if (
+            revive(
+                str(sibling),
+                repo_root,
+                runner=runner,
+                registry=registry,
+                http=http,
+                spawner=spawner,
+                venv_linker=venv_linker,
+                sleeper=sleeper,
+            )
+            != 0
+        ):
+            sys.stderr.write(
+                f"revive: '{name}' frames '{sibling}', which could not be started again (see above).\n"
+            )
+            return 1
+
+    pids = [int(pid) for pid in state.get("pids") or []]
+    starts = state.get("pid_starts")
+    is_wrapped = len(pids) > 1
+    if (
+        not state.get("inner")
+        or not pids
+        or starts is None
+        or (is_wrapped and not state.get("wrapper_args"))
+    ):
+        sys.stderr.write(
+            f"revive: '{name}' was booted before its record kept what a revive needs; boot it again with `up`.\n"
+        )
+        return 1
+    is_inner_running = _is_recorded_process_running(runner, pids[0], str(starts[0]))
+    is_wrapper_running = not is_wrapped or _is_recorded_process_running(
+        runner, pids[1], str(starts[1])
+    )
+    if is_inner_running and is_wrapper_running:
+        sys.stderr.write(f"revive: '{name}' is already running.\n")
+        return 0
+
+    # A port another process took while the instance was down cannot be rebound.
+    ports_needed = (
+        []
+        if is_inner_running
+        else [int(value) for value in (state.get("ports") or {}).values()]
+    )
+    if not is_wrapper_running:
+        ports_needed.append(int(state["wrapper_port"]))
+    taken = [port for port in ports_needed if not _port_is_free(port)]
+    if taken:
+        sys.stderr.write(
+            f"revive: port(s) {', '.join(map(str, taken))} of '{name}' now belong to another process; "
+            "boot it again with `up`.\n"
+        )
+        return 1
+
+    if not is_inner_running:
+        inner = state["inner"]
+        if not _link_project_venv(
+            venv_linker, str(state["cwd"]), inner.get("project"), "revive"
+        ):
+            return 1
+        if not _respawn_inner(
+            name,
+            repo_root,
+            state,
+            "revive",
+            runner=runner,
+            http=http,
+            spawner=spawner,
+            sleeper=sleeper,
+        ):
+            return 1
+    if not is_wrapper_running:
+        wrapper_log = Path(str(state["wrapper_log"]))
+        wrapper_pids: list[int] = []
+        try:
+            _boot_wrapper(
+                repo_root,
+                name,
+                wrapper_log,
+                [str(arg) for arg in state["wrapper_args"]],
+                wrapper_pids,
+                http=http,
+                spawner=spawner,
+                sleeper=sleeper,
+                port=int(state["wrapper_port"]),
+            )
+        except (InstanceError, OSError) as exc:
+            for pid in wrapper_pids:
+                _kill_process_group_and_wait(runner, pid, sleeper)
+            sys.stderr.write(f"revive: {exc}\n{_log_excerpt(wrapper_log)}")
+            return 1
+        revived = list(state["pids"])
+        revived[1] = wrapper_pids[0]
+        revived_starts = list(state["pid_starts"])
+        revived_starts[1] = runner.process_start_time(wrapper_pids[0])
+        state["pids"] = revived
+        state["pid_starts"] = revived_starts
+        state_path.write_text(json.dumps(state, indent=2))
     sys.stderr.write(
-        f"refresh: inner server for '{name}' rebooted on port {port}; reload the "
-        "window to see the current build.\n"
+        f"revive: '{name}' is running again on port {state['inner_port']}.\n"
     )
     return 0
+
+
+def _revive_frame(
+    name: str,
+    repo_root: Path,
+    state: dict,
+    *,
+    runner: Runner,
+    registry: Registry,
+    http: HttpClient,
+    spawner: Spawner,
+    sleeper: Callable[[float], None],
+) -> int:
+    """Boot a frame again from its record unless its wrapper still runs; ``frame`` keeps its port when it is free."""
+    pids = [int(pid) for pid in state.get("pids") or []]
+    starts = state.get("pid_starts") or []
+    if pids and _is_recorded_process_running(
+        runner, pids[0], str(starts[0]) if starts else ""
+    ):
+        sys.stderr.write(f"revive: '{name}' is already running.\n")
+        return 0
+    try:
+        record = read_frame(name, repo_root)
+    except InstanceError as exc:
+        sys.stderr.write(f"revive: {exc}\n")
+        return 1
+    assert record is not None
+    return frame(
+        name,
+        repo_root,
+        inner_service=record.inner_service,
+        frame_service_name=record.frame_service_name,
+        title=record.title,
+        display_name=record.display_name,
+        kind=record.kind,
+        note=record.note,
+        inner_path=record.inner_path,
+        runner=runner,
+        registry=registry,
+        http=http,
+        spawner=spawner,
+        sleeper=sleeper,
+    )
 
 
 def _add_repo_root_arg(subparser: argparse.ArgumentParser) -> None:
@@ -1883,6 +2150,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     _add_repo_root_arg(refresh_parser)
 
+    revive_parser = subparsers.add_parser(
+        "revive",
+        help="Boot again whatever part of an instance has stopped (after a workspace "
+        "restart), on its recorded ports and over its copies.",
+    )
+    revive_parser.add_argument(
+        "--name", required=True, help="The name passed to 'up' or 'frame'."
+    )
+    _add_repo_root_arg(revive_parser)
+
     args = parser.parse_args(argv)
     repo_root = Path(args.repo_root).resolve()
     if args.command == "up":
@@ -1928,6 +2205,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.name,
             repo_root,
             runner=Runner(),
+            http=HttpClient(),
+            spawner=Spawner(),
+            venv_linker=VenvLinker(),
+        )
+    if args.command == "revive":
+        return revive(
+            args.name,
+            repo_root,
+            runner=Runner(),
+            registry=Registry(),
             http=HttpClient(),
             spawner=Spawner(),
             venv_linker=VenvLinker(),

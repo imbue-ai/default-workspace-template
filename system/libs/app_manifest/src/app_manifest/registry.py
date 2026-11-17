@@ -1,5 +1,6 @@
 import time
 import tomllib
+from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
@@ -100,6 +101,20 @@ class RegistryLaunchPath(FrozenModel):
     )
 
 
+class IsolatedInstanceKind(StrEnum):
+    """What an isolated instance's frame shows, spelled as the preview wrapper's ``FrameKind``."""
+
+    CHANGE = "change"
+    MOCK = "mock"
+
+
+class IsolatedInstanceRef(FrozenModel):
+    """The isolated instance a row's window shows, as ``serve_isolated_instance`` registered it."""
+
+    name: NonEmptyStr = Field(description="The instance's name, which its ``revive`` takes")
+    kind: IsolatedInstanceKind = Field(description="Whether it previews a change or frames a mock")
+
+
 class RegistryRow(FrozenModel):
     """One ``[[apps]]`` row of data/.state/apps.toml, with the defaults absent keys read as (contracts.md section 3).
 
@@ -181,6 +196,11 @@ class RegistryRow(FrozenModel):
         default=None,
         description="How the app takes part in workspace themes, when its manifest declares [theming]; absent means "
         "the app does not wear them yet and can be made themeable",
+    )
+    isolated_instance: IsolatedInstanceRef | None = Field(
+        default=None,
+        description="The isolated instance (a preview, or a mock's frame) this row's window shows, which the shell can "
+        "start again once it stops; absent for every other row",
     )
 
     @field_validator("default_shortcuts", mode="before")

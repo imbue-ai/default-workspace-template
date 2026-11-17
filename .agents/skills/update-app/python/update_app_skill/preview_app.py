@@ -103,6 +103,8 @@ class InstanceSpec:
     inner_path: str
     theming_mode: str | None
     project: str | None
+    # The sibling instances this one frames, which ``serve_isolated_instance revive`` brings back first.
+    revive_first: tuple[str, ...]
 
 
 class Instances:
@@ -127,6 +129,7 @@ class Instances:
             inner_path=spec.inner_path,
             theming_mode=spec.theming_mode,
             project=spec.project,
+            revive_first=spec.revive_first,
             runner=serve_isolated_instance.Runner(),
             registry=serve_isolated_instance.Registry(),
             http=serve_isolated_instance.HttpClient(),

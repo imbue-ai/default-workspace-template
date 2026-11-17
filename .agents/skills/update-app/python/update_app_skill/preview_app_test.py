@@ -197,6 +197,7 @@ def test_up_hands_the_manifests_table_to_the_shared_script_with_its_own_placehol
         inner_path="/?chat=agent-1",
         theming_mode=None,
         project=None,
+        revive_first=(),
     )
 
 

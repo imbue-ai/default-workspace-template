@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
+import time
 import tomllib
 import urllib.error
 import urllib.request
@@ -22,6 +23,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from agents_shared import serve_isolated_instance
 from agents_shared.testing import add_linked_worktree
 
 from update_app_skill import preview_app as mod
@@ -209,3 +211,60 @@ def test_a_private_instance_booted_from_a_worktree_runs_over_the_live_data_and_r
 
     assert down_code == 0
     assert mod.live_preview_url(worktree, "fixture") is None
+
+
+@pytest.mark.timeout(_LIFECYCLE_TIMEOUT_SECONDS)
+def test_a_preview_a_restart_stopped_comes_back_at_its_address_over_its_copy(
+    tmp_path: Path, repo_root_on_disk: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = repo_root_on_disk
+    live_data = repo_root / "data" / ".apps" / "fixture"
+    live_data.mkdir(parents=True)
+    (live_data / "greeting.txt").write_text("from the live data")
+    registry = tmp_path / "apps.toml"
+    monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
+    worktree = tmp_path / "worktree"
+    _write_fixture_checkout(worktree)
+    repo_args = ["--repo-root", str(repo_root)]
+    assert (
+        mod.main(["up", "--app", "fixture", "--worktree", str(worktree), *repo_args])
+        == 0
+    )
+    try:
+        url = mod.live_preview_url(repo_root, "fixture")
+        assert url is not None
+        rows_before = _registered_rows(registry)
+        assert rows_before["fixture-preview"]["isolated_instance"] == {
+            "name": "fixture-preview",
+            "kind": "change",
+        }
+        state_path = (
+            repo_root
+            / mod.INSTANCES_ROOT
+            / "fixture-preview"
+            / mod.INSTANCE_STATE_FILENAME
+        )
+        copy = Path(json.loads(state_path.read_text())["copies"]["data"])
+        (copy / "greeting.txt").write_text("edited in the preview's copy")
+        # What a workspace restart does to every process it did not start itself.
+        runner = serve_isolated_instance.Runner()
+        for pid in json.loads(state_path.read_text())["pids"]:
+            assert serve_isolated_instance._kill_process_group_and_wait(
+                runner, pid, time.sleep
+            )
+        with pytest.raises(urllib.error.URLError):
+            _get(url)
+
+        assert (
+            serve_isolated_instance.main(
+                ["revive", "--name", "fixture-preview", *repo_args]
+            )
+            == 0
+        )
+
+        assert _get(url)["greeting"] == "edited in the preview's copy"
+        assert _registered_rows(registry) == rows_before
+    finally:
+        down_code = mod.main(["down", "--app", "fixture", *repo_args])
+
+    assert down_code == 0

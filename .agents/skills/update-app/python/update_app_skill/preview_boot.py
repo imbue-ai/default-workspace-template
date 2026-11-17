@@ -148,6 +148,7 @@ def build_instance_spec(
     window: PreviewWindow | None,
     registry_copy: Path | None,
     inner_path: str,
+    framed_siblings: Sequence[str] = (),
 ) -> InstanceSpec:
     """The shared substrate's boot of the manifest's preview table."""
     preview = manifest.preview
@@ -178,6 +179,7 @@ def build_instance_spec(
         inner_path=inner_path,
         theming_mode=_declared_theming_mode(worktree, manifest),
         project=project,
+        revive_first=tuple(instance_name(sibling) for sibling in framed_siblings),
     )
 
 
@@ -294,6 +296,7 @@ def up(
         window,
         registry_copy,
         inner_path,
+        framed_siblings=with_apps,
     )
     # An earlier ``up --with`` of this preview may have booted siblings this call does not
     # name; they are still running, and ``down`` finds them only through this record.
