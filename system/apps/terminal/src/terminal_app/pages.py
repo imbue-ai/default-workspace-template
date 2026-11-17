@@ -45,6 +45,7 @@ from workspace_themes.flask_routes import (
 from workspace_themes.primitives import THEME_ID_PATTERN
 from workspace_themes.serving import THEME_STATIC_ROUTE_PREFIX
 
+from terminal_app.dispatch import ENDED_MISSING_FOLDER, ENDED_NOT_STARTED, ENDED_WITH_ERROR
 from terminal_app.errors import (
     InvalidTerminalValueError,
     TerminalAppError,
@@ -89,7 +90,8 @@ _CONFIG_ELEMENT_ID: Final[str] = "terminal-config"
 # The template's placeholders, filled in one pass so that a title or a config carrying a
 # placeholder's text is not itself filled.
 _PLACEHOLDER: Final[re.Pattern[str]] = re.compile(
-    r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH|THEME|VIEWER_ARGUMENT)__"
+    r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH|THEME|VIEWER_ARGUMENT"
+    r"|ENDED_NOT_STARTED|ENDED_WITH_ERROR|ENDED_MISSING_FOLDER)__"
 )
 
 # xterm's theme keys for the contract's terminal tokens, in TERMINAL_TOKENS' order.
@@ -244,9 +246,9 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     actions: ["retry", "ask", "report"],
   };
   const ENDINGS = {
-    "not-started": NOT_STARTED,
-    "ended": { message: "This terminal closed.", cause: "", actions: ["new"] },
-    "missing-folder": {
+    "__ENDED_NOT_STARTED__": NOT_STARTED,
+    "__ENDED_WITH_ERROR__": { message: "This terminal closed.", cause: "", actions: ["new"] },
+    "__ENDED_MISSING_FOLDER__": {
       message: "This terminal closed.",
       cause: "This terminal's folder no longer exists, so it can't open.",
       actions: ["new"],
@@ -284,7 +286,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 
   // The kind comes from the pty's output, so only ENDINGS' own keys count (not "constructor" and the like).
   function showEnded(kind, detail) {
-    showEnding(Object.hasOwn(ENDINGS, kind) ? ENDINGS[kind] : ENDINGS.ended, detail);
+    showEnding(Object.hasOwn(ENDINGS, kind) ? ENDINGS[kind] : ENDINGS["__ENDED_WITH_ERROR__"], detail);
   }
 
   endedRetry.addEventListener("click", () => {
@@ -858,6 +860,9 @@ def render_page(config: PageConfig) -> str:
         "CONTRACT_PATH": APP_CONTRACT_ROUTE,
         "THEME": _THEME_SCRIPT_CONFIG,
         "VIEWER_ARGUMENT": VIEWER_ARGUMENT,
+        "ENDED_NOT_STARTED": ENDED_NOT_STARTED,
+        "ENDED_WITH_ERROR": ENDED_WITH_ERROR,
+        "ENDED_MISSING_FOLDER": ENDED_MISSING_FOLDER,
     }
     return _PLACEHOLDER.sub(lambda match: values[match.group(1)], _PAGE_TEMPLATE)
 
