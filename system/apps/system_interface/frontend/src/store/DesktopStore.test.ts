@@ -4252,6 +4252,61 @@ describe("a stopped preview or UI sketch", () => {
     expect(store.instanceRevival("today-preview").kind).toBe("idle");
   });
 
+  describe("Ask in chat", () => {
+    const CHAT = appRecord("chat", {
+      launch_paths: [
+        launchPathRecord({
+          id: "draft",
+          path: "/api/chats/intake",
+          method: "POST",
+          params: ["message"],
+          presets: { target: "current_chat", is_draft: "true" },
+          draft_param: "message",
+        }),
+        launchPathRecord({
+          id: "draft-into-chat",
+          path: "/api/chats/intake",
+          method: "POST",
+          params: ["chat_id", "message"],
+          presets: { target: "chat", is_draft: "true" },
+          chat_draft_params: { chat_id: "chat_id", text: "message" },
+        }),
+      ],
+    });
+    const FROM_A_CHAT = { ...STOPPED_PREVIEW, instance_chat: "agent-lead" };
+
+    function launches(): string[] {
+      return api.calls.filter((call) => call.startsWith("launch:"));
+    }
+
+    it("drafts into the chat that booted the preview, beside its window", async () => {
+      const store = await storeWithStoppedPreview();
+      offerApps(api, socket, [CHAT, FROM_A_CHAT]);
+
+      expect(await store.askInChat(FROM_A_CHAT, "win-3", "It stopped.")).toBe(true);
+
+      expect(launches()).toEqual([
+        `launch:home:chat:draft-into-chat:{"chat_id":"agent-lead","message":"It stopped."}:show:beside:win-3`,
+      ]);
+    });
+
+    it("drafts where any draft goes when no chat booted it, or the chat app no longer has that chat", async () => {
+      const store = await storeWithStoppedPreview();
+      offerApps(api, socket, [CHAT, STOPPED_PREVIEW]);
+
+      await store.askInChat(STOPPED_PREVIEW, "win-3", "It stopped.");
+      api.refusedLaunches.add("chat:draft-into-chat");
+      await store.askInChat(FROM_A_CHAT, "win-3", "It stopped.");
+
+      expect(launches()).toEqual([
+        `launch:home:chat:draft:{"message":"It stopped."}:new`,
+        `launch:home:chat:draft-into-chat:{"chat_id":"agent-lead","message":"It stopped."}:show:beside:win-3`,
+        `launch:home:chat:draft:{"message":"It stopped."}:new`,
+      ]);
+      expect(notices()).toEqual([]);
+    });
+  });
+
   it("is not started by its window's refresh", async () => {
     const store = await storeWithStoppedPreview();
 

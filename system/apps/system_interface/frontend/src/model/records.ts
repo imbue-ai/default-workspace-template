@@ -163,11 +163,19 @@ export interface LaunchPath {
   /** The params the shell fills with the name and display name of the app whose window's "Chat about this app"
    *  button was pressed (the multiplayer spec, section 9.2); never a launcher row; null for none. */
   readonly app_params: AppParams | null;
+  /** The params the shell fills with a chat's id and the text it drafts there, when a stopped preview's or UI
+   *  sketch's "Ask in chat" is pressed; never a launcher row; null for none. */
+  readonly chat_draft_params: ChatDraftParams | null;
 }
 
 export interface AppParams {
   readonly name: string;
   readonly display_name: string;
+}
+
+export interface ChatDraftParams {
+  readonly chat_id: string;
+  readonly text: string;
 }
 
 export interface DefaultShortcut {
@@ -227,6 +235,9 @@ export interface AppRecord {
   /** What the isolated instance behind the app's window is, a preview of a change or a mock's frame, which the
    *  shell can start again once it stops; null for every other app. */
   readonly instance_kind: InstanceKind | null;
+  /** The chat that booted that isolated instance, which its window's "Ask in chat" drafts into; null when no chat
+   *  did, and for every other app. */
+  readonly instance_chat: string | null;
 }
 
 export type AppTheming = "on" | "off" | "unthemed";
@@ -603,6 +614,16 @@ function parseLaunchPath(raw: unknown): LaunchPath {
     draft_param: asOptionalString(record.draft_param, "launch_path.draft_param"),
     mention_param: asOptionalString(record.mention_param, "launch_path.mention_param"),
     app_params: parseAppParams(record.app_params),
+    chat_draft_params: parseChatDraftParams(record.chat_draft_params),
+  };
+}
+
+function parseChatDraftParams(raw: unknown): ChatDraftParams | null {
+  if (raw === undefined || raw === null) return null;
+  const record = asObject(raw, "launch_path.chat_draft_params");
+  return {
+    chat_id: asString(record.chat_id, "launch_path.chat_draft_params.chat_id"),
+    text: asString(record.text, "launch_path.chat_draft_params.text"),
   };
 }
 
@@ -667,6 +688,8 @@ export function parseAppRecord(raw: unknown): AppRecord {
     share_url: typeof record.share_url === "string" && record.share_url !== "" ? record.share_url : null,
     theming: parseAppTheming(record.theming),
     instance_kind: parseInstanceKind(record.instance_kind),
+    instance_chat:
+      typeof record.instance_chat === "string" && record.instance_chat !== "" ? record.instance_chat : null,
   };
 }
 

@@ -923,6 +923,7 @@ def test_a_revive_boots_the_preview_again_as_its_last_up_did_siblings_first(
             with_apps=["chat"],
             instance_key="agent-1",
             title="New desktop",
+            chat="agent-lead",
             instances=instances,
             dump_registry=_dump_registry,
         )
@@ -938,6 +939,11 @@ def test_a_revive_boots_the_preview_again_as_its_last_up_did_siblings_first(
     assert [spec.window for spec in instances.specs] == [
         spec.window for spec in first_boot
     ]
+    # The chat that booted it, which the shell's revive has none of, comes from the record.
+    assert [
+        spec.window.chat if spec.window is not None else None
+        for spec in instances.specs
+    ] == ["agent-lead", "agent-lead"]
     assert [spec.inner_path for spec in instances.specs] == [
         "/?chat=agent-1",
         "/",

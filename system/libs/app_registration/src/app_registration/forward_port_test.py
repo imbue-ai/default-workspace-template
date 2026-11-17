@@ -797,6 +797,15 @@ params = [{name = "app", label = "App", required = true}, {name = "app_display_n
 presets = {target = "app_chat"}
 app_params = {name = "app", display_name = "app_display_name"}
 
+[[launch_paths]]
+id = "draft-into-chat"
+label = "Draft into a chat"
+path = "/api/intake"
+method = "POST"
+params = [{name = "chat_id", label = "Chat", required = true}, {name = "message", label = "Draft message", required = false}]
+presets = {target = "chat", is_draft = "true"}
+chat_draft_params = {chat_id = "chat_id", text = "message"}
+
 [pin]
 path = "/"
 style = "avatar"
@@ -893,6 +902,15 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
             "params": ["app", "app_display_name"],
             "presets": {"target": "app_chat"},
             "app_params": {"name": "app", "display_name": "app_display_name"},
+        },
+        {
+            "id": "draft-into-chat",
+            "label": "Draft into a chat",
+            "path": "/api/intake",
+            "method": "POST",
+            "params": ["chat_id", "message"],
+            "presets": {"target": "chat", "is_draft": "true"},
+            "chat_draft_params": {"chat_id": "chat_id", "text": "message"},
         },
     ]
     assert row["pin"] == {

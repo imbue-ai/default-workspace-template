@@ -111,7 +111,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Callable, NamedTuple, Sequence
+from typing import Callable, Mapping, NamedTuple, Sequence
 
 from app_registration import forward_port
 from disk_headroom.space import read_disk_space
@@ -1126,6 +1126,7 @@ def up(
     theming_mode: str | None = None,
     project: str | None = None,
     preview_of_app: str | None = None,
+    preview_chat: str | None = None,
     runner: Runner,
     registry: Registry,
     http: HttpClient,
@@ -1151,7 +1152,8 @@ def up(
     behind ``project_launcher``. A ``service_name`` from a ``repo_root`` that is a
     linked git worktree is refused before anything boots. ``preview_of_app`` names
     the app this instance previews on the row its window shows, so the shell can
-    offer to start it again once it stops.
+    offer to start it again once it stops, and ``preview_chat`` the chat that booted
+    it, which the window's "Ask in chat" drafts into.
 
     An earlier instance of ``name`` is torn down first, except for the rows this boot
     registers again: those are updated in place, so a window open on them never sees
@@ -1277,9 +1279,7 @@ def up(
         # 2. Register it as a service (own browser origin), if asked. The row a window
         #    shows names the app it previews, so the shell can start it again.
         window_tag = (
-            forward_port.IsolatedInstanceTag(
-                app=preview_of_app, kind=FrameKind.CHANGE.value
-            )
+            _instance_tag(preview_of_app, FrameKind.CHANGE, preview_chat)
             if preview_of_app is not None
             else None
         )
@@ -1428,6 +1428,8 @@ class FrameRecord(NamedTuple):
     kind: FrameKind
     note: str | None
     inner_path: str
+    # The chat that booted it; None for a frame no chat booted, or one recorded before chats were.
+    chat: str | None = None
 
 
 def read_frame(name: str, repo_root: Path) -> FrameRecord | None:
@@ -1444,6 +1446,23 @@ def read_frame(name: str, repo_root: Path) -> FrameRecord | None:
         return FrameRecord(**{**recorded, "kind": FrameKind(recorded["kind"])})
     except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as exc:
         raise InstanceError(f"{state_path} records no frame to read: {exc!r}") from exc
+
+
+def _instance_tag(
+    app: str, kind: FrameKind, chat: str | None
+) -> forward_port.IsolatedInstanceTag:
+    """The tag on the row an isolated instance's window shows: the app it previews or frames, its kind, and the
+    chat that booted it, when one did."""
+    tag = forward_port.IsolatedInstanceTag(app=app, kind=kind.value)
+    if chat is not None:
+        tag["chat"] = chat
+    return tag
+
+
+def caller_chat(environ: Mapping[str, str]) -> str | None:
+    """The chat of the agent running this: ``MINDS_CHAT_ID`` from the chat app that created it, else the agent's
+    own id; None outside an agent."""
+    return environ.get("MINDS_CHAT_ID") or environ.get("MNGR_AGENT_ID") or None
 
 
 def _keep_frame_record(
@@ -1492,6 +1511,7 @@ def frame(
     kind: FrameKind,
     note: str | None = None,
     inner_path: str = "/",
+    chat: str | None = None,
     runner: Runner,
     registry: Registry,
     http: HttpClient,
@@ -1509,8 +1529,8 @@ def frame(
     another process has taken that port, the wrapper boots on a fresh one and its
     row is re-pointed there. ``down`` with the same ``name`` kills the wrapper and
     deregisters it, and never touches the inner service. The frame's row names
-    ``inner_service`` as the app it frames, so the shell can offer to start the frame
-    again once it stops.
+    ``inner_service`` as the app it frames, and ``chat`` as the chat that booted it,
+    so the shell can offer to start the frame again once it stops, and to ask that chat.
 
     Returns 1 on failure. A failed boot is torn down; a failed re-frame keeps its
     record (``read_frame``) and the row an open window shows, so a later call can boot
@@ -1587,6 +1607,7 @@ def frame(
         kind=kind,
         note=note,
         inner_path=inner_path,
+        chat=chat,
     )
     pids: list[int] = []
     # A re-frame of a frame that had a port starts with its row already there.
@@ -1611,9 +1632,7 @@ def frame(
             wrapper_port,
             "forward_port register (frame)",
             display_name=display_name,
-            isolated_instance=forward_port.IsolatedInstanceTag(
-                app=inner_service, kind=kind.value
-            ),
+            isolated_instance=_instance_tag(inner_service, kind, chat),
         )
         if frame_service_name not in services:
             services.append(frame_service_name)

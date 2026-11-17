@@ -1,1 +1,1 @@
-The desktop and app-model contracts document the `isolated_instance` registry key, the inventory's `instance_kind`, and `POST /api/apps/<name>/revive`.
+The desktop and app-model contracts document the `isolated_instance` registry key, the inventory's `instance_kind` and `instance_chat`, the launch paths' `chat_draft_params`, the chat app's `draft-into-chat` launch path, and `POST /api/apps/<name>/revive`.

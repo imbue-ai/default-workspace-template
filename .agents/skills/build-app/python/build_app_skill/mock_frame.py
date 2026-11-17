@@ -47,6 +47,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -84,16 +85,25 @@ class FramedApp:
 
 @dataclass(frozen=True)
 class RecordedFrame:
-    """What an app's frame was last booted with: the note under its banner and the page it opens."""
+    """What an app's frame was last booted with: the note under its banner, the page it opens, and the chat that
+    booted it (None when no chat did)."""
 
     note: str
     inner_path: str
+    chat: str | None = None
 
 
 class Frames:
     """Indirection over the shared frame substrate, so tests can stand in for it."""
 
-    def up(self, app: FramedApp, note: str, inner_path: str, repo_root: Path) -> int:
+    def up(
+        self,
+        app: FramedApp,
+        note: str,
+        inner_path: str,
+        chat: str | None,
+        repo_root: Path,
+    ) -> int:
         return serve_isolated_instance.frame(
             frame_name(app.name),
             repo_root,
@@ -104,6 +114,7 @@ class Frames:
             kind=FrameKind.MOCK,
             note=note,
             inner_path=inner_path,
+            chat=chat,
             runner=serve_isolated_instance.Runner(),
             registry=serve_isolated_instance.Registry(),
             http=serve_isolated_instance.HttpClient(),
@@ -118,7 +129,9 @@ class Frames:
             raise MockFrameError(str(exc)) from exc
         if record is None or record.note is None:
             return None
-        return RecordedFrame(note=record.note, inner_path=record.inner_path)
+        return RecordedFrame(
+            note=record.note, inner_path=record.inner_path, chat=record.chat
+        )
 
     def down(self, app_name: str, repo_root: Path) -> int:
         return serve_isolated_instance.down(
@@ -226,13 +239,15 @@ def up(
     *,
     inner_path: str | None = None,
     surface: str | None = None,
+    chat: str | None = None,
     frames: Frames,
     layout: Layout,
 ) -> int:
     """Frame the app as a mock with ``note``, then open (``surface="open"``) or reload (``"refresh"``) its window.
 
-    A ``note`` or ``inner_path`` left out is the one the app's frame was last booted
-    with (the page defaults to ``/``); a first frame needs a note. Refused from a git
+    A ``note``, ``inner_path``, or ``chat`` left out is the one the app's frame was last
+    booted with (the page defaults to ``/``); a first frame needs a note. ``chat`` is the
+    chat that booted it, which its window's "Ask in chat" drafts into. Refused from a git
     worktree, whose registry the workspace never reads.
     """
     if serve_isolated_instance.refuses_registering_from_a_worktree(
@@ -245,6 +260,7 @@ def up(
         repo_root,
         inner_path=inner_path,
         surface=surface,
+        chat=chat,
         frames=frames,
         layout=layout,
     )
@@ -262,12 +278,15 @@ def _frame_up(
     *,
     inner_path: str | None,
     surface: str | None,
+    chat: str | None,
     frames: Frames,
     layout: Layout,
 ) -> int:
     """``up`` without its hint to open the window; with no ``surface``, the window is left alone."""
-    if note is None or inner_path is None:
+    if note is None or inner_path is None or chat is None:
         recorded = frames.recorded(app_name, repo_root)
+        if chat is None and recorded is not None:
+            chat = recorded.chat
         if note is None:
             if recorded is None:
                 sys.stderr.write(
@@ -290,7 +309,7 @@ def _frame_up(
         return 1
     app = find_app(app_name, repo_root)
     _register(app, repo_root, FRAMED_APP_OVERRIDES)
-    if frames.up(app, note, inner_path, repo_root) != 0:
+    if frames.up(app, note, inner_path, chat, repo_root) != 0:
         _register(app, repo_root, None)
         return 1
     if surface is None:
@@ -303,7 +322,14 @@ def _frame_up(
     )
 
 
-def refresh(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -> int:
+def refresh(
+    app_name: str,
+    repo_root: Path,
+    *,
+    chat: str | None = None,
+    frames: Frames,
+    layout: Layout,
+) -> int:
     """Reload what the user sees of the app: its mock frame while one is up, else its own windows.
 
     With a frame up, the frame is booted again with its recorded note and page and the
@@ -318,6 +344,7 @@ def refresh(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -
             repo_root,
             inner_path=recorded.inner_path,
             surface="refresh",
+            chat=chat,
             frames=frames,
             layout=layout,
         )
@@ -344,6 +371,7 @@ def revive(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) ->
         repo_root,
         inner_path=None,
         surface=None,
+        chat=None,
         frames=frames,
         layout=layout,
     )
@@ -448,11 +476,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repo_root,
                 inner_path=args.path,
                 surface="open" if args.open else "refresh" if args.refresh else None,
+                chat=serve_isolated_instance.caller_chat(os.environ),
                 frames=Frames(),
                 layout=layout,
             )
         if args.command == "refresh":
-            return refresh(args.app, repo_root, frames=Frames(), layout=layout)
+            return refresh(
+                args.app,
+                repo_root,
+                chat=serve_isolated_instance.caller_chat(os.environ),
+                frames=Frames(),
+                layout=layout,
+            )
         if args.command == "revive":
             return revive(args.app, repo_root, frames=Frames(), layout=layout)
         return down(args.app, repo_root, frames=Frames(), layout=layout)

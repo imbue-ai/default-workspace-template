@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
@@ -82,11 +83,13 @@ SHELL_APP_NAME = "system_interface"
 
 @dataclass(frozen=True)
 class PreviewWindow:
-    """How a preview surfaces: the inner app's registration, the frame's, and the frame's label."""
+    """How a preview surfaces: the inner app's registration, the frame's, the frame's label, and the chat that
+    booted it, which the window's "Ask in chat" drafts into (None when no chat did)."""
 
     service_name: str
     preview_service_name: str
     title: str
+    chat: str | None = None
 
 
 @dataclass(frozen=True)
@@ -132,6 +135,7 @@ class Instances:
             theming_mode=spec.theming_mode,
             project=spec.project,
             preview_of_app=spec.app if window is not None else None,
+            preview_chat=window.chat if window is not None else None,
             runner=serve_isolated_instance.Runner(),
             registry=serve_isolated_instance.Registry(),
             http=serve_isolated_instance.HttpClient(),
@@ -451,6 +455,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 instance_key=args.instance_key,
                 title=args.title,
                 is_private=args.private,
+                chat=serve_isolated_instance.caller_chat(os.environ),
                 instances=Instances(),
             )
         if args.command == "revive":

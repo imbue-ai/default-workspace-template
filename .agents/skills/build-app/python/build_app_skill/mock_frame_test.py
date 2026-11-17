@@ -31,6 +31,7 @@ class _FrameCall:
     app: mock_frame.FramedApp
     note: str
     inner_path: str
+    chat: str | None = None
 
 
 @dataclass
@@ -49,13 +50,20 @@ class _RecordingFrames(mock_frame.Frames):
     running: bool = False
 
     def up(
-        self, app: mock_frame.FramedApp, note: str, inner_path: str, repo_root: Path
+        self,
+        app: mock_frame.FramedApp,
+        note: str,
+        inner_path: str,
+        chat: str | None,
+        repo_root: Path,
     ) -> int:
-        self.ups.append(_FrameCall(app, note, inner_path))
+        self.ups.append(_FrameCall(app, note, inner_path, chat))
         if self.registry is not None:
             self.row_at_up = _row(self.registry)
         if self.up_code == 0 or self.current is not None:
-            self.current = mock_frame.RecordedFrame(note=note, inner_path=inner_path)
+            self.current = mock_frame.RecordedFrame(
+                note=note, inner_path=inner_path, chat=chat
+            )
         self.running = self.up_code == 0
         return self.up_code
 
@@ -308,6 +316,7 @@ def test_revive_after_a_restart_reframes_as_recorded_and_leaves_the_window_alone
             _NOTE,
             tmp_path,
             inner_path="/inbox",
+            chat="agent-lead",
             frames=frames,
             layout=_RecordingLayout(),
         )
@@ -325,9 +334,9 @@ def test_revive_after_a_restart_reframes_as_recorded_and_leaves_the_window_alone
     code = mock_frame.revive(_APP, tmp_path, frames=frames, layout=layout)
 
     assert code == 0
-    assert [(call.note, call.inner_path) for call in frames.ups] == [
-        (_NOTE, "/inbox"),
-        (_NOTE, "/inbox"),
+    assert [(call.note, call.inner_path, call.chat) for call in frames.ups] == [
+        (_NOTE, "/inbox", "agent-lead"),
+        (_NOTE, "/inbox", "agent-lead"),
     ]
     assert _row(registry) == framed_row
     assert layout.ops == []

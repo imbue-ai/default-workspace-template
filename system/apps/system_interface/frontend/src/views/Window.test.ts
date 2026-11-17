@@ -7,6 +7,7 @@ import { appRecord, windowRecord } from "../testing/records";
 import { Window, stoppedInstanceActionsOf } from "./Window";
 import type { StoppedInstanceVerbs, WindowAttrs } from "./Window";
 import type { InstanceRevival } from "../model/instanceRevival";
+import type { AppRecord } from "../model/records";
 import { STANDARD_CHROME } from "../model/themes";
 
 afterEach(unmountViews);
@@ -279,8 +280,8 @@ describe("stoppedInstanceActionsOf", () => {
       instanceRevival: () => revival,
       reviveApp: vi.fn(async () => undefined),
       closeOrMinimizeWindow: vi.fn(async () => undefined),
-      draftText: async (text: string) => {
-        drafts.push(text);
+      askInChat: async (app: AppRecord, windowId: string, text: string) => {
+        drafts.push(`${app.name}@${windowId}: ${text}`);
         return true;
       },
     };
@@ -304,10 +305,12 @@ describe("stoppedInstanceActionsOf", () => {
     stoppedInstanceActionsOf(failed, preview, "win-1")?.onAskInChat();
 
     expect(idle.drafts).toEqual([
-      'The "Today (preview)" preview stopped.',
-      'The "Inbox (UI sketch)" UI sketch stopped.',
+      'today-preview@win-1: The "Today (preview)" preview stopped.',
+      'inbox-sketch@win-2: The "Inbox (UI sketch)" UI sketch stopped.',
     ]);
-    expect(failed.drafts).toEqual(['The "Today (preview)" preview stopped, and starting it again failed.']);
+    expect(failed.drafts).toEqual([
+      'today-preview@win-1: The "Today (preview)" preview stopped, and starting it again failed.',
+    ]);
   });
 
   it("offers nothing for an app that is no preview or UI sketch, or where this shell cannot start one", () => {

@@ -564,8 +564,22 @@ def test_only_the_row_a_previews_window_shows_names_the_app_it_previews(
     )
     untagged = _RecordingRegistry()
     assert _up_preview(tmp_path, registry=untagged) == 0
+    from_a_chat = _RecordingRegistry()
+    assert (
+        _up_preview(
+            tmp_path,
+            registry=from_a_chat,
+            preview_of_app="demo",
+            preview_chat="agent-lead",
+        )
+        == 0
+    )
 
     tag = {"app": "demo", "kind": "change"}
+    assert from_a_chat.by_name()["demo-preview"].isolated_instance == {
+        **tag,
+        "chat": "agent-lead",
+    }
     assert wrapped.by_name()["demo-preview"].isolated_instance == tag
     assert wrapped.by_name()["demo-app"].isolated_instance is None
     assert unwrapped.by_name()["demo-app"].isolated_instance == tag
@@ -1532,6 +1546,7 @@ def _frame(
     http: _FakeHttp | None = None,
     spawner: _FakeSpawner | None = None,
     note: str | None = "Sample data; refresh does not work yet.",
+    chat: str | None = None,
 ) -> int:
     return mod.frame(
         _FRAME_NAME,
@@ -1542,6 +1557,7 @@ def _frame(
         display_name="Inbox (UI sketch)",
         kind=FrameKind.MOCK,
         note=note,
+        chat=chat,
         runner=runner or _RecordingRunner(),
         registry=registry or _RecordingRegistry(),
         http=http or _FakeHttp(_all_healthy),
@@ -1923,3 +1939,19 @@ def test_a_pid_from_a_state_older_than_start_times_is_not_taken_for_a_running_in
 
     assert not mod.is_running(_NAME, tmp_path, runner=reused)
     assert mod.is_running(_NAME, tmp_path, runner=no_start_times)
+
+
+def test_a_frame_names_the_chat_that_booted_it_on_its_row_and_in_its_record(
+    tmp_path: Path,
+) -> None:
+    registry = _RecordingRegistry()
+
+    assert _frame(tmp_path, registry=registry, chat="agent-lead") == 0
+
+    assert registry.by_name()[_FRAME_NAME].isolated_instance == {
+        "app": "inbox",
+        "kind": "mock",
+        "chat": "agent-lead",
+    }
+    recorded = mod.read_frame(_FRAME_NAME, tmp_path)
+    assert recorded is not None and recorded.chat == "agent-lead"

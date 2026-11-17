@@ -692,13 +692,15 @@ def launcher_order(rows: Sequence[RegistryRow]) -> tuple[RegistryRow, ...]:
 
 
 @pure
-def _takes_text_mention_or_app(launch_path: RegistryLaunchPath) -> bool:
-    """Whether the launch path needs something filled in: typed or drafted text, a mention of a person, or an app."""
+def _needs_filling_in(launch_path: RegistryLaunchPath) -> bool:
+    """Whether the launch path needs something filled in: typed or drafted text, a mention of a person, an app, or a
+    chat to draft into."""
     return (
         launch_path.text_param is not None
         or launch_path.draft_param is not None
         or launch_path.mention_param is not None
         or launch_path.app_params is not None
+        or launch_path.chat_draft_params is not None
     )
 
 
@@ -717,7 +719,7 @@ def _default_shortcut_choices(row: RegistryRow) -> tuple[DefaultShortcut, ...]:
         return tuple(shortcut for shortcut in row.default_shortcuts if shortcut.launch in offered_ids)
     if row.program is None:
         return ()
-    first = next((path for path in offered if not _takes_text_mention_or_app(path)), offered[0])
+    first = next((path for path in offered if not _needs_filling_in(path)), offered[0])
     return (DefaultShortcut(launch=first.id, mode=ShortcutMode.FOCUS),)
 
 

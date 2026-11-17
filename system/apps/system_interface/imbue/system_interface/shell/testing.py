@@ -95,14 +95,17 @@ def registry_row_toml(
     # Each launch path as ``(id, label, path)``; ``launch_params`` names each one's param names by id,
     # ``launch_text_params`` the param of each that takes typed text, ``launch_draft_params`` the param of each
     # that takes drafted text, ``launch_mention_params`` the param of each that takes a mention of a person,
-    # ``launch_app_params`` the ``(name, display_name)`` params of each that is about an app, ``launch_methods``
-    # the method of each that is not a GET, and ``launch_presets`` the presets of each that declares any.
+    # ``launch_app_params`` the ``(name, display_name)`` params of each that is about an app,
+    # ``launch_chat_draft_params`` the ``(chat_id, text)`` params of each that drafts into a named chat,
+    # ``launch_methods`` the method of each that is not a GET, and ``launch_presets`` the presets of each that
+    # declares any.
     launch_paths: Sequence[tuple[str, str, str]] = (),
     launch_params: Mapping[str, Sequence[str]] | None = None,
     launch_text_params: Mapping[str, str] | None = None,
     launch_draft_params: Mapping[str, str] | None = None,
     launch_mention_params: Mapping[str, str] | None = None,
     launch_app_params: Mapping[str, tuple[str, str]] | None = None,
+    launch_chat_draft_params: Mapping[str, tuple[str, str]] | None = None,
     launch_methods: Mapping[str, str] | None = None,
     launch_presets: Mapping[str, Mapping[str, str]] | None = None,
     # The ``[pin]`` table as ``(path, style, scope, default_mode)``.
@@ -115,8 +118,9 @@ def registry_row_toml(
     # Each ``show`` message handler as ``(type, show, showing)``.
     shown_message_handlers: Sequence[tuple[str, str, Sequence[str]]] = (),
     theming_mode: str | None = None,
-    # The isolated instance the row's window shows, as ``(app, kind)``.
+    # The isolated instance the row's window shows, as ``(app, kind)``, and the chat that booted it.
     isolated_instance: tuple[str, str] | None = None,
+    isolated_instance_chat: str | None = None,
 ) -> str:
     """One ``[[apps]]`` row as ``forward_port.py`` writes it, with the manifest-derived keys the shell reads."""
     lines = [
@@ -149,7 +153,8 @@ def registry_row_toml(
         lines.append(f'theming_mode = "{theming_mode}"')
     if isolated_instance is not None:
         instance_app, instance_kind = isolated_instance
-        lines.append(f'isolated_instance = {{ app = "{instance_app}", kind = "{instance_kind}" }}')
+        chat = "" if isolated_instance_chat is None else f', chat = "{isolated_instance_chat}"'
+        lines.append(f'isolated_instance = {{ app = "{instance_app}", kind = "{instance_kind}"{chat} }}')
     if message_handlers or shown_message_handlers:
         handlers = [f'{{ type = "{kind}", path = "{path}" }}' for kind, path in message_handlers]
         for kind, show, showing in shown_message_handlers:
@@ -176,6 +181,11 @@ def registry_row_toml(
         app_params = (launch_app_params or {}).get(launch_id)
         if app_params is not None:
             lines.append(f'app_params = {{ name = "{app_params[0]}", display_name = "{app_params[1]}" }}')
+        chat_draft_params = (launch_chat_draft_params or {}).get(launch_id)
+        if chat_draft_params is not None:
+            lines.append(
+                f'chat_draft_params = {{ chat_id = "{chat_draft_params[0]}", text = "{chat_draft_params[1]}" }}'
+            )
         method = (launch_methods or {}).get(launch_id)
         if method is not None:
             lines.append(f'method = "{method}"')

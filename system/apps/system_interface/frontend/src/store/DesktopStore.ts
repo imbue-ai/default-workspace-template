@@ -32,6 +32,8 @@ import {
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
   appChatLaunchOf,
+  chatDraftLaunchOf,
+  chatDraftParams,
   appChatParams,
   appShortcutsOf,
   draftRowsOf,
@@ -2652,6 +2654,24 @@ export class DesktopStore {
     return (await this.launchAt(appName, launchId, params, { kind: "new" })) !== null;
   }
 
+  /** A stopped preview's or UI sketch's "Ask in chat": ``text`` is drafted, unsent, into the chat that booted it,
+   *  shown beside its window; with no such chat, or one the chat app no longer has, it is drafted where any draft
+   *  goes (``draftText``). */
+  async askInChat(app: AppRecord, windowId: string, text: string): Promise<boolean> {
+    const launch = app.instance_chat === null ? null : chatDraftLaunchOf(openableApps(this.state));
+    if (app.instance_chat !== null && launch !== null) {
+      const shown = await this.launchAt(
+        launch.app.name,
+        launch.launchPath.id,
+        chatDraftParams(launch.launchPath, app.instance_chat, text),
+        { kind: "show", besideWindowId: windowId },
+        true,
+      );
+      if (shown !== null) return true;
+    }
+    return this.draftText(text);
+  }
+
   /** A page's ``shell:draft-text`` (element-reference-menu plan section 6): the text is drafted into the pinned
    *  window that takes a draft, else through the first draft row of the machine; with neither the user is told. */
   async draftText(text: string): Promise<boolean> {
@@ -2728,6 +2748,7 @@ export class DesktopStore {
     launchId: string,
     params: Readonly<Record<string, string>>,
     target: LaunchTarget,
+    isRefusalQuiet = false,
   ): Promise<string | null> {
     if (this.refuseWhileViewing(`open ${app}`)) return null;
     // A launch into a named window runs on that window's desktop, a show beside one on that window's; any other on
@@ -2753,7 +2774,7 @@ export class DesktopStore {
         isMinimized,
       });
     } catch (error) {
-      this.toast(`Could not open ${app}: ${(error as Error).message}`);
+      if (!isRefusalQuiet) this.toast(`Could not open ${app}: ${(error as Error).message}`);
       return null;
     }
     if (target.kind === "window") {

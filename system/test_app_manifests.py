@@ -556,7 +556,9 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     }
     # The composer's dictation (the workspace-voice-input spec in the mngr repository) is the one built-in that
     # listens, so the chat's frames alone are handed the microphone.
-    assert {name for name, manifest in by_name.items() if manifest.uses_microphone} == {"chat"}
+    assert {name for name, manifest in by_name.items() if manifest.uses_microphone} == {
+        "chat"
+    }
     # Where the minds Share tab lists each built-in: never for an internal one, under its System group for the
     # interfaces the workspace is built out of, and up front for the rest.
     assert {
@@ -656,6 +658,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         ("draft", "/api/chats/intake", "POST"),
         ("lounge", "/api/chats/intake", "POST"),
         ("app-chat", "/api/chats/intake", "POST"),
+        ("draft-into-chat", "/api/chats/intake", "POST"),
     ]
     assert [shortcut.launch for shortcut in by_name["chat"].default_shortcuts] == [
         "root"
@@ -711,11 +714,19 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     app_params = by_name["chat"].launch_paths[6].app_params
     assert app_params is not None
     assert (app_params.name, app_params.display_name) == ("app", "app_display_name")
+    assert by_name["chat"].launch_paths[7].presets == {
+        "target": "chat",
+        "is_draft": "true",
+    }
+    chat_draft_params = by_name["chat"].launch_paths[7].chat_draft_params
+    assert chat_draft_params is not None
+    assert (chat_draft_params.chat_id, chat_draft_params.text) == ("chat_id", "message")
     # The launcher's free-text rows (launcher-and-getting-started plan section 3.1): the chat's ``main`` (the
     # launcher's Enter) sends the typed text to the main chat, its ``new`` takes it as a new chat's first message,
     # its ``send`` as a message to an existing chat, and its ``draft`` as text for a composer; the ``lounge`` path
     # declares the mention param alone (the multiplayer spec, section 7.5), the ``app-chat`` path the app params
-    # alone (section 9.2), and nothing else declares a text, draft, mention, or app param.
+    # alone (section 9.2), the ``draft-into-chat`` path the chat-draft params alone, and nothing else declares a
+    # text, draft, mention, app, or chat-draft param.
     assert by_name["chat"].launch_paths[0].text_param is None
     assert by_name["chat"].launch_paths[1].text_param == "message"
     assert by_name["chat"].launch_paths[2].text_param == "message"
@@ -728,23 +739,28 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert [entry.mention_param for entry in by_name["chat"].launch_paths[:5]] == [
         None
     ] * 5
-    assert by_name["chat"].launch_paths[6].mention_param is None
+    assert [entry.mention_param for entry in by_name["chat"].launch_paths[6:]] == [
+        None
+    ] * 2
     assert [entry.text_param for entry in by_name["chat"].launch_paths[5:]] == [
-        None,
-        None,
-    ]
+        None
+    ] * 3
     assert [entry.draft_param for entry in by_name["chat"].launch_paths[5:]] == [
-        None,
-        None,
-    ]
+        None
+    ] * 3
     assert [entry.app_params for entry in by_name["chat"].launch_paths[:6]] == [
         None
     ] * 6
+    assert by_name["chat"].launch_paths[7].app_params is None
+    assert [entry.chat_draft_params for entry in by_name["chat"].launch_paths[:7]] == [
+        None
+    ] * 7
     for name in ("terminal", "files"):
         assert by_name[name].launch_paths[0].text_param is None, name
         assert by_name[name].launch_paths[0].draft_param is None, name
         assert by_name[name].launch_paths[0].mention_param is None, name
         assert by_name[name].launch_paths[0].app_params is None, name
+        assert by_name[name].launch_paths[0].chat_draft_params is None, name
         assert by_name[name].launch_paths[0].presets == {}, name
     assert [param.name for param in by_name["terminal"].launch_paths[0].params] == [
         "workdir"

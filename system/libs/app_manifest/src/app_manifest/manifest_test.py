@@ -72,9 +72,7 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert [(shortcut.launch, shortcut.mode) for shortcut in manifest.default_shortcuts] == [
         ("new", ShortcutMode.FOCUS)
     ]
-    assert [
-        (launch_path.id, launch_path.path) for launch_path in manifest.launch_paths
-    ] == [("new", "/")]
+    assert [(launch_path.id, launch_path.path) for launch_path in manifest.launch_paths] == [("new", "/")]
     assert manifest.launch_paths[0].params[0].name == "path"
     assert manifest.launch_paths[0].text_param == "path"
     assert manifest.launcher_rank == 20
@@ -93,12 +91,8 @@ def test_uses_microphone_defaults_to_false() -> None:
     assert manifest.uses_microphone is False
 
 
-def test_stop_when_no_windows_defaults_to_false_and_is_refused_on_a_critical_app() -> (
-    None
-):
-    manifest = AppManifest.model_validate(
-        {"name": "news", "display_name": "News", "icon": "icon.svg"}
-    )
+def test_stop_when_no_windows_defaults_to_false_and_is_refused_on_a_critical_app() -> None:
+    manifest = AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg"})
     assert manifest.stop_when_no_windows is False
     with pytest.raises(ValidationError, match="critical app cannot declare stop_when_no_windows"):
         AppManifest.model_validate({**_full_manifest_data(), "critical": True, "stop_when_no_windows": True})
@@ -129,9 +123,7 @@ def test_a_pin_takes_the_plain_linked_bar_defaults_and_needs_only_a_path() -> No
         EntryMode.BAR,
     )
     with pytest.raises(ValidationError, match="path"):
-        AppManifest.model_validate(
-            {"name": "news", "display_name": "News", "icon": "icon.svg", "pin": {}}
-        )
+        AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "pin": {}})
 
 
 @pytest.mark.parametrize(
@@ -145,13 +137,9 @@ def test_a_pin_takes_the_plain_linked_bar_defaults_and_needs_only_a_path() -> No
         ({"path": "/", "position": {"x": 0.5, "y": 0.5}}, "position"),
     ],
 )
-def test_a_pin_follows_the_launch_path_rule_and_the_three_vocabularies(
-    pin: dict[str, object], field: str
-) -> None:
+def test_a_pin_follows_the_launch_path_rule_and_the_three_vocabularies(pin: dict[str, object], field: str) -> None:
     with pytest.raises(ValidationError, match=field):
-        AppManifest.model_validate(
-            {"name": "news", "display_name": "News", "icon": "icon.svg", "pin": pin}
-        )
+        AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "pin": pin})
 
 
 @pytest.mark.parametrize("description", ["", "   ", "two\nlines", "x" * 201])
@@ -177,21 +165,15 @@ def test_a_manifest_reads_its_description_and_api_schema_path() -> None:
     with pytest.raises(ValidationError):
         AppManifest.model_validate({**_full_manifest_data(), "api_schema_path": "api/schema?x=1"})
     with pytest.raises(ValidationError, match="also declares description"):
-        AppManifest.model_validate(
-            {**_full_manifest_data(), "api_schema_path": "/api/schema"}
-        )
+        AppManifest.model_validate({**_full_manifest_data(), "api_schema_path": "/api/schema"})
 
 
 def test_window_closed_path_follows_the_launch_path_rule() -> None:
     with pytest.raises(ValidationError, match="no query string"):
-        AppManifest.model_validate(
-            {**_full_manifest_data(), "window_closed_path": "/closed?x=1"}
-        )
+        AppManifest.model_validate({**_full_manifest_data(), "window_closed_path": "/closed?x=1"})
 
 
-def test_message_handlers_name_the_embedder_messages_an_app_takes_and_where_the_shell_posts_them() -> (
-    None
-):
+def test_message_handlers_name_the_embedder_messages_an_app_takes_and_where_the_shell_posts_them() -> None:
     manifest = AppManifest.model_validate(
         {
             **_full_manifest_data(),
@@ -209,9 +191,7 @@ def test_message_handlers_name_the_embedder_messages_an_app_takes_and_where_the_
     assert AppManifest.model_validate(_full_manifest_data()).message_handlers == ()
 
 
-def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pages_that_already_show_it() -> (
-    None
-):
+def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pages_that_already_show_it() -> None:
     manifest = AppManifest.model_validate(
         {
             **_full_manifest_data(),
@@ -324,9 +304,7 @@ def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pag
             "query string is fixed",
             id="query-field",
         ),
-        pytest.param(
-            {"type": "open:file", "show": "{path}#top"}, "no fragment", id="fragment"
-        ),
+        pytest.param({"type": "open:file", "show": "{path}#top"}, "no fragment", id="fragment"),
         pytest.param(
             {"type": "open:file", "show": "view/{path}"},
             "single '/' or a placeholder",
@@ -349,13 +327,9 @@ def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pag
         ),
     ],
 )
-def test_a_malformed_message_handler_fails_to_load_with_its_reason(
-    handler: dict[str, object], match: str
-) -> None:
+def test_a_malformed_message_handler_fails_to_load_with_its_reason(handler: dict[str, object], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
-        AppManifest.model_validate(
-            {**_full_manifest_data(), "message_handlers": [handler]}
-        )
+        AppManifest.model_validate({**_full_manifest_data(), "message_handlers": [handler]})
 
 
 def test_keybindings_declare_the_actions_a_person_may_rebind_in_display_order() -> None:
@@ -382,7 +356,9 @@ def test_keybindings_declare_the_actions_a_person_may_rebind_in_display_order() 
         pytest.param({"id": "Rename", "label": "Rename"}, "invalid keybinding action id", id="uppercase-id"),
         pytest.param({"id": "rename", "label": ""}, "keybinding label must not be empty", id="empty-label"),
         pytest.param({"id": "rename", "label": "two\nlines"}, "is a single line", id="two-line-label"),
-        pytest.param({"id": "rename", "label": "Rename", "default_chords": [""]}, "at least 1 character", id="empty-chord"),
+        pytest.param(
+            {"id": "rename", "label": "Rename", "default_chords": [""]}, "at least 1 character", id="empty-chord"
+        ),
     ],
 )
 def test_a_malformed_keybinding_fails_to_load_with_its_reason(action: dict[str, object], match: str) -> None:
@@ -420,29 +396,18 @@ def test_text_param_must_name_a_declared_param_and_defaults_to_none() -> None:
     data = _full_manifest_data()
     launch_path = _launch_path_data()
     del launch_path["text_param"]
-    assert (
-        AppManifest.model_validate({**data, "launch_paths": [launch_path]})
-        .launch_paths[0]
-        .text_param
-        is None
-    )
+    assert AppManifest.model_validate({**data, "launch_paths": [launch_path]}).launch_paths[0].text_param is None
 
     with pytest.raises(
         ValidationError,
         match="text_param 'message' is not one of the launch path's params",
     ):
-        AppManifest.model_validate(
-            {**data, "launch_paths": [{**launch_path, "text_param": "message"}]}
-        )
+        AppManifest.model_validate({**data, "launch_paths": [{**launch_path, "text_param": "message"}]})
     with pytest.raises(ValidationError, match="at least 1 character"):
-        AppManifest.model_validate(
-            {**data, "launch_paths": [{**launch_path, "text_param": ""}]}
-        )
+        AppManifest.model_validate({**data, "launch_paths": [{**launch_path, "text_param": ""}]})
 
 
-def test_a_launch_path_is_a_get_with_no_presets_and_no_draft_param_unless_it_says_otherwise() -> (
-    None
-):
+def test_a_launch_path_is_a_get_with_no_presets_and_no_draft_param_unless_it_says_otherwise() -> None:
     launch_path = AppManifest.model_validate(_full_manifest_data()).launch_paths[0]
     assert launch_path.method is LaunchPathMethod.GET
     assert launch_path.presets == {}
@@ -477,26 +442,22 @@ def test_a_launch_path_method_is_get_or_post_spelled_in_upper_case(method: str) 
         AppManifest.model_validate({**data, "launch_paths": [launch_path]})
 
 
-def test_a_launch_path_declares_at_most_one_of_text_param_draft_param_and_mention_param() -> (
-    None
-):
+def test_a_launch_path_declares_at_most_one_of_text_param_draft_param_and_mention_param() -> None:
     data = _full_manifest_data()
     launch_path = {**_launch_path_data(), "draft_param": "path"}
     with pytest.raises(
         ValidationError,
-        match="at most one of text_param, draft_param, mention_param, and app_params",
+        match="at most one of text_param, draft_param, mention_param, app_params, and chat_draft_params",
     ):
         AppManifest.model_validate({**data, "launch_paths": [launch_path]})
     with pytest.raises(
         ValidationError,
-        match="at most one of text_param, draft_param, mention_param, and app_params",
+        match="at most one of text_param, draft_param, mention_param, app_params, and chat_draft_params",
     ):
         AppManifest.model_validate(
             {
                 **data,
-                "launch_paths": [
-                    {**launch_path, "draft_param": None, "mention_param": "path"}
-                ],
+                "launch_paths": [{**launch_path, "draft_param": None, "mention_param": "path"}],
             }
         )
     with pytest.raises(
@@ -506,9 +467,7 @@ def test_a_launch_path_declares_at_most_one_of_text_param_draft_param_and_mentio
         AppManifest.model_validate(
             {
                 **data,
-                "launch_paths": [
-                    {**launch_path, "text_param": None, "draft_param": "message"}
-                ],
+                "launch_paths": [{**launch_path, "text_param": None, "draft_param": "message"}],
             }
         )
     with pytest.raises(
@@ -544,9 +503,38 @@ def test_a_launch_path_declares_at_most_one_of_text_param_draft_param_and_mentio
     assert mentioning.launch_paths[0].mention_param == "path"
 
 
-def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_and_nothing_else() -> (
-    None
-):
+def test_a_launch_path_drafting_into_a_named_chat_declares_both_params_among_its_own_and_nothing_else() -> None:
+    """The ``chat_draft_params`` pair names two distinct params of the launch path, and stands alone like a text,
+    draft, or mention param, or ``app_params``."""
+    data = _full_manifest_data()
+    into_a_chat = {
+        **_launch_path_data(),
+        "text_param": None,
+        "params": [
+            {"name": "chat_id", "label": "Chat", "required": True},
+            {"name": "message", "label": "Draft message"},
+        ],
+        "chat_draft_params": {"chat_id": "chat_id", "text": "message"},
+    }
+    manifest = AppManifest.model_validate({**data, "launch_paths": [into_a_chat]})
+    assert manifest.launch_paths[0].chat_draft_params is not None
+    assert manifest.launch_paths[0].chat_draft_params.text == "message"
+    for broken, reason in (
+        (
+            {"chat_draft_params": {"chat_id": "chat_id", "text": "body"}},
+            "chat_draft_params.text 'body' is not one of the launch path's params",
+        ),
+        (
+            {"chat_draft_params": {"chat_id": "message", "text": "message"}},
+            "names one param 'message' for both the chat id and the text",
+        ),
+        ({"draft_param": "message"}, "at most one of"),
+    ):
+        with pytest.raises(ValidationError, match=reason):
+            AppManifest.model_validate({**data, "launch_paths": [{**into_a_chat, **broken}]})
+
+
+def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_and_nothing_else() -> None:
     """The ``app_params`` pair (the multiplayer spec, section 9.2) names two distinct params of the launch path, and
     stands alone like a text, draft, or mention param."""
     data = _full_manifest_data()
@@ -580,11 +568,9 @@ def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_an
         )
     with pytest.raises(
         ValidationError,
-        match="at most one of text_param, draft_param, mention_param, and app_params",
+        match="at most one of text_param, draft_param, mention_param, app_params, and chat_draft_params",
     ):
-        AppManifest.model_validate(
-            {**data, "launch_paths": [{**about_an_app, "text_param": "app"}]}
-        )
+        AppManifest.model_validate({**data, "launch_paths": [{**about_an_app, "text_param": "app"}]})
     with pytest.raises(
         ValidationError,
         match="names one param 'app' for both the name and the display name",
@@ -605,9 +591,7 @@ def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_an
 def test_a_preset_may_not_shadow_a_param() -> None:
     data = _full_manifest_data()
     launch_path = {**_launch_path_data(), "presets": {"path": "/notes/"}}
-    with pytest.raises(
-        ValidationError, match="preset 'path' is also one of the launch path's params"
-    ):
+    with pytest.raises(ValidationError, match="preset 'path' is also one of the launch path's params"):
         AppManifest.model_validate({**data, "launch_paths": [launch_path]})
 
 
@@ -621,9 +605,7 @@ def test_the_launch_envelopes_names_are_reserved_for_params_and_presets(
         ValidationError,
         match=f"{reserved!r} is reserved for the shell's launch envelope",
     ):
-        AppManifest.model_validate(
-            {**data, "launch_paths": [{**launch_path, "presets": {reserved: "x"}}]}
-        )
+        AppManifest.model_validate({**data, "launch_paths": [{**launch_path, "presets": {reserved: "x"}}]})
     with pytest.raises(
         ValidationError,
         match=f"{reserved!r} is reserved for the shell's launch envelope",
@@ -671,9 +653,7 @@ def test_the_open_launch_path_id_is_reserved_for_the_synthesized_root() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "launch_path_id", ["New", "-new", "", "a" * 33, "new tab", "new\n"]
-)
+@pytest.mark.parametrize("launch_path_id", ["New", "-new", "", "a" * 33, "new tab", "new\n"])
 def test_launch_path_ids_follow_the_id_rule(launch_path_id: str) -> None:
     with pytest.raises(ValidationError, match="invalid launch path id"):
         AppManifest.model_validate(
@@ -681,9 +661,7 @@ def test_launch_path_ids_follow_the_id_rule(launch_path_id: str) -> None:
                 "name": "news",
                 "display_name": "News",
                 "icon": "icon.svg",
-                "launch_paths": [
-                    {"id": launch_path_id, "label": "New", "path": "/new"}
-                ],
+                "launch_paths": [{"id": launch_path_id, "label": "New", "path": "/new"}],
             }
         )
 
@@ -715,9 +693,7 @@ def test_launch_path_values_are_rooted_query_free_and_unescaped(path: str) -> No
         )
 
 
-@pytest.mark.parametrize(
-    "path", ["/", "/new", "/folders/inbox", "/a-b_c.d~", "/a:b@c!$&'()*+,;="]
-)
+@pytest.mark.parametrize("path", ["/", "/new", "/folders/inbox", "/a-b_c.d~", "/a:b@c!$&'()*+,;="])
 def test_launch_path_values_that_follow_the_rule_are_accepted(path: str) -> None:
     manifest = AppManifest.model_validate(
         {
@@ -743,9 +719,7 @@ def test_default_shortcut_launch_must_name_a_declared_launch_path() -> None:
         )
 
 
-def test_default_shortcut_launch_open_is_allowed_only_without_declared_launch_paths() -> (
-    None
-):
+def test_default_shortcut_launch_open_is_allowed_only_without_declared_launch_paths() -> None:
     rooted = AppManifest.model_validate(
         {
             "name": "news",
@@ -783,9 +757,7 @@ def _two_launch_path_manifest_data(default_shortcut: object) -> dict[str, object
 
 def test_an_array_of_default_shortcuts_seeds_each_in_order() -> None:
     manifest = AppManifest.model_validate(
-        _two_launch_path_manifest_data(
-            [{"launch": "screen", "mode": "focus"}, {"launch": "browser", "mode": "new"}]
-        )
+        _two_launch_path_manifest_data([{"launch": "screen", "mode": "focus"}, {"launch": "browser", "mode": "new"}])
     )
 
     assert [(shortcut.launch, shortcut.mode) for shortcut in manifest.default_shortcuts] == [
@@ -808,9 +780,7 @@ def test_an_array_of_default_shortcuts_seeds_each_in_order() -> None:
         ),
     ],
 )
-def test_an_array_of_default_shortcuts_is_checked_shortcut_by_shortcut(
-    default_shortcut: object, message: str
-) -> None:
+def test_an_array_of_default_shortcuts_is_checked_shortcut_by_shortcut(default_shortcut: object, message: str) -> None:
     with pytest.raises(ValidationError, match=message):
         AppManifest.model_validate(_two_launch_path_manifest_data(default_shortcut))
 
@@ -924,13 +894,9 @@ def test_default_shortcut_mode_must_be_focus_or_new() -> None:
         )
 
 
-def test_a_manifest_that_still_carries_the_retired_handles_table_fails_to_load() -> (
-    None
-):
+def test_a_manifest_that_still_carries_the_retired_handles_table_fails_to_load() -> None:
     with pytest.raises(ValidationError, match="handles"):
-        AppManifest.model_validate(
-            {"name": "news", "display_name": "News", "icon": "icon.svg", "handles": {}}
-        )
+        AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "handles": {}})
 
 
 def test_unknown_keys_are_rejected() -> None:
@@ -1097,9 +1063,7 @@ exclude = ["system/apps/news/frontend/dist/**"]
 def test_wiring_programs_are_unique_and_never_the_apps_own() -> None:
     base = {"name": "news", "display_name": "News", "icon": "icon.svg"}
 
-    assert AppManifest.model_validate(
-        {**base, "wiring": {"programs": ["xvfb"]}}
-    ).wiring.programs == ("xvfb",)
+    assert AppManifest.model_validate({**base, "wiring": {"programs": ["xvfb"]}}).wiring.programs == ("xvfb",)
     with pytest.raises(ValidationError, match="unique"):
         AppManifest.model_validate({**base, "wiring": {"programs": ["xvfb", "xvfb"]}})
     with pytest.raises(ValidationError, match="own program"):
@@ -1208,9 +1172,7 @@ def test_a_reference_path_naming_a_glob_says_so() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "note", ["", "   ", "two\nlines", "a carriage\rreturn", "x" * 201]
-)
+@pytest.mark.parametrize("note", ["", "   ", "two\nlines", "a carriage\rreturn", "x" * 201])
 def test_a_reference_note_must_be_one_non_empty_line(note: str) -> None:
     with pytest.raises(ValidationError, match="note"):
         AppManifest.model_validate(
@@ -1332,9 +1294,7 @@ def test_load_manifest_accepts_a_reference_to_a_file_directly_under_the_apps_dir
 
     manifest = load_manifest(manifest_path, repo_root=tmp_path)
 
-    assert [reference.path for reference in manifest.references] == [
-        "system/apps/README.md"
-    ]
+    assert [reference.path for reference in manifest.references] == ["system/apps/README.md"]
 
 
 def test_load_manifest_rejects_a_reference_that_goes_through_a_symlinked_directory(
@@ -1372,9 +1332,7 @@ def test_load_manifest_off_the_apps_layout_skips_the_location_rules_until_a_root
         load_manifest(manifest_path, repo_root=tmp_path)
 
 
-def test_secret_declarations_round_trip_and_reject_a_repeated_file_or_an_empty_variable_list() -> (
-    None
-):
+def test_secret_declarations_round_trip_and_reject_a_repeated_file_or_an_empty_variable_list() -> None:
     data = {
         **_full_manifest_data(),
         "secrets": [
@@ -1387,9 +1345,7 @@ def test_secret_declarations_round_trip_and_reject_a_repeated_file_or_an_empty_v
         ],
     }
     manifest = AppManifest.model_validate(data)
-    assert [
-        (str(secret.file), tuple(secret.variables)) for secret in manifest.secrets
-    ] == [
+    assert [(str(secret.file), tuple(secret.variables)) for secret in manifest.secrets] == [
         ("widget", ("WIDGET_TOKEN", "WIDGET_ORG")),
         ("mailer", ("SMTP_PASSWORD",)),
     ]

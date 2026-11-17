@@ -215,13 +215,15 @@ def up(
     instance_key: str | None = None,
     title: str | None = None,
     is_private: bool = False,
+    chat: str | None = None,
     instances: Instances,
     dump_registry: Callable[[list[dict[str, object]]], str] | None = None,
 ) -> int:
     """Boot the app's preview from ``worktree``, after the siblings named in ``with_apps``.
 
     ``is_private`` boots it with no registrations, title, or instance key, for an agent
-    to reach on its loopback port. Raises PreviewError for a preview with a window from a
+    to reach on its loopback port. ``chat`` is the chat that booted it, which its window's
+    "Ask in chat" drafts into. Raises PreviewError for a preview with a window from a
     ``repo_root`` that is a linked git worktree, and for ``is_private`` with ``with_apps``.
     """
     live_root = _live_root(
@@ -257,6 +259,7 @@ def up(
                 worktree,
                 repo_root,
                 instance_key=instance_key,
+                chat=chat,
                 instances=instances,
                 dump_registry=dump,
             )
@@ -288,6 +291,7 @@ def up(
             service_name=f"{manifest.name}{INNER_SERVICE_SUFFIX}",
             preview_service_name=instance_name(manifest.name),
             title=title if title is not None else f"{manifest.display_name} (preview)",
+            chat=chat,
         )
         inner_path = resolve_open_path(manifest, instance_key)
     spec = build_instance_spec(
@@ -315,6 +319,7 @@ def up(
                 "instance_key": instance_key,
                 "title": title,
                 "is_private": is_private,
+                "chat": chat,
             }
         )
     )
@@ -376,5 +381,6 @@ def revive(app_name: str, repo_root: Path, *, instances: Instances) -> int:
         instance_key=str(instance_key) if instance_key is not None else None,
         title=str(title) if title is not None else None,
         is_private=bool(record.get("is_private")),
+        chat=str(chat) if (chat := record.get("chat")) is not None else None,
         instances=instances,
     )

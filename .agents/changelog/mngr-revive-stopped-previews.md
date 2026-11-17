@@ -6,4 +6,4 @@
 
 - An `up` or `refresh` whose server exits before it answers (a build that crashes on start) fails as soon as the process is gone, instead of after the full minute-long health wait.
 
-- The row a preview's or UI sketch's window shows now names the app it previews or frames, and its kind (`isolated_instance`), which is how the shell offers **Start it again** in the window.
+- The row a preview's or UI sketch's window shows now names the app it previews or frames, its kind, and the chat that booted it (`isolated_instance`), which is how the shell offers **Start it again** in the window and drafts **Ask in chat** into that chat. `preview_app.py up` and `mock_frame.py up` record the chat of the agent that runs them (`MINDS_CHAT_ID`, else `MNGR_AGENT_ID`), and a revive keeps the recorded one.

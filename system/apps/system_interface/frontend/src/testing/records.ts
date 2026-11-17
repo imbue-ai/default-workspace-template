@@ -52,6 +52,7 @@ export function launchPathRecord(overrides: Partial<LaunchPath> = {}): LaunchPat
     draft_param: null,
     mention_param: null,
     app_params: null,
+    chat_draft_params: null,
     ...overrides,
   };
 }
@@ -78,6 +79,7 @@ export function appRecord(name: string, overrides: Partial<AppRecord> = {}): App
     share_url: null,
     theming: null,
     instance_kind: null,
+    instance_chat: null,
     ...overrides,
   };
 }

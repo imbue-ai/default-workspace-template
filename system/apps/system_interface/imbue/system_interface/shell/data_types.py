@@ -125,6 +125,7 @@ def app_view(entry: AppInventoryEntry, share_domain: str | None, theming_off: fr
         share_url=f"https://{row.label}.{share_domain}/" if share_domain is not None and row.label else None,
         theming=theming_of(row, theming_off),
         instance_kind=row.isolated_instance.kind if row.isolated_instance is not None else None,
+        instance_chat=row.isolated_instance.chat if row.isolated_instance is not None else None,
     )
 
 

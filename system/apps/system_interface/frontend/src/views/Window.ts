@@ -108,7 +108,8 @@ export interface StoppedInstanceActions {
   readonly revival: InstanceRevival;
   readonly onStart: () => void;
   readonly onClose: () => void;
-  /** Drafts what happened to it into the chat, unsent, for the user to say what they want. */
+  /** Drafts what happened to it, unsent, into the chat that booted it (else where any draft goes), for the user to
+   *  say what they want. */
   readonly onAskInChat: () => void;
 }
 
@@ -118,7 +119,7 @@ export interface StoppedInstanceVerbs {
   instanceRevival(appName: string): InstanceRevival;
   reviveApp(appName: string): Promise<void>;
   closeOrMinimizeWindow(windowId: string): Promise<void>;
-  draftText(text: string): Promise<boolean>;
+  askInChat(app: AppRecord, windowId: string, text: string): Promise<boolean>;
 }
 
 /** What is drafted into the chat, in the user's words, about a stopped preview or UI sketch. */
@@ -143,7 +144,7 @@ export function stoppedInstanceActionsOf(
     revival,
     onStart: () => void verbs.reviveApp(app.name),
     onClose: () => void verbs.closeOrMinimizeWindow(windowId),
-    onAskInChat: () => void verbs.draftText(askInChatDraft(app.display_name, kind, revival)),
+    onAskInChat: () => void verbs.askInChat(app, windowId, askInChatDraft(app.display_name, kind, revival)),
   };
 }
 

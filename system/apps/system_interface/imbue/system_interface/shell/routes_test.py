@@ -516,6 +516,7 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
                 "draft_param": None,
                 "mention_param": None,
                 "app_params": None,
+                "chat_draft_params": None,
             }
         ],
         "files": [
@@ -530,6 +531,7 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
                 "draft_param": None,
                 "mention_param": None,
                 "app_params": None,
+                "chat_draft_params": None,
             }
         ],
     }
@@ -3500,7 +3502,12 @@ def _stopped_preview_application(tmp_path: Path, broadcaster: WebSocketBroadcast
     """A shell whose registry holds a stopped preview's frame row, a stopped UI sketch's, and a plain app."""
     registry_path = write_two_app_registry(
         tmp_path,
-        registry_row_toml("today-preview", "http://localhost:41234", isolated_instance=("today", "change")),
+        registry_row_toml(
+            "today-preview",
+            "http://localhost:41234",
+            isolated_instance=("today", "change"),
+            isolated_instance_chat="agent-lead",
+        ),
         registry_row_toml("inbox-sketch", "http://localhost:41235", isolated_instance=("inbox", "mock")),
     )
     prober = FakeLivenessProber()
@@ -3513,9 +3520,16 @@ def test_the_inventory_says_which_apps_are_previews_or_ui_sketches(
 ) -> None:
     client = _stopped_preview_application(tmp_path, broadcaster).test_client()
 
-    kinds = {app["name"]: app["instance_kind"] for app in client.get("/api/inventory").get_json()["apps"]}
+    apps = {app["name"]: app for app in client.get("/api/inventory").get_json()["apps"]}
 
-    assert (kinds["today-preview"], kinds["inbox-sketch"], kinds["files"]) == ("change", "mock", None)
+    assert [
+        (apps[name]["instance_kind"], apps[name]["instance_chat"])
+        for name in ("today-preview", "inbox-sketch", "files")
+    ] == [
+        ("change", "agent-lead"),
+        ("mock", None),
+        (None, None),
+    ]
 
 
 @pytest.mark.parametrize(

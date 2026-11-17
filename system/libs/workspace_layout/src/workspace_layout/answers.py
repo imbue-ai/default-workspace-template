@@ -149,6 +149,11 @@ class InventoryApp(FrozenModel):
         description="What the isolated instance behind the app's window is (a preview of a change, or a mock's frame), "
         "which the shell can start again once it stops; None for every other app, and from an older shell",
     )
+    instance_chat: str | None = Field(
+        default=None,
+        description='The chat that booted the isolated instance behind the app\'s window, which its "Ask in chat" '
+        "drafts into; None when no chat did, for every other app, and from an older shell",
+    )
 
 
 class InventoryDocument(FrozenModel):

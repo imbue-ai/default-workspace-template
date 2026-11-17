@@ -239,7 +239,13 @@ describe("parseAppRecord", () => {
       draft_param: "message",
     };
     const app = parseAppRecord({ ...wire, launch_paths: [drafting] });
-    expect(app.launch_paths[0]).toEqual({ ...drafting, mention_param: null, text_param: null, app_params: null });
+    expect(app.launch_paths[0]).toEqual({
+      ...drafting,
+      mention_param: null,
+      text_param: null,
+      app_params: null,
+      chat_draft_params: null,
+    });
     expect(() => parseAppRecord({ ...wire, launch_paths: [{ ...drafting, method: "PUT" }] })).toThrow(WireShapeError);
     expect(() => parseAppRecord({ ...wire, launch_paths: [{ ...drafting, presets: { is_draft: true } }] })).toThrow(
       WireShapeError,
@@ -512,6 +518,23 @@ describe("the tray's records (the multiplayer spec)", () => {
         name: "chat",
         url: "http://127.0.0.1:1",
         launch_paths: [{ ...aboutAnApp, app_params: { name: "app" } }],
+      }),
+    ).toThrow(WireShapeError);
+    const intoAChat = {
+      id: "draft-into-chat",
+      label: "Draft into a chat",
+      path: "/x",
+      chat_draft_params: { chat_id: "chat_id", text: "message" },
+    };
+    expect(
+      parseAppRecord({ name: "chat", url: "http://127.0.0.1:1", launch_paths: [intoAChat] }).launch_paths[0]
+        .chat_draft_params,
+    ).toEqual({ chat_id: "chat_id", text: "message" });
+    expect(() =>
+      parseAppRecord({
+        name: "chat",
+        url: "http://127.0.0.1:1",
+        launch_paths: [{ ...intoAChat, chat_draft_params: { chat_id: "chat_id" } }],
       }),
     ).toThrow(WireShapeError);
   });
