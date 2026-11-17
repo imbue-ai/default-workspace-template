@@ -106,8 +106,11 @@ holder and worker needs:
 mkdir -p data/.tasks/harden/update-$SLUG
 TICKET_ID=$(tk create "update $CREATIONS" -t task -d "Worker: update-$SLUG" \
     --acceptance "task file written; worker launched; worker DONE; branch merged")
-tk start "$TICKET_ID"
+echo "$TICKET_ID"
 ```
+
+Then start it with the id that printed, as its own tool call with nothing
+chained: `tk start <ticket-id>`.
 
 ## Step 2: Capture the change and write the task file
 
