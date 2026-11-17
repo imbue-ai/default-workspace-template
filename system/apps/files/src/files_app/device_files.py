@@ -134,8 +134,13 @@ class DeviceFiles:
         upstream = self._send(method, path, headers, body)
         try:
             if upstream.status_code >= 400:
-                detail = upstream.read().decode("utf-8", "replace").strip()
-                raise FilesError(upstream.status_code, detail or f"Your computer answered {upstream.status_code}.")
+                # The file server's own text goes behind the page's "See details", never on its visible line.
+                answered = upstream.read().decode("utf-8", "replace").strip()
+                raise FilesError(
+                    upstream.status_code,
+                    f"Your computer answered {upstream.status_code}.",
+                    detail=f"{method} {path}: {answered}" if answered else None,
+                )
         finally:
             upstream.close()
 

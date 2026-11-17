@@ -191,7 +191,7 @@ def create_app(
             response = send_from_directory(static_directory, "404.html", max_age=None)
             response.status_code = 404
             return response
-        return _refusal(error.message, error.status, kind=error.kind)
+        return _refusal(error.message, error.status, kind=error.kind, detail=error.detail)
 
     def answer(source: FileSource, prefix: str, path: str) -> Response:
         # A gateway client drops dot segments, so `..` would climb out of a computer's file server to the gateway's

@@ -631,6 +631,16 @@ def test_a_change_the_computer_refuses_is_answered_as_read_only(tmp_path: Path) 
     assert computer.files["/Users/kim/photo.png"] == b"\x89PNG"
 
 
+def test_a_change_the_computer_refuses_in_its_own_words_keeps_them_behind_the_details(tmp_path: Path) -> None:
+    computer = FakeComputer(permissions=["minds-file-server-read-/Users/kim/Atkinson"], folders={})
+    response = _app(computer, tmp_path).delete(f"/__remote/{DEVICE}/Users/kim/Atkinson/gone.otf")
+    assert response.status_code == 404
+    assert response.get_json() == {
+        "detail": "DELETE /Users/kim/Atkinson/gone.otf: Not Found",
+        "user_facing_message": "Your computer answered 404.",
+    }
+
+
 class _GarbledGateway(FakeComputer):
     """A gateway that answers the device list with a page that is not JSON."""
 
