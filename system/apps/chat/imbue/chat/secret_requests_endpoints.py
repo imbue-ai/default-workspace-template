@@ -29,10 +29,12 @@ from pydantic import Field
 
 from imbue.chat.harnesses.message_display import SecretResolutionVerdict
 from imbue.chat.harnesses.message_display import format_secret_resolution_notice
+from imbue.chat.request_helpers import refusal_response
 from imbue.chat.secret_requests import ChatLookup
 from imbue.chat.secret_requests import FiledSecretRequest
 from imbue.chat.secret_requests import FiledSecretRequestResponse
 from imbue.chat.secret_requests import InvalidSecretRequestError
+from imbue.chat.secret_requests import MAX_NOTE_LENGTH
 from imbue.chat.secret_requests import NoticeDeliveryError
 from imbue.chat.secret_requests import SecretFileWriteError
 from imbue.chat.secret_requests import SecretRequest
@@ -40,6 +42,7 @@ from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestError
 from imbue.chat.secret_requests import SecretRequestNotPendingError
 from imbue.chat.secret_requests import SecretRequestResponse
+from imbue.chat.secret_requests import SecretRequestStatus
 from imbue.chat.secret_requests import SecretValuesMismatchError
 from imbue.chat.secret_requests import UnknownSecretRequestError
 from imbue.chat.state import get_state
@@ -94,8 +97,30 @@ def _refusal_on_a_secondary_chat() -> Response | None:
     """
     if not get_state().is_secondary:
         return None
-    return _error_response(
-        "This is a preview of the chat, which cannot answer secret requests; answer it in the live chat.", 409
+    return refusal_response(
+        "This is a preview of the chat, which cannot answer secret requests; answer it in the live chat.",
+        409,
+        user_facing_message="This request can't be answered from here. Open the chat itself and answer it there.",
+    )
+
+
+def _unknown_request_response(e: UnknownSecretRequestError) -> Response:
+    return refusal_response(
+        str(e), 404, user_facing_message="This request can't be answered any more.", kind="request_gone"
+    )
+
+
+def _not_pending_response(e: SecretRequestNotPendingError) -> Response:
+    """A request someone already answered (another window, say), or one a newer request replaced."""
+    if e.status is SecretRequestStatus.SUPERSEDED:
+        return refusal_response(
+            str(e),
+            409,
+            user_facing_message="The agent asked again in a newer request. Answer that one instead.",
+            kind="superseded",
+        )
+    return refusal_response(
+        str(e), 409, user_facing_message="This request was already answered.", kind=f"already_{e.status.value}"
     )
 
 
@@ -170,13 +195,20 @@ def submit(request_id: str) -> Response:
     try:
         stored = get_state().secret_requests.submit(request_id, body.values)
     except UnknownSecretRequestError as e:
-        return _error_response(str(e), 404)
+        return _unknown_request_response(e)
     except SecretRequestNotPendingError as e:
-        return _error_response(str(e), 409)
+        return _not_pending_response(e)
     except SecretValuesMismatchError as e:
         return _error_response(str(e))
     except SecretFileWriteError as e:
-        return _error_response(str(e), 500)
+        logger.warning("Could not store the values of secret request {}: {}", request_id, e)
+        return refusal_response(
+            str(e),
+            500,
+            user_facing_message=(
+                "Imbue Studio couldn't save these values in this workspace. Try again. If this persists, report a bug."
+            ),
+        )
     return _request_response(stored, _deliver(stored, SecretResolutionVerdict.STORED))
 
 
@@ -189,11 +221,13 @@ def decline(request_id: str) -> Response:
     try:
         declined = get_state().secret_requests.decline(request_id, body.note)
     except UnknownSecretRequestError as e:
-        return _error_response(str(e), 404)
+        return _unknown_request_response(e)
     except SecretRequestNotPendingError as e:
-        return _error_response(str(e), 409)
+        return _not_pending_response(e)
     except InvalidSecretRequestError as e:
-        return _error_response(str(e))
+        return refusal_response(
+            str(e), 400, user_facing_message=f"Shorten the note to {MAX_NOTE_LENGTH} characters or fewer."
+        )
     return _request_response(declined, _deliver(declined, SecretResolutionVerdict.DECLINED))
 
 

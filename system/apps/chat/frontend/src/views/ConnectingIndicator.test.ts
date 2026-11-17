@@ -10,6 +10,7 @@ vi.mock("../models/Providers", async (importOriginal) => ({
 vi.mock("../models/ModelSettings", () => ({
   effectiveChoice: (_chatId: string, live: { matched: { label: string } | null } | null) =>
     live === null ? null : { matched: live.matched },
+  addModelChoiceFailureListener: () => undefined,
 }));
 
 vi.mock("../models/Chats", async (importOriginal) => ({

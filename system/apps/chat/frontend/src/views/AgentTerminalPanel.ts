@@ -11,6 +11,12 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
+import { postJson } from "@imbue/workspace-ui/src/models/http";
+import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { getShellConnection } from "../shellConnection";
+import { plainFailureLines, plainFailureSentence } from "./failure-lines";
+import type { FailureLines } from "./failure-lines";
 import { getChatById } from "../models/Chats";
 import { isAgentProcessAlive, isAgentProcessDead } from "./agentLiveness";
 import { handoffPhaseText } from "./handoff-phase";
@@ -24,7 +30,7 @@ interface AgentTerminalPanelAttrs {
 
 export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
   let starting = true;
-  let startError: string | null = null;
+  let startError: FailureLines | null = null;
 
   async function ensureAgentStarted(chatId: string): Promise<void> {
     // Defensive: if the panel was constructed without a chatId (e.g. a
@@ -37,15 +43,9 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
       return;
     }
     try {
-      const response = await fetch(apiUrl(`/api/chats/${encodeURIComponent(chatId)}/start`), {
-        method: "POST",
-      });
-      if (!response.ok) {
-        const data = (await response.json().catch(() => ({}))) as { detail?: string };
-        startError = data.detail ?? `Failed to start agent (HTTP ${response.status})`;
-      }
+      await postJson(apiUrl(`/api/chats/${encodeURIComponent(chatId)}/start`), {});
     } catch (e) {
-      startError = (e as Error).message;
+      startError = plainFailureLines(e, "The agent couldn't be started");
     } finally {
       starting = false;
       m.redraw();
@@ -114,17 +114,20 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
               m(
                 "div",
                 { class: "text-(length:--font-size-row) text-faint" },
-                "This agent is stopped, so its terminal has nothing to attach to.",
+                "This agent isn't running, so there's nothing to show here yet.",
               ),
               // A failed start leaves the agent dead, which lands back on this face --
               // without this line the Start button would appear to silently do nothing.
               startError === null
                 ? null
-                : m(
-                    "div",
-                    { class: "agent-terminal-start-error w-0 min-w-full text-(length:--font-size-row) text-danger" },
-                    `Could not start agent: ${startError}`,
-                  ),
+                : m("div", { class: "flex w-0 min-w-full flex-col items-center gap-1" }, [
+                    m(
+                      "div",
+                      { class: "agent-terminal-start-error text-(length:--font-size-row) text-danger" },
+                      plainFailureSentence(startError),
+                    ),
+                    m("div", { class: "text-secondary" }, m(SeeDetails, { details: startError.details })),
+                  ]),
             ]),
             m(
               "button",
@@ -141,6 +144,14 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
               },
               "Start agent",
             ),
+            startError?.isReportable === true
+              ? m(ReportBugButton, {
+                  connection: getShellConnection(),
+                  variant: "ghost",
+                  sm: true,
+                  extra: "agent-terminal-report-bug",
+                })
+              : null,
           ],
         );
       }
@@ -155,7 +166,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
               class: "agent-terminal-start-error text-danger",
               style: "font-size: 0.85em; padding: 4px 8px; flex: 0 0 auto;",
             },
-            `Could not start agent: ${startError}`,
+            [plainFailureSentence(startError), m(SeeDetails, { details: startError.details })],
           ),
           m(
             "div",

@@ -32,6 +32,9 @@ import { isUnread } from "./chatUnread";
 import { dropPendingDelete, showPendingDelete } from "./pendingDeletes";
 import { acceptPendingRename, dropPendingRename, showPendingRename } from "./pendingRenames";
 import { destroyChat, makeMainChat, renameChat, startChat, stopChat } from "./verbs";
+import { describeDeleteFailure, describeRunVerbFailure, raiseRootNotice } from "./rootNotice";
+import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
+import { addChatsUpdatedListener, removeChatsUpdatedListener } from "../models/Chats";
 import { foldOwnerKey, getParticipant, participantName } from "../models/Participants";
 import { participantPicture } from "../views/participant-picture";
 import { isAgentStarted, isRoom, startsWithMainChat } from "./rows";
@@ -149,9 +152,12 @@ function refuseRename(row: ChatRow, title: string, error: unknown): void {
 function setRunningFromMenu(row: ChatRow, isRunning: boolean): void {
   const verb = isRunning ? startChat : stopChat;
   verb(row.chatId).catch((error: unknown) => {
-    alert(
-      `Could not ${isRunning ? "restart" : "stop"} "${row.title}".\n\n${error instanceof Error ? error.message : String(error)}`,
-    );
+    // A stop or a start is safe to repeat, so Try again is offered even when nothing answered.
+    raiseRootNotice({
+      title: isRunning ? "Couldn't restart the chat" : "Couldn't stop the chat",
+      lines: describeRunVerbFailure(error, row.title, isRunning),
+      retry: describeRequestFailure(error).kind === "chat_gone" ? null : () => setRunningFromMenu(row, isRunning),
+    });
   });
 }
 
@@ -186,16 +192,41 @@ function deleteFromMenu(attrs: RowMenuContext, row: ChatRow): void {
   );
   if (!isConfirmed) return;
   const next = attrs.rows.find((candidate) => candidate.chatId !== row.chatId);
+  // Off the list before the selection moves: picking none fills the empty slot from the list, which would otherwise
+  // pick this chat again.
   showPendingDelete(row.chatId);
   if (row.chatId === attrs.selectedChatId) attrs.onPick(next?.chatId ?? null);
+  deleteChat(attrs, row);
+}
+
+function deleteChat(attrs: RowMenuContext, row: ChatRow): void {
+  showPendingDelete(row.chatId);
   m.redraw();
   destroyChat(row.chatId).catch((error: unknown) => {
-    dropPendingDelete(row.chatId);
-    attrs.onDeleteRefused();
-    // Synchronous, so the chat is back behind the alert rather than after it.
-    m.redraw.sync();
-    alert(`Could not delete "${row.title}".\n\n${error instanceof Error ? error.message : String(error)}`);
+    const failure = describeRequestFailure(error);
+    if (failure.cause === "not_answered") {
+      // The delete may have run: the chat stays off the list until the next list says whether it is still there.
+      dropPendingDeleteOnNextUpdate(row.chatId);
+    } else {
+      dropPendingDelete(row.chatId);
+      attrs.onDeleteRefused();
+    }
+    m.redraw();
+    raiseRootNotice({
+      title: "Couldn't delete the chat",
+      lines: describeDeleteFailure(error, row.title),
+      retry: failure.cause === "not_answered" || failure.cause === "user_facing" ? null : () => deleteChat(attrs, row),
+    });
   });
+}
+
+function dropPendingDeleteOnNextUpdate(chatId: string): void {
+  const listener = (): void => {
+    removeChatsUpdatedListener(listener);
+    dropPendingDelete(chatId);
+    m.redraw();
+  };
+  addChatsUpdatedListener(listener);
 }
 
 /** The rows a chat's menu offers, ending with ``referenceRows``: the reference rows for the element right-clicked,

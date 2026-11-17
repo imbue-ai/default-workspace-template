@@ -88,6 +88,8 @@ export interface DisplayDecision {
   display?: UserMessageEvent["display"] | null;
   display_label?: string | null;
   display_body?: string | null;
+  resolution?: UserMessageEvent["resolution"] | null;
+  display_details?: string | null;
 }
 
 /** Who sent a message not on the transcript yet, joined from the chat's author annotations as its turn's will

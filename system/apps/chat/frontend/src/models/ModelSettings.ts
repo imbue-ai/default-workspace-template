@@ -44,8 +44,8 @@ interface PendingPick {
 const pendingByChat = new Map<string, PendingPick>();
 const applyChainByChat = new Map<string, Promise<void>>();
 
-/** Told when the chat app refuses a pick, with the chat and the refusal's reason in words. */
-export type ModelChoiceFailureListener = (chatId: string, detail: string) => void;
+/** Told when the chat app refuses a pick, or nothing answers it, with the chat and the failed request. */
+export type ModelChoiceFailureListener = (chatId: string, error: unknown) => void;
 const modelChoiceFailureListeners = new Set<ModelChoiceFailureListener>();
 
 export function addModelChoiceFailureListener(listener: ModelChoiceFailureListener): void {
@@ -167,8 +167,7 @@ async function postModelChoice(chatId: string, identity: ModelIdentity, axes: st
       body: { model_id: identity.model_id, effort: identity.effort, fast: identity.fast, axes },
     });
   } catch (error) {
-    const detail = describeRequestError(error);
-    console.warn(`Failed to set model for chat ${chatId}: ${detail}`);
+    console.warn(`Failed to set model for chat ${chatId}: ${describeRequestError(error)}`);
     // A refused pick changes nothing the chat app pushes, so no live choice will come to settle the overlay: the bar
     // goes back to what the chat runs on now.
     const pending = pendingByChat.get(chatId);
@@ -176,7 +175,7 @@ async function postModelChoice(chatId: string, identity: ModelIdentity, axes: st
       pendingByChat.delete(chatId);
       m.redraw();
     }
-    for (const listener of modelChoiceFailureListeners) listener(chatId, detail);
+    for (const listener of modelChoiceFailureListeners) listener(chatId, error);
   }
 }
 
