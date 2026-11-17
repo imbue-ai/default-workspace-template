@@ -1941,14 +1941,7 @@ def test_a_message_held_for_a_new_chat_deleted_elsewhere_comes_back_to_the_compo
                 timeout=10.0,
                 error_message="the chat app never held the message",
             )
-            request = urllib.request.Request(
-                f"{server.chat_url}/api/chats/{provisional.chat_id}/destroy",
-                data=b"{}",
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(request, timeout=10) as response:
-                assert response.status == 200
+            _post_chat_json(server, f"/api/chats/{provisional.chat_id}/destroy", {})
         finally:
             release_create.touch()
 
