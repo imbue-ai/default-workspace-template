@@ -127,7 +127,6 @@ _LOADING_PAGE = _page_html(
 # A press reloads the address the visitor was opening: the gateway's pages are served in place of
 # an app's own page, at that page's address.
 _TRY_AGAIN_BUTTON = '<a class="button" href="">Try again</a>'
-_RELOAD_BUTTON = '<a class="button" href="">Reload</a>'
 
 _UNRESPONSIVE_WAITING_PAGE = _page_html(
     "Waiting for this page",
@@ -182,13 +181,15 @@ _UNRESPONSIVE_GIVE_UP_SECONDS = 60.0
 _UNRESPONSIVE_WAIT_GAP_SECONDS = 30.0
 
 
-def _not_shared_with_account_page(switch_account_url: str) -> str:
+def _not_shared_with_account_page(reload_url: str, switch_account_url: str) -> str:
+    """The refusal of a signed-in account; ``reload_url`` is the page the visitor was opening ("" when this page is
+    served at that page's own address)."""
     return _page_html(
         "Not shared with you",
         "<h1>Not shared with you</h1>\n"
         "<p>This page hasn't been shared with your account. "
         "Ask the person who shared it to give you access, then reload this page.</p>\n"
-        f"{_RELOAD_BUTTON}"
+        f'<a class="button" href="{html.escape(reload_url)}">Reload</a>'
         f'<a class="button secondary" href="{html.escape(switch_account_url)}">Sign in with a different account</a>',
     )
 
@@ -321,10 +322,10 @@ def build_gateway_app(
     def _origin_refused() -> Response:
         return _html_page(_ORIGIN_REFUSED_PAGE, status=403)
 
-    def _not_shared_with_account(requested_url: str) -> Response:
+    def _not_shared_with_account(requested_url: str, reload_url: str) -> Response:
         switch_query = urlencode({"next": requested_url if _is_workspace_url(requested_url) else ""})
         switch_account_url = f"{auth_origin}/_auth/switch-account?{switch_query}"
-        return _html_page(_not_shared_with_account_page(switch_account_url), status=403)
+        return _html_page(_not_shared_with_account_page(reload_url, switch_account_url), status=403)
 
     def _expired_login() -> Response:
         return _html_page(_EXPIRED_LOGIN_PAGE, status=403)
@@ -545,7 +546,8 @@ def build_gateway_app(
             ):
                 _log_denied("session identity has no grant admitting it to this service", host)
                 return _counted(
-                    _not_shared_with_account(_requested_url(host, forwarded_uri)),
+                    # Caddy answers the visitor with this page at the address they were opening.
+                    _not_shared_with_account(_requested_url(host, forwarded_uri), reload_url=""),
                     requester_kind,
                     requester_id,
                     DENIED_NO_GRANT,
@@ -599,7 +601,8 @@ def build_gateway_app(
             _log_denied(
                 f"signed-in account {handoff.user_id} has no grant admitting it anywhere on this workspace", auth_host
             )
-            return _not_shared_with_account(next_url)
+            # Served at the single-use callback address, so Reload goes to the page the visitor was opening.
+            return _not_shared_with_account(next_url, reload_url=_post_login_redirect_target(next_url))
         _upgrade_invite(grants, handoff)
 
         response = Response(status=302, headers={"Location": _post_login_redirect_target(next_url)})

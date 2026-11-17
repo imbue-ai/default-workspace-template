@@ -664,6 +664,8 @@ def test_callback_heals_wrong_audience_and_nonce_mismatch_but_refuses_a_stranger
     page = refused.get_data(as_text=True)
     assert "This page hasn't been shared with your account" in page
     assert parse_qs(urlsplit(_switch_account_link(page)).query)["next"] == [f"https://{_WEB_HOST}/panel"]
+    # Served at the spent callback address, so Reload goes to the page the visitor was opening.
+    assert _buttons(page)["Reload"] == f"https://{_WEB_HOST}/panel"
 
 
 def test_callback_with_a_missing_grants_file_shows_the_misconfigured_page(tmp_path: Path) -> None:
