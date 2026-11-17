@@ -2,13 +2,13 @@
  * The toasts of ``models/toasts.ts``, stacked at the foot of the page. The stack is a live region that stays mounted
  * while empty: a screen reader announces a note added to a region it already knows, not one that arrives with it.
  *
- * A plain toast goes on its own and takes no press unless the page also sets ``closesPlainToasts``: the shell's never
- * stand between the user and what is under them, while a page whose notes run longer (Files lists what failed) gives
- * each a close button. A plain toast with details takes presses either way, for its "See details" and close button;
- * opening the details holds it up (``onHold``). A lasting toast (details or buttons) takes presses and carries a close control wherever the
- * page offers ``onDismiss``. A lasting toast whose message asks for a bug report gets "Report a bug" while the page
- * gives ``onReportBug``, decided as it draws: whether the embedder opens a bug report can be learned after the toast
- * went up.
+ * A plain toast goes on its own and, without details, takes no press unless the page also sets ``closesPlainToasts``:
+ * the shell's never stand between the user and what is under them, while a page whose notes run longer (Files lists
+ * what failed) gives each a close button. A plain toast with details takes presses either way, for its "See details"
+ * and close button; opening the details holds it up (``onHold``). A lasting toast (one that stays until dismissed)
+ * takes presses and carries a close control wherever the page offers ``onDismiss``. A lasting toast whose message
+ * asks for a bug report gets "Report a bug" while the page gives ``onReportBug``, decided as it draws: whether the
+ * embedder opens a bug report can be learned after the toast went up.
  */
 
 import m from "mithril";
