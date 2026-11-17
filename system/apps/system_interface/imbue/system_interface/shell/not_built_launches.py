@@ -63,9 +63,10 @@ def terminal_launch(entries: Sequence[AppInventoryEntry]) -> NotBuiltLaunch | No
 
 @pure
 def repair_agent_launch(entries: Sequence[AppInventoryEntry], message: str) -> NotBuiltLaunch | None:
-    """``message`` sent through the workspace's secondary text action, as the shell's "Ask an agent to ..." buttons
-    send theirs (the launcher's second free-text row that sends rather than drafts, Chat's New Chat on a stock
-    workspace, so the repair starts a chat of its own), else its primary one; None when no app offers either."""
+    """``message`` sent through the second launch path, in launcher order, that sends typed text (a ``text_param``;
+    a draft row is skipped, since the repair has to be sent), else the first; None when no app offers one. On a stock
+    workspace that is Chat's New Chat, the row the shell's "Ask an agent to ..." buttons use, so the repair starts a
+    chat of its own."""
     by_name = {candidate.row.name: candidate for candidate in entries}
     text_rows = [
         (row, launch_path)
