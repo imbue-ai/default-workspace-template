@@ -651,7 +651,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   const actionFailureNotice = makeNoticeDialog();
   const declinedCommandNotice = makeNoticeDialog();
   const authCommandNotice = makeNoticeDialog();
-  // mngr's classification of the failure, which decides which recoveries are worth offering.
+  // How the composer handles the failure (composerFailureKindOf), which decides which recoveries are worth offering.
   let actionFailureKind: ComposerFailureKind = "unknown";
   // A send mngr typed into the agent but could not confirm, or one the chat app never answered
   // (it may have delivered it before the answer was lost): its text went back to the composer
@@ -1951,9 +1951,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           });
         }
         // The chat app already tried once more for an agent that was down and would not start,
-        // and Restart is the stronger way to bring it up, so Retry is not offered; nor for a chat that is gone or
-        // whose account was signed out, which neither can clear. Every other kind -- and anything unclassified --
-        // keeps it.
+        // and Restart is the stronger way to bring it up, so Retry is not offered; nor for a chat that is gone, whose
+        // account was signed out, or whose create failed, which neither can clear. Every other kind -- and anything
+        // unclassified -- keeps it.
         const isResendable = !KINDS_NOTHING_HERE_CAN_CLEAR.has(actionFailureKind);
         const isRepeatable =
           isResendable &&
