@@ -53,18 +53,18 @@ def _referenced_scripts(commands: list[str]) -> set[str]:
     return {name for command in commands for name in _SCRIPT_REF_RE.findall(command)}
 
 
-def _all_events(config: dict[str, Any]) -> list[str]:
-    return list(config.get("hooks", {}))
+def _all_hook_commands(config: dict[str, Any]) -> list[str]:
+    """Every hook command string registered for any event in a claude-shaped config."""
+    return [
+        c for event in config.get("hooks", {}) for c in _hook_commands(config, event)
+    ]
 
 
 def test_every_wired_hook_script_exists() -> None:
     """A hook naming a script that is not here would never run, and never say so."""
     for config_path in (_CLAUDE_SETTINGS, _CODEX_HOOKS):
         config = json.loads(config_path.read_text())
-        commands = [
-            c for event in _all_events(config) for c in _hook_commands(config, event)
-        ]
-        names = _referenced_scripts(commands)
+        names = _referenced_scripts(_all_hook_commands(config))
         assert names, f"{config_path.name} references no system/scripts hook at all"
         for name in sorted(names):
             assert (_SCRIPTS_DIR / name).is_file(), (
@@ -80,10 +80,7 @@ _CLAUDE_PROJECT_DIR_PREFIX = '"${CLAUDE_PROJECT_DIR}"/'
 def test_every_claude_hook_names_its_files_from_the_project_dir() -> None:
     """claude runs a hook in whatever directory the agent's shell is in, so a path the
     command leaves relative resolves against wherever the agent last `cd`ed to."""
-    config = json.loads(_CLAUDE_SETTINGS.read_text())
-    commands = [
-        c for event in _all_events(config) for c in _hook_commands(config, event)
-    ]
+    commands = _all_hook_commands(json.loads(_CLAUDE_SETTINGS.read_text()))
     unanchored = [
         f"{command!r} names {match.group(0)}"
         for command in commands
