@@ -11,7 +11,8 @@ import { fetchInventory, fetchThemes } from "../model/api";
 import { themeRefOf } from "../model/themes";
 import { afterPageLoad } from "../theme/pageLoad";
 import { setIconTheme } from "../views/themeIcons";
-import { ThemeGallery, galleryStateOf } from "../views/ThemeGallery";
+import { FailureLine } from "../views/FailureLine";
+import { ThemeGallery, galleryFailureNotice, galleryStateOf } from "../views/ThemeGallery";
 
 async function start(): Promise<void> {
   const root = document.getElementById("app");
@@ -35,7 +36,11 @@ async function start(): Promise<void> {
 void start().catch((error: unknown) => {
   console.error("[gallery] could not load the themes or the apps", error);
   const root = document.getElementById("app");
-  if (root !== null) {
-    root.textContent = `The theme gallery could not load: ${error instanceof Error ? error.message : String(error)}`;
-  }
+  if (root === null) return;
+  const notice = galleryFailureNotice(error, () => window.location.reload());
+  // The gallery is a page of its own, outside the desktop, so nothing here opens a bug report.
+  m.mount(root, {
+    view: () =>
+      m(FailureLine, { notice, onReportBug: null, marker: "theme-gallery-failure", messageClass: "text-primary" }),
+  });
 });

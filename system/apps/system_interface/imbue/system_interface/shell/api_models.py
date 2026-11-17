@@ -47,6 +47,13 @@ class LaunchResponse(FrozenModel):
     window: WindowView = Field(description="The window showing the launched page")
     path: str = Field(description="The page's path under the app's origin")
     is_new: bool = Field(description="Whether the window was opened by this request (201) or found (200)")
+    layout_saved: bool = Field(
+        default=True,
+        description="False when the app took the launch but the shell could not record where its window is",
+    )
+    unsaved_kind: str | None = Field(
+        default=None, description="Why it could not (out_of_space or not_saved); null when layout_saved"
+    )
 
 
 class PlacementsSavedResponse(FrozenModel):

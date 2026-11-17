@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { EntryLook } from "../reducers/desktopState";
 import { appRecord } from "../testing/records";
 import type { ActionRow, MenuRow } from "@imbue/workspace-ui/src/components/menu";
-import { enableThemingPrompt, taskbarEntryMenuRows, windowMenuRows } from "./WindowMenu";
+import { enableThemingPrompt, phoneWindowMenuRows, taskbarEntryMenuRows, windowMenuRows } from "./WindowMenu";
 
 function keysOf(rows: MenuRow[]): string[] {
   return rows.map((row) => (row.kind === "divider" ? "|" : (row.key ?? "")));
@@ -123,6 +123,14 @@ describe("windowMenuRows", () => {
         }),
       ),
     ).toEqual(["size", "fullscreen", "|", "close"]);
+  });
+});
+
+describe("phoneWindowMenuRows", () => {
+  it("offers Refresh, Share and Quit, and drops Refresh for a window with no page to refresh", () => {
+    const actions = { refresh: vi.fn(), share: vi.fn(), quit: vi.fn() };
+    expect(keysOf(phoneWindowMenuRows(appRecord("docs"), actions))).toEqual(["refresh", "share", "quit"]);
+    expect(keysOf(phoneWindowMenuRows(undefined, { refresh: null, share: null, quit: null }))).toEqual([]);
   });
 });
 

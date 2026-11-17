@@ -8,6 +8,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
+import { ONLY_DESKTOP_REASON } from "../model/failures";
 import type { Desktop, DesktopShortcut } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
 import { TourController } from "../model/tour";
@@ -136,8 +137,8 @@ afterEach(() => {
   gestureListener = null;
 });
 
-describe("a failure toast's Report a bug", () => {
-  it("appears on a toast shown before the embedder said it opens a bug report, and files that toast's failure", async () => {
+describe("the startup read's Report a bug", () => {
+  it("appears on the backdrop's failure once the embedder says it opens a bug report, and files that failure", async () => {
     unmountViews();
     // A failed start leaves the default avatar, the animated character, which reads the reduced-motion setting.
     vi.stubGlobal(
@@ -150,22 +151,49 @@ describe("a failure toast's Report a bug", () => {
     );
     await mountApp({ startRefusal, reportBug });
     m.redraw.sync();
-    const toast = (): HTMLElement => document.querySelector("[data-toast]") as HTMLElement;
-    expect(toast().querySelector(".toast-message")?.textContent).toBe(
-      "Could not read the desktops and apps. Try again. If this persists, report a bug.",
-    );
-    expect(toast().querySelector(".report-bug")).toBeNull();
+    const failure = (): HTMLElement => document.querySelector("[data-boot-failure]") as HTMLElement;
+    const labels = (): (string | null)[] =>
+      [...failure().querySelectorAll(".boot-failure-line-action")].map((button) => button.textContent);
+    const message = "This workspace's desktops couldn't be loaded. Try again. If this persists, report a bug.";
+    expect(failure().querySelector(".boot-failure-line-message")?.textContent).toBe(message);
+    expect(labels()).toEqual(["Reload"]);
 
     store.setCanReportBug(true);
     m.redraw.sync();
-    const button = toast().querySelector<HTMLButtonElement>(".report-bug");
-    expect(button?.textContent).toBe("Report a bug");
-    button?.click();
-    expect(reportBug).toHaveBeenCalledWith({
-      message: "Could not read the desktops and apps. Try again. If this persists, report a bug.",
-      details: "HTTP 500\ninventory unreadable",
-    });
-    expect(document.querySelector("[data-toast]")).not.toBeNull();
+    expect(labels()).toEqual(["Reload", "Report a bug"]);
+    failure().querySelectorAll<HTMLButtonElement>(".boot-failure-line-action")[1].click();
+    expect(reportBug).toHaveBeenCalledWith({ message, details: "HTTP 500\ninventory unreadable" });
+  });
+});
+
+describe("an overview thumbnail's Delete", () => {
+  function deleteRow(): HTMLElement {
+    store.openOverview();
+    m.redraw.sync();
+    const thumbnail = document.querySelector('[data-overview-desktop="home"]') as HTMLElement;
+    thumbnail.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 }),
+    );
+    m.redraw.sync();
+    return document.body.querySelector('[data-menu-part="menu"] [data-menu-row="delete"]') as HTMLElement;
+  }
+
+  it("is disabled on the only desktop, saying why on hover, and asks nothing when pressed", () => {
+    const row = deleteRow();
+    expect(row.textContent).toBe("Delete desktop...");
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(row.getAttribute("data-hover-tooltip")).toBe(ONLY_DESKTOP_REASON);
+    row.click();
+    expect(store.getOverviewDeletingId()).toBeNull();
+  });
+
+  it("asks to delete a desktop once there is another", () => {
+    socket.deliver().onDesktopsUpdated([...api.desktops, desktopRecord("work")]);
+    const row = deleteRow();
+    expect(row.getAttribute("aria-disabled")).toBeNull();
+    expect(row.getAttribute("data-hover-tooltip")).toBeNull();
+    row.click();
+    expect(store.getOverviewDeletingId()).toBe("home");
   });
 });
 
@@ -1000,13 +1028,16 @@ describe("the desktop shortcut rows", () => {
     await settle();
     expect(shownApps()).toEqual(["docs"]);
     const toastMessages = (): string[] => store.toasts.current().map((toast) => toast.message);
-    expect(toastMessages()).toEqual(["Could not remove the shortcut."]);
+    expect(toastMessages()).toEqual(["Couldn't remove this shortcut, so it's back."]);
 
     void store.addShortcut("docs", "other", "focus");
     expect(shownApps()).toEqual(["docs", "docs"]);
     await settle();
     expect(shownApps()).toEqual(["docs"]);
-    expect(toastMessages()).toEqual(["Could not remove the shortcut.", "Could not add the shortcut."]);
+    expect(toastMessages()).toEqual([
+      "Couldn't remove this shortcut, so it's back.",
+      "Couldn't add this shortcut, so it's been taken off again.",
+    ]);
   });
 
   it("keeps a shortcut a broadcast put on the desktop while a refused add was in flight", async () => {
@@ -1079,6 +1110,23 @@ describe("the desktop shortcut rows", () => {
     expect(api.desktops[0].shortcuts.map((shortcut) => [shortcut.target.launch, shortcut.mode])).toEqual([
       ["browse", "focus"],
     ]);
+  });
+});
+
+describe("the launcher field", () => {
+  it("lets go of a search once the tour row it found has run", () => {
+    store.openLauncher();
+    m.redraw.sync();
+    const field = (): HTMLTextAreaElement =>
+      document.querySelector("[data-launcher-field] textarea") as HTMLTextAreaElement;
+    field().value = "tour";
+    field().dispatchEvent(new Event("input", { bubbles: true }));
+    m.redraw.sync();
+
+    (document.querySelector("[data-launcher-overlay] [data-tour-row]") as HTMLElement).click();
+    m.redraw.sync();
+
+    expect(field().value).toBe("");
   });
 });
 
@@ -1298,6 +1346,28 @@ describe("the switch to the phone layout", () => {
     store.setThemeMetrics(themeMetricsRecord(), { isPhone: false, isTouch: false });
     m.redraw.sync();
     expect(rightClick().defaultPrevented).toBe(true);
+  });
+
+  it("tells a failed start-sheet run under its field, and a sheet opened anew starts without it", async () => {
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+    m.redraw.sync();
+    const openStartSheet = (): void => {
+      (document.querySelector("[data-phone-new]") as HTMLElement).click();
+      m.redraw.sync();
+    };
+    openStartSheet();
+    api.refusal = "the shell is restarting";
+    (document.querySelector('[data-launch="docs:new"]') as HTMLElement).click();
+    await settle();
+    m.redraw.sync();
+    expect(document.querySelector(".launcher-failure-message")?.textContent).toBe("Docs couldn't open that.");
+
+    // Left some other way than its own dismiss (the windows sheet replacing it), then opened again with New.
+    store.openPhoneSheet("windows");
+    m.redraw.sync();
+    openStartSheet();
+    expect(document.querySelector('[data-launch="docs:new"]')).not.toBeNull();
+    expect(document.querySelector(".launcher-failure")).toBeNull();
   });
 
   it("creates no page for a window the phone does not show", () => {
