@@ -1,0 +1,1 @@
+- `AGENTS.md` tells an agent that is waiting on a command (a long pull of outside data, a sync, a build) to run it in the background and carry on with work that does not need its result, instead of ending the turn or running it in the foreground. Agents building an app over live data were sitting out each full pull.
