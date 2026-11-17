@@ -154,6 +154,11 @@ def test_a_terminal_tmux_would_not_start_says_so_and_offers_try_again_an_agent_a
     assert task.startswith("The terminal terminal-1 couldn't start.\n\nDetails:\n```\n")
     assert "no server running on /tmp/tmux-1000/default\n```" in task
     _expect_asking_then_told_why(page, ended)
+    # The ending's own "See details" stays with its sentence, above what the ask came back with.
+    assert wrapper.evaluate(
+        "document.getElementById('ended-details').compareDocumentPosition("
+        "document.getElementById('ended-ask-failure')) & Node.DOCUMENT_POSITION_FOLLOWING"
+    )
 
     ended.get_by_role("button", name="Report a bug").click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")

@@ -173,12 +173,12 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     <button type="button" id="ended-new" hidden>Start a new terminal</button>
     <button type="button" id="ended-report" hidden>Report a bug</button>
   </div>
+  <details id="ended-details" hidden><summary>See details</summary><pre id="ended-details-text"></pre></details>
   <div id="ended-ask-failure" role="alert" hidden>
     <p id="ended-ask-failure-message"></p>
     <details id="ended-ask-failure-details" hidden><summary>See details</summary><pre id="ended-ask-failure-details-text"></pre></details>
     <button type="button" id="ended-ask-failure-report" hidden>Report a bug</button>
   </div>
-  <details id="ended-details" hidden><summary>See details</summary><pre id="ended-details-text"></pre></details>
 </div>
 <div id="keys" role="toolbar" aria-label="Terminal keys" hidden>
   <button type="button" data-key="Escape">Esc</button>
