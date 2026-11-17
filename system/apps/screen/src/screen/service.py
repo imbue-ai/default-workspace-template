@@ -382,7 +382,7 @@ class ScreenService(MutableModel):
     def ensure_started(self) -> Lifecycle:
         return self.stack.ensure_started()
 
-    def notify_stopped(self, member: str, reason: str, pid: int | None = None) -> bool:
+    def notify_stopped(self, member: str, reason: str, pid: int | None) -> bool:
         """The watcher says a member left and the rest of the group was stopped; believed only when supervisord
         agrees that the group is down, so a stray notification cannot declare a running stack stopped. A member whose
         ``pid`` the memory guard just shed ended for lack of memory rather than of its own accord."""
