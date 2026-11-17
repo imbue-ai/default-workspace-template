@@ -103,7 +103,7 @@ Judge what no script can decide:
 - Version-bound text outside an old-patterns reference.
 - A term that drifts from the guide's glossary or from `.agents/shared/references/glossary.md`.
 - A fixed procedure left as prose that should be a script.
-- A shared reference that names a file built on it other than the files it was split into, or any file named by description in place of its path.
+- A shared reference that names a file inside a skill, or a file built on it other than the files it was split into, or any file named by description in place of its path.
 
 **Exceptions:**
 - Size, reachability, depth, paths and contents lists are `validate_skill.py`'s to check; do not report them here.
