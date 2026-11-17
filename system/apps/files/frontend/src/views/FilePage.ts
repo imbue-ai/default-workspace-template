@@ -21,6 +21,7 @@ import { isMarkdown, isTextLike, previewKindOf } from "../models/fileKinds";
 import { formatSize } from "../models/format";
 import { matchesKeybinding } from "../models/keybindings";
 import { childPath, nameOf, parentOf } from "../models/paths";
+import { loadIsMarkdownFormatted, saveIsMarkdownFormatted } from "../models/preferences";
 import type { MarkdownDocument } from "../markdown/MarkdownDocument";
 import { Dialogs } from "./dialogs";
 import { FileIcon } from "./FileIcon";
@@ -43,15 +44,35 @@ export class FilePageModel {
   isDeleted = false;
   size: number | null = null;
   readonly dialogs = new Dialogs();
-  /** Whether this is a markdown file's view page, which draws and saves the file itself. */
+  /** Whether this is a markdown file's view page, which offers the formatted view. */
+  readonly isMarkdownFile: boolean;
+  /** Whether that page shows the file formatted (drawing and saving it itself) rather than as plain text: the
+   *  person's choice, kept per browser. */
   readonly isMarkdownView: boolean;
   /** That page's editor, once its code (loaded only for it) has arrived. */
   markdown: MarkdownDocument | null = null;
 
   constructor(readonly options: FilePageOptions) {
     const name = nameOf(options.path);
-    this.isMarkdownView =
+    this.isMarkdownFile =
       options.page === "view" && previewKindOf(name, options.isText) === "text" && isMarkdown(name);
+    this.isMarkdownView = this.isMarkdownFile && loadIsMarkdownFormatted(window.localStorage);
+  }
+
+  /** Show markdown files formatted or as plain text from now on, starting with this one. */
+  async setMarkdownFormatted(isFormatted: boolean): Promise<void> {
+    if (this.markdown?.isDirty) await this.markdown.saveNow();
+    saveIsMarkdownFormatted(window.localStorage, isFormatted);
+    window.location.reload();
+  }
+
+  private async refreshSize(): Promise<void> {
+    try {
+      this.size = (await server.describeFile(this.options.path)).size ?? null;
+    } catch {
+      // The size is a nicety; the page works without it.
+    }
+    m.redraw();
   }
 
   /** Load the markdown editor's code and open the file in it, inside `host`. */
@@ -60,7 +81,11 @@ export class FilePageModel {
     this.markdown = new MarkdownDocument({
       path: this.options.path,
       canSave: !isLiveShared(this.options.path),
-      onChange: () => m.redraw(),
+      onChange: () => {
+        // A save just finished: the file's size moved.
+        if (this.markdown?.isDirty === false) void this.refreshSize();
+        m.redraw();
+      },
     });
     await this.markdown.mount(host);
   }
@@ -74,13 +99,8 @@ export class FilePageModel {
   }
 
   async load(): Promise<void> {
-    void fetch(server.urlOf(this.options.path), { method: "HEAD" })
-      .then((response) => {
-        const length = response.headers.get("content-length");
-        this.size = length === null ? null : Number(length);
-        m.redraw();
-      })
-      .catch(() => undefined);
+    // From the page data, a body: a proxy in front of the server may drop a HEAD answer's Content-Length.
+    void this.refreshSize();
     if (!this.showsText || this.isMarkdownView) return;
     try {
       const text = await server.readText(this.options.path);
@@ -296,6 +316,23 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
                   m.trust(icon("edit", { size: 16 })),
                 )
               : null,
+          page.isMarkdownFile
+            ? m(
+                Button,
+                {
+                  variant: "ghost",
+                  sm: true,
+                  "data-action": "markdown-format",
+                  ...hoverTooltipAttrs(
+                    page.isMarkdownView
+                      ? "Show markdown files as plain text"
+                      : "Show markdown files formatted, to suggest edits and comment",
+                  ),
+                  onclick: () => void page.setMarkdownFormatted(!page.isMarkdownView),
+                },
+                page.isMarkdownView ? "Plain text" : "Formatted",
+              )
+            : null,
           iconButton("Download", "download", { "data-action": "download", onclick: () => downloadFile(page, path) }),
           m("div", { class: "flex shrink-0" }, [
             iconButton("More", "ellipsis", { "data-action": "more", ...menu.triggerAttrs() }),

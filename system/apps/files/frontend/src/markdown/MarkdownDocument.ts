@@ -18,7 +18,7 @@ import { suggestChangesKey } from "@handlewithcare/prosemirror-suggest-changes";
 
 import { buttonClass } from "@imbue/workspace-ui/src/components/Button";
 
-import { urlOf } from "../models/server";
+import { describeFile, urlOf } from "../models/server";
 import "./markdown.css";
 import { cleanCommentText } from "./critic";
 import { currentText, openText } from "./document";
@@ -82,23 +82,38 @@ function preferredMode(): Mode {
   return saved === "edit" || saved === "read" ? saved : "suggest";
 }
 
+const READ_ATTEMPTS = 3;
+
+/** The file's text and the version it is at. The version is asked before and after the text and the read is tried
+ *  again when they differ, so the version never names a newer file than the text shown (a save would then write over
+ *  an agent's change unseen). It comes from the page data, a body, since a proxy may not pass headers on. */
 async function readFile(path: string): Promise<Loaded> {
-  // Never from the browser's cache: the version must be the one on disk now.
-  const response = await fetch(urlOf(path), { cache: "no-store" });
-  if (!response.ok) throw new Error(`Couldn't read ${path}: ${(await response.text()).trim() || response.status}`);
-  return { text: await response.text(), version: response.headers.get("ETag") };
+  for (let attempt = 1; ; attempt++) {
+    const before = await describeFile(path);
+    const response = await fetch(urlOf(path), { cache: "no-store" });
+    if (!response.ok) throw new Error(`Couldn't read ${path}: ${(await response.text()).trim() || response.status}`);
+    const text = await response.text();
+    const after = await describeFile(path);
+    const version = after.version ?? null;
+    if (version === (before.version ?? null) || attempt === READ_ATTEMPTS) {
+      // Still changing after every attempt: no version, so the next check reloads rather than trusting this read.
+      return { text, version: version === (before.version ?? null) ? version : null };
+    }
+  }
 }
 
 async function versionOf(path: string): Promise<string | null> {
-  const response = await fetch(urlOf(path), { method: "HEAD", cache: "no-store" });
-  return response.ok ? response.headers.get("ETag") : null;
+  return (await describeFile(path)).version ?? null;
 }
 
 async function writeFile(path: string, text: string, version: string | null): Promise<string | null> {
-  const headers: Record<string, string> = version === null ? {} : { "If-Match": version };
+  const headers: Record<string, string> = version === null ? {} : { "If-Match": `"${version}"` };
   const response = await fetch(urlOf(path), { method: "PUT", body: text, headers });
   if (!response.ok) throw new SaveError((await response.text()).trim() || `error ${response.status}`, response.status);
-  return response.headers.get("ETag");
+  // A save that named its version answers the one it wrote; one that did not ("Keep mine" over a file whose
+  // version is unknown) is read back.
+  const body = (await response.json().catch(() => null)) as { version?: string } | null;
+  return body?.version ?? versionOf(path);
 }
 
 export class MarkdownDocument {

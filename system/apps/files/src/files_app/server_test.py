@@ -129,10 +129,21 @@ def test_a_files_page_says_whether_it_reads_as_text(tmp_path: Path) -> None:
     (root / "notes.md").write_text("# hi\n" + "\u00e9" * 5000)
     (root / "photo.png").write_bytes(b"\x89PNG\x00\x00")
     (root / "big.txt").write_bytes(b"a" * (4 * 1024 * 1024 + 1))
-    assert _page_data(client.get("/notes.md?view")) == {"kind": "file", "is_text": True}
-    assert _page_data(client.get("/notes.md?edit")) == {"kind": "file", "is_text": True}
-    assert _page_data(client.get("/photo.png?view")) == {"kind": "file", "is_text": False}
-    assert _page_data(client.get("/big.txt?view")) == {"kind": "file", "is_text": False}
+    notes = _page_data(client.get("/notes.md?view"))
+    assert (notes["kind"], notes["is_text"]) == ("file", True)
+    assert _page_data(client.get("/notes.md?edit"))["is_text"] is True
+    assert _page_data(client.get("/photo.png?view"))["is_text"] is False
+    assert _page_data(client.get("/big.txt?view"))["is_text"] is False
+
+
+def test_a_files_page_data_carries_its_size_and_version_in_the_body(tmp_path: Path) -> None:
+    # A proxy in front of the server may drop a HEAD answer's Content-Length (a page then said "0 bytes"), so the
+    # size and the version a save names come in the page data, which is a body.
+    client = _app(None, tmp_path)
+    (tmp_path / "root" / "plan.md").write_text("# Plan\n")
+    data = json_of(client.get("/plan.md?json"))
+    assert data["size"] == 7
+    assert data["version"] == client.get("/plan.md").headers["ETag"].strip('"')
 
 
 def test_a_file_is_served_as_its_bytes_with_ranges_and_a_safe_name_header(tmp_path: Path) -> None:
@@ -228,6 +239,8 @@ def test_a_save_naming_its_version_writes_only_over_that_version_and_answers_the
     assert saved.status_code == 201
     assert plan.read_text() == "# Plan{++ v2++}\n"
     assert saved.headers["ETag"] != version
+    assert saved.get_json() == {"version": saved.headers["ETag"].strip('"')}
+    assert json_of(client.get("/plan.md?json"))["version"] == saved.get_json()["version"]
     assert client.head("/plan.md").headers["ETag"] == saved.headers["ETag"]
 
     # An agent rewrote the file after the editor last read it: the editor's save, from the older version, is refused.

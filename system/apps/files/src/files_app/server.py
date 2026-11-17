@@ -89,7 +89,8 @@ _FILE_VERBS: Final[dict[str, str]] = {
     ),
     "PUT": (
         "the file's new bytes, as the body; answers no body. With ``If-Match`` (a workspace file only) the file is "
-        "written only when still at that version, else 412, and the answer's ETag is the version written"
+        'written only when still at that version, else 412, and answers the version written as ``{"version": ...}`` '
+        "and as its ETag"
     ),
     "DELETE": "removes the path; answers no body",
 }
@@ -197,7 +198,8 @@ def create_app(
                 if source is not local:
                     return _text(_NO_CONDITIONAL_SAVE_ON_COMPUTER, 501)
                 written = local.write_if_unchanged(path, _request_body(), request.content_length, request.if_match)
-                response = _text("", 201)
+                # The version written goes in the body too: a proxy in front of the server may not pass the header on.
+                response = Response(json.dumps({"version": written}), status=201, mimetype="application/json")
                 response.set_etag(written)
                 return response
             if request.method == "MKCOL":

@@ -3,3 +3,7 @@ New: a markdown file's view page shows it formatted, for reading and reviewing t
 The server's workspace files carry an `ETag` that moves whenever the file is written, and a PUT with `If-Match` writes only over that version (412 otherwise), answering the version it wrote; so a save from the markdown page never writes over an agent's rewrite it has not seen, and the page offers to load the new version or keep its own. A computer's files refuse `If-Match`, and a markdown file read live from one opens in Read mode.
 
 A conflict warning shown within a few seconds of an "updated outside the editor" notice stays up until it is answered; the notice's timer no longer hides it.
+
+The formatted view can be turned off: "Plain text" in a markdown file's header shows markdown files as plain text in that browser from then on, and "Formatted" turns it back on.
+
+A file's page reads its size, and the markdown view its version, from the file's `?json` page data rather than a HEAD answer's headers, which a proxy in front of the server may drop (a file's page said "0 bytes"). A save with `If-Match` answers the version it wrote in its body too.

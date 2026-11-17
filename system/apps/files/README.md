@@ -32,9 +32,11 @@ both offer the verbs `sources.py` names. For either:
   cut short leaves the old file; MKCOL makes a folder; MOVE renames, never over
   something already there; DELETE removes;
 - a workspace file's bytes carry an `ETag` that moves whenever the file is
-  written, and a PUT with `If-Match` writes only when the file is still at that
+  written, and its `?json` carries that version and its size too (a proxy in
+  front of the server may drop a HEAD answer's headers, so a page reads both from
+  the body); a PUT with `If-Match` writes only when the file is still at that
   version (412 otherwise, and for a file that is gone) and answers the version it
-  wrote; a computer's files refuse `If-Match` (501), since the check can't be
+  wrote, as `{"version": ...}` and as its ETag; a computer's files refuse `If-Match` (501), since the check can't be
   made there;
 - a path that isn't there is answered with `404.html` when a page was asked for
   (the request accepts `text/html` and is not a `?json`, `?zip`, or `?download`),
@@ -209,7 +211,9 @@ version every 4 seconds and shows a rewrite as it lands. A file read live from a
 computer opens in Read mode, since its saves can't be checked. The editor is
 Tiptap 3 with its markdown extension and the open
 `@handlewithcare/prosemirror-suggest-changes` plugin; Edit opens the file's
-source in the text editor, as for any text file. Both offer Download, Rename, Copy Path, and Delete, and a view page
+source in the text editor, as for any text file. The page's "Plain text" button
+turns the formatted view off for every markdown file in that browser, showing
+them as plain text like any other text file, and "Formatted" turns it back on. Both offer Download, Rename, Copy Path, and Delete, and a view page
 of text an Edit icon beside Download.
 
 `frontend/public/404.html` is Files' own "not found" page, copied into the

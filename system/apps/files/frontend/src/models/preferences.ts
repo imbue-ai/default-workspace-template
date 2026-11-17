@@ -75,3 +75,14 @@ export function savePreferences(storage: Storage, preferences: Preferences): voi
   write(storage, SHOW_HIDDEN_KEY, String(preferences.showHidden));
   write(storage, SIDEBAR_WIDTH_KEY, String(preferences.sidebarWidth));
 }
+
+// Whether a markdown file's view page shows it formatted, to suggest edits to and comment on, or as plain text.
+const MARKDOWN_FORMATTED_KEY = "files-markdown-formatted";
+
+export function loadIsMarkdownFormatted(storage: Storage): boolean {
+  return read(storage, MARKDOWN_FORMATTED_KEY) !== "false";
+}
+
+export function saveIsMarkdownFormatted(storage: Storage, isFormatted: boolean): void {
+  write(storage, MARKDOWN_FORMATTED_KEY, String(isFormatted));
+}

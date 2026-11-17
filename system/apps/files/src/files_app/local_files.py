@@ -75,7 +75,10 @@ class LocalFiles:
             # Taken before the read, so a change during it moves the stamp past what is listed.
             stamp = self._stamp(path)
             return FolderData(entries=tuple(_entries_of(target)), stamp=stamp)
-        return FileData(is_text=_is_text(target))
+        if not target.is_file():
+            return FileData(is_text=False)
+        final = Path(os.path.realpath(target))
+        return FileData(is_text=_is_text(target), size=final.stat().st_size, version=version_of(final))
 
     def read(self, path: str, headers: Headers) -> Response | None:
         target = self._existing(path)

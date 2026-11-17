@@ -113,7 +113,9 @@ class DeviceFiles:
         entry = described[0]
         if entry.is_folder:
             return FolderData(entries=tuple(_record(child) for child in described[1:]))
-        return FileData(is_text=entry.size <= EDITABLE_LIMIT and bool(_TEXT_TYPES.match(entry.content_type)))
+        return FileData(
+            is_text=entry.size <= EDITABLE_LIMIT and bool(_TEXT_TYPES.match(entry.content_type)), size=entry.size
+        )
 
     def _send(
         self, method: str, path: str, headers: Mapping[str, str], body: Iterator[bytes] | None

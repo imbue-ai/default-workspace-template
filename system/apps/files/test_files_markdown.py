@@ -166,3 +166,26 @@ def test_a_markdown_files_source_still_opens_in_the_text_editor(
     page = open_files_page("/notes.md?edit")
     expect(page.locator("textarea.files-editor")).to_have_value("# Notes\n")
     expect(page.locator(".files-markdown")).to_have_count(0)
+
+
+def test_the_formatted_view_can_be_turned_off_and_on_and_is_remembered(
+    open_files_page: OpenFilesPage, files_root: Path
+) -> None:
+    (files_root / "plan.md").write_text("# Plan\n\nFirst draft.\n")
+    (files_root / "notes.md").write_text("# Notes\n")
+    page = open_files_page("/plan.md?view")
+    expect(page.locator(".tiptap h1")).to_have_text("Plan")
+    # The size comes from the page data, so it is right even where a proxy drops a HEAD answer's length.
+    expect(page.locator("header.files-toolbar")).to_contain_text("21 bytes")
+
+    page.click('[data-action="markdown-format"]')
+    expect(page.locator("textarea.files-editor")).to_have_value("# Plan\n\nFirst draft.\n")
+    expect(page.locator(".files-markdown")).to_have_count(0)
+    expect(page.locator('[data-action="markdown-format"]')).to_have_text("Formatted")
+
+    # Another markdown file opens as plain text too, until the person turns formatting back on.
+    page.goto(page.url.replace("/plan.md?view", "/notes.md?view"))
+    expect(page.locator("textarea.files-editor")).to_have_value("# Notes\n")
+    page.click('[data-action="markdown-format"]')
+    expect(page.locator(".tiptap h1")).to_have_text("Notes")
+    assert (files_root / "plan.md").read_text() == "# Plan\n\nFirst draft.\n"
