@@ -43,11 +43,11 @@ from share_gateway.request_counts import REQUESTER_KIND_NONE
 from share_gateway.request_counts import REQUESTER_KIND_OWNER
 from share_gateway.request_counts import REQUESTER_KIND_USER
 from share_gateway.request_counts import RequestCounter
-from share_gateway.server import PAGE_CONTENT_SECURITY_POLICY
 from share_gateway.server import PendingLoginRegistry
 from share_gateway.server import UnansweredAddressWaits
 from share_gateway.server import build_gateway_app
 from share_gateway.server import forwarded_client_ip
+from share_gateway.server import page_content_security_policy
 from share_gateway.session_cookie import PARTITIONED_SESSION_COOKIE_NAME
 from share_gateway.session_cookie import SESSION_COOKIE_NAME
 from share_gateway.session_cookie import mint_session_cookie_value
@@ -288,24 +288,25 @@ def test_a_visitor_refused_by_the_grants_is_told_so_and_offered_another_account(
     assert resp.status_code == 403
     page = resp.get_data(as_text=True)
     assert "This page hasn't been shared with your account" in page
-    buttons = _buttons(page)
-    assert list(buttons) == ["Reload", "Sign in with a different account"]
     # The page is served at the address the visitor was opening, so an empty href reloads it.
-    assert buttons["Reload"] == ""
-    switch_link = _switch_account_link(page)
-    assert switch_link.startswith(f"{_AUTH_ORIGIN}/_auth/switch-account?")
-    assert parse_qs(urlsplit(switch_link).query)["next"] == [f"https://{_SHELL_HOST}/desk?view=2"]
+    assert _buttons(page) == {"Reload": ""}
+    assert _switch_account_form(page) == (
+        f"{_AUTH_ORIGIN}/_auth/switch-account",
+        f"https://{_SHELL_HOST}/desk?view=2",
+    )
 
 
 def test_switching_account_ends_the_session_and_asks_the_broker_which_account_to_use(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
     _install_session(harness.client, "carol@example.com")
     refused = harness.client.get("/_auth/verify", headers=_verify_headers(uri="/desk"))
-    switch_link = _switch_account_link(refused.get_data(as_text=True))
+    action, next_url = _switch_account_form(refused.get_data(as_text=True))
 
-    resp = harness.client.get(switch_link.removeprefix(_AUTH_ORIGIN))
+    resp = harness.client.post(
+        action.removeprefix(_AUTH_ORIGIN), data={"next": next_url}, headers={"Origin": f"https://{_SHELL_HOST}"}
+    )
 
-    assert resp.status_code == 302
+    assert resp.status_code == 303
     query = _broker_query(resp)
     assert query["next"] == [f"https://{_SHELL_HOST}/desk"]
     assert "confirmed" not in query
@@ -323,10 +324,42 @@ def test_switching_account_ends_the_session_and_asks_the_broker_which_account_to
 def test_switching_account_drops_a_foreign_next(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
 
-    resp = harness.client.get("/_auth/switch-account?next=https://evil.example.com/")
+    resp = harness.client.post(
+        "/_auth/switch-account", data={"next": "https://evil.example.com/"}, headers={"Origin": f"https://{_WEB_HOST}"}
+    )
 
-    assert resp.status_code == 302
+    assert resp.status_code == 303
     assert _broker_query(resp)["next"] == [""]
+
+
+def test_a_link_to_switch_account_never_signs_the_visitor_out(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "carol@example.com")
+
+    resp = harness.client.get(f"/_auth/switch-account?next=https://{_SHELL_HOST}/desk")
+
+    assert resp.status_code == 405
+    assert set_cookies_by_name(resp) == {}
+
+
+@pytest.mark.parametrize("origin", ["https://evil.example.com", None], ids=["foreign-origin", "no-origin"])
+def test_a_switch_posted_from_another_site_is_refused_and_keeps_the_session(
+    tmp_path: Path, origin: str | None
+) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "carol@example.com")
+
+    resp = harness.client.post(
+        "/_auth/switch-account",
+        data={"next": f"https://{_SHELL_HOST}/desk"},
+        headers={} if origin is None else {"Origin": origin},
+    )
+
+    assert resp.status_code == 403
+    assert set_cookies_by_name(resp) == {}
+    page = resp.get_data(as_text=True)
+    assert "<h1>This page can't be opened from another site</h1>" in page
+    assert _buttons(page) == {"Open this page": f"https://{_SHELL_HOST}/desk"}
 
 
 def test_workspace_grant_allows_shell_and_services_and_strips_cookie(tmp_path: Path) -> None:
@@ -461,6 +494,15 @@ def test_post_with_foreign_origin_is_rejected(tmp_path: Path) -> None:
     )
 
     assert resp.status_code == 403
+    page = resp.get_data(as_text=True)
+    assert "<h1>This page can't be opened from another site</h1>" in page
+    assert (
+        "For your security, this workspace doesn't accept requests sent from other websites. "
+        "Open the page directly instead."
+    ) in page
+    assert "your account" not in page
+    # Served at the address the request was for, so an empty href opens that page with a plain GET.
+    assert _buttons(page) == {"Open this page": ""}
 
 
 def test_callback_sets_both_domain_cookies_and_redirects_to_next(tmp_path: Path) -> None:
@@ -530,8 +572,15 @@ def _buttons(page: str) -> dict[str, str]:
     }
 
 
-def _switch_account_link(page: str) -> str:
-    return _buttons(page)["Sign in with a different account"]
+def _switch_account_form(page: str) -> tuple[str, str]:
+    """The switch-account form's unescaped action and the ``next`` it posts."""
+    match = re.search(
+        r'<form method="post" action="([^"]*)"><input type="hidden" name="next" value="([^"]*)">'
+        r'<button class="button secondary" type="submit">Sign in with a different account</button></form>',
+        page,
+    )
+    assert match is not None
+    return html.unescape(match.group(1)), html.unescape(match.group(2))
 
 
 def _broker_query(response: TestResponse) -> dict[str, list[str]]:
@@ -663,7 +712,7 @@ def test_callback_heals_wrong_audience_and_nonce_mismatch_but_refuses_a_stranger
     assert refused.status_code == 403
     page = refused.get_data(as_text=True)
     assert "This page hasn't been shared with your account" in page
-    assert parse_qs(urlsplit(_switch_account_link(page)).query)["next"] == [f"https://{_WEB_HOST}/panel"]
+    assert _switch_account_form(page)[1] == f"https://{_WEB_HOST}/panel"
     # Served at the spent callback address, so Reload goes to the page the visitor was opening.
     assert _buttons(page)["Reload"] == f"https://{_WEB_HOST}/panel"
 
@@ -705,7 +754,9 @@ def test_gateway_pages_carry_a_policy_admitting_exactly_their_stylesheet(tmp_pat
     assert forbidden.status_code == 403
     for page in (loading, forbidden):
         policy = page.headers["Content-Security-Policy"]
-        assert policy == PAGE_CONTENT_SECURITY_POLICY
+        assert policy == page_content_security_policy(_AUTH_ORIGIN)
+        # The one form the pages carry posts to the auth origin, and nowhere else.
+        assert policy.endswith(f"; form-action {_AUTH_ORIGIN}")
         # The hash is the page's actual stylesheet, so a browser enforcing the
         # policy still renders the page as styled.
         assert f"'sha256-{_inline_style_hash(page.get_data(as_text=True))}'" in policy

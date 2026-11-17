@@ -138,10 +138,18 @@ refusal, and logs every denial (never the token) to the service's stderr:
   per-service grants on internal apps (see "Grants") or on apps not
   registered, since those admit it nowhere, and, on any later request, a
   session with no grant for the app it is opening. The page has a Reload
-  button and a "Sign in with a different account" button, which opens
-  `/_auth/switch-account` on the auth origin; that expires both session
+  button and a "Sign in with a different account" button, a form that POSTs
+  to `/_auth/switch-account` on the auth origin; that expires both session
   cookies and sends the visitor through the broker without `confirmed=1`, so
   the broker asks which account to continue as and offers a different one.
+  The route takes only a POST whose Origin is one of this workspace's, so no
+  link from another site can sign a visitor out (a GET is a 405; a POST from
+  anywhere else gets the page below and keeps the session).
+- A request from another site that the Origin policy refuses (a cross-site
+  form post, say) is **"This page can't be opened from another site"** (403:
+  "For your security, this workspace doesn't accept requests sent from other
+  websites. Open the page directly instead."), with an "Open this page" button
+  that loads the same address with a plain GET.
 - An address that is not one of this workspace's origins (an old or mistyped
   link, an app whose registration was removed) is **"Nothing shared here"**
   (403: "Nothing is shared at this address right now. Check the link with the

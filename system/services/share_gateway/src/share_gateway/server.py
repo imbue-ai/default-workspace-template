@@ -50,6 +50,7 @@ from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.handoff import verify_handoff_token
 from share_gateway.hostnames import service_for_host
+from share_gateway.hostnames import workspace_origins_allow
 from share_gateway.identity import AgentIdentity
 from share_gateway.identity import IDENTITY_HEADER
 from share_gateway.identity import RequesterIdentity
@@ -94,18 +95,18 @@ _SHELL_SERVICE_NAME = "system_interface"
 _PAGE_STYLE = (
     "body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;"
     "height:100vh;margin:0;color:#334155}div{text-align:center;max-width:32rem;padding:0 1rem}"
-    "a.button{display:inline-block;margin-top:0.5rem;padding:0.5rem 1rem;border-radius:0.375rem;"
-    "background:#334155;color:#fff;text-decoration:none;border:1px solid #334155}"
-    "a.button.secondary{background:#fff;color:#334155;margin-left:0.5rem}"
+    ".button{display:inline-block;margin-top:0.5rem;padding:0.5rem 1rem;border-radius:0.375rem;"
+    "background:#334155;color:#fff;text-decoration:none;border:1px solid #334155;font:inherit;cursor:pointer}"
+    ".button.secondary{background:#fff;color:#334155;margin-left:0.5rem}form{display:inline}"
 )
 _PAGE_STYLE_HASH = base64.b64encode(hashlib.sha256(_PAGE_STYLE.encode("utf-8")).digest()).decode("ascii")
 
-# The gateway's own pages load nothing but their inline stylesheet. Stated in
-# full here because the frame-ancestors policy caddy adds governs embedding
-# only; the two headers compose by intersection.
-PAGE_CONTENT_SECURITY_POLICY = (
-    f"default-src 'none'; style-src 'sha256-{_PAGE_STYLE_HASH}'; base-uri 'none'; form-action 'none'"
-)
+
+def page_content_security_policy(auth_origin: str) -> str:
+    """The gateway's own pages load nothing but their inline stylesheet, and their one form (switching account)
+    posts to the auth origin. Stated in full because the frame-ancestors policy caddy adds governs embedding only;
+    the two headers compose by intersection."""
+    return f"default-src 'none'; style-src 'sha256-{_PAGE_STYLE_HASH}'; base-uri 'none'; form-action {auth_origin}"
 
 
 def _render_page(title: str, body_html: str, refresh_seconds: int | None = None) -> str:
@@ -154,11 +155,18 @@ _NOTHING_SHARED_HERE_PAGE = _render_page(
     "<p>Nothing is shared at this address right now. Check the link with the person who sent it.</p>",
 )
 
-_ORIGIN_REFUSED_PAGE = _render_page(
-    "Not shared with you",
-    "<h1>Not shared with you</h1>\n"
-    "<p>This workspace exists, but your account has not been granted access to this page.</p>",
-)
+
+def _origin_refused_page(open_url: str) -> str:
+    """A request sent from another site; ``open_url`` opens the page itself with a plain GET, which is always
+    allowed ("" when this page is served at that page's own address)."""
+    return _render_page(
+        "This page can't be opened from another site",
+        "<h1>This page can't be opened from another site</h1>\n"
+        "<p>For your security, this workspace doesn't accept requests sent from other websites. "
+        "Open the page directly instead.</p>\n"
+        f'<a class="button" href="{html.escape(open_url)}">Open this page</a>',
+    )
+
 
 _EXPIRED_LOGIN_PAGE = _render_page(
     "Sign-in link expired",
@@ -181,7 +189,7 @@ _UNRESPONSIVE_GIVE_UP_SECONDS = 60.0
 _UNRESPONSIVE_WAIT_GAP_SECONDS = 30.0
 
 
-def _not_shared_with_account_page(reload_url: str, switch_account_url: str) -> str:
+def _not_shared_with_account_page(reload_url: str, switch_account_url: str, next_url: str) -> str:
     """The refusal of a signed-in account; ``reload_url`` is the page the visitor was opening ("" when this page is
     served at that page's own address)."""
     return _render_page(
@@ -190,14 +198,10 @@ def _not_shared_with_account_page(reload_url: str, switch_account_url: str) -> s
         "<p>This page hasn't been shared with your account. "
         "Ask the person who shared it to give you access, then reload this page.</p>\n"
         f'<a class="button" href="{html.escape(reload_url)}">Reload</a>'
-        f'<a class="button secondary" href="{html.escape(switch_account_url)}">Sign in with a different account</a>',
-    )
-
-
-def _html_page(page: str, status: int) -> Response:
-    """One of the gateway's own pages, under the policy that admits exactly its contents."""
-    return Response(
-        page, status=status, mimetype="text/html", headers={"Content-Security-Policy": PAGE_CONTENT_SECURITY_POLICY}
+        # A form, so only a press on this page can end the session: a link could be followed from any site.
+        f'<form method="post" action="{html.escape(switch_account_url)}">'
+        f'<input type="hidden" name="next" value="{html.escape(next_url)}">'
+        '<button class="button secondary" type="submit">Sign in with a different account</button></form>',
     )
 
 
@@ -321,17 +325,22 @@ def build_gateway_app(
     chrome_origin = materials.chrome_origin
 
     auth_host = f"{auth_label}.{workspace_domain}"
+    page_policy = page_content_security_policy(auth_origin)
+
+    def _html_page(page: str, status: int) -> Response:
+        """One of the gateway's own pages, under the policy that admits exactly its contents."""
+        return Response(page, status=status, mimetype="text/html", headers={"Content-Security-Policy": page_policy})
 
     def _nothing_shared_here() -> Response:
         return _html_page(_NOTHING_SHARED_HERE_PAGE, status=403)
 
-    def _origin_refused() -> Response:
-        return _html_page(_ORIGIN_REFUSED_PAGE, status=403)
+    def _origin_refused(open_url: str) -> Response:
+        return _html_page(_origin_refused_page(open_url), status=403)
 
     def _not_shared_with_account(requested_url: str, reload_url: str) -> Response:
-        switch_query = urlencode({"next": requested_url if _is_workspace_url(requested_url) else ""})
-        switch_account_url = f"{auth_origin}/_auth/switch-account?{switch_query}"
-        return _html_page(_not_shared_with_account_page(reload_url, switch_account_url), status=403)
+        next_url = requested_url if _is_workspace_url(requested_url) else ""
+        switch_account_url = f"{auth_origin}/_auth/switch-account"
+        return _html_page(_not_shared_with_account_page(reload_url, switch_account_url, next_url), status=403)
 
     def _expired_login() -> Response:
         return _html_page(_EXPIRED_LOGIN_PAGE, status=403)
@@ -424,15 +433,22 @@ def build_gateway_app(
             return _html_page(_UNRESPONSIVE_NOT_RESTARTED_PAGE, status=503)
         return _html_page(_UNRESPONSIVE_PAGE, status=503)
 
-    @app.get("/_auth/switch-account")
+    @app.post("/_auth/switch-account")
     def switch_account() -> Response:
         # Ending the gateway's session alone would sign the visitor straight back in as the same
         # account: the broker remembers it. Sending them through the broker unconfirmed makes it
         # ask which account to continue as, with a way to use a different one.
-        next_url = request.args.get("next", "")
-        response = _redirect_to_broker(
-            next_url if _is_workspace_url(next_url) else "", is_confirmed=False, is_retry=False
-        )
+        next_url = request.form.get("next", "")
+        safe_next = next_url if _is_workspace_url(next_url) else ""
+        # Only the not-granted page, on one of this workspace's origins, may end the session.
+        origin_header = request.headers.get("Origin", "")
+        if not origin_header or not workspace_origins_allow(
+            origin_header, workspace_domain, build_label_to_name(get_registered_apps()), auth_label
+        ):
+            _log_denied("switch-account posted without one of this workspace's origins", auth_host)
+            return _origin_refused(_post_login_redirect_target(safe_next))
+        response = _redirect_to_broker(safe_next, is_confirmed=False, is_retry=False)
+        response.status_code = 303
         clear_session_cookie(response, workspace_domain)
         return response
 
@@ -471,7 +487,7 @@ def build_gateway_app(
             chrome_origin,
         ):
             _log_denied("request Origin is not allowed", host)
-            return _counted(_origin_refused(), REQUESTER_KIND_NONE, "", DENIED_ORIGIN)
+            return _counted(_origin_refused(""), REQUESTER_KIND_NONE, "", DENIED_ORIGIN)
 
         # A CORS preflight from the hosted chrome must reach the service so it
         # can answer with its CORS headers -- and preflights never carry
