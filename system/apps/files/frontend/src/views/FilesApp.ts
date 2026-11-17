@@ -569,18 +569,21 @@ function UploadPanel(): m.Component<{ app: FilesController }> {
                 [
                   m(
                     "span",
-                    { class: "min-w-0 flex-1 truncate text-primary", title: item.error ?? item.name },
+                    { class: "min-w-0 flex-1 truncate text-primary", title: item.failure?.explanation ?? item.name },
                     item.name,
                   ),
                   m(
                     "span",
-                    { class: `shrink-0 ${item.status === "failed" ? "text-danger" : "text-faint"}` },
+                    {
+                      class: `shrink-0 ${item.status === "failed" ? "text-danger" : "text-faint"}`,
+                      title: item.failure?.explanation,
+                    },
                     item.status === "uploading"
                       ? `${Math.round((item.loaded / Math.max(item.file.size, 1)) * 100)}%`
                       : item.status === "done"
                         ? m.trust(icon("check", { size: 13, className: "text-success" }))
-                        : item.status === "failed"
-                          ? "Failed"
+                        : item.failure !== null
+                          ? item.failure.line
                           : item.status === "canceled"
                             ? "Canceled"
                             : "Waiting",

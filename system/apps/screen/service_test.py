@@ -13,6 +13,7 @@ from websockets.sync.client import connect as connect_websocket
 
 from mock_broker_test import FakeBroker
 from mock_display_modes_test import FakeDisplayModes
+from mock_install_test import FakeInstall
 from mock_neko_test import FakeNeko
 from mock_supervisor_test import FakeSupervisor
 from mock_window_tools_test import FakeWindowTools
@@ -323,6 +324,56 @@ def test_watcher_notification_stops_the_lifecycle_and_frees_the_lease(
     )
     assert client.get("/api/state").get_json()["stop_reason"] == "screen-xorg exited unexpectedly"
     assert client.post("/api/session", headers=_IDENTITY).status_code == 503
+
+
+def _stop_every_member(fake_supervisor: FakeSupervisor) -> None:
+    for member in ("screen-xorg", "screen-pulse", "screen-session", "screen-neko"):
+        fake_supervisor.stop_program(member)
+
+
+def test_the_stopped_state_says_what_kind_of_end_it_was(
+    client: FlaskClient, service: ScreenService, fake_supervisor: FakeSupervisor, fake_install: FakeInstall
+) -> None:
+    start_service_stack(service)
+    service.stack.stop("Quit from the window menu")
+    assert client.get("/api/state").get_json()["stop_cause"] == "requested"
+
+    start_service_stack(service)
+    _stop_every_member(fake_supervisor)
+    client.post("/api/internal/stopped", json={"member": "screen-neko", "reason": "screen-neko exited", "pid": 51})
+    assert client.get("/api/state").get_json()["stop_cause"] == "crashed"
+
+    # The memory guard's ledger names the pid that left: the stop was a shed, not a crash.
+    fake_install.shed_pids.add(52)
+    start_service_stack(service)
+    _stop_every_member(fake_supervisor)
+    client.post("/api/internal/stopped", json={"member": "screen-neko", "reason": "screen-neko exited", "pid": 52})
+    stopped = client.get("/api/state").get_json()
+    assert (stopped["stop_cause"], stopped["stop_reason"]) == ("out_of_memory", "screen-neko exited")
+
+    fake_supervisor.failing_programs.add("screen-neko")
+    service.ensure_started()
+    assert wait_until(lambda: service.stack.lifecycle == Lifecycle.STOPPED)
+    assert client.get("/api/state").get_json()["stop_cause"] == "start_failed"
+
+
+def test_an_install_that_failed_this_boot_is_reported_while_the_stack_waits_for_it(
+    client: FlaskClient, service: ScreenService, fake_install: FakeInstall
+) -> None:
+    fake_install.missing_stack = "waiting for env-converge to install neko"
+    fake_install.failure = (
+        "env-converge ran system/scripts/env.d/2000-screen.sh in this boot and it failed (exit code 1)"
+    )
+    service.ensure_started()
+    assert wait_until(lambda: service.stack.install_failure is not None)
+    installing = client.get("/api/state").get_json()
+    assert installing["lifecycle"] == "installing"
+    assert installing["install_reason"] == "waiting for env-converge to install neko"
+    assert "exit code 1" in installing["install_failure"]
+    # A later run of the unit installs it after all: the stack comes up and the failure is gone.
+    fake_install.missing_stack = None
+    assert wait_until(lambda: service.stack.lifecycle == Lifecycle.RUNNING)
+    assert client.get("/api/state").get_json()["install_failure"] is None
 
 
 def test_watcher_notification_is_loopback_only(client: FlaskClient) -> None:

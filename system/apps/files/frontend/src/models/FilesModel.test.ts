@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fileEntry, folderEntry, memoryStorage } from "../testing/records";
+import { fileEntry, folderEntry, httpFailure, memoryStorage } from "../testing/records";
 import * as server from "./server";
 import type { Connections } from "./connections";
 import { FilesModel, compareEntries, type ConflictChoice, type FilesHost } from "./FilesModel";
@@ -34,11 +34,14 @@ interface Harness {
   host: FilesHost;
   locations: [string, string, number][];
   replaceAnswer: { value: ConflictChoice };
+  /** Whether the shell says Imbue Studio opens a bug report here. */
+  bugReport: { canReport: boolean };
 }
 
 function harness(): Harness {
   const locations: [string, string, number][] = [];
   const replaceAnswer = { value: "replace" as ConflictChoice };
+  const bugReport = { canReport: false };
   const host: FilesHost = {
     redraw: vi.fn(),
     redrawNow: vi.fn(),
@@ -48,9 +51,12 @@ function harness(): Harness {
     confirmDelete: vi.fn(async () => true),
     confirmReplace: vi.fn(async () => replaceAnswer.value),
     askNewName: vi.fn(async () => null),
+    canReportBug: () => bugReport.canReport,
+    reportBug: vi.fn(),
   };
-  const model = new FilesModel(host, HOME, { exists: true, entries: ENTRIES });
-  return { model, host, locations, replaceAnswer };
+  // A copy: a test that adds to the model's entries must not add to every later test's.
+  const model = new FilesModel(host, HOME, { exists: true, entries: [...ENTRIES] });
+  return { model, host, locations, replaceAnswer, bugReport };
 }
 
 beforeEach(() => {
@@ -227,12 +233,14 @@ describe("deleting", () => {
   it("keeps what could not be deleted selected, and stays in a folder whose delete failed", async () => {
     const { model, locations } = harness();
     vi.mocked(server.deletePath).mockImplementation(async (path) => {
-      if (path !== "/home/b.txt") throw new Error(`Couldn't delete ${path}`);
+      if (path !== "/home/b.txt") throw httpFailure(500, null);
     });
     model.selection = ["/home/b.txt", "/home/a.png"];
     await model.deleteEntries(model.selection);
     expect(model.selection).toEqual(["/home/a.png"]);
-    expect(model.toasts.current().map((toast) => toast.message)).toEqual(["Couldn't delete /home/a.png"]);
+    expect(model.toasts.current().map((toast) => toast.message)).toEqual([
+      'Couldn\'t delete "a.png". Try again. If this persists, report a bug.',
+    ]);
 
     model.navigate("/home/zeta/");
     await model.deleteEntries(["/home/zeta/"]);
@@ -390,5 +398,90 @@ describe("loadConnections", () => {
     expect(asked).toHaveLength(2);
     asked[1].answer(listed);
     await third;
+  });
+});
+
+describe("telling a failed change", () => {
+  const PERMISSION = "You don't have permission to change or read /home/zeta/b.txt.";
+
+  it("shows the server's own sentence as a note that goes, its details only in the log", async () => {
+    const { model } = harness();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.mocked(server.movePath).mockRejectedValueOnce(
+      httpFailure(403, { detail: PERMISSION, user_facing_message: PERMISSION }),
+    );
+
+    await model.moveInto(["/home/b.txt"], "/home/zeta/");
+
+    expect(model.toasts.current().map((toast) => [toast.message, toast.isLasting])).toEqual([[PERMISSION, false]]);
+    expect(warn).toHaveBeenCalledWith(`[files] ${PERMISSION}`, `HTTP 403\n${PERMISSION}`);
+    warn.mockRestore();
+  });
+
+  it("names a move the server could not carry out, and keeps it up with the details and Report a bug", async () => {
+    const { model, host, bugReport } = harness();
+    bugReport.canReport = true;
+    vi.mocked(server.movePath).mockRejectedValueOnce(
+      httpFailure(500, { detail: "Couldn't do that with /home/b.txt: Input/output error" }),
+    );
+
+    await model.moveInto(["/home/b.txt"], "/home/zeta/");
+
+    const [toast] = model.toasts.current();
+    expect(toast.message).toBe('Couldn\'t move "b.txt" into "zeta". Try again. If this persists, report a bug.');
+    expect(toast.isLasting).toBe(true);
+    expect(toast.details).toBe("HTTP 500\nCouldn't do that with /home/b.txt: Input/output error");
+    expect(toast.actions.map((action) => action.label)).toEqual(["Report a bug"]);
+    toast.actions[0].run();
+    expect(host.reportBug).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no Report a bug where Imbue Studio cannot open one, though the note still stays", async () => {
+    const { model } = harness();
+    vi.mocked(server.createFolder).mockRejectedValueOnce(httpFailure(500, null));
+
+    await model.createFolder();
+
+    const [toast] = model.toasts.current();
+    expect(toast.message).toBe('Couldn\'t create "untitled folder". Try again. If this persists, report a bug.');
+    expect(toast.isLasting).toBe(true);
+    expect(toast.actions).toEqual([]);
+  });
+
+  it("says once that nothing answered a delete of several, never that nothing changed", async () => {
+    const { model } = harness();
+    vi.mocked(server.deletePath).mockRejectedValue(httpFailure(0, null));
+
+    await model.deleteEntries(["/home/b.txt", "/home/a.png"]);
+
+    expect(model.toasts.current().map((toast) => toast.message)).toEqual([
+      "The workspace didn't answer, so Imbue Studio can't tell whether this went through.",
+    ]);
+  });
+
+  it("says why a rename failed in the name field, in the server's words", async () => {
+    const { model } = harness();
+    vi.mocked(server.movePath).mockRejectedValueOnce(
+      httpFailure(403, { detail: PERMISSION, user_facing_message: PERMISSION }),
+    );
+    model.startRename("/home/b.txt");
+    model.setRenameDraft("c.txt");
+
+    await model.commitRename();
+
+    expect(model.rename).toMatchObject({ path: "/home/b.txt", error: PERMISSION, isSaving: false });
+  });
+
+  it("names a rename that failed for no reason of the server's", async () => {
+    const { model } = harness();
+    vi.mocked(server.movePath).mockRejectedValueOnce(httpFailure(500, null));
+    model.startRename("/home/b.txt");
+    model.setRenameDraft("c.txt");
+
+    await model.commitRename();
+
+    expect(model.rename?.error).toBe(
+      'Couldn\'t rename "b.txt" to "c.txt". Try again. If this persists, report a bug.',
+    );
   });
 });

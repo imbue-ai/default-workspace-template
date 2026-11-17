@@ -34,6 +34,11 @@ const IDLE_POLL_MS = 15000;
  *  file a sync brings in shows within a couple of seconds. One stat a folder on the server; a folder is fetched again
  *  only when it changed. */
 const FOLDER_CHECK_MS = 2000;
+/** The longest path a window can be at (workspace_layout's ``MAX_WINDOW_PATH_LENGTH``): the shell refuses a longer
+ *  one. */
+const MAX_WINDOW_PATH_LENGTH = 2048;
+const TOO_LONG_FOR_A_WINDOW =
+  "This file's location is too long to open in a window of its own. Download it from the folder instead.";
 
 /** Below this width the window lays itself out for a phone: the sidebar floats over the folder, and one tap opens. A
  *  desktop window this narrow is rare; one a little wider keeps its sidebar beside the folder. */
@@ -115,6 +120,8 @@ export class FilesController {
         confirmDelete: (entries) => this.dialogs.confirmDelete(entries),
         confirmReplace: (names) => this.dialogs.confirmReplace(names),
         askNewName: (suggested, isFolder) => this.dialogs.askNewName(suggested, isFolder),
+        canReportBug: () => connection.canReportBug(),
+        reportBug: () => connection.reportBug(),
       },
       folder,
       initial,
@@ -218,11 +225,19 @@ export class FilesController {
     this.reportLocation(folder);
   }
 
-  /** A file's page, in a window of its own that is closed when done with; in place only outside the workspace. */
+  /** A file's page, in a window of its own that is closed when done with; in place only outside the workspace. A
+   *  path longer than a window can be at is told here rather than refused by the shell. */
   openPage(path: string, page: "view" | "edit"): void {
     const url = pageUrlOf(path, page);
-    if (this.connection.isFramed) this.connection.openPath(url, "focus");
-    else this.win.location.assign(url);
+    if (!this.connection.isFramed) {
+      this.win.location.assign(url);
+      return;
+    }
+    if (url.length > MAX_WINDOW_PATH_LENGTH) {
+      this.model.toasts.show(TOO_LONG_FOR_A_WINDOW);
+      return;
+    }
+    this.connection.openPath(url, "focus");
   }
 
   openInNewWindow(folder: string): void {

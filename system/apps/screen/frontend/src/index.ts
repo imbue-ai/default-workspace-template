@@ -17,6 +17,7 @@
 import "./style.css";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
+import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { ClipboardBridge, navigatorClipboard, nekoRouteWithToken, serviceClipboardTransport } from "./clipboard";
@@ -25,7 +26,7 @@ import { InputRelay, XK_V } from "./input";
 import { keyboardMapForLanguage } from "./keyboard_map";
 import { MobileControls, isPhoneViewer } from "./mobile";
 import { NekoSocket } from "./neko_socket";
-import { Overlays } from "./overlays";
+import { Overlays, type FailureHost, type PageFailure } from "./overlays";
 import { PointerLockControl } from "./pointer_lock";
 import { RemoteCursor, listenForCursor } from "./remote_cursor";
 import { ResizeReporter } from "./resize_reporter";
@@ -34,7 +35,7 @@ import { ScreencastPoller } from "./screencast";
 import { SCREENCAST_FPS } from "./screencast";
 import {
   ServiceEvents,
-  ServiceRequestError,
+  failureOf,
   fetchState,
   postCancelPendingUrl,
   postInputSeen,
@@ -89,7 +90,8 @@ class Viewer {
   private stageSize: Size = { width: 0, height: 0 };
   private screenSize: Size = { width: 0, height: 0 };
   private isSigningIn = false;
-  private signInError: string | null = null;
+  private signInFailureDetails: string | null = null;
+  private startFailure: PageFailure | null = null;
   private signInRetryTimer = 0;
   private notice: string | null = null;
   private noticeTimer = 0;
@@ -122,7 +124,7 @@ class Viewer {
       }),
     });
     this.overlays = new Overlays(
-      () => void postStart(),
+      () => void this.start(),
       () => this.takeControl(),
       () => this.cancelPendingUrl(),
     );
@@ -247,6 +249,32 @@ class Viewer {
   attachShell(reportLocation: (title: string) => void): void {
     this.reportLocation = reportLocation;
     if (this.state) reportLocation(this.state.title);
+    // A handshake decides which failure buttons the overlay offers.
+    this.render();
+  }
+
+  /** The shell connection the overlay's "Ask an agent to fix this" and "Report a bug" go through. */
+  setFailureHost(host: FailureHost): void {
+    this.overlays.setHost(host);
+  }
+
+  /** The first state could not be loaded; the service's events bring it once the service answers. */
+  showLoadFailure(error: unknown): void {
+    console.error("[screen] state failed", error);
+    if (this.state !== null) return;
+    const told = failureSentence(failureOf(error, "read"), "The Screen couldn't load");
+    this.overlays.showLoadFailure({ message: told.message, details: told.details });
+  }
+
+  /** The overlay's Start (or Try again): a refusal, or no answer, is said under its title until the stack moves. */
+  private async start(): Promise<void> {
+    this.startFailure = null;
+    this.render();
+    const failure = await postStart();
+    if (failure === null) return;
+    const told = failureSentence(failure, "The Screen couldn't start");
+    this.startFailure = { message: told.message, details: told.details };
+    this.render();
   }
 
   shellShown(isShown: boolean): void {
@@ -278,6 +306,7 @@ class Viewer {
     const previousTitle = this.state?.title;
     const previousVideoId = this.state?.video_id;
     this.state = state;
+    if (state.lifecycle !== "stopped") this.startFailure = null;
     if (state.title !== previousTitle) this.reportLocation?.(state.title);
     if (state.lifecycle === "running") {
       if (this.session === null) void this.signIn();
@@ -318,7 +347,7 @@ class Viewer {
       this.notice,
     );
     this.pointerLock.setAvailable(isController);
-    this.overlays.update(this.state, this.streamStatus, this.session, this.signInError);
+    this.overlays.update(this.state, this.streamStatus, this.session, this.signInFailureDetails, this.startFailure);
     this.input?.setEnabled(canSend);
     this.mobile?.setEnabled(canSend);
     this.remoteCursor.setControlling(mayControl);
@@ -341,7 +370,7 @@ class Viewer {
         this.noteSignInFailure(error);
         return;
       }
-      this.signInError = null;
+      this.signInFailureDetails = null;
       this.session = session;
       // A stopped socket's close lands after the fact, possibly once its replacement is open: only the viewer's
       // own socket speaks for isNekoOpen.
@@ -392,10 +421,12 @@ class Viewer {
     }
   }
 
-  /** A refused sign-in is shown on the overlay and tried again while the stack still reads running. */
+  /** A refused sign-in is shown on the overlay, its reason behind "See details", and tried again while the stack
+   *  still reads running. */
   private noteSignInFailure(error: unknown): void {
-    this.signInError = error instanceof ServiceRequestError ? error.detail : String(error);
-    console.warn("[screen] sign-in failed:", this.signInError);
+    const failure = failureOf(error, "change");
+    this.signInFailureDetails = failure.details ?? failureSentence(failure).message;
+    console.warn("[screen] sign-in failed:", this.signInFailureDetails);
     this.render();
     this.signInRetryTimer = window.setTimeout(() => {
       if (this.session === null && this.state?.lifecycle === "running") void this.signIn();
@@ -528,7 +559,7 @@ class Viewer {
 
   private teardownStream(): void {
     window.clearTimeout(this.signInRetryTimer);
-    this.signInError = null;
+    this.signInFailureDetails = null;
     this.screencast?.stop();
     this.screencast = null;
     this.stream?.close();
@@ -588,12 +619,13 @@ function bootstrap(): void {
     onHidden: () => viewer.shellShown(false),
     onCloseRequest: () => viewer.sendCloseChord(),
   });
+  viewer.setFailureHost(connection);
   window.addEventListener("focus", () => connection.focused());
   installElementContextMenu({ connection, handshake: () => handshake, open: createContextMenuOpener().open });
   const events = new ServiceEvents((event) => viewer.handleEvent(event));
   fetchState()
     .then((state) => viewer.handleEvent({ type: "state", ...state }))
-    .catch((error) => console.error("[screen] state failed", error))
+    .catch((error: unknown) => viewer.showLoadFailure(error))
     .finally(() => events.start());
 }
 

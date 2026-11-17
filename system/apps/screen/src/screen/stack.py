@@ -21,9 +21,11 @@ from imbue.imbue_common.pure import pure
 from screen.data_types import Lifecycle
 from screen.data_types import NekoSecrets
 from screen.data_types import NekoSession
+from screen.data_types import StopCause
 from screen.errors import NekoError
 from screen.errors import StackStartError
 from screen.errors import SupervisorError
+from screen.install_unit import describe_install_failure_this_boot
 from screen.interfaces import NekoInterface
 from screen.interfaces import ProgramState
 from screen.interfaces import SupervisorInterface
@@ -50,6 +52,8 @@ PULSE_SCRIPT_FILENAME: Final[str] = "pulse.pa"
 # Why the stack last ended, kept for the next service life (a service restart ends the stack, and the viewer
 # would otherwise say the Screen was stopped with no reason).
 STOP_REASON_FILENAME: Final[str] = "stop_reason"
+# What kind of end that was (a ``StopCause``), kept beside the reason for the same service life.
+STOP_CAUSE_FILENAME: Final[str] = "stop_cause"
 NEKO_BINARY_PATH: Final[Path] = Path("/opt/neko/bin/neko")
 # neko's Xorg input driver, in the server's input module directory, where the env.d unit installs it beside the
 # binary (Xorg loads it as the ``neko`` driver of the touchscreen xorg.conf declares).
@@ -144,6 +148,11 @@ class ScreenStack(MutableModel):
     install_check: Callable[[], str | None] = Field(
         default=describe_missing_install, frozen=True, description="Why the stack cannot start yet, or None"
     )
+    install_failure_check: Callable[[], str | None] = Field(
+        default=describe_install_failure_this_boot,
+        frozen=True,
+        description="How the install unit failed in this boot, or None; read only while something is missing",
+    )
     xorg_sockets_timeout_seconds: float = Field(
         default=_XORG_SOCKETS_TIMEOUT_SECONDS, frozen=True, description="How long a start waits for Xorg's sockets"
     )
@@ -168,7 +177,9 @@ class ScreenStack(MutableModel):
 
     lifecycle: Lifecycle = Field(default=Lifecycle.STOPPED, description="Where the stack is")
     install_reason: str | None = Field(default=None, description="What is still installing")
+    install_failure: str | None = Field(default=None, description="How the install unit failed in this boot")
     stop_reason: str | None = Field(default=None, description="Why the stack ended")
+    stop_cause: StopCause | None = Field(default=None, description="What kind of end that was")
     secrets: NekoSecrets | None = Field(default=None, description="The current start's secrets")
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
@@ -178,15 +189,22 @@ class ScreenStack(MutableModel):
     _abort_start: threading.Event = PrivateAttr(default_factory=threading.Event)
     _start_generation: int = PrivateAttr(default=0)
 
-    def _set_lifecycle(self, lifecycle: Lifecycle, install_reason: str | None, stop_reason: str | None) -> None:
+    def _set_stopped(self, reason: str, cause: StopCause) -> None:
+        self._remember_stop(reason, cause)
         with self._lock:
-            self.lifecycle = lifecycle
-            self.install_reason = install_reason
-            self.stop_reason = stop_reason
+            self.lifecycle = Lifecycle.STOPPED
+            self.install_reason = None
+            self.install_failure = None
+            self.stop_reason = reason
+            self.stop_cause = cause
         self.on_lifecycle_changed()
 
     def _set_lifecycle_unless_aborted(
-        self, abort: threading.Event, lifecycle: Lifecycle, install_reason: str | None
+        self,
+        abort: threading.Event,
+        lifecycle: Lifecycle,
+        install_reason: str | None,
+        install_failure: str | None = None,
     ) -> bool:
         """A start's own lifecycle step, skipped (False) once a stop has aborted it, so the STOPPED the stop
         recorded is never overwritten by the start it interrupted."""
@@ -195,7 +213,9 @@ class ScreenStack(MutableModel):
                 return False
             self.lifecycle = lifecycle
             self.install_reason = install_reason
+            self.install_failure = install_failure
             self.stop_reason = None
+            self.stop_cause = None
         self.on_lifecycle_changed()
         return True
 
@@ -214,6 +234,7 @@ class ScreenStack(MutableModel):
             # Callers see the start at once, before the thread has run.
             self.lifecycle = Lifecycle.STARTING
             self.stop_reason = None
+            self.stop_cause = None
             self._start_generation += 1
             self._abort_start = threading.Event()
             self._starter = threading.Thread(
@@ -227,11 +248,14 @@ class ScreenStack(MutableModel):
         return Lifecycle.STARTING
 
     def _start(self, abort: threading.Event, generation: int) -> None:
-        # The first boot of an existing workspace installs the stack through env-converge; the viewer shows
-        # "Installing the screen" until the unit is satisfied.
+        # The first boot of an existing workspace installs the stack through env-converge; the viewer says the
+        # Screen is being set up until the unit is satisfied, or that it could not be once the unit failed this boot
+        # (still waiting: a later run of the unit may yet install it).
         missing = self.install_check()
         is_installing = False
-        while missing is not None and self._set_lifecycle_unless_aborted(abort, Lifecycle.INSTALLING, missing):
+        while missing is not None and self._set_lifecycle_unless_aborted(
+            abort, Lifecycle.INSTALLING, missing, self.install_failure_check()
+        ):
             is_installing = True
             abort.wait(self.install_poll_seconds)
             missing = self.install_check()
@@ -246,9 +270,7 @@ class ScreenStack(MutableModel):
             logger.warning("The Screen's stack did not come up: {}", e)
             self._stop_members()
             self.set_api_token(None)
-            reason = f"the stack did not start: {e}"
-            self._remember_stop_reason(reason)
-            self._set_lifecycle(Lifecycle.STOPPED, None, reason)
+            self._set_stopped(f"the stack did not start: {e}", StopCause.START_FAILED)
 
     def _finish_abandoned_start(self, generation: int, cause: Exception) -> None:
         """A start that a stop interrupted: the stop recorded the lifecycle and the reason, so this only cleans up
@@ -294,9 +316,11 @@ class ScreenStack(MutableModel):
             self.secrets = new_secrets
             self.lifecycle = Lifecycle.RUNNING
             self.install_reason = None
+            self.install_failure = None
             self.stop_reason = None
+            self.stop_cause = None
             self.on_running(new_secrets, service_session)
-        self._forget_stop_reason()
+        self._forget_stop()
         self.on_lifecycle_changed()
 
     def _render_configuration(self, new_secrets: NekoSecrets) -> None:
@@ -346,8 +370,7 @@ class ScreenStack(MutableModel):
         self.set_api_token(None)
         with self._lock:
             self.secrets = None
-        self._remember_stop_reason(reason)
-        self._set_lifecycle(Lifecycle.STOPPED, None, reason)
+        self._set_stopped(reason, StopCause.REQUESTED)
 
     def is_any_member_running(self) -> bool:
         return any(
@@ -355,38 +378,51 @@ class ScreenStack(MutableModel):
             for program in STACK_PROGRAMS
         )
 
-    def mark_stopped(self, reason: str) -> None:
-        """The watcher says the group ended on its own; a start in flight gives up."""
+    def mark_stopped(self, reason: str, cause: StopCause) -> None:
+        """The watcher says the group ended on its own (``cause`` says whether the memory guard ended it); a start in
+        flight gives up."""
         with self._lock:
             self._abort_start.set()
         self.set_api_token(None)
         with self._lock:
             self.secrets = None
-        self._remember_stop_reason(reason)
-        self._set_lifecycle(Lifecycle.STOPPED, None, reason)
+        self._set_stopped(reason, cause)
 
-    def _remember_stop_reason(self, reason: str) -> None:
+    def _remember_stop(self, reason: str, cause: StopCause) -> None:
         try:
             self.state_dir.mkdir(parents=True, exist_ok=True)
             (self.state_dir / STOP_REASON_FILENAME).write_text(reason)
+            (self.state_dir / STOP_CAUSE_FILENAME).write_text(cause.value)
         except OSError as e:
             logger.warning("Could not record why the stack stopped under {}: {}", self.state_dir, e)
 
-    def _forget_stop_reason(self) -> None:
+    def _forget_stop(self) -> None:
         try:
             (self.state_dir / STOP_REASON_FILENAME).unlink(missing_ok=True)
+            (self.state_dir / STOP_CAUSE_FILENAME).unlink(missing_ok=True)
         except OSError as e:
             logger.warning("Could not clear the recorded stop reason under {}: {}", self.state_dir, e)
 
-    def _recall_stop_reason(self) -> str | None:
-        """Why the stack ended in a previous service life, when that life recorded it."""
+    def _read_state_file(self, filename: str) -> str | None:
         try:
-            return (self.state_dir / STOP_REASON_FILENAME).read_text().strip() or None
+            return (self.state_dir / filename).read_text().strip() or None
         except FileNotFoundError:
             return None
         except OSError as e:
-            logger.warning("Could not read the recorded stop reason under {}: {}", self.state_dir, e)
+            logger.warning("Could not read {} under {}: {}", filename, self.state_dir, e)
             return None
+
+    def _recall_stop(self) -> tuple[str | None, StopCause | None]:
+        """Why the stack ended in a previous service life, and what kind of end it was, when that life recorded
+        them; a cause it did not record (an older life's) is None."""
+        reason = self._read_state_file(STOP_REASON_FILENAME)
+        cause_text = self._read_state_file(STOP_CAUSE_FILENAME)
+        try:
+            cause = StopCause(cause_text) if cause_text is not None and reason is not None else None
+        except ValueError:
+            logger.warning("Ignored an unknown recorded stop cause {!r}", cause_text)
+            cause = None
+        return reason, cause
 
     def adopt_running_stack(self) -> bool:
         """At service start: when every member is RUNNING and neko answers, take the stack over from the previous
@@ -395,8 +431,10 @@ class ScreenStack(MutableModel):
         neko_yaml = self.state_dir / NEKO_YAML_FILENAME
         states = {program: self.supervisor.program_state(program) for program in STACK_PROGRAMS}
         if any(state != ProgramState.RUNNING for state in states.values()) or not neko_yaml.is_file():
+            reason, cause = self._recall_stop()
             with self._lock:
-                self.stop_reason = self._recall_stop_reason()
+                self.stop_reason = reason
+                self.stop_cause = cause
             return False
         try:
             found_secrets = secrets_from_neko_yaml(neko_yaml.read_text())
@@ -418,5 +456,11 @@ class ScreenStack(MutableModel):
         with self._lock:
             self.secrets = found_secrets
         self.on_running(found_secrets, service_session)
-        self._set_lifecycle(Lifecycle.RUNNING, None, None)
+        with self._lock:
+            self.lifecycle = Lifecycle.RUNNING
+            self.install_reason = None
+            self.install_failure = None
+            self.stop_reason = None
+            self.stop_cause = None
+        self.on_lifecycle_changed()
         return True

@@ -3,6 +3,9 @@
  * they land in, and the queue that sends them a few at a time with progress.
  */
 
+import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
+
 import { uploadFile, type Upload } from "./server";
 
 /** A file to send and where it goes below the target folder: `a.png`, or `photos/2024/a.png` from a folder. */
@@ -22,7 +25,23 @@ export interface UploadItem {
   file: File;
   loaded: number;
   status: UploadStatus;
-  error: string | null;
+  /** Why a failed upload failed; null for any other. */
+  failure: UploadFailure | null;
+}
+
+/** A failed upload as its row tells it: a short line, and the sentence and details behind it. */
+export interface UploadFailure {
+  readonly line: string;
+  readonly explanation: string;
+}
+
+/** What a failed upload's row says: a dropped connection was interrupted, a 403 is a folder that cannot be written,
+ *  and any other refusal names no cause of its own. The sentence and what the server said go in the explanation. */
+export function uploadFailureOf(error: unknown, name: string): UploadFailure {
+  const failure = describeRequestFailure(error, "change");
+  const told = failureSentence(failure, `"${name}" couldn't be uploaded`);
+  const line = failure.status === 0 ? "Interrupted" : failure.status === 403 ? "Failed — read-only folder" : "Failed";
+  return { line, explanation: [told.message, told.details].filter((part) => part !== null).join("\n") };
 }
 
 export interface UploadQueueHost {
@@ -56,7 +75,7 @@ export class UploadQueue {
         file: source.file,
         loaded: 0,
         status: "queued",
-        error: null,
+        failure: null,
       });
     }
     this.pump();
@@ -119,9 +138,9 @@ export class UploadQueue {
         this.host.onUploaded(item.folder);
       })
       .catch((error: unknown) => {
-        const aborted = item.status === "uploading" && error instanceof Error && error.message === "Canceled";
+        const aborted = item.status === "uploading" && error instanceof DOMException && error.name === "AbortError";
         item.status = aborted ? "canceled" : "failed";
-        item.error = aborted ? null : error instanceof Error ? error.message : String(error);
+        item.failure = aborted ? null : uploadFailureOf(error, item.name);
       })
       .finally(() => {
         this.running.delete(item.id);

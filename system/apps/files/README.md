@@ -41,6 +41,12 @@ header a computer sends is made ASCII-safe: a name with a character outside
 Latin-1 (the narrow space macOS puts in screenshot names) makes the forwarder
 between the workspace and the browser answer with an error in place of the file.
 
+A refusal is an `ErrorResponse` (`app_schema`): `detail`, and the same words as
+`user_facing_message` when they are written for the person (nothing there, no
+permission, a name already taken); an unexpected failure of the disk carries a
+`detail` only. A refusal to a `?download` stays plain text, which is all the
+hidden frame a download loads in can read.
+
 `/__files/assets/` is the frontend's build, and `/__files/api/connections` lists
 what the user has shared with the workspace from their computers, read through
 the latchkey gateway (`gateway.py`), whose address and credentials every
@@ -158,6 +164,18 @@ shared by every window.
   upload whose name is taken asks whether to replace it or keep both. Uploads
   show their progress in a panel at the bottom right, which goes away a moment
   after the last one lands and stays up when one failed.
+
+A failed request is told through `workspace_ui`'s reader (`models/failures.ts`):
+the server's own sentence where it wrote one, else a sentence naming what failed
+(`Couldn't move "b.txt" into "zeta".`), with the status and the server's text
+behind "See details". One whose sentence asks for a bug report leaves a toast
+that stays, with "See details" and, where the shell says Imbue Studio opens one,
+"Report a bug"; any other leaves a note that goes, its details logged. A rename
+says it in the name field. A file whose text cannot be loaded says so in place of
+the editor, with Try again; an upload that failed says why in its row
+(interrupted, a read-only folder, or failed), with the details on hover; and a
+file whose location is too long for a window of its own is told rather than
+asked of the shell.
 
 Under 520px of the frame's own width the window lays itself out for a phone:
 the sidebar floats over the folder from a button at the toolbar's start, one

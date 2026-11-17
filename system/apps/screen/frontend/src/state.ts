@@ -1,6 +1,9 @@
 /** The service's ``GET /api/state`` document and its events (docs/system/specs/screen/spec.md section 10). */
 
 export type Lifecycle = "installing" | "starting" | "running" | "stopped";
+/** What kind of end a stop was: somebody stopped it, its start failed, a member left on its own, or the
+ *  workspace's memory guard shed a member. */
+export type StopCause = "requested" | "start_failed" | "crashed" | "out_of_memory";
 export type Controller = "human" | "agent" | "nobody";
 
 export interface ControlDocument {
@@ -32,7 +35,9 @@ export interface ChromiumDocument {
 export interface ScreenStateDocument {
   lifecycle: Lifecycle;
   install_reason: string | null;
+  install_failure: string | null;
   stop_reason: string | null;
+  stop_cause: StopCause | null;
   title: string;
   video_id: string;
   control: ControlDocument;

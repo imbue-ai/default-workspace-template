@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { httpFailure } from "../testing/records";
 import * as server from "./server";
 import { FINISHED_LINGER_MS, UploadQueue } from "./uploads";
 
@@ -69,5 +70,36 @@ describe("the upload panel's lifetime", () => {
     busy.add("/home/", [file("c.txt")]);
     await vi.advanceTimersByTimeAsync(FINISHED_LINGER_MS);
     expect(busy.items.map((item) => item.name)).toEqual(["b.txt", "c.txt"]);
+  });
+});
+
+describe("a failed upload's row", () => {
+  it("says why each failed: interrupted, a read-only folder, or no cause of its own, with the details behind it", async () => {
+    const uploads = queue();
+    uploads.add("/home/", [file("a.txt"), file("b.txt"), file("c.txt")]);
+    settles[0].reject(httpFailure(0, null));
+    const readOnly = "Your computer only shares this to read.";
+    settles[1].reject(httpFailure(403, { detail: readOnly, user_facing_message: readOnly }));
+    settles[2].reject(httpFailure(500, { detail: "No space left on device" }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(uploads.items.map((item) => [item.status, item.failure?.line])).toEqual([
+      ["failed", "Interrupted"],
+      ["failed", "Failed — read-only folder"],
+      ["failed", "Failed"],
+    ]);
+    expect(uploads.items[1].failure?.explanation).toBe(`${readOnly}\nHTTP 403\n${readOnly}`);
+    expect(uploads.items[2].failure?.explanation).toBe(
+      '"c.txt" couldn\'t be uploaded. Try again. If this persists, report a bug.\nHTTP 500\nNo space left on device',
+    );
+  });
+
+  it("is canceled, not failed, when the upload was stopped on purpose", async () => {
+    const uploads = queue();
+    uploads.add("/home/", [file("a.txt")]);
+    settles[0].reject(new DOMException("Canceled", "AbortError"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(uploads.items.map((item) => [item.status, item.failure])).toEqual([["canceled", null]]);
   });
 });
