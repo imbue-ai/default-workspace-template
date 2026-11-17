@@ -34,6 +34,26 @@ describe("ToastQueue", () => {
   });
 });
 
+describe("ToastQueue's plain notes with details", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps a plain note's details, and holds the note up once its reader opens them", () => {
+    vi.useFakeTimers();
+    const queue = new ToastQueue(() => undefined, 1000);
+    queue.show("Could not close the window.", { isLasting: false, details: "HTTP 409\nWindow win-1 is pinned" });
+    queue.show("Could not move the shortcut.", { isLasting: false, details: "HTTP 400" });
+    const [held] = queue.current();
+    expect(held.details).toBe("HTTP 409\nWindow win-1 is pinned");
+    queue.hold(held.id);
+    vi.advanceTimersByTime(1000);
+    expect(queue.current().map((toast) => toast.message)).toEqual(["Could not close the window."]);
+    queue.dismiss(held.id);
+    expect(queue.current()).toEqual([]);
+  });
+});
+
 describe("ToastQueue's lasting notes", () => {
   let queue: ToastQueue;
 

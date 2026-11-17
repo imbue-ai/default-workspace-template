@@ -16,11 +16,21 @@ from typing import Final
 import pytest
 from app_manifest.testing import (
     SHELL_HANDSHAKE_COUNTER_SCRIPT,
+    answer_start_new_with_text,
     built_app_contract_source,
+    resend_shell_handshake,
     shell_messages,
     shell_stand_in_page,
 )
-from playwright.sync_api import Browser, BrowserContext, Frame, Page, Route, expect
+from playwright.sync_api import (
+    Browser,
+    BrowserContext,
+    Frame,
+    Locator,
+    Page,
+    Route,
+    expect,
+)
 from terminal_app.dispatch import (
     ENDED_MISSING_FOLDER,
     ENDED_NOT_STARTED,
@@ -131,16 +141,19 @@ def test_a_terminal_tmux_would_not_start_says_so_and_offers_try_again_an_agent_a
         "This terminal couldn't start. Try again. If this persists, report a bug."
     )
     expect(wrapper.locator("#pty")).to_be_hidden()
-    ended.get_by_text("See details").click()
+    ended.locator("#ended-details").get_by_text("See details").click()
     expect(ended.locator("#ended-details-text")).to_have_text("no server running on /tmp/tmux-1000/default")
     expect(ended.get_by_role("button", name="Start a new terminal")).to_be_hidden()
 
     ended.get_by_role("button", name="Ask an agent to fix this").click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:start-new-with-text')")
     [asked] = shell_messages(page, "shell:start-new-with-text")
+    # The page shows the outcome under the button, so the shell toasts nothing of its own.
+    assert asked["showsOutcome"] is True
     task = str(asked["text"])
     assert task.startswith("The terminal terminal-1 couldn't start.\n\nDetails:\n```\n")
     assert "no server running on /tmp/tmux-1000/default\n```" in task
+    _expect_asking_then_told_why(page, ended)
 
     ended.get_by_role("button", name="Report a bug").click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
@@ -191,6 +204,71 @@ def test_an_unknown_kind_from_the_pty_reads_as_a_terminal_that_closed(desktop_co
     expect(ended.get_by_role("button", name="Start a new terminal")).to_be_visible()
 
 
+def _expect_asking_then_told_why(page: Page, surface: Locator) -> None:
+    """After a press of "Ask an agent to fix this": it reads "Asking an agent…" and is disabled until the shell
+    answers, and a failed answer brings it back with the failure's sentence and details beside it."""
+    asking = surface.get_by_role("button", name="Asking an agent…")
+    expect(asking).to_be_disabled()
+    answer_start_new_with_text(
+        page,
+        {"isOpened": False, "failure": {"message": "Chat couldn't open that.", "details": "HTTP 400", "isReportable": False}},
+    )
+    expect(surface.get_by_role("button", name="Ask an agent to fix this")).to_be_enabled()
+    told = surface.get_by_role("alert")
+    expect(told).to_contain_text("Chat couldn't open that.")
+    told.get_by_text("See details").click()
+    expect(told.locator("pre")).to_have_text("HTTP 400")
+
+
+def test_a_pending_ask_survives_the_shell_greeting_again_and_takes_its_late_answer_after_a_restart(
+    desktop_context: BrowserContext,
+) -> None:
+    _serve(desktop_context, _wrapper_html("terminal-1"), can_report_bug=True)
+    page, wrapper, pty = _open(desktop_context)
+    _print_end(pty, ENDED_NOT_STARTED, "no server running on /tmp/tmux-1000/default")
+    ended = wrapper.locator("#ended")
+    ended.get_by_role("button", name="Ask an agent to fix this").click()
+    expect(ended.get_by_role("button", name="Asking an agent…")).to_be_disabled()
+
+    # The same shell greeting again (a window moved, viewing started) leaves the ask pending.
+    resend_shell_handshake(page)
+    wrapper.wait_for_function("window.shellHandshakes > 1")
+    expect(ended.get_by_role("button", name="Asking an agent…")).to_be_disabled()
+
+    # A shell that started again settles it as not answered, and its real answer still replaces that.
+    resend_shell_handshake(page, "restarted-shell")
+    expect(ended.get_by_role("alert")).to_contain_text("The workspace didn't answer")
+    expect(ended.get_by_role("button", name="Ask an agent to fix this")).to_be_enabled()
+    answer_start_new_with_text(
+        page,
+        {"isOpened": False, "failure": {"message": "The workspace couldn't do that.", "details": "boom", "isReportable": True}},
+    )
+    told = ended.get_by_role("alert")
+    expect(told).to_contain_text("The workspace couldn't do that.")
+    told.get_by_role("button", name="Report a bug").click()
+    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
+    [reported] = shell_messages(page, "shell:report-bug")
+    assert (reported["message"], reported["details"]) == ("The workspace couldn't do that.", "boom")
+
+
+def test_an_ask_about_an_earlier_ending_never_shows_under_a_later_one(desktop_context: BrowserContext) -> None:
+    _serve(desktop_context, _wrapper_html("terminal-1"), can_report_bug=True)
+    page, wrapper, pty = _open(desktop_context)
+    _print_end(pty, ENDED_NOT_STARTED, "first failure")
+    ended = wrapper.locator("#ended")
+    ended.get_by_role("button", name="Ask an agent to fix this").click()
+
+    ended.get_by_role("button", name="Try again").click()
+    _print_end(pty, ENDED_NOT_STARTED, "second failure")
+    expect(ended.get_by_role("button", name="Ask an agent to fix this")).to_be_enabled()
+    answer_start_new_with_text(
+        page,
+        {"isOpened": False, "failure": {"message": "Chat couldn't open that.", "details": None, "isReportable": False}},
+    )
+    expect(ended.get_by_role("button", name="Ask an agent to fix this")).to_be_enabled()
+    expect(ended.get_by_role("alert")).to_be_hidden()
+
+
 def _open_failure_page(context: BrowserContext, error: TerminalAppError, can_report_bug: bool) -> tuple[Page, Frame]:
     _serve(context, render_failure_page(page_failure(error, "terminal-1")), can_report_bug)
     page = context.new_page()
@@ -214,9 +292,12 @@ def test_a_failure_page_for_unreadable_saved_terminals_asks_an_agent_through_the
 
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:start-new-with-text')")
     [asked] = shell_messages(page, "shell:start-new-with-text")
+    # The page shows the outcome under the button, so the shell toasts nothing of its own.
+    assert asked["showsOutcome"] is True
     task = str(asked["text"])
     assert task.startswith("The Terminal app can't open terminals: it can't read this workspace's saved terminals.")
     assert "the terminal store /x/instances.json is not valid JSON: x\n```" in task
+    _expect_asking_then_told_why(page, wrapper.locator("body"))
 
 
 def test_a_failure_page_while_tmux_does_not_answer_offers_only_try_again(desktop_context: BrowserContext) -> None:

@@ -5,11 +5,12 @@
  * depend on which folder refused (the server's ``kind``), else in the server's sentence, which names only the cause.
  * A failure whose sentence asks for a bug report leaves a toast that stays, with "See details" and, where the shell
  * says Imbue Studio opens one when the toast is drawn, "Report a bug"; a full disk leaves one that stays with "Ask an
- * agent to free up space"; any other leaves a plain note, its retry being the control just used, and its details go to
- * the log.
+ * agent to free up space"; any other leaves a plain note, its retry being the control just used, with its details
+ * behind "See details" (opening them keeps the note up).
  */
 
-import type { ReportedFailure, ShellConnection } from "@imbue/workspace-ui/src/app_contract";
+import type { ReportedFailure, ShellConnection, StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
+import { ASKING_AN_AGENT_LABEL } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { failureSentence, type Failure, type FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import type { ToastAction, ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
@@ -80,20 +81,23 @@ export function plainFailure(message: string): FilesFailure {
 }
 
 /** One operation's failures, of one item or many, as one toast. */
-export function toastFailures(toasts: ToastQueue, failures: readonly FilesFailure[], host: FailureHost): void {
+export function toastFailures(
+  toasts: ToastQueue,
+  failures: readonly FilesFailure[],
+  host: FailureHost,
+  redraw: () => void,
+): void {
   if (failures.length === 0) return;
   const message = [...new Set(failures.map((failure) => failure.message))].join("\n");
   const detailLines = failures.map((failure) => failure.details).filter((details) => details !== null);
   const details = detailLines.length === 0 ? null : detailLines.join("\n\n");
   const actions: ToastAction[] = [];
   if (failures.some((failure) => failure.isOutOfSpace) && host.hasShell()) {
-    actions.push({ label: FREE_SPACE_LABEL, run: () => host.startWithText(FREE_SPACE_REQUEST), keepsToast: true });
+    actions.push(freeUpSpaceAction(toasts, host, redraw));
   }
   const isReportable = failures.some((failure) => failure.isReportable);
   if (!isReportable && actions.length === 0) {
-    // A plain note has no room for the details, so they go to the log rather than nowhere.
-    if (details !== null) console.warn(`[files] ${message}`, details);
-    toasts.show(message);
+    toasts.show(message, { isLasting: false, details });
     return;
   }
   toasts.show(message, { isLasting: true, details, actions, isReportable });
@@ -103,4 +107,44 @@ export function toastFailures(toasts: ToastQueue, failures: readonly FilesFailur
  *  bug report here. */
 export function reportBugAction(host: FailureHost): ((failure: ReportedFailure) => void) | null {
   return host.canReportBug() ? (failure) => host.reportBug(failure) : null;
+}
+
+/**
+ * "Ask an agent to free up space", in the chat already running (a new agent would need disk): "Asking an agent…"
+ * until the shell says the chat opened, and a note saying why when it could not. An answer the shell sends after a
+ * restart settled the ask as not answered replaces that note, unless the button was pressed again since.
+ */
+function freeUpSpaceAction(toasts: ToastQueue, host: FailureHost, redraw: () => void): ToastAction {
+  let isAsking = false;
+  let presses = 0;
+  let toldId: number | null = null;
+  const tell = (press: number, outcome: StartNewOutcome): void => {
+    if (press !== presses) return;
+    if (toldId !== null) toasts.dismiss(toldId);
+    toldId = null;
+    if (!outcome.isOpened) {
+      toastFailures(toasts, [{ ...outcome.failure, isOutOfSpace: false }], host, redraw);
+      const shown = toasts.current();
+      toldId = shown.length === 0 ? null : shown[shown.length - 1].id;
+    }
+    redraw();
+  };
+  const ask = async (): Promise<void> => {
+    presses += 1;
+    const press = presses;
+    isAsking = true;
+    redraw();
+    const outcome = await host.startWithText(FREE_SPACE_REQUEST, {
+      showsOutcome: true,
+      onLateAnswer: (late) => tell(press, late),
+    });
+    if (press === presses) isAsking = false;
+    tell(press, outcome);
+  };
+  return {
+    label: FREE_SPACE_LABEL,
+    run: () => void ask(),
+    keepsToast: true,
+    pending: { isPending: () => isAsking, label: ASKING_AN_AGENT_LABEL },
+  };
 }

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from playwright.sync_api import Page
+from playwright.sync_api import Route
 from playwright.sync_api import expect
 from workspace_layout.identity import ANONYMOUS_OWNER
 
@@ -53,9 +54,26 @@ def test_the_not_built_page_asks_an_agent_and_frames_its_chat_and_a_terminal_ses
         page.goto(f"http://shell-z.{_COORDINATE}:{served.port}/")
         # The command and the terminal wait behind "See details"; the agent is the way out on the page.
         expect(page.locator("#repair-command")).not_to_be_visible()
-        ask = page.get_by_role("button", name="Ask an agent to fix this")
+        ask = page.locator("#ask-agent-button")
+        expect(ask).to_have_text("Ask an agent to fix this")
 
+        # While the launch is out the button says so and takes no second press; it comes back with the failure.
+        held: list[Route] = []
+        page.route("**/api/not-built/launch", lambda route: held.append(route))
         ask.click()
+        expect(ask).to_have_text("Asking an agent…")
+        expect(ask).to_be_disabled()
+        expect(page.locator("#ask-agent-failure-message")).to_be_hidden()
+        # The sync API hands the route over only while it is called.
+        for _ in range(50):
+            if held:
+                break
+            page.wait_for_timeout(100)
+        (launch,) = held
+        launch.continue_()
+        page.unroute("**/api/not-built/launch")
+        expect(ask).to_have_text("Ask an agent to fix this")
+        expect(ask).to_be_enabled()
         expect(page.locator("#ask-agent-failure-message")).to_have_text(
             "Couldn't start an agent. Try again. If this persists, report a bug."
         )
@@ -110,15 +128,61 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         framed = page.frame_locator("#app")
         expect(framed.get_by_role("heading")).to_have_text("Docs couldn't start.")
         # Only a shell can start an agent, so the button waits for its greeting.
-        ask = framed.get_by_role("button", name="Ask an agent to look at it")
+        ask = framed.locator("#ask-agent")
+        expect(ask).to_have_text("Ask an agent to look at it")
         expect(ask).to_be_hidden()
-        page.evaluate(
-            "document.getElementById('app').contentWindow.postMessage({ type: 'shell:handshake', windowId: 'w' }, '*')"
+        handshake = (
+            "(shellId) => document.getElementById('app').contentWindow.postMessage("
+            "{ type: 'shell:handshake', windowId: 'w', shellId }, '*')"
         )
+        page.evaluate(handshake, "shell-1")
         ask.click()
         page.wait_for_function("window.received.length > 0")
-        assert page.evaluate("window.received") == [
-            {"type": "shell:start-new-with-text", "text": could_not_start_request("Docs", "docs")}
-        ]
+        (asked,) = page.evaluate("window.received")
+        assert asked["type"] == "shell:start-new-with-text"
+        assert asked["text"] == could_not_start_request("Docs", "docs")
+        # The page shows the answer itself, so the shell is told not to toast it too.
+        assert asked["showsOutcome"] is True
+        # The button says the ask is out and takes no second press until the shell answers this request.
+        expect(ask).to_have_text("Asking an agent…")
+        expect(ask).to_be_disabled()
+        reply = (
+            "(answer) => document.getElementById('app').contentWindow.postMessage("
+            "Object.assign({ type: 'shell:start-new-with-text-result' }, answer), '*')"
+        )
+        page.evaluate(reply, {"requestId": "some-other-request", "isOpened": True})
+        expect(ask).to_be_disabled()
+        page.evaluate(
+            reply,
+            {
+                "requestId": asked["requestId"],
+                "isOpened": False,
+                "failure": {"message": "Chat couldn't open that.", "details": "HTTP 500\nboom", "isReportable": True},
+            },
+        )
+        expect(ask).to_have_text("Ask an agent to look at it")
+        expect(ask).to_be_enabled()
+        expect(framed.locator("#ask-agent-failure")).to_have_text("Chat couldn't open that.")
+        framed.get_by_text("See details", exact=True).click()
+        expect(framed.locator("#ask-agent-failure-details")).to_have_text("HTTP 500\nboom")
+
+        # The same shell greeting the page again (a window moved, Imbue Studio said it opens help) leaves the ask out.
+        ask.click()
+        expect(framed.locator("#ask-agent-failure")).to_be_hidden()
+        page.wait_for_function("window.received.length === 2")
+        second = page.evaluate("window.received[1]")
+        page.evaluate(handshake, "shell-1")
+        page.wait_for_timeout(300)
+        expect(ask).to_be_disabled()
+        expect(ask).to_have_text("Asking an agent…")
+        # A greeting from a restarted shell settles it as not answered; the old shell's answer, if it still comes,
+        # replaces that.
+        page.evaluate(handshake, "shell-2")
+        expect(ask).to_be_enabled()
+        expect(framed.locator("#ask-agent-failure")).to_have_text(
+            "The workspace didn't answer, so Imbue Studio can't tell whether this went through."
+        )
+        page.evaluate(reply, {"requestId": second["requestId"], "isOpened": True})
+        expect(framed.locator("#ask-agent-failure")).to_be_hidden()
     finally:
         parked.release()

@@ -22,6 +22,8 @@ export interface FailureNotice {
   /** The sentence asks for a bug report: the surface offers "Report a bug" after the buttons where it can, and a
    *  toast of it stays even where it cannot. */
   readonly isReportable: boolean;
+  /** An app whose not running is all the notice says: a toast of it goes once the app list shows the app running. */
+  readonly untilRunning?: string;
 }
 
 const REFUSAL_KIND_VALUES = [

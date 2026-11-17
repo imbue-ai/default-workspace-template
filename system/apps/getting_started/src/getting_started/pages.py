@@ -63,9 +63,10 @@ _REBUILD_REQUEST: Final[str] = (
 )
 
 # Served in place of the page while the frontend has not been built (``static/`` is build output): it checks again
-# on its own, offers a Reload, and, once a shell has greeted it, an agent to rebuild it; the build command is behind
-# "See details". The contract module it asks the shell with is the shell's, served from this origin; when it cannot
-# be loaded (the shell's frontend is not built either), or no shell greets the page, the agent button stays hidden.
+# on its own, offers a Reload, and, once a shell has greeted it, an agent to rebuild it; the build command, and a failed
+# ask's reason, are behind "See details". The contract module it asks the shell with is the shell's, served from this
+# origin; when it cannot be loaded (the shell's frontend is not built either), or no shell greets the page, the agent
+# button stays hidden.
 _NOT_BUILT_PAGE: Final[str] = (
     """<!doctype html>
 <html><head><meta charset="utf-8"><title>Getting Started</title>
@@ -78,8 +79,10 @@ summary{cursor:pointer}</style></head>
 <p>The Getting Started page isn't available right now. It comes back on its own once it is rebuilt.</p>
 <p><button type="button" id="reload">Reload</button><button type="button" id="ask-agent" hidden>Ask an agent to
 rebuild it</button></p>
-<details><summary>See details</summary><p>Its built files are missing. They are rebuilt with
-<code>npm run build</code> in <code>system/</code>.</p></details>
+<p id="ask-agent-failure" hidden></p>
+<details><summary>See details</summary>
+<pre id="ask-agent-failure-details" hidden></pre>
+<p>Its built files are missing. They are rebuilt with <code>npm run build</code> in <code>system/</code>.</p></details>
 </main>
 <script type="module">
   document.getElementById("reload").addEventListener("click", () => window.location.reload());
@@ -98,7 +101,36 @@ rebuild it</button></p>
         const ask = document.getElementById("ask-agent");
         // Only a shell can start a chat, so the button waits for one to greet the page.
         const shell = connectToShell({ onHandshake: () => (ask.hidden = false) });
-        ask.addEventListener("click", () => shell.startNewWithText(__REBUILD_REQUEST__));
+        const failure = document.getElementById("ask-agent-failure");
+        const failureDetails = document.getElementById("ask-agent-failure-details");
+        const askLabel = ask.textContent;
+        const show = (outcome) => {
+          failure.hidden = outcome.isOpened;
+          failureDetails.hidden = outcome.isOpened || outcome.failure.details === null;
+          if (outcome.isOpened) return;
+          failure.textContent = outcome.failure.message;
+          failureDetails.textContent = outcome.failure.details ?? "";
+        };
+        let presses = 0;
+        // Until the shell says the agent's chat is up (or why it is not), the button says the ask is out. An answer
+        // that comes after the ask was settled as not answered (the shell restarted) replaces what is shown, unless
+        // the button was pressed again since.
+        ask.addEventListener("click", async () => {
+          presses += 1;
+          const press = presses;
+          ask.disabled = true;
+          ask.textContent = "Asking an agent\u2026";
+          show({ isOpened: true });
+          const outcome = await shell.startNewWithText(__REBUILD_REQUEST__, {
+            showsOutcome: true,
+            onLateAnswer: (late) => {
+              if (press === presses) show(late);
+            },
+          });
+          ask.disabled = false;
+          ask.textContent = askLabel;
+          show(outcome);
+        });
       })
       .catch((error) => console.warn("[getting-started] could not load the shell contract", error));
   }

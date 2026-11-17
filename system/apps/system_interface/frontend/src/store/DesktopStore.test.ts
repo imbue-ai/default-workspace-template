@@ -702,10 +702,13 @@ describe("opening", () => {
     expect(store.getState().desktops[0].windows[0].path).toBe("/new?message=hi");
   });
 
-  it("shell:start-with-text runs the primary text action, and says so when there is none", async () => {
+  it("shell:start-with-text runs the primary text action, and answers its failure without a toast", async () => {
     const store = await startedStore();
-    expect(await store.startWithText("hello")).toBe(false);
-    expect(last(notices())).toBe("No app in this workspace can start a chat");
+    expect(await store.startWithText("hello")).toEqual({
+      isOpened: false,
+      failure: { message: "No app in this workspace can start a chat.", details: null, isReportable: false },
+    });
+    expect(notices()).toEqual([]);
     socket.deliver().onAppsUpdated([
       appRecord("docs", { launcher_rank: 20 }),
       appRecord("notes", {
@@ -716,16 +719,14 @@ describe("opening", () => {
         ],
       }),
     ]);
-    expect(await store.startWithText("hello")).toBe(true);
+    expect(await store.startWithText("hello")).toEqual({ isOpened: true });
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
       `launch:home:notes:new:{"message":"hello"}:new`,
     );
   });
 
-  it("shell:start-new-with-text runs the secondary text action, else the primary, and says so when there is none", async () => {
+  it("shell:start-new-with-text runs the secondary text action, else the primary, and answers once the window opened", async () => {
     const store = await startedStore();
-    expect(await store.startNewWithText("Fix this.")).toBe(false);
-    expect(last(notices())).toBe("No app in this workspace can start a chat");
     const notes = (launchIds: readonly string[]): ReturnType<typeof appRecord> =>
       appRecord("notes", {
         launch_paths: launchIds.map((id) =>
@@ -733,15 +734,39 @@ describe("opening", () => {
         ),
       });
     offerApps(api, socket, [notes(["main", "new", "send"])]);
-    expect(await store.startNewWithText("Fix this.")).toBe(true);
+    expect(await store.startNewWithText("Fix this.")).toEqual({ isOpened: true });
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
       `launch:home:notes:new:{"message":"Fix this."}:new`,
     );
+    expect(store.getState().desktops[0].windows.some((window) => window.app === "notes")).toBe(true);
     offerApps(api, socket, [notes(["main"])]);
-    expect(await store.startNewWithText("Fix this.")).toBe(true);
+    expect(await store.startNewWithText("Fix this.")).toEqual({ isOpened: true });
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
       `launch:home:notes:main:{"message":"Fix this."}:new`,
     );
+  });
+
+  it("shell:start-new-with-text answers a failure for the page to show, and leaves no toast of its own", async () => {
+    const store = await startedStore();
+    expect(await store.startNewWithText("Fix this.")).toEqual({
+      isOpened: false,
+      failure: { message: "No app in this workspace can start a chat.", details: null, isReportable: false },
+    });
+    offerApps(api, socket, [
+      appRecord("notes", {
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+    ]);
+    api.refusal = "notes refused the launch: no account is signed in";
+    expect(await store.startNewWithText("Fix this.")).toEqual({
+      isOpened: false,
+      failure: {
+        message: "Notes couldn't open that.",
+        details: "HTTP 400\nnotes refused the launch: no account is signed in",
+        isReportable: false,
+      },
+    });
+    expect(notices()).toEqual([]);
   });
 
   it("shell:draft-text drafts through the first draft row when no pinned window takes one, and says so with none", async () => {
@@ -779,7 +804,7 @@ describe("opening", () => {
     api.refusal = null;
     await store.runLaunch("gone", "new", "new");
     expect(store.toasts.current().map((toast) => [toast.message, toast.details])).toEqual([
-      ["Docs couldn't be opened.", null],
+      ["Docs couldn't be opened.", "HTTP 400\nthe shell is restarting"],
       ["This shortcut's app is no longer part of this workspace.", null],
     ]);
   });
@@ -795,9 +820,12 @@ describe("opening", () => {
       "launch_path_gone",
     );
     await store.runLaunch("docs", "new", "new");
-    // The open is a plain note, its details in the log; the launch's toast stays, with them behind See details.
+    // The open is a plain note and the launch's toast stays, each with the reason behind See details.
     expect(store.toasts.current().map((toast) => [toast.message, toast.details])).toEqual([
-      ["Docs isn't available in this workspace right now, so nothing was changed.", null],
+      [
+        "Docs isn't available in this workspace right now, so nothing was changed.",
+        "HTTP 400\nNo registered app named 'docs'",
+      ],
       [
         "Docs no longer offers “New docs”, so nothing was changed.",
         "HTTP 400\nApp 'docs' declares no launch path 'new'",
@@ -920,6 +948,34 @@ describe("opening", () => {
     await settle();
     expect(notices()).toEqual(["That window is no longer here, so nothing was changed. Try again."]);
     expect(api.calls.filter((call) => call === "fetchInventory")).toHaveLength(readsBefore + 1);
+  });
+
+  it("shows the free-up-space agent as pending until its send settles, and toasts a refused one", async () => {
+    const store = await startedStore();
+    offerApps(api, socket, [
+      appRecord("buddy", {
+        display_name: "Buddy",
+        launch_paths: [launchPathRecord({ id: "main", path: "/main", params: ["message"], text_param: "message" })],
+      }),
+    ]);
+    api.refusal = shellRefusal(
+      500,
+      "cannot write shell state file desktops.json: [Errno 28] No space left on device",
+      "This workspace is out of space, so your change could not be saved.",
+      "out_of_space",
+    );
+    await store.openWindowAt("docs", "/x", "new");
+    const [ask] = store.toasts.current()[0].actions;
+    api.refusal = refusedWith(400, { detail: "buddy refused the launch: no account is signed in" });
+
+    ask.run();
+    expect(ask.pending?.isPending()).toBe(true);
+    await settle();
+    expect(ask.pending?.isPending()).toBe(false);
+    expect(store.toasts.current().map((toast) => [toast.message, toast.details])).toContainEqual([
+      "Buddy couldn't open that.",
+      "HTTP 400\nbuddy refused the launch: no account is signed in",
+    ]);
   });
 
   it("offers an agent and a second try when a change could not be saved for want of space", async () => {
@@ -1223,30 +1279,68 @@ describe("a launch into an app that is not running", () => {
     return store.toasts.current().map((toast) => [toast.message, toast.details, toast.actions.map((a) => a.label)]);
   }
 
-  it("says what the app's stopped window says, with the agent asked to start it", async () => {
+  const TERMINAL_STOPPED_DETAIL = "terminal is not running, so it could not take the launch: refused";
+
+  /** A store whose launch into the terminal the shell refused as one to a stopped app, leaving its note up. */
+  async function storeWithTerminalStoppedNote(): Promise<DesktopStore> {
     api.apps = [chat, terminal];
     const store = await startedStore();
     api.refusal = shellRefusal(
       502,
-      "terminal is not running, so it could not take the launch: refused",
+      TERMINAL_STOPPED_DETAIL,
       "Terminal isn't running right now, so it couldn't open that.",
       "app_stopped",
     );
     await store.runLaunch("terminal", "new", "new");
+    api.refusal = null;
+    return store;
+  }
+
+  it("says what the app's stopped window says, with the agent asked to start it", async () => {
+    const store = await storeWithTerminalStoppedNote();
 
     expect(toastsShown(store)).toEqual([
-      [
-        "Terminal isn't running.",
-        "HTTP 502\nterminal is not running, so it could not take the launch: refused",
-        ["Ask an agent to start it"],
-      ],
+      ["Terminal isn't running.", `HTTP 502\n${TERMINAL_STOPPED_DETAIL}`, ["Ask an agent to start it"]],
     ]);
-    api.refusal = null;
     store.toasts.current()[0].actions[0].run();
     await settle();
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
       `launch:home:chat:new:${JSON.stringify({ message: "Terminal (terminal) isn't running in this workspace. Please start it again." })}:new`,
     );
+  });
+
+  it("shows an agent asked for as pending until its launch settles, and a failed one in a toast of its own", async () => {
+    const store = await storeWithTerminalStoppedNote();
+    const [ask] = store.toasts.current()[0].actions;
+    expect(ask.pending?.label).toBe("Asking an agent…");
+    expect(ask.pending?.isPending()).toBe(false);
+
+    ask.run();
+    expect(ask.pending?.isPending()).toBe(true);
+    // A second press while it is out asks nothing more.
+    ask.run();
+    await settle();
+    expect(ask.pending?.isPending()).toBe(false);
+    expect(api.calls.filter((call) => call.startsWith("launch:home:chat"))).toHaveLength(1);
+
+    api.refusal = refusedWith(400, { detail: "chat refused the launch: no account is signed in" });
+    ask.run();
+    await settle();
+    expect(ask.pending?.isPending()).toBe(false);
+    expect(store.toasts.current().map((toast) => [toast.message, toast.details])).toContainEqual([
+      "Chat couldn't open that.",
+      "HTTP 400\nchat refused the launch: no account is signed in",
+    ]);
+  });
+
+  it("takes the stopped app's note down once the app list says the app is running again", async () => {
+    await storeWithTerminalStoppedNote();
+    expect(notices()).toEqual(["Terminal isn't running."]);
+
+    socket.deliver().onAppsUpdated([chat, { ...terminal, is_running: false }]);
+    expect(notices()).toEqual(["Terminal isn't running."]);
+    socket.deliver().onAppsUpdated([chat, { ...terminal, is_running: true }]);
+    expect(notices()).toEqual([]);
   });
 
   it("words a wake that brought nothing up as the app's could-not-start page does", async () => {
@@ -1446,19 +1540,18 @@ describe("failure toasts", () => {
     });
   });
 
-  it("leaves a plain note where the control just pressed is the retry, its reason in the log", async () => {
+  it("leaves a plain note where the control just pressed is the retry, its reason behind See details", async () => {
     const store = await startedStore();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     api.refusal = refusedWith(409, { detail: "Window win-1 is pinned and cannot be closed" });
     await store.closeWindow("win-1");
     expect(store.toasts.current()).toMatchObject([
-      { message: "This window couldn't be closed.", details: null, actions: [], isLasting: false },
+      {
+        message: "This window couldn't be closed.",
+        details: "HTTP 409\nWindow win-1 is pinned and cannot be closed",
+        actions: [],
+        isLasting: false,
+      },
     ]);
-    expect(warn).toHaveBeenCalledWith(
-      "[si] This window couldn't be closed.",
-      "HTTP 409\nWindow win-1 is pinned and cannot be closed",
-    );
-    warn.mockRestore();
     vi.advanceTimersByTime(TOAST_DURATION_MS);
     expect(notices()).toEqual([]);
   });
@@ -1895,6 +1988,25 @@ describe("gestures", () => {
     await settle();
     expect(cellsByApp(store)).toEqual({ docs: "0,0", notes: "1,0" });
     expect(notices()).toEqual(["Couldn't move this shortcut, so it's back where it was."]);
+  });
+
+  it("offers Try again on a drop the shell failed with no reason, which makes the same move again", async () => {
+    const store = await shortcutStore();
+    api.refusal = refusedWith(500, null, "boom");
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    store.endShortcutDrag({ x: 130, y: 40 }, { x: 100, y: 0 });
+    await settle();
+    expect(cellsByApp(store)).toEqual({ docs: "0,0", notes: "1,0" });
+    const [toast] = store.toasts.current();
+    expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
+
+    api.refusal = null;
+    toast.actions[0].run();
+    await settle();
+    const moves = api.calls.filter((call) => call.startsWith("moveDesktopShortcut"));
+    expect(moves).toHaveLength(2);
+    expect(moves[1]).toBe(moves[0]);
+    expect(cellsByApp(store)).toEqual({ docs: "1,0", notes: "0,0" });
   });
 });
 
@@ -2435,6 +2547,7 @@ describe("embedder messages", () => {
       ]);
     api.refusal = "Nothing in this workspace handles 'open:url'";
     expect(await store.relayEmbedderMessage({ type: "open:url", url: "http://localhost:3000/" }, "chat")).toBe(false);
+    expect(await store.relayEmbedderMessage({ type: "open:url", url: "http://localhost:3001/" }, "chat")).toBe(false);
     api.refusal = "buddy did not take it: could not be reached";
     expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" }, null)).toBe(false);
     api.refusal = "files did not take it: answered 500";
@@ -2465,9 +2578,9 @@ describe("embedder messages", () => {
     expect(await store.relayEmbedderMessage({ type: "open:slack", url: "slack://open" }, "chat")).toBe(false);
 
     expect(store.toasts.current().map((toast) => [toast.message, toast.details, toast.isLasting])).toEqual([
-      ["Couldn't open this link.", null, false],
-      ["Couldn't show that chat.", null, false],
-      ["Couldn't open that file.", null, false],
+      ["Couldn't open this link.", "HTTP 400\nNothing in this workspace handles 'open:url'", false],
+      ["Couldn't show that chat.", "HTTP 400\nbuddy did not take it: could not be reached", false],
+      ["Couldn't open that file.", "HTTP 400\nfiles did not take it: answered 500", false],
       ["Web Browser couldn't open this link. Try again. If this persists, report a bug.", `HTTP 502\n${detail}`, true],
       ["Slack couldn't open this link. Try again. If this persists, report a bug.", `HTTP 502\n${slackDetail}`, true],
     ]);
@@ -2582,7 +2695,7 @@ describe("links Imbue Studio hands over", () => {
     expect(api.calls.filter((call) => call.startsWith("openWindow:"))).toEqual([]);
   });
 
-  it("names the app by its display name when the shell's show refuses a link, the reason in the log", async () => {
+  it("names the app by its display name when the shell's show refuses a link, the reason behind See details", async () => {
     const store = await startedStore();
     socket
       .deliver()
@@ -2590,16 +2703,13 @@ describe("links Imbue Studio hands over", () => {
         appRecord("docs"),
         chatLikeAppRecord("chat", { label: "chat-ab12cd34", display_name: "Chats" }),
       ]);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     api.refusal = "No chat agent-1";
 
     await store.openLink("http://chat-ab12cd34.localhost/?chat=agent-1", SHELL_HOST, "notes");
 
     expect(store.toasts.current()).toMatchObject([
-      { message: "Chats couldn't be opened.", details: null, actions: [], isLasting: false },
+      { message: "Chats couldn't be opened.", details: "HTTP 400\nNo chat agent-1", actions: [], isLasting: false },
     ]);
-    expect(warn).toHaveBeenCalledWith("[si] Chats couldn't be opened.", "HTTP 400\nNo chat agent-1");
-    warn.mockRestore();
   });
 
   it("focuses or opens a link to an app's pin page itself, or to its other pages, as any other page", async () => {
@@ -4497,6 +4607,33 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect(store.renderedRect(placement)).toEqual({ x: 0, y: 0, width: 1000, height: 800 + METRICS.taskbarHeight });
   });
 
+  it("answers an agent asked for while viewing with the stop-viewing note, told once and asking for no bug report", async () => {
+    const store = await viewerStore();
+    socket.deliver().onAppsUpdated([
+      chatLikeAppRecord("chat", {
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+    ]);
+    await store.switchDesktop("alice");
+
+    expect(await store.startNewWithText("Please look at this.")).toEqual({
+      isOpened: false,
+      failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
+    });
+    await store.askAgent("Please look at this.", true);
+    expect(notices()).toEqual([STOP_VIEWING_FIRST_NOTICE]);
+    expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([]);
+  });
+
+  it("answers an agent asked for while viewing with the stop-viewing note even with no app to take the ask", async () => {
+    const store = await viewerStore();
+    socket.deliver().onAppsUpdated([]);
+    await store.switchDesktop("alice");
+
+    await store.askAgent("Please look at this.", true);
+    expect(notices()).toEqual([STOP_VIEWING_FIRST_NOTICE]);
+  });
+
   it("never views on the phone: a window shrunk to phone width while viewing lands on the way back", async () => {
     api.ownerLayoutClientId = "alice-laptop";
     api.ownerViewport = { width: 2000, height: 1600 };
@@ -4681,6 +4818,20 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect(calls).toEqual([]);
     expect(api.calls.slice(callsBefore)).toEqual([]);
     expect(notices()).toEqual([STOP_VIEWING_FIRST_NOTICE]);
+  });
+
+  it("answers a page's Ask an agent while viewing with the refusal for the page to show, launching and toasting nothing", async () => {
+    api.apps = [chatLikeAppRecord("chat")];
+    const store = await viewerStore();
+    await store.switchDesktop("alice");
+    const callsBefore = api.calls.length;
+
+    expect(await store.startNewWithText("Fix this.")).toEqual({
+      isOpened: false,
+      failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
+    });
+    expect(api.calls.slice(callsBefore)).toEqual([]);
+    expect(notices()).toEqual([]);
   });
 
   it("refuses every change to a viewed desktop with one note, and reloads the owner's layout on every poll", async () => {

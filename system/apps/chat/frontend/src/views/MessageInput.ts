@@ -42,6 +42,7 @@ import {
   sendMessage,
   sentUserTurnIds,
 } from "../models/Response";
+import type { SendStatus } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
 import { addModelChoiceFailureListener } from "../models/ModelSettings";
 import {
@@ -81,7 +82,7 @@ import {
   openProviderChooser,
   whenAccountsReadyToChoose,
 } from "../models/Providers";
-import type { ProvisionalChat } from "../models/Chats";
+import type { DiscardedChat, ProvisionalChat } from "../models/Chats";
 import {
   ensureHarnessCatalogs,
   findComposerPopup,
@@ -90,6 +91,8 @@ import {
 } from "../models/HarnessCatalog";
 import { chooseFastMode, parseFastModeCommand } from "./fast-mode-limit";
 import {
+  ChatNotStartedError,
+  addProvisionalChatDiscardedListener,
   getChatById,
   getProvisionalChat,
   refuseSendToFailedChat,
@@ -579,6 +582,81 @@ addModelChoiceFailureListener((chatId, error) =>
     error,
   }),
 );
+
+/** A message this page is sending, or sent, to a chat that is not an agent yet, which the chat app holds for the
+ *  agent its create lands: the words and attachments as typed, to put back if the chat is deleted first (the chat
+ *  app drops what it held and says which), and the bubble standing for it. Only this page knows which of the held
+ *  messages were typed here and what attachment chips they had; the chat app holds the text alone. */
+interface SendToChatNotYetAnAgent {
+  text: string;
+  attachments: readonly ComposerAttachment[];
+  outgoingId: string;
+  /** A Retry's until it lands: the failed send's copy is still in the box, so nothing is put back. */
+  isInBox: boolean;
+  /** Its send has had its answer, so a discard after that has nothing to tell the send path. */
+  isAnswered?: boolean;
+}
+const sendsToChatsNotYetAgents = new Map<string, Map<string, SendToChatNotYetAnAgent>>();
+// Messages a discard put back before their send's own answer came, by message id.
+const putBackBeforeAnswered = new Set<string>();
+let isListeningForDiscardedChats = false;
+
+/** Note a send about to go to ``chatId`` while the chat is not an agent yet, before its answer: a discard can reach
+ *  the page first. */
+function noteSendToChatNotYetAnAgent(chatId: string, messageId: string, send: SendToChatNotYetAnAgent): void {
+  if (getChatById(chatId) !== undefined || getProvisionalChat(chatId) === undefined) return;
+  for (const notedChatId of [...sendsToChatsNotYetAgents.keys()]) {
+    if (getChatById(notedChatId) !== undefined) sendsToChatsNotYetAgents.delete(notedChatId);
+  }
+  const noted = sendsToChatsNotYetAgents.get(chatId) ?? new Map<string, SendToChatNotYetAnAgent>();
+  noted.set(messageId, send);
+  sendsToChatsNotYetAgents.set(chatId, noted);
+  if (!isListeningForDiscardedChats) {
+    isListeningForDiscardedChats = true;
+    addProvisionalChatDiscardedListener(putBackSendsDroppedWithChat);
+  }
+}
+
+/** Settle a noted send by its answer (null for none): one the chat app did not hold is forgotten. Whether the chat's
+ *  discard already put it back in the box, so the caller does not put it back again. */
+function settleSendToChatNotYetAnAgent(chatId: string, messageId: string, status: SendStatus | null): boolean {
+  if (putBackBeforeAnswered.delete(messageId)) return true;
+  const noted = sendsToChatsNotYetAgents.get(chatId);
+  const send = noted?.get(messageId);
+  if (status !== "held") noted?.delete(messageId);
+  else if (send !== undefined) send.isAnswered = true;
+  return false;
+}
+
+/** A noted Retry landed and its copy left the box, so the chat's discard has to put it back. */
+function noteSendLeftBox(chatId: string, messageId: string): void {
+  const send = sendsToChatsNotYetAgents.get(chatId)?.get(messageId);
+  if (send !== undefined) send.isInBox = false;
+}
+
+function putBackSendsDroppedWithChat(discarded: DiscardedChat): void {
+  const chatId = discarded.chat_id;
+  const noted = sendsToChatsNotYetAgents.get(chatId);
+  sendsToChatsNotYetAgents.delete(chatId);
+  if (noted === undefined) return;
+  // What the chat app dropped, in the order it held them: a send Stop took back is not among them.
+  const dropped = discarded.held_sends.flatMap((held) => {
+    const send = noted.get(held.message_id);
+    return send === undefined ? [] : [{ messageId: held.message_id, send }];
+  });
+  if (dropped.length === 0) return;
+  // Last first: each put-back goes above what is in the box, so the box reads in the order they were sent.
+  for (const { messageId, send } of [...dropped].reverse()) {
+    if (send.isAnswered !== true) putBackBeforeAnswered.add(messageId);
+    dropOutgoing(chatId, send.outgoingId);
+    if (!send.isInBox) restoreToComposer(chatId, send.text, send.attachments);
+  }
+  raiseFailureNotice(chatId, {
+    title: "Couldn't send your message",
+    describe: describeSendFailure,
+    error: new ChatNotStartedError("The chat was closed before it started"),
+  });
+}
 
 /** The provider chooser for a chat whose account was signed out: the account signed in to or picked is the one the
  *  chat's next message moves it to. */
@@ -1288,8 +1366,16 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             }
             if (choice.kind === "account" && !awaiting.is_seeded) {
               priorTurnIds = sentUserTurnIds(chatId);
-              dropOutgoingNoTurnWillRetire(chatId, outgoingId, await sendMessage(chatId, finalText, messageId));
+              noteSendToChatNotYetAnAgent(chatId, messageId, {
+                text: sentText,
+                attachments: sentAttachments,
+                outgoingId,
+                isInBox: false,
+              });
+              const firstStatus = await sendMessage(chatId, finalText, messageId);
+              dropOutgoingNoTurnWillRetire(chatId, outgoingId, firstStatus);
               noteOutgoingAccepted(chatId, outgoingId);
+              settleSendToChatNotYetAnAgent(chatId, messageId, firstStatus);
               refocusAfterSend();
               return;
             }
@@ -1316,13 +1402,27 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           if (isLaunchInFlight(chatId)) await whenChatRegistered(chatId);
           refuseSendToFailedChat(chatId);
           priorTurnIds = sentUserTurnIds(chatId);
+          noteSendToChatNotYetAnAgent(chatId, messageId, {
+            text: sentText,
+            attachments: sentAttachments,
+            outgoingId,
+            isInBox: false,
+          });
           const status = await sendMessage(chatId, finalText, messageId);
           // The send resolved: the message is now real (committed, queued, or held for the
           // agent the chat is switching to), so its "Sending…" bubble is removed by the arriving
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).
           dropOutgoingNoTurnWillRetire(chatId, outgoingId, status);
           noteOutgoingAccepted(chatId, outgoingId);
+          settleSendToChatNotYetAnAgent(chatId, messageId, status);
         } catch (err) {
+          if (settleSendToChatNotYetAnAgent(chatId, messageId, null)) {
+            // Its chat's discard already put it back in the box and said why.
+            dropOutgoing(chatId, outgoingId);
+            m.redraw();
+            refocusAfterSend();
+            return;
+          }
           // A refusal means the message was NOT accepted; one nothing answered, or mngr could not
           // confirm, may have reached the agent anyway (KINDS_THAT_MAY_HAVE_ARRIVED). A /compact the server declined
           // to run gets the declined-command notice rather than the failure notice, since retrying
@@ -1807,16 +1907,34 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         try {
           refuseSendToFailedChat(recovery.chatId);
           priorTurnIds = sentUserTurnIds(recovery.chatId);
+          noteSendToChatNotYetAnAgent(recovery.chatId, messageId, {
+            text: recovery.text,
+            attachments: recovery.attachments,
+            outgoingId,
+            isInBox: true,
+          });
           const status = await sendMessage(recovery.chatId, recovery.sentText, messageId, true);
           dropOutgoingNoTurnWillRetire(recovery.chatId, outgoingId, status);
           noteOutgoingAccepted(recovery.chatId, outgoingId);
+          if (settleSendToChatNotYetAnAgent(recovery.chatId, messageId, status)) {
+            // Its chat's discard put it back in the box and said why, so the copy and the notice stay.
+            actionFailureInFlight = null;
+            m.redraw();
+            return;
+          }
           // Landed, so take the restored copy back out of the composer.
           clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);
+          noteSendLeftBox(recovery.chatId, messageId);
           stopWatchingUnconfirmedTurn(recovery);
           clearActionFailureNotice();
           focusMessageTextarea();
         } catch (err) {
           dropOutgoing(recovery.chatId, outgoingId);
+          if (settleSendToChatNotYetAnAgent(recovery.chatId, messageId, null)) {
+            actionFailureInFlight = null;
+            m.redraw();
+            return;
+          }
           watchForUnconfirmedTurn(err, recovery, priorTurnIds);
           catchUpOnSignedOutAccount(err);
           // Failed again. Only re-open the notice if they are still on that agent -- otherwise

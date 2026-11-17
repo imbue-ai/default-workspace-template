@@ -70,7 +70,7 @@ Built-in manifests:
 | `system-monitor` | false | `system-monitor` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 50` | none; the shell synthesizes `open` at `/` | `SYSTEM_MONITOR_PORT = "{port:main}"` and `SYSTEM_MONITOR_HOST = "{host}"`, no copies (it stores nothing) |
 | `routines` | false | `routines` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 45` and a `[[message_handlers]]` `type = "minds:show-routine", show = "/{routine_id}"` | none; the shell synthesizes `open` at `/` | `routines-app` (the program's name, the default, is the routines library's command line) over `ROUTINES_APP_PORT = "{port:main}"`, `ROUTINES_APP_HOST = "{host}"` and `ROUTINES_APP_PREVIEW = "1"` (read-only over the live state: it refuses every change with `403`), no copies (it stores nothing) |
 
-The chat, terminal, Screen, Getting Started, and System Monitor declare `system = true`; Routines does not.
+The chat, terminal, Screen, Getting Started, System Monitor, Files, and Routines declare `system = true`: each is part of every workspace rather than an app built on it, so the share panel lists it under System and the desktop app's home screen does not count it among the workspace's own apps.
 
 Every built-in except the shell and the terminal's pty points `icon` at an `icon.svg` beside its manifest; those two are `internal` and have none.
 
@@ -277,7 +277,7 @@ Outbound (shell to browser):
 A single-instance app carries one synthesized record: key `""`, url `/`, title `display_name`, status `idle` while running and `stopped` otherwise, lifetime `explicit`, renameable `false`, stoppable `false` (the app-level Stop and Start are its verbs).
 
 The shell's socket carries nothing about chats.
-The chat pages read `/api/ws` on the chat's origin, which sends `chats_updated` (one `ChatSnapshot` per chat, its agent-level facts under `active_agent`), `provisional_chat_created` (a provisional chat's record, its held sends as the page draws them -- the words without the author prefix, and who sent them -- sent again when its phase changes) and `provisional_chat_completed` (`{"chat_id", "success", "error"}`; `success` false with a reason is a failed create, false with `null` a chat discarded before it launched).
+The chat pages read `/api/ws` on the chat's origin, which sends `chats_updated` (one `ChatSnapshot` per chat, its agent-level facts under `active_agent`), `provisional_chat_created` (a provisional chat's record, its held sends as the page draws them -- the words without the author prefix, and who sent them -- sent again when its phase changes) and `provisional_chat_completed` (`{"chat_id", "success", "error"}`; `success` false with a reason is a failed create, false with `null` a chat discarded before it launched, which also carries `held_sends`, the messages dropped with it in the order held, and is replayed for 15 minutes to a page that connects later, after the provisional records and before the chat list).
 The arrangement ops `open`, `focus`, `split`, `close`, and `move` never travel on the socket: the shell applies them to the layout file and the file's `layout_updated` is what the windows see.
 
 ## 9. The inventory document

@@ -29,6 +29,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from collections.abc import Generator
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,7 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.config import Config
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import HeldSendSnapshot
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatAsShown
 from imbue.chat.primitives import ChatId
@@ -106,10 +108,18 @@ class _WithholdProtoCreatedBroadcaster(WebSocketBroadcaster):
         if type(self)._release_on_completion:
             type(self)._withheld.append(send)
 
-    def broadcast_provisional_chat_completed(self, chat_id: ChatId, success: bool, error: str | None) -> None:
+    def broadcast_provisional_chat_completed(
+        self,
+        chat_id: ChatId,
+        success: bool,
+        error: str | None,
+        held_sends: Sequence[HeldSendSnapshot] | None = None,
+    ) -> None:
         while type(self)._withheld:
             type(self)._withheld.pop(0)()
-        WebSocketBroadcaster.broadcast_provisional_chat_completed(self, chat_id=chat_id, success=success, error=error)
+        WebSocketBroadcaster.broadcast_provisional_chat_completed(
+            self, chat_id=chat_id, success=success, error=error, held_sends=held_sends
+        )
 
 
 class _ReplayHidingAgentManager(AgentManager):

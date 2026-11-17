@@ -125,8 +125,8 @@ export const IMMERSIVE_REQUEST: "minds:immersive-request" =
 export const IMMERSIVE_CHANGED: "minds:immersive-changed" =
   "IMMERSIVE_CHANGED" in embedContract ? embedContract.IMMERSIVE_CHANGED : "minds:immersive-changed";
 
-// The longest ``errorDetails`` OPEN_HELP takes (contract v16, which added the field: the failure a "Report a bug"
-// is about, attached to the report); an embedder drops a message whose details run longer.
+// The longest ``errorDetails`` (the failure a "Report a bug" is about) OPEN_HELP takes from contract v16; an
+// embedder drops a message whose details run longer.
 export const MAX_HELP_ERROR_DETAILS_LENGTH: number =
   "MAX_HELP_ERROR_DETAILS_LENGTH" in embedContract ? embedContract.MAX_HELP_ERROR_DETAILS_LENGTH : 16384;
 

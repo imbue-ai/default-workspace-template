@@ -43,9 +43,14 @@ export const FailureLine: m.Component<FailureLineAttrs> = {
         : m(
             "div",
             { class: "flex flex-wrap gap-1" },
-            actions.map((action) =>
-              m(Button, { sm: true, extra: `${marker}-action`, onclick: action.run }, action.label),
-            ),
+            actions.map((action) => {
+              const isPending = action.pending?.isPending() === true;
+              return m(
+                Button,
+                { sm: true, extra: `${marker}-action`, disabled: isPending, onclick: action.run },
+                isPending && action.pending !== undefined ? action.pending.label : action.label,
+              );
+            }),
           ),
     ]);
   },

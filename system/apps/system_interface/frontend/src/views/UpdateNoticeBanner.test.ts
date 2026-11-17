@@ -243,7 +243,15 @@ describe("UpdateNoticeBanner", () => {
       "The previous version is restored, but ... Ask your agent to run `mngr start --restart system-services`.";
     deliverNotice(noticeWire(["chat"], { outcome: restored, needs_system_services_restart: true }));
     click(root, ".update-notice-finish");
+    // While the chat's window is not up yet the button says so and takes no second press.
+    m.redraw.sync();
+    const finish = root.querySelector(".update-notice-finish") as HTMLButtonElement;
+    expect(finish.textContent).toBe("Asking an agent…");
+    expect(finish.disabled).toBe(true);
     await settled();
+    expect((root.querySelector(".update-notice-finish") as HTMLButtonElement).textContent).toBe(
+      "Ask an agent to finish it",
+    );
     // A rollback that failed settles the same record: the agent is told what happened, not that the files are back.
     const failed = "The update could not be reverted, so nothing was changed: conflict. Ask your agent to look at it.";
     deliverNotice(noticeWire(["chat"], { outcome: failed, needs_system_services_restart: true }));

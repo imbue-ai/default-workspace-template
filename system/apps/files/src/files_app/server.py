@@ -170,7 +170,7 @@ def create_app(
     gateway: Gateway | None,
     static_directory: Path,
     agent_id: str,
-    root: Path = Path("/"),
+    local: LocalFiles,
     synced_root: Path = SYNCED_FOLDERS,
 ) -> Flask:
     app = Flask(__name__, static_folder=None)
@@ -181,7 +181,6 @@ def create_app(
     )
     # Absolute, as Flask would read a relative one from its own package rather than the working directory.
     static_directory = static_directory.resolve()
-    local = LocalFiles(root)
     # Whether each device's file server is reached under its id, as the last listing of the shares found.
     device_paths: dict[str, bool] = {}
     cache = ConnectionsCache(gateway, agent_id, synced_root)

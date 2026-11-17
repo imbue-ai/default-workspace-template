@@ -3,7 +3,6 @@
 Every change a test makes goes through the app's own controls and is read back off the disk.
 """
 
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -556,7 +555,7 @@ def test_a_download_the_server_refuses_says_why_in_a_toast(open_files_page: Open
     (files_root / "notes.txt").unlink()
     _entry(page, "/notes.txt").click(button="right")
     page.locator('[data-menu-row="download"]').click()
-    expect(page.locator("[data-toast]")).to_have_text("Couldn't download notes.txt: It's no longer there.")
+    expect(page.locator("[data-toast]")).to_have_text("Couldn't download \"notes.txt\". It's no longer there.")
 
 
 def test_add_makes_a_new_folder_and_names_it(open_files_page: OpenFilesPage, files_root: Path) -> None:
@@ -572,22 +571,22 @@ def test_add_makes_a_new_folder_and_names_it(open_files_page: OpenFilesPage, fil
     assert not (files_root / "untitled folder").exists()
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into a folder whatever its mode")
 def test_a_new_folder_in_a_folder_that_cannot_be_written_says_what_failed_and_why(
-    open_files_page: OpenFilesPage, files_root: Path
+    open_files_page: OpenFilesPage, files_root: Path, read_only_folders: set[str]
 ) -> None:
-    (files_root / "photos").chmod(0o555)
-    try:
-        page = open_files_page("/photos/")
-        expect(_entry(page, "/photos/sunset.png")).to_be_visible()
-        page.locator('[data-action="add"]').click()
-        page.locator('[data-menu-row="new-folder"]').click()
+    read_only_folders.add("/photos/")
+    page = open_files_page("/photos/")
+    expect(_entry(page, "/photos/sunset.png")).to_be_visible()
+    page.locator('[data-action="add"]').click()
+    page.locator('[data-menu-row="new-folder"]').click()
 
-        expect(page.locator("[data-toast]")).to_have_text(
-            'Couldn\'t create "untitled folder". This folder is read-only.'
-        )
-    finally:
-        (files_root / "photos").chmod(0o755)
+    toast = page.locator("[data-toast]")
+    expect(
+        toast.get_by_text('Couldn\'t create "untitled folder". This folder is read-only.', exact=True)
+    ).to_be_visible()
+    toast.get_by_text("See details").click()
+    expect(toast.locator(".see-details pre")).to_contain_text("HTTP 403")
+    assert not (files_root / "photos" / "untitled folder").exists()
 
 
 def test_uploads_land_in_the_folder_and_a_taken_name_can_keep_both(

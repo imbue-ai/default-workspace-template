@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { Overlays, mayCancelPendingUrl } from "./overlays";
-import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
+import type { ReportedFailure, StartNewOutcome, StartOptions } from "@imbue/workspace-ui/src/app_contract";
 import type { FailureHost } from "./overlays";
 import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
 
@@ -138,14 +138,28 @@ describe("Overlays", () => {
 /** A shell connection as the overlay's buttons see it, recording what they asked of it. */
 function fakeHost(fields: { hasShell?: boolean; canReportBug?: boolean } = {}): FailureHost & {
   started: string[];
+  /** Settles each ask in turn, as the shell's reply would. */
+  answers: ((outcome: StartNewOutcome) => void)[];
+  /** Hands each ask an answer that came after it settled as not answered. */
+  lateAnswers: ((outcome: StartNewOutcome) => void)[];
+  /** Whether each ask told the shell the page shows its outcome (so the shell toasts nothing). */
+  showsOutcome: boolean[];
   reports: ReportedFailure[];
 } {
   const host = {
     started: [] as string[],
+    answers: [] as ((outcome: StartNewOutcome) => void)[],
+    lateAnswers: [] as ((outcome: StartNewOutcome) => void)[],
+    showsOutcome: [] as boolean[],
     reports: [] as ReportedFailure[],
     hasShell: () => fields.hasShell ?? true,
     canReportBug: () => fields.canReportBug ?? true,
-    startNewWithText: (text: string) => void host.started.push(text),
+    startNewWithText: (text: string, options?: StartOptions) => {
+      host.started.push(text);
+      host.showsOutcome.push(options?.showsOutcome === true);
+      host.lateAnswers.push(options?.onLateAnswer ?? (() => undefined));
+      return new Promise<StartNewOutcome>((resolve) => host.answers.push(resolve));
+    },
     reportBug: (failure: ReportedFailure) => void host.reports.push(failure),
   };
   return host;
@@ -272,6 +286,134 @@ describe("Overlays for the stack's state", () => {
     expect(host.reports).toEqual([
       { message: "The Screen stopped unexpectedly.", details: "screen-neko exited unexpectedly" },
     ]);
+  });
+
+  it("reads Asking an agent… until the chat opens, and says why when it could not", async () => {
+    const host = fakeHost();
+    const overlays = overlaysWith(host);
+    const crashed = state({ ...STOPPED, stop_reason: "screen-neko exited unexpectedly", stop_cause: "crashed" });
+    overlays.update(crashed, "idle", null, null, null);
+    const ask = overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]");
+    const askFailure = (): HTMLElement | null =>
+      overlays.element.querySelector<HTMLElement>("[data-screen-ask-failure]:not([hidden])");
+
+    ask?.click();
+    expect([ask?.textContent, ask?.disabled]).toEqual(["Asking an agent…", true]);
+    expect(host.showsOutcome).toEqual([true]);
+    // A state that arrives while the shell is starting the chat leaves the press pending.
+    overlays.update(crashed, "idle", null, null, null);
+    expect([ask?.textContent, ask?.disabled]).toEqual(["Asking an agent…", true]);
+
+    host.answers[0]({
+      isOpened: false,
+      failure: { message: "Chat couldn't open that.", details: "HTTP 400\nbad launch", isReportable: false },
+    });
+    await Promise.resolve();
+    expect([ask?.textContent, ask?.disabled]).toEqual(["Ask an agent to fix this", false]);
+    expect(askFailure()?.querySelector("p")?.textContent).toBe("Chat couldn't open that.");
+    expect(askFailure()?.querySelector("pre")?.textContent).toBe("HTTP 400\nbad launch");
+
+    ask?.click();
+    expect(askFailure()).toBeNull();
+    host.answers[1]({ isOpened: true });
+    await Promise.resolve();
+    expect([ask?.textContent, ask?.disabled, askFailure()]).toEqual(["Ask an agent to fix this", false, null]);
+  });
+
+  it("never reads Asking an agent… on a newer failure's button for an ask made about an older one", async () => {
+    const host = fakeHost();
+    const overlays = overlaysWith(host);
+    const ask = overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]");
+    const askFailure = (): HTMLElement | null =>
+      overlays.element.querySelector<HTMLElement>("[data-screen-ask-failure]:not([hidden])");
+    overlays.update(
+      state({ ...STOPPED, stop_reason: "screen-neko exited unexpectedly", stop_cause: "crashed" }),
+      "idle",
+      null,
+      null,
+      null,
+    );
+    ask?.click();
+
+    overlays.update(
+      state({ ...STOPPED, stop_reason: "neko never answered", stop_cause: "start_failed" }),
+      "idle",
+      null,
+      null,
+      null,
+    );
+    expect([ask?.textContent, ask?.disabled]).toEqual(["Ask an agent to fix this", false]);
+
+    // An ask about the newer failure is pending on its own, and the older ask's answer touches neither.
+    ask?.click();
+    host.answers[0]({
+      isOpened: false,
+      failure: { message: "Chat couldn't open that.", details: null, isReportable: false },
+    });
+    await Promise.resolve();
+    expect([ask?.textContent, ask?.disabled, askFailure()]).toEqual(["Asking an agent…", true, null]);
+    host.answers[1]({ isOpened: true });
+    await Promise.resolve();
+    expect([ask?.textContent, ask?.disabled, askFailure()]).toEqual(["Ask an agent to fix this", false, null]);
+  });
+
+  it("replaces a not-answered ask with the shell's late answer, and offers Report a bug under a reportable one", async () => {
+    const host = fakeHost();
+    const overlays = overlaysWith(host);
+    const askFailure = (): HTMLElement | null =>
+      overlays.element.querySelector<HTMLElement>("[data-screen-ask-failure]:not([hidden])");
+    overlays.update(
+      state({ ...STOPPED, stop_reason: "screen-neko exited unexpectedly", stop_cause: "crashed" }),
+      "idle",
+      null,
+      null,
+      null,
+    );
+    overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]")?.click();
+    host.answers[0]({
+      isOpened: false,
+      failure: { message: "The workspace didn't answer.", details: null, isReportable: false },
+    });
+    await Promise.resolve();
+    expect(askFailure()?.querySelector("p")?.textContent).toBe("The workspace didn't answer.");
+
+    const late = { message: "The workspace couldn't do that.", details: "boom", isReportable: true };
+    host.lateAnswers[0]({ isOpened: false, failure: late });
+    expect(askFailure()?.querySelector("p")?.textContent).toBe(late.message);
+    askFailure()?.querySelector<HTMLButtonElement>("[data-screen-ask-failure-report]")?.click();
+    expect(host.reports).toEqual([{ message: late.message, details: "boom" }]);
+
+    host.lateAnswers[0]({ isOpened: true });
+    expect(askFailure()).toBeNull();
+  });
+
+  it("drops a failed ask once the Screen runs again, and one that settles after it did", async () => {
+    const host = fakeHost();
+    const overlays = overlaysWith(host);
+    const crashed = state({ ...STOPPED, stop_reason: "screen-neko exited unexpectedly", stop_cause: "crashed" });
+    const notOpened: StartNewOutcome = {
+      isOpened: false,
+      failure: { message: "Chat couldn't open that.", details: null, isReportable: false },
+    };
+    const askFailure = (): HTMLElement | null =>
+      overlays.element.querySelector<HTMLElement>("[data-screen-ask-failure]:not([hidden])");
+    const ask = (): void => overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]")?.click();
+
+    overlays.update(crashed, "idle", null, null, null);
+    ask();
+    host.answers[0](notOpened);
+    await Promise.resolve();
+    expect(askFailure()).not.toBeNull();
+    overlays.update(state({}), "connected", OWNER, null, null);
+    overlays.update(crashed, "idle", null, null, null);
+    expect(askFailure()).toBeNull();
+
+    ask();
+    overlays.update(state({}), "connected", OWNER, null, null);
+    host.answers[1](notOpened);
+    await Promise.resolve();
+    overlays.update(crashed, "idle", null, null, null);
+    expect(askFailure()).toBeNull();
   });
 
   it("names low memory for a member the memory guard shed, with no bug report for it", () => {

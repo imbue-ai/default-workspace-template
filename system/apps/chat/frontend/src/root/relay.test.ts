@@ -132,6 +132,12 @@ describe("passing the chrome's answers down", () => {
         resolutions: [{ requestId: "req-1", resolution: "granted" }],
       }),
     ).toBe(true);
+    expect(
+      isForwardedToInnerFrames({ type: "shell:start-new-with-text-result", requestId: "a1", isOpened: true }),
+    ).toBe(true);
+    expect(isForwardedToInnerFrames({ type: "shell:start-with-text-result", requestId: "a2", isOpened: true })).toBe(
+      true,
+    );
     expect(isForwardedToInnerFrames({ type: "minds:focus-chat", chatId: "agent-1" })).toBe(false);
     expect(isForwardedToInnerFrames(null)).toBe(false);
   });

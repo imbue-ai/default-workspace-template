@@ -749,6 +749,7 @@ export function FilesApp(): m.Component<{ app: FilesController }> {
           onDismiss: (id: number) => app.model.toasts.dismiss(id),
           closesPlainToasts: true,
           onReportBug: app.reportBugAction(),
+          onHold: (id: number) => app.model.toasts.hold(id),
         }),
         app.dialogs.view(),
       ]);

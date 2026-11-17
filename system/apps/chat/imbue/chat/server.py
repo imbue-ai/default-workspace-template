@@ -255,6 +255,7 @@ from imbue.chat.state import ChatAppState
 from imbue.chat.state import attach_state
 from imbue.chat.state import get_state
 from imbue.chat.ws_broadcaster import chats_updated_message
+from imbue.chat.ws_broadcaster import provisional_chat_completed_message
 from imbue.chat.ws_broadcaster import provisional_chat_created_message
 from imbue.chat.wsgi import build_sock
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
@@ -959,8 +960,8 @@ def _consider_naming_chat(state: ChatAppState, chat_id: ChatId, message: str) ->
 ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND: Final[str] = "account_signed_out"
 
 # What a refused send says for each of mngr's kinds and the chat app's ``agent_start_failed``, in place of mngr's
-# reason, which is written for its own command line and goes behind the page's details. An unclassified refusal (``unknown``) has no sentence of its own, and an
-# unconfirmed one is worded by the page, which offers Send again for it.
+# reason, which is written for its own command line and goes behind the page's details. An unclassified refusal
+# (``unknown``) has no sentence of its own, and an unconfirmed one is worded by the page, which offers Send again.
 _SEND_FAILURE_SENTENCES: Final[dict[str, str]] = {
     SendFailureKind.INPUT_BLOCKED: "The agent is waiting on something in its terminal. Answer it there and try again.",
     SendFailureKind.AGENT_UNREACHABLE: "The agent isn't running and didn't start.",
@@ -1058,10 +1059,8 @@ def _send_to_chat(
             logger.info("Agent {} was destroyed while a message to it was in flight: {}", agent_info.name, e)
             return _SendRefused(answer=_send_to_gone_chat_error(str(chat_id)), status=404)
         except SendFailedError as send_failure:
-            # The harness's reason goes back as the detail, with its kind beside it, and the sentence for the kind:
-            # only this side knows which case it met (a start that failed, a pane that is gone), while the page
-            # decides what to offer by the kind (trying again can clear a blocked input, where only a restart is left
-            # for a pane that is gone). A /compact the chat declines is its own refusal, not a failure.
+            # The sentence comes from here, the only side that knows which case it met; the page picks what to offer
+            # by the kind. A /compact the chat declines is a refusal, not a failure.
             logger.info("Send to chat {} failed: {}", chat_id, send_failure.kind)
             is_declined = send_failure.kind in _DECLINED_SEND_FAILURE_KINDS
             status_code = 409 if is_declined else 500
@@ -3197,14 +3196,20 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
     _loguru_logger.info("WS /api/ws connection opened (conn {})", id(client_queue))
     disconnect_reason = "handler exited"
     try:
-        # The connect-time replay: every provisional chat this process holds, then the chat
-        # list. The list comes last on purpose -- it is how a page knows the replay is over,
-        # so a record it still holds that this process did not replay (a create the previous
-        # process was running) can be dropped rather than waited on forever. Before the first
-        # read of the agent list there is no list to send: an empty one would tell the page every
-        # chat is gone, so the page waits for the push that follows that read instead.
-        for provisional in agent_manager.get_provisional_chats_as_shown():
+        # The connect-time replay: every provisional chat this process holds, the chats deleted lately with the
+        # messages dropped with them (a page whose socket was down then puts its own back), then the chat list.
+        # A discard comes after the records, so one read between the two drops the record it follows. The list
+        # comes last on purpose -- it is how a page knows the replay is over, so a record it still holds that
+        # this process did not replay (a create the previous process was running) can be dropped rather than
+        # waited on forever. Before the first read of the agent list there is no list to send: an empty one
+        # would tell the page every chat is gone, so the page waits for the push that follows that read instead.
+        replay = agent_manager.get_connect_replay()
+        for provisional in replay.provisional_chats:
             websocket.send(json.dumps(provisional_chat_created_message(provisional)))
+        for discarded in replay.discarded_chats:
+            websocket.send(
+                json.dumps(provisional_chat_completed_message(discarded.chat_id, False, None, discarded.held_sends))
+            )
         if agent_manager.is_agent_list_known():
             websocket.send(
                 json.dumps(chats_updated_message(agent_manager.get_chat_snapshots(), agent_manager.get_main_chat_id()))

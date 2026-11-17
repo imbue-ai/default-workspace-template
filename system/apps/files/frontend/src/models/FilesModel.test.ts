@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
+
 import { fileEntry, folderEntry, httpFailure, memoryStorage } from "../testing/records";
 import * as server from "./server";
 import type { Connections } from "./connections";
@@ -52,7 +54,7 @@ function harness(): Harness {
     confirmReplace: vi.fn(async () => replaceAnswer.value),
     askNewName: vi.fn(async () => null),
     hasShell: () => true,
-    startWithText: vi.fn(),
+    startWithText: vi.fn(async (): Promise<StartNewOutcome> => ({ isOpened: true })),
     canReportBug: () => bugReport.canReport,
     reportBug: vi.fn(),
   };
@@ -442,9 +444,8 @@ describe("telling a failed change", () => {
   const PERMISSION = "You don't have permission to change this.";
   const PERMISSION_DETAIL = "MOVE /home/b.txt: [Errno 13] Permission denied: '/home/zeta/b.txt'";
 
-  it("says what failed, then the cause the server gave, as a note that goes with its details only in the log", async () => {
+  it("says what failed, then the cause the server gave, as a note that goes with its details behind See details", async () => {
     const { model } = harness();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const said = "Something with that name is already there.";
     vi.mocked(server.movePath).mockRejectedValueOnce(
       httpFailure(412, { detail: said, user_facing_message: said, kind: "already_exists" }),
@@ -453,10 +454,27 @@ describe("telling a failed change", () => {
     await model.moveInto(["/home/b.txt"], "/home/zeta/");
 
     const message = `Couldn't move "b.txt" into "zeta". ${said}`;
-    expect(model.toasts.current().map((toast) => [toast.message, toast.isLasting])).toEqual([[message, false]]);
     // The reader drops a reason that only repeats the sentence.
-    expect(warn).toHaveBeenCalledWith(`[files] ${message}`, "HTTP 412");
-    warn.mockRestore();
+    expect(model.toasts.current().map((toast) => [toast.message, toast.isLasting, toast.details])).toEqual([
+      [message, false, "HTTP 412"],
+    ]);
+  });
+
+  it("keeps a computer's refusal of a delete behind See details on the note: its status and its own text", async () => {
+    const { model } = harness();
+    vi.mocked(server.deletePath).mockRejectedValueOnce(
+      httpFailure(404, {
+        detail: "DELETE /Users/kim/b.txt: Not Found",
+        user_facing_message: "It's no longer there.",
+        kind: "not_found",
+      }),
+    );
+
+    await model.deleteEntries(["/home/b.txt"]);
+
+    expect(model.toasts.current().map((toast) => [toast.message, toast.isLasting, toast.details])).toEqual([
+      ["Couldn't delete \"b.txt\". It's no longer there.", false, "HTTP 404\nDELETE /Users/kim/b.txt: Not Found"],
+    ]);
   });
 
   it("says which folder refused a move that could not be written", async () => {
@@ -500,7 +518,47 @@ describe("telling a failed change", () => {
     expect(toast.isLasting).toBe(true);
     expect(toast.actions.map((action) => action.label)).toEqual(["Ask an agent to free up space"]);
     toast.actions[0].run();
-    expect(host.startWithText).toHaveBeenCalledWith(expect.stringContaining("out of disk space"));
+    expect(host.startWithText).toHaveBeenCalledWith(
+      expect.stringContaining("out of disk space"),
+      expect.objectContaining({ showsOutcome: true }),
+    );
+  });
+
+  it("reads Asking an agent… on the free-up-space button until the chat opens, and says why when it could not", async () => {
+    const { model, host } = harness();
+    const answers: ((outcome: StartNewOutcome) => void)[] = [];
+    const lateAnswers: ((outcome: StartNewOutcome) => void)[] = [];
+    vi.mocked(host.startWithText).mockImplementation((_text, options) => {
+      lateAnswers.push(options?.onLateAnswer ?? (() => undefined));
+      return new Promise((resolve) => answers.push(resolve));
+    });
+    vi.mocked(server.createFolder).mockRejectedValueOnce(
+      httpFailure(507, {
+        detail: "MKCOL",
+        user_facing_message: "This workspace is out of disk space.",
+        kind: "out_of_space",
+      }),
+    );
+    await model.createFolder();
+    const [freeUpSpace] = model.toasts.current()[0].actions;
+
+    freeUpSpace.run();
+    expect(freeUpSpace.pending?.isPending()).toBe(true);
+    expect(freeUpSpace.pending?.label).toBe("Asking an agent…");
+
+    answers[0]({
+      isOpened: false,
+      failure: { message: "The workspace didn't answer.", details: null, isReportable: false },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(freeUpSpace.pending?.isPending()).toBe(false);
+    expect(model.toasts.current().map((toast) => toast.message)).toContain("The workspace didn't answer.");
+
+    // The shell's real answer, after a restart settled the ask, replaces what was said.
+    lateAnswers[0]({ isOpened: true });
+    expect(model.toasts.current().map((toast) => toast.message)).not.toContain("The workspace didn't answer.");
+    expect(host.redraw).toHaveBeenCalled();
   });
 
   it("says why a folder couldn't be listed, with the details kept", async () => {

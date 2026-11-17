@@ -720,8 +720,6 @@ describe("openPermissionRequest", () => {
   });
 });
 
-// -- Shell-reported verdicts ---------------------------------------------------
-
 describe("shell-reported verdicts", () => {
   beforeEach(() => {
     resetShellPermissionResolutionsForTesting();

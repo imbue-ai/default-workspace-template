@@ -279,8 +279,10 @@ _SHELL_STAND_IN_TEMPLATE: Final[str] = """<!doctype html>
 <script>
   window.shellMessages = [];
   const frame = document.getElementById("app");
+  window.shellId = "stand-in-shell";
   const greet = () => frame.contentWindow.postMessage({
     type: "shell:handshake",
+    shellId: window.shellId,
     clientId: "client-stand-in",
     windowId: "window-stand-in",
     desktopId: "desktop-stand-in",
@@ -289,6 +291,14 @@ _SHELL_STAND_IN_TEMPLATE: Final[str] = """<!doctype html>
     canReportBug: __CAN_REPORT_BUG__,
   }, "*");
   frame.addEventListener("load", greet);
+  window.greet = greet;
+  // Settles the frame's latest shell:start-new-with-text as the shell does once the chat opened or could not.
+  window.answerStartNewWithText = (outcome) => {
+    const asked = window.shellMessages.filter((message) => message.type === "shell:start-new-with-text").at(-1);
+    frame.contentWindow.postMessage(
+      { type: "shell:start-new-with-text-result", requestId: asked.requestId, ...outcome }, "*",
+    );
+  };
   window.addEventListener("message", (event) => {
     if (event.source !== frame.contentWindow) return;
     window.shellMessages.push(event.data);
@@ -314,10 +324,25 @@ window.addEventListener("message", (event) => {
 def shell_stand_in_page(frame_url: str, can_report_bug: bool) -> str:
     """A page standing in for the workspace shell around one app page: it frames ``frame_url``, greets the frame with
     a ``shell:handshake`` on every load and in answer to each ``shell:capabilities``, as the shell does, saying
-    ``can_report_bug``, and keeps every message the frame posts in ``window.shellMessages``."""
+    ``can_report_bug`` and one ``shellId``, keeps every message the frame posts in ``window.shellMessages``, answers a
+    ``shell:start-new-with-text`` when a test calls ``answer_start_new_with_text``, and greets again when a test calls
+    ``resend_shell_handshake``."""
     return _SHELL_STAND_IN_TEMPLATE.replace("__FRAME_URL__", html.escape(frame_url)).replace(
         "__CAN_REPORT_BUG__", json.dumps(can_report_bug)
     )
+
+
+def answer_start_new_with_text(page: Page, outcome: Mapping[str, object]) -> None:
+    """Answer the framed page's latest ``shell:start-new-with-text`` with ``outcome`` (``{"isOpened": True}``, or
+    ``{"isOpened": False, "failure": {...}}``), as the shell does, through the ``shell_stand_in_page`` loaded in
+    ``page``."""
+    page.evaluate("(outcome) => window.answerStartNewWithText(outcome)", dict(outcome))
+
+
+def resend_shell_handshake(page: Page, shell_id: str | None = None) -> None:
+    """Greet the framed page again, as the shell does when something about the window changes (the same
+    ``shellId``), or, given another ``shell_id``, as a shell that started again does."""
+    page.evaluate("(shellId) => { if (shellId !== null) window.shellId = shellId; window.greet(); }", shell_id)
 
 
 def shell_messages(page: Page, message_type: str) -> list[dict[str, object]]:

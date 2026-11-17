@@ -70,12 +70,17 @@ export interface GalleryState {
   readonly apps: readonly AppRecord[];
 }
 
-/** Why the gallery could not load its themes or apps, with a Try again that loads the page again. */
-export function galleryFailureNotice(error: unknown, reload: () => void): FailureNotice {
-  return {
-    ...failureSentence(describeRequestFailure(error), "The theme gallery couldn't load"),
-    actions: [{ label: "Try again", run: reload }],
-  };
+const GALLERY_NOT_LOADED = "The theme gallery couldn't load";
+
+/** Why the gallery could not load its themes or apps, with a Try again that loads the page again; a sentence that
+ *  would ask for a bug report asks only for the Try again where none can be opened (``canReportBug``). */
+export function galleryFailureNotice(error: unknown, reload: () => void, canReportBug: boolean): FailureNotice {
+  const told = failureSentence(describeRequestFailure(error), GALLERY_NOT_LOADED);
+  const actions = [{ label: "Try again", run: reload }];
+  if (told.isReportable && !canReportBug) {
+    return { message: `${GALLERY_NOT_LOADED}. Try again.`, details: told.details, isReportable: false, actions };
+  }
+  return { ...told, actions };
 }
 
 /** The gallery of the theme `requested` names, or null when the catalog has no such theme. */

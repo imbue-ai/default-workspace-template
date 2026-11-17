@@ -114,6 +114,7 @@ export class FilePageModel {
         this.toasts,
         [toldFailure(error, `Couldn't save "${nameOf(this.options.path)}"`, "item")],
         this.reporter,
+        () => m.redraw(),
       );
     }
     this.isSaving = false;
@@ -128,7 +129,7 @@ export class FilePageModel {
     const target = childPath(parent, name, false);
     const failure = await renameOnServer(path, target, name);
     if (failure !== null) {
-      toastFailures(this.toasts, [failure], this.reporter);
+      toastFailures(this.toasts, [failure], this.reporter, () => m.redraw());
       m.redraw();
       return;
     }
@@ -150,7 +151,12 @@ export class FilePageModel {
     try {
       await server.deletePath(path);
     } catch (error) {
-      toastFailures(this.toasts, [toldFailure(error, `Couldn't delete "${nameOf(path)}"`, "item")], this.reporter);
+      toastFailures(
+        this.toasts,
+        [toldFailure(error, `Couldn't delete "${nameOf(path)}"`, "item")],
+        this.reporter,
+        () => m.redraw(),
+      );
       m.redraw();
       return;
     }
@@ -356,6 +362,7 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
           onDismiss: (id: number) => page.toasts.dismiss(id),
           closesPlainToasts: true,
           onReportBug: reportBugAction(page.reporter),
+          onHold: (id: number) => page.toasts.hold(id),
         }),
         page.dialogs.view(),
       ]);

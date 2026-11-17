@@ -51,9 +51,13 @@ import {
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   SHELL_START_NEW_WITH_TEXT,
+  SHELL_START_NEW_WITH_TEXT_RESULT,
   SHELL_START_WITH_TEXT,
+  SHELL_START_WITH_TEXT_RESULT,
   reportedFailureOf,
 } from "@imbue/workspace-ui/src/app_contract";
+import type { StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
+import { DEFAULT_WHAT_FAILED, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { viewportRect } from "../geometry/frames";
 import type { PixelRect } from "../geometry/frames";
@@ -232,6 +236,11 @@ export class LivePagesLayer implements PageDriver {
   private mountPolicy: MountPolicy = { kind: "all" };
   /** The overview's tiles while it is up, else null. */
   private overview: OverviewPresentation | null = null;
+  /** This load of the shell, in every handshake: a page settles the requests it is still waiting on only when a
+   *  handshake names another load (the shell started again and forgot them). */
+  private readonly shellId = Array.from(crypto.getRandomValues(new Uint32Array(2)), (part) =>
+    part.toString(16).padStart(8, "0"),
+  ).join("");
 
   constructor(
     private readonly host: HTMLElement,
@@ -895,6 +904,7 @@ export class LivePagesLayer implements PageDriver {
       canReportBug: this.store.getCanReportBug(),
       opensLocalFiles: this.store.getOpensLocalFiles(),
       isViewing,
+      shellId: this.shellId,
     });
     page.greetedDesktopId = desktopId;
     page.greetedIsViewing = isViewing;
@@ -987,18 +997,56 @@ export class LivePagesLayer implements PageDriver {
     this.store.raiseWindow(page.windowId);
   }
 
-  /** ``shell:start-with-text {text}`` from a page: the launcher's primary text action runs with it, on the active
-   *  desktop (a page can only be pressed there); the frame has to be one the shell created. */
+  /** ``shell:start-with-text {text, requestId}`` from a page: the launcher's primary text action runs with it, on the
+   *  active desktop (a page can only be pressed there), and the page is answered with
+   *  ``shell:start-with-text-result``; the frame has to be one the shell created. */
   private takeStartWithText(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
-    const text = this.textFromPage(frame, payload, SHELL_START_WITH_TEXT);
-    if (text !== null) void this.store.startWithText(text);
+    this.startAndAnswer(frame, payload, SHELL_START_WITH_TEXT, SHELL_START_WITH_TEXT_RESULT, (text) =>
+      this.store.startWithText(text),
+    );
   }
 
-  /** ``shell:start-new-with-text {text}`` from a page ("Ask an agent to fix this"): the launcher's secondary text
-   *  action runs with it, as ``shell:start-with-text`` runs the primary one. */
+  /** ``shell:start-new-with-text {text, requestId}`` from a page ("Ask an agent to fix this"): the launcher's
+   *  secondary text action runs with it, and the page is answered with ``shell:start-new-with-text-result``. */
   private takeStartNewWithText(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
-    const text = this.textFromPage(frame, payload, SHELL_START_NEW_WITH_TEXT);
-    if (text !== null) void this.store.startNewWithText(text);
+    this.startAndAnswer(frame, payload, SHELL_START_NEW_WITH_TEXT, SHELL_START_NEW_WITH_TEXT_RESULT, (text) =>
+      this.store.startNewWithText(text),
+    );
+  }
+
+  /** Run ``start`` with a page's text and answer the page with ``resultType`` once the window opened or the start
+   *  failed; a start that throws is answered with the fallback, so the page's button never stays pending. A failure
+   *  is toasted too unless the request says ``showsOutcome``: a page that drops the answer still has it told. */
+  private startAndAnswer(
+    frame: HTMLIFrameElement,
+    payload: Record<string, unknown>,
+    type: string,
+    resultType: string,
+    start: (text: string) => Promise<StartNewOutcome>,
+  ): void {
+    const text = this.textFromPage(frame, payload, type);
+    if (text === null) return;
+    const requestId = payload.requestId;
+    if (typeof requestId !== "string" || requestId === "") {
+      console.warn(`[si] ${type} ignored: it carried no request id (${JSON.stringify(payload)})`);
+      return;
+    }
+    void start(text)
+      .catch((error: unknown): StartNewOutcome => {
+        console.error(`[si] ${type} failed`, error);
+        return {
+          isOpened: false,
+          failure: {
+            message: fallbackSentence(DEFAULT_WHAT_FAILED),
+            details: error instanceof Error ? error.message : String(error),
+            isReportable: true,
+          },
+        };
+      })
+      .then((outcome) => {
+        sendToChildFrame(frame, resultType, { requestId, ...outcome });
+        if (!outcome.isOpened && payload.showsOutcome !== true) this.store.showStartFailure(outcome.failure);
+      });
   }
 
   /** ``shell:draft-text {text}`` from a page (element-reference-menu plan section 5): the text is drafted into the

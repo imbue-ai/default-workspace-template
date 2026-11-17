@@ -6,6 +6,7 @@
 
 import "../style.css";
 import m from "mithril";
+import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import { STANDARD_THEME_ID, wearTheme } from "@imbue/workspace-ui/src/themes/themeClient";
 import { fetchInventory, fetchThemes } from "../model/api";
 import { themeRefOf } from "../model/themes";
@@ -37,10 +38,16 @@ void start().catch((error: unknown) => {
   console.error("[gallery] could not load the themes or the apps", error);
   const root = document.getElementById("app");
   if (root === null) return;
-  const notice = galleryFailureNotice(error, () => window.location.reload());
-  // The gallery is a page of its own, outside the desktop, so nothing here opens a bug report.
+  // A shell that frames the gallery says whether Imbue Studio opens bug reports, which can arrive after the failure.
+  const connection = connectToShell({ onHandshake: () => m.redraw() });
+  const reload = (): void => window.location.reload();
   m.mount(root, {
     view: () =>
-      m(FailureLine, { notice, onReportBug: null, marker: "theme-gallery-failure", messageClass: "text-primary" }),
+      m(FailureLine, {
+        notice: galleryFailureNotice(error, reload, connection.canReportBug()),
+        onReportBug: connection.canReportBug() ? (failure) => connection.reportBug(failure) : null,
+        marker: "theme-gallery-failure",
+        messageClass: "text-primary",
+      }),
   });
 });

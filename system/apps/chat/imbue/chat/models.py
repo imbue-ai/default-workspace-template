@@ -940,6 +940,15 @@ class ProvisionalChat(FrozenModel):
     )
 
 
+class DiscardedChat(FrozenModel):
+    """A chat deleted before its agent landed, as a page that connects soon after is told of it."""
+
+    chat_id: ChatId = Field(description="The deleted chat")
+    held_sends: tuple[HeldSendSnapshot, ...] = Field(
+        description="The messages it held for its agent, dropped with it, in the order they were held, as the page draws them"
+    )
+
+
 class ProvisionalChatAsShown(FrozenModel):
     """A provisional chat as the pages are sent it (the ``provisional_chat_created`` message)."""
 
@@ -947,6 +956,13 @@ class ProvisionalChatAsShown(FrozenModel):
     held_sends: tuple[HeldSendSnapshot, ...] = Field(
         description="The sends held for it, as the page draws them: the sender's words, and who the sender is"
     )
+
+
+class ConnectReplay(FrozenModel):
+    """What a page that connects is told before the chat list: the provisional chats, then the chats deleted lately."""
+
+    provisional_chats: tuple[ProvisionalChatAsShown, ...] = Field(description="The provisional chats held now")
+    discarded_chats: tuple[DiscardedChat, ...] = Field(description="The chats deleted lately, oldest first")
 
 
 class SetLaunchChoiceRequest(FrozenModel):

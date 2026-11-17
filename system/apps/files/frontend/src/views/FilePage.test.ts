@@ -6,7 +6,7 @@ import m from "mithril";
 
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 
-import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
+import type { ReportedFailure, StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
 
 import type { FailureHost } from "../models/failures";
 import * as server from "../models/server";
@@ -24,7 +24,7 @@ const PATH = "/home/user/workspace/notes.md";
 function reporter(canReport: boolean): FailureHost & { reportBug: Mock<(failure: ReportedFailure) => void> } {
   return {
     hasShell: () => true,
-    startWithText: vi.fn<(text: string) => void>(),
+    startWithText: vi.fn(async (): Promise<StartNewOutcome> => ({ isOpened: true })),
     canReportBug: () => canReport,
     reportBug: vi.fn<(failure: ReportedFailure) => void>(),
   };
@@ -96,6 +96,32 @@ describe("a file whose text could not be loaded", () => {
 });
 
 describe("a file that could not be saved", () => {
+  it("shows a refusal it can name as a note with See details, which holds the note up once opened", async () => {
+    vi.mocked(server.readText).mockResolvedValueOnce("draft");
+    const { page, root } = await openedPage(true);
+    page.draft = "draft, changed";
+    const said = "There's a folder where a file should be.";
+    vi.mocked(server.writeFile).mockRejectedValueOnce(
+      httpFailure(409, {
+        detail: "PUT /home/user/workspace/notes.md",
+        user_facing_message: said,
+        kind: "is_a_folder",
+      }),
+    );
+    const hold = vi.spyOn(page.toasts, "hold");
+
+    await page.save();
+    m.redraw.sync();
+
+    const [toast] = page.toasts.current();
+    expect([toast.message, toast.isLasting]).toEqual([`Couldn't save "notes.md". ${said}`, false]);
+    const disclosure = root.querySelector<HTMLDetailsElement>(".toast details.see-details");
+    expect(disclosure?.querySelector("pre")?.textContent).toBe("HTTP 409\nPUT /home/user/workspace/notes.md");
+    disclosure?.setAttribute("open", "");
+    disclosure?.dispatchEvent(new Event("toggle"));
+    expect(hold).toHaveBeenCalledWith(toast.id);
+  });
+
   it("names it, and keeps the note up with the details where nothing in the server's answer explains it", async () => {
     vi.mocked(server.readText).mockResolvedValueOnce("draft");
     const { page, root } = await openedPage(true);

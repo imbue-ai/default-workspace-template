@@ -92,6 +92,7 @@ const mocks = vi.hoisted(() => {
     // Whether the chat is a room (a message log among the people here), which offers no model and no agent.
     isRoom: false,
     provisional: undefined as unknown,
+    discardListeners: [] as ((discarded: DiscardedChat) => void)[],
     launchChat: vi.fn(async (_chatId: string, _accountId: string, _message?: string, _kind?: string) => ({})),
     startChatOnAccount: vi.fn(async (_accountId: string) => {}),
     chooseFastMode: vi.fn(),
@@ -257,6 +258,8 @@ vi.mock("../models/Chats", async (importOriginal) => ({
     mocks.launchChat(chatId, accountId, message, kind),
   whenChatRegistered: (chatId: string) => mocks.whenChatRegistered(chatId),
   refuseSendToFailedChat: (chatId: string) => mocks.refuseSendToFailedChat(chatId),
+  addProvisionalChatDiscardedListener: (listener: (discarded: DiscardedChat) => void) =>
+    mocks.discardListeners.push(listener),
 }));
 vi.mock("../models/Providers", () => ({
   openProviderChooser: mocks.openProviderChooser,
@@ -289,6 +292,7 @@ vi.mock("@imbue/workspace-voice/src/support", async (importOriginal) => ({
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
 import { isApplePlatform } from "@imbue/workspace-voice/src/support";
 import { ChatNotStartedError } from "../models/Chats";
+import type { DiscardedChat, ProvisionalChat } from "../models/Chats";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
 import { stubShellConnection } from "../shellConnectionFixture";
 import { describeTapFailure } from "./composer-failures";
@@ -462,6 +466,17 @@ async function typeAndSend(component: m.Component<{ chatId: string | null }>, ch
   expect(onclick, "send button should be present once text is typed").toBeTruthy();
   await onclick!();
   return render();
+}
+
+/** The message id the ``fromEnd``-th last send carried (1 for the latest). */
+function sentMessageId(fromEnd = 1): string {
+  const calls = mocks.sendMessage.mock.calls as unknown as [string, string, string][];
+  return calls[calls.length - fromEnd][2];
+}
+
+/** Tell the composer the chat app discarded a chat not yet an agent, with the messages it dropped with it. */
+function discardProvisionalChat(discarded: DiscardedChat): void {
+  for (const listener of mocks.discardListeners) listener(discarded);
 }
 
 describe("MessageInput send guard", () => {
@@ -1096,6 +1111,154 @@ describe("MessageInput send to a chat still being created", () => {
     expect(calledText).toContain("hello");
   });
 
+  describe("deleted before it lands", () => {
+    const creating: ProvisionalChat = {
+      chat_id: "agent-1",
+      name: "Chat 2",
+      account_id: "acct-1",
+      kind: "agent",
+      phase: "creating",
+      error: null,
+      is_seeded: false,
+      held_sends: [],
+      model_pick: null,
+    };
+
+    beforeEach(() => {
+      mocks.isChatRegistered = false;
+      mocks.provisional = creating;
+    });
+
+    afterEach(() => {
+      mocks.isChatRegistered = true;
+      mocks.provisional = undefined;
+    });
+
+    /** Send ``text``, which the chat app holds, then discard the chat, whose record still holds it when ``keepsHeld``. */
+    async function sendThenDiscard(text: string, keepsHeld: boolean): Promise<unknown> {
+      mocks.sendMessage.mockResolvedValueOnce("held");
+      const component = MessageInput();
+      const sent = await typeAndSend(component, "agent-1", text);
+      expect(findByTag(sent, "textarea")?.attrs?.value).toBe("");
+      discardProvisionalChat({
+        chat_id: "agent-1",
+        held_sends: keepsHeld ? [{ message_id: sentMessageId(), text }] : [],
+      });
+      return component.view!({ attrs: { chatId: "agent-1" } } as never);
+    }
+
+    it("puts a message the chat app held back in the box, with the not-delivered notice", async () => {
+      const earlierBubbles = getOutgoingMessages("agent-1").map((outgoing) => outgoing.id);
+
+      const after = await sendThenDiscard("hello", true);
+
+      expect(renderedText(findByClass(after, "modal-message"))).toContain("Your message wasn't delivered.");
+      expect(findByTag(after, "textarea")?.attrs?.value).toBe("hello");
+      expect(getOutgoingMessages("agent-1").map((outgoing) => outgoing.id)).toEqual(earlierBubbles);
+      expect(findButton(after, "Retry")).toBeUndefined();
+    });
+
+    it("puts several held messages back in the order they were sent", async () => {
+      mocks.sendMessage.mockResolvedValueOnce("held").mockResolvedValueOnce("held");
+      const component = MessageInput();
+      await typeAndSend(component, "agent-1", "first");
+      await typeAndSend(component, "agent-1", "second");
+      const heldSends = [
+        { message_id: sentMessageId(2), text: "first" },
+        { message_id: sentMessageId(), text: "second" },
+      ];
+
+      discardProvisionalChat({ chat_id: "agent-1", held_sends: heldSends });
+
+      const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
+      expect(findByTag(after, "textarea")?.attrs?.value).toBe("first\n\nsecond");
+    });
+
+    it("leaves alone a message Stop already took back, which the chat no longer held", async () => {
+      const after = await sendThenDiscard("hello", false);
+
+      expect(findByClass(after, "modal-message")).toBeUndefined();
+      expect(findByTag(after, "textarea")?.attrs?.value).toBe("");
+    });
+
+    it("puts a held message back when the chat's discard reaches the page before the send's own answer", async () => {
+      let answer: (status: string) => void = () => {};
+      mocks.sendMessage.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+      const earlierBubbles = getOutgoingMessages("agent-1").map((outgoing) => outgoing.id);
+      const component = MessageInput();
+      const sending = typeAndSend(component, "agent-1", "hello");
+      await flushAsync();
+
+      discardProvisionalChat({ chat_id: "agent-1", held_sends: [{ message_id: sentMessageId(), text: "hello" }] });
+      answer("held");
+      await sending;
+
+      const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
+      expect(renderedText(findByClass(after, "modal-message"))).toContain("Your message wasn't delivered.");
+      expect(findByTag(after, "textarea")?.attrs?.value).toBe("hello");
+      expect(getOutgoingMessages("agent-1").map((outgoing) => outgoing.id)).toEqual(earlierBubbles);
+    });
+
+    it("leaves the box alone when a send's failure comes after the chat's discard put it back", async () => {
+      let refuse: (error: unknown) => void = () => {};
+      mocks.sendMessage.mockImplementationOnce(() => new Promise((_resolve, reject) => (refuse = reject)));
+      const component = MessageInput();
+      const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+      const sending = typeAndSend(component, "agent-1", "hello");
+      await flushAsync();
+
+      discardProvisionalChat({ chat_id: "agent-1", held_sends: [{ message_id: sentMessageId(), text: "hello" }] });
+      render();
+      refuse("nope");
+      await sending;
+
+      const after = render();
+      expect(renderedText(findByClass(after, "modal-message"))).toContain("Your message wasn't delivered.");
+      expect(findByTag(after, "textarea")?.attrs?.value).toBe("hello");
+      expect(findButton(after, "Retry")).toBeUndefined();
+    });
+
+    it("leaves a retried message where it is in the box when the chat's discard comes before the retry's answer", async () => {
+      let answer: (status: string) => void = () => {};
+      mocks.sendMessage
+        .mockRejectedValueOnce("nope")
+        .mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+      const component = MessageInput();
+      const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+      const failed = await typeAndSend(component, "agent-1", "hello");
+      (findButton(failed, "Retry")!.attrs!.onclick as () => void)();
+      await flushAsync();
+      const textarea = findByTag(render(), "textarea");
+      (textarea?.attrs?.oninput as (event: unknown) => void)({
+        target: { value: "and this\n\nhello", style: {}, scrollHeight: 10 },
+      });
+
+      discardProvisionalChat({ chat_id: "agent-1", held_sends: [{ message_id: sentMessageId(), text: "hello" }] });
+      answer("held");
+      await flushAsync();
+
+      const after = render();
+      expect(renderedText(findByClass(after, "modal-message"))).toContain("Your message wasn't delivered.");
+      expect(findByTag(after, "textarea")?.attrs?.value).toBe("and this\n\nhello");
+    });
+
+    it("puts a retried message back when the chat is discarded after the chat app held the retry", async () => {
+      mocks.sendMessage.mockRejectedValueOnce("nope").mockResolvedValueOnce("held");
+      const component = MessageInput();
+      const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+      const failed = await typeAndSend(component, "agent-1", "hello");
+      (findButton(failed, "Retry")!.attrs!.onclick as () => void)();
+      await flushAsync();
+      expect(findByTag(render(), "textarea")?.attrs?.value).toBe("");
+
+      discardProvisionalChat({ chat_id: "agent-1", held_sends: [{ message_id: sentMessageId(), text: "hello" }] });
+
+      const after = render();
+      expect(renderedText(findByClass(after, "modal-message"))).toContain("Your message wasn't delivered.");
+      expect(findByTag(after, "textarea")?.attrs?.value).toBe("hello");
+    });
+  });
+
   it("returns the message to the composer with the reason when the create has already failed", async () => {
     stubShellConnection(true);
     mocks.refuseSendToFailedChat.mockImplementationOnce(() => {
@@ -1284,6 +1447,21 @@ describe("MessageInput first send of a chat with no seed", () => {
     expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-1", "", "agent");
     expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
     expect(mocks.sendMessage.mock.calls[0]).toEqual(expect.arrayContaining(["agent-1", "Plan my week"]));
+  });
+
+  it("puts a held first send back in the box when the chat it launched is deleted before it lands", async () => {
+    mocks.sendMessage.mockResolvedValueOnce("held");
+    const component = MessageInput();
+    await typeAndSend(component, "agent-1", "Plan my week");
+
+    discardProvisionalChat({
+      chat_id: "agent-1",
+      held_sends: [{ message_id: sentMessageId(), text: "Plan my week" }],
+    });
+
+    const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(renderedText(findByClass(after, "modal-message"))).toContain("Your message wasn't delivered.");
+    expect(findByTag(after, "textarea")?.attrs?.value).toBe("Plan my week");
   });
 
   it("drops the bubble of a first send that Stop took back, which no turn will retire", async () => {

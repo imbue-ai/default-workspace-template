@@ -8,13 +8,18 @@ import { TEXT_HELPER_SIZE } from "./typography";
  */
 export interface SeeDetailsAttrs {
   readonly details: string | null;
+  /** The reader opened the details. */
+  readonly onOpen?: () => void;
 }
 
 export const SeeDetails: m.Component<SeeDetailsAttrs> = {
   view(vnode) {
-    const { details } = vnode.attrs;
+    const { details, onOpen } = vnode.attrs;
     if (details === null || details.trim() === "") return null;
-    return m("details", { class: `see-details ${TEXT_HELPER_SIZE} max-w-full` }, [
+    const ontoggle = (event: Event): void => {
+      if ((event.currentTarget as HTMLDetailsElement).open) onOpen?.();
+    };
+    return m("details", { class: `see-details ${TEXT_HELPER_SIZE} max-w-full`, ontoggle }, [
       m(
         "summary",
         {
