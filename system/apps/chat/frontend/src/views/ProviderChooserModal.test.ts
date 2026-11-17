@@ -758,6 +758,42 @@ describe("a failure on the chooser's screens", () => {
     shell.release();
   });
 
+  it("offers Try again and Report a bug for a failed load whose providers were already listed", async () => {
+    state.loaded = true;
+    loadLanesAndAccountsWithRetry.mockRejectedValueOnce(rejection(500, { detail: "Internal server error: boom" }));
+    const shell = framePageInShell(true);
+
+    const { root, draw } = await mounted();
+
+    expect(root.textContent).toContain(
+      "Couldn't load the list of providers. Try again. If this persists, report a bug.",
+    );
+    expect(root.querySelector(".see-details-text")?.textContent).toContain("Internal server error: boom");
+    (root.querySelector(".report-bug") as HTMLElement).click();
+    expect(shell.posted("shell:report-bug")).toHaveLength(1);
+    (root.querySelector("[data-e2e=retry-providers]") as HTMLButtonElement).click();
+    await settled();
+    draw();
+    expect(loadLanesAndAccountsWithRetry).toHaveBeenCalledTimes(2);
+    expect(root.textContent).not.toContain("Couldn't load the list of providers");
+    shell.release();
+  });
+
+  it("keeps a failure screen's buttons out of the scrolling body, so opening See details cannot push them away", async () => {
+    startFlow.mockRejectedValue(rejection(500, { detail: "a long reason" }));
+    const { root, draw } = await mounted();
+
+    (root.querySelector('[data-e2e="lane-anthropic"]') as HTMLElement).click();
+    await settled();
+    draw();
+
+    const body = root.querySelector("[data-e2e='status-error']")!.closest(".overflow-y-auto");
+    const tryAgain = [...root.querySelectorAll("button")].find((button) => button.textContent === "Try again");
+    expect(body).not.toBeNull();
+    expect(tryAgain).toBeDefined();
+    expect(body!.contains(tryAgain!)).toBe(false);
+  });
+
   it("says the workspace didn't answer when the provider list got a gateway answer", async () => {
     state.loaded = false;
     loadLanesAndAccountsWithRetry.mockRejectedValue(rejection(502, null, "Bad Gateway"));
