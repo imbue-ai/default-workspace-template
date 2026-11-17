@@ -1,9 +1,9 @@
 /**
  * The composer's mic (the workspace-voice-input spec, D5): one button that carries the speech model's state and
- * every state of dictation, with no bar and no timer. While the model is not loaded the mic asks for it first:
- * the glyph faint, a warning badge on its corner, and a press that loads the model without listening. While
- * that load is shown the button eases into a label with the download's progress as a bar under it, and a press
- * on the label dismisses it, leaving the load to run on. The label takes over the keyboard's focus when the mic
+ * every state of dictation, with no bar and no timer. While the model is not loaded the mic says a press has
+ * that to do first: the glyph faint, a warning badge on its corner, and a press that loads the model and goes on
+ * to dictate. While that load is shown the button eases into a label with the download's progress as a bar under
+ * it, and a press on the label dismisses it, which calls the dictation off and leaves the load to run on. The label takes over the keyboard's focus when the mic
  * holds it, and the faded mic leaves the tab order. Once the model is loaded a press dictates: a spinner while
  * starting and stopping, and while listening the capsule fills from the bottom with the input level, drawn inside
  * the glyph so nothing in the toolbar moves. The level is set imperatively, through the setter the button hands
@@ -57,10 +57,10 @@ export function dictationTooltip(
 ): string {
   switch (state) {
     case "load-needed":
-      if (download === null) return `Set up dictation: load the speech model (${shortcut})`;
+      if (download === null) return `Dictate once the speech model has loaded (${shortcut})`;
       return download.totalBytes === null || download.totalBytes <= 0
-        ? `Set up dictation: one-time download (${shortcut})`
-        : `Set up dictation: one-time ${formatFileSize(download.totalBytes)} download (${shortcut})`;
+        ? `Dictate after a one-time download (${shortcut})`
+        : `Dictate after a one-time ${formatFileSize(download.totalBytes)} download (${shortcut})`;
     case "loading":
       return progress === null || progress.totalBytes <= 0
         ? "Downloading speech model"
@@ -77,7 +77,7 @@ export function dictationTooltip(
 }
 
 const ARIA_LABELS: Record<DictationButtonState, string> = {
-  "load-needed": "Set up dictation",
+  "load-needed": "Dictate once the speech model has loaded",
   loading: "Downloading the speech model",
   ready: "Dictate",
   starting: "Starting dictation",
@@ -234,7 +234,8 @@ export function DictationButton(): m.Component<DictationButtonAttrs> {
   const label = (attrs: DictationButtonAttrs): m.Vnode => {
     const isLoading = attrs.state === "loading";
     const tooltip = isLoading
-      ? `${dictationTooltip("loading", attrs.progress, attrs.shortcutLabel)}. Click to keep typing.`
+      ? `${dictationTooltip("loading", attrs.progress, attrs.shortcutLabel)}. Dictation starts when it is done; ` +
+        "click to keep typing instead."
       : null;
     return m(
       "button",
@@ -244,7 +245,7 @@ export function DictationButton(): m.Component<DictationButtonAttrs> {
         disabled: !isLoading,
         tabindex: isLoading ? undefined : -1,
         "aria-hidden": isLoading ? undefined : "true",
-        "aria-label": "Keep typing while the speech model loads",
+        "aria-label": "Cancel dictation and keep typing while the speech model loads",
         ...hoverTooltipAttrs(tooltip, "above"),
         onclick: () => attrs.onDismissLoading(),
       },

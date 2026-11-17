@@ -55,13 +55,13 @@ describe("dictationTooltip", () => {
 
   it("says what a press sets up while the model is not loaded: a download, sized when known, or a load", () => {
     expect(dictationTooltip("load-needed", null, "Cmd+Shift+M", { totalBytes: 250_000_000 })).toBe(
-      "Set up dictation: one-time 238 MB download (Cmd+Shift+M)",
+      "Dictate after a one-time 238 MB download (Cmd+Shift+M)",
     );
     expect(dictationTooltip("load-needed", null, "Ctrl+Shift+M", { totalBytes: null })).toBe(
-      "Set up dictation: one-time download (Ctrl+Shift+M)",
+      "Dictate after a one-time download (Ctrl+Shift+M)",
     );
     expect(dictationTooltip("load-needed", null, "Cmd+Shift+M", null)).toBe(
-      "Set up dictation: load the speech model (Cmd+Shift+M)",
+      "Dictate once the speech model has loaded (Cmd+Shift+M)",
     );
     // A download still to come changes no other state's words.
     expect(dictationTooltip("ready", null, "Cmd+Shift+M", { totalBytes: 1 })).toBe("Dictate (Cmd+Shift+M)");
@@ -86,8 +86,8 @@ describe("DictationButton", () => {
   it("names its state, and says what it is and what a press does, in every state", () => {
     const said: Record<DictationButtonState, { ariaLabel: string; tooltip: string }> = {
       "load-needed": {
-        ariaLabel: "Set up dictation",
-        tooltip: "Set up dictation: load the speech model (Cmd+Shift+M)",
+        ariaLabel: "Dictate once the speech model has loaded",
+        tooltip: "Dictate once the speech model has loaded (Cmd+Shift+M)",
       },
       loading: { ariaLabel: "Downloading the speech model", tooltip: "Downloading speech model" },
       ready: { ariaLabel: "Dictate", tooltip: "Dictate (Cmd+Shift+M)" },
@@ -138,21 +138,21 @@ describe("DictationButton", () => {
   it("asks for the model first, as a faint mic with a warning badge, while the model is not loaded", () => {
     vi.useFakeTimers();
     const { button, attrs } = mountButton({ state: "load-needed", download: { totalBytes: 250_000_000 } });
-    expect(button.getAttribute("aria-label")).toBe("Set up dictation");
+    expect(button.getAttribute("aria-label")).toBe("Dictate once the speech model has loaded");
     expect(button.querySelector("svg.dictation-glyph")!.classList.contains("text-faint")).toBe(true);
     const badge = button.querySelector<HTMLElement>(".dictation-setup-badge")!;
     expect(badge.classList.contains("text-warning")).toBe(true);
     expect(badge.querySelector("svg")).not.toBeNull();
-    expect(hoverTooltipText(button)).toBe("Set up dictation: one-time 238 MB download (Cmd+Shift+M)");
+    expect(hoverTooltipText(button)).toBe("Dictate after a one-time 238 MB download (Cmd+Shift+M)");
     button.click();
     expect(attrs.onPress).toHaveBeenCalledTimes(1);
     unmountViews();
     const unsized = mountButton({ state: "load-needed", download: { totalBytes: null } });
-    expect(hoverTooltipText(unsized.button)).toBe("Set up dictation: one-time download (Cmd+Shift+M)");
+    expect(hoverTooltipText(unsized.button)).toBe("Dictate after a one-time download (Cmd+Shift+M)");
     unmountViews();
     // The files are on this device already: the same look, and a press that loads them.
     const downloaded = mountButton({ state: "load-needed", download: null });
-    expect(hoverTooltipText(downloaded.button)).toBe("Set up dictation: load the speech model (Cmd+Shift+M)");
+    expect(hoverTooltipText(downloaded.button)).toBe("Dictate once the speech model has loaded (Cmd+Shift+M)");
     expect(downloaded.button.querySelector(".dictation-setup-badge")).not.toBeNull();
     expect(downloaded.button.querySelector("svg.dictation-glyph")!.classList.contains("text-faint")).toBe(true);
   });
@@ -191,14 +191,18 @@ describe("DictationButton", () => {
     expect(label.disabled).toBe(false);
     expect(label.hasAttribute("tabindex")).toBe(false);
     expect(label.hasAttribute("aria-hidden")).toBe(false);
-    expect(label.getAttribute("aria-label")).toBe("Keep typing while the speech model loads");
-    expect(hoverTooltipText(label)).toBe("Downloading speech model, 25% of 4 B. Click to keep typing.");
+    expect(label.getAttribute("aria-label")).toBe("Cancel dictation and keep typing while the speech model loads");
+    expect(hoverTooltipText(label)).toBe(
+      "Downloading speech model, 25% of 4 B. Dictation starts when it is done; click to keep typing instead.",
+    );
     label.click();
     expect(attrs.onDismissLoading).toHaveBeenCalledTimes(1);
     expect(attrs.onPress).not.toHaveBeenCalled();
     unmountViews();
     const unsized = mountButton({ state: "loading" });
-    expect(hoverTooltipText(unsized.label)).toBe("Downloading speech model. Click to keep typing.");
+    expect(hoverTooltipText(unsized.label)).toBe(
+      "Downloading speech model. Dictation starts when it is done; click to keep typing instead.",
+    );
   });
 
   it("keeps the collapsed label out of reach at rest", () => {

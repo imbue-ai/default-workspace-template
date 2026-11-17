@@ -1008,11 +1008,11 @@ nothing itself. The mic shows one of six states, named by its
 `data-dictation-state`:
 
 - `load-needed`: the model is not loaded. The glyph sits faint with a warning
-  badge on its corner, and the tooltip says what a press sets up: the one-time
-  download with its size, when the page's own Cache Storage does not hold the
-  files of the variant this device runs, or the load of files already here. A
-  press asks for the model and shows its load; it never goes on to listen by
-  itself.
+  badge on its corner, and the tooltip says what a press has to do before it
+  dictates: the one-time download with its size, when the page's own Cache
+  Storage does not hold the files of the variant this device runs, or the load
+  of files already here. A press means the whole of it: it asks for the model,
+  shows its load, and goes on to dictate when the load ends.
 - `loading`: the load is shown. The mic eases into a `Loading voice model` label
   with the download's progress as a bar under it, the composer's box is marked
   `data-composer-state="blocked-loading"`, and the text box is disabled and
@@ -1027,12 +1027,13 @@ A shown load can be dismissed: a press on the label, a press on the dimmed text
 box (which puts the caret where the press landed), Escape, the mic's shortcut,
 or the page going out of view (a press right behind the one that asked for the
 load is that press landing twice, and dismisses nothing). Dismissing hands the
-box back for typing and cancels nothing: the load runs on with the mic `load-needed`, and a press shows
-it again from where it has got to. A load that ends while shown leaves the mic
-`ready` and gives the text box focus back; one that fails is told in a notice
-over the composer, whose Retry asks again. A load that ends after a dismissal
-turns the mic `ready` with no sound and no notice, and one that fails then says
-nothing. A model loaded from another page of the workspace turns this page's mic
+box back for typing and calls off the dictation the load was to go on to, but
+not the load: it runs on with the mic `load-needed`, and a press shows it again
+from where it has got to. A load that ends while shown goes straight on to
+dictation, with no second press; one that fails is told in a notice over the
+composer, whose Retry asks again. A load that ends after a dismissal turns the
+mic `ready` with no sound and no notice, and starts nothing; one that fails
+then says nothing. A model loaded from another page of the workspace turns this page's mic
 `ready` as well. Until a page has found out the model's state as its composer
 mounts (five seconds at most), the mic is drawn `ready`, so a loaded model never
 flashes the badge.

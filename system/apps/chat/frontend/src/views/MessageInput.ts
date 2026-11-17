@@ -865,12 +865,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     screenWakeLock.setWanted(dictationState !== "idle" || isWatchingModelLoad);
   }
 
-  /** The load this composer asked for has settled. One still shown ends, and says why if it failed; one
-   *  dismissed since ends unremarked, its failure left for the press that asks again. */
+  /** The load this composer asked for has settled. One still shown ends as the press that asked for it meant:
+   *  it goes on to dictate, with no second press, or says why the load failed. One dismissed since ends
+   *  unremarked: nothing starts, and its failure is left for the press that asks again. */
   function handleModelLoadSettled(failure: DictationProblem | null): void {
     if (isWatchingModelLoad) {
       isWatchingModelLoad = false;
       if (failure !== null) dictationProblem = failure;
+      else if (currentChatId !== null && !isComposerDisabledNow) beginDictation();
     }
     syncScreenWakeLock();
     m.redraw();
@@ -893,8 +895,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   }
 
   /**
-   * Stop showing the speech model's load and hand the box back for typing. The load itself runs on, since
-   * nothing cancels one, and the mic becomes ready by itself when it ends.
+   * Stop showing the speech model's load and hand the box back for typing, which calls off the dictation the
+   * load was to go on to. The load itself runs on, since nothing cancels one, and the mic becomes ready by
+   * itself when it ends.
    *
    * This is the one place a shown load is dismissed: every trigger calls it, and a trigger added later should
    * too. The triggers: a press on the loading label, or on the mic or its shortcut while the load is shown
@@ -930,9 +933,18 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     textarea.setSelectionRange(position.offset, position.offset);
   }
 
+  /** Begin a dictation whose words land where the caret is now. The speech model is loaded; a load this
+   *  composer was showing for it is over. */
+  function beginDictation(): void {
+    isWatchingModelLoad = false;
+    openDictationSpan();
+    void ensureDictation().start();
+  }
+
   /** The mic and the shortcut. While dictating, a press stops it. Otherwise a press on a shown load is the
    *  label's own (``handleLoadingPress``), a press on a loaded model dictates, and a press on one that is not
-   *  loaded asks for it: a press that loads never goes on to listen by itself. */
+   *  loaded means the same with the load first: it asks for the model, shows the load, and goes on to dictate
+   *  when the load ends, unless the load was dismissed meanwhile. */
   function handleMicPress(): void {
     if (currentChatId === null || isComposerDisabledNow) return;
     if (dictation !== null && dictation.state !== "idle") {
@@ -949,8 +961,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       watchModelLoad();
       return;
     }
-    openDictationSpan();
-    void ensureDictation().start();
+    beginDictation();
   }
 
   /** Stop and keep the words heard so far; a dictation still starting has none, so it is called off. */

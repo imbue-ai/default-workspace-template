@@ -2928,8 +2928,8 @@ describe("MessageInput dictation", () => {
       await settled();
       const tree = render();
       expect(micState(tree)).toBe("load-needed");
-      expect(mic(tree).attrs!["aria-label"]).toBe("Set up dictation");
-      expect(mic(tree).attrs!["data-hover-tooltip"]).toMatch(/^Set up dictation: load the speech model \(/);
+      expect(mic(tree).attrs!["aria-label"]).toBe("Dictate once the speech model has loaded");
+      expect(mic(tree).attrs!["data-hover-tooltip"]).toMatch(/^Dictate once the speech model has loaded \(/);
       expect(mocks.speechModels.discover).not.toHaveBeenCalled();
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("no storage"));
@@ -2963,7 +2963,7 @@ describe("MessageInput dictation", () => {
       }
       const tree = render();
       expect(micState(tree)).toBe("load-needed");
-      expect(mic(tree).attrs!["data-hover-tooltip"]).toMatch(/^Set up dictation: load the speech model \(/);
+      expect(mic(tree).attrs!["data-hover-tooltip"]).toMatch(/^Dictate once the speech model has loaded \(/);
       // The worker greeting late, with the model loaded, still turns the mic ready.
       mocks.speechModels.finishDiscovery();
       await vi.advanceTimersByTimeAsync(0);
@@ -2990,10 +2990,10 @@ describe("MessageInput dictation", () => {
       );
       const tree = render();
       expect(micState(tree)).toBe("load-needed");
-      expect(mic(tree).attrs!["aria-label"]).toBe("Set up dictation");
+      expect(mic(tree).attrs!["aria-label"]).toBe("Dictate once the speech model has loaded");
       expect(findByClass(tree, "dictation-setup-badge")).toBeDefined();
       // The size is formatted by the mocked attachments module here; DictationButton's own tests read the real one.
-      expect(mic(tree).attrs!["data-hover-tooltip"]).toMatch(/^Set up dictation: one-time .+ download \(/);
+      expect(mic(tree).attrs!["data-hover-tooltip"]).toMatch(/^Dictate after a one-time .+ download \(/);
       expect(isLoadShown(tree)).toBe(false);
     });
 
@@ -3005,8 +3005,8 @@ describe("MessageInput dictation", () => {
       );
       const tree = render();
       expect(micState(tree)).toBe("load-needed");
-      expect(mic(tree).attrs!["aria-label"]).toBe("Set up dictation");
-      expect(mic(tree).attrs!["data-hover-tooltip"]).toMatch(/^Set up dictation: load the speech model \(/);
+      expect(mic(tree).attrs!["aria-label"]).toBe("Dictate once the speech model has loaded");
+      expect(mic(tree).attrs!["data-hover-tooltip"]).toMatch(/^Dictate once the speech model has loaded \(/);
     });
 
     it("asks for the load once at a press and shows it: the label, the blocked box, the scrim", async () => {
@@ -3209,7 +3209,7 @@ describe("MessageInput dictation", () => {
       expect(mocks.speechModels.loads.length).toBe(1);
       expect((findByClass(tree, "dictation-morph-bar")!.attrs!.style as { width: string }).width).toBe("43%");
       expect(findByClass(tree, "dictation-morph-label")!.attrs!["data-hover-tooltip"]).toMatch(
-        /^Downloading speech model, 43% of .+\. Click to keep typing\.$/,
+        /^Downloading speech model, 43% of .+\. Dictation starts when it is done; click to keep typing instead\.$/,
       );
       // One end of the load ends both watches of it.
       mocks.speechModels.loads[0].resolve(LOADED);
@@ -3239,7 +3239,7 @@ describe("MessageInput dictation", () => {
       expect(textarea.focus).toHaveBeenCalledTimes(focusesBefore);
     });
 
-    it("comes to rest ready when a watched load finishes: the box live and focused, nothing started", async () => {
+    it("goes on to dictate when a watched load finishes, with no second press", async () => {
       const { render } = await composerWithoutModel();
       const { textarea, redraw } = withTextbox(render);
       pressMic(render);
@@ -3249,16 +3249,38 @@ describe("MessageInput dictation", () => {
       mocks.speechModels.loads[0].resolve(LOADED);
       await settled();
 
+      // The one press asked for the model and for the dictation: the load's end starts it.
+      expect(mocks.dictation!.start).toHaveBeenCalledTimes(1);
+      expect(mocks.speechModels.request).toHaveBeenCalledTimes(1);
       const tree = redraw();
       expect(isLoadShown(tree)).toBe(false);
-      expect(micState(tree)).toBe("ready");
       expect(textarea.focus).toHaveBeenCalledTimes(2);
-      expect(mocks.dictation).toBeNull();
-      expect(mocks.readyChime.play).not.toHaveBeenCalled();
       expect(findByClass(tree, "message-input-dictation-notice")).toBeUndefined();
-      // The press that follows dictates, and loads nothing.
-      startDictating(render);
-      expect(mocks.speechModels.request).toHaveBeenCalledTimes(1);
+      expect(mocks.readyChime.play).not.toHaveBeenCalled();
+      setDictationState("starting");
+      setDictationState("listening");
+      expect(micState(redraw())).toBe("listening");
+      expect(mocks.readyChime.play).toHaveBeenCalledTimes(1);
+    });
+
+    it("starts nothing when a watched load finishes in a composer that takes no input", async () => {
+      const { render } = await composerWithoutModel();
+      pressMic(render);
+      // The chat's account is signed out while the model loads, which disables the composer.
+      mocks.agent.account_id = "account-signed-out-5521";
+      mocks.signedOutAccountIds.add("account-signed-out-5521");
+      try {
+        render();
+
+        mocks.speechModels.loads[0].resolve(LOADED);
+        await settled();
+
+        expect(mocks.dictation).toBeNull();
+        expect(micState(render())).toBe("ready");
+      } finally {
+        mocks.agent.account_id = null;
+        mocks.signedOutAccountIds.clear();
+      }
     });
 
     it("says why a watched load failed, and asks for the model again on Retry", async () => {
@@ -3373,7 +3395,7 @@ describe("MessageInput dictation", () => {
       await mocks.voiceQueryClient.resetQueries({ queryKey: LOAD_KEY, exact: true });
       const tree = render();
       expect(micState(tree)).toBe("load-needed");
-      expect(mic(tree).attrs!["data-hover-tooltip"]).toMatch(/^Set up dictation: load the speech model \(/);
+      expect(mic(tree).attrs!["data-hover-tooltip"]).toMatch(/^Dictate once the speech model has loaded \(/);
     });
 
     it("comes to rest as soon as the worker says the model is loaded, ahead of the request's own answer", async () => {
@@ -3385,11 +3407,13 @@ describe("MessageInput dictation", () => {
       const tree = render();
       expect(isLoadShown(tree)).toBe(false);
       expect(micState(tree)).toBe("ready");
-      // A press in that step dictates, as any press on a loaded model does.
-      startDictating(render, "idle");
+      // A press in that step dictates, as any press on a loaded model does, and the load's own answer starts
+      // no second dictation.
+      startDictating(render);
       mocks.speechModels.loads[0].resolve(LOADED);
       await settled();
-      expect(micState(render())).toBe("ready");
+      expect(mocks.dictation!.start).toHaveBeenCalledTimes(1);
+      expect(micState(render())).toBe("listening");
       expect(mocks.speechModels.request).toHaveBeenCalledTimes(1);
     });
 
