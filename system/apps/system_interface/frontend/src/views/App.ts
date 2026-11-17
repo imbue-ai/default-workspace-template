@@ -1206,8 +1206,10 @@ export function App(): m.Component<AppAttrs> {
     });
   }
 
-  function keyboardShortcutsDialogView(): m.Children {
+  function keyboardShortcutsDialogView(current: DesktopStore): m.Children {
     return m(KeyboardShortcutsDialog, {
+      wordFailure: (whatFailed, error, retry) => current.changeFailureNotice(whatFailed, error, retry),
+      onReportBug: current.reportBugAction(),
       onClose: () => {
         isKeyboardShortcutsDialogOpen = false;
       },
@@ -1702,7 +1704,7 @@ export function App(): m.Component<AppAttrs> {
           menuRows === null ? null : menu.view(menuRows),
           wallpaperDialogDesktopId === null ? null : wallpaperDialogView(current, wallpaperDialogDesktopId),
           themeDialogDesktopId === null ? null : themeDialogView(current, themeDialogDesktopId),
-          isKeyboardShortcutsDialogOpen ? keyboardShortcutsDialogView() : null,
+          isKeyboardShortcutsDialogOpen ? keyboardShortcutsDialogView(current) : null,
           isResourceGaugeDialogOpen ? resourceGaugeDialogView(current) : null,
           replacedDesktopNotice(current),
           avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
