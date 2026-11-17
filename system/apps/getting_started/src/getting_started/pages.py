@@ -80,6 +80,7 @@ summary{cursor:pointer}</style></head>
 <p><button type="button" id="reload">Reload</button><button type="button" id="ask-agent" hidden>Ask an agent to
 rebuild it</button></p>
 <p id="ask-agent-failure" hidden></p>
+<p><button type="button" id="ask-agent-report" hidden>Report a bug</button></p>
 <details><summary>See details</summary>
 <pre id="ask-agent-failure-details" hidden></pre>
 <p>Its built files are missing. They are rebuilt with <code>npm run build</code> in <code>system/</code>.</p></details>
@@ -100,11 +101,27 @@ rebuild it</button></p>
       .then(({ connectToShell }) => {
         const ask = document.getElementById("ask-agent");
         // Only a shell can start a chat, so the button waits for one to greet the page.
-        const shell = connectToShell({ onHandshake: () => (ask.hidden = false) });
+        const report = document.getElementById("ask-agent-report");
+        let shown = null;
+        // A failure that asks for a bug report offers one while the shell's latest handshake says it can open one.
+        const showReport = () => {
+          report.hidden = !(shown !== null && shown.isReportable && shell.canReportBug());
+        };
+        const shell = connectToShell({
+          onHandshake: () => {
+            ask.hidden = false;
+            showReport();
+          },
+        });
+        report.addEventListener("click", () => {
+          if (shown !== null) shell.reportBug({ message: shown.message, details: shown.details });
+        });
         const failure = document.getElementById("ask-agent-failure");
         const failureDetails = document.getElementById("ask-agent-failure-details");
         const askLabel = ask.textContent;
         const show = (outcome) => {
+          shown = outcome.isOpened ? null : outcome.failure;
+          showReport();
           failure.hidden = outcome.isOpened;
           failureDetails.hidden = outcome.isOpened || outcome.failure.details === null;
           if (outcome.isOpened) return;
