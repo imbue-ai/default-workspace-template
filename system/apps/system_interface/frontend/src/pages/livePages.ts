@@ -1015,7 +1015,8 @@ export class LivePagesLayer implements PageDriver {
   }
 
   /** Run ``start`` with a page's text and answer the page with ``resultType`` once the window opened or the start
-   *  failed; a start that throws is answered with the fallback, so the page's button never stays pending. */
+   *  failed; a start that throws is answered with the fallback, so the page's button never stays pending. A failure
+   *  is toasted too unless the request says ``showsOutcome``: a page that drops the answer still has it told. */
   private startAndAnswer(
     frame: HTMLIFrameElement,
     payload: Record<string, unknown>,
@@ -1044,6 +1045,7 @@ export class LivePagesLayer implements PageDriver {
       })
       .then((outcome) => {
         sendToChildFrame(frame, resultType, { requestId, ...outcome });
+        if (!outcome.isOpened && payload.showsOutcome !== true) this.store.showStartFailure(outcome.failure);
       });
   }
 
