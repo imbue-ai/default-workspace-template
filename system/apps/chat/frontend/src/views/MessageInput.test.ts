@@ -1116,6 +1116,8 @@ describe("MessageInput send to a chat still being created", () => {
     expect(findButton(after, "Retry")).toBeUndefined();
     expect(findButton(after, "Restart")).toBeUndefined();
     expect(findButton(after, "Report a bug")).toBeUndefined();
+    // Nothing is on offer, so the notice is acknowledged rather than cancelled.
+    expect(renderedText(findByClass(after, "notice-dismiss")).trim()).toBe("OK");
     expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
   });
 });

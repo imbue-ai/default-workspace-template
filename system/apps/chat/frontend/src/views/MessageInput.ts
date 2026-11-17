@@ -2008,7 +2008,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           body: shown.body,
           details: shown.details,
           dismissLabel:
-            isRepeatable || recovery !== null || actionFailureActions.length > 0 || externalAction !== null
+            isRepeatable || isRestartOffered || actionFailureActions.length > 0 || externalAction !== null
               ? "Cancel"
               : "OK",
           isDismissable: actionFailureInFlight === null,
