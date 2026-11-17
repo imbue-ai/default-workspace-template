@@ -22,6 +22,8 @@ from playwright.sync_api import Route
 from playwright.sync_api import expect
 
 from app_manifest.testing import SHELL_HANDSHAKE_COUNTER_SCRIPT
+from app_manifest.testing import answer_start_new_with_text
+from app_manifest.testing import resend_shell_handshake
 from app_manifest.testing import shell_messages
 from app_manifest.testing import shell_stand_in_page
 
@@ -132,6 +134,25 @@ def test_a_crash_offers_an_agent_and_a_bug_report_through_the_shell(desktop_cont
     assert _CRASH_REASON in str(started[0]["text"])
     [reported] = shell_messages(page, "shell:report-bug")
     assert (reported["message"], reported["details"]) == ("The Screen stopped unexpectedly.", _CRASH_REASON)
+
+
+def test_an_ask_stays_pending_while_the_same_shell_greets_again_and_settles_when_it_answers(
+    desktop_context: BrowserContext,
+) -> None:
+    _serve(desktop_context, can_report_bug=True)
+    page, viewer = _open(desktop_context)
+    ask = viewer.locator("[data-screen-ask-agent]")
+    ask.click()
+    expect(ask).to_have_text("Asking an agent…")
+
+    resend_shell_handshake(page)
+    viewer.wait_for_function("window.shellHandshakes > 1")
+    expect(ask).to_have_text("Asking an agent…")
+    expect(ask).to_be_disabled()
+
+    answer_start_new_with_text(page, {"isOpened": True})
+    expect(ask).to_have_text("Ask an agent to fix this")
+    expect(viewer.locator("[data-screen-ask-failure]")).to_be_hidden()
 
 
 def test_no_bug_report_where_the_shell_cannot_open_one_and_a_refused_start_is_said(
