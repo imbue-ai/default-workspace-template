@@ -428,8 +428,12 @@ def build_gateway_app(
         return _html_page(_LOADING_PAGE, status=503)
 
     # Caddy rewrites the path of whatever request the backend refused and keeps its method, so a page's POST to a
-    # down app is answered as not responding too, rather than as a method this route does not take.
-    @app.route("/_auth/unresponsive", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    # down app is answered as not responding too, rather than as a method this route does not take (Files sends the
+    # WebDAV ones).
+    @app.route(
+        "/_auth/unresponsive",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "MOVE", "MKCOL", "PROPFIND"],
+    )
     def unresponsive() -> Response:
         # Caddy rewrites the path but keeps the Host, so the address the visitor was opening is
         # still known here. Read raw: werkzeug's parsed host is empty for a label with an

@@ -1107,7 +1107,10 @@ def test_one_address_spelled_differently_is_one_wait(tmp_path: Path) -> None:
     assert "Let the person who shared it know" in _unresponsive_page(harness, f"{_WEB_HOST.upper()}:443")
 
 
-def test_a_page_request_of_any_method_to_an_app_that_stops_answering_is_part_of_the_same_wait(tmp_path: Path) -> None:
+@pytest.mark.parametrize("method", ["POST", "MOVE", "MKCOL"])
+def test_a_page_request_of_any_method_to_an_app_that_stops_answering_is_part_of_the_same_wait(
+    tmp_path: Path, method: str
+) -> None:
     harness = _make_harness(tmp_path)
     _unresponsive_page(harness, _WEB_HOST)
     for _reload in range(19):
@@ -1115,7 +1118,7 @@ def test_a_page_request_of_any_method_to_an_app_that_stops_answering_is_part_of_
         _unresponsive_page(harness, _WEB_HOST)
 
     harness.clock.now += 3.0
-    posted = harness.client.post("/_auth/unresponsive", headers={"Host": _WEB_HOST})
+    posted = harness.client.open("/_auth/unresponsive", method=method, headers={"Host": _WEB_HOST})
 
     assert posted.status_code == 503
     assert "Let the person who shared it know" in posted.get_data(as_text=True)
