@@ -18,6 +18,7 @@ function framedConnection(): ShellConnection {
     location: vi.fn(),
     openPath: vi.fn(),
     startWithText: vi.fn(),
+    startNewWithText: vi.fn(),
     canReportBug: () => false,
     reportBug: vi.fn(),
     draftText: vi.fn(),

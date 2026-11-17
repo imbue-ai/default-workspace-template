@@ -19,7 +19,14 @@ import { startDownload } from "@imbue/workspace-ui/src/download";
 
 import { isLiveShared } from "../models/connections";
 import * as server from "../models/server";
-import { plainFailure, toastFailures, toldFailure, type FailureHost, type FilesFailure } from "../models/failures";
+import {
+  plainFailure,
+  reportBugAction,
+  toastFailures,
+  toldFailure,
+  type FailureHost,
+  type FilesFailure,
+} from "../models/failures";
 import { isTextLike, previewKindOf } from "../models/fileKinds";
 import { formatSize } from "../models/format";
 import { matchesKeybinding } from "../models/keybindings";
@@ -235,7 +242,13 @@ function loadFailureView(page: FilePageModel, failure: FilesFailure, centred: st
     m(SeeDetails, { details: failure.details }),
     m("div", { class: "flex gap-2" }, [
       m(Button, { sm: true, "data-action": "retry-load", onclick: () => void page.loadText() }, "Try again"),
-      failure.isReportable ? m(ReportBugButton, { connection: page.reporter, sm: true }) : null,
+      failure.isReportable
+        ? m(ReportBugButton, {
+            connection: page.reporter,
+            failure: { message: failure.message, details: failure.details },
+            sm: true,
+          })
+        : null,
     ]),
   ]);
 }
@@ -358,6 +371,7 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
           placementClass: "fixed bottom-6",
           onDismiss: (id: number) => page.toasts.dismiss(id),
           closesPlainToasts: true,
+          onReportBug: reportBugAction(page.reporter),
         }),
         page.dialogs.view(),
       ]);

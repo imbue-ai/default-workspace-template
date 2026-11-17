@@ -4,12 +4,12 @@
  * into "reports"") and then, when the server explained the refusal, why: in Files' own words for the refusals that
  * depend on which folder refused (the server's ``kind``), else in the server's sentence, which names only the cause.
  * A failure whose sentence asks for a bug report leaves a toast that stays, with "See details" and, where the shell
- * says Imbue Studio opens one, "Report a bug"; a full disk leaves one that stays with "Ask an agent to free up space";
+ * says Imbue Studio opens one when the toast is drawn, "Report a bug"; a full disk leaves one that stays with "Ask an agent to free up space";
  * any other leaves a plain note, its retry being the control just used, and its details go to the log.
  */
 
-import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
-import { REPORT_A_BUG_LABEL, failureSentence, type FailureMessage } from "@imbue/workspace-ui/src/models/failure";
+import type { ReportedFailure, ShellConnection } from "@imbue/workspace-ui/src/app_contract";
+import { failureSentence, type FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import type { ToastAction, ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
@@ -87,17 +87,20 @@ export function toastFailures(toasts: ToastQueue, failures: readonly FilesFailur
   const details = detailLines.length === 0 ? null : detailLines.join("\n\n");
   const actions: ToastAction[] = [];
   if (failures.some((failure) => failure.isOutOfSpace) && host.hasShell()) {
-    actions.push({ label: FREE_SPACE_LABEL, run: () => host.startWithText(FREE_SPACE_REQUEST) });
+    actions.push({ label: FREE_SPACE_LABEL, run: () => host.startWithText(FREE_SPACE_REQUEST), keepsToast: true });
   }
   const isReportable = failures.some((failure) => failure.isReportable);
-  if (isReportable && host.canReportBug()) {
-    actions.push({ label: REPORT_A_BUG_LABEL, run: () => host.reportBug() });
-  }
   if (!isReportable && actions.length === 0) {
     // A plain note has no room for the details, so they go to the log rather than nowhere.
     if (details !== null) console.warn(`[files] ${message}`, details);
     toasts.show(message);
     return;
   }
-  toasts.show(message, { isLasting: true, details, actions });
+  toasts.show(message, { isLasting: true, details, actions, isReportable });
+}
+
+/** What a toast's "Report a bug" does, decided as the toasts are drawn: null while the shell says Imbue Studio opens no
+ *  bug report here. */
+export function reportBugAction(host: FailureHost): ((failure: ReportedFailure) => void) | null {
+  return host.canReportBug() ? (failure) => host.reportBug(failure) : null;
 }

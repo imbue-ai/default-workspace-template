@@ -724,6 +724,7 @@ export function FilesApp(): m.Component<{ app: FilesController }> {
           placementClass: "fixed bottom-10",
           onDismiss: (id: number) => app.model.toasts.dismiss(id),
           closesPlainToasts: true,
+          onReportBug: app.reportBugAction(),
         }),
         app.dialogs.view(),
       ]);

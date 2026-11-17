@@ -6,6 +6,8 @@ import m from "mithril";
 
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 
+import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
+
 import type { FailureHost } from "../models/failures";
 import * as server from "../models/server";
 import { httpFailure } from "../testing/records";
@@ -19,12 +21,12 @@ vi.mock("../models/server", async (importOriginal) => ({
 
 const PATH = "/home/user/workspace/notes.md";
 
-function reporter(canReport: boolean): FailureHost & { reportBug: Mock<() => void> } {
+function reporter(canReport: boolean): FailureHost & { reportBug: Mock<(failure: ReportedFailure) => void> } {
   return {
     hasShell: () => true,
     startWithText: vi.fn<(text: string) => void>(),
     canReportBug: () => canReport,
-    reportBug: vi.fn<() => void>(),
+    reportBug: vi.fn<(failure: ReportedFailure) => void>(),
   };
 }
 
@@ -70,7 +72,10 @@ describe("a file whose text could not be loaded", () => {
     expect(failureText(root)).toBe("This file couldn't be opened. Try again. If this persists, report a bug.");
     expect(root.querySelector(".see-details pre")?.textContent).toBe("HTTP 500\nInput/output error");
     (root.querySelector(".report-bug") as HTMLButtonElement).click();
-    expect(page.reporter.reportBug).toHaveBeenCalledTimes(1);
+    expect(page.reporter.reportBug).toHaveBeenCalledWith({
+      message: "This file couldn't be opened. Try again. If this persists, report a bug.",
+      details: "HTTP 500\nInput/output error",
+    });
 
     vi.mocked(server.readText).mockResolvedValueOnce("# Notes");
     (root.querySelector('[data-action="retry-load"]') as HTMLButtonElement).click();
@@ -93,7 +98,7 @@ describe("a file whose text could not be loaded", () => {
 describe("a file that could not be saved", () => {
   it("names it, and keeps the note up with the details where nothing in the server's answer explains it", async () => {
     vi.mocked(server.readText).mockResolvedValueOnce("draft");
-    const { page } = await openedPage(true);
+    const { page, root } = await openedPage(true);
     page.draft = "draft, changed";
     vi.mocked(server.writeFile).mockRejectedValueOnce(httpFailure(500, { detail: "No space left on device" }));
 
@@ -103,7 +108,9 @@ describe("a file that could not be saved", () => {
     expect(toast.message).toBe('Couldn\'t save "notes.md". Try again. If this persists, report a bug.');
     expect(toast.isLasting).toBe(true);
     expect(toast.details).toBe("HTTP 500\nNo space left on device");
-    expect(toast.actions.map((action) => action.label)).toEqual(["Report a bug"]);
     expect(page.isDirty).toBe(true);
+    m.redraw.sync();
+    root.querySelector<HTMLButtonElement>(".toast .report-bug")?.click();
+    expect(page.reporter.reportBug).toHaveBeenCalledWith({ message: toast.message, details: toast.details });
   });
 });

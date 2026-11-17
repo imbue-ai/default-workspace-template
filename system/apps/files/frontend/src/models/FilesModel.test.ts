@@ -485,11 +485,10 @@ describe("telling a failed change", () => {
     });
   });
 
-  it("names a move the server could not carry out, and keeps it up with the details and Report a bug", async () => {
-    const { model, host, bugReport } = harness();
-    bugReport.canReport = true;
+  it("names a move the server could not carry out, and keeps it up with the details as a reportable note", async () => {
+    const { model } = harness();
     vi.mocked(server.movePath).mockRejectedValueOnce(
-      httpFailure(500, { detail: "Couldn't do that with /home/b.txt: Input/output error" }),
+      httpFailure(500, { detail: "MOVE /home/b.txt: [Errno 5] Input/output error" }),
     );
 
     await model.moveInto(["/home/b.txt"], "/home/zeta/");
@@ -497,21 +496,8 @@ describe("telling a failed change", () => {
     const [toast] = model.toasts.current();
     expect(toast.message).toBe('Couldn\'t move "b.txt" into "zeta". Try again. If this persists, report a bug.');
     expect(toast.isLasting).toBe(true);
-    expect(toast.details).toBe("HTTP 500\nCouldn't do that with /home/b.txt: Input/output error");
-    expect(toast.actions.map((action) => action.label)).toEqual(["Report a bug"]);
-    toast.actions[0].run();
-    expect(host.reportBug).toHaveBeenCalledTimes(1);
-  });
-
-  it("offers no Report a bug where Imbue Studio cannot open one, though the note still stays", async () => {
-    const { model } = harness();
-    vi.mocked(server.createFolder).mockRejectedValueOnce(httpFailure(500, null));
-
-    await model.createFolder();
-
-    const [toast] = model.toasts.current();
-    expect(toast.message).toBe('Couldn\'t create "untitled folder". Try again. If this persists, report a bug.');
-    expect(toast.isLasting).toBe(true);
+    expect(toast.isReportable).toBe(true);
+    expect(toast.details).toBe("HTTP 500\nMOVE /home/b.txt: [Errno 5] Input/output error");
     expect(toast.actions).toEqual([]);
   });
 
