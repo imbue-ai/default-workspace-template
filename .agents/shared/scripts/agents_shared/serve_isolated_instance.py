@@ -1700,8 +1700,16 @@ def refresh(
         return 1
     # 1. Stop the old inner server and wait for it to release the port. A live
     #    listening socket cannot be rebound, so we must not respawn until it is
-    #    gone -- otherwise the new process fails to bind.
-    if not _kill_process_group_and_wait(runner, old_pid, sleeper):
+    #    gone -- otherwise the new process fails to bind. A pid a restart handed to
+    #    another process is left alone: the server it named is already gone.
+    starts = state.get("pid_starts") or []
+    recorded_start = str(starts[0]) if starts else ""
+    if recorded_start and runner.process_start_time(old_pid) != recorded_start:
+        sys.stderr.write(
+            f"note: inner server pid {old_pid} is no longer the process this instance "
+            "started (it exited, or the workspace restarted); leaving it alone.\n"
+        )
+    elif not _kill_process_group_and_wait(runner, old_pid, sleeper):
         sys.stderr.write(
             f"refresh: inner server pid {old_pid} survived SIGKILL; its port "
             f"{port} may still be held. Aborting rather than risk a bind clash.\n"

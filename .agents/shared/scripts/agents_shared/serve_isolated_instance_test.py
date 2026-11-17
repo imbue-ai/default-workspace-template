@@ -913,6 +913,23 @@ def test_refresh_reboots_inner_on_same_port_leaving_wrapper_and_services(
     assert state["services"] == ["demo-app", "demo-preview"]
 
 
+def test_refresh_after_a_restart_never_signals_the_pid_another_process_now_holds(
+    tmp_path: Path,
+) -> None:
+    up_spawner = _FakeSpawner()
+    runner = _RecordingRunner(start_times={4242: "boot", 4243: "boot"})
+    assert _up_preview(tmp_path, runner=runner, spawner=up_spawner) == 0
+    inner_port = json.loads(_state_path(tmp_path).read_text())["inner_port"]
+    runner.start_times = {4242: "after-restart", 4243: "after-restart"}
+    spawner = _FakeSpawner(detached_pid=5555)
+
+    code = _refresh(tmp_path, runner=runner, spawner=spawner)
+
+    assert code == 0
+    assert runner.killed_pgroups == []
+    assert spawner.detached_envs[0][_PORT_ENV] == str(inner_port)
+
+
 def test_refresh_without_state_is_an_error(tmp_path: Path) -> None:
     assert _refresh(tmp_path) == 1
 
