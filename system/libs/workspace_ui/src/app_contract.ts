@@ -491,9 +491,10 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
       }
       case SHELL_START_NEW_WITH_TEXT_RESULT: {
         const requestId = message.requestId;
-        const settle = typeof requestId === "string" ? pendingStarts.get(requestId) : undefined;
+        if (typeof requestId !== "string") return;
+        const settle = pendingStarts.get(requestId);
         if (settle === undefined) return;
-        pendingStarts.delete(requestId as string);
+        pendingStarts.delete(requestId);
         settle(readStartNewOutcome(message));
         return;
       }
