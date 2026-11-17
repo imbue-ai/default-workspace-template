@@ -324,6 +324,35 @@ def test_a_private_instance_from_a_worktree_registers_nothing_and_reads_the_live
     ]
 
 
+def test_a_private_shell_from_a_worktree_reads_the_live_checkouts_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worktree = _worktree_of_a_live_checkout(tmp_path)
+    monkeypatch.delenv("MINDS_APPS_FILE", raising=False)
+    monkeypatch.chdir(worktree)
+    live_registry = tmp_path / "live" / "data" / ".state" / "apps.toml"
+    live_registry.parent.mkdir(parents=True)
+    live_registry.write_text(
+        _dump_registry(
+            [{"name": "chat", "url": "http://localhost:8010", "label": "chat-live"}]
+        )
+    )
+
+    assert (
+        boot.up(
+            "system_interface",
+            worktree,
+            worktree,
+            is_private=True,
+            instances=_RecordingInstances(worktree),
+            dump_registry=_dump_registry,
+        )
+        == 0
+    )
+
+    assert _shell_registry_rows(worktree)["chat"]["url"] == "http://localhost:8010"
+
+
 def test_a_private_instance_cannot_frame_siblings(tmp_path: Path) -> None:
     worktree = _worktree_of_a_live_checkout(tmp_path)
     instances = _RecordingInstances(worktree)
