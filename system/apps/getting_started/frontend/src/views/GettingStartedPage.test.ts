@@ -4,7 +4,6 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { afterEach, describe, expect, it } from "vitest";
-import type { StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
 import type { TemplateCatalogState } from "../models/TemplateCatalog";
 import { catalogTemplateRecord } from "../testing/records";
 import { GettingStartedPage } from "./GettingStartedPage";
@@ -37,21 +36,14 @@ interface Rendered {
   readonly bugReports: ReportedFailure[];
 }
 
-function render(
-  catalog: TemplateCatalogState = LOADED,
-  canReportBug = true,
-  outcome: StartNewOutcome = { isOpened: true },
-): Rendered {
+function render(catalog: TemplateCatalogState = LOADED, canReportBug = true): Rendered {
   const started: string[] = [];
   const retries: number[] = [];
   const bugReports: ReportedFailure[] = [];
   const root = mountView(() =>
     m(GettingStartedPage, {
       catalog,
-      onStartWithText: (text) => {
-        started.push(text);
-        return Promise.resolve(outcome);
-      },
+      onStartWithText: (text) => started.push(text),
       onRetryTemplates: () => retries.push(retries.length + 1),
       connection: { canReportBug: () => canReportBug, reportBug: (failure) => bugReports.push(failure) },
     }),
@@ -77,16 +69,6 @@ describe("the Getting Started page", () => {
 
     root.querySelector<HTMLElement>('[data-start="build-app"]')!.click();
     expect(started).toEqual([START_OPTIONS.find((option) => option.key === "build-app")!.prompt]);
-  });
-
-  it("says in a toast why a tile's chat could not start", async () => {
-    const failure = { message: "No app in this workspace can start a chat.", details: null, isReportable: false };
-    const { root } = render(LOADED, true, { isOpened: false, failure });
-    expect(root.querySelector("[data-toast]")).toBeNull();
-    root.querySelector<HTMLElement>('[data-start="build-app"]')!.click();
-    await Promise.resolve();
-    m.redraw.sync();
-    expect(root.querySelector("[data-toast]")?.textContent).toContain(failure.message);
   });
 
   it("shows the shelves, and a card opens the detail page whose back control returns", () => {

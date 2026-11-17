@@ -162,7 +162,8 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     "ask.textContent = {asking};"
     "failure.hidden = true;"
     "failureDetails.hidden = true;"
-    'window.parent.postMessage({ type: {start_new_with_text}, text: {request}, requestId: pendingId }, "*");'
+    "window.parent.postMessage("
+    '{ type: {start_new_with_text}, text: {request}, requestId: pendingId, showsOutcome: true }, "*");'
     "});"
     "})();</script>"
 )

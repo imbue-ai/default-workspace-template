@@ -746,6 +746,12 @@ export class DesktopStore {
     return this.noticeOf(failureSentence(describeRequestFailure(error), whatFailed), actions);
   }
 
+  /** Toast a failed start of a page that does not show the outcome itself: lasting when there is more to it than the
+   *  sentence (a launch's reason, a bug report to ask for), a plain note otherwise (no app takes text, a refusal). */
+  showStartFailure(failure: FailureMessage): void {
+    this.toastNotice({ ...failure, actions: [] }, { isLasting: failure.details !== null || failure.isReportable });
+  }
+
   /** A failed change in ``noticeFor``'s words for ``whatFailed``, for a surface that shows it itself (a dialog's
    *  line), offering ``retry`` where the failure is one to try again. */
   changeFailureNotice(whatFailed: string, error: unknown, retry: () => void): FailureNotice {

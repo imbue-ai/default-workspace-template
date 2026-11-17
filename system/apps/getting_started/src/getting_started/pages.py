@@ -121,8 +121,11 @@ rebuild it</button></p>
           ask.disabled = true;
           ask.textContent = "Asking an agent\u2026";
           show({ isOpened: true });
-          const outcome = await shell.startNewWithText(__REBUILD_REQUEST__, (late) => {
-            if (press === presses) show(late);
+          const outcome = await shell.startNewWithText(__REBUILD_REQUEST__, {
+            showsOutcome: true,
+            onLateAnswer: (late) => {
+              if (press === presses) show(late);
+            },
           });
           ask.disabled = false;
           ask.textContent = askLabel;

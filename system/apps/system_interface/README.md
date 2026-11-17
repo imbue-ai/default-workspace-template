@@ -652,7 +652,8 @@ new one through
 free-text row (Chat's New Chat; a failure's "Ask an agent to fix this" uses
 it) and then telling the page how it went with
 `shell:start-new-with-text-result` (the chat's window opened, or the failure
-for the page to show where it was pressed; the shell toasts nothing for it),
+for the page to show where it was pressed; the shell toasts a failure itself
+unless the request says `showsOutcome`, as an "Ask an agent" button's does),
 and drafts a text into the chat on screen through `shell:draft-text`, which the shell answers by running the pinned
 app's launch path with a `draft_param` into the pinned window, as the avatar
 dialog's "Design your own..." does (the element context menu's "Explain..."

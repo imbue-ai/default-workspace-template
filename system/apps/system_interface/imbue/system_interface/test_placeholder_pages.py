@@ -141,6 +141,8 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         (asked,) = page.evaluate("window.received")
         assert asked["type"] == "shell:start-new-with-text"
         assert asked["text"] == could_not_start_request("Docs", "docs")
+        # The page shows the answer itself, so the shell is told not to toast it too.
+        assert asked["showsOutcome"] is True
         # The button says the ask is out and takes no second press until the shell answers this request.
         expect(ask).to_have_text("Asking an agent…")
         expect(ask).to_be_disabled()
