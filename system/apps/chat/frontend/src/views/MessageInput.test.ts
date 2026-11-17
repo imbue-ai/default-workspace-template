@@ -2612,12 +2612,14 @@ describe("MessageInput dictation", () => {
   }
 
   function isLoadShown(tree: unknown): boolean {
-    const isBlocked = composerBox(tree).attrs!["data-composer-state"] === "blocked-loading";
-    const isTextboxDisabled = findByTag(tree, "textarea")?.attrs?.disabled === true;
     const isLabelLive = findByClass(tree, "dictation-morph-label")?.attrs?.disabled === false;
-    const shown = [micState(tree) === "loading", isBlocked, isTextboxDisabled, isLabelLive];
-    // The mic's label, the box's mark and the disabled text box come and go together.
+    const shown = [micState(tree) === "loading", isLabelLive];
+    // The mic's state and its live label come and go together.
     expect(new Set(shown).size, `the loading look is drawn in part: ${shown.join(", ")}`).toBe(1);
+    // The load is the mic's to show: the box around it is never marked, washed or disabled for it.
+    expect(composerBox(tree).attrs!["data-composer-state"]).toBeUndefined();
+    expect(findByClass(tree, "message-input-scrim")).toBeUndefined();
+    expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(false);
     return shown[0];
   }
 
@@ -3005,7 +3007,7 @@ describe("MessageInput dictation", () => {
       expect(mic(tree).attrs!["data-hover-tooltip"]).toMatch(/^Dictate once the speech model has loaded \(/);
     });
 
-    it("asks for the load once at a press and shows it: the label and the blocked box, with no wash over it", async () => {
+    it("asks for the load once at a press and shows it on the mic alone, the box left as it is", async () => {
       const { render } = await composerWithoutModel();
       pressMic(render);
       expect(mocks.speechModels.request).toHaveBeenCalledTimes(1);
@@ -3013,9 +3015,7 @@ describe("MessageInput dictation", () => {
       expect(mocks.speechModels.loads.length).toBe(1);
       const tree = render();
       expect(isLoadShown(tree)).toBe(true);
-      expect(composerBox(tree).attrs!["data-composer-state"]).toBe("blocked-loading");
-      expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
-      expect(findByClass(tree, "message-input-scrim")).toBeUndefined();
+      expect(findByTag(tree, "textarea")?.attrs?.readonly).toBe(false);
       expect(findByClass(tree, "dictation-setup-badge")).toBeUndefined();
       // The buttons beside the box stay live, and nothing listens.
       expect(findByAttr(tree, "aria-label", "Attach files")?.attrs?.disabled).toBe(false);
@@ -3038,19 +3038,27 @@ describe("MessageInput dictation", () => {
       {
         trigger: "a press on the label",
         repeatsThePress: true,
+        focusesTheBox: true,
         dismiss: (render: () => unknown) => {
           (findByClass(render(), "dictation-morph-label")!.attrs!.onclick as () => void)();
         },
       },
-      { trigger: "a press on the mic", repeatsThePress: true, dismiss: (render: () => unknown) => pressMic(render) },
+      {
+        trigger: "a press on the mic",
+        repeatsThePress: true,
+        focusesTheBox: true,
+        dismiss: (render: () => unknown) => pressMic(render),
+      },
       {
         trigger: "the mic's shortcut",
         repeatsThePress: true,
+        focusesTheBox: true,
         dismiss: () => pageListener("keydown")(shortcutChord()),
       },
       {
         trigger: "Escape from the page",
         repeatsThePress: false,
+        focusesTheBox: true,
         dismiss: () => {
           pageListener("keydown")({
             key: "Escape",
@@ -3061,13 +3069,25 @@ describe("MessageInput dictation", () => {
         },
       },
       {
+        trigger: "text entered into the box",
+        repeatsThePress: false,
+        focusesTheBox: false,
+        dismiss: (render: () => unknown) => {
+          (findByTag(render(), "textarea")!.attrs!.oninput as (event: unknown) => void)({
+            target: { value: "never mind, I'll type", style: {}, scrollHeight: 10 },
+          });
+        },
+      },
+      {
         trigger: "the shell saying the page is hidden",
         repeatsThePress: false,
+        focusesTheBox: false,
         dismiss: () => stopDictationWhenHidden(),
       },
       {
         trigger: "the page going out of view",
         repeatsThePress: false,
+        focusesTheBox: false,
         dismiss: () => {
           const page = document as unknown as { visibilityState?: string };
           page.visibilityState = "hidden";
@@ -3078,8 +3098,8 @@ describe("MessageInput dictation", () => {
           }
         },
       },
-    ])("dismissed by $trigger", ({ dismiss, repeatsThePress }) => {
-      it("hands the box back, leaves the mic asking for the model, and lets the load run on", async () => {
+    ])("dismissed by $trigger", ({ dismiss, repeatsThePress, focusesTheBox }) => {
+      it("stops showing the load, leaves the mic asking for the model, and lets the load run on", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         const { render } = await composerWithoutModel();
         const { textarea, redraw } = withTextbox(render);
@@ -3094,9 +3114,8 @@ describe("MessageInput dictation", () => {
         const tree = redraw();
         expect(isLoadShown(tree)).toBe(false);
         expect(micState(tree)).toBe("load-needed");
-        expect(composerBox(tree).attrs!["data-composer-state"]).toBeUndefined();
-        expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(false);
-        expect(textarea.focus).toHaveBeenCalledTimes(2);
+        // A dismissal made on the load itself is the user turning back to typing.
+        expect(textarea.focus).toHaveBeenCalledTimes(focusesTheBox ? 2 : 1);
         // Neither asked for again nor called off.
         expect(mocks.speechModels.request).toHaveBeenCalledTimes(1);
         expect(mocks.speechModels.loads.length).toBe(1);
@@ -3147,6 +3166,54 @@ describe("MessageInput dictation", () => {
       // Let go and pressed again, the shortcut dismisses.
       onShortcut(shortcutChord());
       expect(isLoadShown(render())).toBe(false);
+    });
+
+    it("keeps the load shown at a press in the text box, and dictates there when the load ends", async () => {
+      const { render } = await composerWithoutModel();
+      pressMic(render);
+      const textbox = findByTag(render(), "textarea")!;
+      expect(textbox.attrs!.disabled).toBe(false);
+
+      (textbox.attrs!.onclick as (event: unknown) => void)({
+        target: { value: "", selectionStart: 0, selectionEnd: 0 },
+      });
+
+      expect(isLoadShown(render())).toBe(true);
+      mocks.speechModels.loads[0].resolve(LOADED);
+      await settled();
+      expect(mocks.dictation!.start).toHaveBeenCalledTimes(1);
+    });
+
+    it("starts nothing when the load ends after text was entered into the box", async () => {
+      const { render } = await composerWithoutModel();
+      pressMic(render);
+      (findByTag(render(), "textarea")!.attrs!.oninput as (event: unknown) => void)({
+        target: { value: "a", style: {}, scrollHeight: 10 },
+      });
+      expect(isLoadShown(render())).toBe(false);
+      expect(loadState()).toMatchObject({ status: "pending", fetchStatus: "fetching" });
+
+      mocks.speechModels.loads[0].resolve(LOADED);
+      await settled();
+
+      expect(mocks.dictation).toBeNull();
+      expect(micState(render())).toBe("ready");
+      expect(findByTag(render(), "textarea")?.attrs?.value).toBe("a");
+    });
+
+    it("leaves a touch device's focus where it is when the label dismisses, so no keyboard comes up", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === TOUCH_MEDIA_QUERY }));
+      const { render } = await composerWithoutModel();
+      const { textarea, redraw } = withTextbox(render);
+      pressMic(render);
+      vi.advanceTimersByTime(500);
+      const focusesBefore = textarea.focus.mock.calls.length;
+
+      (findByClass(render(), "dictation-morph-label")!.attrs!.onclick as () => void)();
+
+      expect(isLoadShown(redraw())).toBe(false);
+      expect(textarea.focus).toHaveBeenCalledTimes(focusesBefore);
     });
 
     it("dismisses on Escape from the page or the composer, and leaves a key meant for another control alone", async () => {
@@ -3238,7 +3305,7 @@ describe("MessageInput dictation", () => {
       expect(mocks.speechModels.request).toHaveBeenCalledTimes(1);
       const tree = redraw();
       expect(isLoadShown(tree)).toBe(false);
-      expect(textarea.focus).toHaveBeenCalledTimes(2);
+      expect(textarea.focus).toHaveBeenCalledTimes(1);
       expect(findByClass(tree, "message-input-dictation-notice")).toBeUndefined();
       expect(mocks.readyChime.play).not.toHaveBeenCalled();
       setDictationState("starting");

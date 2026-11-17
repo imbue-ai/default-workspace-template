@@ -1014,9 +1014,9 @@ nothing itself. The mic shows one of six states, named by its
   of files already here. A press means the whole of it: it asks for the model,
   shows its load, and goes on to dictate when the load ends.
 - `loading`: the load is shown. The mic eases into a `Loading voice model` label
-  with the download's progress as a bar under it, the composer's box is marked
-  `data-composer-state="blocked-loading"`, and the text box is disabled and
-  dimmed while the paperclip and Send stay live.
+  with the download's progress as a bar under it. The box around it is left as
+  it is: the text box stays live, so a press or a tap in it sets where the
+  dictated words will land.
 - `ready`: the model is loaded, and a press dictates at once.
 - `starting`, `listening`, `stopping`: a dictation is running (a spinner while
   starting and stopping, the neutral pressed tint with its capsule filling to the
@@ -1024,11 +1024,14 @@ nothing itself. The mic shows one of six states, named by its
   open.
 
 A shown load can be dismissed: a press on the label, Escape, the mic's shortcut,
-or the page going out of view (a press right behind the one that asked for the
-load is that press landing twice, and dismisses nothing). Dismissing hands the
-box back for typing and calls off the dictation the load was to go on to, but
-not the load: it runs on with the mic `load-needed`, and a press shows it again
-from where it has got to. A load that ends while shown goes straight on to
+text entered into the box, or the page going out of view. A press or a tap in
+the text box alone dismisses nothing, and neither does a press right behind the
+one that asked for the load, which is that press landing twice. Dismissing calls
+off the dictation the load was to go on to, but not the load: it runs on with
+the mic `load-needed`, and a press shows it again from where it has got to.
+After a dismissal made on the label, with the shortcut or with Escape, the text
+box takes the focus on a desktop; a touch device's focus stays where it is, so
+no keyboard comes up unasked. A load that ends while shown goes straight on to
 dictation, with no second press; one that fails is told in a notice over the
 composer, whose Retry asks again. A load that ends after a dismissal turns the
 mic `ready` with no sound and no notice, and starts nothing; one that fails

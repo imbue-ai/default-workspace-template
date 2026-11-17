@@ -533,26 +533,14 @@ function providerNotice(markerClass: string, sentence: string, onChoose: () => v
   );
 }
 
-/** What the composer's box is in the middle of, which the parts inside it take their look from: blocked while
- *  the speech model's load is shown (the text box disabled, the mic a label), or nothing. */
-type ComposerState = "blocked-loading";
-
 /** The composer's box, beside ``leading`` when there is one. The row is there either way, so the box (and the
  *  textarea in it, with its focus and the soft keyboard) is kept when ``leading`` comes or goes. */
-function composeRow(
-  leading: m.Children | undefined,
-  composerState: ComposerState | null,
-  boxChildren: m.Children[],
-): m.Vnode {
+function composeRow(leading: m.Children | undefined, boxChildren: m.Children[]): m.Vnode {
   return m("div", { class: "message-input-compose-row flex items-end gap-1.5" }, [
     leading ?? null,
     m(
       "div",
-      {
-        class: `${INPUT_BOX_CLASS} relative min-w-0 flex-1`,
-        ...appPartAttrs("chat", "composer"),
-        "data-composer-state": composerState ?? undefined,
-      },
+      { class: `${INPUT_BOX_CLASS} relative min-w-0 flex-1`, ...appPartAttrs("chat", "composer") },
       boxChildren,
     ),
   ]);
@@ -895,15 +883,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   }
 
   /**
-   * Stop showing the speech model's load and hand the box back for typing, which calls off the dictation the
-   * load was to go on to. The load itself runs on, since nothing cancels one, and the mic becomes ready by
-   * itself when it ends.
+   * Stop showing the speech model's load, which calls off the dictation the load was to go on to. The load
+   * itself runs on, since nothing cancels one, and the mic becomes ready by itself when it ends.
    *
    * This is the one place a shown load is dismissed: every trigger calls it, and a trigger added later should
    * too. The triggers: a press on the loading label, or on the mic or its shortcut while the load is shown
-   * (``handleLoadingPress``); Escape from the page
-   * (``handleLoadingEscape``); the page going out of view (``handlePageHidden``); and the composer turning to
-   * another chat, or leaving the page.
+   * (``handleLoadingPress``); Escape from the page (``handleLoadingEscape``); text entered into the box (the
+   * text box's ``oninput``; a press or a tap in the box alone dismisses nothing); the page going out of view
+   * (``handlePageHidden``); and the composer turning to another chat, or leaving the page.
    */
   function dismissModelLoad(): void {
     if (!isWatchingModelLoad) return;
@@ -918,6 +905,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   function handleLoadingPress(): void {
     if (modelLoadShownAtMs !== null && Date.now() - modelLoadShownAtMs < REPEATED_PRESS_WINDOW_MS) return;
     dismissModelLoad();
+    focusTextboxAfterDismissal();
+  }
+
+  /** A dismissal made on the load itself (the label, the shortcut, Escape) is the user turning back to typing,
+   *  so on a desktop the text box takes the focus. A touch device's stays where it is: focusing the box there
+   *  raises the keyboard, which a tap on the label did not ask for. */
+  function focusTextboxAfterDismissal(): void {
+    if (pageDeviceClass() === "desktop") focusMessageTextarea();
   }
 
   /** Begin a dictation whose words land where the caret is now. The speech model is loaded; a load this
@@ -969,9 +964,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     syncScreenWakeLock();
   }
 
-  /** Escape while the model's load is shown dismisses it. The text box is disabled then, so its own Escape
-   *  cannot; this one answers from the composer (the label, which takes the focus the mic held) or from no
-   *  control at all, and leaves a key meant for another control (a menu, a dialog) alone. */
+  /** Escape while the model's load is shown dismisses it, from anywhere in the composer (the text box, or the
+   *  label, which takes the focus the mic held) or from no control at all. A key meant for another control (a
+   *  menu, a dialog), or one something in the composer has already answered, is left alone. */
   function handleLoadingEscape(event: KeyboardEvent): boolean {
     if (event.key !== "Escape" || event.defaultPrevented || !isModelLoadShown()) return false;
     const target = event.target;
@@ -982,6 +977,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     if (!isFromPage && !isFromComposer) return false;
     event.preventDefault();
     dismissModelLoad();
+    focusTextboxAfterDismissal();
     return true;
   }
 
@@ -2240,10 +2236,6 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       const canSendNow = canSend && !isComposerDisabled;
       // The box is read-only while dictation owns it, from the press until the last words land.
       const isDictating = dictationState !== "idle";
-      // While the speech model's load is shown the box is blocked: the text box disabled and dimmed,
-      // the mic the label that says why. The paperclip and Send stay live.
-      const isBlockedByLoading = isModelLoadShown();
-      const isTextboxDisabled = isComposerDisabled || isBlockedByLoading;
       // The send that waited for the dictation's words goes once they are in, after this pass has drawn them.
       if (isSendPendingAfterDictation && !isDictating) {
         isSendPendingAfterDictation = false;
@@ -2312,7 +2304,6 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           }),
           composeRow(
             vnode.attrs.leading,
-            isBlockedByLoading ? "blocked-loading" : null,
             // With no provider to send to, the composer stays in view, holding any draft, but takes nothing.
             [
               mentionPopover({
@@ -2350,13 +2341,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                               ? "Type to queue more messages..."
                               : "Type a message...",
                     rows: 1,
-                    disabled: isTextboxDisabled,
+                    disabled: isComposerDisabled,
                     readonly: isDictating,
                     value: messageText,
                     oncreate: (textareaVnode: m.VnodeDOM) => {
                       messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
                       mountedComposerTextarea = messageTextareaElement;
-                      wasComposerDisabled = isTextboxDisabled;
+                      wasComposerDisabled = isComposerDisabled;
                       refitComposer();
                       focusMessageTextarea();
                     },
@@ -2365,8 +2356,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                       mountedComposerTextarea = messageTextareaElement;
                       refitComposer(isTypingUntilRedraw);
                       isTypingUntilRedraw = false;
-                      if (wasComposerDisabled && !isTextboxDisabled) focusMessageTextarea();
-                      wasComposerDisabled = isTextboxDisabled;
+                      if (wasComposerDisabled && !isComposerDisabled) focusMessageTextarea();
+                      wasComposerDisabled = isComposerDisabled;
                     },
                     onremove: () => {
                       if (mountedComposerTextarea === messageTextareaElement) mountedComposerTextarea = null;
@@ -2379,6 +2370,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                       updateMentionDraft(textarea);
                       refitAfterEdit();
                       if (messageText.trim() !== "") warmUpStoppedChat(chatId);
+                      // Text entered while the speech model's load is shown is the user going back to typing. A
+                      // press or a tap in the box alone is not: it leaves the load shown, and sets where the
+                      // dictated words will land.
+                      dismissModelLoad();
                     },
                     onclick: (event: MouseEvent) => updateMentionDraft(event.target as HTMLTextAreaElement),
                     onblur: () => {
