@@ -21,17 +21,9 @@ import {
   type GaugeVisibility,
   type ResourceGaugeSettings,
 } from "../model/resourceGauge";
-import type { FailureNotice } from "../model/failures";
-import { FailureLine } from "./FailureLine";
-import type { ReportBug } from "./FailureLine";
 
 export interface ResourceGaugeDialogAttrs {
   readonly settings: ResourceGaugeSettings;
-  /** A failed save as the dialog's line says it, from what failed (a sentence stem) and the error, with ``retry``
-   *  where the failure is one to try again. */
-  readonly wordFailure: (whatFailed: string, error: unknown, retry: () => void) => FailureNotice;
-  /** Report a bug about a failed save where it asks for one; null where no bug report can be opened. */
-  readonly onReportBug: ReportBug;
   readonly onSave: (settings: ResourceGaugeSettings) => Promise<void>;
   readonly onClose: () => void;
 }
@@ -101,23 +93,16 @@ export function parseLevelText(resource: GaugeResource, text: string): number | 
   return value >= MIN_WARNING_PERCENT && value <= MAX_WARNING_PERCENT ? value : null;
 }
 
-const RANGE_ERROR: FailureNotice = {
-  message:
-    `Disk space is ${MIN_DISK_WARNING_FREE_GB} to ${MAX_DISK_WARNING_FREE_GB} GB; ` +
-    `memory and CPU are whole numbers from ${MIN_WARNING_PERCENT} to ${MAX_WARNING_PERCENT}.`,
-  details: null,
-  actions: [],
-  isReportable: false,
-};
-
-const SETTINGS_NOT_SAVED = "The resource gauge settings couldn't be saved";
+const RANGE_ERROR =
+  `Disk space is ${MIN_DISK_WARNING_FREE_GB} to ${MAX_DISK_WARNING_FREE_GB} GB; ` +
+  `memory and CPU are whole numbers from ${MIN_WARNING_PERCENT} to ${MAX_WARNING_PERCENT}.`;
 
 export function ResourceGaugeDialog(): m.Component<ResourceGaugeDialogAttrs> {
   let visibility: GaugeVisibility = "when_warning";
   let enabled: Record<GaugeResource, boolean> = { cpu: false, memory: false, disk: false };
   /** The levels as typed, so a half-typed number is not thrown away. */
   let texts: Record<GaugeResource, string> = { cpu: "", memory: "", disk: "" };
-  let error: FailureNotice | null = null;
+  let error: string | null = null;
   let isSaving = false;
 
   function draft(base: ResourceGaugeSettings): ResourceGaugeSettings | null {
@@ -146,7 +131,7 @@ export function ResourceGaugeDialog(): m.Component<ResourceGaugeDialogAttrs> {
       await attrs.onSave(next);
       attrs.onClose();
     } catch (failure) {
-      error = attrs.wordFailure(SETTINGS_NOT_SAVED, failure, () => void save(attrs));
+      error = `Could not save: ${(failure as Error).message}`;
     } finally {
       isSaving = false;
       m.redraw();
@@ -247,18 +232,7 @@ export function ResourceGaugeDialog(): m.Component<ResourceGaugeDialogAttrs> {
             "A warning sends one notification to Imbue Studio and tells the agents working here. The disk also " +
               "warns when it is on course to fill within 15 minutes.",
           ),
-          error === null
-            ? null
-            : m(
-                "div",
-                { class: "mt-2", "data-gauge-error": "" },
-                m(FailureLine, {
-                  notice: error,
-                  onReportBug: attrs.onReportBug,
-                  marker: "resource-gauge-error",
-                  messageClass: "text-danger type-body",
-                }),
-              ),
+          error === null ? null : m("p", { class: "mt-2 mb-0 text-danger type-body", "data-gauge-error": "" }, error),
         ],
       );
     },

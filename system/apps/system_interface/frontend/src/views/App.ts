@@ -1192,13 +1192,11 @@ export function App(): m.Component<AppAttrs> {
     void current.showAppPage(SYSTEM_MONITOR_APP_NAME, systemMonitorPathOf(resource), SYSTEM_MONITOR_PAGES);
   }
 
-  function resourceGaugeDialogView(current: DesktopStore): m.Children {
+  function resourceGaugeDialogView(): m.Children {
     const view = currentResourceGauge();
     if (view === null) return null;
     return m(ResourceGaugeDialog, {
       settings: view.settings,
-      wordFailure: (whatFailed, error, retry) => current.changeFailureNotice(whatFailed, error, retry),
-      onReportBug: current.reportBugAction(),
       onSave: (settings) => saveResourceGaugeSettings(settings, () => m.redraw()),
       onClose: () => {
         isResourceGaugeDialogOpen = false;
@@ -1703,7 +1701,7 @@ export function App(): m.Component<AppAttrs> {
           wallpaperDialogDesktopId === null ? null : wallpaperDialogView(current, wallpaperDialogDesktopId),
           themeDialogDesktopId === null ? null : themeDialogView(current, themeDialogDesktopId),
           isKeyboardShortcutsDialogOpen ? keyboardShortcutsDialogView() : null,
-          isResourceGaugeDialogOpen ? resourceGaugeDialogView(current) : null,
+          isResourceGaugeDialogOpen ? resourceGaugeDialogView() : null,
           replacedDesktopNotice(current),
           avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
           tourCardView(current, vnode.attrs.tour),
