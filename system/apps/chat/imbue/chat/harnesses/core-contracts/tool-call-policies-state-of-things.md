@@ -156,11 +156,12 @@ unreachable, and an agent that wants to background a command can.
 every hook in the session's current directory, and its `Bash` tool keeps one shell cwd ACROSS
 calls, so an agent whose last call `cd`ed into a subfolder has its Stop hooks run there. Every
 Stop hook a workspace agent runs finds its files from `MNGR_AGENT_WORK_DIR`, `MNGR_AGENT_STATE_DIR`
-or its own location instead (code-guardian's reads `.reviewer/` from the cwd, but
-`.reviewer/settings.json` keeps it off in workspaces). claude's settings used to carry
+or its own location instead, and code-guardian's (which workers run for its uncommitted-changes
+gate) `cd`s to `CLAUDE_PROJECT_DIR` first. claude's settings used to carry
 `[ -e .git ] || "Be sure to return to the repo root..."`, which refused the stop until the agent
 went back. It protected nothing here, and answering it cost the agent a second reply after its
-real one (the P8 problem), which broke the chat's turn, so it was removed. agy's `Cwd` and codex's
+real one (the extra-reply problem described under P8), which broke the chat's turn, so it was
+removed. agy's `Cwd` and codex's
 `workdir` are required per-call parameters, so they never had the question.
 
 ### pi  (wiring: `.pi/extensions/policy_guards.ts` in this repo)
