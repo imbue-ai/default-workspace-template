@@ -96,9 +96,9 @@ If the output shows ongoing tool use, an active spinner / "Running…" line,
 or recent timestamps within the last few minutes, the worker is alive --
 re-arm the poll with a longer timeout (e.g. `60m`) and continue. A session
 that is dead is a crash: recover the worker
-(`.agents/skills/launch-task/references/dead-worker-recovery.md`) and re-arm
+(`.agents/shared/references/lead-proxy/dead-worker-recovery.md`) and re-arm
 the poll. Only invoke the failure flow
-(`.agents/skills/launch-task/references/worker-failure.md`) if that recovery
+(`.agents/shared/references/lead-proxy/worker-failure.md`) if that recovery
 does not bring it back, the agent is wedged on the same operation for an
 extended period, or output has been static.
 
@@ -316,7 +316,7 @@ On `type: status`:
   conflict manually.
 
 - `name: stuck`, or the 30m timeout tripped without a report arriving -- follow
-  `.agents/skills/launch-task/references/worker-failure.md`: surface the report
+  `.agents/shared/references/lead-proxy/worker-failure.md`: surface the report
   body (or its absence) to the user, point at the branch and worker agent, then
   stop the worker (and its sub-workers) so no process stays behind:
   ```bash
@@ -351,7 +351,7 @@ uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
 The send brings the stopped worker back in its worktree with its conversation
 intact, and `reply` blanks the `archived_at` label the stop set, so a later
 crash of it is restarted like any other
-(`.agents/skills/launch-task/references/dead-worker-recovery.md`). Then re-arm
+(`.agents/shared/references/lead-proxy/dead-worker-recovery.md`). Then re-arm
 the `await` poll and end your turn.
 
 ## When you are a worker yourself

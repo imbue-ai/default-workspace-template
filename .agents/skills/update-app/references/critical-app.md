@@ -341,7 +341,7 @@ poll) with these specifics:
 
 - **Terminal handling:** on `done`, go to Step 4. On `stuck` or a dead-worker
   timeout, surface to the user per
-  `.agents/skills/launch-task/references/worker-failure.md`; do not merge or
+  `.agents/shared/references/lead-proxy/worker-failure.md`; do not merge or
   apply, and do not retry silently.
 
 **Optional final preview before merge.** When the worker produced **real work

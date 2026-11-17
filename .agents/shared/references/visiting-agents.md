@@ -39,7 +39,7 @@ A skill was written for an agent chatting inside the workspace, so ignore its in
 Requests to third-party services go through `latchkey curl` inside `wsvisit run`; the gateway attaches the person's credentials, and no credential ever reaches you.
 Prefer what is already granted below.
 File a permission request only when the task cannot proceed without one: the person is not watching this workspace, so each request waits for them.
-When you must, send it exactly as `.agents/skills/connect-external-service/references/latchkey.md` describes, with `"agent_id": "{{workspace_id}}"` and the `X-Latchkey-Device: *` header, and then poll `latchkey curl http://latchkey-self.invalid/permissions/self` for the grant, because no chat exists to deliver the verdict to you.
+When you must, send it exactly as the `connect-external-service` skill (`.agents/skills/connect-external-service/SKILL.md`) describes for a latchkey service, with `"agent_id": "{{workspace_id}}"` and the `X-Latchkey-Device: *` header, and then poll `latchkey curl http://latchkey-self.invalid/permissions/self` for the grant, because no chat exists to deliver the verdict to you.
 Never run `latchkey auth` yourself.
 <!-- exec-only:end -->
 

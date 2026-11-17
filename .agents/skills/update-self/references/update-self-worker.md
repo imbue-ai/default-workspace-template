@@ -13,8 +13,8 @@ changelog gathering, the rollbacks to undo) live in
 flow shipped with the version being updated to (the lead staged it and it was
 synced into this worktree with the runtime dir); reference it by literal each
 time (each bash invocation is a fresh shell) and run it from your worktree
-root. The lead staged the target release's `.agents/shared/`, `harden-worker`
-skill and `launch-task` references beside it, and this guide names those files
+root. The lead staged the target release's `.agents/shared/` and `harden-worker`
+skill beside it, and this guide names those files
 by their staged path; when one of them names a further `.agents/...` path, read
 the copy under `data/.tasks/update-self/skill-at-target/` if one is there, else
 your worktree's. Impact analysis (who depends on a changed file) is deliberately *not*
