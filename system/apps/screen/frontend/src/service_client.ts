@@ -2,6 +2,7 @@
 
 import { readFailure } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure, RequestKind } from "@imbue/workspace-ui/src/models/failure";
+import { readResponseFailure } from "@imbue/workspace-ui/src/models/http";
 import type { ConnectInfo, NekoSessionAnswer, ScreenSizeAnswer, ScreenStateDocument, ServiceEvent } from "./state";
 
 const RECONNECT_MS = 1500;
@@ -21,15 +22,8 @@ export class ServiceRequestError extends Error {
 
 /** A refused or failed answer as a ``ServiceRequestError``. */
 async function refusalError(response: Response, requestKind: RequestKind): Promise<ServiceRequestError> {
-  const rawText = await response.text().catch(() => "");
-  let body: unknown;
-  try {
-    body = JSON.parse(rawText);
-  } catch {
-    body = null;
-  }
-  const detail = body !== null && typeof body === "object" ? (body as { detail?: unknown }).detail : undefined;
-  const failure = readFailure({ status: response.status, body, rawText, requestKind });
+  const { failure } = await readResponseFailure(response, requestKind);
+  const detail = failure.body?.detail;
   return new ServiceRequestError(
     response.status,
     typeof detail === "string" && detail ? detail : `status ${response.status}`,
