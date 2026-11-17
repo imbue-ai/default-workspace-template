@@ -1209,7 +1209,7 @@ def up(
             runner=runner,
             registry=registry,
             sleeper=sleeper,
-            keeps_rows=kept_rows,
+            kept_rows=kept_rows,
         )
         != 0
     ):
@@ -1663,10 +1663,10 @@ def down(
     runner: Runner,
     registry: Registry,
     sleeper: Callable[[float], None] = time.sleep,
-    keeps_rows: Sequence[str] = (),
+    kept_rows: Sequence[str] = (),
 ) -> int:
     """Tear down the instance for ``name``: kill the server(s), deregister the
-    service(s) other than ``keeps_rows``, delete the state directory.
+    service(s) other than ``kept_rows``, delete the state directory.
 
     Idempotent: a missing state file is a no-op success, so this is safe to run to
     clean up after a successful test, a rejected preview, or a half-set-up
@@ -1689,7 +1689,7 @@ def down(
         return 1
     pids = _pids_still_ours(state, runner)
     services = [
-        service for service in state.get("services") or [] if service not in keeps_rows
+        service for service in state.get("services") or [] if service not in kept_rows
     ]
     survivors = _teardown(
         repo_root, runner, registry, pids=pids, services=services, sleeper=sleeper
