@@ -45,7 +45,11 @@ from workspace_themes.flask_routes import (
 from workspace_themes.primitives import THEME_ID_PATTERN
 from workspace_themes.serving import THEME_STATIC_ROUTE_PREFIX
 
-from terminal_app.dispatch import ENDED_MISSING_FOLDER, ENDED_NOT_STARTED, ENDED_WITH_ERROR
+from terminal_app.dispatch import (
+    ENDED_MISSING_FOLDER,
+    ENDED_NOT_STARTED,
+    ENDED_WITH_ERROR,
+)
 from terminal_app.errors import (
     InvalidTerminalValueError,
     TerminalAppError,
