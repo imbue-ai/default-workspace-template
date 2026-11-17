@@ -4578,13 +4578,11 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
 
   it("answers an agent asked for while viewing with the stop-viewing note, told once and asking for no bug report", async () => {
     const store = await viewerStore();
-    socket
-      .deliver()
-      .onAppsUpdated([
-        chatLikeAppRecord("chat", {
-          launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
-        }),
-      ]);
+    socket.deliver().onAppsUpdated([
+      chatLikeAppRecord("chat", {
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+    ]);
     await store.switchDesktop("alice");
 
     expect(await store.startNewWithText("Please look at this.")).toEqual({
