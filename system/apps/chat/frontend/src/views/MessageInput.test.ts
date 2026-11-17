@@ -1644,6 +1644,20 @@ describe("MessageInput send failure notice", () => {
     expect(findButton(after, "Retry")).toBeUndefined();
   });
 
+  it("words a gateway's 502 that carries only its own reason as a send nothing answered, with no Report a bug", async () => {
+    stubShellConnection(true);
+    mocks.sendMessage.mockRejectedValueOnce(refusal(502, { error: "upstream connection reset" }));
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+    const text = renderedText(after);
+    expect(text).toContain("Your message may not have been sent");
+    expect(text).toContain(
+      "The workspace didn't answer, so Imbue Studio can't tell whether your message was delivered.",
+    );
+    expect(text).not.toContain("Your message wasn't delivered");
+    expect(findButton(after, "Send again")).toBeTruthy();
+    expect(findButton(after, "Report a bug")).toBeUndefined();
+  });
+
   it("still takes an unconfirmed message out of the composer when its turn lands after Cancel", async () => {
     mocks.sendMessage.mockRejectedValueOnce(refusal(500, { detail: "unconfirmed", kind: "submission_unconfirmed" }));
     const component = MessageInput();

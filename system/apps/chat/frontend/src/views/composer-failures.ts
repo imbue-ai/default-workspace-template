@@ -4,6 +4,7 @@
  */
 
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import type { Failure } from "@imbue/workspace-ui/src/models/failure";
 import {
   describeRequestErrorKind,
   describeRequestFailure,
@@ -27,10 +28,15 @@ const SEND_REFUSED = "Your message wasn't delivered. Your text is back in the bo
  */
 export type ComposerFailureKind = SendFailureKind | "not_answered" | "unrecognised" | "chat_not_started";
 
+/** Whether nothing answered the send: a gateway that gave up counts even when its body carries a reason. */
+function isUnansweredSend(error: unknown, failure: Failure): boolean {
+  return isUnansweredRequest(error) || failure.cause === "not_answered";
+}
+
 export function composerFailureKindOf(error: unknown): ComposerFailureKind {
   if (error instanceof ChatNotStartedError) return "chat_not_started";
   const failure = describeRequestFailure(error);
-  if (isUnansweredRequest(error) || failure.cause === "not_answered") return "not_answered";
+  if (isUnansweredSend(error, failure)) return "not_answered";
   const kind = describeRequestErrorKind(error);
   return kind === "unknown" && failure.kind !== null && failure.kind !== "unknown" ? "unrecognised" : kind;
 }
@@ -39,7 +45,7 @@ export function composerFailureKindOf(error: unknown): ComposerFailureKind {
  *  sentence for its case stands as written; this words the rest. */
 export function describeSendFailure(error: unknown): FailureLines {
   const failure = describeRequestFailure(error);
-  if (failure.cause === "not_answered") {
+  if (isUnansweredSend(error, failure)) {
     return { body: [SEND_NOT_ANSWERED], details: failure.details, isReportable: false };
   }
   const told = failureSentence(failure, "Your message wasn't delivered. Your text is back in the box");
