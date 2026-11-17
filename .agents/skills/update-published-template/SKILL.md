@@ -158,7 +158,7 @@ delta, only the full current state of the recipe's paths.
 **2a. Get read access and fetch the published tip.** Route git through the
 latchkey gateway exactly as `use-template` §1 does for a private fetch (the
 `github-git` / `github-git-read` permission; initiate it yourself via a latchkey
-permission request per `.agents/skills/connect-external-service/references/latchkey.md`
+permission request per the `connect-external-service` skill
 if the `permissions/self` probe shows it missing, and tell the user an approval is
 waiting in Imbue Studio). A public repo may
 fetch anonymously.

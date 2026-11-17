@@ -110,7 +110,7 @@ If the repo is private, the anonymous fetch fails with an auth error. Route git
 through the latchkey gateway instead (it proxies GitHub's git endpoints with the
 credential injected server-side; needs the `github-git` / `github-git-read`
 permission -- initiate it yourself like any other latchkey permission request,
-see `.agents/skills/connect-external-service/references/latchkey.md`). Fetch the
+per the `connect-external-service` skill). Fetch the
 URL directly rather than persisting a gateway-URL remote:
 
 ```bash
@@ -138,7 +138,7 @@ git worktree add -q "$WT" HEAD
 - **An app from an older template** (one that is a root workspace member in the template's
   layout, with no `uv.lock` of its own) needs converting to a standalone project with
   `uv run --no-sync user-package-migration migrate`, once the root venv is synced
-  (`references/python-packaging-migration.md` in update-self, "A user app, service or
+  (`.agents/shared/references/python-packaging-migration.md`, "A user app, service or
   lib"); until then it fails to start. When resolving a conflict in the root
   `pyproject.toml`, keep this workspace's explicit `members` list, never the template's
   globs.
@@ -255,8 +255,8 @@ or would you rather it read something else, like email?"
 conversation:**
 
 1. Initiate every activation requirement YOURSELF, now -- one latchkey
-   permission request per `requires_permission:` line (see
-   `.agents/skills/connect-external-service/references/latchkey.md`: `latchkey
+   permission request per `requires_permission:` line (per the
+   `connect-external-service` skill: `latchkey
    curl -XPOST http://latchkey-self.invalid/permission-requests`; the request
    opens the approval/login flow in the Imbue Studio app). Each request is its own tool call,
    with nothing else in it; when a template needs several, file them one after

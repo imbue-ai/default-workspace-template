@@ -13,7 +13,7 @@ from pathlib import Path
 from agents_shared.skill_checks import (
     GUIDE_PATH,
     SkillTree,
-    shared_links_into_skills,
+    outside_links_into_skills,
     skill_dirs,
     unreached_shared_files,
 )
@@ -48,11 +48,11 @@ def test_every_shared_file_is_reached() -> None:
     )
 
 
-def test_no_shared_file_links_a_file_inside_a_skill() -> None:
-    reaching = shared_links_into_skills(_REPO_ROOT)
+def test_no_file_outside_every_skill_links_a_file_inside_one() -> None:
+    reaching = outside_links_into_skills(_REPO_ROOT)
     assert not reaching, (
-        "These files under .agents/shared/ link a file inside a skill. The shared layer may "
-        "name a skill, by its name or its SKILL.md, but a skill's other files are its own. "
+        "These files link a file inside a skill. The shared layer and AGENTS.md may name a "
+        "skill, by its name or its SKILL.md, but a skill's other files are its own. "
         "Move what every reader needs into the shared layer, or name the skill and let it "
         f"send its own reader on. See {GUIDE_PATH}.\n"
         + "\n".join(f"  - {shared} links {linked}" for shared, linked in reaching)
@@ -86,6 +86,6 @@ def test_every_reference_the_update_flow_reaches_is_one_it_stages() -> None:
                     queue.append(linked)
     # The files this guard exists for; without them it is vacuous.
     assert ".agents/shared/references/lead-proxy.md" in reached
-    assert any(name.startswith(".agents/skills/harden-worker/") for name in reached)
+    assert ".agents/shared/references/review-gates.md" in reached
 
     assert sorted(name for name in reached if not name.startswith(staged)) == []

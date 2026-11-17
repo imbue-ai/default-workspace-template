@@ -94,8 +94,8 @@ a lock that upgraded a package selects the suites that depend on it.
 
 Run every printed line, in order, plus `uv run --no-sync ruff check` when a
 Python file is in the list. Handle a failing test and a shed command the way
-`data/.tasks/update-self/skill-at-target/.agents/skills/harden-worker/references/harden-creation.md`
-("The test gate") says, naming a flaky test under your report's Validation.
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/review-gates.md`
+says, naming a flaky test under your report's Validation.
 The tree before your change, for attributing a failure, is `$MERGE^1` (a test
 absent there arrived with the update). mngr's own suite runs in its repo, not
 here.
@@ -128,7 +128,7 @@ For the shell, build the frontends in your worktree: `uv sync
 workspace emits all seven bundles: the shell's, the chat app's, the Getting
 Started app's, the Files app's, the Routines app's, the Screen's, and the
 Style Guide's. Drive it per
-`data/.tasks/update-self/skill-at-target/.agents/skills/harden-worker/references/web-frontend-testing.md`.
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/web-frontend-testing.md`.
 
 Those seven bundles are what the lead's apply installs live
 (`--worker-bundle`, one per app, installed only as a set), so name all seven

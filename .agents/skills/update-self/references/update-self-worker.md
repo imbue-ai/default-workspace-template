@@ -20,10 +20,10 @@ and is read only when its step says so.
   worktree with the runtime dir. Write the path out each time (each bash call
   is a fresh shell) and run it from your worktree root.
 - **Files outside this skill are named by their staged path.** The lead
-  staged the target release's `.agents/shared/` and `harden-worker` skill
-  beside the skill. When one of them names a further `.agents/...` path, read
-  the copy under `data/.tasks/update-self/skill-at-target/` if one is there,
-  else your worktree's.
+  staged the target release's `.agents/shared/` beside the skill. When one of
+  its files names a further `.agents/...` path, read the copy under
+  `data/.tasks/update-self/skill-at-target/` if one is there, else your
+  worktree's.
 - **Scope is decided by rule, never by judgment.** Whether the impact
   analysis (4a), each validation item (4b) and the review gates (4c) run, and
   whether the running agents restart (4d), is a rule below. Apply it, and
@@ -253,6 +253,8 @@ from an edit.
 On a clean pull with no local footprint and no edits of your own, every other
 condition is false and nothing else here runs. Otherwise read
 `references/worker-validation.md` and run each item whose condition holds.
+Its Playwright item drives the page per
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/web-frontend-testing.md`.
 
 ### 4c. Review gates
 
@@ -261,9 +263,11 @@ condition is false and nothing else here runs. Otherwise read
 anything the update changed, and no global-dependency bump with a
 user-created dependent; and you authored no in-branch edits of your own
 (the skill-exemption commit of 4b is not one).
-**Otherwise run the real gates**, scoped to every file whose merged content
-differs from the target release. 4b's suites are their test gate, so select
-tests again only over what you commit after it.
+**Otherwise run the real gates**
+(`data/.tasks/update-self/skill-at-target/.agents/shared/references/review-gates.md`),
+scoped to every file whose merged content differs from the target release.
+4b's suites are their test gate, so select tests again only over what you
+commit after it.
 
 `references/worker-review-gates.md` is the full rule: what counts as an edit
 of yours, the scope, and the keep-or-revert disposition for fix commits. Read
