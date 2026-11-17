@@ -253,7 +253,7 @@ class UnansweredAddressWaits:
         self._first_and_last_by_address: dict[str, tuple[float, float]] = {}
         self._lock = threading.Lock()
 
-    def seconds_waiting(self, address: str) -> float:
+    def record_unanswered_request(self, address: str) -> float:
         """Record one unanswered request for ``address``; answer how long its current wait has lasted."""
         now = self._clock()
         with self._lock:
@@ -417,7 +417,7 @@ def build_gateway_app(
         )
         # Counted per service rather than per spelling of its host (case, a port), which caddy passes on as sent.
         address = service_name if service_name is not None else host.strip().lower()
-        if unanswered_waits.seconds_waiting(address) < _UNRESPONSIVE_GIVE_UP_SECONDS:
+        if unanswered_waits.record_unanswered_request(address) < _UNRESPONSIVE_GIVE_UP_SECONDS:
             return _html_page(_UNRESPONSIVE_WAITING_PAGE, status=503)
         app_entry = next((entry for entry in registered_apps if entry.name == service_name), None)
         if app_entry is not None and not is_started_on_demand(app_entry, registered_apps):
