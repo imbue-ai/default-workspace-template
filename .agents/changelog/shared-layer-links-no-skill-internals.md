@@ -8,7 +8,7 @@ A skill's files have one reader, an agent following that skill: nothing outside 
 
 - **`python-packaging-migration.md`** moves from `update-self/references/` to `.agents/shared/references/`: `migrate-workspace`, `use-template` and `update-installed-template` read it too. It gains a contents list, and tells a reader with no lead to take its questions to the user.
 
-- **`worker-failure.md` and `dead-worker-recovery.md`** move from `launch-task/references/` to `.agents/shared/references/lead-proxy/`. Every lead follows them through `lead-proxy.md`, whichever skill it came from.
+- **`worker-failure.md` and `dead-worker-recovery.md`** move from `launch-task/references/` to `.agents/shared/references/lead-proxy/`. Every lead follows them through `lead-proxy.md`, whichever skill it came from, so `dead-worker-recovery.md`'s commands take the lead's own task file rather than `launch-task`'s.
 
 - **Pointers that now name a skill.** A latchkey permission request in `github-sync`, `migrate-workspace`, `update-installed-template`, `update-published-template`, `use-template` and `datalib` names the `connect-external-service` skill, as does the visiting agent's primer. `build-app` and `interactive-delivery.md` name the `harden-worker` skill, and `freeing-memory.md` the `update-self` skill.
 
