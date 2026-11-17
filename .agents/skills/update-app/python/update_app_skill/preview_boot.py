@@ -200,7 +200,8 @@ def _live_root(
     if is_private and with_apps:
         raise PreviewError(
             "a preview frames each --with sibling at the origin its window registers, and a "
-            "private instance registers none; preview from the live checkout instead."
+            "private instance registers none. Drop --with to boot the app alone, or drop "
+            "--private to preview it with a window from the live checkout."
         )
     return main_checkout or repo_root
 
