@@ -1709,6 +1709,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           return m(actionFailureNotice, {
             title: actionFailureTitle,
             body: [detail],
+            details: actionFailureDetails,
             dismissLabel: "Cancel",
             onDismiss: dismissActionFailureNotice,
             actions: [

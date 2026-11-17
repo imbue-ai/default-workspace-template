@@ -3023,9 +3023,9 @@ export class DesktopStore {
     return this.runFreeText(primary.app.name, primary.launchPath.id, text);
   }
 
-  /** A page's ``shell:start-new-with-text``, and the shell's own "Ask an agent to ...": the secondary text action
-   *  runs with the text (Chat's New Chat on a stock machine), else the primary one; with no free-text row on the
-   *  machine the user is told. */
+  /** A page's ``shell:start-new-with-text`` ("Ask an agent to fix this"): the secondary text action runs with the
+   *  text (Chat's New Chat on a stock machine), else the primary one; with no free-text row on the machine the user
+   *  is told. */
   async startNewWithText(text: string): Promise<boolean> {
     const [primary, secondary] = freeTextRowsOf(openableApps(this.state));
     const row = secondary ?? primary;
@@ -3126,8 +3126,8 @@ export class DesktopStore {
         retry: () => void this.launchAt(app, launchId, params, target, copy),
       };
       const notice = this.noticeFor(copy.whatFailed ?? `${this.displayNameOf(app)} couldn't open that`, error, asked);
-      // Lasting: a launch from a page's draft has already let go of the text it carried, so pressing again is no
-      // retry, and an app's own reason waits behind "See details".
+      // Lasting for every launch, a shortcut's included: a text row or a page's draft has already let go of the text
+      // it carried, which only the toast's Try again still holds, and an app's own reason waits behind "See details".
       if (copy.report === undefined) this.toastNotice(notice, { isLasting: true });
       else copy.report(notice);
       return null;
