@@ -3,7 +3,7 @@
 What this workspace adds to the [agentskills.io spec](https://agentskills.io/specification):
 how a skill's steps are scripted and how its Python is packaged and validated.
 How to write the skill itself (SKILL.md size and order, references,
-descriptions, version-bound text, paths, exemptions) is in
+descriptions, version-bound text, paths) is in
 `docs/system/skill_authoring_guide.md`; read it before writing or restructuring
 a skill. `.agents/shared/references/user-facing-language.md` stays the authority
 for words the user reads.
@@ -233,7 +233,8 @@ with what to fix. It checks:
   skill carries until the release that restructures it: leave that exemption
   and that skill's structure alone, and make sure your edit fails no further
   check. With neither flag a skill passes with whatever exemption it carries.
-  A stale exemption always fails.
+  A stale exemption always fails. `docs/system/skill_exemptions.md` has the
+  reasons and who may write each.
 - **Python**: a bare skill's one script imports only the standard library,
   carries no PEP 723 header, and `python3 -S -s <script> --help` exits 0. A
   packaged skill's `python/pyproject.toml` names the project and package as
