@@ -57,7 +57,10 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   goes to its optional `onLateAnswer`), and the button reads "Asking an
   agent…", disabled, until it settles, then shows a failure under itself,
   with "Report a bug" for that failure when it asks for one, and takes a late
-  answer in place of a not-answered one; `ReportBugButton` asks the
+  answer in place of a not-answered one. The connection's `startWithText`,
+  for a request that goes to the main chat (such as "Ask an agent to free up
+  space"), answers the same way through `shell:start-with-text-result`.
+  `ReportBugButton` asks the
   shell to open Imbue Studio's bug report about the failure it is given (a
   `ReportedFailure`: the sentence on screen and what its "See details" holds,
   sent as `shell:report-bug {message, details}`), and renders only where the

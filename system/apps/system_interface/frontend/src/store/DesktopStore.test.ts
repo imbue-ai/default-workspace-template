@@ -660,10 +660,13 @@ describe("opening", () => {
     expect(store.getState().desktops[0].windows[0].path).toBe("/new?message=hi");
   });
 
-  it("shell:start-with-text runs the primary text action, and says so when there is none", async () => {
+  it("shell:start-with-text runs the primary text action, and answers its failure without a toast", async () => {
     const store = await startedStore();
-    expect(await store.startWithText("hello")).toBe(false);
-    expect(last(notices())).toBe("No app in this workspace can start a chat");
+    expect(await store.startWithText("hello")).toEqual({
+      isOpened: false,
+      failure: { message: "No app in this workspace can start a chat.", details: null, isReportable: false },
+    });
+    expect(notices()).toEqual([]);
     socket.deliver().onAppsUpdated([
       appRecord("docs", { launcher_rank: 20 }),
       appRecord("notes", {
@@ -674,7 +677,7 @@ describe("opening", () => {
         ],
       }),
     ]);
-    expect(await store.startWithText("hello")).toBe(true);
+    expect(await store.startWithText("hello")).toEqual({ isOpened: true });
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
       `launch:home:notes:new:{"message":"hello"}:new`,
     );

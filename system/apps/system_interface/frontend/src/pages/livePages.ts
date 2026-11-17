@@ -53,6 +53,7 @@ import {
   SHELL_START_NEW_WITH_TEXT,
   SHELL_START_NEW_WITH_TEXT_RESULT,
   SHELL_START_WITH_TEXT,
+  SHELL_START_WITH_TEXT_RESULT,
   reportedFailureOf,
 } from "@imbue/workspace-ui/src/app_contract";
 import type { StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
@@ -996,28 +997,42 @@ export class LivePagesLayer implements PageDriver {
     this.store.raiseWindow(page.windowId);
   }
 
-  /** ``shell:start-with-text {text}`` from a page: the launcher's primary text action runs with it, on the active
-   *  desktop (a page can only be pressed there); the frame has to be one the shell created. */
+  /** ``shell:start-with-text {text, requestId}`` from a page: the launcher's primary text action runs with it, on the
+   *  active desktop (a page can only be pressed there), and the page is answered with
+   *  ``shell:start-with-text-result``; the frame has to be one the shell created. */
   private takeStartWithText(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
-    const text = this.textFromPage(frame, payload, SHELL_START_WITH_TEXT);
-    if (text !== null) void this.store.startWithText(text);
+    this.startAndAnswer(frame, payload, SHELL_START_WITH_TEXT, SHELL_START_WITH_TEXT_RESULT, (text) =>
+      this.store.startWithText(text),
+    );
   }
 
   /** ``shell:start-new-with-text {text, requestId}`` from a page ("Ask an agent to fix this"): the launcher's
-   *  secondary text action runs with it, as ``shell:start-with-text`` runs the primary one, and the page is answered
-   *  with ``shell:start-new-with-text-result`` once the window opened or the launch failed. */
+   *  secondary text action runs with it, and the page is answered with ``shell:start-new-with-text-result``. */
   private takeStartNewWithText(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
-    const text = this.textFromPage(frame, payload, SHELL_START_NEW_WITH_TEXT);
+    this.startAndAnswer(frame, payload, SHELL_START_NEW_WITH_TEXT, SHELL_START_NEW_WITH_TEXT_RESULT, (text) =>
+      this.store.startNewWithText(text),
+    );
+  }
+
+  /** Run ``start`` with a page's text and answer the page with ``resultType`` once the window opened or the start
+   *  failed; a start that throws is answered with the fallback, so the page's button never stays pending. */
+  private startAndAnswer(
+    frame: HTMLIFrameElement,
+    payload: Record<string, unknown>,
+    type: string,
+    resultType: string,
+    start: (text: string) => Promise<StartNewOutcome>,
+  ): void {
+    const text = this.textFromPage(frame, payload, type);
     if (text === null) return;
     const requestId = payload.requestId;
     if (typeof requestId !== "string" || requestId === "") {
-      console.warn(`[si] ${SHELL_START_NEW_WITH_TEXT} ignored: it carried no request id (${JSON.stringify(payload)})`);
+      console.warn(`[si] ${type} ignored: it carried no request id (${JSON.stringify(payload)})`);
       return;
     }
-    void this.store
-      .startNewWithText(text)
+    void start(text)
       .catch((error: unknown): StartNewOutcome => {
-        console.error(`[si] ${SHELL_START_NEW_WITH_TEXT} failed`, error);
+        console.error(`[si] ${type} failed`, error);
         return {
           isOpened: false,
           failure: {
@@ -1028,7 +1043,7 @@ export class LivePagesLayer implements PageDriver {
         };
       })
       .then((outcome) => {
-        sendToChildFrame(frame, SHELL_START_NEW_WITH_TEXT_RESULT, { requestId, ...outcome });
+        sendToChildFrame(frame, resultType, { requestId, ...outcome });
       });
   }
 
