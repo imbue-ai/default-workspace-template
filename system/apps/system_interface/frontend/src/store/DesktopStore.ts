@@ -2821,8 +2821,8 @@ export class DesktopStore {
         isMinimized,
       });
     } catch (error) {
-      // Lasting: a launch from the launcher's text row or a page's draft has already let go of the text it carried,
-      // so pressing again is no retry, and an app's own reason waits behind "See details".
+      // Lasting for every launch, a shortcut's included: one from a text row or a page's draft has already let go of
+      // the text it carried, so pressing again is no retry, and an app's own reason waits behind "See details".
       this.toastFailure(`${appByName(this.state, app)?.display_name ?? app} couldn't open that`, error, {
         isLasting: true,
       });

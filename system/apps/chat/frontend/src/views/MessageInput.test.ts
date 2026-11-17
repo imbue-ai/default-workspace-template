@@ -2570,6 +2570,10 @@ describe("MessageInput on a chat whose account was signed out", () => {
     const text = renderedText(after);
     expect(text).toContain("Couldn't send your message");
     expect(text).toContain("You signed out of the account this chat runs on.");
+    // See details holds the status alone: the chat app's reason only repeats its sentence.
+    expect(findByClass(after, "see-details")).toBeDefined();
+    expect(text).toContain("HTTP 409");
+    expect(text.split(detail)).toHaveLength(2);
     expect(text).not.toContain("Retry");
     expect(text).not.toContain("Restart");
     expect(text).not.toContain("open the agent's terminal");
