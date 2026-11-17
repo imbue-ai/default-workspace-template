@@ -12,7 +12,7 @@ record:
   non-empty raw transcript (the same lines);
 - after the retention window, the archive itself and any session files still left.
 
-A session id that a present agent's history also names is never touched.
+A session id that a present or listed agent's history also names is never touched.
 """
 
 import json
@@ -78,17 +78,26 @@ def plan_sweep(
     protected_agent_ids = {
         path.name for path in present_agent_dirs
     } | _listed_agent_ids(roots.chats_root)
+    archives = discover_preserved_agent_archives(roots.host_dir)
+    unprotected_archives = [
+        archive
+        for archive in archives
+        if str(archive.agent_id) not in protected_agent_ids
+    ]
+    protected_history_files = [
+        agent_dir / SESSION_ID_HISTORY_FILENAME for agent_dir in present_agent_dirs
+    ] + [
+        archive.path / SESSION_ID_HISTORY_FILENAME
+        for archive in archives
+        if str(archive.agent_id) in protected_agent_ids
+    ]
     protected_session_ids: set[str] = set()
-    for agent_dir in present_agent_dirs:
-        protected_session_ids.update(
-            read_session_ids(agent_dir / SESSION_ID_HISTORY_FILENAME)
-        )
+    for history_file in protected_history_files:
+        protected_session_ids.update(read_session_ids(history_file))
 
     removals: list[Removal] = []
-    for archive in discover_preserved_agent_archives(roots.host_dir):
+    for archive in unprotected_archives:
         agent_id = str(archive.agent_id)
-        if agent_id in protected_agent_ids:
-            continue
         session_ids = (
             read_session_ids(archive.path / SESSION_ID_HISTORY_FILENAME)
             - protected_session_ids

@@ -210,6 +210,27 @@ def test_session_a_present_agent_still_names_is_kept(roots: SweepRoots) -> None:
     assert not set(shared_copies) & set(planned)
 
 
+def test_session_a_listed_absent_agent_names_is_kept(roots: SweepRoots) -> None:
+    shared_session = str(uuid4())
+    shared_copies = _write_session(roots, shared_session)
+    listed_agent_id = _new_agent_id()
+    _write_chat_record(roots, [_new_agent_id(), listed_agent_id])
+    _write_archive(
+        roots,
+        listed_agent_id,
+        [shared_session],
+        preserved_at=_NOW - timedelta(days=90),
+    )
+    _write_archive(
+        roots,
+        _new_agent_id(),
+        [shared_session],
+        preserved_at=_NOW - timedelta(days=1),
+    )
+
+    assert not set(shared_copies) & set(_planned(roots))
+
+
 def test_session_copies_are_found_in_every_account(roots: SweepRoots) -> None:
     session_id = str(uuid4())
     copies = _write_session(roots, session_id, account="a") + _write_session(

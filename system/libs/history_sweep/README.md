@@ -27,7 +27,7 @@ by any chat record (`data/.apps/chat/chats/*/record.json`):
 | At once, if the archive holds a non-empty raw transcript | the agent's session files in every account folder |
 | 30 days after the archive was written (`preserved_at` in its manifest) | the archive, and any session files still left |
 
-It never removes a session that a present agent's history also names, never reads
+It never removes a session that a present or listed agent's history also names, never reads
 an archive whose manifest it cannot parse, and removes nothing at all when a chat
 record cannot be read (it cannot tell what is listed). Archived hand-off segments
 of a listed chat are present agents, so they are never touched.
