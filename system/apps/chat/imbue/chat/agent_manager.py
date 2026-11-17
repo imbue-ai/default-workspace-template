@@ -4922,7 +4922,7 @@ class AgentManager:
             if provisional is None:
                 return False
             del self._provisional_chats[parsed]
-            # Under the same lock as the removal, so a page's connect-time replay sees the chat one way or the other.
+            # Under the same lock as the removal, so a page's connect-time replay finds the chat in one list or both.
             self._prune_recent_discards_locked()
             self._recent_discards[parsed] = (provisional, time.monotonic())
             if provisional.phase is ProvisionalChatPhase.CREATING:
@@ -4947,19 +4947,20 @@ class AgentManager:
             del self._recent_discards[chat_id]
 
     def get_connect_replay(self) -> ConnectReplay:
-        """What a page that connects is told before the chat list: the chats deleted lately, each with the messages
-        dropped with it (a page whose socket was down then puts its own back), and the provisional chats. Both are
-        read under one lock, so a chat deleted meanwhile is in exactly one of them."""
+        """What a page that connects is told before the chat list: the provisional chats, then the chats deleted
+        lately, each with the messages dropped with it (a page whose socket was down then puts its own back). The
+        discards are read second, so a chat deleted between the two reads is among them, and the page, told of it after
+        its record, drops the record again."""
+        provisional_chats = self.get_provisional_chats_as_shown()
         with self._lock:
             self._prune_recent_discards_locked()
             discarded = [provisional for provisional, _ in self._recent_discards.values()]
-            provisional_chats = list(self._provisional_chats.values())
         return ConnectReplay(
+            provisional_chats=tuple(provisional_chats),
             discarded_chats=tuple(
                 DiscardedChat(chat_id=chat.chat_id, held_sends=self._provisional_as_shown(chat).held_sends)
                 for chat in discarded
             ),
-            provisional_chats=tuple(self._provisional_as_shown(chat) for chat in provisional_chats),
         )
 
     def create_chat(

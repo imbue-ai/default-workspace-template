@@ -959,11 +959,10 @@ class ProvisionalChatAsShown(FrozenModel):
 
 
 class ConnectReplay(FrozenModel):
-    """What a page that connects is told first, read at one moment: the chats deleted lately, then the provisional
-    chats."""
+    """What a page that connects is told before the chat list: the provisional chats, then the chats deleted lately."""
 
-    discarded_chats: tuple[DiscardedChat, ...] = Field(description="The chats deleted lately, oldest first")
     provisional_chats: tuple[ProvisionalChatAsShown, ...] = Field(description="The provisional chats held now")
+    discarded_chats: tuple[DiscardedChat, ...] = Field(description="The chats deleted lately, oldest first")
 
 
 class SetLaunchChoiceRequest(FrozenModel):

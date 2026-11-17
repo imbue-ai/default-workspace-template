@@ -3196,20 +3196,20 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
     _loguru_logger.info("WS /api/ws connection opened (conn {})", id(client_queue))
     disconnect_reason = "handler exited"
     try:
-        # The connect-time replay: the chats deleted lately while they were created, with the messages dropped
-        # with them (a page whose socket was down then puts its own back), every provisional chat this process
-        # holds, then the chat list. The list comes last on purpose -- it is how a page knows the replay is over,
-        # so a record it still holds that this process did not replay (a create the previous
-        # process was running) can be dropped rather than waited on forever. Before the first
-        # read of the agent list there is no list to send: an empty one would tell the page every
-        # chat is gone, so the page waits for the push that follows that read instead.
+        # The connect-time replay: every provisional chat this process holds, the chats deleted lately with the
+        # messages dropped with them (a page whose socket was down then puts its own back), then the chat list.
+        # A discard comes after the records, so one read between the two drops the record it follows. The list
+        # comes last on purpose -- it is how a page knows the replay is over, so a record it still holds that
+        # this process did not replay (a create the previous process was running) can be dropped rather than
+        # waited on forever. Before the first read of the agent list there is no list to send: an empty one
+        # would tell the page every chat is gone, so the page waits for the push that follows that read instead.
         replay = agent_manager.get_connect_replay()
+        for provisional in replay.provisional_chats:
+            websocket.send(json.dumps(provisional_chat_created_message(provisional)))
         for discarded in replay.discarded_chats:
             websocket.send(
                 json.dumps(provisional_chat_completed_message(discarded.chat_id, False, None, discarded.held_sends))
             )
-        for provisional in replay.provisional_chats:
-            websocket.send(json.dumps(provisional_chat_created_message(provisional)))
         if agent_manager.is_agent_list_known():
             websocket.send(
                 json.dumps(chats_updated_message(agent_manager.get_chat_snapshots(), agent_manager.get_main_chat_id()))
