@@ -27,7 +27,8 @@ import {
   isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
-import { DEFAULT_WHAT_FAILED, REPORT_A_BUG_LABEL, failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import { DEFAULT_WHAT_FAILED, failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { refreshShellKeybindings } from "../model/keybindings";
 import {
@@ -433,8 +434,9 @@ export interface StoreDependencies {
   readonly popOut?: PopOutBridge;
   /** Where external links open when no app takes them; absent opens none. */
   readonly outsideLinks?: OutsideLinkOpener;
-  /** Open the bug report a failure's "Report a bug" asks for; absent opens none. */
-  readonly reportBug?: () => void;
+  /** Open the bug report a failure's "Report a bug" asks for, with the failure attached (null: a page that sent
+   *  none); absent opens none. */
+  readonly reportBug?: (failure: ReportedFailure | null) => void;
   /** The immersive-mode conversation with the embedder; absent means no embedder. */
   readonly immersive?: ImmersiveBridge;
   /** The one window this shell shows edge to edge (a pulled-out window's own desktop window), else null. */
@@ -584,7 +586,7 @@ export class DesktopStore {
   private markAppsLoaded: () => void = () => undefined;
   private readonly popOut: PopOutBridge;
   private readonly outsideLinks: OutsideLinkOpener;
-  private readonly reportBug: () => void;
+  private readonly reportBug: (failure: ReportedFailure | null) => void;
   private readonly immersiveBridge: ImmersiveBridge;
   private readonly soloWindowId: string | null;
   /** Whether the embedder can pull a window out; off until it says so (an older chrome, a plain browser). */
@@ -684,7 +686,8 @@ export class DesktopStore {
    * Tell the user that what they asked for failed with ``error``, in ``failureSentence``'s words for ``whatFailed``
    * (a sentence stem naming it). A call site whose retry is the control just pressed asks for a plain note; any other,
    * and any failure that asks for a bug report, shows one that stays, with the status and the server's own text
-   * behind "See details" and, when the embedder opens a bug report, "Report a bug".
+   * behind "See details" and, for a failure that asks for one, "Report a bug" wherever the embedder opens a bug report
+   * when the toast is drawn (``reportBugAction``).
    */
   private toastFailure(whatFailed: string, error: unknown, { isLasting }: { readonly isLasting: boolean }): void {
     const told = failureSentence(describeRequestFailure(error), whatFailed);
@@ -697,7 +700,7 @@ export class DesktopStore {
     this.toasts.show(told.message, {
       isLasting: true,
       details: told.details,
-      actions: told.isReportable && this.canReportBug ? [{ label: REPORT_A_BUG_LABEL, run: this.reportBug }] : [],
+      isReportable: told.isReportable,
     });
   }
 
@@ -759,11 +762,20 @@ export class DesktopStore {
     if (this.canReportBug === canReportBug) return;
     this.canReportBug = canReportBug;
     this.pageDriver?.greetAll();
+    // The toasts already up decide their "Report a bug" as they draw.
+    this.notifyListeners();
   }
 
-  /** A page's ``shell:report-bug``: the bug report opens, where the embedder opens one. */
-  reportBugFromPage(): void {
-    if (this.canReportBug) this.reportBug();
+  /** What a reportable toast's "Report a bug" runs: the bug report about its failure, or null while the embedder
+   *  opens none. */
+  reportBugAction(): ((failure: ReportedFailure) => void) | null {
+    return this.canReportBug ? (failure) => this.reportBug(failure) : null;
+  }
+
+  /** A page's ``shell:report-bug``: the bug report about ``failure`` opens, where the embedder opens one; null opens
+   *  it with nothing attached. */
+  reportBugFromPage(failure: ReportedFailure | null): void {
+    if (this.canReportBug) this.reportBug(failure);
   }
 
   /** Whether the embedder can take the app window immersive for a window of this desktop. */
@@ -2714,6 +2726,19 @@ export class DesktopStore {
       return false;
     }
     return this.runFreeText(primary.app.name, primary.launchPath.id, text);
+  }
+
+  /** A page's ``shell:start-new-with-text``, and the shell's own "Ask an agent to ...": the secondary text action
+   *  runs with the text (Chat's New Chat on a stock machine), else the primary one; with no free-text row on the
+   *  machine the user is told. */
+  async startNewWithText(text: string): Promise<boolean> {
+    const [primary, secondary] = freeTextRowsOf(openableApps(this.state));
+    const row = secondary ?? primary;
+    if (row === undefined) {
+      this.toast(NO_TEXT_APP_REASON);
+      return false;
+    }
+    return this.runFreeText(row.app.name, row.launchPath.id, text);
   }
 
   /** The desktop an open goes to: the active one, or on a phone the first, where a window opened out of sight
