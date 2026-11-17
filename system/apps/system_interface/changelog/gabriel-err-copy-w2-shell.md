@@ -16,7 +16,7 @@ The workspace desktop says what failed in its own words, names apps as people kn
 
 - "Ask an agent to start it", "Ask an agent to look at it" and "Ask an agent to finish it" start a new chat, and leave their note up; "Ask an agent to free up space" goes to the main chat.
 
-- Delete is withheld from the only desktop in the overview, saying why. The wallpaper and theme choosers, the resource gauge's settings and the keyboard shortcuts dialog say what couldn't be changed (or loaded) with the reason behind "See details", and offer Try again (and, on a full disk, an agent to free up space). The avatar chooser retries its designs in place. The update notice says how long ago the update was, names what a rollback restarts by display name, and offers an agent to finish a rollback that left the restart to one.
+- Delete is withheld from the only desktop in the overview, saying why. The wallpaper and theme choosers say what couldn't be changed with the reason behind "See details", and offer Try again (and, on a full disk, an agent to free up space). The avatar chooser retries its designs in place. The update notice says how long ago the update was, names what a rollback restarts by display name, and offers an agent to finish a rollback that left the restart to one.
 
 - A stopped app's page says "Starting <name>..." without guessing a cause; one that couldn't start waits for Try again instead of reloading on its own, offers an agent to look at it, and keeps the log command behind "See details".
 
