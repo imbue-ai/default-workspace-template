@@ -110,7 +110,11 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   askButton.onclick = async () => {
     askButton.disabled = true;
     askButton.textContent = "Asking an agent…";
-    const outcome = await askAgentToFix(connection, { whatFailed: "The terminal couldn't start", details: output });
+    const outcome = await askAgentToFix(
+      connection,
+      { whatFailed: "The terminal couldn't start", details: output },
+      { showsOutcome: true },
+    );
     askButton.disabled = false;
     askButton.textContent = "Ask an agent to fix this";
     if (!outcome.isOpened) showFailure(outcome.failure);
