@@ -93,24 +93,60 @@ _PAGE_TEMPLATE: Final[str] = """<!DOCTYPE html>
 # contract module: the parker answers every path with this page, so it cannot serve the module beside it.
 SHELL_HANDSHAKE_TYPE: Final[str] = "shell:handshake"
 SHELL_START_NEW_WITH_TEXT_TYPE: Final[str] = "shell:start-new-with-text"
+SHELL_START_NEW_WITH_TEXT_RESULT_TYPE: Final[str] = "shell:start-new-with-text-result"
+ASKING_AN_AGENT_LABEL: Final[str] = "Asking an agent\u2026"
+CHANGE_NOT_ANSWERED_SENTENCE: Final[str] = (
+    "The workspace didn't answer, so Imbue Studio can't tell whether this went through."
+)
 
 # What a page that could not start offers: a Try again that asks once more, an agent asked to look at it (shown once
-# a shell that frames the page has greeted it, since only a shell can start one), and the log's command for whoever
-# wants it.
+# a shell that frames the page has greeted it, since only a shell can start one; while the shell has not answered the
+# ask it reads "Asking an agent...", and a failed ask is told under it, its details at the top of the page's one "See
+# details"), and the log's command for whoever wants it. A fresh handshake while an ask is out means the shell
+# restarted, so that ask is settled as not answered.
 _FAILED_BODY_TEMPLATE: Final[str] = (
     '{sentence}<p><button type="button" id="try-again">Try again</button> '
     '<button type="button" id="ask-agent" hidden>Ask an agent to look at it</button></p>'
-    "<details><summary>See details</summary><p>The program's log may say why: "
+    '<p id="ask-agent-failure" hidden></p>'
+    "<details><summary>See details</summary>"
+    '<pre id="ask-agent-failure-details" hidden></pre>'
+    "<p>The program's log may say why: "
     "<code>supervisorctl tail {program} stderr</code></p></details>"
     "<script>(function () {"
     'document.getElementById("try-again").addEventListener("click", function () { location.reload(); });'
     'var ask = document.getElementById("ask-agent");'
+    'var failure = document.getElementById("ask-agent-failure");'
+    'var failureDetails = document.getElementById("ask-agent-failure-details");'
+    "var askLabel = ask.textContent;"
+    "var pendingId = null;"
     "if (window.parent === window) return;"
+    "function settle(told) {"
+    "pendingId = null;"
+    "ask.disabled = false;"
+    "ask.textContent = askLabel;"
+    "if (told === null) return;"
+    "failure.textContent = told.message;"
+    "failure.hidden = false;"
+    'failureDetails.textContent = told.details || "";'
+    "failureDetails.hidden = !told.details;"
+    "}"
     'window.addEventListener("message", function (event) {'
-    "if (event.source === window.parent && event.data && event.data.type === {handshake}) ask.hidden = false;"
+    "if (event.source !== window.parent || !event.data) return;"
+    "if (event.data.type === {handshake}) {"
+    "ask.hidden = false;"
+    "if (pendingId !== null) settle({ message: {not_answered}, details: null });"
+    "} else if (event.data.type === {result} && event.data.requestId === pendingId) {"
+    "settle(event.data.isOpened ? null : event.data.failure);"
+    "}"
     "});"
     'ask.addEventListener("click", function () {'
-    'window.parent.postMessage({ type: {start_new_with_text}, text: {request} }, "*");'
+    "if (pendingId !== null) return;"
+    "pendingId = Math.random().toString(16).slice(2) + Date.now().toString(16);"
+    "ask.disabled = true;"
+    "ask.textContent = {asking};"
+    "failure.hidden = true;"
+    "failureDetails.hidden = true;"
+    'window.parent.postMessage({ type: {start_new_with_text}, text: {request}, requestId: pendingId }, "*");'
     "});"
     "})();</script>"
 )
@@ -166,6 +202,9 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
         _FAILED_BODY_TEMPLATE.replace("{program}", html.escape(program))
         .replace("{handshake}", _script_literal(SHELL_HANDSHAKE_TYPE))
         .replace("{start_new_with_text}", _script_literal(SHELL_START_NEW_WITH_TEXT_TYPE))
+        .replace("{result}", _script_literal(SHELL_START_NEW_WITH_TEXT_RESULT_TYPE))
+        .replace("{asking}", _script_literal(ASKING_AN_AGENT_LABEL))
+        .replace("{not_answered}", _script_literal(CHANGE_NOT_ANSWERED_SENTENCE))
         .replace("{request}", _script_literal(could_not_start_request(display_name, program)))
     )
     match kind:
