@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 from pydantic import Field
 
 from imbue.imbue_common.mutable_model import MutableModel
@@ -16,8 +18,16 @@ class FakeInstall(MutableModel):
         description="Pids the memory guard shed whose record lands only after this many reads of the ledger",
     )
 
+    on_next_ledger_read: Callable[[], None] | None = Field(
+        default=None, description="What happens elsewhere while the ledger is next read; run once"
+    )
+
     def was_shed(self, pid: int) -> bool:
         """Whether the ledger names ``pid`` as shed, as read now."""
+        happening = self.on_next_ledger_read
+        if happening is not None:
+            self.on_next_ledger_read = None
+            happening()
         if pid in self.shed_pids:
             return True
         reads_left = self.ledger_reads_before_shed.get(pid)

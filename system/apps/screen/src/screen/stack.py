@@ -378,6 +378,11 @@ class ScreenStack(MutableModel):
             for program in STACK_PROGRAMS
         )
 
+    def start_generation(self) -> int:
+        """The number of the latest start, so a caller can tell whether a start began since it last looked."""
+        with self._lock:
+            return self._start_generation
+
     def mark_stopped(self, reason: str, cause: StopCause) -> None:
         """The watcher says the group ended on its own (``cause`` says whether the memory guard ended it); a start in
         flight gives up."""

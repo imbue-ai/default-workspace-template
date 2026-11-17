@@ -400,7 +400,13 @@ class ScreenService(MutableModel):
         if self.stack.lifecycle == Lifecycle.STOPPED:
             # The first member to go names the reason; the others leaving afterwards is the group ending as designed.
             return True
+        generation = self.stack.start_generation()
         cause = StopCause.OUT_OF_MEMORY if pid is not None and self._was_shed_by_now(pid) else StopCause.CRASHED
+        # A Quit or a failed start recorded during the wait says how the group ended, and a start begun since is not
+        # this notice's to abort.
+        if self.stack.lifecycle == Lifecycle.STOPPED or self.stack.start_generation() != generation:
+            logger.info("Dropped the stop notification for {}: the stack moved on while it waited", member)
+            return True
         logger.warning("The Screen stopped: {} ({}, {})", reason, member, cause.value.lower())
         self.stack.mark_stopped(reason, cause)
         self.broadcaster.broadcast({"type": "stopped", "reason": reason, "member": member})
