@@ -173,8 +173,8 @@ command lines or config shapes -- go read it.
 The web-API sources (Slack, GitHub, Notion, ...) need the user's credentials,
 which flow through the same `latchkey` gateway used elsewhere. If a sync fails
 for a source with a missing-credentials or "request not permitted by the user"
-error, request access the way the `connect-external-service` skill's
-`references/latchkey.md` describes ("Ask for user permission"): POST a
+error, request access the way the `connect-external-service` skill
+describes: POST a
 `predefined` permission request for that service's scope (e.g. `slack-api`,
 `github-api`, `notion-api`), wait for the user's approval, then re-run
 `datalib-dag`. If datalib's own error hint says to run `latchkey auth set`,
@@ -203,8 +203,8 @@ to hold:
   address ranges outright, so for an agent running remotely the requests have
   to go out through the user's own computer. That happens once desktop
   proxying is on for the service: set `"proxy": true` on the permission
-  request you file for it (`references/latchkey.md`, "Proxying requests
-  through the user's desktop"), or the user turns it on in that connector's
+  request you file for it (the `connect-external-service` skill covers
+  proxying through the user's desktop), or the user turns it on in that connector's
   settings.
 
 If a sync of one of these sources returns Cloudflare challenge pages instead
