@@ -34,7 +34,7 @@ def _os_error(number: int) -> OSError:
 def test_an_error_people_can_act_on_is_a_refusal_in_their_words_without_the_path(
     number: int, status: int, kind: str
 ) -> None:
-    refusal = refusal_for_os_error(_os_error(number))
+    refusal = refusal_for_os_error(_os_error(number), is_read=False)
 
     assert isinstance(refusal, OsRefusal)
     assert (refusal.status, refusal.kind) == (status, kind)
@@ -45,4 +45,4 @@ def test_an_error_people_can_act_on_is_a_refusal_in_their_words_without_the_path
 def test_an_unexplained_error_is_left_to_be_reported(number: int | None) -> None:
     error = OSError("something odd") if number is None else _os_error(number)
 
-    assert refusal_for_os_error(error) is None
+    assert refusal_for_os_error(error, is_read=False) is None

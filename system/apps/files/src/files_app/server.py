@@ -233,7 +233,7 @@ def create_app(
             return failure(error)
         except OSError as error:
             detail = f"{request.method} {path}: {error}"
-            refusal = refusal_for_os_error(error)
+            refusal = refusal_for_os_error(error, is_read=request.method in ("GET", "HEAD"))
             if refusal is None:
                 logger.warning("{} {} failed: {}", request.method, path, error)
                 return _unexplained_failure(detail)

@@ -17,6 +17,10 @@ class OsRefusal(NamedTuple):
 WRITE_REFUSAL_KINDS: Final[frozenset[str]] = frozenset({"permission_denied", "read_only"})
 
 _PERMISSION_DENIED: Final[OsRefusal] = OsRefusal(403, "permission_denied", "You don't have permission to change this.")
+# A download's refusal is shown as the server words it, so a refused read must not speak of changing anything.
+_PERMISSION_DENIED_TO_READ: Final[OsRefusal] = OsRefusal(
+    403, "permission_denied", "You don't have permission to open this."
+)
 _ALREADY_EXISTS: Final[OsRefusal] = OsRefusal(409, "already_exists", "Something with that name is already there.")
 _IN_USE: Final[OsRefusal] = OsRefusal(409, "in_use", "It's in use right now. Try again in a moment.")
 _OUT_OF_SPACE: Final[OsRefusal] = OsRefusal(507, "out_of_space", "This workspace is out of disk space.")
@@ -40,8 +44,12 @@ _REFUSAL_BY_ERRNO: Final[dict[int, OsRefusal]] = {
 }
 
 
-def refusal_for_os_error(error: OSError) -> OsRefusal | None:
-    """The refusal ``error`` is to a person, or None for an error with no cause they can act on (EIO and the like)."""
+def refusal_for_os_error(error: OSError, is_read: bool) -> OsRefusal | None:
+    """The refusal ``error`` is to a person, or None for an error with no cause they can act on (EIO and the like);
+    ``is_read`` says the request only read, which a permission refusal then says."""
     if error.errno is None:
         return None
-    return _REFUSAL_BY_ERRNO.get(error.errno)
+    refusal = _REFUSAL_BY_ERRNO.get(error.errno)
+    if is_read and refusal == _PERMISSION_DENIED:
+        return _PERMISSION_DENIED_TO_READ
+    return refusal

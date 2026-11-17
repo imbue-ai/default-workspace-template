@@ -331,6 +331,21 @@ def test_creating_in_a_folder_that_cannot_be_written_is_refused_in_words_for_peo
     assert "/reports/drafts" in answer["detail"]
 
 
+@pytest.mark.skipif(_IS_ROOT, reason="root reads a file whatever its mode")
+def test_a_download_that_cannot_be_read_says_it_cannot_be_opened(tmp_path: Path) -> None:
+    client = _app(None, tmp_path)
+    unreadable = tmp_path / "root" / "notes.txt"
+    unreadable.parent.mkdir(parents=True, exist_ok=True)
+    unreadable.write_text("a")
+    unreadable.chmod(0o000)
+
+    response = client.get("/notes.txt?download")
+
+    assert response.status_code == 403
+    # Plain text, which the page quotes as written after "Couldn't download notes.txt:".
+    assert response.get_data(as_text=True) == "You don't have permission to open this."
+
+
 def test_a_move_from_the_workspace_onto_a_computer_is_refused(tmp_path: Path) -> None:
     client = _app(None, tmp_path)
     (tmp_path / "root" / "notes.txt").write_text("a")
