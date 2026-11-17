@@ -75,6 +75,143 @@ App specifics:
 Beyond the live-instance rules in `web-frontend-testing.md`: do not run `workspace-layout
 open` / `refresh` / `list` against the served tree.
 
+## Phone and sharing checks
+
+The user built and confirmed the app on a desktop, as its owner, so two ways
+of reaching it went untried: from a phone, and by someone else. Once sharing
+is on, the app has its own public address (`build-app`'s "The shared (public)
+URL"), and the user can open it from their phone's browser
+(`.agents/skills/use-from-phone/SKILL.md`) or grant it to other people and to
+visiting agents. The crystallize pass runs these checks after its first
+milestone (`op-crystallize.md`, Stage 3). Each finding is either fixed and
+covered by a test, or named in your report; none is a reason to stop the pass.
+
+### On a phone
+
+A phone shows one window at a time, filling the screen, or the app's own
+link opened directly in its browser; either way the app's page gets a
+phone-sized viewport and a finger instead of a mouse. Drive the isolated
+instance (`web-frontend-testing.md`) in a browser context at 393x852 and at
+852x393 with `has_touch=True` and `is_mobile=True` (without `is_mobile`,
+Chromium ignores the page's viewport tag and does not draw what a phone
+does), and check:
+
+- The page carries `<meta name="viewport" content="width=device-width,
+  initial-scale=1">`, without which a phone draws the desktop layout shrunk
+  to fit.
+- Nothing scrolls sideways at 393 wide
+  (`document.documentElement.scrollWidth <= 393`; not `window.innerWidth`,
+  which an emulated phone widens to fit a page that overflows): a wide table
+  or code block scrolls inside its own container, and fixed widths give way
+  to the screen's.
+- Every action the desktop offers can be done by tapping. Nothing is reachable
+  only on hover (a row's buttons that appear on hover, a tooltip that holds
+  the only copy of a value), controls are big enough to tap (about 44px), and
+  a menu or dialog fits on screen and closes.
+- A text field's font is at least 16px, or iOS zooms the page when it gains
+  focus.
+
+The user confirmed the desktop layout, so a fix for a phone applies only on a
+phone, never as a new desktop look: under the media queries the workspace's
+own apps switch on (`system/libs/workspace_ui/src/device_queries.ts`), a
+phone-sized viewport either way round, which covers 852x393 where a
+`max-width` breakpoint does not, or `(pointer: coarse)` for what a finger
+needs (hover-only controls, tap targets). Look at the screenshots at both
+phone sizes and at the desktop size the user confirmed, as
+`web-frontend-testing.md` requires for any page you change. Commit one
+`browser` test in that phone context (393x852, `has_touch=True`,
+`is_mobile=True`; `page.tap` fails without touch) that asserts no sideways
+scroll and runs the app's main action by tapping it. The repo-root
+`conftest.py` does not reach a user-built app's suite and its dev group has
+no Playwright, so add `playwright` to that group (`uv add --dev playwright` in
+its directory), register the `browser` marker in its
+`[tool.pytest.ini_options]`, and launch Fortress by its path inside the test,
+as `AGENTS.md` says.
+
+### When it is shared
+
+Over a share, every route answers whoever holds a grant on the whole
+workspace or on this app (`system/services/share_gateway/README.md`,
+"Grants"), and a visiting agent scoped to it ("Visiting agents" there), not
+just the pages the user clicks. Each request carries `X-Imbue-Identity`
+("Request identity" there): `owner` is always present; a person over a share
+adds `user_id` and `email`; a visiting agent adds `agent_id`, `agent_name` and
+`granter`, with no `user_id` ("Visiting agents", "Admission"); and a request
+with no header is the owner's, which is safe only from loopback under a
+loopback `Host`. Every built-in app installs a guard for that and the scaffold
+does not, so add `install_request_guard(app, exempt_rules=frozenset())` from
+`app_schema.request_guard` right after the app is created, ahead of every
+other request hook (`system/libs/app_schema/README.md`; `exempt_rules` names a
+route meant for pages of other origins). It answers 403 to a page of another
+origin and to a header-less request from anywhere else. A header that does
+not parse is never read as the owner's: `parse_identity_header` raises on it
+and the guard answers that with a 400, so a route that reads the identity
+answers 400, and a route that never reads it does not see the difference.
+Read the identity with `workspace_layout.identity`, as the shell and the chat
+app do; it comes with `app-schema`. Use `parse_identity_header`,
+`is_owner_participant`, and `participant_key_of`, which names the requester
+`user:<id>`, `agent:<id>`, or `owner`. Locally the header looks the same, so
+the test client exercises all of this without turning sharing on.
+
+What an app can enforce is narrow, so neither the app nor your report claims
+more:
+
+- Sharing grants decide who gets in; there are no read or edit roles. By
+  default anyone admitted can do whatever the app's API allows.
+- Hiding a control is not access control: a visitor can call any route from
+  the browser console. Treat the UI as affordance only.
+- A route is owner-only only if the server refuses visitors, by
+  `X-Imbue-Identity`. The proxies strip any copy a client sends and inject the
+  real one, so a page cannot forge it.
+- That refusal holds only against someone admitted to this one app. A
+  whole-workspace visitor or visiting agent can message the chat agents or
+  edit files, so no app-level check limits them.
+- A request from inside the container has no identity header and reads as the
+  owner, so a change a chat agent makes for a visitor is attributed to the
+  owner, and a direct edit to a file is not logged. The access log covers
+  requests made through the app, not everything.
+
+Go through every route the app's API document lists, and check:
+
+1. **Secrets.** A route that reveals a secret or a credential answers visitors
+   403 on the server, the way the chat app's
+   `system/apps/chat/imbue/chat/identity.py` does, and no other route reaches
+   the same thing, including one that runs a command or touches files outside
+   the app's data.
+2. **Saved content.** Content a visitor can save is rendered safely, so it
+   cannot run script in the owner's browser and act as the owner.
+3. **Controls.** Controls a visitor should not casually use are hidden or
+   de-emphasized for visitors where that makes sense, without claiming that
+   protects anything.
+4. **Who did what.** A change made through the app stores the requester's
+   participant key; `email` and `agent_name` are for display only, never the
+   key. When visitors can change anything, the app keeps an access log: one
+   line per request that changed something, with the time, the participant
+   key, whether it was the owner, and the route. Keep it under the app's data
+   directory and bound it like any other store ("Bound disk growth" in
+   `harden-creation.md`). The share gateway's own access log (its README, "The
+   access log") records every request but never who made it, so it does not
+   replace this one.
+5. **Claims.** The API document is what a visiting agent reads to learn the
+   app (`build-app`'s "The app describes its own API"), so a route's
+   description says when it is owner-only. Neither it nor your report claims
+   more protection than the above.
+
+If the task file or the user explicitly asks to restrict visitors, do it on
+the server and say plainly that it holds only for people given that one app,
+not a whole-workspace share.
+
+Cover the server-side checks with tests through the test client, sending a
+person's header (`{"owner": false, "user_id": "...", "email": "..."}`) and a
+visiting agent's
+(`{"owner": false, "agent_id": "...", "agent_name": "...", "granter": "..."}`):
+an owner-only route answers both 403 and still works for the owner and for a
+request with no header, a route that reads the identity answers 400 to a
+header that does not parse, saved markup comes back inert, a change records
+the visitor's participant key, and the access log gains its line. Assert the
+guard with `app_schema.testing`'s
+`assert_request_guard_refuses_unknown_provenance` on one of the app's reads.
+
 ## Critical apps
 
 The shell (`system/apps/system_interface`), the chat (`system/apps/chat`), the

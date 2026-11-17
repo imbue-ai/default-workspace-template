@@ -322,7 +322,7 @@ def open_window(desktop_id: str) -> ResponseReturnValue:
     """Open a window of an app at a path on a desktop, or answer the one already at that path; 201 when it is new."""
     body = parse_request_body(WindowOpenRequest)
     shell = _shell()
-    outcome = shell.open_window(desktop_id, body)
+    outcome = shell.open_window(desktop_id, body, None)
     return model_response(
         WindowOpenedResponse(
             window=shell.window_view(outcome.window),
@@ -797,7 +797,7 @@ def _open_unplaced(shell: ShellState, arguments: OpenArgs, requester: OpRequeste
     else:
         raise LayoutOpError("there is no desktop to open on yet")
     target = _open_target(shell, arguments, None, None)
-    outcome = shell.open_window_unplaced(desktop.id, target.app, target.path, arguments.if_present)
+    outcome = shell.open_window_unplaced(desktop.id, target.app, target.path, arguments.if_present, requester)
     logger.info(
         "layout op=open requester={} desktop={} client=none args={}", requester, desktop.id, _logged(arguments)
     )
@@ -1070,6 +1070,7 @@ def _show_page(
         repoint=repoint,
         is_every_desktop_searched=True,
         is_minimized=False,
+        requester=requester,
     )
     desktop = shown.desktop
     # Switched after the raise, so the layout the client fetches on arriving already has the window on top; a window
@@ -1233,7 +1234,7 @@ def _open(
     if found is not None and _is_detached_while_connected(shell, target.client_id, is_found_detached):
         _raise_in_own_window(shell, found.id, target.client_id, requester)
         return found.id, _PopOutNotes(is_raised_in_own_window=True)
-    window_id = shell.open_window(target.desktop.id, request).window.id
+    window_id = shell.open_window(target.desktop.id, request, requester).window.id
     _pair_beside(shell, target, anchor, window_id)
     _switch_as_asked(shell, target)
     if not arguments.minimized:

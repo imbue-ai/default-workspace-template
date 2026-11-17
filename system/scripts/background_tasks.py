@@ -11,6 +11,7 @@ on sys.path, so run it as ``python3 <path>``, never with -I, -P or PYTHONSAFEPAT
 import sys
 from pathlib import Path
 
+# import-path: no-venv -- Imbue Studio, minds_evals and minds_admin run this path from outside the workspace's release, so it cannot rely on the workspace's venv
 sys.path.insert(
     0,
     str(Path(__file__).resolve().parents[1] / "libs" / "chat_background_tasks" / "src"),

@@ -27,6 +27,7 @@ from app_schema.api_schema import RouteTable
 from app_schema.api_schema import SchemalessRoute
 from app_schema.api_schema import merge_route_tables
 from app_schema.api_schema import register_api_schema_route
+from app_schema.request_guard import install_request_guard
 from app_schema.routes import error_response
 from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
@@ -67,8 +68,6 @@ from screen.errors import ScreenNotRunningError
 from screen.errors import WindowToolError
 from screen.identity import AGENT_ID_HEADER
 from screen.identity import AGENT_NAME_HEADER
-from screen.identity import IDENTITY_HEADER
-from screen.identity import parse_identity_header
 from screen.primitives import APP_DESCRIPTION
 from screen.primitives import APP_DISPLAY_NAME
 from screen.primitives import AgentId
@@ -82,11 +81,13 @@ from screen.route_guards import VISITOR_REFUSAL
 from screen.route_guards import describe_controller_refusal
 from screen.route_guards import describe_visitor_refusal
 from screen.route_guards import is_owner_request
+from screen.route_guards import request_identity
 from screen.route_guards import session_id_from_request
 from screen.service import DEFAULT_SCREENSHOT_QUALITY
 from screen.service import ScreenService
 from screen.watch import STOPPED_NOTIFICATION_PATH
 from screen.xclipboard import MAX_CLIPBOARD_BYTES
+from workspace_layout.identity import is_loopback_address
 
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
 
@@ -202,14 +203,12 @@ def _cap_request_body(max_bytes: int) -> None:
     request.max_content_length = max_bytes
 
 
-def _is_loopback_request() -> bool:
-    return request.remote_addr in ("127.0.0.1", "::1")
-
-
 def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) -> Flask:
     app = Flask(__name__, static_folder=None)
     app.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
     sock = Sock(app)
+
+    install_request_guard(app, exempt_rules=frozenset())
 
     # the owner gate
 
@@ -325,9 +324,8 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
     def create_session() -> ResponseReturnValue:
         """Log the requester in to neko as a session named from ``X-Imbue-Identity`` (a header-less request is the
         owner); answers the session id, its token and name, and whether it is the owner's."""
-        identity = parse_identity_header(request.headers.get(IDENTITY_HEADER))
         try:
-            session = service.create_session(identity)
+            session = service.create_session(request_identity())
         except ScreenNotRunningError as e:
             service.ensure_started()
             return _error(str(e), HTTP_SERVICE_UNAVAILABLE)
@@ -599,7 +597,7 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
     def stopped() -> ResponseReturnValue:
         """The watcher's notification that a member of the stack exited (loopback only): the service records the stop
         with its reason."""
-        if not _is_loopback_request():
+        if not is_loopback_address(request.remote_addr):
             return _error("loopback only", HTTP_FORBIDDEN)
         body = parse_request_body(StoppedNotification)
         member = body.member.strip() or "a member"

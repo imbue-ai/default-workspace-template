@@ -1,0 +1,1 @@
+The Screen spec says the service tells its own host changes (the `give`, `reset` and locking it makes through neko's REST API) apart from a human taking an uncontrolled Screen by the event's initiator, neko's `API` session, and only keeps its host record from them.

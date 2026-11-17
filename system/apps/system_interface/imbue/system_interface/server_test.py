@@ -15,7 +15,9 @@ from unittest.mock import patch
 import httpx
 import pytest
 from app_manifest.testing import assert_document_policy_admits_page
+from app_schema.testing import CROSS_SITE_FETCH_HEADERS
 from app_schema.testing import assert_api_schema_describes_app
+from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from flask import Flask
 from flask.testing import FlaskClient
 from workspace_layout.identity import ANONYMOUS_OWNER
@@ -210,6 +212,21 @@ def test_the_touch_icon_and_the_manifest_follow_the_selected_avatar_and_the_work
     assert json.loads(client.get("/manifest.webmanifest").data)["start_url"] == "/"
 
 
+def test_the_shell_refuses_a_page_of_another_origin_and_a_header_less_request_off_loopback(
+    client: FlaskClient,
+) -> None:
+    """The workspace's own browser is on loopback too, so a header-less request is the owner's only from loopback
+    under a loopback Host, and a request the browser marks as another origin's never reaches a route; the shell's
+    frame of its own page is a navigation and passes, as does a request a proxy stamped."""
+    assert client.get("/api/health").status_code == 200
+    assert_request_guard_refuses_unknown_provenance(client, "GET", "/api/health")
+    framed = client.get("/api/health", headers={"Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "navigate"})
+    assert framed.status_code == 200
+    unreadable = client.post("/api/presence/heartbeat", json={}, headers={"X-Imbue-Identity": "{not json"})
+    assert unreadable.status_code == 400
+    assert "X-Imbue-Identity" in unreadable.get_json()["detail"]
+
+
 @pytest.mark.parametrize("basename", ["app_contract.js", "context_menu.js"])
 def test_the_shell_serves_its_browser_side_modules_for_the_stub_pages(tmp_path: Path, basename: str) -> None:
     static_dir = tmp_path / "static"
@@ -224,6 +241,9 @@ def test_the_shell_serves_its_browser_side_modules_for_the_stub_pages(tmp_path: 
     assert response.mimetype == "text/javascript"
     assert response.headers["Access-Control-Allow-Origin"] == "*"
     assert b"built" in response.data
+    # Meant for a stub page of another origin: the one kind of cross-origin request the shell admits.
+    imported = test_client.get(f"/_static/{basename}", headers=CROSS_SITE_FETCH_HEADERS)
+    assert imported.status_code == 200
 
 
 def test_a_preview_shells_page_says_so_and_carries_no_staleness_banner(tmp_path: Path) -> None:
@@ -649,6 +669,19 @@ def test_websocket_connect_sends_the_chats_activity_once_the_chat_app_has_report
     assert messages[6] == {"type": "chats_activity", **report}
 
 
+def test_websocket_connect_ends_with_the_resource_gauge(app: Flask) -> None:
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(7)]
+        finally:
+            close_ws(ws)
+
+    assert messages[6]["type"] == "resource_gauge_changed"
+    assert messages[6]["view"]["settings"]["disk_warning_free_gb"] == 5.0
+    assert messages[6]["view"]["alerts"] == []
+
+
 _VISITOR_IDENTITY = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
 _OWNER_IDENTITY = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
 
@@ -713,11 +746,19 @@ def test_a_persons_picture_is_served_from_the_shells_origin_and_cached_by_versio
 
     client = _profile_aware_app(tmp_path, broadcaster, connector).test_client()
     _heartbeat(client, _OWNER_IDENTITY)
-    owner = next(
-        entry
-        for entry in client.get("/api/roster").get_json()["participants"]
-        if entry["key"] == "user:user-owner-9c21"
+
+    def owner_entry() -> dict[str, Any]:
+        participants = client.get("/api/roster").get_json()["participants"]
+        return next(entry for entry in participants if entry["key"] == "user:user-owner-9c21")
+
+    # The roster answers without waiting on the connector; the owner's picture appears once the fetch behind it lands.
+    wait_for(
+        lambda: owner_entry()["profile_picture_url"] is not None,
+        timeout=10.0,
+        poll_interval=0.01,
+        error_message="the owner's profile never reached the roster",
     )
+    owner = owner_entry()
     assert owner["profile_picture_url"].startswith("/api/roster/user:user-owner-9c21/picture?v=")
 
     served = client.get(owner["profile_picture_url"])
@@ -810,10 +851,13 @@ def test_a_present_identity_header_that_does_not_parse_is_refused_by_every_route
     assert _heartbeat(client, None).get_json()["participant"] == "owner"
 
 
-def test_presence_heartbeat_records_nothing_for_a_visiting_agent(client: FlaskClient) -> None:
+def test_presence_heartbeat_records_nothing_for_a_visiting_agent(client: FlaskClient, app: Flask) -> None:
+    """Neither presence nor, whatever windows the body reports, a ``window_input`` event."""
     agent = RequestIdentity(owner=False, agent_id="va-0123", agent_name="Visitor", granter="user:8c0f")
-    assert _heartbeat(client, agent).status_code == 204
+    body = {"client_id": "c1", "input_windows": [{"window_id": "win-0123456789abcdef", "app": "files"}]}
+    assert _heartbeat(client, agent, body).status_code == 204
     assert client.get("/api/presence").get_json() == {"users": []}
+    assert state_of(app).shell.activity.read_events() == []
 
 
 def test_presence_heartbeat_keeps_the_pages_newest_input_time(client: FlaskClient) -> None:
@@ -887,9 +931,18 @@ def test_presence_carries_each_users_profile_from_the_connector(
     try:
         _heartbeat(client, _VISITOR_IDENTITY)
         _heartbeat(client, _OWNER_IDENTITY)
-        (joined_bob, joined_owner) = _presence_messages(drain_messages(client_queue))
+        # The heartbeats answer without waiting on the connector; the fetch behind them announces the connected
+        # set again once Bob's profile lands.
+        presence_messages: list[dict[str, Any]] = []
+
+        def is_bob_named() -> bool:
+            presence_messages.extend(_presence_messages(drain_messages(client_queue)))
+            return any(user["display_name"] == "Bob" for message in presence_messages for user in message["users"])
+
+        wait_for(is_bob_named, timeout=10.0, poll_interval=0.01, error_message="Bob's profile was never announced")
         assert [
-            (user["user_id"], user["display_name"], user["profile_picture_url"]) for user in joined_owner["users"]
+            (user["user_id"], user["display_name"], user["profile_picture_url"])
+            for user in presence_messages[-1]["users"]
         ] == [
             ("user-bob-4471", "Bob", "https://a/b"),
             ("user-owner-9c21", None, None),

@@ -19,7 +19,7 @@ import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
-import { ClipboardBridge, navigatorClipboard, serviceClipboardTransport } from "./clipboard";
+import { ClipboardBridge, navigatorClipboard, nekoRouteWithToken, serviceClipboardTransport } from "./clipboard";
 import { describeDropOutcome, uploadDroppedFiles } from "./files";
 import { InputRelay, XK_V } from "./input";
 import { keyboardMapForLanguage } from "./keyboard_map";
@@ -189,9 +189,15 @@ class Viewer {
   }
 
   private wireClipboard(): void {
-    window.addEventListener("focus", () => void this.clipboard.onFocus());
+    window.addEventListener("focus", () => this.clipboard.onFocus());
     document.addEventListener("paste", (event) => {
-      if (!this.clipboard.isActive || !event.clipboardData) return;
+      if (!event.clipboardData) return;
+      if (!this.clipboard.isActive) {
+        // The paste would be dropped on the floor: say why, so a lease that moved to another session (or to
+        // nobody after a reconnect) does not read as a broken clipboard.
+        if (this.state?.lifecycle === "running") this.showClipboardStatus("Take control to paste on the Screen");
+        return;
+      }
       event.preventDefault();
       void this.clipboard.onPaste(event.clipboardData).then((isSent) => {
         // The clipboard is on the Screen: paste it there with the chord the user pressed (Ctrl+V, or synthesized
@@ -544,11 +550,7 @@ class Viewer {
     const token = this.session.token;
     this.session = null;
     // The page is going away: a keepalive request outlives it (spec section 6.3).
-    void fetch("/neko/api/logout", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-      keepalive: true,
-    });
+    void fetch(nekoRouteWithToken("/neko/api/logout", token), { method: "POST", keepalive: true });
   }
 
   private async takeControl(): Promise<void> {

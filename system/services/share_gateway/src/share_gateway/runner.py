@@ -48,7 +48,6 @@ from werkzeug.serving import BaseWSGIServer
 from werkzeug.serving import make_server
 
 from share_gateway import materials as materials_module
-from share_gateway.access_log import QueryOmittingRequestHandler
 from share_gateway.agent_access import LastSeenStore
 from share_gateway.agent_access import default_agent_access_paths
 from share_gateway.agent_access import reconcile as reconcile_agent_access
@@ -81,6 +80,10 @@ from share_gateway.materials import load_or_create_auth_label
 from share_gateway.materials import load_or_create_signing_secret
 from share_gateway.materials import read_share_materials
 from share_gateway.materials import record_share_domain
+from share_gateway.request_counts import RequestCountFlusher
+from share_gateway.request_counts import RequestCounter
+from share_gateway.request_counts import events_path_from_environ as request_counts_events_path
+from share_gateway.request_handler import SilentRequestHandler
 from share_gateway.retry_state import ProvisioningRetryState
 from share_gateway.retry_state import STATUS_HALTED
 from share_gateway.retry_state import STATUS_RETRYING
@@ -96,6 +99,10 @@ from share_gateway.turn import TurnCredentialCache
 POLL_INTERVAL_SECONDS = 10
 _CADDY_ADMIN_URL = "http://localhost:2019"
 _RENEWAL_CHECK_INTERVAL = timedelta(hours=24)
+# How often a running stack restamps its "up" status, so a reader can tell a live
+# "up" from one a runner wrote before it died with its container (the Imbue Studio
+# desktop disbelieves an "up" stamped more than five minutes ago).
+STATUS_HEARTBEAT_INTERVAL = timedelta(minutes=1)
 
 
 def _try_setup_inotify(paths: list[Path]) -> object | None:
@@ -193,6 +200,7 @@ class ShareStack:
         self.assignment = assignment
         self.turn = TurnCredentialCache(materials.connector_url, materials.relay_token)
         self.gateway_server: BaseWSGIServer | None = None
+        self.request_count_flusher: RequestCountFlusher | None = None
         self.caddy_process: subprocess.Popen[bytes] | None = None
         self.frpc_process_by_relay_id: dict[str, subprocess.Popen[bytes]] = {}
         self.frpc_config_text_by_relay_id: dict[str, str] = {}
@@ -202,6 +210,7 @@ class ShareStack:
         self.last_caddyfile_text = ""
         self.last_assignment_fetch = time.monotonic()
         self.last_renewal_check = datetime.now(timezone.utc)
+        self.last_status_heartbeat = datetime.now(timezone.utc)
 
     def render_current_caddyfile(self) -> str:
         return render_caddyfile(
@@ -213,6 +222,7 @@ class ShareStack:
             https_port=materials_module.CADDY_HTTPS_PORT,
             gateway_port=materials_module.GATEWAY_PORT,
             chrome_origin=self.materials.chrome_origin,
+            access_log_path=materials_module.ACCESS_LOG_PATH.resolve(),
         )
 
     def admin_port_for(self, relay_id: str) -> int:
@@ -309,6 +319,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
     stack.turn.refresh_if_due()
     signing_secret = load_or_create_signing_secret(materials_module.SIGNING_SECRET_FILE, materials.relay_token)
     agent_access = _build_agent_access_context(materials.workspace_domain)
+    request_counter = RequestCounter(request_counts_events_path(os.environ))
     app = build_gateway_app(
         materials=materials,
         grants_path=materials_module.GRANTS_FILE,
@@ -320,7 +331,10 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
         get_connect_info=stack.connect_info,
         admit_agent=build_agent_admitter(agent_access, lambda: read_registered_apps(APPS_TOML_PATH)),
+        request_counter=request_counter,
     )
+    stack.request_count_flusher = RequestCountFlusher(request_counter)
+    stack.request_count_flusher.start()
     register_agent_routes(
         app,
         context=agent_access,
@@ -331,7 +345,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
     )
     stack.gateway_server = make_server(
-        "127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True, request_handler=QueryOmittingRequestHandler
+        "127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True, request_handler=SilentRequestHandler
     )
     threading.Thread(target=stack.gateway_server.serve_forever, name="share-gateway-http", daemon=True).start()
 
@@ -373,16 +387,21 @@ def _try_start_stack(materials: ShareMaterials, retry_state: ProvisioningRetrySt
         )
         return None
     retry_state.reset()
+    _write_up_status(materials.workspace_domain, utc_now())
+    return stack
+
+
+def _write_up_status(workspace_domain: str, now: datetime) -> None:
+    """Write the "up" status document, stamped ``now``; the heartbeat rewrites this same document."""
     write_gateway_status(
         materials_module.GATEWAY_STATUS_FILE,
         state=STATUS_UP,
-        workspace_domain=materials.workspace_domain,
+        workspace_domain=workspace_domain,
         failed_attempt_count=0,
         last_error="",
         next_retry_in_seconds=None,
-        now=utc_now(),
+        now=now,
     )
-    return stack
 
 
 def _stop_stack(stack: ShareStack | None) -> None:
@@ -394,6 +413,8 @@ def _stop_stack(stack: ShareStack | None) -> None:
     _stop_child(stack.caddy_process, "caddy")
     if stack.gateway_server is not None:
         stack.gateway_server.shutdown()
+    if stack.request_count_flusher is not None:
+        stack.request_count_flusher.stop()
     _log("Share stack stopped")
 
 
@@ -421,8 +442,20 @@ def _repoll_assignment(stack: ShareStack) -> None:
     _converge_frpc_processes(stack)
 
 
+def _is_status_heartbeat_due(last_status_heartbeat: datetime, now: datetime) -> bool:
+    return now - last_status_heartbeat >= STATUS_HEARTBEAT_INTERVAL
+
+
+def _heartbeat_gateway_status(stack: ShareStack, now: datetime) -> None:
+    """Rewrite the "up" status with a fresh stamp once per heartbeat interval."""
+    if not _is_status_heartbeat_due(stack.last_status_heartbeat, now):
+        return
+    stack.last_status_heartbeat = now
+    _write_up_status(stack.materials.workspace_domain, now)
+
+
 def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
-    """Periodic upkeep for a running stack: restart dead children, re-render configs, renew the cert."""
+    """Periodic upkeep for a running stack: restart dead children, re-render configs, restamp the status, renew the cert."""
     if stack.caddy_process is not None and stack.caddy_process.poll() is not None:
         _log(f"caddy exited with {stack.caddy_process.returncode}; restarting the stack")
         _stop_stack(stack)
@@ -452,6 +485,7 @@ def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
                 _log(f"Reloaded frpc[{relay_id}] for a service-registry change")
 
     now = datetime.now(timezone.utc)
+    _heartbeat_gateway_status(stack, now)
     if now - stack.last_renewal_check >= _RENEWAL_CHECK_INTERVAL:
         stack.last_renewal_check = now
         cert_before = materials_module.TLS_CERT_FILE.read_text() if materials_module.TLS_CERT_FILE.exists() else ""

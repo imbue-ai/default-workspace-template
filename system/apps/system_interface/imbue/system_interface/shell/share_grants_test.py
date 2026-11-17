@@ -1,9 +1,12 @@
-"""Tests for the reader over the share materials the minds desktop writes."""
+"""Tests for the readers over the share materials the minds desktop writes."""
 
+import json
 import os
 from pathlib import Path
 
+from imbue.system_interface.shell.data_types import GrantedIdentity
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
+from imbue.system_interface.shell.share_grants import ShareIdentitiesReader
 
 # The document as the minds desktop renders it: every scope carries all three lists.
 _GRANTS_WITH_A_PER_APP_GRANT = """\
@@ -73,3 +76,64 @@ def _bump_mtime(path: Path) -> None:
     version."""
     stat = path.stat()
     os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+
+def test_the_identities_reader_answers_what_the_desktop_recorded_and_nothing_while_the_file_is_absent(
+    tmp_path: Path, loguru_records: list[str]
+) -> None:
+    reader = ShareIdentitiesReader(share_identities_path=tmp_path / "share_identities.json")
+
+    assert reader.read_identities() == {}
+
+    reader.share_identities_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "identities": {
+                    "3f1c": {"email": "alice@example.com", "display_name": "Alice", "profile_picture_url": "x"},
+                    "9a7b": {"email": None, "display_name": None},
+                },
+            }
+        )
+    )
+    assert reader.read_identities() == {
+        "3f1c": GrantedIdentity(email="alice@example.com", display_name="Alice"),
+        "9a7b": GrantedIdentity(email=None, display_name=None),
+    }
+    assert [record for record in loguru_records if record.startswith("WARNING")] == []
+
+
+def test_the_identities_reader_warns_once_per_version_of_a_file_it_cannot_read(
+    tmp_path: Path, loguru_records: list[str]
+) -> None:
+    reader = ShareIdentitiesReader(share_identities_path=tmp_path / "share_identities.json")
+    reader.share_identities_path.write_text(json.dumps({"version": 1, "identities": {"3f1c": "alice"}}))
+
+    assert reader.read_identities() == {}
+    assert reader.read_identities() == {}
+    warnings = [record for record in loguru_records if record.startswith("WARNING")]
+    assert len(warnings) == 1
+    assert "share_identities.json" in warnings[0]
+
+    # A version this shell does not know is warned about once too; a good rewrite is read.
+    reader.share_identities_path.write_text(json.dumps({"version": 2, "identities": {}}))
+    _bump_mtime(reader.share_identities_path)
+    assert reader.read_identities() == {}
+    assert reader.read_identities() == {}
+    assert len([record for record in loguru_records if record.startswith("WARNING")]) == 2
+    reader.share_identities_path.write_text(json.dumps({"version": 1, "identities": {}}))
+    _bump_mtime(reader.share_identities_path)
+    assert reader.read_identities() == {}
+    assert len([record for record in loguru_records if record.startswith("WARNING")]) == 2
+
+    # So is one that is not JSON at all, or not a JSON object.
+    reader.share_identities_path.write_text("{not json")
+    _bump_mtime(reader.share_identities_path)
+    assert reader.read_identities() == {}
+    assert reader.read_identities() == {}
+    assert len([record for record in loguru_records if record.startswith("WARNING")]) == 3
+    reader.share_identities_path.write_text("[]")
+    _bump_mtime(reader.share_identities_path)
+    assert reader.read_identities() == {}
+    assert reader.read_identities() == {}
+    assert len([record for record in loguru_records if record.startswith("WARNING")]) == 4

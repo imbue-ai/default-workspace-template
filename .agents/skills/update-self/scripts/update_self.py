@@ -14,6 +14,7 @@ from pathlib import Path
 # Kept as a stub: every release's update-self flow and Imbue Studio's update dispatcher run
 # this path with the system python3 and no venv, in place and from the target release's
 # staged copy, so the package beside scripts/ is put on sys.path here.
+# import-path: no-venv -- update-self and Imbue Studio's update dispatcher run it, in place and from the staged copy, and an update must run when the venv is what it broke
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
 UPDATE_IMPOSSIBLE_EXIT_CODE = 75

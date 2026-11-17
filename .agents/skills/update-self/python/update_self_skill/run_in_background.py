@@ -2,7 +2,7 @@
 
 Usage, from the repo root (every skill's cwd)::
 
-    python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the worker" -- <command> [args...]
+    python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Run the tests" -- <command> [args...]
 
 The script returns at once: the command runs in a detached process of its own, so the
 caller's tool call ends and the agent can end its turn. When the command exits, its exit
@@ -47,6 +47,13 @@ band, so a command shed for memory is reported like any other exit; the detached
 then moves itself down to the user-service band, below every agent but the workspace's
 primary, because it holds next to no memory and shedding it would lose the report.
 
+``--waiter`` is for a command that only waits -- on a worker's report, an approval, a sync --
+and is safe to start over. It holds next to no memory, so it runs in the runner's band rather
+than the caller's: shedding it frees nothing and loses the caller's only signal that what it
+waits on is done. If a signal ends it anyway while the caller's agent is still running (a
+shed, which a stop of the agent is not), it is started again, up to ``WAITER_MAX_REARMS``
+times, and its output records each restart.
+
 Standard library only, and kept byte-identical at two paths:
 
     system/scripts/workspace_bare_scripts/run_in_background.py
@@ -86,6 +93,7 @@ EXIT_CODE_FILE_NAME = "exit_code"
 MESSAGE_FILE_NAME = "message.md"
 RUNNER_LOG_FILE_NAME = "runner.log"
 
+# own-process: other-tree -- update-self's staged copy messages through the workspace tree's messenger
 MESSAGE_CHAT_REL = Path("system") / "scripts" / "message_chat.py"
 
 # The marker layout ``system/libs/chat_background_tasks`` reads, copied because update-self's
@@ -122,6 +130,16 @@ DELIVERY_GIVE_UP_AFTER_SECONDS = 4 * 3600.0
 # a test pins it to ``bands.py``.
 RUNNER_OOM_SCORE_ADJ = 200
 OWN_OOM_SCORE_ADJ_PATH = Path("/proc/self/oom_score_adj")
+
+# How often a waiter ended by a signal is started again, and how long the runner first waits
+# for a stop of the caller's agent, which ends the waiter first and the agent moments later, to
+# finish before reading whether the agent is still running.
+WAITER_MAX_REARMS = 3
+WAITER_REARM_SETTLE_SECONDS = 5.0
+# Exit statuses of a command a signal ended: a negative one when the signal reached it
+# directly, 128 plus the signal when it reached a wrapper (``uv run``) that passed it on.
+SIGNAL_EXIT_STATUSES = frozenset({128 + 15, 128 + 9})
+TMUX_SERVER_COMM = "tmux: server"
 
 MAX_INLINE_OUTPUT_CHARS = 20_000
 # How much of a long output's start is kept: enough for a report's frontmatter, which a
@@ -394,6 +412,40 @@ def move_to_runner_oom_band(oom_score_adj_path: Path) -> None:
         _log(f"Kept the inherited OOM band: {exc}")
 
 
+def is_signal_exit(returncode: int) -> bool:
+    return returncode < 0 or returncode in SIGNAL_EXIT_STATUSES
+
+
+def is_agent_running(agent_id: str, proc_dir: Path = Path("/proc")) -> bool:
+    """Whether a process outside this runner's own process group carries the agent's id: the
+    test ``mngr stop`` kills by, so a stopped agent has none. The group holds this runner and the
+    command it ran, which carries the id without being the agent. The shared tmux server, which
+    ``mngr stop`` leaves running though it can carry the id of the agent that forked it, is not
+    the agent either. False where ``/proc`` is absent."""
+    needle = f"{AGENT_ID_ENV}={agent_id}".encode()
+    if not proc_dir.is_dir():
+        return False
+    own_group = os.getpgrp()
+    for entry in proc_dir.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if os.getpgid(int(entry.name)) == own_group:
+                continue
+            environ = (entry / "environ").read_bytes()
+        except OSError:
+            continue
+        if needle not in environ.split(b"\0"):
+            continue
+        try:
+            comm = (entry / "comm").read_text(errors="replace").strip()
+        except OSError:
+            comm = ""
+        if comm != TMUX_SERVER_COMM:
+            return True
+    return False
+
+
 def _log(message: str) -> None:
     """One line of ``runner.log`` (the detached process's stderr), stamped so a silent gap is visible."""
     stamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
@@ -409,9 +461,17 @@ def _run_messenger(argv: list[str]) -> int:
 
 
 def _run_command(
-    command: Sequence[str], output_path: Path, environ: Mapping[str, str]
+    command: Sequence[str],
+    output_path: Path,
+    environ: Mapping[str, str],
+    is_waiter: bool = False,
+    is_appending: bool = False,
 ) -> int:
-    with output_path.open("wb") as output:
+    # A waiter inherits the runner's band; any other command starts before the move, so it
+    # keeps the caller's.
+    if is_waiter:
+        move_to_runner_oom_band(OWN_OOM_SCORE_ADJ_PATH)
+    with output_path.open("ab" if is_appending else "wb") as output:
         try:
             process: subprocess.Popen[bytes] | None = subprocess.Popen(
                 list(command),
@@ -423,11 +483,44 @@ def _run_command(
         except OSError as exc:
             output.write(f"Could not start the command: {exc}\n".encode())
             process = None
-        # After the start, so the command keeps the band it inherited.
         move_to_runner_oom_band(OWN_OOM_SCORE_ADJ_PATH)
         if process is None:
             return EXIT_COMMAND_NOT_RUNNABLE
         return process.wait()
+
+
+def run_command_rearming_a_waiter(
+    command: Sequence[str],
+    output_path: Path,
+    environ: Mapping[str, str],
+    is_waiter: bool,
+    run: Callable[..., int] = _run_command,
+    is_caller_running: Callable[[str], bool] = is_agent_running,
+    sleep: Callable[[float], None] = time.sleep,
+) -> int:
+    """Run the command; a waiter a signal ended while the caller's agent still runs starts again."""
+    returncode = run(command, output_path, environ, is_waiter=is_waiter)
+    agent_id = environ.get(AGENT_ID_ENV, "")
+    for rearm in range(1, WAITER_MAX_REARMS + 1):
+        if not (is_waiter and agent_id and is_signal_exit(returncode)):
+            break
+        sleep(WAITER_REARM_SETTLE_SECONDS)
+        if not is_caller_running(agent_id):
+            _log(
+                f"The waiter ended with {returncode} and its agent is stopped; not restarting it"
+            )
+            break
+        note = (
+            f"[run_in_background.py: a signal ended the command (exit {returncode}) while "
+            f"your agent was still running; started it again ({rearm} of {WAITER_MAX_REARMS})]"
+        )
+        _log(note)
+        with output_path.open("ab") as output:
+            output.write(f"\n{note}\n".encode())
+        returncode = run(
+            command, output_path, environ, is_waiter=is_waiter, is_appending=True
+        )
+    return returncode
 
 
 def run_and_deliver(
@@ -437,6 +530,7 @@ def run_and_deliver(
     command: Sequence[str],
     command_environ: Mapping[str, str],
     is_keeping_host_awake: bool = False,
+    is_waiter: bool = False,
 ) -> int:
     """Run the command to completion here, in ``command_environ``, then send its report to the
     chat; the chat's busy marker for this run goes once the report is delivered or given up on."""
@@ -448,6 +542,7 @@ def run_and_deliver(
             command,
             command_environ,
             is_keeping_host_awake,
+            is_waiter,
         )
     finally:
         marker_path(
@@ -462,6 +557,7 @@ def _run_and_deliver(
     command: Sequence[str],
     command_environ: Mapping[str, str],
     is_keeping_host_awake: bool,
+    is_waiter: bool,
 ) -> int:
     output_path = task_dir / OUTPUT_FILE_NAME
     _log(f"Running {shlex.join(command)}")
@@ -474,7 +570,9 @@ def _run_and_deliver(
             daemon=True,
         ).start()
     try:
-        returncode = _run_command(command, output_path, command_environ)
+        returncode = run_command_rearming_a_waiter(
+            command, output_path, command_environ, is_waiter
+        )
     finally:
         command_finished.set()
     (task_dir / EXIT_CODE_FILE_NAME).write_text(f"{returncode}\n")
@@ -511,6 +609,7 @@ def _start_detached(
     command: Sequence[str],
     environ: Mapping[str, str],
     is_keeping_host_awake: bool,
+    is_waiter: bool,
 ) -> None:
     # A session of its own, and no stdio shared with the caller, so nothing the caller's harness
     # does to the tool call's processes reaches it and nothing waits on it; and no agent id in
@@ -530,6 +629,7 @@ def _start_detached(
                 description,
                 *(["--agent-id", agent_id] if agent_id else []),
                 *(["--keep-host-awake"] if is_keeping_host_awake else []),
+                *(["--waiter"] if is_waiter else []),
                 "--",
                 *command,
             ],
@@ -594,6 +694,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "is itself an mngr agent needs no flag.",
     )
     parser.add_argument(
+        "--waiter",
+        action="store_true",
+        help="The command only waits (on a worker, an approval, a sync) and is safe to start over: "
+        "run it in the runner's OOM band instead of yours, and start it again if a signal ends it "
+        "while your agent is still running.",
+    )
+    parser.add_argument(
         "--foreground",
         action="store_true",
         help="Run the command in this process and deliver its result when it exits, instead of "
@@ -652,6 +759,7 @@ def main(
             command,
             command_environ,
             args.keep_host_awake,
+            args.waiter,
         )
     _start_detached(
         entry_script,
@@ -661,6 +769,7 @@ def main(
         command,
         resolved_environ,
         args.keep_host_awake,
+        args.waiter,
     )
     print(
         f"Started in the background as task {task_dir.name}. When the command exits, its exit "

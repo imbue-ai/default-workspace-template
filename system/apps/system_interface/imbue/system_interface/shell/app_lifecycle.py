@@ -30,6 +30,7 @@ from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import AppInventoryEntry
@@ -45,7 +46,8 @@ from imbue.system_interface.shell.liveness import SUPERVISOR_FATAL_STATENAME
 from imbue.system_interface.shell.liveness import SUPERVISOR_RUNNING_STATENAME
 from imbue.system_interface.shell.liveness import SUPERVISOR_STARTING_STATENAME
 from imbue.system_interface.shell.liveness import SUPERVISOR_STOPPED_STATENAME
-from imbue.system_interface.shell.liveness import fetch_supervisor_program_statenames
+from imbue.system_interface.shell.liveness import SupervisorProgramState
+from imbue.system_interface.shell.liveness import fetch_supervisor_programs
 from imbue.system_interface.shell.liveness import start_supervisor_program
 from imbue.system_interface.shell.liveness import stop_supervisor_program
 from imbue.system_interface.shell.liveness import supervisor_socket_path
@@ -69,14 +71,14 @@ WAKE_WAIT_SECONDS: Final[float] = 20.0
 _WAKE_WAIT_POLL_SECONDS: Final[float] = 0.2
 _WAKE_WAIT_CONNECT_TIMEOUT_SECONDS: Final[float] = 0.5
 
-ProgramStatesReader = Callable[[], dict[str, str] | None]
+ProgramStatesReader = Callable[[], dict[str, SupervisorProgramState] | None]
 ProgramAction = Callable[[str], None]
 # How many windows across every desktop show each app, by app name; an app with none may be absent.
 WindowCountsReader = Callable[[], Mapping[str, int]]
 
 
-def read_supervisor_program_statenames() -> dict[str, str] | None:
-    return fetch_supervisor_program_statenames(supervisor_socket_path())
+def read_supervisor_programs() -> dict[str, SupervisorProgramState] | None:
+    return fetch_supervisor_programs(supervisor_socket_path())
 
 
 def start_supervisor_program_by_name(program: str) -> None:
@@ -96,6 +98,13 @@ def recent_wake_times(wake_times: Sequence[float], now: float) -> list[float]:
 @pure
 def is_wake_budget_spent(wake_times: Sequence[float], now: float) -> bool:
     return len(recent_wake_times(wake_times, now)) >= WAKE_BUDGET_COUNT
+
+
+class IdleMark(FrozenModel):
+    """Since when no window has shown an app, and the process of its program that the mark counts for."""
+
+    pid: int = Field(description="The program's process when the mark was set")
+    since: float = Field(description="The manager's clock when the mark was set")
 
 
 class AppLifecycleManager(MutableModel):
@@ -133,9 +142,9 @@ class AppLifecycleManager(MutableModel):
         description="How often the sweep runs while nothing is in transition",
     )
     program_states: ProgramStatesReader = Field(
-        default=read_supervisor_program_statenames,
+        default=read_supervisor_programs,
         frozen=True,
-        description="Every supervised program's statename, or None when supervisord cannot be reached",
+        description="Every supervised program's statename and pid, or None when supervisord cannot be reached",
     )
     start_program: ProgramAction = Field(default=start_supervisor_program_by_name, frozen=True)
     stop_program: ProgramAction = Field(default=stop_supervisor_program_by_name, frozen=True)
@@ -146,7 +155,7 @@ class AppLifecycleManager(MutableModel):
     _wake_times_by_app: dict[str, list[float]] = PrivateAttr(default_factory=dict)
     _apps_awaiting_wake_outcome: set[str] = PrivateAttr(default_factory=set)
     _failed_apps: set[str] = PrivateAttr(default_factory=set)
-    _idle_since_by_app: dict[str, float] = PrivateAttr(default_factory=dict)
+    _idle_mark_by_app: dict[str, IdleMark] = PrivateAttr(default_factory=dict)
     _is_any_app_between_states: bool = PrivateAttr(default=False)
     _is_visited: bool = PrivateAttr(default=False)
     _sweep_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
@@ -333,8 +342,8 @@ class AppLifecycleManager(MutableModel):
         window for the grace period."""
         # A wake that lands after this moment makes the reading stale for its app (see ``_is_woken_since``).
         states_read_at = self.clock()
-        statename_by_program = self.program_states()
-        if statename_by_program is None:
+        state_by_program = self.program_states()
+        if state_by_program is None:
             logger.debug("Skipped an app lifecycle pass: supervisord did not answer")
             return
         entries = self.inventory.entries()
@@ -348,11 +357,11 @@ class AppLifecycleManager(MutableModel):
             program = stoppable_program_of(entry, entries)
             if program is None:
                 continue
-            statename = statename_by_program.get(program)
-            if statename is None:
+            state = state_by_program.get(program)
+            if state is None:
                 continue
             reconciled_apps.add(str(entry.row.name))
-            is_settled = self._reconcile_app(entry, program, statename, states_read_at, window_counts, granted_apps)
+            is_settled = self._reconcile_app(entry, program, state, states_read_at, window_counts, granted_apps)
             is_any_between_states = is_any_between_states or not is_settled
         with self._lock:
             self._is_any_app_between_states = is_any_between_states
@@ -370,8 +379,8 @@ class AppLifecycleManager(MutableModel):
             self._failed_apps.intersection_update(apps)
             for app in [app for app in self._wake_times_by_app if app not in apps]:
                 del self._wake_times_by_app[app]
-            for app in [app for app in self._idle_since_by_app if app not in apps]:
-                del self._idle_since_by_app[app]
+            for app in [app for app in self._idle_mark_by_app if app not in apps]:
+                del self._idle_mark_by_app[app]
         for app, parked in unreachable:
             parked.release()
             logger.info("Released the parked port of {}: the app is no longer one the shell can start", app)
@@ -380,7 +389,7 @@ class AppLifecycleManager(MutableModel):
         self,
         entry: AppInventoryEntry,
         program: str,
-        statename: str,
+        state: SupervisorProgramState,
         states_read_at: float,
         window_counts: WindowCountsReader,
         granted_apps: GrantedAppsReader,
@@ -392,6 +401,7 @@ class AppLifecycleManager(MutableModel):
         after the program exits. ``window_counts`` and ``granted_apps`` are the pass's one read of every app's
         windows and of the per-app share grants."""
         app = str(entry.row.name)
+        statename = state.statename
         if statename in (SUPERVISOR_RUNNING_STATENAME, SUPERVISOR_STARTING_STATENAME, SUPERVISOR_BACKOFF_STATENAME):
             # Up, or about to bind again on its own: the port must be free.
             with self._lock:
@@ -404,10 +414,10 @@ class AppLifecycleManager(MutableModel):
                 parked.release()
             if statename == SUPERVISOR_BACKOFF_STATENAME:
                 return False
-            is_stopped_now = self._apply_no_window_rule(entry, program, window_counts, granted_apps)
+            is_stopped_now = self._apply_no_window_rule(entry, program, state.pid, window_counts, granted_apps)
             return statename == SUPERVISOR_RUNNING_STATENAME and not is_stopped_now
         with self._lock:
-            self._idle_since_by_app.pop(app, None)
+            self._idle_mark_by_app.pop(app, None)
         if statename not in SUPERVISOR_DOWN_STATENAMES:
             # STOPPING: the port is still the app's until it exits.
             return False
@@ -463,13 +473,16 @@ class AppLifecycleManager(MutableModel):
         self,
         entry: AppInventoryEntry,
         program: str,
+        pid: int,
         window_counts: WindowCountsReader,
         granted_apps: GrantedAppsReader,
     ) -> bool:
         """Stop a running app that declares ``stop_when_no_windows`` once no window has shown it for the grace
         period, and only once the workspace has been visited (spec section 6.1); True when the program was told to
-        stop. An app with a per-app share grant counts as one with windows: its visitors reach it without the
-        shell, so their use leaves no window to count. The gateway admits nobody through a grant on an internal
+        stop. The mark belongs to the program's process (``pid``): a program started again gets the whole grace
+        period anew, so an app restarted just before its mark ran out is not stopped while it comes up. An app
+        with a per-app share grant counts as one with windows: its visitors reach it without the shell, so their
+        use leaves no window to count. The gateway admits nobody through a grant on an internal
         app, so such a grant keeps nothing running."""
         app = str(entry.row.name)
         if (
@@ -478,16 +491,19 @@ class AppLifecycleManager(MutableModel):
             or (not entry.row.internal and app in granted_apps())
         ):
             with self._lock:
-                self._idle_since_by_app.pop(app, None)
+                self._idle_mark_by_app.pop(app, None)
             return False
         now = self.clock()
         with self._lock:
             if not self._is_visited:
                 return False
-            idle_since = self._idle_since_by_app.setdefault(app, now)
-            if now - idle_since < self.no_windows_grace_seconds:
+            mark = self._idle_mark_by_app.get(app)
+            if mark is None or mark.pid != pid:
+                mark = IdleMark(pid=pid, since=now)
+                self._idle_mark_by_app[app] = mark
+            if now - mark.since < self.no_windows_grace_seconds:
                 return False
-            self._idle_since_by_app.pop(app, None)
+            self._idle_mark_by_app.pop(app, None)
         try:
             self.stop_program(program)
         except SupervisorProgramActionError as e:

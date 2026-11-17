@@ -104,6 +104,7 @@ class FakeSupervisorServer:
     def __init__(self, socket_path: Path) -> None:
         self.socket_path = socket_path
         self.statename_by_program: dict[str, str] = {}
+        self.pid_by_program: dict[str, int] = {}
         # Lets tests assert on the sweep's RPC economy (e.g. that a registry
         # with no supervised rows makes no supervisord call at all).
         self.get_all_process_info_call_count = 0
@@ -124,9 +125,12 @@ class FakeSupervisorServer:
     # The dispatch protocol hands every RPC argument over as a marshallable
     # value, so the handlers take ``object`` and stringify -- exactly what the
     # wire delivers.
-    def _get_all_process_info(self) -> list[dict[str, str]]:
+    def _get_all_process_info(self) -> list[dict[str, str | int]]:
         self.get_all_process_info_call_count += 1
-        return [{"name": program, "statename": statename} for program, statename in self.statename_by_program.items()]
+        return [
+            {"name": program, "statename": statename, "pid": self.pid_by_program.get(program, 0)}
+            for program, statename in self.statename_by_program.items()
+        ]
 
     def _start_process(self, name: object, _wait: object) -> bool:
         program = str(name)
@@ -270,21 +274,22 @@ def build_test_state(
         profiles=resolved_profiles,
         users=shell.users,
         share_grants=shell.share_grants,
+        share_identities=shell.share_identities,
         agent_grants=shell.agent_grants,
         agent_last_seen_path=resolved_repo_root / AGENT_LAST_SEEN_FILE,
         workspace_name=workspace_name,
         avatar_selection=shell.avatar_selection,
     )
     roster_announcer = build_roster_announcer(roster, resolved_broadcaster, utc_now)
+    presence_sweep = build_presence_sweep(presence, resolved_profiles, resolved_broadcaster, roster_announcer.announce)
+    resolved_profiles.add_refresh_listener(presence_sweep.announce_connected)
     return SystemInterfaceState(
         config=resolved_config,
         shell=shell,
         is_preview=is_preview,
         static_directory=resolved_static_directory,
         presence=presence,
-        presence_sweep=build_presence_sweep(
-            presence, resolved_profiles, resolved_broadcaster, roster_announcer.announce
-        ),
+        presence_sweep=presence_sweep,
         profiles=resolved_profiles,
         roster=roster,
         roster_announcer=roster_announcer,

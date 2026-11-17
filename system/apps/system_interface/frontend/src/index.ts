@@ -148,7 +148,7 @@ function bootstrap(): void {
   // active desktop reads as the viewer's own, so a window that landed on somebody else's re-reads the layout as
   // the owner's once it knows (the multiplayer spec, section 8.3).
   onOwnIdentityChanged(() => desktopStore.takeViewerIdentityKnown());
-  startPresenceHeartbeat();
+  startPresenceHeartbeat(clientId);
   // The pointer hides while text is typed into the shell's own fields (the launcher, the settings);
   // each framed page does the same for itself.
   installCursorHidingWhileTyping(document);
@@ -240,7 +240,9 @@ function bootstrap(): void {
   // Announced once the page can act on what the embedder held, not merely once a handler is
   // registered: relaying a message needs the apps (which of them take it), and the embedder sends
   // what it held the moment this lands.
-  void loaded.then(() => announceReadyToEmbedder({ opensLinks: true, opensCustomSchemeLinks: true }));
+  void loaded.then(() =>
+    announceReadyToEmbedder({ opensLinks: true, opensCustomSchemeLinks: true, reportsChatOnScreen: true }),
+  );
 }
 
 window.addEventListener("load", bootstrap);

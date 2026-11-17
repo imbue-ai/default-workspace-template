@@ -17,6 +17,9 @@ import memory_candidates
 import pytest
 from chat_background_tasks import markers
 from chat_background_tasks.testing import runner_task
+from imbue.chat.config import DEFAULT_CHAT_DATA_DIR
+from imbue.chat.main_chat import MAIN_CHAT_FILENAME, MainChatStore
+from imbue.chat.primitives import ChatId
 from imbue.mngr.cli.field_catalog import FieldContext, build_list_field_catalog
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority.meminfo import HOST_MEMINFO_MAX_AGE_SECONDS
@@ -244,6 +247,7 @@ def _sources(
     is_chat_busy: Callable[[str], bool] = _never_busy,
     supervised_pids: Mapping[str, int] | None = None,
     host_meminfo: Path | None = None,
+    main_chat_file: Path | None = None,
 ) -> memory_candidates.Sources:
     return memory_candidates.Sources(
         proc_dir=proc_dir,
@@ -255,6 +259,9 @@ def _sources(
         shell_url=_SHELL_URL,
         now=_NOW,
         is_chat_busy=is_chat_busy,
+        main_chat_file=main_chat_file
+        if main_chat_file is not None
+        else proc_dir / "absent-main-chat",
     )
 
 
@@ -436,6 +443,81 @@ def test_an_agent_whose_chat_waits_on_a_background_task_is_not_a_candidate(
 
     assert report.agents.candidates is not None
     assert [a.name for a in report.agents.candidates] == ["finished"]
+
+
+def test_the_main_chat_is_never_a_candidate_because_the_chat_app_starts_it_again(
+    tmp_path: Path, runtime_dir: Path
+) -> None:
+    proc = tmp_path / "proc"
+    _write_meminfo(proc, {"MemTotal": 4 * 1024 * 1024, "MemAvailable": 100 * 1024})
+    old = _NOW - timedelta(hours=2)
+    # The main chat has handed off once, so its live agent carries the chat's id as a label.
+    main_chat = _agent_record(
+        "main-successor",
+        "WAITING",
+        {"user_created": "true", "chat_id": "agent-main-chat"},
+        old,
+        10,
+    )
+    other_chat = _agent_record(
+        "trip-plan", "WAITING", {"user_created": "true"}, old, 11
+    )
+    for pid in (10, 11):
+        _fake_process(proc, pid, 100)
+    # Written by the chat app's own store, so the file's place and shape are the ones it keeps.
+    MainChatStore(path=tmp_path / DEFAULT_CHAT_DATA_DIR / MAIN_CHAT_FILENAME).write(
+        ChatId("agent-main-chat")
+    )
+
+    report = memory_candidates.collect_report(
+        _sources(
+            proc,
+            _FakeMngr([main_chat, other_chat]),
+            _FakeHttp({f"{_SCREEN_URL}/browsers": _fleet()}),
+            main_chat_file=tmp_path / memory_candidates.MAIN_CHAT_FILE,
+        )
+    )
+
+    assert report.agents.candidates is not None
+    assert [a.name for a in report.agents.candidates] == ["trip-plan"]
+    assert (
+        "  note: main-successor is the main chat, which the chat app starts again as soon as it stops,"
+        " so it is not listed" in memory_candidates.render_table(report)
+    )
+
+
+def test_an_unreadable_main_chat_file_is_noted_and_the_agents_are_still_listed(
+    tmp_path: Path, runtime_dir: Path
+) -> None:
+    proc = tmp_path / "proc"
+    _write_meminfo(proc, {"MemTotal": 4 * 1024 * 1024, "MemAvailable": 100 * 1024})
+    old = _NOW - timedelta(hours=2)
+    _fake_process(proc, 10, 100)
+    main_chat_file = tmp_path / "main_chat.json"
+    main_chat_file.write_text("{not json", encoding="utf-8")
+
+    report = memory_candidates.collect_report(
+        _sources(
+            proc,
+            _FakeMngr(
+                [
+                    _agent_record(
+                        "trip-plan", "WAITING", {"user_created": "true"}, old, 10
+                    )
+                ]
+            ),
+            _FakeHttp({f"{_SCREEN_URL}/browsers": _fleet()}),
+            main_chat_file=main_chat_file,
+        )
+    )
+
+    assert report.agents.candidates is not None
+    assert [a.name for a in report.agents.candidates] == ["trip-plan"]
+    assert [
+        note
+        for note in report.agents.notes
+        if note.startswith(f"could not read the main chat from {main_chat_file}")
+    ]
 
 
 def test_lists_running_browsers_while_no_window_shows_the_screen_with_their_chromium_memory(

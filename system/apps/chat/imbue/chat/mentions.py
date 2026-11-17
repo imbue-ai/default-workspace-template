@@ -231,6 +231,9 @@ class MentionHandler(MutableModel):
         return handle_table(self.roster.document().participants, chats)
 
     def resolve(self, text: str) -> tuple[MentionTarget, ...]:
+        """The targets ``text`` mentions; a text with no handle in it skips building the table."""
+        if "@" not in text:
+            return ()
         return find_mentions(text, self.table())
 
     def act(

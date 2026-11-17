@@ -18,8 +18,8 @@ vi.mock("../models/Chats", async (importOriginal) => ({
   getProvisionalChat: (id: string) => provisionalChats.get(id),
 }));
 
-import type { ChatSnapshot, ProvisionalChat, ProvisionalChatPhase } from "../models/Chats";
-import { chatSnapshotFixture, handoffStateFixture } from "../models/chatSnapshotFixture";
+import type { ChatSnapshot, ProvisionalChat } from "../models/Chats";
+import { chatSnapshotFixture, handoffStateFixture, provisionalChatFixture } from "../models/chatSnapshotFixture";
 import { addOutgoing } from "../models/OutgoingMessages";
 import { ActivityIndicator } from "./ActivityIndicator";
 import { connectingLabel, isChatConnecting } from "./ConnectingIndicator";
@@ -30,20 +30,6 @@ const provisionalChats = new Map<string, ProvisionalChat>();
 
 function uniqueChatId(): string {
   return `agent-${Math.random().toString(36).slice(2)}`;
-}
-
-function provisionalChat(chatId: string, phase: ProvisionalChatPhase): ProvisionalChat {
-  return {
-    chat_id: chatId,
-    name: "Chat 1",
-    account_id: "acct-1",
-    kind: "agent",
-    phase,
-    error: null,
-    is_seeded: false,
-    held_sends: [],
-    model_pick: null,
-  };
 }
 
 // The status row at the end of the transcript, as it reads for a chat with nothing in its transcript yet.
@@ -89,7 +75,7 @@ describe("Connecting, on the status row at the end of the transcript", () => {
 
   it("reads a message waiting on a chat still being created as connecting", () => {
     const chatId = uniqueChatId();
-    provisionalChats.set(chatId, provisionalChat(chatId, "creating"));
+    provisionalChats.set(chatId, provisionalChatFixture(chatId, { phase: "creating" }));
     expect(isChatConnecting(chatId)).toBe(false);
 
     addOutgoing(chatId, "hello");
@@ -102,10 +88,10 @@ describe("Connecting, on the status row at the end of the transcript", () => {
 
   it("does not read a chat that has not started creating, or whose create failed, as connecting", () => {
     const awaiting = uniqueChatId();
-    provisionalChats.set(awaiting, provisionalChat(awaiting, "awaiting_first_send"));
+    provisionalChats.set(awaiting, provisionalChatFixture(awaiting, { phase: "awaiting_first_send" }));
     addOutgoing(awaiting, "hello");
     const failed = uniqueChatId();
-    provisionalChats.set(failed, provisionalChat(failed, "failed"));
+    provisionalChats.set(failed, provisionalChatFixture(failed, { phase: "failed" }));
     addOutgoing(failed, "hello");
 
     expect(isChatConnecting(awaiting)).toBe(false);
@@ -128,16 +114,16 @@ describe("Connecting, on the status row at the end of the transcript", () => {
     expect(connectingLabel(chatId)).toBe("Connecting to Opus 5.5 on Anthropic…");
 
     const starting = uniqueChatId();
-    provisionalChats.set(starting, { ...provisionalChat(starting, "creating"), held_sends: [] });
+    provisionalChats.set(starting, provisionalChatFixture(starting, { phase: "creating", held_sends: [] }));
     expect(connectingLabel(starting)).toBe("Connecting to Anthropic…");
   });
 
   it("reads a chat still being created that holds a message from another page as connecting", () => {
     const chatId = uniqueChatId();
-    provisionalChats.set(chatId, {
-      ...provisionalChat(chatId, "creating"),
-      held_sends: [{ message_id: "m-1", text: "hello" }],
-    });
+    provisionalChats.set(
+      chatId,
+      provisionalChatFixture(chatId, { phase: "creating", held_sends: [{ message_id: "m-1", text: "hello" }] }),
+    );
 
     expect(isChatConnecting(chatId)).toBe(true);
   });

@@ -169,9 +169,10 @@ def build_production_state(
     tray_feed = None if is_secondary else TrayFeed(shell=shell)
     if tray_feed is not None:
         agent_manager.set_chats_updated_listener(tray_feed.report_chats)
-    # The snapshots name who has written in each chat, read off the author annotations.
+    # The snapshots name who has written in each chat, and who sent each message not on its transcript yet, read off
+    # the author annotations.
     authors = AuthorStore(root=chat_records_root)
-    agent_manager.set_participants_reader(authors.participant_keys)
+    agent_manager.set_author_annotations_reader(authors.annotations)
     lounge = None if is_secondary else LoungeKeeper(agent_manager=agent_manager)
     state = ChatAppState(
         config=config,

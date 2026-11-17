@@ -66,13 +66,18 @@ Built-in apps:
 Every app describes itself in an `app.toml` manifest beside its code: its
 registered name, the display name users see, its icon, the launch paths the
 desktop opens windows at, its memory-shedding `priority`, whether it is `critical`, whether it
-stops once no window shows it (`stop_when_no_windows`), and the
+stops once no window shows it (`stop_when_no_windows`), whether its pages
+listen to the microphone (`uses_microphone`), and the
 supervisord `program` that runs it (the schema is the `app_manifest` library
 in `system/libs/`). An app runs as a supervised program (a `[program:*]` entry
 in its own `system/supervisord.conf.d/<name>.conf`) that registers the manifest
 and the app's port via `system/scripts/forward_port.py --manifest`, from its
 program line or from inside its entry point once its socket is bound, and then
-runs the app.
+runs the app. Every built-in app's Flask app installs the request guard ahead of
+its routes (`app_schema.request_guard`, over `workspace_layout.identity`): the
+workspace's own browser is on loopback too, so a request it marks as a page of
+another origin's is refused, and a request with no `X-Imbue-Identity` header is
+the owner's only from loopback under a loopback `Host`.
 
 A manifest may also declare what belongs to the app *outside* its own folder.
 `[[references]]` lists literal repo-root-relative files and directories the app

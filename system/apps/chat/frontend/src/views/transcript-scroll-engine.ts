@@ -567,6 +567,27 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     trace?.record("write", { reason, targetPx, afterPx, deltaPx: afterPx - beforePx });
   }
 
+  /**
+   * Re-pin FOLLOW to the bottom when the viewport gets shorter (the composer
+   * grows a line). Runs from the ResizeObserver, which the browser calls after
+   * layout and before paint, so the shorter viewport is never painted short of
+   * the bottom; the redraw it schedules would only pin a frame later.
+   */
+  function pinFollowAfterViewportResize(element: HTMLElement): void {
+    if (positionState.kind !== "FOLLOW" || isPointerDown) {
+      return;
+    }
+    // An upward native scroll whose event has not arrived yet is the user's.
+    if (element.scrollTop < scrollTopPx - 0.01) {
+      return;
+    }
+    const targetPx = element.scrollHeight - element.clientHeight;
+    if (targetPx - element.scrollTop > 0.5) {
+      cancelSmoothScroll();
+      writeScrollTop(element, targetPx, "follow-viewport-resize");
+    }
+  }
+
   // live row measurement
 
   function measureMountedRows(): boolean {
@@ -981,6 +1002,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       }
       if (scrollEl.clientHeight !== viewportHeightPx) {
         viewportHeightPx = scrollEl.clientHeight;
+        pinFollowAfterViewportResize(scrollEl);
         m.redraw();
       }
       const listEl = scrollEl.querySelector(".message-list");
@@ -1127,12 +1149,19 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         const pinDeltaPx = targetPx - element.scrollTop;
         // Glide only for steady streaming growth. During fill/measurement
         // churn content grows hundreds of px per frame and a glide would lag
-        // it into a visible sustained gap; and a large catch-up would read as
-        // animation. Both snap.
-        const isChurning =
-          fillInFlight || spacerTopPx > 0 || spacerBottomPx > 0 || (geometry !== null && geometry.unmeasuredCount > 0);
+        // it into a visible sustained gap; a large catch-up would read as
+        // animation; and a clamp absorbed this frame (by the patch, or by
+        // content shrinking before it) has already moved the view up, so
+        // gliding back would paint that move and then slide down over several
+        // frames -- a bounce at the bottom. All three snap.
+        const isSnapRequired =
+          didAbsorbClamp ||
+          fillInFlight ||
+          spacerTopPx > 0 ||
+          spacerBottomPx > 0 ||
+          (geometry !== null && geometry.unmeasuredCount > 0);
         if (Math.abs(pinDeltaPx) > 0.5) {
-          if (!isChurning && Math.abs(pinDeltaPx) <= element.clientHeight * 1.5) {
+          if (!isSnapRequired && Math.abs(pinDeltaPx) <= element.clientHeight * 1.5) {
             smoothWriteScrollTop(targetPx, "follow-pin");
           } else {
             cancelSmoothScroll();

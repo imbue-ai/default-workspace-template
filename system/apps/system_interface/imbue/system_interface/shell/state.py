@@ -26,6 +26,8 @@ from watchdog.observers.api import BaseObserver
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import participant_key_of
 from workspace_layout.identity import visiting_user_id
+from workspace_layout.ops import OpRequester
+from workspace_layout.ops import requester_spelling
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import IfPresent
@@ -85,6 +87,7 @@ from imbue.system_interface.shell.data_types import PlacementsEditOutcome
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import ShownWindow
 from imbue.system_interface.shell.data_types import UserRecord
+from imbue.system_interface.shell.data_types import WindowInputReport
 from imbue.system_interface.shell.data_types import WindowOpenOutcome
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_view
@@ -92,8 +95,8 @@ from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.data_types import effective_window
 from imbue.system_interface.shell.data_types import stoppable_program_of
 from imbue.system_interface.shell.data_types import window_view
-from imbue.system_interface.shell.desktop_document import apps_with_their_default_shortcut_on
 from imbue.system_interface.shell.desktop_document import choose_show_target
+from imbue.system_interface.shell.desktop_document import default_shortcut_targets_on
 from imbue.system_interface.shell.desktop_document import desktop_seeded_from
 from imbue.system_interface.shell.desktop_document import find_window
 from imbue.system_interface.shell.desktop_document import find_window_at
@@ -127,15 +130,27 @@ from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.launches import post_launch
 from imbue.system_interface.shell.launches import resolve_launch_destination
 from imbue.system_interface.shell.ownership import desktop_owner_of
+from imbue.system_interface.shell.ownership import is_desktop_owned_by
+from imbue.system_interface.shell.ownership import visitor_desktop_owners
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
 from imbue.system_interface.shell.primitives import LaunchTargetKind
+from imbue.system_interface.shell.primitives import WindowInputKind
 from imbue.system_interface.shell.primitives import mint_save_id
 from imbue.system_interface.shell.primitives import mint_window_id
+from imbue.system_interface.shell.resource_gauge import AGENT_NOTICE_FILENAME
+from imbue.system_interface.shell.resource_gauge import DeliveryStore
+from imbue.system_interface.shell.resource_gauge import ResourceGaugeMonitor
+from imbue.system_interface.shell.resource_gauge import ResourceGaugeSettingsStore
+from imbue.system_interface.shell.resource_gauge import ResourceNotifierInterface
+from imbue.system_interface.shell.resource_gauge import read_resource_readings
+from imbue.system_interface.shell.resource_gauge import read_shed_ledger_stops
 from imbue.system_interface.shell.share_grants import AgentGrantsReader
 from imbue.system_interface.shell.share_grants import DEFAULT_AGENT_GRANTS_PATH
 from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
+from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_IDENTITIES_PATH
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
+from imbue.system_interface.shell.share_grants import ShareIdentitiesReader
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.theme_watch import ThemeCatalogWatch
 from imbue.system_interface.shell.theme_wire import theme_catalog_wire_json
@@ -184,6 +199,9 @@ class ShellState(MutableModel):
     )
     activity: ClientActivityLog = Field(frozen=True, description="The client-activity event log")
     share_grants: ShareGrantsReader = Field(frozen=True, description="The people's grants the desktop writes")
+    share_identities: ShareIdentitiesReader = Field(
+        frozen=True, description="What the desktop knew of each granted account, written beside the grants"
+    )
     agent_grants: AgentGrantsReader = Field(frozen=True, description="The visiting agents' grants the gateway writes")
     broadcaster: WebSocketBroadcaster = Field(frozen=True, description="The WebSocket fan-out to the shell's windows")
     avatar_catalog: AvatarCatalogStore = Field(
@@ -191,6 +209,9 @@ class ShellState(MutableModel):
     )
     avatar_selection: AvatarSelectionStore = Field(frozen=True, description="avatar_selection.json")
     tour: TourStore = Field(frozen=True, description="tour.json: whether the show-around tour has run")
+    resource_gauge: ResourceGaugeMonitor = Field(
+        frozen=True, description="The tray's resource gauge: its readings, its settings, and the warnings it raises"
+    )
     avatar_status: AvatarStatusReader = Field(
         frozen=True, description="The avatar's mood, read from mngr's event file"
     )
@@ -235,7 +256,9 @@ class ShellState(MutableModel):
 
     def start(self) -> None:
         """Prune stale clients (now, and daily from here on), then start the inventory (registry watch, liveness),
-        the avatar status reader (the event file watch), and the theme watch (the theme folders and app manifests)."""
+        the avatar status reader (the event file watch), and the theme watch (the theme folders and app manifests).
+        Each visitor's desktop made before desktops carried an owner is given its visitor first."""
+        self.adopt_visitor_desktops()
         self.prune_unseen_clients()
         thread = threading.Thread(target=self._run_client_prune, daemon=True, name="shell-client-prune")
         self._prune_thread = thread
@@ -243,6 +266,7 @@ class ShellState(MutableModel):
         self.inventory.start()
         self.lifecycle.start()
         self.update_notice.start()
+        self.resource_gauge.start()
         self.avatar_status.start()
         theme_watch = ThemeCatalogWatch(
             repo_root=self.repo_root, loader=self.themes, on_catalog_changed=self.broadcast_themes_changed
@@ -263,6 +287,7 @@ class ShellState(MutableModel):
 
     def stop(self) -> None:
         self.update_notice.stop()
+        self.resource_gauge.stop()
         self._prune_stop.set()
         if self._prune_thread is not None:
             self._prune_thread.join(timeout=5)
@@ -276,6 +301,26 @@ class ShellState(MutableModel):
         if self._snapshot_watch is not None:
             stop_file_watch(self._snapshot_watch)
             self._snapshot_watch = None
+
+    def adopt_visitor_desktops(self) -> None:
+        """Give each desktop ``users.json`` says was made for a visitor, and which carries no owner, that visitor's
+        key (the multiplayer spec, section 8.1), on the first start that runs this: a shell older than desktop owners
+        seeded visitors' desktops with none, which reads as the workspace owner's."""
+        # CLEANUP: remove this, its call in start(), DesktopStore.adopt_visitor_desktops,
+        # VISITOR_DESKTOPS_ADOPTED_FILENAME, ownership's visitor_desktop_owners and with_visitor_owners, and their tests
+        # once no workspace can still update from a template older than minds-v0.10.0, whose visitor desktops carry no
+        # owner.
+        try:
+            with STATE_FILES_LOCK:
+                outcome = self.desktops.adopt_visitor_desktops(visitor_desktop_owners(self.users.list_users()))
+        except ShellStateError as e:
+            logger.opt(exception=e).error(
+                "Failed to give the visitors' old desktops their visitors; the next start retries"
+            )
+            return
+        if outcome.is_written:
+            logger.info("Gave the visitors' desktops made before desktop owners their visitors")
+            self.broadcaster.broadcast_desktops_updated(self.desktop_views(outcome.desktops))
 
     def prune_unseen_clients(self) -> None:
         """Drop every client unseen for the retention period, together with the layouts it owns (desktop contracts.md section 4.3)."""
@@ -329,11 +374,11 @@ class ShellState(MutableModel):
         return [entry.row for entry in self.inventory.entries()]
 
     def _reconcile_desktops_with(self, rows: Sequence[RegistryRow]) -> tuple[Desktop, ...]:
-        """Every desktop holding the default shortcut of each registered app not yet offered (desktop plan section
-        3.2) and one pinned window per pinned app (pinned-taskbar-entries plan section 3.2). A reconcile that wrote
-        is announced once, after it, so nothing here recurses into itself. Callers hold the state lock and read
-        ``rows`` under it."""
-        shortcuts_outcome = self.desktops.ensure_default_shortcuts_offered(rows)
+        """Every desktop holding no shortcut of an unregistered app, each registered app's default shortcuts not yet
+        offered (desktop plan section 3.2), and one pinned window per pinned app (pinned-taskbar-entries plan section
+        3.2). A reconcile that wrote is announced once, after it, so nothing here recurses into itself. Callers hold
+        the state lock and read ``rows`` under it."""
+        shortcuts_outcome = self.desktops.reconcile_shortcuts_with(rows)
         pinned_outcome = self.desktops.ensure_pinned_windows(pinned_apps(rows), datetime.now(timezone.utc))
         if shortcuts_outcome.is_written or pinned_outcome.is_written:
             self.broadcaster.broadcast_desktops_updated(self.desktop_views(pinned_outcome.desktops))
@@ -362,6 +407,7 @@ class ShellState(MutableModel):
                 seed_desktop_shortcuts(rows),
                 [pinned_window(app_pin, now) for app_pin in pinned_apps(rows)],
                 desktop_owner_of(identity),
+                rows,
             )
         self.broadcast_desktops_updated()
         return desktop
@@ -431,6 +477,7 @@ class ShellState(MutableModel):
         repoint: AbstractSet[WindowPage],
         is_every_desktop_searched: bool,
         is_minimized: bool,
+        requester: OpRequester | None,
     ) -> ShownWindow:
         """Put ``path`` of ``app`` on the client's screen by the ``show`` op's rule (desktop contracts.md section 8,
         ``choose_show_target``): a window already at the path raised (on the given desktop, or on any desktop when
@@ -450,7 +497,7 @@ class ShellState(MutableModel):
             request = WindowOpenRequest(
                 app=app, path=path, client_id=client_id, if_present=IfPresent.NEW, minimized=is_minimized
             )
-            window_id = self.open_window(shown_on.id, request).window.id
+            window_id = self.open_window(shown_on.id, request, requester).window.id
         else:
             window_id = choice.window.id
             if choice.outcome is not ShowOutcome.RAISED:
@@ -490,6 +537,7 @@ class ShellState(MutableModel):
                         if_present=if_present,
                         minimized=request.minimized,
                     ),
+                    None,
                 )
                 return LaunchOutcome(window=opened.window, path=path, is_new=opened.is_new)
             case LaunchTargetKind.WINDOW:
@@ -518,6 +566,7 @@ class ShellState(MutableModel):
                     repoint=set(),
                     is_every_desktop_searched=False,
                     is_minimized=request.minimized,
+                    requester=None,
                 )
                 # The pinned window's own balloon names it as ``beside`` and the show navigates it: one window, nothing
                 # to lay out beside.
@@ -649,11 +698,14 @@ class ShellState(MutableModel):
             )
         return saved
 
-    def open_window(self, desktop_id: str, request: WindowOpenRequest) -> WindowOpenOutcome:
+    def open_window(
+        self, desktop_id: str, request: WindowOpenRequest, requester: OpRequester | None
+    ) -> WindowOpenOutcome:
         """Open a window of ``request.app`` at ``request.path`` on the desktop for everyone, placed at once in the
         requesting client's layout (shown, or minimized when ``request.minimized``); with ``if_present`` focus, a
         window of the app already at that exact path is answered instead, restored and raised there unless the open
-        asked for minimized, in which case it is left as placed (desktop plan section 4.1)."""
+        asked for minimized, in which case it is left as placed (desktop plan section 4.1). Every answer is recorded
+        in the client-activity log as a ``window_opened``, with ``requester`` (an op's, None for a client's own)."""
         desktop = self.get_desktop(desktop_id)
         self.require_app_entry(str(request.app))
         is_minimized = request.minimized
@@ -664,6 +716,7 @@ class ShellState(MutableModel):
                     self.edit_desktop_layout(
                         desktop, request.client_id, lambda layout: with_window_raised(layout, existing.id)
                     )
+                self._record_window_opened(request.client_id, desktop.id, existing, is_new=False, requester=requester)
                 return WindowOpenOutcome(window=existing, is_new=False)
         opened_on, window = self._append_window(desktop, request.app, request.path)
         placed = self._edit_placements(
@@ -676,26 +729,91 @@ class ShellState(MutableModel):
         self.broadcast_desktops_updated()
         self._announce_placements_edit(opened_on, request.client_id, placed)
         logger.info("Opened window {} of {} at {} on desktop {}", window.id, window.app, window.path, desktop.id)
+        self._record_window_opened(request.client_id, desktop.id, window, is_new=True, requester=requester)
         self.lifecycle.wake_soon()
         return WindowOpenOutcome(window=window, is_new=True)
 
     def open_window_unplaced(
-        self, desktop_id: str, app: AppName, path: WindowPath, if_present: IfPresent
+        self, desktop_id: str, app: AppName, path: WindowPath, if_present: IfPresent, requester: OpRequester | None
     ) -> WindowOpenOutcome:
         """An open with no client to place it for (an agent's, with nobody connected): the window exists on the
         desktop for everyone and reads as minimized in every layout; with ``if_present`` focus, a window of the app
-        already at the path is answered as it stands."""
+        already at the path is answered as it stands. Recorded as a ``window_opened`` with no client."""
         desktop = self.get_desktop(desktop_id)
         self.require_app_entry(str(app))
         if if_present is IfPresent.FOCUS:
             existing = find_window_at(desktop, app, path)
             if existing is not None:
+                self._record_window_opened("", desktop.id, existing, is_new=False, requester=requester)
                 return WindowOpenOutcome(window=existing, is_new=False)
         _, window = self._append_window(desktop, app, path)
         self.broadcast_desktops_updated()
         logger.info("Opened window {} of {} at {} on desktop {} for no client", window.id, app, path, desktop.id)
+        self._record_window_opened("", desktop.id, window, is_new=True, requester=requester)
         self.lifecycle.wake_soon()
         return WindowOpenOutcome(window=window, is_new=True)
+
+    def _record_window_opened(
+        self, client_id: str, desktop_id: str, window: Window, is_new: bool, requester: OpRequester | None
+    ) -> None:
+        """Append the open to the client-activity log; a failed append is logged and never fails the open."""
+        try:
+            self.activity.append_window_opened(
+                client_id=client_id,
+                desktop_id=desktop_id,
+                app=str(window.app),
+                window_id=str(window.id),
+                is_new=is_new,
+                requester=requester_spelling(requester),
+            )
+        except OSError as e:
+            logger.opt(exception=e).warning("Failed to record the open of window {} of {}", window.id, window.app)
+
+    def record_window_input(self, client_id: ClientId, reports: Sequence[WindowInputReport]) -> None:
+        """Record a heartbeat's input reports in the client-activity log as ``window_input`` events (the
+        app-usage-signals spec, section 6.2). A window still on a desktop is recorded with that desktop's app and
+        desktop, whatever the page said; one that is gone with the reported app, which must be registered, and the
+        client's active desktop. Input reports go first, so a window reported with both kinds in one heartbeat is
+        written as input. A heartbeat reporting no window reads nothing, and a desktops record the shell cannot bring
+        up to date drops the reports with a warning, never the heartbeat."""
+        if not reports:
+            return
+        now = datetime.now(timezone.utc)
+        try:
+            desktops = self.list_desktops()
+        except ShellStateError as e:
+            logger.opt(exception=e).warning(
+                "Dropped {} input reports of client {}: the desktops cannot be read", len(reports), client_id
+            )
+            return
+        window_by_id = {window.id: (desktop, window) for desktop in desktops for window in desktop.windows}
+        active_desktop_id = ""
+        if any(report.window_id not in window_by_id for report in reports):
+            active_desktop = resolve_active_desktop(self.clients.get_client(str(client_id)), desktops)
+            active_desktop_id = "" if active_desktop is None else str(active_desktop)
+        for report in sorted(reports, key=lambda report: report.kind is not WindowInputKind.INPUT):
+            found = window_by_id.get(report.window_id)
+            if found is not None:
+                desktop, window = found
+                desktop_id, app = str(desktop.id), str(window.app)
+            elif self.inventory.entry(str(report.app)) is None:
+                logger.warning(
+                    "Dropped an input report for window {} of unregistered app {!r}", report.window_id, report.app
+                )
+                continue
+            else:
+                desktop_id, app = active_desktop_id, str(report.app)
+            try:
+                self.activity.append_window_input(
+                    client_id=str(client_id),
+                    desktop_id=desktop_id,
+                    app=app,
+                    window_id=str(report.window_id),
+                    kind=report.kind,
+                    now=now,
+                )
+            except OSError as e:
+                logger.opt(exception=e).warning("Failed to record input in window {} of {}", report.window_id, app)
 
     def _append_window(self, desktop: Desktop, app: AppName, path: WindowPath) -> tuple[Desktop, Window]:
         """Mint a window and write it onto the desktop."""
@@ -807,8 +925,9 @@ class ShellState(MutableModel):
     def arrive_client(self, client_id: ClientId, identity: RequestIdentity) -> ClientArrivalOutcome | None:
         """Where a client whose shell page just loaded lands (desktop plan section 3.10): the owner and anonymous
         clients follow the rule of contracts.md section 4.3; a signed-in visitor lands on the desktop made for them,
-        seeded from the first desktop on their first arrival (and again, with a notice, if it has since been deleted),
-        while a returning client of theirs keeps the desktop it was on. None while the workspace has no desktop."""
+        seeded from the first desktop on their first arrival (and again, with a notice, if it has since been deleted
+        or is no longer theirs), while a returning client of theirs keeps the desktop it was on. None while the
+        workspace has no desktop."""
         now = datetime.now(timezone.utc)
         user_id = visiting_user_id(identity)
         # The profile (what the desktop made for a visitor is named after) is resolved before the lock: it may be a
@@ -853,10 +972,19 @@ class ShellState(MutableModel):
     ) -> ClientArrivalOutcome:
         """Where a visiting user's client lands, with the user's record brought up to date: the desktop made for
         them, seeded now when they have none or when the one they had has been deleted (which the outcome names),
-        unless the client is a returning one of theirs, which keeps the desktop it was on. Runs under the state lock."""
+        unless the client is a returning one of theirs, which keeps the desktop it was on. Runs under the state lock.
+
+        The recorded desktop counts as theirs only while they own it: their record keeps naming its id after the
+        owner deletes it, and a desktop the owner makes later may take that id, which would land them viewing
+        somebody else's desktop with nowhere for "Stop viewing" to go."""
         known = self.users.get_user(user_id)
         desktop_by_id = {desktop.id: desktop for desktop in desktops}
-        own_desktop = desktop_by_id.get(known.desktop_id) if known is not None else None
+        recorded_desktop = desktop_by_id.get(known.desktop_id) if known is not None else None
+        own_desktop = (
+            recorded_desktop
+            if recorded_desktop is not None and is_desktop_owned_by(recorded_desktop, identity)
+            else None
+        )
         created: Desktop | None = None
         replaced_desktop_name: str | None = None
         if own_desktop is not None:
@@ -902,7 +1030,8 @@ class ShellState(MutableModel):
             now,
             desktop_owner_of(identity),
         )
-        created = self.desktops.add_desktop(seeded, apps_with_their_default_shortcut_on(seeded, self._registry_rows()))
+        rows = self._registry_rows()
+        created = self.desktops.add_desktop(seeded, default_shortcut_targets_on(seeded, rows), rows)
         logger.info(
             "Seeded desktop {!r} for user {} from {!r} ({} shortcut(s), {} window(s))",
             created.name,
@@ -1001,6 +1130,7 @@ def build_shell_state(
     launch_poster: LaunchPoster | None = None,
     on_registry_read: Callable[[Sequence[RegistryRow]], None] | None = None,
     is_lifecycle_enabled: bool = False,
+    resource_notifier: ResourceNotifierInterface | None = None,
     no_windows_grace_seconds: float = NO_WINDOWS_GRACE_SECONDS,
     idle_sweep_interval_seconds: float = IDLE_SWEEP_INTERVAL_SECONDS,
 ) -> ShellState:
@@ -1017,8 +1147,12 @@ def build_shell_state(
     is asked for its page) defaults to the loopback POST; ``is_lifecycle_enabled`` is whether the lifecycle
     manager owns the live workspace's apps, sweeping them and waking one for a POST launch (the production shell's
     yes; a preview's and a test's no, so neither starts a live app or parks a port by accident), and the two
-    timings are the manager's grace period and idle sweep interval, which a test shortens."""
+    timings are the manager's grace period and idle sweep interval, which a test shortens;
+    ``resource_notifier`` is where the resource gauge tells the user of a warning or a stopped program (the
+    production shell's Imbue Studio feed; None in a preview or a test, which tell nobody and leave no notice for
+    the agents either)."""
     app_theming = AppThemingStore(state_directory=state_directory)
+    stop_ledger = read_shed_ledger_stops()
     resolved_inventory = (
         inventory
         if inventory is not None
@@ -1034,6 +1168,9 @@ def build_shell_state(
     share_grants = ShareGrantsReader(
         share_env_path=_under_repo_root(DEFAULT_SHARE_ENV_PATH, repo_root),
         share_grants_path=_under_repo_root(DEFAULT_SHARE_GRANTS_PATH, repo_root),
+    )
+    share_identities = ShareIdentitiesReader(
+        share_identities_path=_under_repo_root(DEFAULT_SHARE_IDENTITIES_PATH, repo_root)
     )
     agent_grants = AgentGrantsReader(agent_grants_path=_under_repo_root(DEFAULT_AGENT_GRANTS_PATH, repo_root))
     shell = ShellState(
@@ -1061,11 +1198,21 @@ def build_shell_state(
         ),
         activity=ClientActivityLog(events_path=state_directory / CLIENT_ACTIVITY_EVENTS_PATH),
         share_grants=share_grants,
+        share_identities=share_identities,
         agent_grants=agent_grants,
         broadcaster=broadcaster,
         avatar_catalog=AvatarCatalogStore(directory=_under_repo_root(avatar_catalog_directory, repo_root)),
         avatar_selection=AvatarSelectionStore(state_directory=state_directory),
         tour=TourStore(state_directory=state_directory),
+        resource_gauge=ResourceGaugeMonitor(
+            settings_store=ResourceGaugeSettingsStore(state_directory=state_directory),
+            delivery_store=DeliveryStore(state_directory=state_directory),
+            read_readings=lambda: read_resource_readings(repo_root.resolve()),
+            read_stops=stop_ledger.read,
+            notifier=resource_notifier,
+            push=lambda view: broadcaster.broadcast_resource_gauge_changed(view.model_dump(mode="json")),
+            agent_notice_path=state_directory / AGENT_NOTICE_FILENAME if resource_notifier is not None else None,
+        ),
         avatar_status=AvatarStatusReader(
             events_path=agent_events_path if agent_events_path is not None else agent_events_path_from_environment(),
             background_tasks_root=background_tasks_root

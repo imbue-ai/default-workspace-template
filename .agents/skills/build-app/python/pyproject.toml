@@ -1,11 +1,15 @@
 [project]
 name = "build-app-skill"
 version = "0.1.0"
-description = "Scaffolds a new Flask app under system/apps/"
+description = "Scaffolds a new Flask app under system/apps/, and frames it as a mock until it is real"
 requires-python = ">=3.12"
 dependencies = [
+    # mock_frame frames a mock through the shared preview frame.
+    "agents-shared",
     "app-manifest",
+    "app-registration",
     "tomlkit>=0.12",
+    "workspace-layout",
     "workspace-scripts",
 ]
 

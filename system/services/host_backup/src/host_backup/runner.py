@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Final
 from uuid import uuid4
 
+from env_converge.converge import DEFAULT_WORKSPACE_DIR, capture_unless_fresh_rootfs
+from env_converge.record import EnvConvergeError, default_record_dir
 from loguru import logger
 
 from host_backup.capabilities import BackupCapabilities, detect_backup_capabilities
@@ -32,6 +34,7 @@ from host_backup.config import (
     publish_service_events_dir,
 )
 from host_backup.events import (
+    BACKUP_FAILURE_REASON_QUOTA_EXCEEDED,
     BackupEventType,
     make_event,
     record_abandoned_tick,
@@ -42,6 +45,7 @@ from host_backup.restic import (
     RESTORE_MARKER_TAGS,
     extract_snapshot_id_from_backup_output,
     find_backup_summary,
+    is_quota_exceeded_error,
     is_repo_locked_error,
 )
 from host_backup.restic import backup as restic_backup
@@ -58,23 +62,13 @@ from host_backup.snapshot import (
     SnapshotResult,
     make_snapshot_taker,
 )
+from host_backup.usage import StoreUsage, read_store_usage
 
 LOG_FILE = Path("/tmp/host-backup.log")
 
 # Number of consecutive failed ticks after which the runner raises a prominent,
 # durable alarm so a silent multi-day backup outage cannot go unnoticed.
 CONSECUTIVE_FAILURE_ALARM_THRESHOLD: Final[int] = 3
-
-# Where `uv run --no-sync env-converge capture` resolves its venv from; matches the
-# host-backup program's `directory=` in system/supervisord.conf.d/host-backup.conf,
-# made explicit so the capture also works when the runner is launched from
-# another cwd.
-WORKSPACE_DIR: Final[Path] = Path("/home/user/workspace")
-
-# Hard ceiling for the pre-snapshot `env-converge capture` refresh. The probes
-# (dpkg/npm/uv listings) normally take a few seconds; a wedged probe must not
-# stall the backup cadence.
-ENV_RECORD_CAPTURE_TIMEOUT_SECONDS: Final[float] = 120.0
 
 SLOW_BACKUP_NOTICE_INTERVAL_SECONDS: Final[float] = 24 * 3600.0
 
@@ -91,8 +85,10 @@ ForgetFn = Callable[..., subprocess.CompletedProcess[str]]
 ForgetIdsFn = Callable[
     [tuple[str, ...], Mapping[str, str]], subprocess.CompletedProcess[str]
 ]
-PruneFn = Callable[[Mapping[str, str]], subprocess.CompletedProcess[str]]
+PruneFn = Callable[..., subprocess.CompletedProcess[str]]
 UnlockFn = Callable[..., subprocess.CompletedProcess[str]]
+UsageFn = Callable[[Mapping[str, str]], StoreUsage | None]
+FreeSpaceFn = Callable[..., None]
 
 
 def main() -> None:
@@ -240,11 +236,65 @@ def _should_tick_now(
     return False, "interval_not_elapsed"
 
 
+def _free_space_over_quota(
+    *,
+    state: _LoopState,
+    config: BackupConfig,
+    env_overrides: Mapping[str, str],
+    usage: StoreUsage,
+    forget_fn: ForgetFn = restic_forget,
+    prune_fn: PruneFn = restic_prune,
+    unlock_fn: UnlockFn = restic_unlock,
+) -> None:
+    """The over-quota tick: no backup; the retention forget and a bounded prune instead.
+
+    Emits BACKUP_SKIPPED_OVER_QUOTA (which ends the tick, like a backup outcome)
+    and then reclaims what it can. The prune repacks at most half the headroom
+    between the soft and hard limits, so its transient growth always fits under
+    the hard limit the store enforces; repeated ticks finish the job.
+    """
+    logger.warning(
+        "Skipping the backup: the account's backup storage is over quota "
+        "({} of {} bytes used); running forget and a bounded prune to free space",
+        usage.account_used_bytes,
+        usage.quota_bytes,
+    )
+    write_event(
+        state.events_dir,
+        make_event(
+            BackupEventType.BACKUP_SKIPPED_OVER_QUOTA,
+            tick_id=state.current_tick_id,
+            used_bytes=usage.used_bytes,
+            account_used_bytes=usage.account_used_bytes,
+            quota_bytes=usage.quota_bytes,
+            hard_limit_bytes=usage.hard_limit_bytes,
+        ),
+    )
+    _run_forget(
+        state=state,
+        config=config,
+        env_overrides=env_overrides,
+        forget_fn=forget_fn,
+        unlock_fn=unlock_fn,
+    )
+    _maybe_run_prune(
+        state=state,
+        config=config,
+        env_overrides=env_overrides,
+        prune_fn=prune_fn,
+        unlock_fn=unlock_fn,
+        is_forced=True,
+        max_repack_bytes=usage.headroom_bytes // 2,
+    )
+
+
 def _run_one_tick(
     *,
     state: _LoopState,
     config: BackupConfig,
     trigger_reason: str,
+    usage_fn: UsageFn = read_store_usage,
+    free_space_fn: FreeSpaceFn = _free_space_over_quota,
 ) -> None:
     """Run one full backup tick.
 
@@ -286,6 +336,16 @@ def _run_one_tick(
     # (and keyed) by Imbue Studio, so host_backup just backs up to it -- it
     # never probes-then-inits the repo itself.
     env_overrides = dict(env)
+    # The backup store refuses data uploads past the account's hard limit, and
+    # restic can only free space by writing (a prune repacks). So a tick asks
+    # the store first and, over the soft quota, frees space instead of trying
+    # to back up into the headroom the prune needs.
+    usage = usage_fn(env)
+    if usage is not None and usage.is_over_soft_limit:
+        free_space_fn(
+            state=state, config=config, env_overrides=env_overrides, usage=usage
+        )
+        return
     _refresh_environment_record(state=state)
     snapshot_result = _take_snapshot(state=state)
     if snapshot_result is None:
@@ -333,10 +393,17 @@ def _check_secrets_present(*, state: _LoopState) -> dict[str, str] | None:
     return env
 
 
+def _capture_environment_record() -> None:
+    """``env-converge capture``'s work, in this process: re-capture the record unless the rootfs is fresh."""
+    capture_unless_fresh_rootfs(
+        default_record_dir(), DEFAULT_WORKSPACE_DIR, is_forced=False
+    )
+
+
 def _refresh_environment_record(
     *,
     state: _LoopState,
-    run_fn: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    capture_fn: Callable[[], None] = _capture_environment_record,
 ) -> None:
     """Re-capture the environment record so the snapshot carries current package state.
 
@@ -347,41 +414,29 @@ def _refresh_environment_record(
     (npm globals, uv tools) are otherwise only refreshed at boot; without this,
     anything installed since boot would be missing from a restored workspace.
 
-    Best-effort by design: capture is read-only and takes seconds, and a
-    failure (or absent env-converge, e.g. a pre-cutover workspace) must never
-    block the backup itself -- a slightly stale record beats no backup.
+    Best-effort by design: capture is read-only, each of its probes has its own
+    timeout, and a failure must never block the backup itself -- a slightly
+    stale record beats no backup.
     """
     start = time.monotonic()
-    exit_code: int | None = None
-    stderr = ""
+    error_message = ""
     try:
-        result = run_fn(
-            ["uv", "run", "--no-sync", "env-converge", "capture"],
-            cwd=WORKSPACE_DIR,
-            capture_output=True,
-            text=True,
-            timeout=ENV_RECORD_CAPTURE_TIMEOUT_SECONDS,
-            check=False,
-        )
-        exit_code = result.returncode
-        stderr = result.stderr.strip()[-500:]
-    except (OSError, subprocess.TimeoutExpired) as e:
-        stderr = str(e)[-500:]
+        capture_fn()
+        success = True
+    except (EnvConvergeError, OSError, ValueError) as e:
+        success = False
+        error_message = str(e)[-500:]
     duration = time.monotonic() - start
-    success = exit_code == 0
     if not success:
-        logger.warning(
-            "Pre-snapshot env-converge capture failed (rc={}): {}", exit_code, stderr
-        )
+        logger.warning("Pre-snapshot env-converge capture failed: {}", error_message)
     write_event(
         state.events_dir,
         make_event(
             BackupEventType.ENV_RECORD_CAPTURE_COMPLETED,
             tick_id=state.current_tick_id,
             success=success,
-            exit_code=exit_code,
             duration_seconds=duration,
-            stderr="" if success else stderr,
+            error_message=error_message,
         ),
     )
 
@@ -520,6 +575,11 @@ def _run_restic_backup(
     duration = time.monotonic() - start
     if result.returncode != 0:
         state.consecutive_backup_failures += 1
+        reason = (
+            BACKUP_FAILURE_REASON_QUOTA_EXCEEDED
+            if is_quota_exceeded_error(result.stderr)
+            else ""
+        )
         write_event(
             state.events_dir,
             make_event(
@@ -531,6 +591,7 @@ def _run_restic_backup(
                 stdout=result.stdout,
                 stderr=result.stderr,
                 consecutive_failures=state.consecutive_backup_failures,
+                reason=reason,
             ),
         )
         logger.error(
@@ -816,12 +877,16 @@ def _maybe_run_prune(
     env_overrides: Mapping[str, str],
     prune_fn: PruneFn = restic_prune,
     unlock_fn: UnlockFn = restic_unlock,
+    # The over-quota tick prunes to free space now, whatever the gate says.
+    is_forced: bool = False,
+    # Caps restic's repacking (`--max-repack-size`); None leaves it unbounded.
+    max_repack_bytes: int | None = None,
 ) -> None:
-    """Run `restic prune` iff the gate file is older than prune_interval_hours."""
+    """Run `restic prune` iff the gate file is older than prune_interval_hours (or forced)."""
     interval_seconds = config.retention.prune_interval_hours * 3600.0
     last_prune = _safe_mtime(PRUNE_TIMESTAMP_PATH)
     now = time.time()
-    if last_prune is not None:
+    if last_prune is not None and not is_forced:
         age_seconds = now - last_prune
         if age_seconds < interval_seconds:
             write_event(
@@ -837,7 +902,7 @@ def _maybe_run_prune(
     start = time.monotonic()
     result = _run_with_unlock_retry(
         operation="prune",
-        run=lambda: prune_fn(env_overrides),
+        run=lambda: prune_fn(env_overrides, max_repack_bytes=max_repack_bytes),
         env_overrides=env_overrides,
         unlock_fn=unlock_fn,
     )

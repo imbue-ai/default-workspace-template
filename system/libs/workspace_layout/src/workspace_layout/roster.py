@@ -18,6 +18,9 @@ _HANDLE_ALPHABET: Final[re.Pattern[str]] = re.compile(r"[^A-Za-z0-9._-]")
 _WHITESPACE_RUN: Final[re.Pattern[str]] = re.compile(r"\s+")
 # What a name with nothing usable in it is mentioned by.
 _FALLBACK_HANDLE: Final[str] = "someone"
+# What a person is called when nothing names them (no profile name, no email, no record of an arrival): never their
+# account's raw id, which tells a reader nothing.
+UNNAMED_PERSON_DISPLAY_NAME: Final[str] = "Guest"
 
 # The eight colours a participant may be drawn in (the viewing chrome, the tray ring, the card), chosen by hashing the
 # key so every surface agrees; ``workspace_ui``'s tokens carry the same eight.
@@ -48,6 +51,11 @@ class RosterParticipant(FrozenModel):
     last_seen: str | None = Field(description="When they were last here (ISO 8601), when ever")
     last_input_at: str | None = Field(
         description="When their newest page last saw keyboard or pointer input (ISO 8601), when the page reports it"
+    )
+    is_admitted_by_domain: bool = Field(
+        default=False,
+        description="Whether the person is here through a domain grant rather than a grant naming them: the shell "
+        "lists them from their presence record while the domain stays granted",
     )
 
 

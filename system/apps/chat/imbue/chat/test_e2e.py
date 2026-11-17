@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -33,6 +34,7 @@ from playwright.sync_api import Frame
 from playwright.sync_api import FrameLocator
 from playwright.sync_api import Locator
 from playwright.sync_api import Page
+from playwright.sync_api import Route
 from playwright.sync_api import ViewportSize
 from playwright.sync_api import expect
 from workspace_layout.primitives import ParticipantKey
@@ -54,6 +56,7 @@ from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import FIXTURE_SESSION_ID
+from imbue.chat.testing import HookedSendMngrMessenger
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import SummaryWritingMngrMessenger
@@ -279,8 +282,10 @@ def _post_op(server: RunningWorkspace, body: dict[str, Any]) -> int:
         return 0
 
 
-def _post_chat_json(server: RunningWorkspace, path: str, body: dict[str, Any]) -> dict[str, Any]:
-    """POST ``body`` as JSON to the chat app's ``path``; the parsed answer, which must come under 200."""
+def _post_chat_json(
+    server: RunningWorkspace, path: str, body: dict[str, Any], expected_status: int = 200
+) -> dict[str, Any]:
+    """POST ``body`` as JSON to the chat app's ``path``; the parsed answer, which must come under ``expected_status``."""
     request = urllib.request.Request(
         f"{server.chat_url}{path}",
         data=json.dumps(body).encode(),
@@ -288,7 +293,7 @@ def _post_chat_json(server: RunningWorkspace, path: str, body: dict[str, Any]) -
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=10) as response:
-        assert response.status == 200, f"{path} answered {response.status}"
+        assert response.status == expected_status, f"{path} answered {response.status}"
         answer = json.loads(response.read())
     assert isinstance(answer, dict)
     return answer
@@ -567,6 +572,136 @@ def test_tool_calls_render_as_inline_chips(tmp_path: Path, page: Page) -> None:
         expect(_chat(page).locator(".tool-chip-detail")).to_have_count(0)
 
 
+def _assistant_line(uuid: str, timestamp: str, content: list[dict[str, Any]], stop_reason: str) -> dict[str, Any]:
+    return {
+        "type": "assistant",
+        "uuid": uuid,
+        "timestamp": timestamp,
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "content": content,
+            "stop_reason": stop_reason,
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    }
+
+
+def _tool_result_line(uuid: str, timestamp: str, tool_use_id: str, output: str) -> dict[str, Any]:
+    return {
+        "type": "user",
+        "uuid": uuid,
+        "timestamp": timestamp,
+        "message": {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": output}],
+        },
+    }
+
+
+# A line of intent, a tool call, a background task's report, a finished step, and the closing reply below the timeline.
+_STEPPED_TURN_SESSION_EVENTS: list[dict[str, Any]] = [
+    {
+        "type": "user",
+        "uuid": "uuid-st-1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "message": {"role": "user", "content": "Install the update"},
+    },
+    _assistant_line(
+        "uuid-st-2",
+        "2026-01-01T00:00:01Z",
+        [
+            {"type": "text", "text": "Checks all passed. Installing now."},
+            {"type": "tool_use", "id": "toolu_st1", "name": "Read", "input": {"file_path": "/tmp/project/notes.txt"}},
+        ],
+        "tool_use",
+    ),
+    _tool_result_line("uuid-st-3", "2026-01-01T00:00:02Z", "toolu_st1", "notes"),
+    {
+        "type": "user",
+        "uuid": "uuid-st-3b",
+        "timestamp": "2026-01-01T00:00:02.5Z",
+        "message": {
+            "role": "user",
+            "content": "<background-task-report>\n<summary>Wait for the update's background agent (finished)</summary>\n"
+            "A command you started with run_in_background.py has exited.\nExit code: 0\n</background-task-report>",
+        },
+    },
+    _assistant_line(
+        "uuid-st-4",
+        "2026-01-01T00:00:03Z",
+        [
+            {
+                "type": "tool_use",
+                "id": "toolu_st2",
+                "name": "Bash",
+                "input": {"command": 'tk close ws-step-a1b2 "Installed the update."'},
+            }
+        ],
+        "tool_use",
+    ),
+    _tool_result_line(
+        "uuid-st-5",
+        "2026-01-01T00:00:04Z",
+        "toolu_st2",
+        "Updated ws-step-a1b2 -> closed\n"
+        "tk-step ws-step-a1b2 title: Install the update\n"
+        "tk-step ws-step-a1b2 summary: Installed the update.",
+    ),
+    _assistant_line(
+        "uuid-st-6",
+        "2026-01-01T00:00:05Z",
+        [{"type": "text", "text": "Your workspace is on the new version."}],
+        "end_turn",
+    ),
+]
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_stretch_of_the_agents_output_is_prose_bubbles_and_work_on_one_line(tmp_path: Path, page: Page) -> None:
+    """A stretch of the agent's output sits under one header, beside the agent's face: each message's prose a bubble
+    of its own, and its tool calls, system notices and step timeline on the bubbles' text edge between them, threaded
+    by one line through the chip icons, ticks and bullets that never crosses a bubble."""
+    with _running_e2e_server(tmp_path, session_events=_STEPPED_TURN_SESSION_EVENTS) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        bubbles = chat.locator("[data-machine-bubble]")
+        expect(bubbles).to_have_count(2, timeout=15000)
+        expect(bubbles.nth(0)).to_have_text("Checks all passed. Installing now.")
+        expect(bubbles.nth(1)).to_have_text("Your workspace is on the new version.")
+        expect(chat.locator("[data-machine-header]")).to_have_count(1)
+        expect(chat.locator(".agent-rail-segment")).to_have_count(4)
+
+        face = _box(chat.locator(".machine-face"))
+        first = _box(bubbles.nth(0))
+        assert face["right"] - face["left"] == 24, "the agent's face is not 24px wide"
+        assert abs(face["top"] - first["top"]) <= 1, "the agent's face is not level with its first bubble"
+        assert first["left"] > face["right"], "the agent's bubble starts under its face, not beside it"
+        assert bubbles.nth(0).evaluate("b => getComputedStyle(b).borderTopLeftRadius") == "4px"
+        assert bubbles.nth(1).evaluate("b => getComputedStyle(b).borderTopLeftRadius") == "18px"
+        for selector in (".tool-chip-group", ".message-notice", ".pv-tl-bullet"):
+            expect(chat.locator(f"[data-machine-bubble] {selector}")).to_have_count(0)
+
+        text_edge = first["left"] + 16
+        marks = (
+            ("the tool call's icon", chat.locator(".tool-chip-icon").first),
+            ("the background task's tick", chat.locator(".message-notice [data-rail-node]").first),
+            ("the step's bullet", chat.locator(".pv-tl-bullet [data-rail-node]").first),
+        )
+        line_x = text_edge + 6.5
+        for name, locator in marks:
+            box = _box(locator)
+            assert abs((box["left"] + box["right"]) / 2 - line_x) <= 1, f"{name} is not on the line"
+        bubble_boxes = [_box(bubbles.nth(i)) for i in range(2)]
+        for i in range(4):
+            segment = _box(chat.locator(".agent-rail-segment").nth(i))
+            assert abs((segment["left"] + segment["right"]) / 2 - line_x) <= 1, "a line segment is off the text edge"
+            for bubble in bubble_boxes:
+                assert segment["bottom"] <= bubble["top"] + 0.5 or segment["top"] >= bubble["bottom"] - 0.5, (
+                    "the line runs through a bubble"
+                )
+
+
 @pytest.mark.timeout(60, func_only=False)
 def test_live_stream_delivers_new_events(e2e_server: RunningWorkspace, page: Page) -> None:
     """New events written to the session file appear in the UI as they stream in."""
@@ -678,6 +813,31 @@ def test_queued_message_group_renders_with_actions(tmp_path: Path, page: Page) -
 
 
 @pytest.mark.timeout(60, func_only=False)
+def test_another_persons_queued_message_is_drawn_under_their_name_without_the_prefix(
+    tmp_path: Path, page: Page
+) -> None:
+    """A visitor's message the harness queued (as delivered, prefixed) is drawn on the owner's page as the turn it
+    becomes will be: under their name, beside their monogram, and never with the prefix."""
+    delivered = "[from: Bob] actually also update the changelog"
+    events = [*_QUEUED_SESSION_EVENTS[:-1], {**_QUEUED_SESSION_EVENTS[-1], "content": delivered}]
+    with _running_e2e_server(tmp_path, session_events=events) as server:
+        server.chat_state.authors.record(
+            ChatId(FIXTURE_AGENT_ID),
+            new_author_annotation("msg-bob-1", ParticipantKey("user:user-bob-4471"), "Bob", delivered),
+        )
+        _open_fixture_chat(page, server)
+
+        queued = _chat(page).locator(".queued-message", has_text="actually also update the changelog")
+        expect(queued).to_be_visible(timeout=15000)
+        expect(queued).to_have_class(re.compile(r"message-other"))
+        # Joined to Bob's annotation: the prefix alone would name a synthetic ``name:Bob``.
+        expect(queued.locator("[data-author]")).to_have_attribute("data-author", "user:user-bob-4471")
+        expect(queued.locator(".message-author")).to_have_text("Bob")
+        expect(queued.locator("[data-participant-picture]")).to_have_text("B")
+        expect(_chat(page).locator(".queued-group")).not_to_contain_text("[from:")
+
+
+@pytest.mark.timeout(60, func_only=False)
 def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page) -> None:
     """A chat whose transcript fetch failed recovers on Refresh, without reloading the page."""
     with _running_e2e_server(tmp_path) as server:
@@ -732,7 +892,8 @@ def _make_long_conversation_events(pair_count: int) -> list[dict[str, Any]]:
 
 def _visible_user_messages(page: Page) -> list[str]:
     return _chat_frame(page).evaluate(
-        "() => Array.from(document.querySelectorAll('.message-user')).map((e) => (e.textContent || '').trim())"
+        "() => Array.from(document.querySelectorAll('.message-user .message-user-bubble'))"
+        ".map((e) => (e.textContent || '').trim())"
     )
 
 
@@ -891,6 +1052,73 @@ def test_the_transcript_reaches_its_bottom_whatever_the_composer_height(tmp_path
             timeout=_TRIGGER_TIMEOUT_MS
         )
         frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+
+
+# Record the transcript's distance from its bottom each time its viewport is resized, as it will be painted: the
+# browser calls resize observers after layout and before paint, in the order they were created, so this one reads the
+# viewport after the transcript's own observer has had its turn.
+_START_RESIZE_GAP_RECORDER_JS = """
+() => {
+  const el = document.querySelector('.transcript-scroll');
+  window.__resizeGaps = [];
+  window.__resizeGapObserver = new ResizeObserver(() => {
+    window.__resizeGaps.push(el.scrollHeight - el.scrollTop - el.clientHeight);
+  });
+  window.__resizeGapObserver.observe(el);
+}
+"""
+_STOP_RESIZE_GAP_RECORDER_JS = "() => { window.__resizeGapObserver.disconnect(); return window.__resizeGaps; }"
+
+# Whether the draft is scrolled all the way down: the line holding a caret at its end, and the padding under it,
+# in view, once the edit's redraw has run (two animation frames later).
+_DRAFT_AT_BOTTOM_AFTER_REDRAW_JS = """
+async () => {
+  for (let frame = 0; frame < 2; frame++) await new Promise((resolve) => requestAnimationFrame(resolve));
+  const ta = document.querySelector('.message-input-textbox');
+  return ta.scrollTop + ta.clientHeight >= ta.scrollHeight - 1;
+}
+"""
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_typing_a_long_draft_keeps_the_transcript_and_the_caret_in_view(tmp_path: Path, page: Page) -> None:
+    """Each line the draft grows by shortens the transcript above the composer: the transcript is back at its bottom
+    before that frame is painted instead of jumping up a line, and once the draft outgrows the composer the line being
+    typed stays fully in view. A message arriving meanwhile leaves the draft where its reader scrolled it.
+    """
+    events = _make_long_conversation_events(60)
+    with _running_e2e_server(tmp_path, session_events=events) as server:
+        page.set_viewport_size({"width": 1000, "height": 720})
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        frame = _chat_frame(page)
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=15000)
+        textarea = chat.locator(".message-input-textbox")
+        textarea.click()
+
+        frame.evaluate(_START_RESIZE_GAP_RECORDER_JS)
+        for line in range(16):
+            # One edit per line, not one key event per character: typing the draft key by key outran the test's
+            # timeout in the workspace image's browser.
+            page.keyboard.insert_text(f"typed line {line} " + "lorem ipsum " * 3 + "\n")
+            assert frame.evaluate(_DRAFT_AT_BOTTOM_AFTER_REDRAW_JS), (
+                f"the line being typed is cut off after line {line}"
+            )
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        resize_gaps = frame.evaluate(_STOP_RESIZE_GAP_RECORDER_JS)
+        assert len(resize_gaps) >= 5, f"the composer grew the transcript's viewport only {len(resize_gaps)} times"
+        assert max(resize_gaps) <= 1, f"the transcript was painted off its bottom while typing: {max(resize_gaps)}px"
+        assert frame.evaluate(
+            "() => { const ta = document.querySelector('.message-input-textbox'); "
+            "return ta.scrollHeight > ta.clientHeight; }"
+        ), "the draft never outgrew the composer"
+
+        frame.evaluate("() => { document.querySelector('.message-input-textbox').scrollTop = 40; }")
+        _append_user_turn(server.session_file, "long-u-while-drafting", "arrived-while-drafting")
+        expect(chat.locator(".message-user", has_text="arrived-while-drafting")).to_be_attached(
+            timeout=_TRIGGER_TIMEOUT_MS
+        )
+        assert frame.evaluate("() => document.querySelector('.message-input-textbox').scrollTop") == 40
 
 
 def _make_long_tool_conversation_events(turn_count: int) -> list[dict[str, Any]]:
@@ -1990,6 +2218,93 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         expect(provider_row).not_to_contain_text("next message")
 
 
+# Records, on every change to a chat page, whether the message ``__watchedText`` names is on the page once it has been,
+# and whether the status row is ever drawn above it: what the page showed in its place each time, if anything.
+_RECORD_MESSAGE_GAPS_SCRIPT = """
+(() => {
+  window.__messageGaps = [];
+  window.__rowsAbove = [];
+  let isShown = false;
+  const check = () => {
+    const text = window.__watchedText;
+    if (!text || !document.querySelector(".message-list-wrapper, .message-list-not-found")) return;
+    const bubble = [...document.querySelectorAll(".outgoing-message, .held-send, .message-user")].find(
+      (element) => (element.innerText || "").includes(text),
+    );
+    if (bubble === undefined) {
+      if (isShown) window.__messageGaps.push((document.body.innerText || "").slice(0, 200));
+      return;
+    }
+    isShown = true;
+    const row = document.querySelector(".agent-activity-indicator");
+    if (row !== null && (bubble.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_PRECEDING) !== 0) {
+      window.__rowsAbove.push(row.innerText || "(dot)");
+    }
+  };
+  new MutationObserver(check).observe(document, { childList: true, subtree: true, characterData: true });
+})();
+"""
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_message_sent_during_a_switch_stays_on_the_page_while_the_switch_delivers_it(
+    tmp_path: Path, page: Page
+) -> None:
+    """A message sent while a chat switches is held, and the switch takes it off its held list as it delivers it,
+    before its turn reaches the transcript; the chat's state is pushed meanwhile. The message stays on the page
+    throughout, and the switch's status row stays below it."""
+    confirming = "Carry on on the other account"
+    follow_up = "Find what's using disk space here"
+    page.add_init_script(f"window.__watchedText = {json.dumps(follow_up)};" + _RECORD_MESSAGE_GAPS_SCRIPT)
+    is_delivering = {confirming: threading.Event(), follow_up: threading.Event()}
+    is_released = {confirming: threading.Event(), follow_up: threading.Event()}
+    messenger = HookedSendMngrMessenger()
+    with _switched_workspace(
+        tmp_path, messenger=messenger, additional_accounts=(("anthropic", "Anthropic"),)
+    ) as server:
+        manager = server.chat_state.agent_manager
+
+        def hold_delivery(sent: str) -> None:
+            if sent not in is_delivering:
+                return
+            is_delivering[sent].set()
+            is_released[sent].wait(timeout=60.0)
+
+        messenger.during_send.append(hold_delivery)
+        try:
+            _open_fixture_chat(page, server)
+            chat = _chat(page)
+            expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
+            _open_provider_menu(chat)
+            chat.locator('[data-menu-part="submenu"] button', has_text="Anthropic 2").first.click()
+            expect(chat.locator(".message-input-switch-strip")).to_contain_text("Anthropic 2 (Claude Code)")
+            _switch_and_send(chat, confirming)
+            wait_for(is_delivering[confirming].is_set, timeout=30.0, error_message="the switch never delivered")
+
+            # Sent from another window: every page shows a held send from the chat's snapshot.
+            answer = _post_chat_json(
+                server,
+                f"/api/chats/{FIXTURE_AGENT_ID}/message",
+                {"message": follow_up, "message_id": "follow-up-1"},
+                expected_status=202,
+            )
+            assert answer["status"] == "held"
+            # Holding a send pushes nothing of its own; with the delivery paused, the test stands in for the pushes
+            # a running chat makes all the time.
+            manager._broadcast_chats_updated()
+            expect(chat.locator(".held-send", has_text=follow_up)).to_have_count(1, timeout=15000)
+            is_released[confirming].set()
+
+            wait_for(is_delivering[follow_up].is_set, timeout=30.0, error_message="the follow-up was never delivered")
+            expect(chat.locator(".held-send", has_text=follow_up)).to_have_count(1, timeout=5000)
+        finally:
+            for event in is_released.values():
+                event.set()
+        frame = _chat_frame(page)
+        assert frame.evaluate("window.__messageGaps") == []
+        assert frame.evaluate("window.__rowsAbove") == []
+
+
 # A turn that failed on the chat's own credential: Claude Code's stamped login notice.
 _AUTH_FAILED_SESSION_EVENTS: list[dict[str, Any]] = [
     {
@@ -2562,6 +2877,131 @@ def test_the_phone_header_kebab_renames_the_chat_on_screen(e2e_server: RunningWo
         timeout_seconds=15.0,
         what="the chat to take the name typed in the header",
     )
+
+
+def _hold_chat_verb(page: Page, verb: str) -> list[Route]:
+    """Keep every POST of ``verb`` from reaching the chat app; the list fills with them as they are sent."""
+    held: list[Route] = []
+    page.route(f"**/api/chats/*/{verb}", lambda route: held.append(route))
+    return held
+
+
+def _refuse_held_verb(page: Page, held: list[Route], detail: str) -> None:
+    """Answer the verb ``_hold_chat_verb`` held as the chat app does a refusal.
+
+    Polled through the page: a route reaches ``held`` only while Playwright is running."""
+    for _ in range(150):
+        if held:
+            held.pop().fulfill(status=500, content_type="application/json", body=json.dumps({"detail": detail}))
+            return
+        page.wait_for_timeout(100)
+    raise TimeoutError("the verb never reached the route that holds it")
+
+
+def _expect_window_title_to_follow_a_refused_rename(page: Page, row: Locator, title: str) -> None:
+    """Rename ``row`` away from ``title``: the window takes the typed name ahead of the chat app, and a refusal gives
+    ``title`` back."""
+    expect(page).to_have_title(title, timeout=15000)
+    held = _hold_chat_verb(page, "rename")
+
+    row.dblclick()
+    field = page.locator(".chat-rail-rename-input")
+    field.fill("Typed name")
+    field.press("Enter")
+
+    expect(page).to_have_title("Typed name")
+    _refuse_held_verb(page, held, "the name is taken")
+    expect(page).to_have_title(title)
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_rename_reaches_the_window_title_before_the_chat_app_answers(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """The window takes the typed name as the list does, and gives it back on a refusal."""
+    page.goto(f"{e2e_server.chat_url}{_FIXTURE_ROOT_PATH}")
+    row = page.locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]')
+
+    _expect_window_title_to_follow_a_refused_rename(page, row, "test-agent")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_chat_with_no_agent_yet_wears_its_name_and_a_rename_in_the_window_title(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """A chat awaiting its first send has only a provisional record, whose name the window shows as the list does."""
+    e2e_server.chat_state.agent_manager.remove_agent(FIXTURE_AGENT_ID)
+    page.goto(f"{e2e_server.chat_url}/")
+    row = page.locator(".chat-rail-row")
+    expect(row).to_have_count(1, timeout=15000)
+
+    _expect_window_title_to_follow_a_refused_rename(page, row, row.locator(".chat-rail-title").inner_text())
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_deleting_the_last_chat_empties_the_list_at_once_and_a_refusal_brings_the_chat_back(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """The last chat leaves the list and the selection the moment its delete is confirmed, and no new chat is asked
+    for while the delete is on its way, since the chat could yet come back. A refusal puts it back on screen and says
+    why."""
+    dialogs: list[str] = []
+    awaiting_requests: list[str] = []
+
+    def record_and_accept(dialog: Dialog) -> None:
+        dialogs.append(dialog.message)
+        dialog.accept()
+
+    page.on("dialog", record_and_accept)
+    page.on(
+        "request",
+        lambda request: awaiting_requests.append(request.url) if request.url.endswith("/api/chats/awaiting") else None,
+    )
+    page.goto(f"{e2e_server.chat_url}{_FIXTURE_ROOT_PATH}")
+    rows = page.locator(".chat-rail-row")
+    expect(rows).to_have_count(1, timeout=15000)
+    held = _hold_chat_verb(page, "destroy")
+
+    rows.first.click(button="right")
+    page.locator('.chat-rail-menu [data-menu-row="delete"]').click()
+
+    expect(rows).to_have_count(0)
+    expect(page.locator(".chat-root-empty")).to_be_visible()
+    assert _selection_of(page.url) is None
+
+    _refuse_held_verb(page, held, "mngr failed")
+
+    expect(rows).to_have_count(1)
+    expect(page.locator(".chat-root-empty")).to_have_count(0)
+    assert _selection_of(page.url) == FIXTURE_AGENT_ID
+    assert "mngr failed" in dialogs[-1]
+    assert awaiting_requests == []
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_deleting_the_only_chat_while_it_awaits_its_first_send_opens_a_new_one(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """The chat an empty list opened can itself be deleted: the root asks again once it is gone, is handed a new chat
+    rather than that one, and the deleted chat's frame goes with it."""
+    e2e_server.chat_state.agent_manager.remove_agent(FIXTURE_AGENT_ID)
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.goto(f"{e2e_server.chat_url}/")
+    rows = page.locator(".chat-rail-row")
+    expect(rows).to_have_count(1, timeout=15000)
+    deleted_chat_id = rows.first.get_attribute("data-chat-id")
+    assert deleted_chat_id is not None
+
+    rows.first.click(button="right")
+    page.locator('.chat-rail-menu [data-menu-row="delete"]').click()
+
+    new_row = page.locator(f'.chat-rail-row:not([data-chat-id="{deleted_chat_id}"])')
+    expect(new_row).to_have_count(1, timeout=15000)
+    expect(rows).to_have_count(1)
+    new_chat_id = new_row.get_attribute("data-chat-id")
+    assert new_chat_id is not None
+    expect(page).to_have_url(f"{e2e_server.chat_url}{chat_root_path(ChatId(new_chat_id))}")
+    expect(page.locator(f'iframe.chat-root-frame[data-chat-id="{deleted_chat_id}"]')).to_have_count(0)
 
 
 @pytest.mark.timeout(60, func_only=False)

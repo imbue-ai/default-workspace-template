@@ -75,6 +75,13 @@ export interface PersonCardAttrs extends Omit<TrayCardFrameAttrs, "label"> {
   readonly onNewDesktop: () => void;
 }
 
+/** The part of an address after the @, or null when there is none to read it from. */
+export function domainOf(email: string | null): string | null {
+  if (email === null) return null;
+  const at = email.lastIndexOf("@");
+  return at === -1 || at === email.length - 1 ? null : email.slice(at + 1);
+}
+
 function statusDotClass(state: ReturnType<typeof presenceStateOf>): string {
   switch (state) {
     case "active":
@@ -117,6 +124,15 @@ export const PersonCard: m.Component<PersonCardAttrs> = {
               isVisitingAgent ? `Visiting agent · ${statusLineOf(entry, now)}` : statusLineOf(entry, now),
             ),
           ]),
+          // Nobody granted them by name: their email's domain is what lets them in, so a granter looking for
+          // them in the share panel finds the domain, not a row of their own.
+          entry.is_admitted_by_domain
+            ? m(
+                "div",
+                { class: "text-(length:--font-size-helper) text-faint", "data-tray-card-domain": "" },
+                `Here through ${domainOf(entry.email) ?? "a domain grant"}`,
+              )
+            : null,
         ]),
       ]),
       looking === null

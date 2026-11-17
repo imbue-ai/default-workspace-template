@@ -360,7 +360,7 @@ def test_write_lib_writes_a_manifest_the_library_accepts(tmp_path: Path) -> None
     assert manifest.icon == "icon.svg"
     assert manifest.priority == "user"
     assert manifest.program == "inbox-status"
-    assert manifest.default_shortcut is None
+    assert manifest.default_shortcuts == ()
     assert manifest.description == "inbox status dashboard"
     assert manifest.api_schema_path == "/api/schema"
     assert (lib_dir / "src" / "inbox_status" / "runner_test.py").exists()
@@ -444,6 +444,7 @@ def test_a_scaffolded_app_passes_its_own_tests(tmp_path: Path) -> None:
         name: value for name, value in os.environ.items() if name != "PYTEST_ADDOPTS"
     }
 
+    # import-path: no-venv -- outside a workspace the scaffolded app has no venv of its own, so its tests run from this one
     result = subprocess.run(
         [
             sys.executable,
@@ -774,7 +775,7 @@ def _workspace_for_a_real_lock(root: Path) -> Path:
     """A workspace uv can resolve a scaffolded app against, without the whole tree.
 
     The root pyproject and lock as they are, every root member's pyproject (uv reads them
-    to discover the workspace), the full source of the two libraries a scaffolded app
+    to discover the workspace), the full source of the libraries a scaffolded app
     installs, and the venv-link helper its program line runs.
     """
     root.mkdir(parents=True)
@@ -790,7 +791,12 @@ def _workspace_for_a_real_lock(root: Path) -> Path:
             shutil.copy(
                 directory / "pyproject.toml", root / relative / "pyproject.toml"
             )
-    for library in ("system/libs/app_schema", "system/libs/app_manifest"):
+    for library in (
+        "system/libs/app_schema",
+        "system/libs/app_manifest",
+        "system/libs/app_registration",
+        "system/libs/workspace_layout",
+    ):
         shutil.rmtree(root / library)
         shutil.copytree(
             _REPO_ROOT / library,

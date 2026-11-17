@@ -1,5 +1,5 @@
 /**
- * "Done in 14s", with a check, under the latest reply once the agent has finished the turn: the
+ * "Done in 14s" under the latest reply once the agent has finished the turn: the
  * explicit end the status row above it hands over to, so a finished chat never reads as one that
  * might still be going.
  *
@@ -16,10 +16,10 @@
  */
 
 import m from "mithril";
-import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { getChatById } from "../models/Chats";
 import { getOutgoingMessages, sentAtOfArrival } from "../models/OutgoingMessages";
 import { liveArrivalOfAgentWork, type TranscriptEvent } from "../models/Response";
+import { AGENT_TEXT_EDGE_CLASS } from "./machine-bubbles";
 import { formatElapsed, latestTurnSpan } from "./turnTiming";
 
 /** What the mark says for the transcript's latest turn, or null when it shows nothing. */
@@ -49,22 +49,14 @@ export function TurnDoneMark(): m.Component<{ chatId: string; events: Transcript
     view(vnode) {
       const label = turnDoneLabel(vnode.attrs.chatId, vnode.attrs.events);
       if (label === null) return null;
+      // A quiet receipt tucked just under the stretch it closes, off the line, on the bubbles' text edge.
       return m(
         "div",
         {
-          class:
-            "turn-done-mark mb-5 flex min-h-5 items-center gap-1.5 px-1 " +
-            "text-(length:--font-size-helper) text-faint",
+          class: `turn-done-mark -mt-3.5 mb-5 ${AGENT_TEXT_EDGE_CLASS} font-mono text-[11px] text-faint`,
           role: "status",
         },
-        [
-          m(
-            "span",
-            { class: "turn-done-mark__check inline-flex shrink-0" },
-            m.trust(icon("check", { size: 12, strokeWidth: 2.5 })),
-          ),
-          m("span", { class: "turn-done-mark__label" }, label),
-        ],
+        m("span", { class: "turn-done-mark__label" }, label),
       );
     },
   };

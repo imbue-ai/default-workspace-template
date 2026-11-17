@@ -40,6 +40,7 @@ from update_self_skill.update_runtime import (
 
 # The shared post-change refresh motion, repo-relative. It owns *how* a changed
 # interface is pushed to whoever is looking; this script only decides *when*.
+# own-process: other-tree -- update-self runs the refresh of whichever tree it lands on, an older release's after a rollback
 _REFRESH_SCRIPT = "system/scripts/refresh_workspace_view.py"
 
 _REFRESH_TIMEOUT_SECONDS = 120.0
@@ -478,22 +479,34 @@ def preflight(
     It boots the entry point the shell's supervisord program execs, from the
     workspace venv or, when the apply synced the merged tree into a fresh target,
     from ``venv``: the venv the services run once the link is switched to it. What
-    passes here is the install the restart then runs."""
+    passes here is the install the restart then runs.
+
+    The boot keeps its state and presence folders in a scratch directory of its own:
+    the shell resolves its default ones against its working directory, the app's
+    folder here, and writes into them as it starts, which would leave files in the
+    tree for the next apply to refuse as uncommitted changes."""
     port = find_free_port()
-    return _preflight_boot(
-        argv=[_entry_point(repo_root, SYSTEM_INTERFACE_EXECUTABLE, venv)],
-        cwd=repo_root / SYSTEM_INTERFACE_DIR,
-        env_overrides={
-            "SYSTEM_INTERFACE_HOST": "127.0.0.1",
-            "SYSTEM_INTERFACE_PORT": str(port),
-        },
-        health_url=f"http://127.0.0.1:{port}{HEALTH_PATH}",
-        what="the merged backend",
-        http=http,
-        spawner=spawner,
-        sleeper=sleeper,
-        expend=expend,
-    )
+    with tempfile.TemporaryDirectory(prefix="shell-preflight-") as scratch:
+        return _preflight_boot(
+            argv=[
+                _entry_point(repo_root, SYSTEM_INTERFACE_EXECUTABLE, venv),
+                "--state-dir",
+                str(Path(scratch) / "state"),
+                "--presence-dir",
+                str(Path(scratch) / "presence"),
+            ],
+            cwd=repo_root / SYSTEM_INTERFACE_DIR,
+            env_overrides={
+                "SYSTEM_INTERFACE_HOST": "127.0.0.1",
+                "SYSTEM_INTERFACE_PORT": str(port),
+            },
+            health_url=f"http://127.0.0.1:{port}{HEALTH_PATH}",
+            what="the merged backend",
+            http=http,
+            spawner=spawner,
+            sleeper=sleeper,
+            expend=expend,
+        )
 
 
 def preflight_chat(

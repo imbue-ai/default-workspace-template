@@ -7,8 +7,10 @@ renderers, and the file locks every writer of them holds:
   the workspace (or one of its apps) with: user ids, invited emails, and email
   domains, per scope (`share_gateway/README.md`, "Grants"). `parse_grants`,
   `render_grants`, the invite upgrade that turns an admitted email into its
-  user id, `locked_grants_file`, and the query for which apps the document
-  shares on their own (`Grants.granted_app_names`).
+  user id, `locked_grants_file`, the query for which apps the document
+  shares on their own (`Grants.granted_app_names`), and the domain match on
+  its own (`GrantList.allows_email_domain`, which the shell's roster lists
+  the people a domain grant admitted by).
 - `agent_grants` -- `data/.secrets/agent_access/grants.toml` and
   `invites.toml`, the visiting agents admitted by a bearer token and the
   one-time codes they join with (`share_gateway/README.md`, "Visiting

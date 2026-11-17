@@ -99,7 +99,7 @@ RUNNING_LIFECYCLE_STATES: frozenset[str] = frozenset({"RUNNING", "RUNNING_UNKNOW
 # mngr's lifecycle reports RUNNING iff this marker file exists in the agent state dir while
 # the process is alive; every harness's plugin writes the same filename. Reading it directly
 # is a *timely* alternative to the observe-reported lifecycle state (see
-# :func:`resolve_is_agent_running`).
+# :func:`resolve_is_turn_in_flight`).
 ACTIVE_MARKER_FILENAME: str = "active"
 
 # The lifecycle state of an alive-but-idle agent (between turns). This is the ONLY state where
@@ -107,6 +107,12 @@ ACTIVE_MARKER_FILENAME: str = "active"
 # marker before the observe stream reports RUNNING, leaving the reported state at WAITING the
 # whole time.
 WAITING_LIFECYCLE_STATE: str = "WAITING"
+
+# The lifecycle of an agent whose turn ended while work it declared is still outstanding: a
+# background command, a subagent, a monitor. Alive, and the next thing to move it is that work
+# rather than the user -- but no turn is in flight, so this is deliberately not one of
+# RUNNING_LIFECYCLE_STATES, which answers that narrower question.
+BACKGROUND_LIFECYCLE_STATE: str = "RUNNING_BACKGROUND"
 
 # The lifecycle of an agent whose process exited while its tmux pane lives on: a crash, a kill, an
 # out-of-memory shed of the process. A deliberate stop takes the pane with it and reads STOPPED.
@@ -123,31 +129,38 @@ UNKNOWN_LIFECYCLE_STATE: str = "UNKNOWN"
 def is_lifecycle_dead(lifecycle_state: str) -> bool:
     """True iff the observe-reported lifecycle positively says the agent process is dead.
 
-    Dead is everything outside the RUNNING states, WAITING (alive between turns), and
-    UNKNOWN (unobservable -- non-evidence, never treated as death). A dead process's
+    Dead is everything outside the RUNNING states, WAITING (alive between turns),
+    RUNNING_BACKGROUND (alive, carrying work past its turn), and UNKNOWN (unobservable --
+    non-evidence, never treated as death). A dead process's
     in-memory queue and in-flight turn died with it, so its activity must settle to IDLE
     no matter what the transcript tail says; the manager applies that override in
     ``_recompute_activity_state``.
     """
     if lifecycle_state in RUNNING_LIFECYCLE_STATES:
         return False
-    if lifecycle_state == WAITING_LIFECYCLE_STATE:
+    if lifecycle_state in (WAITING_LIFECYCLE_STATE, BACKGROUND_LIFECYCLE_STATE):
         return False
     return lifecycle_state != UNKNOWN_LIFECYCLE_STATE
 
 
 @pure
-def resolve_is_agent_running(lifecycle_state: str, is_active_marker_present: bool) -> bool:
+def resolve_is_turn_in_flight(lifecycle_state: str, is_active_marker_present: bool) -> bool:
     """Whether the agent has a turn in flight, preferring the ``active`` marker over the
     (laggy) observe-reported lifecycle state.
 
     RUNNING states are authoritative. In the alive-but-idle WAITING state the marker breaks the
     tie: the observe stream can miss a short turn, so the reported state stays WAITING while the
     marker itself flips promptly -- trust the marker there. Any other state (STOPPED / EXITED /
-    ...) reads as not running, so a hard-crashed agent's stale marker is never mistaken for a
-    live turn. Each harness's plugin also clears the marker at launch, so a
-    marker outliving its process cannot be mistaken for a live turn by anything that reads it
-    directly either.
+    ...) reads as no turn, so a hard-crashed agent's stale marker is never mistaken for a live
+    turn. Each harness's plugin also clears the marker at launch, so a marker outliving its
+    process cannot be mistaken for a live turn by anything that reads it directly either.
+
+    RUNNING_BACKGROUND reads as no turn in flight, which is the point of it: that agent's turn
+    has ended, and work it left behind will start the next one. Whether it is alive at all is
+    :func:`is_lifecycle_dead`'s question, not this one's.
+
+    Not to be confused with ``is_turn_in_flight``, which asks the same of an already-derived
+    ``ActivityState``; this one resolves the two raw signals it is derived from.
     """
     if lifecycle_state in RUNNING_LIFECYCLE_STATES:
         return True

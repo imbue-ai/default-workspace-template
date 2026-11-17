@@ -56,10 +56,14 @@ from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import builtin_chat_row_toml
 from imbue.system_interface.shell.testing import builtin_registry_rows
 from imbue.system_interface.shell.testing import builtin_rows_toml_before_chat
-from imbue.system_interface.shell.testing import read_default_shortcuts_offered
+from imbue.system_interface.shell.testing import default_target_pairs
+from imbue.system_interface.shell.testing import offered_targets_recorded
 from imbue.system_interface.shell.testing import read_desktops_file_in_its_released_shape
 from imbue.system_interface.shell.testing import registry_row_toml
+from imbue.system_interface.shell.testing import screen_row_toml
 from imbue.system_interface.shell.testing import shortcut_apps_on
+from imbue.system_interface.shell.testing import shortcut_at
+from imbue.system_interface.shell.testing import targets_and_cells
 from imbue.system_interface.shell.testing import window_record
 from imbue.system_interface.shell.testing import write_desktops_file
 from imbue.system_interface.shell.testing import write_registry
@@ -84,19 +88,19 @@ def test_the_default_desktop_is_created_once_on_the_first_read_that_may_seed(tmp
     # A later read with another seed keeps what was written.
     assert store.ensure_default(lambda: ()) == seeded
     assert json.loads((tmp_path / "desktops.json").read_text())["version"] == 1
-    # The apps of the seeded shortcuts are recorded as offered.
-    assert read_default_shortcuts_offered(tmp_path) == {"version": 1, "apps": ["chat"]}
+    # The targets of the seeded shortcuts are recorded as offered.
+    assert offered_targets_recorded(tmp_path) == [("chat", "new")]
 
 
 def test_a_late_apps_default_shortcut_is_offered_once_on_every_desktop_and_a_removal_sticks(tmp_path: Path) -> None:
     before_chat, with_chat = builtin_registry_rows(tmp_path / "registry")
     store = DesktopStore(state_directory=tmp_path)
     store.ensure_default(lambda: seed_desktop_shortcuts(before_chat))
-    store.create_desktop("Work", "#111111", 1, seed_desktop_shortcuts(before_chat), (), None)
+    store.create_desktop("Work", "#111111", 1, seed_desktop_shortcuts(before_chat), (), None, before_chat)
     rearranged = store.move_shortcut("work", AppName("files"), LaunchPathId("new"), GridCell(column=0, row=3))
-    assert store.ensure_default_shortcuts_offered(before_chat).is_written is False
+    assert store.reconcile_shortcuts_with(before_chat).is_written is False
 
-    offered = store.ensure_default_shortcuts_offered(with_chat)
+    offered = store.reconcile_shortcuts_with(with_chat)
 
     assert offered.is_written is True
     home, work = offered.desktops
@@ -105,18 +109,14 @@ def test_a_late_apps_default_shortcut_is_offered_once_on_every_desktop_and_a_rem
     assert work.shortcuts[:-1] == rearranged.shortcuts
     assert (shortcut_apps_on(work)[-1], work.shortcuts[-1].cell) == ("chat", next_shortcut_cell(rearranged))
     assert store.list_desktops() == list(offered.desktops)
-    assert read_default_shortcuts_offered(tmp_path) == {
-        "version": 1,
-        "apps": sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT),
-    }
+    assert offered_targets_recorded(tmp_path) == default_target_pairs(with_chat)
     stamp = (tmp_path / "desktops.json").stat().st_mtime_ns
-    assert store.ensure_default_shortcuts_offered(with_chat).is_written is False
+    assert store.reconcile_shortcuts_with(with_chat).is_written is False
     assert (tmp_path / "desktops.json").stat().st_mtime_ns == stamp
 
-    # A shortcut the user removes stays removed, the app's rows deregistered and registered again included.
+    # A shortcut the user removes stays removed while its app stays registered.
     store.remove_shortcut("home", AppName("chat"), LaunchPathId("root"))
-    for rows in (with_chat, before_chat, with_chat):
-        assert store.ensure_default_shortcuts_offered(rows).is_written is False
+    assert store.reconcile_shortcuts_with(with_chat).is_written is False
     assert "chat" not in shortcut_apps_on(store.list_desktops()[0])
 
 
@@ -137,23 +137,159 @@ def test_a_workspaces_own_apps_are_added_once_to_every_desktop_and_a_removal_sti
     )
     store = DesktopStore(state_directory=tmp_path / "state")
     store.ensure_default(lambda: seed_desktop_shortcuts(with_chat))
-    store.create_desktop("Work", "#111111", 1, seed_desktop_shortcuts(with_chat), (), None)
+    store.create_desktop("Work", "#111111", 1, seed_desktop_shortcuts(with_chat), (), None, with_chat)
 
-    offered = store.ensure_default_shortcuts_offered(with_own_apps)
+    offered = store.reconcile_shortcuts_with(with_own_apps)
 
     assert offered.is_written is True
     for desktop in offered.desktops:
         assert shortcut_apps_on(desktop) == (*BUILTIN_SHORTCUT_APPS_WITH_CHAT, "notes", "recipes")
-    assert read_default_shortcuts_offered(tmp_path / "state")["apps"] == sorted(
-        (*BUILTIN_SHORTCUT_APPS_WITH_CHAT, "notes", "recipes")
-    )
+    assert offered_targets_recorded(tmp_path / "state") == default_target_pairs(with_own_apps)
 
     store.remove_shortcut("home", AppName("notes"), LaunchPathId("open"))
-    assert store.ensure_default_shortcuts_offered(with_own_apps).is_written is False
+    assert store.reconcile_shortcuts_with(with_own_apps).is_written is False
     assert "notes" not in shortcut_apps_on(store.list_desktops()[0])
 
 
-@pytest.mark.parametrize("offered_record_text", [None, '{"version": 2, "apps": []}', '{"version": 1}', "not json"])
+def test_a_workspace_updated_off_the_browser_app_trades_its_browser_shortcut_for_the_screens(tmp_path: Path) -> None:
+    """A workspace that ran the browser app, as the update to the Screen leaves it: desktops arranged by hand holding
+    the browser's shortcut, the Screen's one shortcut already added, and a record of apps. The browser's shortcut goes,
+    the Screen's Browser shortcut lands at the next free cell, nothing else moves or is added (the chat counts as
+    offered though the desktop holds a shortcut of another launch path of it), and the record is rewritten as
+    targets."""
+    rows = read_registry(
+        write_registry(
+            tmp_path / "registry" / "apps.toml",
+            builtin_chat_row_toml(),
+            registry_row_toml(
+                "files",
+                "http://localhost:7000",
+                program="files",
+                launcher_rank=20,
+                default_shortcuts=[("new", "new")],
+                launch_paths=[("new", "Files", "/")],
+            ),
+            screen_row_toml([("screen", "focus"), ("browser", "focus")]),
+            registry_row_toml("notes", "http://localhost:8100", program="notes"),
+        )
+    )
+    state_directory = tmp_path / "state"
+    arranged = (
+        shortcut_at("chat", "new", 0, 0),
+        shortcut_at("browser", "new", 0, 1),
+        shortcut_at("files", "new", 0, 2),
+        shortcut_at("notes", "open", 1, 0),
+        shortcut_at("screen", "screen", 2, 1),
+    )
+    home = default_desktop(arranged)
+    work = home.model_copy_update(
+        to_update(home.field_ref().id, DesktopId("work")), to_update(home.field_ref().name, "Work")
+    )
+    write_desktops_file(state_directory, home, work)
+    (state_directory / DEFAULT_SHORTCUTS_OFFERED_FILENAME).write_text(
+        json.dumps({"version": 1, "apps": ["browser", "chat", "files", "notes", "screen"]})
+    )
+    store = DesktopStore(state_directory=state_directory)
+
+    reconciled = store.reconcile_shortcuts_with(rows)
+
+    assert reconciled.is_written is True
+    for desktop in reconciled.desktops:
+        assert targets_and_cells(desktop) == [
+            ("chat", "new", 0, 0),
+            ("files", "new", 0, 2),
+            ("notes", "open", 1, 0),
+            ("screen", "screen", 2, 1),
+            ("screen", "browser", 2, 0),
+        ]
+    assert offered_targets_recorded(state_directory) == default_target_pairs(rows)
+    assert read_desktops_file_in_its_released_shape(state_directory) == reconciled.desktops
+    stamp = (state_directory / "desktops.json").stat().st_mtime_ns
+    assert store.reconcile_shortcuts_with(rows).is_written is False
+    assert (state_directory / "desktops.json").stat().st_mtime_ns == stamp
+
+
+def test_an_app_that_leaves_the_registry_loses_its_shortcuts_and_is_offered_them_again_when_it_returns(
+    tmp_path: Path,
+) -> None:
+    _, with_chat = builtin_registry_rows(tmp_path / "registry")
+    without_files = read_registry(
+        write_registry(
+            tmp_path / "registry" / "without_files.toml",
+            *(row for row in builtin_rows_toml_before_chat() if 'name = "files"' not in row),
+            builtin_chat_row_toml(),
+        )
+    )
+    store = DesktopStore(state_directory=tmp_path / "state")
+    store.ensure_default(lambda: seed_desktop_shortcuts(with_chat))
+    store.create_desktop("Work", "#111111", 1, seed_desktop_shortcuts(with_chat), (), None, with_chat)
+
+    dropped = store.reconcile_shortcuts_with(without_files)
+
+    assert dropped.is_written is True
+    for desktop in dropped.desktops:
+        assert "files" not in shortcut_apps_on(desktop)
+    assert ("files", "new") not in offered_targets_recorded(tmp_path / "state")
+    assert store.reconcile_shortcuts_with(without_files).is_written is False
+
+    returned = store.reconcile_shortcuts_with(with_chat)
+
+    assert returned.is_written is True
+    for before, after in zip(dropped.desktops, returned.desktops, strict=True):
+        assert after.shortcuts[:-1] == before.shortcuts
+        assert (shortcut_apps_on(after)[-1], after.shortcuts[-1].cell) == ("files", next_shortcut_cell(before))
+    assert offered_targets_recorded(tmp_path / "state") == default_target_pairs(with_chat)
+
+
+def test_an_app_that_returns_is_offered_only_the_shortcuts_it_lost_not_one_the_user_removed(tmp_path: Path) -> None:
+    with_screen = read_registry(
+        write_registry(
+            tmp_path / "registry" / "apps.toml",
+            builtin_chat_row_toml(),
+            screen_row_toml([("screen", "focus"), ("browser", "focus")]),
+        )
+    )
+    without_screen = read_registry(write_registry(tmp_path / "registry" / "chat_only.toml", builtin_chat_row_toml()))
+    store = DesktopStore(state_directory=tmp_path / "state")
+    store.ensure_default(lambda: seed_desktop_shortcuts(with_screen))
+    store.remove_shortcut("home", AppName("screen"), LaunchPathId("browser"))
+
+    assert store.reconcile_shortcuts_with(without_screen).is_written is True
+    (returned,) = store.reconcile_shortcuts_with(with_screen).desktops
+
+    assert [(app, launch) for app, launch, _, _ in targets_and_cells(returned)] == [
+        ("chat", "root"),
+        ("screen", "screen"),
+    ]
+    assert offered_targets_recorded(tmp_path / "state") == default_target_pairs(with_screen)
+
+
+def test_a_registry_with_no_rows_drops_no_shortcut(tmp_path: Path) -> None:
+    """An empty read is a registry nothing has registered in yet (or one that was removed), never every app retired."""
+    _, with_chat = builtin_registry_rows(tmp_path / "registry")
+    store = DesktopStore(state_directory=tmp_path / "state")
+    seeded = store.ensure_default(lambda: seed_desktop_shortcuts(with_chat))
+    store.reconcile_shortcuts_with(with_chat)
+    recorded = offered_targets_recorded(tmp_path / "state")
+
+    outcome = store.reconcile_shortcuts_with([])
+
+    assert outcome.is_written is False
+    assert store.list_desktops() == seeded
+    assert offered_targets_recorded(tmp_path / "state") == recorded
+    # With no record either, it writes none, so the next reconcile with rows counts the desktops' apps as offered.
+    offered_path = tmp_path / "state" / DEFAULT_SHORTCUTS_OFFERED_FILENAME
+    offered_path.unlink()
+    store.reconcile_shortcuts_with([])
+    assert not offered_path.exists()
+    assert store.reconcile_shortcuts_with(with_chat).is_written is False
+    assert offered_targets_recorded(tmp_path / "state") == recorded
+
+
+@pytest.mark.parametrize(
+    "offered_record_text",
+    [None, '{"version": 3, "targets": []}', '{"version": 2, "apps": []}', '{"version": 1}', "not json"],
+)
 def test_a_desktops_file_with_no_usable_offered_record_counts_its_shortcuts_as_offered(
     tmp_path: Path, offered_record_text: str | None
 ) -> None:
@@ -167,30 +303,65 @@ def test_a_desktops_file_with_no_usable_offered_record_counts_its_shortcuts_as_o
         (state_directory / DEFAULT_SHORTCUTS_OFFERED_FILENAME).write_text(offered_record_text)
     store = DesktopStore(state_directory=state_directory)
 
-    offered = store.ensure_default_shortcuts_offered(with_chat)
+    offered = store.reconcile_shortcuts_with(with_chat)
 
     assert offered.is_written is True
     assert shortcut_apps_on(offered.desktops[0]) == BUILTIN_SHORTCUT_APPS_WITH_CHAT
-    assert read_default_shortcuts_offered(state_directory)["apps"] == sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT)
+    assert offered_targets_recorded(state_directory) == default_target_pairs(with_chat)
     assert read_desktops_file_in_its_released_shape(state_directory) == offered.desktops
 
 
-def test_a_created_or_added_desktop_records_the_apps_of_its_default_shortcuts(tmp_path: Path) -> None:
+def test_a_created_or_added_desktop_records_the_targets_of_its_default_shortcuts(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
-    store.create_desktop("Alpha", "#111111", 1, _SEED, (), None)
-    assert read_default_shortcuts_offered(tmp_path)["apps"] == ["chat"]
-    store.add_desktop(default_desktop(()), {AppName("files")})
-    assert read_default_shortcuts_offered(tmp_path)["apps"] == ["chat", "files"]
+    store.create_desktop("Alpha", "#111111", 1, _SEED, (), None, ())
+    assert offered_targets_recorded(tmp_path) == [("chat", "new")]
+    store.add_desktop(default_desktop(()), {ShortcutTarget(app=AppName("files"), launch=LaunchPathId("new"))}, ())
+    assert offered_targets_recorded(tmp_path) == [("chat", "new"), ("files", "new")]
 
 
 def test_a_desktop_added_before_any_offered_record_starts_it_from_the_shortcuts_already_there(tmp_path: Path) -> None:
-    store = DesktopStore(state_directory=tmp_path)
+    """An app with a shortcut on a desktop counts as offered its first default shortcut, whichever it holds."""
+    _, with_chat = builtin_registry_rows(tmp_path / "registry")
+    store = DesktopStore(state_directory=tmp_path / "state")
     store.ensure_default(lambda: _SEED)
-    (tmp_path / DEFAULT_SHORTCUTS_OFFERED_FILENAME).unlink()
+    (tmp_path / "state" / DEFAULT_SHORTCUTS_OFFERED_FILENAME).unlink()
 
-    store.create_desktop("Alpha", "#111111", 1, (), (), None)
+    store.create_desktop("Alpha", "#111111", 1, (), (), None, with_chat)
 
-    assert read_default_shortcuts_offered(tmp_path)["apps"] == ["chat"]
+    assert offered_targets_recorded(tmp_path / "state") == [("chat", "root")]
+
+
+@pytest.mark.parametrize(
+    "offered_record_text",
+    [None, json.dumps({"version": 1, "apps": sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT)})],
+)
+def test_a_desktop_added_before_the_registry_is_read_leaves_the_offered_record_for_the_next_reconcile(
+    tmp_path: Path, offered_record_text: str | None
+) -> None:
+    """With no rows there is nothing to start a missing record over from, nor to read a record of apps as targets, so
+    the record is left as it is, whatever the new desktop holds: the next reconcile with rows still counts what was
+    offered and a shortcut the user removed from one desktop stays removed."""
+    before_chat, with_chat = builtin_registry_rows(tmp_path / "registry")
+    store = DesktopStore(state_directory=tmp_path / "state")
+    store.ensure_default(lambda: seed_desktop_shortcuts(with_chat))
+    store.create_desktop("Work", "#111111", 1, seed_desktop_shortcuts(with_chat), (), None, with_chat)
+    store.remove_shortcut("home", AppName("chat"), LaunchPathId("root"))
+    offered_path = tmp_path / "state" / DEFAULT_SHORTCUTS_OFFERED_FILENAME
+    if offered_record_text is None:
+        offered_path.unlink()
+    else:
+        offered_path.write_text(offered_record_text)
+
+    store.create_desktop("Alpha", "#222222", 2, seed_desktop_shortcuts(before_chat), (), None, ())
+
+    if offered_record_text is None:
+        assert not offered_path.exists()
+    else:
+        assert offered_path.read_text() == offered_record_text
+    home, _, alpha = store.reconcile_shortcuts_with(with_chat).desktops
+    assert "chat" not in shortcut_apps_on(home)
+    assert alpha.shortcuts == seed_desktop_shortcuts(before_chat)
+    assert offered_targets_recorded(tmp_path / "state") == default_target_pairs(with_chat)
 
 
 def _delete_file(path: Path) -> None:
@@ -219,14 +390,14 @@ def test_seeding_the_default_desktop_again_starts_the_offered_record_over(
     state_directory = tmp_path / "state"
     store = DesktopStore(state_directory=state_directory)
     store.ensure_default(lambda: seed_desktop_shortcuts(before_chat))
-    store.ensure_default_shortcuts_offered(with_chat)
-    assert read_default_shortcuts_offered(state_directory)["apps"] == sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT)
+    store.reconcile_shortcuts_with(with_chat)
+    assert offered_targets_recorded(state_directory) == default_target_pairs(with_chat)
     spoil_desktops_file(state_directory / "desktops.json")
 
     (home,) = store.ensure_default(lambda: seed_desktop_shortcuts(before_chat))
 
-    assert read_default_shortcuts_offered(state_directory)["apps"] == sorted(shortcut_apps_on(home))
-    offered = store.ensure_default_shortcuts_offered(with_chat)
+    assert offered_targets_recorded(state_directory) == default_target_pairs(before_chat)
+    offered = store.reconcile_shortcuts_with(with_chat)
     assert offered.is_written is True
     assert offered.desktops[0].shortcuts == seed_desktop_shortcuts(with_chat)
 
@@ -236,9 +407,9 @@ def test_a_desktop_added_where_no_desktop_stands_starts_the_offered_record_over(
     store.ensure_default(lambda: _SEED)
     (tmp_path / "desktops.json").unlink()
 
-    store.create_desktop("Alpha", "#111111", 1, (), (), None)
+    store.create_desktop("Alpha", "#111111", 1, (), (), None, ())
 
-    assert read_default_shortcuts_offered(tmp_path)["apps"] == []
+    assert offered_targets_recorded(tmp_path) == []
 
 
 def _seed_the_default_desktop(store: DesktopStore) -> None:
@@ -246,7 +417,7 @@ def _seed_the_default_desktop(store: DesktopStore) -> None:
 
 
 def _create_a_desktop(store: DesktopStore) -> None:
-    store.create_desktop("Alpha", "#111111", 1, _SEED, (), None)
+    store.create_desktop("Alpha", "#111111", 1, _SEED, (), None, ())
 
 
 @pytest.mark.parametrize("make_a_desktop_where_none_stands", [_seed_the_default_desktop, _create_a_desktop])
@@ -269,7 +440,7 @@ def test_with_no_desktop_nothing_is_offered_or_recorded(tmp_path: Path) -> None:
     _, with_chat = builtin_registry_rows(tmp_path / "registry")
     store = DesktopStore(state_directory=tmp_path / "state")
 
-    outcome = store.ensure_default_shortcuts_offered(with_chat)
+    outcome = store.reconcile_shortcuts_with(with_chat)
 
     assert outcome.is_written is False and outcome.desktops == ()
     assert not (tmp_path / "state").exists()
@@ -278,7 +449,7 @@ def test_with_no_desktop_nothing_is_offered_or_recorded(tmp_path: Path) -> None:
 def test_pinned_windows_are_reconciled_across_every_desktop_and_written_only_on_a_change(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
     store.ensure_default(lambda: ())
-    store.create_desktop("Alpha", "#111111", 1, (), (), None)
+    store.create_desktop("Alpha", "#111111", 1, (), (), None, ())
     pin = AppPin(app=AppName("chat"), pin=Pin(path=LaunchPathValue("/")))
     ensured = store.ensure_pinned_windows([pin], TEST_NOW)
     assert ensured.is_written is True
@@ -292,7 +463,7 @@ def test_pinned_windows_are_reconciled_across_every_desktop_and_written_only_on_
     assert withdrawn.is_written is True
     assert all(desktop.windows[0].is_pinned is False for desktop in withdrawn.desktops)
     # A pinned window is born with a new desktop when the caller hands it over.
-    born = store.create_desktop("Beta", "#222222", 2, (), (ensured.desktops[0].windows[0],), None)
+    born = store.create_desktop("Beta", "#222222", 2, (), (ensured.desktops[0].windows[0],), None, ())
     assert born.windows == (ensured.desktops[0].windows[0],)
 
 
@@ -308,14 +479,14 @@ def test_a_file_of_another_version_or_shape_is_treated_as_absent(tmp_path: Path)
 def test_a_desktop_made_again_never_wears_a_theme_its_id_left_behind(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
     store.ensure_default(lambda: ())
-    store.create_desktop("Research", "#12B5A5", 4, (), (), None)
+    store.create_desktop("Research", "#12B5A5", 4, (), (), None, ())
     store.set_default_theme(ThemeId("mac-classic"))
     store.set_theme("home", ThemeId("windows-2000"))
     store.set_theme("research", ThemeId("windows-2000"))
     # A shell from before themes deletes the desktop without knowing desktop_themes.json.
     write_desktops_file(tmp_path, *(desktop for desktop in store.list_desktops() if desktop.id != "research"))
 
-    store.create_desktop("Research", "#12B5A5", 4, (), (), None)
+    store.create_desktop("Research", "#12B5A5", 4, (), (), None, ())
     assert store.read_theme_choices() == ThemeChoices(
         default=ThemeId("mac-classic"), theme_by_desktop_id={DesktopId("home"): ThemeId("windows-2000")}
     )
@@ -328,14 +499,14 @@ def test_a_desktop_made_again_never_wears_a_theme_its_id_left_behind(tmp_path: P
 def test_desktops_are_created_settled_and_deleted_with_the_last_one_refused(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
     home = store.ensure_default(lambda: ())[0]
-    research = store.create_desktop("Research!", "#12B5A5", 4, _SEED, (), None)
+    research = store.create_desktop("Research!", "#12B5A5", 4, _SEED, (), None, ())
     assert research.id == "research" and research.shortcuts == _SEED
     with pytest.raises(DesktopConflictError):
-        store.create_desktop("research", "#12B5A5", 4, (), (), None)
+        store.create_desktop("research", "#12B5A5", 4, (), (), None, ())
     with pytest.raises(DesktopValueError):
-        store.create_desktop("Bad", "red", 4, (), (), None)
+        store.create_desktop("Bad", "red", 4, (), (), None, ())
     with pytest.raises(DesktopValueError):
-        store.create_desktop("Bad", "#12B5A5", 12, (), (), None)
+        store.create_desktop("Bad", "#12B5A5", 12, (), (), None, ())
     with pytest.raises(DesktopValueError):
         slugify_desktop_name("!!!")
     settled = store.update_settings("research", "Research 2", "#222222", 2)
@@ -409,7 +580,7 @@ def test_shortcuts_are_set_moved_and_removed(tmp_path: Path) -> None:
 
 def test_a_clients_active_desktop_falls_back_from_its_desktop_to_the_first(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
-    home, alpha = store.ensure_default(lambda: ())[0], store.create_desktop("Alpha", "#111111", 1, (), (), None)
+    home, alpha = store.ensure_default(lambda: ())[0], store.create_desktop("Alpha", "#111111", 1, (), (), None, ())
     desktops = [home, alpha]
     assert resolve_active_desktop(None, desktops) == home.id
     assert resolve_active_desktop(None, []) is None
@@ -496,9 +667,9 @@ def test_reordering_moves_the_requesters_own_desktops_and_leaves_the_others_in_p
     the places their desktops held; an order naming any other desktop, or not every one of theirs, is refused."""
     store = DesktopStore(state_directory=tmp_path)
     store.ensure_default(lambda: ())
-    store.create_desktop("Alpha", "#111111", 1, (), (), ParticipantKey("user:user-alice"))
-    store.create_desktop("Beta", "#222222", 2, (), (), None)
-    store.create_desktop("Gamma", "#333333", 3, (), (), None)
+    store.create_desktop("Alpha", "#111111", 1, (), (), ParticipantKey("user:user-alice"), ())
+    store.create_desktop("Beta", "#222222", 2, (), (), None, ())
+    store.create_desktop("Gamma", "#333333", 3, (), (), None, ())
     owner = RequestIdentity(owner=True)
     alice = RequestIdentity(owner=False, user_id="user-alice", email="alice@example.com")
     reordered = store.reorder_desktops([DesktopId("gamma"), DesktopId("home"), DesktopId("beta")], owner)

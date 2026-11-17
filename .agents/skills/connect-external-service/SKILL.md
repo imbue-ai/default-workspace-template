@@ -18,15 +18,17 @@ explain; do not ask them to choose a mechanism.
 | # | Method | Workable when | What you say | Read |
 |---|---|---|---|---|
 | 1 | **Builtin latchkey service** | `latchkey services list` names the service, possibly under a name other than the product's (Notion is `notion-mcp`); `latchkey services info <name>` gives auth options and status. | "I'll use your connected Slack account." | `references/latchkey.md` |
-| 2 | **Custom latchkey service, with a key** | The API is HTTPS and takes a key the user can copy from their account settings as one header (`Authorization: Bearer <token>`, or a named header via `payload.header`). A key that goes in the query string, a signature scheme, or two values that must be combined are NOT workable here. | "I'll ask you to approve a connection to api.example.com and paste its API key into the approval window; the key stays in Imbue Studio's credential store." | `references/latchkey.md`, "Custom services" |
-| 3 | **Official MCP server** | The service itself publishes an MCP server: its docs link to it, or it lives in the service's own GitHub organization. Local or hosted, key or OAuth sign-in, all equally fine. Anyone else's server is never run. | "Example has its own connector, so I'll set that up; it needs you to sign in to Example once." | `references/mcp.md` |
+| 2 | **Official MCP server** | The service itself hosts an MCP server (its docs link to it, or it lives in the service's own GitHub organization) **and** the server's OAuth metadata publishes a `registration_endpoint`, so latchkey can register itself as a client; `references/mcp.md` shows how to check that with no credential. A server that wants a client registered by hand is not this row, and neither is one that takes a key in a header (that is row 3's request on the server's domain). Anyone else's server is never used, and a server published as a package to run here is not this row (it only calls the service's API, which rows 3 and 5 reach). The server is a custom latchkey service, signed in through its own OAuth (the `mcp` login flow), so its credential stays in Imbue Studio's credential store. Never a harness's own MCP config. | "Example has its own connector; I'll ask you to approve the connection and sign in to Example once, in a window Imbue Studio opens on your computer." | `references/mcp.md` |
+| 3 | **Custom latchkey service, with a key** | The API is HTTPS and takes a key the user can copy from their account settings as one header (`Authorization: Bearer <token>`, or a named header via `payload.header`). A key that goes in the query string, a signature scheme, or two values that must be combined are NOT workable here. | "I'll ask you to approve a connection to api.example.com and paste its API key into the approval window; the key stays in Imbue Studio's credential store." | `references/latchkey.md`, "Custom services" |
 | 4 | **Custom latchkey service, with a sign-in** | No key works (the documented API needs a registered OAuth app, or there is none), but the service's own website loads its data from endpoints its sign-in authorises: `cookie-capture` when the session cookie is the credential, `token-capture` when the page fetches a bearer token from an endpoint of its own. | "I'll ask you to sign in to Example once, in a window Imbue Studio opens on your computer; your session stays in Imbue Studio's credential store." | `references/latchkey.md`, "Signing in instead of a key" |
 | 5 | **Direct API** | An official SDK, CLI, or documented HTTP API takes a key the user can copy from their account settings. An API that needs an OAuth app registration is workable too, but offered as the more technical option, with row 6 the default. | "Example has an API; I'll ask you for its key and call it from here." | `references/direct-api.md` |
 | 6 | **Browser** | Always. Sign-ins, CAPTCHAs, and two-factor prompts go to the user through `handoff`. | "I'll drive a browser you can watch and take over." | the `agentic-browser-fleet` skill |
 
-A row's test is cheap on purpose: run `latchkey services list` and `mcpc`
-(which lists the MCP connections this workspace already has) first, then look
-at the service's docs for the shape its API takes. Do not run the whole
+A row's test is cheap on purpose: run `latchkey services list` (which also
+names the hosted MCP servers latchkey knows, builtin or connected earlier)
+first, then look at the service's docs for the shape its API takes. Row 2's
+test is two credential-free `curl`s of the server's metadata, which say
+whether it registers clients itself; the docs rarely do. Do not run the whole
 table when an earlier row is plainly workable. The one test the docs do not
 answer is row 4's: when they rule out a key, ask what the service's own website
 calls once you are signed in, which they never mention.
@@ -44,8 +46,8 @@ explanation, try the row, and move to the next one when it actually fails.
   (registering an OAuth app for row 5 versus driving the browser for row 6),
   default to the browser and mention the OAuth alternative in one line.
 - **A credential value never enters a command, a file you write, or your prose.**
-  Rows 1, 2 and 4 keep the value in Imbue Studio's credential store and inject it at the
-  gateway. Rows 3 and 5 take a key through the **secret card**: you run
+  Rows 1 to 4 keep the value in Imbue Studio's credential store and inject it
+  at the gateway. Row 5 takes a key through the **secret card**: you run
   `request_secret.py` (below), the user types the value into the card, and the
   chat app writes `data/.secrets/<name>.env`. You never see the value; you name
   the file and the variables. A program reads the file only through

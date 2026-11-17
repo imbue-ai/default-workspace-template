@@ -60,14 +60,15 @@ Every desktop is shared: a window holds a resource (a terminal, a browser) for e
 A fresh workspace, and a workspace whose state directory holds no `desktops.json`, gets one desktop named `Home` with the theme's default wallpaper and the seeded shortcuts of 3.6.
 It is created on the first read of the desktops after the inventory has read the registry once, so its shortcuts are seeded from the apps that are actually registered rather than from an empty registry at boot.
 Apps register one at a time as their programs finish starting, so an app may register after `Home` was seeded; its default shortcut is added then rather than waited for.
-The shell records every app whose default shortcut it has offered in `default_shortcuts_offered.json`: the apps each new desktop was seeded with, and every app added as follows.
-On every read of the desktops and after every change of the registry's rows, each app with a default shortcut (3.6) that is not recorded has it added to every desktop, and is then recorded.
+The shell records the `(app, launch)` target of every default shortcut it has offered in `default_shortcuts_offered.json`: those each new desktop was seeded with, and every one added as follows.
+On every read of the desktops and after every change of the registry's rows, each default shortcut (3.6) whose target is not recorded is added to every desktop, and is then recorded.
 A desktop that already holds a shortcut of that `(app, launch)` gets nothing.
-A desktop whose shortcuts are exactly the seed of the recorded apps that are registered is seeded again from every registered app, so it reads in launcher order however late each app registered.
+A desktop whose shortcuts are exactly the seed of the recorded targets is seeded again from every registered app, so it reads in launcher order however late each app registered.
 Any other desktop gets the shortcut at the first free cell in reading order, and nothing on it moves.
-A recorded app is never added again: a shortcut the user removed stays removed when its app registers again, on every boot and across restarts, and an app that deregisters changes nothing.
-A state directory holding `desktops.json` but no record counts every app with a shortcut on any desktop as recorded.
-A desktop created when no other desktop stands, such as `Home` seeded over a missing or unusable `desktops.json`, starts the record over from the apps it is seeded with.
+A recorded target is never added again: a shortcut the user removed stays removed when its app registers again, on every boot and across restarts. An app that declares a further default shortcut is offered only that one.
+The same pass drops every shortcut of an app no registry row names, since nothing would run it: the update that retires an app removes its row, and a preview's teardown removes its own. The dropped shortcuts' targets leave the record, so an app that registers again is offered them again; a default shortcut the user had already taken off every desktop has nothing dropped and stays recorded. A registry with no rows drops nothing.
+A state directory holding `desktops.json` but no record counts the first default shortcut of every app with a shortcut on any desktop as recorded, which is also how a record written while an app had at most one default shortcut (a list of apps) is read.
+A desktop created when no other desktop stands, such as `Home` seeded over a missing or unusable `desktops.json`, starts the record over from the shortcuts it is seeded with.
 Deleting the last desktop is refused with `409`.
 Deleting a desktop closes its windows (their pages are destroyed in every client) and removes every client's layout of it; clients on it switch to the first remaining desktop.
 
@@ -109,12 +110,12 @@ A client whose active desktop no longer exists is moved to the first desktop on 
 ### 3.6 Shortcuts and the grid
 
 A shortcut is `{target, mode, cell}` where `target` is `{kind: "launch", app, launch}` (the only V1 kind), `mode` is `focus` or `new`, and `cell` is `{column, row}` with both at least zero.
-`focus` raises the most recently focused window of that app in this client's layout of this desktop (restoring it when minimized) and runs the launch path only when there is none; `new` always runs it.
+`focus` raises the most recently focused window of that app in this client's layout of this desktop (restoring it when minimized) and runs the launch path only when there is none. A POST launch path of a one-window app (an unpinned app whose first default shortcut focuses, such as the Screen) does something the window alone does not (the Screen's Browser opens the browser), so `focus` always runs it into that app's window, as its launcher row does. `new` always runs it.
 A desktop holds at most one shortcut per `(app, launch)`.
 
-Every registered, non-internal app has at most one default shortcut: its manifest's `default_shortcut` when it declares one, whether or not that launch path takes typed or drafted text (none when it names a launch path the app does not offer); otherwise, when its row names a `program`, its first launch path that takes no text and no mention (one declaring none of `text_param`, `draft_param`, and `mention_param`), or its first launch path when every one takes one, in `focus` mode. A shortcut of a launch path that takes text runs it with no text.
+Every registered, non-internal app has its manifest's default shortcuts when it declares any (one `default_shortcut` table, or several as `[[default_shortcut]]`, in order), each whether or not its launch path takes typed or drafted text (none for one naming a launch path the app does not offer); otherwise, when its row names a `program`, its first launch path that takes no text and no mention (one declaring none of `text_param`, `draft_param`, and `mention_param`), or its first launch path when every one takes one, in `focus` mode. A shortcut of a launch path that takes text runs it with no text.
 A row naming no program and declaring no `default_shortcut` has none: such a row is a preview frame, an isolated test server, or an app registered before manifests without `forward_port.py --program`, while an app built from a manifest names one, and so does an app registered before manifests with `--program`.
-A new desktop is seeded from every app's default shortcut, in launcher order (by `launcher_rank`, lowest first, then the apps that declare none; registry order breaks every tie), laid out in reading order from the grid origin.
+A new desktop is seeded from every app's default shortcuts, in launcher order and each app's own order (by `launcher_rank`, lowest first, then the apps that declare none; registry order breaks every tie), laid out in reading order from the grid origin.
 An app that registers after a desktop was made is added to it as 3.2 says.
 The grid is `columns = max(1, floor((width - inset) / cell_width))` by `rows = max(1, floor((height - inset) / cell_height))` over the backdrop, with the cell size and inset from the theme (contracts.md section 10).
 Rendering places every shortcut that has a free cell inside the grid at its cell, then every other shortcut at the nearest free cell to its clamped cell (Euclidean distance in cell units, ties by column then row); no two shortcuts ever draw in one cell, and nothing is written.
@@ -136,7 +137,7 @@ The backdrop draws the wallpaper with `cover` fit, centred, over the theme's bac
 | What is inside an app, and its own verbs on those things | The app, in its pages |
 | Desktops: name, colour, glyph, wallpaper, shortcuts and cells | Shell, shared |
 | Which desktop was made for which user | Shell, in `users.json` |
-| Which apps' default shortcuts have been offered | Shell, in `default_shortcuts_offered.json` |
+| Which default shortcuts have been offered | Shell, in `default_shortcuts_offered.json` |
 | Which windows a desktop holds; each window's path and title | Shell, shared; the page reports path and title |
 | Each client's placements and stacking order; the active desktop | Shell, per client |
 | Taskbar entries, tray widgets, the launcher's contents | Derived in the browser |
@@ -168,7 +169,7 @@ Visitors granted a single app never load the shell and are not concerned.
 
 Every open goes through one route, `POST /api/desktops/<id>/windows` with `{app, path, client_id, if_present, launch?}`, whatever asked for it: a shortcut, a launcher tile, a page's `shell:open`, an agent's `layout.py open`, a deep link, or the chat app's auto-open of a chat started outside the workspace.
 `if_present` is `focus` (the default) or `new`: with `focus`, a window of that app at that exact path already on the desktop is answered instead of opened, and the shell restores and raises it in the requesting client's layout, so the rule holds for an agent op with no browser connected just as it does for a click.
-A shortcut in `focus` mode asks the client's own layout first (any window of the app, most recently focused) and opens only when there is none.
+A shortcut in `focus` mode asks the client's own layout first (any window of the app, most recently focused) and opens only when there is none, except one of a one-window app's POST launch path, which always runs (3.6).
 
 The shell mints the id, appends the window to the desktop, writes the **requesting client's** placement at once (state `NORMAL`, not minimized, frame from the cascade rule, on top of that client's stack), and broadcasts `desktops_updated` and `placements_updated` for that client.
 Every other client has no placement and shows the window minimized in its taskbar.
@@ -244,7 +245,7 @@ Creating switches the creating client to the new desktop.
 ### 4.9 Shortcut gestures
 
 Single click selects; double click, Enter, or Space runs; on touch a tap runs, since a finger has no double tap worth asking for and nothing to select for; a drag beyond the threshold lifts the icon, shows the target cell, and drops it there; right-click or long-press opens the shortcut menu (Open, the complementary mode, Remove from desktop).
-Adding a shortcut: the right-click menu of the launcher row of an app's default shortcut (3.6), and of a taskbar entry of the app, offers "Add to desktop", placed at the first free cell in reading order in the shortcut's mode, or "Remove from desktop" when the active desktop holds it (launcher plan section 4.2); no other launch path is offered.
+Adding a shortcut: the right-click menu of the launcher row of each of an app's default shortcuts (3.6), and of a taskbar entry of the app (for its first), offers "Add to desktop", placed at the first free cell in reading order in the shortcut's mode, or "Remove from desktop" when the active desktop holds it (launcher plan section 4.2); no other launch path is offered.
 
 ### 4.10 The taskbar
 
@@ -285,7 +286,7 @@ Window cycling and keyboard move and resize are deferred.
 
 ### 5.1 State files
 
-Under `data/.state/system_interface/`: `desktops.json`, `default_shortcuts_offered.json` (the apps whose default shortcut the shell has offered, 3.2), `placements/<desktop_id>/<client_id>.json`, `clients.json`, `users.json` (the desktop made for each visiting user, 3.10), and the client-activity event log as today.
+Under `data/.state/system_interface/`: `desktops.json`, `default_shortcuts_offered.json` (the default shortcuts the shell has offered, 3.2), `placements/<desktop_id>/<client_id>.json`, `clients.json`, `users.json` (the desktop made for each visiting user, 3.10), and the client-activity event log as today.
 Under `data/.apps/system_interface/`: `wallpapers/`.
 The old `projects.json`, `layouts/`, and `migrated.json` are ignored and left in place; a `CLEANUP:` note names them for deletion once migration lands.
 The boot-time `migrate_workspace_layouts.py` is removed from bootstrap and the apply, and deleted.

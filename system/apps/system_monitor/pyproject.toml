@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
     "app-schema",
+    "disk-headroom",
     "flask>=3.0",
     "host-backup",
     "httpx>=0.27",
@@ -21,7 +22,7 @@ dev = [
     # What the API-document test validates the served document with.
     "app-schema[testing]",
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
-    "ty==0.0.85",
+    "ty==0.0.87",
 ]
 
 [project.scripts]

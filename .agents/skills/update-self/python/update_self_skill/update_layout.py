@@ -276,6 +276,7 @@ DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 APPS_REGISTRY_PATH = "data/.state/apps.toml"
 
 # The registration script every supervised app's program line runs; ``--remove`` drops a row.
+# own-process: other-tree -- update-self's staged copy runs the workspace tree's registration script
 FORWARD_PORT_SCRIPT = "system/scripts/forward_port.py"
 
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"

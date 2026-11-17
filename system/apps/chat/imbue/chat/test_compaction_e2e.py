@@ -660,9 +660,10 @@ def test_the_auto_compact_notice_shows_under_the_compactions_chip_row_until_it_i
 
     finished = _finished_chip(chat)
     expect(finished.locator(".tool-chip-label")).to_have_text(_FINISHED_LABEL, timeout=15000)
-    chip_group = chat.locator(".tool-chip-group", has=finished)
-    notice = chip_group.locator("xpath=following-sibling::*[1]")
-    expect(notice).to_have_class(re.compile(r"\bautocompact-notice\b"), timeout=15000)
+    # The chip row and the notice are pieces of the agent's stretch, each in its place on the stretch's line.
+    chip_row = chat.locator("[data-rail-node='chips']", has=finished)
+    notice = chip_row.locator("xpath=following-sibling::*[1]").locator(".autocompact-notice")
+    expect(notice).to_be_visible(timeout=15000)
     expect(notice).to_have_text(_AUTOCOMPACT_NOTICE_TEXT)
     notice.locator(".autocompact-notice-dismiss").click()
     expect(chat.locator(".autocompact-notice")).to_have_count(0)

@@ -261,6 +261,19 @@ class AttachmentUploadResponse(FrozenModel):
     size: int = Field(description="Size of the stored upload in bytes")
 
 
+class InterruptAgentRequest(FrozenModel):
+    """Optional request body for the /api/chats/{id}/interrupt endpoint."""
+
+    only_if_idle: bool = Field(
+        default=False,
+        description="Restart only a chat that has ended its turn; a busy one is refused with 409 and what it is doing",
+    )
+    keep_queue: bool = Field(
+        default=False,
+        description="Resend the messages queued for the agent as one turn after the restart, instead of dropping them",
+    )
+
+
 class InterruptAgentResponse(FrozenModel):
     """Response from the /api/chats/{id}/interrupt endpoint."""
 
@@ -278,6 +291,13 @@ class ChatWatchersResponse(FrozenModel):
     """Response from GET /api/chats/{id}/watchers."""
 
     watched_by: tuple[str, ...] = Field(description="The page instances shown and focused on the chat now")
+
+
+class ChatNotificationRequest(FrozenModel):
+    """Request body for POST /api/chats/{id}/notification: the notification the chat just sent the user."""
+
+    message: str = Field(min_length=1, description="What the notification says")
+    title: str | None = Field(default=None, description="Its optional title, shown as a prefix on the message")
 
 
 class DrainToComposerResponse(FrozenModel):
@@ -361,7 +381,17 @@ class DisplayDecisionFields(FrozenModel):
     display_body: str | None = Field(default=None, description="The decision's body, when it is not the text")
 
 
-class QueuedMessageState(DisplayDecisionFields):
+class MessageAuthorFields(FrozenModel):
+    """The author a not-yet-delivered message's turn will be stamped with (``authors.py``), so the page draws it under
+    its sender."""
+
+    author: ParticipantKey | None = Field(
+        default=None, description="Who sent it; None for an unattributed message, which is the owner's"
+    )
+    author_name: str | None = Field(default=None, description="What the sender was called when they sent it")
+
+
+class QueuedMessageState(DisplayDecisionFields, MessageAuthorFields):
     """One currently-queued message on the per-agent WebSocket state.
 
     The harness-agnostic wire shape of a queued message: the frontend renders the
@@ -370,7 +400,7 @@ class QueuedMessageState(DisplayDecisionFields):
     """
 
     queued_id: str = Field(description="Stable id the populator minted; keys the rendered bubble")
-    content: str = Field(description="Verbatim text the user queued")
+    content: str = Field(description="The text as the agent was handed it: a non-owner's carries their author prefix")
     timestamp: str = Field(description="Enqueue timestamp (ISO string from the harness ledger)")
     is_sending: bool = Field(
         default=False,
@@ -512,11 +542,18 @@ class HeldSend(FrozenModel):
     received_at: datetime = Field(description="When the chat app accepted it")
 
 
-class HeldSendSnapshot(DisplayDecisionFields):
-    """One message the chat app is holding for the successor, as the chat pages render it while converging."""
+class HeldSendSnapshot(DisplayDecisionFields, MessageAuthorFields):
+    """One message the chat app holds while the chat converges or is still being created, as the chat pages draw it."""
 
     message_id: str = Field(description="The sender's stable send-time id, which the page's own bubble carries too")
     text: str = Field(description="The message's words, without the author prefix a non-owner's send carries")
+    is_delivered: bool = Field(
+        default=False,
+        description=(
+            "Whether the switch has delivered it, so its turn may already be in the transcript or the agent's queue; "
+            "False while it is still held"
+        ),
+    )
 
 
 class HandoffState(FrozenModel):
@@ -539,8 +576,9 @@ class HandoffState(FrozenModel):
     held_sends: tuple[HeldSendSnapshot, ...] = Field(
         default=(),
         description=(
-            "The messages held for after the switch, the confirming message first, so a page (a reloaded one "
-            "too) keeps showing them until they land in the transcript"
+            "The messages sent during the switch, the confirming message first, those the switch has already "
+            "delivered included until it is done, so a page (a reloaded one too) keeps showing them until they "
+            "land in the transcript"
         ),
     )
     model_pick: ModelPick | None = Field(
@@ -615,6 +653,12 @@ class ConvergingResponse(ErrorResponse):
     """The 409 a verb answers while the chat converges on a new agent, with the handoff's phase."""
 
     phase: HandoffPhase = Field(description="The phase the chat is in")
+
+
+class InterruptBusyResponse(ErrorResponse):
+    """The 409 an ``only_if_idle`` interrupt answers for a chat that has not ended its turn."""
+
+    busy_with: str = Field(description="What the chat is in the middle of, in plain words")
 
 
 class HandoffCancelResponse(FrozenModel):
@@ -850,7 +894,7 @@ class ProvisionalChat(FrozenModel):
     """A chat the app has minted but whose first agent mngr does not know yet.
 
     Keyed by its chat id (the id mngr will give its first agent), listed among the chats, and pushed
-    to the chat pages verbatim as the ``provisional_chat_created`` message.
+    to the chat pages as the ``provisional_chat_created`` message in the form ``ProvisionalChatAsShown`` gives it.
     """
 
     chat_id: ChatId = Field(description="The chat's id, which its first agent will carry")
@@ -877,6 +921,15 @@ class ProvisionalChat(FrozenModel):
     kind: ChatKind = Field(
         default=ChatKind.AGENT,
         description="What it is being created as: an agent's chat, or a room, whose sends are attributed as a room's",
+    )
+
+
+class ProvisionalChatAsShown(FrozenModel):
+    """A provisional chat as the pages are sent it (the ``provisional_chat_created`` message)."""
+
+    chat: ProvisionalChat = Field(description="The chat's record, under the name it is shown by")
+    held_sends: tuple[HeldSendSnapshot, ...] = Field(
+        description="The sends held for it, as the page draws them: the sender's words, and who the sender is"
     )
 
 

@@ -207,9 +207,13 @@ export interface AppRecord {
   readonly critical: boolean;
   /** Whether the shell stops the app's program once no window shows it (the stop-when-no-windows spec). */
   readonly stop_when_no_windows: boolean;
+  /** Whether the app's pages listen to the microphone, which the shell then delegates to their frames. */
+  readonly uses_microphone: boolean;
   /** The app's launch paths; the shell synthesizes ``open`` at ``/`` for an app declaring none. */
   readonly launch_paths: readonly LaunchPath[];
-  readonly default_shortcut: DefaultShortcut | null;
+  /** The shortcuts a new desktop is seeded with, as the app declares them; none for an app that leaves the choice to
+   *  the shell. */
+  readonly default_shortcuts: readonly DefaultShortcut[];
   readonly launcher_rank: number | null;
   readonly pin: AppPin | null;
   /** The messages the app takes, from the Imbue Studio chrome or from other apps' pages, which the shell relays. */
@@ -342,6 +346,8 @@ export interface RosterParticipant {
   readonly last_seen: string | null;
   /** When their newest page last saw keyboard or pointer input (ISO 8601), when it reports it. */
   readonly last_input_at: string | null;
+  /** Whether a domain grant admits them rather than a grant naming them (the multiplayer spec, section 4.2). */
+  readonly is_admitted_by_domain: boolean;
 }
 
 /** What a chat is doing, as the chat app reports it for the agent's card (the multiplayer spec, section 6.4). */
@@ -354,7 +360,12 @@ export interface ChatActivity {
   readonly kind: "agent" | "room";
 }
 
-/** A speech bubble as the shell pushes it (the multiplayer spec, section 6.5): what somebody just said. */
+/** What a ``bubble`` push carries: a message somebody sent, or a chat's notification to the user. */
+export const BUBBLE_KINDS = ["message", "notification"] as const;
+export type BubbleKind = (typeof BUBBLE_KINDS)[number];
+
+/** A ``bubble`` push as the shell sends it (the multiplayer spec, section 6.5): what somebody just said, or what a
+ *  chat just notified the user of. */
 export interface BubbleWire {
   readonly speaker: string;
   readonly chat_id: string;
@@ -362,6 +373,7 @@ export interface BubbleWire {
   readonly text: string;
   readonly message_id: string;
   readonly mentions: readonly string[];
+  readonly kind: BubbleKind;
 }
 
 /** What the avatar's image says about the machine (pinned-taskbar-entries plan section 4.6). */
@@ -592,8 +604,7 @@ function parseAppParams(raw: unknown): AppParams | null {
   };
 }
 
-function parseDefaultShortcut(raw: unknown): DefaultShortcut | null {
-  if (raw === null || raw === undefined) return null;
+function parseDefaultShortcut(raw: unknown): DefaultShortcut {
   const record = asObject(raw, "default_shortcut");
   return {
     launch: asString(record.launch, "default_shortcut.launch"),
@@ -635,8 +646,9 @@ export function parseAppRecord(raw: unknown): AppRecord {
     program: typeof record.program === "string" ? record.program : "",
     critical: record.critical === true,
     stop_when_no_windows: record.stop_when_no_windows === true,
+    uses_microphone: record.uses_microphone === true,
     launch_paths: asArray(record.launch_paths ?? [], "app.launch_paths").map(parseLaunchPath),
-    default_shortcut: parseDefaultShortcut(record.default_shortcut),
+    default_shortcuts: asArray(record.default_shortcuts ?? [], "app.default_shortcuts").map(parseDefaultShortcut),
     launcher_rank: typeof rank === "number" && Number.isFinite(rank) ? rank : null,
     pin: parsePin(record.pin),
     message_handlers: asArray(record.message_handlers ?? [], "app.message_handlers").map(parseMessageHandler),
@@ -824,6 +836,7 @@ function parseRosterParticipant(raw: unknown): RosterParticipant {
     is_connected: asBoolean(record.is_connected, "participant.is_connected"),
     last_seen: asOptionalString(record.last_seen, "participant.last_seen"),
     last_input_at: asOptionalString(record.last_input_at, "participant.last_input_at"),
+    is_admitted_by_domain: asBoolean(record.is_admitted_by_domain, "participant.is_admitted_by_domain"),
   };
 }
 
@@ -859,6 +872,7 @@ export function parseBubble(raw: unknown): BubbleWire {
     mentions: asArray(record.mentions ?? [], "bubble.mentions").map((mention, index) =>
       asString(mention, `bubble.mentions[${index}]`),
     ),
+    kind: asOneOf(record.kind, BUBBLE_KINDS, "bubble.kind"),
   };
 }
 

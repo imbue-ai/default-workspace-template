@@ -1,0 +1,1 @@
+A manifest registration (`system/scripts/forward_port.py --manifest`, and `register_manifest`) copies the manifest's `default_shortcut`, whether one table or an array, onto the registry entry as `default_shortcuts`, and clears an older entry's `default_shortcut` key.

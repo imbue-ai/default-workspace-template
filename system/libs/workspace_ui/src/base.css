@@ -127,12 +127,6 @@
   --z-popover: 10001;
   --z-tooltip: 10002;
   --width-message-column: 672px;
-  /* The agent's side of the column keeps this much clear on the right. The user's
-     bubbles already stop short (they cap at 80% and hug the right edge); without
-     it the agent's prose and task rows were the only thing running the column's
-     full width, which read as a wall rather than as the other side of a
-     conversation. */
-  --width-agent-gutter: 60px;
   /* Elevation values, behind --shadow-raised / --shadow-overlay (see @theme below). */
   --c-shadow-raised: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
   --c-shadow-overlay: 0 0 2px 0 rgba(0, 0, 0, 0.08), 0 3px 8px 2px rgba(0, 0, 0, 0.08);

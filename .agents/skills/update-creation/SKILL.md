@@ -217,7 +217,7 @@ uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
 ```
 
 Then background-poll (`create_worker.py await --name update-$SLUG --task-file
-... --timeout 90m`, started through `system/scripts/workspace_bare_scripts/run_in_background.py`) and
+... --timeout 90m`, started through `system/scripts/workspace_bare_scripts/run_in_background.py --waiter`) and
 follow `.agents/shared/references/lead-proxy.md`.
 Flow-specific substitutions:
 
@@ -252,7 +252,9 @@ in the pass, by its type:
   dependency the merge added. If it is a built-in upstream skill, note the local
   drift to reconcile later via `update-self` / `submit-upstream-changes`.
 - **app**: refresh its window (`uv run --no-sync workspace-layout refresh
-  --app <app-name>`).
+  --app <app-name>`; for an app `build-app` made, `uv run --no-sync
+  .agents/skills/build-app/python/build_app_skill/mock_frame.py refresh --app <app-name>`, which reloads its mock frame while one is
+  up and its own windows otherwise).
 - **service**: it has no window -- restart its programs (`supervisorctl restart
   <program>`): the one named after the package (`host_backup` runs as
   `host-backup`) and any `<program>-<role>` ones. `oom_priority`'s programs

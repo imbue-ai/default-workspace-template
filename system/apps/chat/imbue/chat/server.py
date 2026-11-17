@@ -22,6 +22,7 @@ from uuid import uuid4
 
 import httpx
 from app_manifest.content_security_policy import attach_document_policy
+from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_origin_label
 from app_manifest.registry_location import registry_path
@@ -33,6 +34,8 @@ from app_schema.api_schema import RouteTable
 from app_schema.api_schema import SchemalessRoute
 from app_schema.api_schema import merge_route_tables
 from app_schema.api_schema import register_api_schema_route
+from app_schema.errors import InvalidRequestBodyError
+from app_schema.request_guard import install_request_guard
 from app_schema.routes import error_response
 from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
@@ -45,13 +48,16 @@ from flask import send_from_directory
 from flask.ctx import AppContext
 from loguru import logger as _loguru_logger
 from pydantic import Field
+from pydantic import ValidationError
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import is_owner_participant
 from workspace_layout.identity import participant_key_of
+from workspace_layout.primitives import BubbleKind
 from workspace_layout.primitives import ParticipantKey
+from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 from workspace_layout.shell_url import shell_base_url
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 from workspace_themes.flask_routes import register_workspace_theme_route
@@ -147,6 +153,7 @@ from imbue.chat.identity import request_identity
 from imbue.chat.identity import request_participant
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.mention_parser import MentionTarget
+from imbue.chat.mention_parser import mentioned_people
 from imbue.chat.mentions import BackgroundMentionDeliverer
 from imbue.chat.mentions import MentionHandler
 from imbue.chat.mentions_endpoints import requester_mention_keys
@@ -163,6 +170,7 @@ from imbue.chat.models import AttachmentUploadResponse
 from imbue.chat.models import AutocompactStateResponse
 from imbue.chat.models import ChatConvergingError
 from imbue.chat.models import ChatListResponse
+from imbue.chat.models import ChatNotificationRequest
 from imbue.chat.models import ChatSegmentInfo
 from imbue.chat.models import ChatSettingsResponse
 from imbue.chat.models import ChatSnapshot
@@ -188,7 +196,9 @@ from imbue.chat.models import IntakeApplyResponse
 from imbue.chat.models import IntakeRequest
 from imbue.chat.models import IntakeResponse
 from imbue.chat.models import IntakeTarget
+from imbue.chat.models import InterruptAgentRequest
 from imbue.chat.models import InterruptAgentResponse
+from imbue.chat.models import InterruptBusyResponse
 from imbue.chat.models import MeResponse
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.models import NoProviderAccountError
@@ -1080,8 +1090,8 @@ def _act_on_accepted_send(
     state: ChatAppState, chat_id: ChatId, message_id: str, text: str, identity: RequestIdentity
 ) -> None:
     """What a person's or a visiting agent's send does once it was accepted (the multiplayer spec, sections 6.5 and
-    7.4): their speech bubble is raised over their tray entry, naming the people a room message mentions so their
-    clients mark it; and in a room the mentions act, people marked and the agent or a chat sent the message. In an
+    7.4): it is posted to the tray, hopping their entry and naming the people a room message mentions, whose clients
+    raise it as a bubble; and in a room the mentions act, people marked and the agent or a chat sent the message. In an
     agent chat a handle is a word the agent reads like any other. A send no proxy stamped (a script's, the
     terminal's) is nobody's speech: it raises no bubble and its mentions act on nothing. Takes the sender's
     ``identity`` rather than reading the request's, since an intake nobody waits on and a room's first message land
@@ -1093,12 +1103,13 @@ def _act_on_accepted_send(
         return
     handler = state.mention_handler
     targets: tuple[MentionTarget, ...] = ()
-    if snapshot.kind is ChatKind.ROOM and handler is not None and "@" in text:
+    if snapshot.kind is ChatKind.ROOM and handler is not None:
         targets = handler.resolve(text)
     sender = participant_key_of(identity)
     if state.tray_feed is not None:
-        mentioned = tuple(target.key for target in targets if target.is_person and target.key is not None)
-        state.tray_feed.post_bubble(sender, chat_id, snapshot.title, text, message_id, mentioned)
+        state.tray_feed.post_bubble(
+            sender, chat_id, snapshot.title, text, message_id, mentioned_people(targets), BubbleKind.MESSAGE
+        )
     if handler is not None and targets:
         sender_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
         handler.act(targets, chat_id, snapshot.title, message_id, text, sender, sender_name)
@@ -1536,6 +1547,12 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
     (ending any in-progress turn) and starts it fresh without sending a resume
     message. Returns 404 if the agent is unknown, 400 if the agent carries the
     ``is_primary=true`` label, 500 if the restart command fails, 200 otherwise.
+    With ``only_if_idle`` a chat that has not ended its turn is left alone and
+    answered 409, its ``busy_with`` saying what it is doing. With ``keep_queue``
+    the messages queued for the agent are resent to it as one turn after the
+    restart, as the flush does, instead of dying with the process; a resend that
+    fails is a 500 too, though the restart has happened. A body that is not an
+    ``InterruptAgentRequest`` is a 400, and nothing is restarted.
 
     Refuses to interrupt agents carrying the ``is_primary=true`` label: that's
     the services agent for the workspace, and restarting it would stop the
@@ -1558,6 +1575,23 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
             400,
         )
 
+    interrupt_request = _parse_interrupt_request()
+    if interrupt_request.only_if_idle:
+        busy_with = get_state().agent_manager.restart_busy_reason_for_chat(ChatId(chat_id))
+        if busy_with is not None:
+            return model_response(
+                InterruptBusyResponse(
+                    detail=f"Chat '{chat_id}' is {busy_with}; it was not restarted", busy_with=busy_with
+                ),
+                409,
+            )
+
+    if interrupt_request.keep_queue:
+        watcher, restart_process, _ = _interrupt_capabilities(agent_info)
+        return _restart_and_resend_queue(
+            chat_id, agent_info, watcher, restart_process, lambda: _settle_after_interrupt(agent_info)
+        )
+
     agent_name = agent_info.name
 
     with get_state().agent_manager.letting_go_of_unrecorded_sends(agent_info.id):
@@ -1565,15 +1599,40 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
     if not is_restarted:
         return error_response(f"Failed to interrupt agent '{agent_name}': {output}", 500)
 
-    # The restart abandons the session transcript mid-turn, so the
-    # transcript-derived activity state would stay pinned at THINKING /
-    # TOOL_RUNNING until the user sends another message. Reset it to IDLE
-    # now so the activity indicator clears immediately after the stop. The
-    # restart also ended any compaction, which reports no completion.
-    get_state().agent_manager.reset_activity_state(agent_info.id)
-    get_state().agent_manager.clear_compaction_after_interrupt(agent_info)
+    _settle_after_interrupt(agent_info)
 
     return model_response(InterruptAgentResponse(status="ok"))
+
+
+def _settle_after_interrupt(agent_info: AgentInfo) -> None:
+    """Settle an agent the interrupt route restarted.
+
+    The restart abandons the session transcript mid-turn, so the
+    transcript-derived activity state would stay pinned at THINKING /
+    TOOL_RUNNING until the user sends another message. Reset it to IDLE
+    now so the activity indicator clears immediately after the stop. The
+    restart also ended any compaction, which reports no completion.
+    """
+    agent_manager = get_state().agent_manager
+    agent_manager.reset_activity_state(agent_info.id)
+    agent_manager.clear_compaction_after_interrupt(agent_info)
+
+
+def _parse_interrupt_request() -> InterruptAgentRequest:
+    """The interrupt's optional body: none, as the stop button posts, is the plain interrupt.
+
+    ``parse_request_body`` requires a body, so the view parses it here, the same way: as JSON
+    whatever its content type, and a body that is not the model's shape is a 400.
+    """
+    if not request.get_data():
+        return InterruptAgentRequest()
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        raise InvalidRequestBodyError("the request body must be a JSON object")
+    try:
+        return InterruptAgentRequest.model_validate(body)
+    except ValidationError as e:
+        raise InvalidRequestBodyError(describe_validation_error(e)) from e
 
 
 def _restart_agent_process(agent_name: str) -> tuple[bool, str]:
@@ -1616,8 +1675,9 @@ def _refuse_queue_action_on_primary(agent_info: AgentInfo, action: str) -> Respo
 def _interrupt_capabilities(
     agent_info: AgentInfo,
 ) -> tuple[AgentSessionWatcher, Callable[[], tuple[bool, str]], Callable[[], None]]:
-    """The harness-neutral capabilities the restart-drain flush binds for one agent: the queue
-    mirror, a process restart (``mngr start --restart --no-resume``), and an activity-settle.
+    """The harness-neutral capabilities the restart-drain (the flush, and the interrupt with
+    ``keep_queue``) binds for one agent: the queue mirror, a process restart
+    (``mngr start --restart --no-resume``), and an activity-settle.
 
     The stop button and the handoff's draining step bind theirs through
     ``ChatAppState.drain_to_composer`` instead, which dispatches to the harness's interrupt.
@@ -1656,6 +1716,17 @@ def _flush_queue_endpoint(chat_id: str) -> Response:
     if not watcher.get_queued_block():
         return model_response(SendMessageResponse(status="ok"))
 
+    return _restart_and_resend_queue(chat_id, agent_info, watcher, restart_process, settle_activity)
+
+
+def _restart_and_resend_queue(
+    chat_id: str,
+    agent_info: AgentInfo,
+    watcher: AgentSessionWatcher,
+    restart_process: Callable[[], tuple[bool, str]],
+    settle_activity: Callable[[], None],
+) -> Response:
+    """Restart the agent, then resend whatever was queued as one turn: 500 if either fails, 200 otherwise."""
     agent_manager: AgentManager = get_state().agent_manager
     try:
         with agent_manager.letting_go_of_unrecorded_sends(agent_info.id):
@@ -1669,7 +1740,7 @@ def _flush_queue_endpoint(chat_id: str) -> Response:
         if isinstance(resend, SendFailure):
             # The harness said why; passing that on rather than a generic sentence is the whole
             # point of carrying it this far.
-            logger.info("Flush of chat {}'s queue failed: {}", chat_id, resend.kind)
+            logger.info("Resending chat {}'s queue after its restart failed: {}", chat_id, resend.kind)
             return model_response(SendFailureResponse(detail=resend.reason, kind=resend.kind), 500)
         if resend is SendDelivery.RESENT:
             agent_manager.note_resent_send(agent_info.id, block, sent_after)
@@ -1827,8 +1898,9 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
     switch_request = parse_request_body(SwitchChatRequest)
     message_id = switch_request.message_id or uuid4().hex
     # The confirming message is the first the chat's next agent receives, so it is attributed for that agent's
-    # harness (the multiplayer spec, section 5.1); the held-send listing shows it without the prefix. The annotation
-    # is recorded once the switch has begun, since the manager may still refuse it.
+    # harness (the multiplayer spec, section 5.1); the held-send listing shows it without the prefix, under the
+    # sender its annotation names. The annotation is recorded once the manager has let the switch begin, which may
+    # still refuse it, and before any page is told of the switch.
     attributed = (
         _attributed_send(
             state,
@@ -1840,6 +1912,7 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
         if switch_request.message
         else None
     )
+    annotation = attributed.annotation if attributed is not None else None
     try:
         kind, phase, returned_block = agent_manager.begin_switch(
             ChatId(chat_id),
@@ -1849,13 +1922,12 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
             _held_send_origin(switch_request),
             model_pick=switch_request.model,
             kind=switch_request.kind,
+            on_begun=None if annotation is None else lambda: state.authors.record(ChatId(chat_id), annotation),
         )
     except ChatConvergingError as e:
         return error_response(str(e), 409)
     except HandoffError as e:
         return error_response(str(e), 400)
-    if attributed is not None and attributed.annotation is not None:
-        state.authors.record(ChatId(chat_id), attributed.annotation)
     record_client_message_activity(state.shell, ChatId(chat_id), switch_request, state.is_secondary)
     agent_manager.record_message_sent(ChatId(chat_id))
     response = SwitchChatResponse(status="converging", kind=kind, phase=phase, returned_block=returned_block)
@@ -2097,7 +2169,13 @@ def _bubble_new_chats_first_message(
     if not message or state.tray_feed is None or not identity.is_header_present:
         return
     state.tray_feed.post_bubble(
-        participant_key_of(identity), created.chat_id, created.display_name, message, message_id, ()
+        participant_key_of(identity),
+        created.chat_id,
+        created.display_name,
+        message,
+        message_id,
+        (),
+        BubbleKind.MESSAGE,
     )
 
 
@@ -2731,6 +2809,34 @@ def _watchers_endpoint(chat_id: str) -> Response:
     return model_response(ChatWatchersResponse(watched_by=tuple(agent_manager.chat_watchers(ChatId(chat_id)))))
 
 
+def _notification_endpoint(chat_id: str) -> Response:
+    """The notification the chat just sent the user, from the notify script inside the workspace (loopback only):
+    raised as a bubble over the agent's tray entry (the multiplayer spec, section 6.5), so everyone in the
+    workspace who is not looking at the chat sees it."""
+    refusal = require_loopback()
+    if refusal is not None:
+        return refusal
+    if not AGENT_ID_PATTERN.fullmatch(chat_id):
+        return _chat_not_found_response(chat_id)
+    notification = parse_request_body(ChatNotificationRequest)
+    state = get_state()
+    snapshot = state.agent_manager.get_chat_snapshot(chat_id)
+    if snapshot is None:
+        return _chat_not_found_response(chat_id)
+    if state.tray_feed is not None:
+        text = notification.message if not notification.title else f"{notification.title}: {notification.message}"
+        state.tray_feed.post_bubble(
+            WORKSPACE_AGENT_PARTICIPANT_KEY,
+            snapshot.chat_id,
+            snapshot.title,
+            text,
+            uuid4().hex,
+            (),
+            BubbleKind.NOTIFICATION,
+        )
+    return model_response(OkResponse())
+
+
 # The terminal app's registered name: the chat's terminal back face is served from its origin.
 _TERMINAL_APP_NAME: Final[AppName] = AppName("terminal")
 # The origin ttyd itself is served from since the terminal split into a wrapper and a pty
@@ -2934,6 +3040,7 @@ _PER_CHAT_ROUTES: Final[tuple[tuple[str, Callable[..., Response], tuple[str, ...
     ("message", _send_message_endpoint, ("POST",)),
     ("presence", _presence_endpoint, ("POST",)),
     ("watchers", _watchers_endpoint, ("GET",)),
+    ("notification", _notification_endpoint, ("POST",)),
     ("model", _set_model_choice_endpoint, ("POST",)),
     ("model-options", _get_model_options_endpoint, ("GET",)),
     ("powered-by", _get_powered_by_endpoint, ("GET",)),
@@ -3039,13 +3146,26 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ),
     ("POST", "/api/chats/{chat_id}/presence"): RouteModels(request_model=PresenceReport, response_model=OkResponse),
     ("GET", "/api/chats/{chat_id}/watchers"): RouteModels(response_model=ChatWatchersResponse),
+    ("POST", "/api/chats/{chat_id}/notification"): RouteModels(
+        request_model=ChatNotificationRequest, response_model=OkResponse
+    ),
     ("POST", "/api/chats/{chat_id}/model"): RouteModels(
         request_model=SetModelChoiceRequest, response_model=SendMessageResponse, alternate_responses=(_CONVERGING,)
     ),
     ("GET", "/api/chats/{chat_id}/model-options"): RouteModels(response_model=ModelOptionsResponse),
     ("GET", "/api/chats/{chat_id}/powered-by"): RouteModels(response_model=PoweredByResponse),
+    # The view reads the body itself: the stop button posts none.
     ("POST", "/api/chats/{chat_id}/interrupt"): RouteModels(
-        response_model=InterruptAgentResponse, alternate_responses=(_CONVERGING,)
+        request_model=InterruptAgentRequest,
+        response_model=InterruptAgentResponse,
+        alternate_responses=(
+            _CONVERGING,
+            AlternateResponse(status=409, model=InterruptBusyResponse),
+            # ``keep_queue`` answers as the flush does.
+            AlternateResponse(status=200, model=SendMessageResponse),
+            AlternateResponse(status=500, model=SendFailureResponse),
+        ),
+        is_body_parsed_by_view=True,
     ),
     ("POST", "/api/chats/{chat_id}/flush-queue"): RouteModels(
         response_model=SendMessageResponse,
@@ -3118,11 +3238,24 @@ def create_application(state: ChatAppState) -> Flask:
     """
     # No static folder: Flask would otherwise add a /static/<path> route beside the document route.
     application = Flask(__name__, static_folder=None)
+    install_request_guard(application, exempt_rules=frozenset())
     attach_state(application, state)
     # A message's markdown embeds images from anywhere, and passes raw HTML through the sanitizer,
     # whose default tag list admits <video> and <audio> as it does <img>; the sanitizer decides
-    # which tags render, and these two directives admit exactly what it renders.
-    attach_document_policy(application, {"img-src": "* data: blob:", "media-src": "* data: blob:"})
+    # which tags render, and these two directives admit exactly what it renders. The composer's
+    # dictation runs its speech models in the page (the workspace-voice-input spec in the mngr
+    # repository, D7): compiling their WebAssembly needs 'wasm-unsafe-eval', which admits nothing
+    # but WebAssembly, and the model files come straight from Hugging Face, whose downloads
+    # redirect to its regional CDN hosts under hf.co; scripts still load only from the chat's origin.
+    attach_document_policy(
+        application,
+        {
+            "script-src": "'self' 'wasm-unsafe-eval'",
+            "connect-src": "'self' https://huggingface.co https://*.hf.co",
+            "img-src": "* data: blob:",
+            "media-src": "* data: blob:",
+        },
+    )
     # The handoff borrows the watchers and the send path from here; wired where the routes
     # are, so a manager built by a test that never assembles the app refuses to hand off.
     state.agent_manager.set_handoff_capabilities(_build_handoff_capabilities(state))
