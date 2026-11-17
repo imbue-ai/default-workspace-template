@@ -690,8 +690,8 @@ export class DesktopStore {
    * Tell the user that what they asked for failed with ``error``, in ``failureSentence``'s words for ``whatFailed``
    * (a sentence stem naming it), with the status and the server's own text behind "See details". A call site whose
    * retry is the control just pressed asks for a plain note; any other, and any failure that asks for a bug report,
-   * shows one that stays, with for a failure that asks for one, "Report a bug" wherever the embedder opens a bug report
-   * when the toast is drawn (``reportBugAction``).
+   * shows one that stays, which for a failure that asks for one offers "Report a bug" wherever the embedder opens a bug
+   * report when the toast is drawn (``reportBugAction``).
    */
   private toastFailure(whatFailed: string, error: unknown, options: { readonly isLasting: boolean }): void {
     this.showFailure(failureSentence(describeRequestFailure(error), whatFailed), options);
@@ -2683,7 +2683,7 @@ export class DesktopStore {
    *  pinned-first: when the app has a pinned window on the active desktop, the launch runs into this client's view
    *  of it (the page the launch answers is pure, so a linked window is safe too) and the window is restored and
    *  raised; otherwise the launch opens a new window. False when the text cannot go (a GET launch path over the
-   *  path bound) or the shell refused, each told to the user. */
+   *  path bound) or the shell refused, each toasted or, given ``onFailure``, handed to it to show. */
   async runFreeText(
     appName: string,
     launchId: string,
@@ -2756,6 +2756,13 @@ export class DesktopStore {
    *  text (Chat's New Chat on a stock machine), else the primary one. Settles once the window is on the desktop, or
    *  with the failure for the caller to show where the press was: nothing is toasted. */
   async startNewWithText(text: string): Promise<StartNewOutcome> {
+    if (this.viewedDesktop() !== null) {
+      console.info("[si] refused to start a new chat while viewing somebody else's desktop");
+      return {
+        isOpened: false,
+        failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
+      };
+    }
     const [primary, secondary] = freeTextRowsOf(openableApps(this.state));
     const row = secondary ?? primary;
     if (row === undefined) {

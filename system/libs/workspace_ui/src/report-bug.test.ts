@@ -48,6 +48,16 @@ describe("Report a bug", () => {
     expect(attached.endsWith("\n[...]")).toBe(true);
   });
 
+  it("never cuts a character in half", async () => {
+    const message = "Docs couldn't save.";
+    // The cut falls between the two halves of the emoji that straddles it.
+    const keptLength = MAX_HELP_ERROR_DETAILS_LENGTH - "\n[...]".length;
+    const details = `${"x".repeat(keptLength - message.length - 2 - 1)}\u{1F600}${"y".repeat(100)}`;
+    const attached = (await openHelpSentFor({ message, details })).errorDetails as string;
+    expect(attached.length).toBeLessThanOrEqual(MAX_HELP_ERROR_DETAILS_LENGTH);
+    expect(attached.endsWith("x\n[...]")).toBe(true);
+  });
+
   it("opens the bug report with nothing attached when there is no failure to attach", async () => {
     const sent = await openHelpSentFor(null);
     expect(sent).not.toHaveProperty("errorDetails");
