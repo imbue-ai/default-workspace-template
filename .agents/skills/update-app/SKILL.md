@@ -462,7 +462,9 @@ where the data dies. Encode these, cheapest first:
   registered in the worktree's own registry, where the workspace never looks.
   For an instance only you drive, with no window, add `--private`; that works
   from anywhere, a worktree included, and like every preview it runs over
-  copies of the live data and the live secrets.
+  copies of the live data and the live secrets. A private instance boots the
+  app alone: it takes no `--with`, since a sibling is framed at the origin its
+  window registers, and a private instance registers none.
 
 - **Never "clean up" test data by deleting from the live store.** If you
   did leave a stray test record in it, leave it -- an additive junk record

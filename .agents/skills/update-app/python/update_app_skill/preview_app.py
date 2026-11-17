@@ -383,7 +383,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help=(
             "Register no window: an instance only you reach on its loopback port, e.g. a "
-            "worker checking its own build from its worktree."
+            "worker checking its own build from its worktree. Takes no --with."
         ),
     )
     _add_repo_root_arg(up_parser)

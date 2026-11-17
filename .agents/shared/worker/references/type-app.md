@@ -238,7 +238,8 @@ What differs for you:
   <your work_dir> --private`) or the raw isolated-instance script, and reach it
   on its loopback port. `--private` registers no window (from a worktree the
   script refuses without it, since a window registered there is one nobody can
-  open), and the instance still runs over copies of the user's live data. The
-  live app and its windows are the user's.
+  open), and the instance still runs over copies of the user's live data. It
+  boots the app alone, taking no `--with` siblings. The live app and its
+  windows are the user's.
 - The go-live is the lead's: the atomic update apply, after your `done`. You
   neither merge nor restart anything in the served tree.
