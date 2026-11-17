@@ -352,24 +352,26 @@ def down(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -> i
     """Close the mock window, remove the frame, and make the app an ordinary app again.
 
     The frame comes down even when the app itself is gone (removed while still a mock);
-    its registration is then left alone, since registering it would add it back.
+    its registration is then left alone, since registering it would add it back. Holds
+    the frame's lock, so it never tears down a frame an ``up`` or a ``revive`` is booting.
     """
-    if layout.run(["close", frame_name(app_name)]) != 0:
-        sys.stderr.write(
-            f"note: the {frame_name(app_name)} window was not closed (see above; most "
-            "often none was open); the frame comes down regardless.\n"
-        )
-    code = frames.down(app_name, repo_root)
-    try:
-        app = find_app(app_name, repo_root)
-    except MockFrameError as exc:
-        sys.stderr.write(
-            f"mock frame: the frame is down, but {app_name!r}'s registration is left as "
-            f"it is: {exc}\n"
-        )
+    with serve_isolated_instance.instance_lock(repo_root, frame_name(app_name)):
+        if layout.run(["close", frame_name(app_name)]) != 0:
+            sys.stderr.write(
+                f"note: the {frame_name(app_name)} window was not closed (see above; most "
+                "often none was open); the frame comes down regardless.\n"
+            )
+        code = frames.down(app_name, repo_root)
+        try:
+            app = find_app(app_name, repo_root)
+        except MockFrameError as exc:
+            sys.stderr.write(
+                f"mock frame: the frame is down, but {app_name!r}'s registration is left as "
+                f"it is: {exc}\n"
+            )
+            return code
+        _register(app, repo_root, None)
         return code
-    _register(app, repo_root, None)
-    return code
 
 
 def main(argv: Sequence[str] | None = None) -> int:

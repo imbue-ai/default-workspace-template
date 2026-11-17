@@ -7,11 +7,10 @@ state, so they do not load the manifest library (and the pydantic it builds on) 
 
 from __future__ import annotations
 
-import contextlib
 import json
 import sys
 import tomllib
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from agents_shared import serve_isolated_instance
@@ -30,6 +29,7 @@ from update_app_skill.preview_app import (
     InstanceSpec,
     PreviewError,
     PreviewWindow,
+    _instance_locks,
     _instance_state_path,
     _preview_state_path,
     _read_json,
@@ -240,18 +240,6 @@ def up(
             instances=instances,
             dump_registry=dump_registry,
         )
-
-
-@contextlib.contextmanager
-def _instance_locks(repo_root: Path, app_names: Sequence[str]) -> Generator[None]:
-    """Hold the instance lock of each app's preview, taken in one order so two holders never
-    wait on each other."""
-    with contextlib.ExitStack() as locks:
-        for name in sorted(set(app_names)):
-            locks.enter_context(
-                serve_isolated_instance.instance_lock(repo_root, instance_name(name))
-            )
-        yield
 
 
 def _up_locked(

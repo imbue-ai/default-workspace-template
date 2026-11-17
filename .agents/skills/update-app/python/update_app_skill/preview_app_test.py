@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from agents_shared import serve_isolated_instance
 from agents_shared.testing import add_linked_worktree
 
 from update_app_skill import preview_app as mod
@@ -1094,3 +1095,41 @@ def test_an_up_asked_for_while_a_revive_boots_the_preview_waits_for_it(
     upping.join(timeout=10)
     assert codes == [0, 0]
     assert slow.ups() == ["notes-preview", "notes-preview"]
+
+
+def test_a_down_asked_for_while_a_revive_boots_a_sibling_waits_for_it(
+    tmp_path: Path,
+) -> None:
+    """A teardown run while the window's Start boots the preview again must not pull the
+    state out from under that boot, the siblings' included."""
+    worktree = _write_worktree(tmp_path)
+    instances = _RecordingInstances(tmp_path)
+    assert (
+        boot.up(
+            "system_interface",
+            worktree,
+            tmp_path,
+            with_apps=["chat"],
+            instance_key="agent-1",
+            instances=instances,
+            dump_registry=_dump_registry,
+        )
+        == 0
+    )
+    downing = threading.Thread(
+        target=lambda: mod.down(
+            "system_interface",
+            tmp_path,
+            instances=instances,
+            dump_registry=_dump_registry,
+        )
+    )
+
+    with serve_isolated_instance.instance_lock(tmp_path, mod.instance_name("chat")):
+        downing.start()
+        downing.join(timeout=1)
+        assert downing.is_alive()
+        assert instances.downs == []
+    downing.join(timeout=10)
+
+    assert instances.downs == ["system_interface-preview", "chat-preview"]
