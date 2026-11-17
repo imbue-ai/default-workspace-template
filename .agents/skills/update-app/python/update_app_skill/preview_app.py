@@ -346,7 +346,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     up_parser = subparsers.add_parser(
         "up",
-        help="Boot the app's preview from a worktree and surface it as an app to open.",
+        help=(
+            "Boot the app's preview from a worktree and, unless --private, surface it "
+            "as an app to open."
+        ),
     )
     up_parser.add_argument(
         "--app", required=True, help="The app's registered name (its manifest's name)."
