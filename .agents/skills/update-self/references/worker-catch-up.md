@@ -1,8 +1,5 @@
 # Worker: catching up, and retrying after a rollback (the worker guide's Steps 7 and 8)
 
-Read this when the lead replies asking you to catch up to its `HEAD`, or to
-retry after its apply rolled back.
-
 ## Contents
 
 - Catch up when the lead's `HEAD` moved

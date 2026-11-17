@@ -4,9 +4,8 @@ You are the background worker for an update pass, in your own worktree
 branched off the lead's `HEAD`. Merge the target release, triage the
 conflicts, validate what reconciled, and report a "what's new" summary.
 
-**After a compaction, re-read this file, then the reference your current step
-names.** This file is the whole pass in order; each reference holds one
-step's detail and is read only when its step says so.
+This file is the whole pass in order; each reference holds one step's detail
+and is read only when its step says so.
 
 ## Standing instructions
 
@@ -41,18 +40,14 @@ step's detail and is read only when its step says so.
 
 ## Steps
 
-- 1. Resolve inputs, and revert any rollback of an earlier update.
-- 2. Reason about the diff, then trial-merge. A conflict:
-  `references/worker-conflict-triage.md`.
-- 3. Commit with the marker subject.
-- 4. Classify and validate the merged set: 4a impact analysis
-  (`references/worker-impact-analysis.md`), 4b validation
-  (`references/worker-validation.md`), 4c review gates
-  (`references/worker-review-gates.md`).
-- 5. Gather the "what's new" inputs.
-- 6. Report back (`references/worker-report.md`), then wait for the lead.
-- 7. Catch up when the lead's `HEAD` moved, and 8. Retry after the apply
-  rolled back: only when the lead asks (`references/worker-catch-up.md`).
+1. Resolve inputs
+2. Reason about the diff, then trial-merge
+3. Commit with the marker subject
+4. Classify and validate the merged set
+5. Gather the "what's new" inputs
+6. Report back, then wait for the lead
+7. Catch up when the lead's `HEAD` moved, only when the lead asks
+8. Retry after the apply rolled back, only when the lead asks
 
 ## 1. Resolve inputs
 

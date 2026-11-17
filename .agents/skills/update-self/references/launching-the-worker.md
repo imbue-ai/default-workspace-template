@@ -9,13 +9,13 @@ not swap a command here for a newer launcher subcommand.
 Do not open a window for your own chat while the pass runs: teardown opens it
 once the results are ready.
 
-## Contents
+## Steps
 
-- 1. Open the tracking ticket
-- 2. Write the task file
-- 3. Clear the previous pass's worker
-- 4. Clear the previous pass's branch
-- 5. Launch, record the hand-off, arm the poll
+1. Open the tracking ticket
+2. Write the task file
+3. Clear the previous pass's worker
+4. Clear the previous pass's branch
+5. Launch, record the hand-off, arm the poll
 
 ## 1. Open the tracking ticket
 
@@ -52,7 +52,8 @@ Follow the worker guide at
 `data/.tasks/update-self/skill-at-target/.agents/skills/update-self/references/update-self-worker.md`
 end to end: trial-merge conflict triage, complete the merge (preserving the
 `update-self:` merge-commit subject), validate the merged set, generate the
-"what's new" report, and report `done`. That
+"what's new" report, and report `done`. After a compaction, re-read that
+guide, then the reference its current step names. That
 `data/.tasks/update-self/skill-at-target/.agents/skills/update-self` path is the copy
 of the update-self skill shipped with the release being updated to (staged by the
 lead and synced into your worktree with this runtime dir) -- run *all* its

@@ -1,7 +1,6 @@
 # Answering the worker's `question` gate (SKILL.md Step 4)
 
-Read this when the poll delivers a report whose `name:` is `question`. The
-shared mechanics of answering a worker are in
+The shared mechanics of answering a worker are in
 `data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy.md`
 (worker `update-self`, branch `mngr/update-self`, reports dir
 `data/.tasks/update-self/reports/`).
