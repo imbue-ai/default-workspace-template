@@ -2756,6 +2756,13 @@ export class DesktopStore {
    *  text (Chat's New Chat on a stock machine), else the primary one. Settles once the window is on the desktop, or
    *  with the failure for the caller to show where the press was: nothing is toasted. */
   async startNewWithText(text: string): Promise<StartNewOutcome> {
+    if (this.viewedDesktop() !== null) {
+      console.info("[si] refused to start a new chat while viewing somebody else's desktop");
+      return {
+        isOpened: false,
+        failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
+      };
+    }
     const [primary, secondary] = freeTextRowsOf(openableApps(this.state));
     const row = secondary ?? primary;
     if (row === undefined) {
