@@ -82,6 +82,8 @@ _MOVE_REFUSAL_BY_SIDE: Final[dict[MoveSide, OsRefusal]] = {
 }
 # Queries that ask for data or a download rather than a page, so a failure is answered in plain words.
 _NON_PAGE_QUERIES: Final[frozenset[str]] = frozenset({"json", "zip", "download"})
+# Queries that load in the hidden frame a download goes through, which can read only a plain-text refusal.
+_DOWNLOAD_QUERIES: Final[frozenset[str]] = frozenset({"zip", "download"})
 
 # What every route exchanges, which the API document publishes. The connections listing is the one JSON route; a
 # path's routes serve files of any kind (its page, its bytes, a zip, and ``?json`` the page data its view describes),
@@ -122,16 +124,16 @@ def _text(message: str, status: int) -> Response:
 def _refusal(sentence: str, status: int, kind: str | None = None, detail: str | None = None) -> Response:
     """A refusal as the ``ErrorResponse`` the page reads: ``sentence`` for the person (naming only the cause, as the
     page's own words name what failed), ``kind`` for a page that words the cause itself, ``detail`` for a script (the
-    sentence when there is nothing more to say). A download is answered in plain text instead: it loads in a hidden
-    frame, which can read only that (workspace_ui's ``startDownload``)."""
-    if "download" in request.args:
+    sentence when there is nothing more to say). A download, of a file or a folder's zip, is answered in plain text
+    instead: it loads in a hidden frame, which can read only that (workspace_ui's ``startDownload``)."""
+    if _DOWNLOAD_QUERIES & request.args.keys():
         return _text(sentence, status)
     return error_response(detail or sentence, status, user_facing_message=sentence, kind=kind)
 
 
 def _unexplained_failure(detail: str) -> Response:
     """A failure no sentence explains, which the page asks to have reported: ``detail`` only."""
-    if "download" in request.args:
+    if _DOWNLOAD_QUERIES & request.args.keys():
         return _text(detail, 500)
     return error_response(detail, 500)
 

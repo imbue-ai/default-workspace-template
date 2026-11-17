@@ -186,6 +186,11 @@ def test_a_file_asked_for_as_a_download_is_an_attachment_under_its_name_and_a_re
     missing_there = client.get(f"/__remote/{DEVICE}/Users/kim/gone.png?download")
     assert missing_there.status_code == 404
     assert "Content-Disposition" not in missing_there.headers
+    # A folder's download loads in the same frame.
+    missing_folder = client.get("/missing/?zip", headers={"Accept": "text/html,*/*"})
+    assert missing_folder.status_code == 404
+    assert missing_folder.content_type.startswith("text/plain")
+    assert missing_folder.get_data(as_text=True) == "It's no longer there."
 
 
 def test_a_path_that_is_not_there_is_files_own_not_found_page_for_a_browser_and_plain_words_otherwise(
