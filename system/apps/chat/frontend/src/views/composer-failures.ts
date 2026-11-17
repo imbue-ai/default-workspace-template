@@ -4,25 +4,44 @@
  */
 
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
-import { describeRequestErrorKind, describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
+import {
+  describeRequestErrorKind,
+  describeRequestFailure,
+  isUnansweredRequest,
+} from "@imbue/workspace-ui/src/models/request-error";
+import type { SendFailureKind } from "@imbue/workspace-ui/src/models/request-error";
+import { ChatNotStartedError } from "../models/Chats";
 import { plainFailureLines } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 
-export const SEND_NOT_ANSWERED =
-  "The workspace didn't answer, so the agent may already have your message. Check its terminal before you send it again.";
-export const SEND_TO_GONE_CHAT =
-  "This chat is no longer here -- it was deleted. Your message is still in the box, so you can paste it into a new chat.";
+const SEND_NOT_ANSWERED =
+  "The workspace didn't answer, so Imbue Studio can't tell whether your message was delivered. Your text is back in " +
+  "the box.";
 const SEND_REFUSED = "Your message wasn't delivered. Your text is back in the box, so nothing was lost.";
 
-/** A refused or unanswered send. The message is back in the composer whichever way it failed. A kind mngr classified
- *  is worded by the composer's notice itself; this is what it says for the rest. */
+/**
+ * How the composer handles a failed send, which decides the notice's buttons: one of mngr's or the chat app's send
+ * kinds; ``not_answered`` for a send nothing answered (it may have been delivered before the answer was lost);
+ * ``unrecognised`` for a kind the server named that the composer does not know, which gets nothing kind-specific; and
+ * ``chat_not_started`` for a send to a chat whose create failed, which has no agent behind it.
+ */
+export type ComposerFailureKind = SendFailureKind | "not_answered" | "unrecognised" | "chat_not_started";
+
+export function composerFailureKindOf(error: unknown): ComposerFailureKind {
+  if (error instanceof ChatNotStartedError) return "chat_not_started";
+  const failure = describeRequestFailure(error);
+  if (isUnansweredRequest(error) || failure.cause === "not_answered") return "not_answered";
+  const kind = describeRequestErrorKind(error);
+  return kind === "unknown" && failure.kind !== null && failure.kind !== "unknown" ? "unrecognised" : kind;
+}
+
+/** A refused or unanswered send. The message is back in the composer whichever way it failed. The chat app's
+ *  sentence for its case stands as written; this words the rest. */
 export function describeSendFailure(error: unknown): FailureLines {
   const failure = describeRequestFailure(error);
-  const kind = describeRequestErrorKind(error);
   if (failure.cause === "not_answered") {
     return { body: [SEND_NOT_ANSWERED], details: failure.details, isReportable: false };
   }
-  if (kind === "chat_gone") return { body: [SEND_TO_GONE_CHAT], details: failure.details, isReportable: false };
   const told = failureSentence(failure, "Your message wasn't delivered. Your text is back in the box");
   if (failure.cause === "user_facing") {
     return { body: [told.message], details: told.details, isReportable: told.isReportable };
