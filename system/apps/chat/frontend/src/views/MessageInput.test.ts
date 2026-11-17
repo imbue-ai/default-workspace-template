@@ -468,6 +468,17 @@ async function typeAndSend(component: m.Component<{ chatId: string | null }>, ch
   return render();
 }
 
+/** The message id the ``fromEnd``-th last send carried (1 for the latest). */
+function sentMessageId(fromEnd = 1): string {
+  const calls = mocks.sendMessage.mock.calls as unknown as [string, string, string][];
+  return calls[calls.length - fromEnd][2];
+}
+
+/** Tell the composer a chat still being created was discarded, with its last record. */
+function discardProvisionalChat(record: ProvisionalChat): void {
+  for (const listener of mocks.discardListeners) listener(record);
+}
+
 describe("MessageInput send guard", () => {
   beforeEach(() => {
     mocks.sendMessage.mockClear();
@@ -1129,11 +1140,7 @@ describe("MessageInput send to a chat still being created", () => {
       const component = MessageInput();
       const sent = await typeAndSend(component, "agent-1", text);
       expect(findByTag(sent, "textarea")?.attrs?.value).toBe("");
-      const calls = mocks.sendMessage.mock.calls as unknown as [string, string, string][];
-      const messageId = calls[calls.length - 1][2];
-      const heldSends = keepsHeld ? [{ message_id: messageId, text }] : [];
-      for (const listener of mocks.discardListeners)
-        listener({ ...creating, held_sends: heldSends } as ProvisionalChat);
+      discardProvisionalChat({ ...creating, held_sends: keepsHeld ? [{ message_id: sentMessageId(), text }] : [] });
       return component.view!({ attrs: { chatId: "agent-1" } } as never);
     }
 
@@ -1153,13 +1160,12 @@ describe("MessageInput send to a chat still being created", () => {
       const component = MessageInput();
       await typeAndSend(component, "agent-1", "first");
       await typeAndSend(component, "agent-1", "second");
-      const calls = mocks.sendMessage.mock.calls as unknown as [string, string, string][];
       const heldSends = [
-        { message_id: calls[calls.length - 2][2], text: "first" },
-        { message_id: calls[calls.length - 1][2], text: "second" },
+        { message_id: sentMessageId(2), text: "first" },
+        { message_id: sentMessageId(), text: "second" },
       ];
 
-      for (const listener of mocks.discardListeners) listener({ ...creating, held_sends: heldSends });
+      discardProvisionalChat({ ...creating, held_sends: heldSends });
 
       const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
       expect(findByTag(after, "textarea")?.attrs?.value).toBe("first\n\nsecond");
@@ -1367,12 +1373,12 @@ describe("MessageInput first send of a chat with no seed", () => {
     mocks.sendMessage.mockResolvedValueOnce("held");
     const component = MessageInput();
     await typeAndSend(component, "agent-1", "Plan my week");
-    const calls = mocks.sendMessage.mock.calls as unknown as [string, string, string][];
-    const messageId = calls[calls.length - 1][2];
 
-    const discarded = { ...(mocks.provisional as ProvisionalChat), phase: "creating" };
-    for (const listener of mocks.discardListeners)
-      listener({ ...discarded, held_sends: [{ message_id: messageId, text: "Plan my week" }] } as ProvisionalChat);
+    discardProvisionalChat({
+      ...(mocks.provisional as ProvisionalChat),
+      phase: "creating",
+      held_sends: [{ message_id: sentMessageId(), text: "Plan my week" }],
+    });
 
     const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
     expect(renderedText(findByClass(after, "modal-message"))).toContain("Your message wasn't delivered.");
