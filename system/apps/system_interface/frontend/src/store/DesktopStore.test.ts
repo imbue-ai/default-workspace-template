@@ -1249,6 +1249,25 @@ describe("a launch into an app that is not running", () => {
     );
   });
 
+  it("takes the stopped app's note down once the app list says the app is running again", async () => {
+    api.apps = [chat, terminal];
+    const store = await startedStore();
+    api.refusal = shellRefusal(
+      502,
+      "terminal is not running, so it could not take the launch: refused",
+      "Terminal isn't running right now, so it couldn't open that.",
+      "app_stopped",
+    );
+    await store.runLaunch("terminal", "new", "new");
+    api.refusal = null;
+    expect(notices()).toEqual(["Terminal isn't running."]);
+
+    socket.deliver().onAppsUpdated([chat, { ...terminal, is_running: false }]);
+    expect(notices()).toEqual(["Terminal isn't running."]);
+    socket.deliver().onAppsUpdated([chat, { ...terminal, is_running: true }]);
+    expect(notices()).toEqual([]);
+  });
+
   it("words a wake that brought nothing up as the app's could-not-start page does", async () => {
     api.apps = [chat, docs];
     const store = await startedStore();

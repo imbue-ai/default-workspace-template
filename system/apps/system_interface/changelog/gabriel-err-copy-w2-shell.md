@@ -4,7 +4,7 @@ The workspace desktop says what failed in its own words, names apps as people kn
 
 - The shell's refusals carry a sentence for people (`user_facing_message`, with `reportable` where it asks for a bug report): an app that is no longer in the workspace, a launch path it no longer offers, a window or desktop that has gone, the last desktop's delete, and a change that could not be saved (a full disk says so and offers an agent to free up space, and every failed save offers Try again). A failed launch otherwise carries the app's own words, and the desktop words it.
 
-- A launch into an app that isn't running says what the app's window would ("Terminal is not running right now." with "Ask an agent to start it"), and a launch that woke a stopped app that didn't come up says what its could-not-start page says (couldn't start, failed several times so not started again, or still starting).
+- A launch into an app that isn't running says what the app's window would ("Terminal is not running right now." with "Ask an agent to start it"; the note goes once the app runs again), and a launch that woke a stopped app that didn't come up says what its could-not-start page says (couldn't start, failed several times so not started again, or still starting).
 
 - Once an app has taken a launch, a failed write of where its window is no longer fails the launch: the window shows the page, the launcher lets go of the text, and a note says the window's place wasn't saved (on a full disk, with an agent to free up space). When no window could be opened for it, the note says so (on a full disk, with an agent to free up space) and offers no Try again, which would ask the app a second time.
 

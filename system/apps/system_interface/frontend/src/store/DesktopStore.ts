@@ -661,6 +661,8 @@ export class DesktopStore {
   private bootFailure: Failure | null = null;
   /** The notes a refusal leaves on screen (plan-phone-interface.md's toasts). */
   readonly toasts: ToastQueue;
+  /** The stopped apps' notes up, by toast id, with whether the app list has shown the app stopped since. */
+  private readonly toastsUntilRunning = new Map<number, { readonly app: string; isSeenStopped: boolean }>();
   /** The speech bubbles up over the tray (the multiplayer spec, section 6.5), in arrival order. */
   private bubbles: BubbleStack = [];
   private bubbleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -765,6 +767,28 @@ export class DesktopStore {
       actions: notice.actions,
       isReportable: notice.isReportable,
     });
+    const shown = this.toasts.current().at(-1);
+    if (notice.untilRunning !== undefined && shown !== undefined) {
+      const app = appByName(this.state, notice.untilRunning);
+      this.toastsUntilRunning.set(shown.id, { app: notice.untilRunning, isSeenStopped: app?.is_running === false });
+    }
+  }
+
+  /** Take down each stopped app's note once its app runs again. The app list may still say an app runs when its
+   *  launch found it stopped, so only a reading of it running after one of it stopped counts. */
+  private dismissNotesOfRunningApps(): void {
+    const current = new Set(this.toasts.current().map((toast) => toast.id));
+    for (const [id, watch] of this.toastsUntilRunning) {
+      const app = appByName(this.state, watch.app);
+      if (!current.has(id) || app === undefined) {
+        this.toastsUntilRunning.delete(id);
+      } else if (!app.is_running) {
+        watch.isSeenStopped = true;
+      } else if (watch.isSeenStopped) {
+        this.toastsUntilRunning.delete(id);
+        this.toasts.dismiss(id);
+      }
+    }
   }
 
   /** What users call the app, or "This app" for one this window no longer knows. */
@@ -805,7 +829,7 @@ export class DesktopStore {
         return this.noticeOf(failureSentence(failure, whatFailed), tryAgain);
       case "app_stopped":
         if (app === undefined) break;
-        return { ...this.stoppedNotice(app), details: failure.details };
+        return { ...this.stoppedNotice(app), details: failure.details, untilRunning: app.name };
       case "app_could_not_start":
         if (app === undefined) break;
         return this.couldNotStartNotice(app, `${app.display_name} couldn't start.`, failure.details, tryAgain);
@@ -1615,6 +1639,7 @@ export class DesktopStore {
     const themingBefore = new Map(this.state.apps.map((app) => [app.name, app.theming]));
     this.dispatch({ type: "apps_updated", apps });
     this.markAppsLoaded();
+    this.dismissNotesOfRunningApps();
     for (const app of apps) {
       const before = themingBefore.get(app.name);
       if (before !== undefined && before !== app.theming) this.pageDriver?.resendTheme(app.name);
