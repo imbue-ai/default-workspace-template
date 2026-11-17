@@ -390,3 +390,77 @@ def test_the_chat_app_sits_between_the_shell_and_the_sharing_stack() -> None:
         < bands.SERVICE_BANDS["chat"]
         < bands.SERVICE_BANDS["share-gateway"]
     )
+
+
+_DAY = 24 * _HOUR
+
+
+def _stages_with(**idle_seconds_by_stage: float) -> dict[str, bands.ChatStage]:
+    """The chat stages with the named stages' idle times replaced, and nothing else."""
+    return {
+        name: stage._replace(
+            idle_seconds=idle_seconds_by_stage.get(name, stage.idle_seconds)
+        )
+        for name, stage in bands.CHAT_STAGES.items()
+    }
+
+
+def _aged_under(
+    stages: dict[str, bands.ChatStage],
+    idle_seconds: float,
+    *,
+    is_engaged: bool = False,
+    is_mid_turn: bool = False,
+) -> int:
+    """The score, under ``stages``, for a chat last engaged with ``idle_seconds`` ago."""
+    return bands.chat_agent_oom_score_adj(
+        is_open=is_engaged,
+        is_visible=is_engaged,
+        recency_rank=0 if is_engaged else None,
+        idle_seconds=idle_seconds,
+        is_mid_turn=is_mid_turn,
+        stages=stages,
+    )
+
+
+def test_chat_stages_are_declared_in_the_order_a_chat_reaches_them() -> None:
+    # The stages are read in order: each later one takes longer to reach and is
+    # more expendable.
+    stages = list(bands.CHAT_STAGES.values())
+    assert stages == sorted(stages, key=lambda stage: stage.idle_seconds)
+    assert stages == sorted(stages, key=lambda stage: stage.adj)
+
+
+def test_an_idle_time_on_the_aged_stage_is_all_it_takes_to_shed_old_chats_first() -> (
+    None
+):
+    stages = _stages_with(aged=7 * _DAY)
+    aged = stages["aged"].adj
+    assert _aged_under(stages, 7 * _DAY) == aged
+    assert _aged_under(stages, 30 * _DAY) == aged
+    # More expendable than anything an agent in use is running, and no less than
+    # the browser.
+    assert aged > bands.AGENT_SUBPROCESS
+    assert aged >= bands.SHARED_BROWSER
+    # On the way there a chat is past stale and still climbing; a day in, it has
+    # not started.
+    assert bands.CHAT_AGENT_STALE_CEILING < _aged_under(stages, 4 * _DAY) < aged
+    assert _aged_under(stages, 1 * _DAY) == bands.CHAT_AGENT_STALE_CEILING
+
+
+def test_the_climb_past_stale_ignores_engagement_and_spares_a_chat_mid_turn() -> None:
+    stages = _stages_with(aged=7 * _DAY)
+    assert _aged_under(stages, 7 * _DAY, is_engaged=True) == stages["aged"].adj
+    assert _aged_under(stages, 7 * _DAY, is_mid_turn=True) == bands.CHAT_AGENT_BASE
+
+
+def test_a_chat_never_reaches_a_stage_set_at_never() -> None:
+    # Left forever, it stops at the last stage that has an idle time.
+    assert (
+        _aged_under(bands.CHAT_STAGES, float("inf")) == bands.CHAT_AGENT_STALE_CEILING
+    )
+    never_stale = _stages_with(stale=bands.NEVER)
+    assert _aged_under(never_stale, 3650 * _DAY) == bands.CHAT_AGENT_BASE
+    assert (
+        _aged_under(never_stale, 3650 * _DAY, is_engaged=True) == bands.CHAT_AGENT_FLOOR
+    )

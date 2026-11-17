@@ -264,8 +264,8 @@ there: down toward `CHAT_AGENT_FLOOR` (300) as the user engages with it, and up
 toward `CHAT_AGENT_STALE_CEILING` (800) as it is left alone.
 
 Two forces, combined through a single **freshness** factor that decays with idle
-time (1.0 for the first hour, reaching 0.0 at 24 hours -- the ramp is a table in
-`bands`):
+time (1.0 for the first hour, reaching 0.0 at 24 hours -- the schedule is the
+`CHAT_STAGES` table in `bands`):
 
 - **engagement** lowers the score: an open tab, a visible tab, and how recently
   the chat was messaged relative to its peers. Each bonus is scaled by freshness.
@@ -319,6 +319,28 @@ the durable client-activity log; without that, every chat would look
 never-messaged and start aging from its process-start time. An agent whose record
 can't be classified as a chat at all still falls through to the worker band, not
 a protected one.
+
+## Changing the policy
+
+`bands` is laid out as its types, the tables that fill them in, and the functions
+that read the tables, so who is shed first changes by editing a table:
+
+| To change | Edit |
+|---|---|
+| a fixed band (a worker, an agent's subprocess, the Screen's stack) | its constant |
+| a service's place among the services | its `SERVICE_BANDS` row |
+| how long a chat stays fresh, when it is stale, and the band at each | its `CHAT_STAGES` row |
+| what an open tab, a visible tab, or a recent message is worth to a chat | `CHAT_ENGAGEMENT` |
+| where Chromium's processes land | `BROWSER` |
+
+`CHAT_STAGES` also declares a third stage, `aged`, switched off: its idle time is
+`NEVER`, which no chat reaches. An idle time in its place carries a chat left
+that long on from the stale band to the top of the scale, level with Chromium's
+renderers. `chat_agent_oom_score_adj` takes the stage table as an argument, so a
+schedule can be tried without editing the module.
+
+When earlyoom acts is not in `bands`: its two thresholds are the `-m` argument in
+`system/supervisord.conf.d/earlyoom.conf`.
 
 ## Outputs
 
