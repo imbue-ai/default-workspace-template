@@ -51,9 +51,8 @@ A heal of a critical app (the shell, the chat, the terminal, or an app whose
 manifest says `critical = true`) is a live edit of the served tree at your own
 risk: there is no preview, no kept rollback point, and no notice behind it, so
 a wrong fix takes the user's surface down with nothing to undo it but your next
-edit. The safe path is `update-app`'s careful flow
-(`.agents/skills/update-app/references/critical-app.md`); take it whenever the
-fix can wait for a preview.
+edit. The safe path is the `update-app` skill's careful flow; take it whenever
+the fix can wait for a preview.
 
 ## Steps
 

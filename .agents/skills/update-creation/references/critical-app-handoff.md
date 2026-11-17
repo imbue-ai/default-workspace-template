@@ -1,7 +1,6 @@
 # A pass the careful flow dispatched for a critical app
 
-Read this when `update-app`'s careful flow
-(`.agents/skills/update-app/references/critical-app.md`) sent you to
+Read this when the `update-app` skill's careful flow sent you to
 `update-creation` to hand a critical app's change to a harden worker. No other
 pass needs it.
 
@@ -17,10 +16,8 @@ and lands through the same apply.
 What differs from an ordinary update pass:
 
 - **The task file carries no `## Change origin` marker, and the worker runs no
-  gate** (see "Critical-app handoff" in
-  `.agents/skills/harden-worker/references/op-update.md`).
-  The careful flow already got the user's approval through its live preview
-  loop, so re-arming the gate would ask them to approve the same thing twice --
+  gate.** The careful flow already got the user's approval through its live
+  preview loop, so re-arming the gate would ask them to approve the same thing twice --
   and writing the marker anyway, or telling the worker in the task body to
   follow it, puts the gate back. Every other task file needs the marker.
 - **The launch passes `--branch`**, so the worker checks out and extends the

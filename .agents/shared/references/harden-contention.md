@@ -129,11 +129,8 @@ or a provisional milestone merge:
    your branch first and rerun; do not treat the failure as staleness. When
    the worker's `done` report lists paths under `References registered:`, add
    them to `$PATHS` as well -- your tree's manifest predates them. A critical
-   app's merge lives in
-   `update-app/references/critical-app.md` step 4, which applies this same
-   check over the pass's footprint together with `system/libs/workspace_ui/`,
-   `system/libs/workspace_layout/`, `system/libs/workspace_themes/`, `system/package.json`,
-   `system/package-lock.json`, and every file the pass branch changes. Empty
+   app's merge is not this one: the `update-app` skill's careful flow owns it,
+   and applies this same check over a wider footprint. Empty
    output means fresh: merge normally. Any output means the base moved under
    the worker: the pass is stale -- do not merge; catch it up (below).
 

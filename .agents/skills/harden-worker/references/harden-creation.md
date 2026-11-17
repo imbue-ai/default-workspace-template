@@ -153,9 +153,9 @@ merge and verify their work as their lead.
 
 ## Review gates
 
-1. Ensure all in-flight changes have settled and are committed
-2. Run the test gate below and fix what it flags with narrowly targeted
-   changes
+The gates, and how to run them, are in
+`.agents/shared/references/review-gates.md`: read it before you run them. This
+section has what is a harden pass's own.
 
 ### The test gate
 
@@ -173,46 +173,13 @@ changes, inside a footprint or not: what your branch changed and the files of
 the change you are hardening ("The scope file" above). Other work that landed in the window (the
 scope file's `others`) selects nothing, except that the lead's work you merged
 in runs the suites of the pass's creations it reaches (`catching-up.md`).
-The selector reads commits, like the
-scope file. It refuses to run while the working tree holds an uncommitted or
-untracked change, naming it, and refuses a scope file whose diff does not run
-to `HEAD`; regenerate the file and run it again.
+The selector refuses a scope file whose diff does not run to `HEAD`;
+regenerate the file and run it again.
 
-It prints shell lines, each under a comment naming the changed paths behind
-it. Run every line, in order, each as its own command: they include the
-frontend build the browser tests need, and passing two pytest roots to one
-invocation breaks collection. What it selects, and why, is in
-`system/libs/app_manifest/README.md` ("Selecting tests"): the repo guards, the
-changed packages' and skills' own suites with their ratchets, the suites of
-whatever declares a dependency on them, the browser tests too of an app whose
-Python changed, only the `browser` and `frontend` tests of the chat app or the
-shell when its frontend alone changed (any other app runs whole), each changed
-test file of those two on its own, and the frontend checks. A path of the
-pass's outside every package and skill, or in a package the root project
-depends on, brings in the full root suite; that is the gate working, not a
-gap. Do not drop any line of it.
-
-Read `test-gate-cases.md` before you act whenever the run is not a clean pass.
-It covers, each under its own heading:
-
-- **A failing test.** Rerun only the tests that failed before anything else;
-  one that passes on that rerun without a change of yours is flaky, and goes on
-  your report's `Flaky tests:` line.
-- **A failing test you would change.** Run it on the tree before your change
-  first, and report which of the two caused the failure.
-- **A suite the selector left out.** When you have a concrete reason to think
-  a suite it did not print can observe your change, run it and declare the
-  coupling, or name it under `Undeclared couplings:` when the suite is
-  built-in.
-- **A regression the gate let through.** When your task fixes a break an
-  earlier change made, check whether the selector would have picked the test
-  that catches it.
-- **A command that dies from a signal** (exit status 137 or 143, or `Killed`
-  with no failure output). It is not a test failure until the shed ledger says
-  it is not a shed; a shed is never a failure to fix in the code.
-
-Memory pressure is never a reason to skip a command of the gate, or to report
-`done` without it.
+Run what it prints as `review-gates.md` says, and read its sections on a run
+that is not a clean pass before you act on one. For a harden pass the tree
+before your change is `$DIFF_BASE`, and a flaky test goes on your report's
+`Flaky tests:` line.
 
 If your own task file says your lead runs this verification on the merged
 result -- you are one of the workers a pass was split across -- run your own

@@ -70,10 +70,10 @@ type's reference once however many creations share it.
 ## Step 2: Load the references that define your pass
 
 Read the ones your pass selects top to bottom, then follow them. A bare
-filename is relative to `.agents/skills/harden-worker/references/`; the three
+filename is relative to `.agents/skills/harden-worker/references/`; the
 shared references are written with their full paths. Inside the references,
-`worker-reporting.md`, `spec-summary.md` and `lead-proxy.md` always mean those
-three shared files.
+`worker-reporting.md`, `review-gates.md`, `spec-summary.md`,
+`web-frontend-testing.md` and `lead-proxy.md` always mean those shared files.
 
 Every pass:
 
@@ -83,6 +83,7 @@ Every pass:
 | every pass | the one of `op-crystallize.md`, `op-update.md` and `op-heal.md` named for your operation | your operation's spine: pre-work, stages, which gates fire and their `name:` values, gate report templates |
 | every pass, once per type among your creations | the one of `type-skill.md`, `type-app.md` and `type-service.md` named for the type (`type-skill.md` for a `shared` creation) | the creation itself: where it lives, how to run and test it in isolation, how to edit it safely |
 | every pass | `.agents/shared/references/worker-reporting.md` | the report-file procedure and task-file frontmatter schema (Step 4 uses it) |
+| every pass | `.agents/shared/references/review-gates.md` | running the test gate, and what to do when its run is not a clean pass: a failing test, a suite the selector left out, a regression the gate let through, a command that dies from a signal |
 
 By what the pass is:
 
@@ -92,14 +93,13 @@ By what the pass is:
 | a creation is a `skill` | `.agents/shared/references/spec-summary.md` | this workspace's skill packaging rules |
 | a creation is a `skill`, and your operation runs an outline gate | `skill-outline-fields.md` | what goes inside the outline gate |
 | a creation is a `skill`, on an emergent `update` | `update-vs-create-new.md` | update in place, or split off a new skill |
-| a creation is an `app` | `web-frontend-testing.md` | isolated-instance and rendered-page rules |
+| a creation is an `app` | `.agents/shared/references/web-frontend-testing.md` | isolated-instance and rendered-page rules |
 | a creation performs multiple independent I/O-bound operations (fetches, API calls, subprocesses), works through many items, captures data, or keeps anything on disk across runs | `data-and-storage.md` | concurrency for independent work, partial failure and resumption, preserve-and-surface, bounded disk growth, the `.nobackup` marker |
 
 By what happens during the pass:
 
 | Load when | Reference | What it gives you |
 |---|---|---|
-| the test gate's run is not a clean pass: a test fails, a command dies from a signal, a suite looks left out, or your task fixes an earlier break | `test-gate-cases.md` | reruns and flaky tests, attributing a failure, undeclared couplings, the shed ledger |
 | you decide to split the pass across workers of your own | `splitting-the-pass.md`, then `.agents/shared/references/lead-proxy.md` | how to launch, brief, merge and verify them; the flow every lead follows for its worker |
 | your task body has a `## Carried work` section | `carried-work.md` | merging and hardening what a superseded pass left |
 | your lead asks you to catch up to a commit, or names a revert of a milestone it merged | `catching-up.md` | the catch-up merge and its scoped test gate; bringing a reverted milestone back |

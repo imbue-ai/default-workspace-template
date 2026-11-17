@@ -21,11 +21,9 @@ Standing instructions:
   Commit pending changes, never stash them, then dispatch.
 - **A change that touches a critical app never starts here.** A critical app
   (the shell, the chat, the terminal, or an app whose manifest says `critical =
-  true`) is an `app:` creation too, but the **whole change** takes
-  `update-app`'s careful flow
-  (`.agents/skills/update-app/references/critical-app.md`): every other
-  creation it touched is edited on the same branch, rides the same pass, and
-  lands through the same apply. That flow calls into Steps 1-3 here and owns
+  true`) is an `app:` creation too, but the **whole change** takes the
+  `update-app` skill's careful flow: every other creation it touched is edited
+  on the same branch, rides the same pass, and lands through the same apply. That flow calls into Steps 1-3 here and owns
   the go-live. When it sent you here, read
   `references/critical-app-handoff.md` before Step 1 for what differs.
 - **After a compaction**, re-read the shared references below before you handle
@@ -40,9 +38,8 @@ so are an app and the skill that drives it, or two unrelated tweaks made in
 the same turn. Never dispatch a pass per creation. Every worker pays its own
 environment setup before it does any work, and two passes over one change
 would each verify half of something that only works whole. When a change holds
-parts that are separate jobs, the worker splits them across workers of its own
-(the harden worker's contract, "Splitting the pass across workers of your
-own"); that is its call, not yours.
+parts that are separate jobs, the worker splits them across workers of its
+own; that is its call, not yours.
 
 ## The two origins
 
