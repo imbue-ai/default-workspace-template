@@ -6,7 +6,7 @@ An exemption is two strings in a SKILL.md's frontmatter ``metadata``:
       exempt-checks: size depth
       exempt-reason: awaiting-restructure
 
-``docs/system/skill_authoring_guide.md`` says what each reason means and who may write it.
+``docs/system/skill_exemptions.md`` says what each reason means and who may write it.
 """
 
 from __future__ import annotations
