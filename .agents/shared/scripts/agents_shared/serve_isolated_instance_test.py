@@ -2118,7 +2118,9 @@ def test_a_revived_frame_frames_its_app_the_way_it_was_framed(tmp_path: Path) ->
     assert registry.manifest_registrations == [
         (_FRAMED_INBOX.manifest_path, _FRAMED_INBOX.url, _FRAMED_INBOX.overrides)
     ]
-    assert mod.read_frame(_FRAME_NAME, tmp_path).framed_app == _FRAMED_INBOX
+    record = mod.read_frame(_FRAME_NAME, tmp_path)
+    assert record is not None
+    assert record.framed_app == _FRAMED_INBOX
 
 
 def test_a_frame_that_does_not_come_back_leaves_its_app_registered_plainly(
