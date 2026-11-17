@@ -210,6 +210,35 @@ describe("Window", () => {
     ).toBeNull();
   });
 
+  it("draws a pending button as its pending label, taking no press, until it settles", () => {
+    let isPending = true;
+    const askAgent = vi.fn();
+    const element = render({
+      app: appRecord("docs", { is_running: false, program: "" }),
+      stopped: {
+        message: "Docs isn't running.",
+        details: null,
+        actions: [
+          {
+            label: "Ask an agent to start it",
+            run: askAgent,
+            pending: { isPending: () => isPending, label: "Asking an agent…" },
+          },
+        ],
+        isReportable: false,
+      },
+    });
+    const button = (): HTMLButtonElement => element.querySelector("[data-stopped-app] button") as HTMLButtonElement;
+    expect(button().textContent).toBe("Asking an agent…");
+    expect(button().disabled).toBe(true);
+    button().click();
+    expect(askAgent).not.toHaveBeenCalled();
+    isPending = false;
+    m.redraw.sync();
+    expect(button().textContent).toBe("Ask an agent to start it");
+    expect(button().disabled).toBe(false);
+  });
+
   it("offers Report a bug about a stopped app's sentence that asks for one, decided as it draws", () => {
     const stopped = {
       message: "Chat is not running right now. If this persists, report a bug.",

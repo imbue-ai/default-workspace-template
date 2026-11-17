@@ -31,6 +31,7 @@ import { failureSentence, fallbackSentence } from "@imbue/workspace-ui/src/model
 import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import type { ReportedFailure, StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
+import { ASKING_AN_AGENT_LABEL } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { couldNotStartRequest, isRetryable, refusalKindOf, stoppedSentence } from "../model/failures";
 import type { FailureNotice } from "../model/failures";
 import { refreshShellKeybindings } from "../model/keybindings";
@@ -661,6 +662,8 @@ export class DesktopStore {
   private bootFailure: Failure | null = null;
   /** The notes a refusal leaves on screen (plan-phone-interface.md's toasts). */
   readonly toasts: ToastQueue;
+  /** The requests of the agents asked from the shell's own buttons whose launch has not settled. */
+  private readonly agentAsks = new Set<string>();
   /** The stopped apps' notes up, by toast id, with whether the app list has shown the app stopped since. */
   private readonly toastsUntilRunning = new Map<number, { readonly app: string; isSeenStopped: boolean }>();
   /** The speech bubbles up over the tray (the multiplayer spec, section 6.5), in arrival order. */
@@ -849,11 +852,43 @@ export class DesktopStore {
 
   /** What a full disk offers: an agent, in the main chat, asked to free up space; its toast stays up. */
   private freeSpaceAction(): ToastAction {
+    return this.askAgentAction("Ask an agent to free up space", FREE_SPACE_REQUEST, false);
+  }
+
+  /** An "Ask an agent to ..." button: it reads "Asking an agent…" and takes no press while its ask is out, and its
+   *  toast stays up. ``isNewChat`` asks in a new chat rather than the main one. */
+  private askAgentAction(label: string, request: string, isNewChat: boolean): ToastAction {
     return {
-      label: "Ask an agent to free up space",
-      run: () => void this.startWithText(FREE_SPACE_REQUEST),
+      label,
+      run: () => void this.askAgent(request, isNewChat),
       keepsToast: true,
+      pending: { isPending: () => this.isAskingAgent(request), label: ASKING_AN_AGENT_LABEL },
     };
+  }
+
+  /** Whether an agent was asked ``request`` and its chat's window is not on the desktop yet. */
+  isAskingAgent(request: string): boolean {
+    return this.agentAsks.has(request);
+  }
+
+  /** Ask an agent ``request`` from one of the shell's own buttons, once at a time per request: in a new chat, whose
+   *  failure is toasted here (``startNewWithText`` leaves that to its caller), or in the main chat, whose launch
+   *  toasts its own. */
+  async askAgent(request: string, isNewChat: boolean): Promise<void> {
+    if (this.agentAsks.has(request)) return;
+    this.agentAsks.add(request);
+    this.notifyListeners();
+    try {
+      if (!isNewChat) {
+        await this.startWithText(request);
+        return;
+      }
+      const outcome = await this.startNewWithText(request);
+      if (!outcome.isOpened) this.toastNotice({ ...outcome.failure, actions: [] }, { isLasting: true });
+    } finally {
+      this.agentAsks.delete(request);
+      this.notifyListeners();
+    }
   }
 
   /** An app that could not start, as its could-not-start page says it: ``sentence``, then ``actions`` and an agent
@@ -872,11 +907,7 @@ export class DesktopStore {
     }
     return this.noticeOf({ message: sentence, details, isReportable: false }, [
       ...actions,
-      {
-        label: "Ask an agent to look at it",
-        run: () => void this.startNewWithText(couldNotStartRequest(app)),
-        keepsToast: true,
-      },
+      this.askAgentAction("Ask an agent to look at it", couldNotStartRequest(app), true),
     ]);
   }
 
@@ -1156,9 +1187,7 @@ export class DesktopStore {
       });
     }
     const request = `${app.display_name} (${app.name}) isn't running in this workspace. Please start it again.`;
-    return this.plainNotice(sentence, [
-      { label: "Ask an agent to start it", run: () => void this.startNewWithText(request), keepsToast: true },
-    ]);
+    return this.plainNotice(sentence, [this.askAgentAction("Ask an agent to start it", request, true)]);
   }
 
   /** Whether ``app`` is the one agents are asked through (the app of the row ``startNewWithText`` runs, Chat on a

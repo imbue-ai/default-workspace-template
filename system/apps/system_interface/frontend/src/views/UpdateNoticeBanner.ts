@@ -10,6 +10,7 @@
  */
 
 import m from "mithril";
+import { ASKING_AN_AGENT_LABEL } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { bannerClass } from "@imbue/workspace-ui/src/components/banner";
 import { DestroyConfirmDialog } from "@imbue/workspace-ui/src/DestroyConfirmDialog";
@@ -111,6 +112,16 @@ export interface UpdateNoticeBannerAttrs {
   readonly store: DesktopStore;
 }
 
+/** "Ask an agent to finish it": it reads "Asking an agent…" and takes no press until the agent's chat is up. */
+function finishButton(store: DesktopStore, request: string): m.Children {
+  const isAsking = store.isAskingAgent(request);
+  return m(
+    Button,
+    { sm: true, extra: "update-notice-finish", disabled: isAsking, onclick: () => void store.askAgent(request, true) },
+    isAsking ? ASKING_AN_AGENT_LABEL : "Ask an agent to finish it",
+  );
+}
+
 export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
   let isDialogOpen = false;
   let isRequestInFlight = false;
@@ -143,17 +154,7 @@ export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
     if (isRollbackRunning(notice)) return null;
     if (isNoticeSettled(notice)) {
       return [
-        notice.needsSystemServicesRestart
-          ? m(
-              Button,
-              {
-                sm: true,
-                extra: "update-notice-finish",
-                onclick: () => void store.startNewWithText(finishRollbackRequest(notice.outcome ?? "")),
-              },
-              "Ask an agent to finish it",
-            )
-          : null,
+        notice.needsSystemServicesRestart ? finishButton(store, finishRollbackRequest(notice.outcome ?? "")) : null,
         m(
           Button,
           {

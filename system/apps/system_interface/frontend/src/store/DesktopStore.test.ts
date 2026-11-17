@@ -1274,6 +1274,39 @@ describe("a launch into an app that is not running", () => {
     );
   });
 
+  it("shows an agent asked for as pending until its launch settles, and a failed one in a toast of its own", async () => {
+    api.apps = [chat, terminal];
+    const store = await startedStore();
+    api.refusal = shellRefusal(
+      502,
+      "terminal is not running, so it could not take the launch: refused",
+      "Terminal isn't running right now, so it couldn't open that.",
+      "app_stopped",
+    );
+    await store.runLaunch("terminal", "new", "new");
+    api.refusal = null;
+    const [ask] = store.toasts.current()[0].actions;
+    expect(ask.pending?.label).toBe("Asking an agent…");
+    expect(ask.pending?.isPending()).toBe(false);
+
+    ask.run();
+    expect(ask.pending?.isPending()).toBe(true);
+    // A second press while it is out asks nothing more.
+    ask.run();
+    await settle();
+    expect(ask.pending?.isPending()).toBe(false);
+    expect(api.calls.filter((call) => call.startsWith("launch:home:chat"))).toHaveLength(1);
+
+    api.refusal = refusedWith(400, { detail: "chat refused the launch: no account is signed in" });
+    ask.run();
+    await settle();
+    expect(ask.pending?.isPending()).toBe(false);
+    expect(store.toasts.current().map((toast) => [toast.message, toast.details])).toContainEqual([
+      "Chat couldn't open that.",
+      "HTTP 400\nchat refused the launch: no account is signed in",
+    ]);
+  });
+
   it("takes the stopped app's note down once the app list says the app is running again", async () => {
     api.apps = [chat, terminal];
     const store = await startedStore();
