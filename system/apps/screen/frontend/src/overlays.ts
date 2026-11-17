@@ -13,6 +13,7 @@ import type {
   ReportedFailure,
   ShellConnection,
   ShownFailure,
+  StartNewOutcome,
 } from "@imbue/workspace-ui/src/app_contract";
 import { REPORT_A_BUG_LABEL, fallbackSentence, failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
@@ -176,6 +177,7 @@ export class Overlays {
   private readonly askFailure = document.createElement("div");
   private readonly askFailureMessage = document.createElement("p");
   private readonly askFailureDetails = document.createElement("details");
+  private readonly askFailureReport = document.createElement("button");
   private readonly askFailureDetailsText = document.createElement("pre");
   private readonly dim = document.createElement("div");
   private readonly dimTitle = document.createElement("div");
@@ -186,9 +188,13 @@ export class Overlays {
   private agentFix: AgentFixRequest | null = null;
   private reported: ReportedFailure | null = null;
   private isReportable = false;
-  private isAskingAgent = false;
   /** Which failure the overlay shows: changes when it hides or shows another, so an ask settling later knows. */
   private shownFailure = 0;
+  /** The failure the pending ask was made about (``shownFailure`` at the press), or null when none is pending. */
+  private askingAbout: number | null = null;
+  /** Counts presses, so an answer to an earlier press never replaces what a later one shows. */
+  private askPresses = 0;
+  private askFailureShown: ShownFailure | null = null;
 
   constructor(onStart: () => void, onTakeControl: () => void, onCancelPendingUrl: () => void, onReload: () => void) {
     this.element.className = "screen-overlay";
@@ -229,7 +235,16 @@ export class Overlays {
     this.askFailure.setAttribute("role", "alert");
     this.askFailure.dataset.screenAskFailure = "true";
     this.askFailure.hidden = true;
-    this.askFailure.append(this.askFailureMessage, this.askFailureDetails);
+    this.askFailureReport.className = "screen-button report-bug";
+    this.askFailureReport.textContent = REPORT_A_BUG_LABEL;
+    this.askFailureReport.dataset.screenAskFailureReport = "true";
+    this.askFailureReport.addEventListener("click", () => {
+      const failure = this.askFailureShown;
+      if (this.host !== null && failure !== null) {
+        this.host.reportBug({ message: failure.message, details: failure.details });
+      }
+    });
+    this.askFailure.append(this.askFailureMessage, this.askFailureDetails, this.askFailureReport);
     this.element.append(this.title, this.body, this.details, this.actions, this.askFailure);
     // Until the first state arrives, the page is loading: nothing to start, nothing failed.
     this.showLoading();
@@ -291,27 +306,39 @@ export class Overlays {
 
   /** "Ask an agent to fix this": pending until the shell says the chat opened, or why it could not. */
   private async askAgent(): Promise<void> {
-    if (this.host === null || this.agentFix === null || this.isAskingAgent) return;
-    this.isAskingAgent = true;
+    if (this.host === null || this.agentFix === null || this.askingAbout === this.shownFailure) return;
+    const askedAbout = this.shownFailure;
+    this.askPresses += 1;
+    const press = this.askPresses;
+    this.askingAbout = askedAbout;
     this.showAskFailure(null);
     this.syncAskButton();
-    const askedAbout = this.shownFailure;
-    const outcome = await askAgentToFix(this.host, this.agentFix);
-    this.isAskingAgent = false;
+    // Applies only while the overlay still shows the failure asked about and no press came since.
+    const show = (outcome: StartNewOutcome): void => {
+      if (this.shownFailure === askedAbout && this.askPresses === press) {
+        this.showAskFailure(outcome.isOpened ? null : outcome.failure);
+      }
+    };
+    const outcome = await askAgentToFix(this.host, this.agentFix, show);
+    if (this.askingAbout === askedAbout && this.askPresses === press) this.askingAbout = null;
     this.syncAskButton();
-    if (!outcome.isOpened && this.shownFailure === askedAbout) this.showAskFailure(outcome.failure);
+    show(outcome);
   }
 
   private syncAskButton(): void {
-    this.askAgentButton.textContent = this.isAskingAgent ? ASKING_AN_AGENT_LABEL : ASK_AGENT_TO_FIX_LABEL;
-    this.askAgentButton.disabled = this.isAskingAgent;
+    const isAsking = this.askingAbout === this.shownFailure;
+    this.askAgentButton.textContent = isAsking ? ASKING_AN_AGENT_LABEL : ASK_AGENT_TO_FIX_LABEL;
+    this.askAgentButton.disabled = isAsking;
   }
 
   private showAskFailure(failure: ShownFailure | null): void {
+    this.askFailureShown = failure;
     this.askFailure.hidden = failure === null;
     this.askFailureMessage.textContent = failure?.message ?? "";
     this.askFailureDetails.hidden = failure?.details == null;
     this.askFailureDetailsText.textContent = failure?.details ?? "";
+    this.askFailureReport.hidden =
+      failure === null || !failure.isReportable || this.host === null || !this.host.canReportBug();
   }
 
   /** The page could not load the state at all; the service's events bring it once the service answers. */
@@ -329,6 +356,7 @@ export class Overlays {
     if (shown === null || this.element.hidden || shown.title !== this.title.textContent) {
       this.shownFailure += 1;
       this.showAskFailure(null);
+      this.syncAskButton();
     }
     if (shown === null) {
       this.element.hidden = true;

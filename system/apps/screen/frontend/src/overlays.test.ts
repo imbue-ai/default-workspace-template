@@ -140,16 +140,20 @@ function fakeHost(fields: { hasShell?: boolean; canReportBug?: boolean } = {}): 
   started: string[];
   /** Settles each ask in turn, as the shell's reply would. */
   answers: ((outcome: StartNewOutcome) => void)[];
+  /** Hands each ask an answer that came after it settled as not answered. */
+  lateAnswers: ((outcome: StartNewOutcome) => void)[];
   reports: ReportedFailure[];
 } {
   const host = {
     started: [] as string[],
     answers: [] as ((outcome: StartNewOutcome) => void)[],
+    lateAnswers: [] as ((outcome: StartNewOutcome) => void)[],
     reports: [] as ReportedFailure[],
     hasShell: () => fields.hasShell ?? true,
     canReportBug: () => fields.canReportBug ?? true,
-    startNewWithText: (text: string) => {
+    startNewWithText: (text: string, onLateAnswer?: (outcome: StartNewOutcome) => void) => {
       host.started.push(text);
+      host.lateAnswers.push(onLateAnswer ?? (() => undefined));
       return new Promise<StartNewOutcome>((resolve) => host.answers.push(resolve));
     },
     reportBug: (failure: ReportedFailure) => void host.reports.push(failure),
@@ -309,6 +313,73 @@ describe("Overlays for the stack's state", () => {
     host.answers[1]({ isOpened: true });
     await Promise.resolve();
     expect([ask?.textContent, ask?.disabled, askFailure()]).toEqual(["Ask an agent to fix this", false, null]);
+  });
+
+  it("never reads Asking an agent… on a newer failure's button for an ask made about an older one", async () => {
+    const host = fakeHost();
+    const overlays = overlaysWith(host);
+    const ask = overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]");
+    const askFailure = (): HTMLElement | null =>
+      overlays.element.querySelector<HTMLElement>("[data-screen-ask-failure]:not([hidden])");
+    overlays.update(
+      state({ ...STOPPED, stop_reason: "screen-neko exited unexpectedly", stop_cause: "crashed" }),
+      "idle",
+      null,
+      null,
+      null,
+    );
+    ask?.click();
+
+    overlays.update(
+      state({ ...STOPPED, stop_reason: "neko never answered", stop_cause: "start_failed" }),
+      "idle",
+      null,
+      null,
+      null,
+    );
+    expect([ask?.textContent, ask?.disabled]).toEqual(["Ask an agent to fix this", false]);
+
+    // An ask about the newer failure is pending on its own, and the older ask's answer touches neither.
+    ask?.click();
+    host.answers[0]({
+      isOpened: false,
+      failure: { message: "Chat couldn't open that.", details: null, isReportable: false },
+    });
+    await Promise.resolve();
+    expect([ask?.textContent, ask?.disabled, askFailure()]).toEqual(["Asking an agent…", true, null]);
+    host.answers[1]({ isOpened: true });
+    await Promise.resolve();
+    expect([ask?.textContent, ask?.disabled, askFailure()]).toEqual(["Ask an agent to fix this", false, null]);
+  });
+
+  it("replaces a not-answered ask with the shell's late answer, and offers Report a bug under a reportable one", async () => {
+    const host = fakeHost();
+    const overlays = overlaysWith(host);
+    const askFailure = (): HTMLElement | null =>
+      overlays.element.querySelector<HTMLElement>("[data-screen-ask-failure]:not([hidden])");
+    overlays.update(
+      state({ ...STOPPED, stop_reason: "screen-neko exited unexpectedly", stop_cause: "crashed" }),
+      "idle",
+      null,
+      null,
+      null,
+    );
+    overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]")?.click();
+    host.answers[0]({
+      isOpened: false,
+      failure: { message: "The workspace didn't answer.", details: null, isReportable: false },
+    });
+    await Promise.resolve();
+    expect(askFailure()?.querySelector("p")?.textContent).toBe("The workspace didn't answer.");
+
+    const late = { message: "The workspace couldn't do that.", details: "boom", isReportable: true };
+    host.lateAnswers[0]({ isOpened: false, failure: late });
+    expect(askFailure()?.querySelector("p")?.textContent).toBe(late.message);
+    askFailure()?.querySelector<HTMLButtonElement>("[data-screen-ask-failure-report]")?.click();
+    expect(host.reports).toEqual([{ message: late.message, details: "boom" }]);
+
+    host.lateAnswers[0]({ isOpened: true });
+    expect(askFailure()).toBeNull();
   });
 
   it("drops a failed ask once the Screen runs again, and one that settles after it did", async () => {
