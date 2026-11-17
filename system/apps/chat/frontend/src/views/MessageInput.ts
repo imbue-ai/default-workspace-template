@@ -593,6 +593,8 @@ interface SendToChatNotYetAnAgent {
   outgoingId: string;
   /** A Retry's until it lands: the failed send's copy is still in the box, so nothing is put back. */
   isInBox: boolean;
+  /** Its send has had its answer, so a discard after that has nothing to tell the send path. */
+  isAnswered?: boolean;
 }
 const sendsToChatsNotYetAgents = new Map<string, Map<string, SendToChatNotYetAnAgent>>();
 // Messages a discard put back before their send's own answer came, by message id.
@@ -619,7 +621,10 @@ function noteSendToChatNotYetAnAgent(chatId: string, messageId: string, send: Se
  *  discard already put it back in the box, so the caller does not put it back again. */
 function settleSendToChatNotYetAnAgent(chatId: string, messageId: string, status: SendStatus | null): boolean {
   if (putBackBeforeAnswered.delete(messageId)) return true;
-  if (status !== "held") sendsToChatsNotYetAgents.get(chatId)?.delete(messageId);
+  const noted = sendsToChatsNotYetAgents.get(chatId);
+  const send = noted?.get(messageId);
+  if (status !== "held") noted?.delete(messageId);
+  else if (send !== undefined) send.isAnswered = true;
   return false;
 }
 
@@ -642,7 +647,7 @@ function putBackSendsDroppedWithChat(discarded: DiscardedChat): void {
   if (dropped.length === 0) return;
   // Last first: each put-back goes above what is in the box, so the box reads in the order they were sent.
   for (const { messageId, send } of [...dropped].reverse()) {
-    putBackBeforeAnswered.add(messageId);
+    if (send.isAnswered !== true) putBackBeforeAnswered.add(messageId);
     dropOutgoing(chatId, send.outgoingId);
     if (!send.isInBox) restoreToComposer(chatId, send.text, send.attachments);
   }
