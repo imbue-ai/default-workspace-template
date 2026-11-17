@@ -271,10 +271,7 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
   <div id="ask-agent" hidden>
     <p>If it isn't back in a few minutes, an agent can fix it.</p>
     <p><button id="ask-agent-button" class="action" type="button">Ask an agent to fix this</button></p>
-    <div id="ask-agent-failure" hidden>
-      <p id="ask-agent-failure-message"></p>
-      <details><summary>See details</summary><pre id="ask-agent-failure-details"></pre></details>
-    </div>
+    <p id="ask-agent-failure-message" hidden></p>
     <p id="agent-started" hidden></p>
     <div id="agent-chat-slot" hidden>
       <iframe id="agent-chat" title="The repair agent's chat"></iframe>
@@ -282,6 +279,10 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
   </div>
   <details id="repair-details">
     <summary>See details</summary>
+    <div id="ask-agent-failure-reason" hidden>
+      <p>Why the agent didn't start:</p>
+      <pre id="ask-agent-failure-details"></pre>
+    </div>
     <p>This creates an agent and tells it what you are looking at:</p>
     <div id="repair">
       <pre id="repair-command">__REPAIR_COMMAND__</pre>
@@ -399,7 +400,8 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
     document.getElementById("ask-agent").hidden = false;
     askButton.addEventListener("click", function () {
       askButton.disabled = true;
-      document.getElementById("ask-agent-failure").hidden = true;
+      document.getElementById("ask-agent-failure-message").hidden = true;
+      document.getElementById("ask-agent-failure-reason").hidden = true;
       launch("repair_agent", "Couldn't start an agent").then(function (answer) {
         var page = pageAt(answer);
         askButton.hidden = true;
@@ -414,9 +416,11 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
         }
       }, function (failure) {
         askButton.disabled = false;
-        document.getElementById("ask-agent-failure-message").textContent = failure.sentence;
+        var message = document.getElementById("ask-agent-failure-message");
+        message.textContent = failure.sentence;
+        message.hidden = false;
         document.getElementById("ask-agent-failure-details").textContent = failure.message;
-        document.getElementById("ask-agent-failure").hidden = false;
+        document.getElementById("ask-agent-failure-reason").hidden = false;
       });
     });
   }

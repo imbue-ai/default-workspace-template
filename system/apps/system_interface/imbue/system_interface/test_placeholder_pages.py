@@ -84,7 +84,15 @@ def test_the_not_built_page_asks_an_agent_and_frames_its_chat_and_a_terminal_ses
         expect(page.locator("#ask-agent-failure-message")).to_have_text(
             "Couldn't start an agent. Try again. If this persists, report a bug."
         )
+        # The failure's reason is in the page's one "See details", at its top.
+        see_details = page.get_by_text("See details", exact=True)
+        expect(see_details).to_have_count(1)
+        expect(page.locator("#ask-agent-failure-details")).not_to_be_visible()
+        see_details.click()
+        expect(page.locator("#ask-agent-failure-reason")).to_contain_text("Why the agent didn't start:")
+        expect(page.locator("#ask-agent-failure-details")).to_contain_text("HTTP 502")
         expect(page.locator("#ask-agent-failure-details")).to_contain_text("boom")
+        see_details.click()
 
         ask.click()
         expect(page.locator("#agent-started")).to_have_text("An agent is on it. Its chat is below.")
@@ -92,9 +100,10 @@ def test_the_not_built_page_asks_an_agent_and_frames_its_chat_and_a_terminal_ses
             "src", f"http://helper-y2.{_COORDINATE}:{served.port}/?chat=agent-1"
         )
         expect(ask).to_be_hidden()
+        expect(page.locator("#ask-agent-failure-reason")).to_be_hidden()
         assert [post.body for post in posts] == [{"target": "new_chat", "message": _NOT_BUILT_REPAIR_MESSAGE}] * 2
 
-        page.get_by_text("See details", exact=True).last.click()
+        page.get_by_text("See details", exact=True).click()
         expect(page.locator("#repair-command")).to_be_visible()
         expect(page.locator("#terminal")).to_have_attribute(
             "src", f"http://terminal-x1.{_COORDINATE}:{served.port}/new"
