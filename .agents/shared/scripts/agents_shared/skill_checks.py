@@ -56,6 +56,7 @@ _PLACEHOLDER = re.compile(r"[<>{}$*]|\.\.\.")
 _FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 _LIST_ITEM = re.compile(r"^\s*(?:[-*+]|(\d+)[.)])\s+(?:\[[ xX]\]\s+)?(.+)$")
 _MARKDOWN_LINK = re.compile(r"\[([^\]]*)\]\(([^)]*)\)")
+_STEP_HEADING = re.compile(r"^step (\d+): ")
 _PRUNED_DIR_NAMES = frozenset({".git", ".venv", "__pycache__", "node_modules"})
 
 
@@ -86,7 +87,8 @@ _GOALS: dict[Check, str] = {
     Check.DEPTH: (
         "An agent reaches any file within two links of SKILL.md. Name each of these from "
         "SKILL.md or from the first reference in its chain, or fold it into the file that "
-        "links it."
+        "links it. A shared file that is still too deep is layered wrongly: move its content "
+        "as the guide's rule on links says, and do not reword the link."
     ),
     Check.PATHS: (
         "A path an agent is given exists. Correct each of these; write a path outside this "
@@ -465,8 +467,13 @@ def _anchor(heading: str) -> str:
 
 
 def _names(item: str, heading: str) -> bool:
-    plain_heading = _plain(heading)
-    if plain_heading and plain_heading in _plain(item):
+    plain_heading, plain_item = _plain(heading), _plain(item)
+    if plain_heading and plain_heading in plain_item:
+        return True
+    # A numbered entry names a step by its number: `3. Make the change` is
+    # `## Step 3: Make the change`.
+    as_entry, steps = _STEP_HEADING.subn(r"\1. ", plain_heading)
+    if steps and plain_item.startswith(as_entry):
         return True
     return _anchor(heading) in {
         target.strip().lower() for _, target in _MARKDOWN_LINK.findall(item)
@@ -477,8 +484,9 @@ def contents_problem(text: str) -> str | None:
     """What stops ``text`` from having a contents list, or ``None`` when it has one.
 
     A contents list starts in the first 100 lines and names every H2 heading below it, by
-    the heading's text or by a link to its anchor. It may name more (a step list has
-    entries that are not sections).
+    the heading's text, by a link to its anchor, or, for a heading `Step N: ...`, by a
+    numbered entry `N. ...`. It may name more (a step list has entries that are not
+    sections).
     """
     headings, lists = _outline(text)
     if not headings:

@@ -204,6 +204,33 @@ def test_a_numbered_step_list_names_sections_whose_headings_carry_the_step_numbe
     assert _failed(skill) == expected
 
 
+@pytest.mark.parametrize(
+    ("step_list", "expected"),
+    [
+        pytest.param("1. Fetch\n2. Report\n", set(), id="numbered-entries"),
+        pytest.param(
+            "1. Fetch. *Ends the turn.*\n2. Report\n", set(), id="entry-with-a-clause"
+        ),
+        pytest.param(
+            "- Step 1: Fetch\n- Step 2: Report\n", set(), id="headings-written-out"
+        ),
+        pytest.param(
+            "1. Fetch\n12. Report\n", {Check.CONTENTS}, id="a-longer-number"
+        ),
+        pytest.param(
+            "1. Report\n2. Fetch\n", {Check.CONTENTS}, id="numbered-differently"
+        ),
+    ],
+)
+def test_a_numbered_entry_names_the_section_headed_step_n(
+    tmp_path: Path, step_list: str, expected: set[Check]
+) -> None:
+    skill = _skill(tmp_path, "stepped", "Read `references/steps.md`.\n")
+    sections = f"## Step 1: Fetch\n\n{_LONG_FILLER}\n\n## Step 2: Report\n\nText.\n"
+    _write(skill, "references/steps.md", f"# Steps\n\n{step_list}\n{sections}")
+    assert _failed(skill) == expected
+
+
 def test_an_anchor_keeps_an_underscore_inside_a_word_and_drops_emphasis(
     tmp_path: Path,
 ) -> None:
