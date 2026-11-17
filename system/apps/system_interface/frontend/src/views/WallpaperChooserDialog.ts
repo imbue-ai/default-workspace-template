@@ -8,12 +8,18 @@
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { MODAL_LABEL_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
+import type { FailureNotice } from "../model/failures";
 import type { Desktop, Wallpaper, WallpaperListing } from "../model/records";
+import { FailureLine } from "./FailureLine";
+
+const WALLPAPER_NOT_SAVED = "The wallpaper couldn't be changed";
 
 export interface WallpaperChooserDialogAttrs {
   readonly desktop: Desktop;
   /** The wallpapers on offer, bundled first; null while they load. */
   readonly wallpapers: readonly WallpaperListing[] | null;
+  /** A failed save as the dialog's line says it: what failed, a sentence stem, then the reason. */
+  readonly wordFailure: (whatFailed: string, error: unknown) => FailureNotice;
   readonly onSave: (wallpaper: Wallpaper | null) => Promise<void>;
   readonly onCancel: () => void;
 }
@@ -26,7 +32,7 @@ export function isSameWallpaper(first: Wallpaper | null, second: Wallpaper | nul
 export function WallpaperChooserDialog(): m.Component<WallpaperChooserDialogAttrs> {
   let wallpaper: Wallpaper | null = null;
   let isSaving = false;
-  let error: string | null = null;
+  let error: FailureNotice | null = null;
 
   async function save(attrs: WallpaperChooserDialogAttrs): Promise<void> {
     if (isSaving) return;
@@ -36,7 +42,7 @@ export function WallpaperChooserDialog(): m.Component<WallpaperChooserDialogAttr
     try {
       await attrs.onSave(resolvedWallpaper(attrs.wallpapers));
     } catch (e) {
-      error = (e as Error).message;
+      error = attrs.wordFailure(WALLPAPER_NOT_SAVED, e);
       isSaving = false;
     }
     m.redraw();
@@ -125,7 +131,17 @@ export function WallpaperChooserDialog(): m.Component<WallpaperChooserDialogAttr
         [
           m("label", { class: MODAL_LABEL_CLASS }, `Wallpaper of ${attrs.desktop.name}`),
           m("div", { class: "mb-3" }, wallpaperPicker(attrs)),
-          error ? m("p", { class: "type-helper mt-1 text-danger" }, error) : null,
+          error === null
+            ? null
+            : m(
+                "div",
+                { class: "mt-1" },
+                m(FailureLine, {
+                  notice: error,
+                  marker: "wallpaper-chooser-error",
+                  messageClass: "type-helper text-danger",
+                }),
+              ),
         ],
       );
     },

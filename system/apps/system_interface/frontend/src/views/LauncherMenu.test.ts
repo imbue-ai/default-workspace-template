@@ -45,6 +45,7 @@ function render(
     highlightIndex: defaultHighlightIndex(menu.rows),
     isApplePlatform: false,
     bottomOffsetPx: 0,
+    failure: null,
     onRun: vi.fn(),
     onHighlight: vi.fn(),
     onAppShortcutContextMenu: vi.fn(),

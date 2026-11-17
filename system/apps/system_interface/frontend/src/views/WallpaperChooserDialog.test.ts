@@ -3,11 +3,22 @@ import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { failureSentence, readFailure } from "@imbue/workspace-ui/src/models/failure";
+import { HttpError } from "@imbue/workspace-ui/src/models/http";
+import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
+import { noticeOf } from "../model/failures";
 import { desktopRecord } from "../testing/records";
 import { WallpaperChooserDialog, isSameWallpaper } from "./WallpaperChooserDialog";
 import type { WallpaperChooserDialogAttrs } from "./WallpaperChooserDialog";
 
 afterEach(unmountViews);
+
+const reportBug = vi.fn();
+
+/** A refusal of a change as the REST helper throws it. */
+function refusedWith(status: number, body: unknown, rawText: string | null = null): HttpError {
+  return new HttpError(readFailure({ status, body, rawText, requestKind: "change" }));
+}
 
 const ARCS = { kind: "bundled" as const, name: "arcs", url: "/wallpapers/bundled/arcs" };
 const DAWN = { kind: "bundled" as const, name: "dawn", url: "/wallpapers/bundled/dawn" };
@@ -16,6 +27,8 @@ function render(overrides: Partial<WallpaperChooserDialogAttrs> = {}): Wallpaper
   const attrs: WallpaperChooserDialogAttrs = {
     desktop: desktopRecord("home", { name: "Home" }),
     wallpapers: [ARCS, DAWN],
+    wordFailure: (whatFailed, error) =>
+      noticeOf(failureSentence(describeRequestFailure(error), whatFailed), [], reportBug),
     onSave: vi.fn(async () => undefined),
     onCancel: vi.fn(),
     ...overrides,
@@ -60,11 +73,16 @@ describe("WallpaperChooserDialog", () => {
     expect(attrs.onSave).toHaveBeenCalledWith({ kind: "bundled", name: "dawn" });
   });
 
-  it("shows the shell's refusal of a save and lets the user try again", async () => {
-    const attrs = render({ onSave: vi.fn(async () => Promise.reject(new Error("no such wallpaper"))) });
+  it("says the wallpaper couldn't be changed, with the shell's reason behind See details, and lets the user try again", async () => {
+    const attrs = render({
+      onSave: vi.fn(async () => Promise.reject(refusedWith(400, { detail: "no such wallpaper" }))),
+    });
     save();
     await settled();
-    expect(card().textContent).toContain("no such wallpaper");
+    expect(card().querySelector(".wallpaper-chooser-error-message")?.textContent).toBe(
+      "The wallpaper couldn't be changed.",
+    );
+    expect(card().querySelector(".see-details pre")?.textContent).toBe("HTTP 400\nno such wallpaper");
     expect((card().querySelector(".wallpaper-chooser-save") as HTMLButtonElement).disabled).toBe(false);
     expect(attrs.onSave).toHaveBeenCalledTimes(1);
   });

@@ -10,13 +10,17 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { MODAL_LABEL_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
 import { TILE_PART } from "@imbue/workspace-ui/src/themes/parts";
+import type { FailureNotice } from "../model/failures";
 import type { AppRecord, Desktop } from "../model/records";
 import { availableTheme, resolveDesktopTheme, type ThemeCatalog, type ThemeRecord } from "../model/themes";
 import { appIconMarkupForApp } from "./components/appIcon";
+import { FailureLine } from "./FailureLine";
 import { glyph as genericGlyph } from "./glyphs";
 
 export interface ThemeChooserDialogAttrs {
   readonly desktop: Desktop;
+  /** A failed save as the dialog's line says it: what failed, a sentence stem, then the reason. */
+  readonly wordFailure: (whatFailed: string, error: unknown) => FailureNotice;
   readonly onSave: (themeChoice: ThemeChoice) => Promise<void>;
   readonly onCancel: () => void;
   /** The workspace's themes; null until they have been read. */
@@ -42,6 +46,8 @@ export interface ThemeChoice {
 
 export const THEME_PREVIEW_APP = "files";
 
+const THEME_NOT_SAVED = "The theme couldn't be changed";
+
 /** The prompt "Make your own..." drafts, unsent, into the pinned window's chat. */
 export const THEME_DESIGN_PROMPT =
   "I'd like to make my own workspace theme. Design it, show me how it looks, and let me try it " +
@@ -57,7 +63,7 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
   let theme: string | null = null;
   let isWorkspaceDefault = false;
   let isSaving = false;
-  let error: string | null = null;
+  let error: FailureNotice | null = null;
 
   async function save(attrs: ThemeChooserDialogAttrs): Promise<void> {
     if (isSaving) return;
@@ -71,7 +77,7 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
           isWorkspaceDefault && attrs.themes !== null && availableTheme(attrs.themes, theme) !== null,
       });
     } catch (e) {
-      error = (e as Error).message;
+      error = attrs.wordFailure(THEME_NOT_SAVED, e);
       isSaving = false;
     }
     m.redraw();
@@ -257,7 +263,17 @@ export function ThemeChooserDialog(): m.Component<ThemeChooserDialogAttrs> {
         [
           m("label", { class: MODAL_LABEL_CLASS }, `Theme of ${attrs.desktop.name}`),
           themeRow(attrs),
-          error ? m("p", { class: "type-helper mt-1 text-danger" }, error) : null,
+          error === null
+            ? null
+            : m(
+                "div",
+                { class: "mt-1" },
+                m(FailureLine, {
+                  notice: error,
+                  marker: "theme-chooser-error",
+                  messageClass: "type-helper text-danger",
+                }),
+              ),
         ],
       );
     },

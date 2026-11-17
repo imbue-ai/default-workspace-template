@@ -13,8 +13,8 @@ import m from "mithril";
 import type { UpdateNoticeWire } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket } from "../testing/fakeShell";
-import { appRecord, desktopRecord, noticeWire, themeMetricsRecord } from "../testing/records";
-import { SYSTEM_SERVICES_RESTART_DETAILS, UpdateNoticeBanner } from "./UpdateNoticeBanner";
+import { appRecord, desktopRecord, launchPathRecord, noticeWire, themeMetricsRecord } from "../testing/records";
+import { FINISH_ROLLBACK_REQUEST, SYSTEM_SERVICES_RESTART_DETAILS, UpdateNoticeBanner } from "./UpdateNoticeBanner";
 
 const CLIENT = "client-1";
 const NO_LINK = { desktopId: null, open: null, launch: null };
@@ -41,6 +41,11 @@ function requestedPaths(fetchMock: ReturnType<typeof vi.fn>): string[] {
 function deliverNotice(wire: UpdateNoticeWire | null): void {
   socket.deliver().onUpdateNoticeChanged(wire);
   m.redraw.sync();
+}
+
+/** The wire time of an update applied ``secondsAgo`` before now. */
+function appliedSecondsAgo(secondsAgo: number): number {
+  return Math.floor(Date.now() / 1000) - secondsAgo;
 }
 
 function mountBanner(): HTMLElement {
@@ -89,23 +94,37 @@ describe("UpdateNoticeBanner", () => {
 
   it("names every app the apply touched, since a rollback takes them all back together", () => {
     const root = mountBanner();
-    deliverNotice(noticeWire(["chat"]));
+    const now = appliedSecondsAgo(0);
+    deliverNotice(noticeWire(["chat"], { applied_at: now }));
     expect(root.querySelector(".update-notice-banner")?.textContent).toContain(
       "Chat was updated a moment ago. If something is not working, you can go back to the previous version.",
     );
 
-    deliverNotice(noticeWire(["chat", "system_interface"]));
+    deliverNotice(noticeWire(["chat", "system_interface"], { applied_at: now }));
     expect(root.querySelector(".update-notice-banner")?.textContent).toContain(
       "Chat and the workspace interface were updated a moment ago.",
     );
 
-    deliverNotice(noticeWire([]));
+    deliverNotice(noticeWire([], { applied_at: now }));
     expect(root.querySelector(".update-notice-banner")?.textContent).toContain(
       "The workspace was updated a moment ago.",
     );
 
     deliverNotice(null);
     expect(root.querySelector(".update-notice-banner")).toBeNull();
+  });
+
+  it("says how long ago the update was applied, since the notice stays until someone confirms it", () => {
+    const root = mountBanner();
+    const text = (): string | null | undefined => root.querySelector(".update-notice-banner")?.textContent;
+    deliverNotice(noticeWire(["chat"], { applied_at: appliedSecondsAgo(5 * 60) }));
+    expect(text()).toContain("Chat was updated 5 minutes ago.");
+    deliverNotice(noticeWire(["chat"], { applied_at: appliedSecondsAgo(3 * 60 * 60) }));
+    expect(text()).toContain("Chat was updated 3 hours ago.");
+    deliverNotice(noticeWire(["chat"], { applied_at: appliedSecondsAgo(26 * 60 * 60) }));
+    expect(text()).toContain("Chat was updated yesterday.");
+    deliverNotice(noticeWire(["chat"], { applied_at: appliedSecondsAgo(4 * 24 * 60 * 60) }));
+    expect(text()).toContain("Chat was updated 4 days ago.");
   });
 
   it("offers the two verbs on an open notice, and Everything seems good confirms it", async () => {
@@ -151,7 +170,7 @@ describe("UpdateNoticeBanner", () => {
     expect(root.querySelector(".update-notice-banner-error")).toBeNull();
   });
 
-  it("asks before rolling back, naming the apps and the programs, then posts the rollback", async () => {
+  it("asks before rolling back, naming the apps and what restarts as people know them, then posts the rollback", async () => {
     const fetchMock = stubFetch(202, "The rollback has started.");
     const root = mountBanner();
     deliverNotice(noticeWire(["chat", "system_interface"]));
@@ -161,7 +180,7 @@ describe("UpdateNoticeBanner", () => {
 
     const dialog = root.querySelector(".modal-message");
     expect(dialog?.textContent).toContain("Chat and the workspace interface");
-    expect(dialog?.textContent).toContain("chat and system_interface will restart");
+    expect(dialog?.textContent).toContain("Chat and the workspace interface will restart.");
     expect(root.textContent).not.toContain(SYSTEM_SERVICES_RESTART_DETAILS);
     expect(requestedPaths(fetchMock)).toEqual([]);
 
@@ -195,8 +214,39 @@ describe("UpdateNoticeBanner", () => {
 
     const dialog = root.querySelector(".modal-message");
     expect(dialog?.textContent).toContain("the workspace");
-    expect(dialog?.textContent).toContain("no app restarts on its own");
+    expect(dialog?.textContent).toContain("No app restarts on its own.");
     expect(root.textContent).toContain(SYSTEM_SERVICES_RESTART_DETAILS);
+  });
+
+  it("names a restarted program that shows no app as another part of the workspace", () => {
+    const root = mountBanner();
+    deliverNotice(noticeWire(["chat"], { programs: ["chat", "backup-service"] }));
+    click(root, ".update-notice-rollback");
+    m.redraw.sync();
+    expect(root.querySelector(".modal-message")?.textContent).toContain(
+      "Chat and other parts of the workspace will restart.",
+    );
+  });
+
+  it("offers to ask an agent to finish a rollback that left the restart to one", async () => {
+    socket.deliver().onAppsUpdated([
+      appRecord("chat", {
+        display_name: "Chat",
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+    ]);
+    const root = mountBanner();
+    deliverNotice(noticeWire(["chat"], { outcome: "Rolled back to the previous version." }));
+    expect(root.querySelector(".update-notice-finish")).toBeNull();
+
+    deliverNotice(
+      noticeWire(["chat"], { outcome: "Rolled back to the previous version.", needs_system_services_restart: true }),
+    );
+    click(root, ".update-notice-finish");
+    await settled();
+    expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([
+      `launch:home:chat:new:${JSON.stringify({ message: FINISH_ROLLBACK_REQUEST })}:new`,
+    ]);
   });
 
   it("shows a running rollback's progress with no verbs, then the outcome with Close", async () => {

@@ -90,6 +90,8 @@ from imbue.system_interface.shell.keybindings_routes import KeybindingsCatalogRe
 from imbue.system_interface.shell.keybindings_routes import ResetKeybindingRequest
 from imbue.system_interface.shell.keybindings_routes import SaveKeybindingRequest
 from imbue.system_interface.shell.keybindings_routes import SaveKeybindingResponse
+from imbue.system_interface.shell.not_built_launches import NotBuiltLaunchAnswer
+from imbue.system_interface.shell.not_built_launches import NotBuiltLaunchRequest
 from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_ROUTE
 from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_SETTINGS_ROUTE
 from imbue.system_interface.shell.resource_gauge import ResourceGaugeSettings
@@ -223,6 +225,9 @@ SHELL_ROUTE_TABLE: RouteTable = {
         alternate_responses=(AlternateResponse(status=HTTP_BAD_GATEWAY, model=EmbedderMessageRelayResponse),),
     ),
     # The update notice
+    ("POST", "/api/not-built/launch"): RouteModels(
+        request_model=NotBuiltLaunchRequest, response_model=NotBuiltLaunchAnswer
+    ),
     ("GET", "/api/updates/pending"): RouteModels(response_model=PendingUpdateResponse),
     ("POST", "/api/updates/pending/confirm"): RouteModels(success_status=HTTP_NO_CONTENT),
     ("POST", "/api/updates/pending/rollback"): RouteModels(

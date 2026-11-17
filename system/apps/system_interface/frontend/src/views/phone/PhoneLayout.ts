@@ -24,12 +24,14 @@ import {
   startSheetRows,
   windowsSheetRows,
 } from "../../reducers/phone";
+import type { FailureNotice } from "../../model/failures";
 import type { ShownMountPolicy } from "../../pages/livePages";
 import type { DesktopStore } from "../../store/DesktopStore";
 import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { UpdateNoticeBanner } from "../UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "../UpdateStalenessBanner";
-import { stoppedPlaceholder } from "../Window";
+import { BootFailureNotice } from "../FailureLine";
+import { appGoneNotice, windowPlaceholder } from "../Window";
 import { MENU_MIN_WIDTH, openShareSettings, phoneWindowMenuRows } from "../WindowMenu";
 import { HomeGrid } from "./HomeGrid";
 import { PhoneBar } from "./PhoneBar";
@@ -61,6 +63,8 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
   let windowQuery = "";
   let startQuery = "";
   let startHighlight: number | null = null;
+  // Why the last row the start sheet ran failed, shown under its field until the text changes or the sheet closes.
+  let startFailure: FailureNotice | null = null;
   let root: HTMLElement | null = null;
   let isKeyboardUp = false;
   const menu = createMenu({
@@ -133,20 +137,32 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
     return defaultHighlightIndex(rows);
   }
 
-  /** Run a start-sheet row: the sheet closes and its text clears first, whatever the row does. */
+  /** Run a start-sheet row: the sheet closes first, whatever the row does. Its field keeps the text until the row
+   *  has run, and a row that failed opens the sheet again with the failure under the field. */
   function runStartRow(store: DesktopStore, row: LauncherRow): void {
     store.openPhoneSheet(null);
-    startQuery = "";
     startHighlight = null;
+    startFailure = null;
+    const text = startQuery;
+    const report = (failure: FailureNotice): void => {
+      startFailure = failure;
+      store.openPhoneSheet("start");
+    };
+    const clearIfUnchanged = (isRun: boolean): void => {
+      if (!isRun || startQuery !== text) return;
+      startQuery = "";
+      m.redraw();
+    };
     switch (row.kind) {
       case "launch":
-        void store.runLaunchRow(row.app.name, row.launchPath.id);
+        void store.runLaunchRow(row.app.name, row.launchPath.id, report).then(clearIfUnchanged);
         return;
       case "window":
+        startQuery = "";
         store.showOnPhone({ kind: "window", windowId: row.window.id });
         return;
       case "text":
-        void store.runFreeText(row.app.name, row.launchPath.id, row.text);
+        void store.runFreeText(row.app.name, row.launchPath.id, row.text, report).then(clearIfUnchanged);
         return;
     }
   }
@@ -183,6 +199,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
           onQuery: (query) => {
             startQuery = query;
             startHighlight = null;
+            startFailure = null;
           },
           onRun: (row) => runStartRow(store, row),
           onHighlight: (index) => {
@@ -193,7 +210,11 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
             const index = startHighlightIndex(rows);
             if (index >= 0) runStartRow(store, rows[index]);
           },
-          onDismiss: () => store.openPhoneSheet(null),
+          onDismiss: () => {
+            startFailure = null;
+            store.openPhoneSheet(null);
+          },
+          failure: startFailure,
         });
       }
     }
@@ -218,6 +239,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
       const shownWindow = shownWindowOf(state);
       const shownApp = shownWindow === null ? undefined : appByName(state, shownWindow.app);
       const isHome = state.phone.shown === null || state.phone.shown.kind === "home";
+      const bootFailure = store.getBootFailure();
       const thresholdPx = store.getMetrics().dragThreshold;
       const menuRows =
         openMenu === null
@@ -248,8 +270,29 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
                 oncreate: (created: m.VnodeDOM) => onPagesHostCreated(created.dom as HTMLElement),
                 onbeforeupdate: () => false,
               }),
-              shownWindow !== null && isAppShownStopped(state, shownApp)
-                ? m("div", { class: "absolute inset-0" }, stoppedPlaceholder(shownApp))
+              shownWindow !== null && shownApp !== undefined && isAppShownStopped(state, shownApp)
+                ? m(
+                    "div",
+                    { class: "absolute inset-0" },
+                    windowPlaceholder("stopped-app", store.stoppedNotice(shownApp)),
+                  )
+                : null,
+              shownWindow !== null && shownApp === undefined && state.isAppsLoaded
+                ? m(
+                    "div",
+                    { class: "absolute inset-0" },
+                    windowPlaceholder(
+                      "gone-app",
+                      appGoneNotice(() => void store.closeOrMinimizeWindow(shownWindow.id)),
+                    ),
+                  )
+                : null,
+              bootFailure !== null && !state.isDesktopsLoaded
+                ? m(
+                    "div",
+                    { class: "absolute inset-0 flex items-center justify-center" },
+                    m(BootFailureNotice, { notice: bootFailure }),
+                  )
                 : null,
               isHome
                 ? m(HomeGrid, {
@@ -280,6 +323,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
                 onNew: () => {
                   startQuery = "";
                   startHighlight = null;
+                  startFailure = null;
                   store.openPhoneSheet("start");
                 },
                 thresholdPx,

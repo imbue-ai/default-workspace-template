@@ -3,7 +3,7 @@ import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AvatarChooserDialog, NO_DRAFT_TARGET_REASON } from "./AvatarChooserDialog";
+import { AvatarChooserDialog } from "./AvatarChooserDialog";
 import type { AvatarChooserDialogAttrs } from "./AvatarChooserDialog";
 
 afterEach(() => {
@@ -25,9 +25,11 @@ function render(overrides: Partial<AvatarChooserDialogAttrs> = {}): HTMLElement 
       { id: "mine", label: "Mine", source_path: "/tmp/mine.svg" },
     ],
     loadError: null,
+    onRetry: vi.fn(),
     selected: "mine",
     onSelect: vi.fn(),
     onDesignOwn: vi.fn(),
+    designOwnDisabledReason: "This needs Chat on this desktop.",
     onClose: vi.fn(),
     onDownloadFailed: vi.fn(),
     ...overrides,
@@ -78,14 +80,32 @@ describe("AvatarChooserDialog", () => {
     expect(onDesignOwn).toHaveBeenCalledTimes(1);
     const disabled = render({ onDesignOwn: null }).querySelector(".avatar-design-own") as HTMLButtonElement;
     expect(disabled.disabled).toBe(true);
-    expect(disabled.parentElement?.getAttribute("data-hover-tooltip")).toBe(NO_DRAFT_TARGET_REASON);
+    expect(disabled.parentElement?.getAttribute("data-hover-tooltip")).toBe("This needs Chat on this desktop.");
   });
 
   it("shows the loading and error states, and closes on Done, which holds the focus when it opens", () => {
     const loading = render({ designs: null });
     expect(loading.querySelector("[role='status']")?.textContent).toBe("Loading designs…");
     expect(loading.querySelector("[data-avatar-source]")).toBeNull();
-    expect(render({ designs: null, loadError: "down" }).querySelector("[role='alert']")?.textContent).toBe("down");
+    // A list that could not be read says so in place of the grid, its reason behind See details, with a Try again.
+    const onRetry = vi.fn();
+    const failed = render({
+      designs: null,
+      loadError: {
+        message: "Avatar designs couldn't be loaded.",
+        details: "HTTP 500",
+        actions: [],
+        isReportable: false,
+      },
+      onRetry,
+    });
+    expect(failed.querySelector(".avatar-designs-failure-message")?.textContent).toBe(
+      "Avatar designs couldn't be loaded.",
+    );
+    expect(failed.querySelector(".see-details pre")?.textContent).toBe("HTTP 500");
+    (failed.querySelector(".avatar-designs-failure-action") as HTMLButtonElement).click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    unmountViews();
     const onClose = vi.fn();
     const done = render({ onClose }).querySelector(".avatar-chooser-done") as HTMLElement;
     expect(document.activeElement).toBe(done);

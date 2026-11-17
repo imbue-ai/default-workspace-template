@@ -2,8 +2,10 @@
 
 import base64
 import hashlib
+import re
 from collections.abc import Callable
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +16,8 @@ from imbue.system_interface.shell.port_parking import FAILED_REFRESH_SECONDS
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.port_parking import ParkedPort
 from imbue.system_interface.shell.port_parking import ParkingTarget
+from imbue.system_interface.shell.port_parking import SHELL_HANDSHAKE_TYPE
+from imbue.system_interface.shell.port_parking import SHELL_START_WITH_TEXT_TYPE
 from imbue.system_interface.shell.port_parking import STARTING_REFRESH_SECONDS
 from imbue.system_interface.shell.port_parking import parked_page_html
 from imbue.system_interface.shell.port_parking import parked_response_bytes
@@ -67,21 +71,42 @@ def test_a_parked_port_answers_its_first_connection_with_the_loading_page_and_le
     assert b"Connection: close" in head and b"Cache-Control: no-store" in head
     assert f"Retry-After: {STARTING_REFRESH_SECONDS}".encode() in head
     assert b"Starting Docs" in body and f'content="{STARTING_REFRESH_SECONDS}"'.encode() in body
+    # It names no cause: the app may have stopped for want of a window, a Quit, an agent, or on its own.
+    assert b"This opens on its own once it's ready." in body and b"nothing showed it" not in body
     assert woken == ["docs"]
     assert parked_port.is_woken is True
     wait_for(lambda: can_bind_loopback_port(parked_port.target.port), timeout=5.0, poll_interval=0.02)
 
 
-def test_a_wake_that_fails_is_told_so(closed_port: int) -> None:
+def test_a_wake_that_fails_is_told_so_and_waits_for_the_persons_try_again(closed_port: int) -> None:
     parked_port = _parked_port(closed_port, lambda: ParkedPageKind.FAILED)
     parked_port.start()
 
     answer = send_raw_get_over_socket(parked_port.target.port)
 
-    assert b"Docs could not start" in answer and b"supervisorctl tail docs stderr" in answer
-    assert f'content="{FAILED_REFRESH_SECONDS}"'.encode() in answer
-    # The header makes the page's slower retry the promise a fetch sees too.
-    assert f"Retry-After: {FAILED_REFRESH_SECONDS}".encode() in answer
+    head, _, body = answer.partition(b"\r\n\r\n")
+    assert b"<h1>Docs couldn't start.</h1>" in body
+    assert b'id="try-again">Try again</button>' in body
+    assert b'getElementById("try-again").addEventListener("click", function () { location.reload(); })' in body
+    assert b"<summary>See details</summary>" in body and b"supervisorctl tail docs stderr" in body
+    # A reload is a wake, which spends the budget, so the page never reloads itself; a fetch is told to wait.
+    assert b"http-equiv" not in body
+    assert f"Retry-After: {FAILED_REFRESH_SECONDS}".encode() in head
+
+
+def test_a_wake_the_budget_refused_says_the_app_failed_several_times(closed_port: int) -> None:
+    parked_port = _parked_port(closed_port, lambda: ParkedPageKind.BUDGET_SPENT)
+    parked_port.start()
+
+    body = send_raw_get_over_socket(parked_port.target.port).partition(b"\r\n\r\n")[2]
+
+    assert b"<h1>Docs couldn't start.</h1>" in body
+    assert (
+        b"Docs failed to start several times in the last few minutes, so it wasn't started again. "
+        b"Try again in a few minutes." in body
+    )
+    assert b">Try again</button>" in body and b"supervisorctl tail docs stderr" in body
+    assert b"http-equiv" not in body
 
 
 def test_a_wake_that_raises_still_answers_the_request(closed_port: int) -> None:
@@ -91,7 +116,7 @@ def test_a_wake_that_raises_still_answers_the_request(closed_port: int) -> None:
     parked_port = _parked_port(closed_port, explode)
     parked_port.start()
 
-    assert b"could not start" in send_raw_get_over_socket(parked_port.target.port)
+    assert b"Docs couldn't start." in send_raw_get_over_socket(parked_port.target.port)
 
 
 class _UnexpectedWakeError(Exception):
@@ -141,10 +166,37 @@ def test_the_response_bytes_carry_the_page_length() -> None:
     assert "&lt;b&gt;" in page
 
 
-def test_the_response_bytes_carry_a_policy_admitting_exactly_the_pages_stylesheet() -> None:
+@pytest.mark.frontend
+def test_the_could_not_start_pages_wire_types_are_the_app_contracts() -> None:
+    """The page speaks the app contract without its module, so it carries the two types it uses; this pins them to
+    ``app_contract.ts``, where a renamed type would otherwise leave the page's button silently doing nothing."""
+    app_contract_ts = (Path(__file__).parents[5] / "libs" / "workspace_ui" / "src" / "app_contract.ts").read_text()
+    for name, value in (
+        ("SHELL_HANDSHAKE", SHELL_HANDSHAKE_TYPE),
+        ("SHELL_START_WITH_TEXT", SHELL_START_WITH_TEXT_TYPE),
+    ):
+        declared = re.search(rf'export const {name} = "([^"]+)";', app_contract_ts)
+        assert declared is not None and declared.group(1) == value
+
+
+def _sha256_source(text: str) -> str:
+    return f"'sha256-{base64.b64encode(hashlib.sha256(text.encode()).digest()).decode()}'"
+
+
+def test_the_response_bytes_carry_a_policy_admitting_exactly_the_pages_stylesheet_and_script() -> None:
     page = parked_page_html(ParkedPageKind.FAILED, "Docs", "docs")
     head, _, _ = parked_response_bytes(ParkedPageKind.FAILED, page).partition(b"\r\n\r\n")
     style = page.split("<style>", 1)[1].split("</style>", 1)[0]
-    digest = base64.b64encode(hashlib.sha256(style.encode()).digest()).decode()
-    policy = f"default-src 'none'; style-src 'sha256-{digest}'; base-uri 'none'; form-action 'none'"
+    script = page.split("<script>", 1)[1].split("</script>", 1)[0]
+    policy = (
+        f"default-src 'none'; style-src {_sha256_source(style)}; script-src {_sha256_source(script)}; "
+        "base-uri 'none'; form-action 'none'"
+    )
     assert f"Content-Security-Policy: {policy}".encode() in head
+    # The page's own buttons run from that script alone: no inline handler, which no hash admits.
+    assert "onclick=" not in page
+
+    starting = parked_page_html(ParkedPageKind.STARTING, "Docs", "docs")
+    starting_head, _, _ = parked_response_bytes(ParkedPageKind.STARTING, starting).partition(b"\r\n\r\n")
+    starting_policy = f"default-src 'none'; style-src {_sha256_source(style)}; base-uri 'none'; form-action 'none'"
+    assert f"Content-Security-Policy: {starting_policy}".encode() in starting_head

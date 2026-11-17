@@ -111,6 +111,7 @@ function windowSpecimen(state: GalleryState, isFocused: boolean, title: string):
             app,
             state: "NORMAL",
             isFocused,
+            canRefresh: true,
             isMenuOpen: false,
             sizeMenuTrigger: {},
             onControl: () => undefined,
