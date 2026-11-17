@@ -167,22 +167,26 @@ const ATTACHMENT_DETAIL_CLASS = "composer-attachment-detail truncate text-[11px]
 const MESSAGE_TEXT_KEY_PREFIX = "message-text:";
 const COMPOSER_HINT_KEY_PREFIX = "composer-hint:";
 
-// Kinds of refused send that no retry or restart can clear: the chat's account was signed out, or the chat is gone.
-const KINDS_NOTHING_HERE_CAN_CLEAR: ReadonlySet<ComposerFailureKind> = new Set(["account_signed_out", "chat_gone"]);
+// Kinds of refused send that no retry or restart can clear: the chat's account was signed out, the chat is gone, or its
+// create failed, which leaves no agent to send to.
+const KINDS_NOTHING_HERE_CAN_CLEAR: ReadonlySet<ComposerFailureKind> = new Set([
+  "account_signed_out",
+  "chat_gone",
+  "chat_not_started",
+]);
 // Kinds of refused send whose cause the agent's terminal shows.
 const KINDS_THE_TERMINAL_SHOWS: ReadonlySet<ComposerFailureKind> = new Set([
   "input_blocked",
   "submission_unconfirmed",
 ]);
 // Kinds a restart must not answer: an agent still starting would lose the session it was about to finish bringing up;
-// one that may already be working on the message would have that turn cut off and get it twice; a kind the composer
-// does not know says nothing about the agent; and a chat whose create failed has no agent to restart.
+// one that may already be working on the message would have that turn cut off and get it twice; and a kind the
+// composer does not know says nothing about the agent.
 const KINDS_RESTART_MUST_NOT_ANSWER: ReadonlySet<ComposerFailureKind> = new Set([
   "not_ready",
   "submission_unconfirmed",
   "not_answered",
   "unrecognised",
-  "chat_not_started",
 ]);
 // Kinds of send that may have reached the agent: its turn arriving takes the copy back out of the composer.
 const KINDS_THAT_MAY_HAVE_ARRIVED: ReadonlySet<ComposerFailureKind> = new Set([

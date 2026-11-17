@@ -1107,7 +1107,8 @@ describe("MessageInput send to a chat still being created", () => {
     const text = renderedText(after);
     expect(text).toContain("Couldn't send your message");
     expect(text).toContain("mngr create exited with code 3");
-    // The chat has no agent to restart.
+    // The chat has no agent to send to again or to restart.
+    expect(findButton(after, "Retry")).toBeUndefined();
     expect(findButton(after, "Restart")).toBeUndefined();
     expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
   });
