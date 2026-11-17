@@ -1493,6 +1493,7 @@ def frame(
     note: str | None = None,
     inner_path: str = "/",
     framed_app: FramedAppRegistration | None = None,
+    keeps_row_on_failure: bool = False,
     runner: Runner,
     registry: Registry,
     http: HttpClient,
@@ -1513,8 +1514,10 @@ def frame(
     recorded: it is how ``revive`` registers the inner service again.
 
     Returns 1 on failure. A failed boot is torn down, a re-frame's row deregistered
-    with it; a failed re-frame keeps only its record (``read_frame``), so a later
-    call can boot it again on a fresh port without being told the note. An inner
+    with it unless ``keeps_row_on_failure`` (a revive's, whose row is what an open
+    window and the shell find the instance by); a failed re-frame keeps only its
+    record (``read_frame``), so a later call can boot it again on a fresh port
+    without being told the note. An inner
     path without a leading ``/``, a ``repo_root`` that is a linked git worktree, an
     unreadable state file, or a previous wrapper that survives SIGKILL is refused
     before anything changes, leaving a previous frame as it was.
@@ -1635,7 +1638,7 @@ def frame(
             runner,
             registry,
             pids=pids,
-            services=services,
+            services=[] if keeps_row_on_failure else services,
             sleeper=sleeper,
         )
         if is_reframe:
@@ -2170,6 +2173,7 @@ def _revive_frame(
         note=record.note,
         inner_path=record.inner_path,
         framed_app=framed_app,
+        keeps_row_on_failure=True,
         runner=runner,
         registry=registry,
         http=http,

@@ -2149,3 +2149,5 @@ def test_a_frame_that_does_not_come_back_leaves_its_app_registered_plainly(
         _FRAMED_INBOX.overrides,
         None,
     ]
+    # The frame's row stays, so its window still offers to start it again.
+    assert registry.removed == []
