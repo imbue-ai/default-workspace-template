@@ -2742,7 +2742,8 @@ export class DesktopStore {
    *  page (built for a GET launch path, asked of the app for a POST one) and opens a window there, points the
    *  named window at it, or shows it by the show rule. An opened, focused, or shown window is taken as an open
    *  is; a navigated one (the named window, or the pinned window a show pointed at the page) as this client's own
-   *  navigation, so the page follows. Answers the window's id, or null when the shell refused (told to the user). */
+   *  navigation, so the page follows. Answers the window's id, or null when the shell refused (told to the user, or
+   *  with ``isRefusalQuiet`` only logged, for a caller that falls back on a refusal). */
   async launchAt(
     app: string,
     launchId: string,
@@ -2774,7 +2775,8 @@ export class DesktopStore {
         isMinimized,
       });
     } catch (error) {
-      if (!isRefusalQuiet) this.toast(`Could not open ${app}: ${(error as Error).message}`);
+      if (isRefusalQuiet) console.warn(`[si] the launch ${app}:${launchId} was refused`, error);
+      else this.toast(`Could not open ${app}: ${(error as Error).message}`);
       return null;
     }
     if (target.kind === "window") {
