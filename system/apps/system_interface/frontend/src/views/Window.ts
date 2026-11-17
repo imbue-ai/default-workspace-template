@@ -122,7 +122,7 @@ export interface StoppedInstanceVerbs {
 
 /** What the chat is asked, in the user's words, for a stopped preview or UI sketch no start can bring back. */
 export function newInstancePrompt(displayName: string, kind: InstanceKind): string {
-  return `The ${displayName} ${instanceNoun(kind)} stopped and can't be started again. Make me a new one.`;
+  return `"${displayName}" stopped and can't be started again. Make me a new ${instanceNoun(kind)}.`;
 }
 
 /** What the placeholder of window ``windowId`` offers when its app is a preview or UI sketch; null for any other
