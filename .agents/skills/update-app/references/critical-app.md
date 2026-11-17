@@ -437,20 +437,17 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    *settle* healthy, refreshes every open view, and **auto-rolls-back the entire
    merge on any failure**. `--keep-rollback-point` keeps the snapshots and a
    record of what it touched afterwards, which is what the notice below offers
-   back; any later apply replaces them. Interpret the exit code and report it.
-   The apply's closing stderr lines say what it did and name any follow-up it
-   left, so read them before you report:
+   back; any later apply replaces them. Read what the exit code means, and
+   what to do about an apply that was interrupted, in
+   `.agents/shared/references/apply-exit-codes.md`, then report it. What this
+   flow adds:
 
-   - `0`: applied; the live app is updated and healthy.
-   - `2`: the change was bad and was **automatically rolled back**; the live
-     app is healthy on the previous revision and the change did not land.
-     Diagnose before retrying; a rolled-back merge cannot be re-landed by
-     re-running the apply, so the retry is a fresh pass off the current `HEAD`.
-   - `3`: **emergency**: even rollback could not restore a healthy workspace.
-     Escalate immediately, with the snapshot paths the stderr names.
-   - `1`: precondition error (a dirty tree, another apply in flight, a
-     conflicted merge); nothing was changed. A conflicted merge is a stale
-     pass: catch it up as the freshness check says.
+   - `2` (rolled back): diagnose before retrying. The retry is a fresh pass
+     off the current `HEAD`.
+   - `3` (emergency): escalate immediately, with the snapshot paths the stderr
+     names.
+   - `1` (nothing changed): a conflicted merge is a stale pass; catch it up as
+     the freshness check says.
 
    Only the critical apps' health gates the apply. After a `0`, check that any
    ordinary app or service in the pass works, and fix what doesn't.
