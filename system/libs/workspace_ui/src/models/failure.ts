@@ -115,7 +115,8 @@ export interface FailedAnswer {
  * What a failed request's answer says about why: a non-empty ``user_facing_message``, else a non-empty ``detail``
  * (or ``error``), else no answer (status 0 or a gateway status), else nothing. A gateway status that carries a JSON
  * reason is the server's own answer, not the proxy's: Imbue Studio's forward proxy answers its own 502, 503 and 504
- * as plain text or an HTML page.
+ * as plain text or an HTML page. A reason that only repeats the sentence for people stays out of "See details",
+ * which would otherwise say the sentence twice.
  */
 export function readFailure(answer: FailedAnswer): Failure {
   const { status, rawText, requestKind } = answer;
@@ -130,7 +131,7 @@ export function readFailure(answer: FailedAnswer): Failure {
     status,
     details: joinDetails([
       status === 0 ? null : `HTTP ${status}`,
-      reason,
+      reason === userFacing ? null : reason,
       nonEmptyString(body?.details),
       userFacing === null && reason === null ? rawText?.slice(0, RAW_BODY_LIMIT) : null,
     ]),

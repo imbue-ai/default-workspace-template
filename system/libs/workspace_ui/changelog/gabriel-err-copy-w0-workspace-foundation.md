@@ -4,7 +4,7 @@ A failed request inside a workspace is now told the same way everywhere: a sente
 
 - One function words it, from what the screen says failed: a request nothing answered says "The workspace didn't answer. Try again in a moment." for a read and "The workspace didn't answer, so Imbue Studio can't tell whether this went through." for a change, never prefixed with what failed; a refusal with a reason says what failed ("This window couldn't be closed."); anything else says what failed, then "Try again. If this persists, report a bug.". These replace "HTTP 500", "request failed (HTTP 503)", "could not reach the workspace", "unknown error" and the gateway sentence that claimed "nothing was changed", which the workspace cannot know: Imbue Studio's forward proxy can send a gateway status after the request arrived.
 
-- A server's own sentence asks for a bug report only when its answer says `reportable: true`.
+- A server's own sentence asks for a bug report only when its answer says `reportable: true`. A `detail` that only repeats the sentence stays out of "See details", which then holds the status alone.
 
 - A screen not yet worded this way keeps showing the server's own reason: a failed request's error message, and `describeRequestError`, are still the route's `detail`, with our sentence only where the route gave none.
 
