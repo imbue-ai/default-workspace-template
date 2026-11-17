@@ -4,22 +4,31 @@ import "../testing/dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
+import type { ReportedFailure } from "../app_contract";
 import { ToastQueue } from "../models/toasts";
 import { mountView, unmountViews } from "../testing/mount";
 import { Toasts } from "./toasts";
 
 const TOASTS = [
-  { id: 1, message: "Could not move it", details: null, actions: [], isLasting: false },
-  { id: 2, message: "Could not copy it", details: null, actions: [], isLasting: false },
+  { id: 1, message: "Could not move it", details: null, actions: [], isLasting: false, isReportable: false },
+  { id: 2, message: "Could not copy it", details: null, actions: [], isLasting: false, isReportable: false },
 ];
 
 afterEach(() => {
   unmountViews();
 });
 
-function mountQueue(queue: ToastQueue): HTMLElement {
+function mountQueue(
+  queue: ToastQueue,
+  onReportBug: () => ((failure: ReportedFailure) => void) | null = () => null,
+): HTMLElement {
   return mountView(() =>
-    m(Toasts, { toasts: queue.current(), placementClass: "fixed", onDismiss: (id) => queue.dismiss(id) }),
+    m(Toasts, {
+      toasts: queue.current(),
+      placementClass: "fixed",
+      onDismiss: (id) => queue.dismiss(id),
+      onReportBug: onReportBug(),
+    }),
   );
 }
 
@@ -74,5 +83,51 @@ describe("Toasts", () => {
 
     (second.querySelector(".toast-close") as HTMLButtonElement).click();
     expect(queue.current()).toEqual([]);
+  });
+
+  it("keeps a lasting note up when the button pressed hands the failure on", () => {
+    const queue = new ToastQueue(() => m.redraw.sync());
+    const ask = vi.fn();
+    const retry = vi.fn();
+    queue.show("Docs couldn't open that.", {
+      isLasting: true,
+      actions: [
+        { label: "Try again", run: retry },
+        { label: "Ask an agent to fix this", run: ask, keepsToast: true },
+      ],
+    });
+    const root = mountQueue(queue);
+
+    const [tryAgain, askAgent] = Array.from(root.querySelectorAll<HTMLButtonElement>(".toast-action"));
+    askAgent.click();
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(queue.current()).toHaveLength(1);
+    tryAgain.click();
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(queue.current()).toEqual([]);
+  });
+
+  it("offers Report a bug on a reportable note once the page can open one, with the note's failure, and keeps it up", () => {
+    const queue = new ToastQueue(() => m.redraw.sync());
+    queue.show("This window couldn't be closed. Try again. If this persists, report a bug.", {
+      isLasting: true,
+      details: "HTTP 500",
+      isReportable: true,
+    });
+    queue.show("Docs couldn't open that.", { isLasting: true, details: "HTTP 400" });
+    let reportBug: ((failure: ReportedFailure) => void) | null = null;
+    const root = mountQueue(queue, () => reportBug);
+    expect(root.querySelector(".report-bug")).toBeNull();
+
+    const reported: ReportedFailure[] = [];
+    reportBug = (failure) => void reported.push(failure);
+    m.redraw.sync();
+    const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>(".report-bug"));
+    expect(buttons.map((button) => button.textContent)).toEqual(["Report a bug"]);
+    buttons[0].click();
+    expect(reported).toEqual([
+      { message: "This window couldn't be closed. Try again. If this persists, report a bug.", details: "HTTP 500" },
+    ]);
+    expect(queue.current()).toHaveLength(2);
   });
 });

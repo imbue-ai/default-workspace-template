@@ -37,7 +37,8 @@ describe("isForwardedToShell", () => {
     expect(isForwardedToShell({ type: "shell:open-link", url: "http://files-ab12cd34.host-0123.localhost/" })).toBe(
       true,
     );
-    expect(isForwardedToShell({ type: "shell:start-with-text", text: "Fix this." })).toBe(true);
+    expect(isForwardedToShell({ type: "shell:start-with-text", text: "Free up space." })).toBe(true);
+    expect(isForwardedToShell({ type: "shell:start-new-with-text", text: "Fix this." })).toBe(true);
     expect(isForwardedToShell({ type: "shell:report-bug" })).toBe(true);
   });
 

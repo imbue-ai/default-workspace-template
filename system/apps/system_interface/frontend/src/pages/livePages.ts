@@ -19,7 +19,7 @@
  * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
  * this client's own stored path, which arrives with the layout), and the pages' own
  * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, ``shell:start-with-text``,
- * ``shell:message``, ``shell:open-link``, and ``shell:report-bug``. Messages cross through ``relay.ts``.
+ * ``shell:start-new-with-text``, ``shell:message``, ``shell:open-link``, and ``shell:report-bug``. Messages cross through ``relay.ts``.
  *
  * The phone layout mounts differently (plan-phone-interface.md): under the ``shown`` policy only the shown
  * window's page lives, laid over the whole host, plus the pages it keeps (the pinned chat window's, created
@@ -49,7 +49,9 @@ import {
   SHELL_SHOWN,
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
+  SHELL_START_NEW_WITH_TEXT,
   SHELL_START_WITH_TEXT,
+  reportedFailureOf,
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { viewportRect } from "../geometry/frames";
@@ -246,10 +248,13 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_INPUT, (frame) => this.takeInput(frame));
     setChildFrameMessageHandler(SHELL_OPEN, (frame, payload) => this.takeOpen(frame, payload));
     setChildFrameMessageHandler(SHELL_START_WITH_TEXT, (frame, payload) => this.takeStartWithText(frame, payload));
+    setChildFrameMessageHandler(SHELL_START_NEW_WITH_TEXT, (frame, payload) =>
+      this.takeStartNewWithText(frame, payload),
+    );
     setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
     setChildFrameMessageHandler(SHELL_MESSAGE, (frame, payload) => this.takeMessage(frame, payload));
     setChildFrameMessageHandler(SHELL_OPEN_LINK, (frame, payload) => this.takeOpenLink(frame, payload));
-    setChildFrameMessageHandler(SHELL_REPORT_BUG, (frame) => this.takeReportBug(frame));
+    setChildFrameMessageHandler(SHELL_REPORT_BUG, (frame, payload) => this.takeReportBug(frame, payload));
     // Focusable, so the shell has somewhere of its own to put the document's focus (``takeFocusFromOtherPages``).
     this.host.tabIndex = -1;
     this.store.setPageDriver(this);
@@ -988,6 +993,13 @@ export class LivePagesLayer implements PageDriver {
     if (text !== null) void this.store.startWithText(text);
   }
 
+  /** ``shell:start-new-with-text {text}`` from a page ("Ask an agent to fix this"): the launcher's secondary text
+   *  action runs with it, as ``shell:start-with-text`` runs the primary one. */
+  private takeStartNewWithText(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    const text = this.textFromPage(frame, payload, SHELL_START_NEW_WITH_TEXT);
+    if (text !== null) void this.store.startNewWithText(text);
+  }
+
   /** ``shell:draft-text {text}`` from a page (element-reference-menu plan section 5): the text is drafted into the
    *  chat the pinned draft launch path names; the frame has to be one the shell created. */
   private takeDraftText(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
@@ -1035,10 +1047,14 @@ export class LivePagesLayer implements PageDriver {
     void this.store.openLink(url, window.location.host, page.app);
   }
 
-  /** ``shell:report-bug`` from a page: the bug report opens, where the embedder opens one; the frame has to be one the
-   *  shell created. */
-  private takeReportBug(frame: HTMLIFrameElement): void {
-    if (this.pageOfFrame(frame) !== undefined) this.store.reportBugFromPage();
+  /** ``shell:report-bug {message, details}`` from a page: the bug report about that failure opens, where the
+   *  embedder opens one; the frame has to be one the shell created. A payload that holds no failure (an older page,
+   *  a malformed one) still opens the report, with nothing attached. */
+  private takeReportBug(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    if (this.pageOfFrame(frame) === undefined) return;
+    const failure = reportedFailureOf(payload);
+    if (failure === null) console.warn(`[si] shell:report-bug carried no failure (${JSON.stringify(payload)})`);
+    this.store.reportBugFromPage(failure);
   }
 
   private takeOpen(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

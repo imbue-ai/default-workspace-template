@@ -5,12 +5,16 @@
  * A plain toast goes on its own and takes no press unless the page also sets ``closesPlainToasts``: the shell's never
  * stand between the user and what is under them, while a page whose notes run longer (Files lists what failed) gives
  * each a close button. A lasting toast (details or buttons) takes presses and carries a close control wherever the
- * page offers ``onDismiss``.
+ * page offers ``onDismiss``. A lasting toast whose message asks for a bug report gets "Report a bug" while the page
+ * gives ``onReportBug``, decided as it draws: whether the embedder opens a bug report can be learned after the toast
+ * went up.
  */
 
 import m from "mithril";
 
-import type { Toast } from "../models/toasts";
+import type { ReportedFailure } from "../app_contract";
+import { REPORT_A_BUG_LABEL } from "../models/failure";
+import type { Toast, ToastAction } from "../models/toasts";
 import { Button } from "./Button";
 import { SeeDetails } from "./SeeDetails";
 import { icon } from "./icons";
@@ -25,6 +29,8 @@ export interface ToastsAttrs {
   readonly onDismiss?: (id: number) => void;
   /** Give each plain toast a close button too (it calls ``onDismiss``). */
   readonly closesPlainToasts?: boolean;
+  /** Open the bug report about a reportable toast's failure; absent or null where none can be opened now. */
+  readonly onReportBug?: ((failure: ReportedFailure) => void) | null;
 }
 
 function plainToastBody(toast: Toast, onDismiss: ((id: number) => void) | null): m.Children {
@@ -46,7 +52,20 @@ function plainToastBody(toast: Toast, onDismiss: ((id: number) => void) | null):
   ];
 }
 
-function lastingToastBody(toast: Toast, onDismiss: ((id: number) => void) | null): m.Children {
+function lastingToastBody(
+  toast: Toast,
+  onDismiss: ((id: number) => void) | null,
+  onReportBug: ((failure: ReportedFailure) => void) | null,
+): m.Children {
+  const reportBug: ToastAction | null =
+    toast.isReportable && onReportBug !== null
+      ? {
+          label: REPORT_A_BUG_LABEL,
+          run: () => onReportBug({ message: toast.message, details: toast.details }),
+          keepsToast: true,
+        }
+      : null;
+  const actions = reportBug === null ? toast.actions : [...toast.actions, reportBug];
   return [
     m("div", { class: "toast-head flex items-start gap-2" }, [
       m("span", { class: "toast-message min-w-0 flex-1 py-0.5" }, toast.message),
@@ -67,21 +86,22 @@ function lastingToastBody(toast: Toast, onDismiss: ((id: number) => void) | null
           ),
     ]),
     m(SeeDetails, { details: toast.details }),
-    toast.actions.length === 0
+    actions.length === 0
       ? null
       : m(
           "div",
           { class: "toast-actions -mx-2 flex flex-wrap gap-1" },
-          toast.actions.map((action) =>
+          actions.map((action) =>
             m(
               Button,
               {
                 variant: "ghost-inverse",
                 sm: true,
-                extra: "toast-action",
-                // The note has done its job once its next step is taken; a retry that fails again leaves a new one.
+                extra: action === reportBug ? "toast-action report-bug" : "toast-action",
+                // A retry or a resolving button has done the note's job, and a retry that fails again leaves a new
+                // one; a button that hands the failure on leaves it up for its other buttons.
                 onclick: () => {
-                  onDismiss?.(toast.id);
+                  if (action.keepsToast !== true) onDismiss?.(toast.id);
                   action.run();
                 },
               },
@@ -94,7 +114,7 @@ function lastingToastBody(toast: Toast, onDismiss: ((id: number) => void) | null
 
 export const Toasts: m.Component<ToastsAttrs> = {
   view(vnode) {
-    const { toasts, placementClass, onDismiss, closesPlainToasts } = vnode.attrs;
+    const { toasts, placementClass, onDismiss, closesPlainToasts, onReportBug } = vnode.attrs;
     const plainDismiss = onDismiss !== undefined && closesPlainToasts === true ? onDismiss : null;
     return m(
       "div",
@@ -119,7 +139,9 @@ export const Toasts: m.Component<ToastsAttrs> = {
               "max-w-[min(480px,100%)] animate-[toast-rise_var(--dur-slow)_ease-out] rounded-[20px] bg-inverse " +
               "px-4 py-2.5 text-(length:--font-size-body) whitespace-pre-line text-on-accent shadow-overlay",
           },
-          toast.isLasting ? lastingToastBody(toast, onDismiss ?? null) : plainToastBody(toast, plainDismiss),
+          toast.isLasting
+            ? lastingToastBody(toast, onDismiss ?? null, onReportBug ?? null)
+            : plainToastBody(toast, plainDismiss),
         ),
       ),
     );
