@@ -33,7 +33,7 @@ import {
   followShellTheme,
   reportedFailureOf,
 } from "./app_contract";
-import type { ShellConnection } from "./app_contract";
+import type { ShellConnection, StartNewOutcome } from "./app_contract";
 
 const HANDSHAKE = {
   type: SHELL_HANDSHAKE,
@@ -42,6 +42,7 @@ const HANDSHAKE = {
   desktopId: "home",
   app: "chat",
   path: "/?chat=agent-1",
+  shellId: "shell-1",
 };
 
 let connection: ShellConnection | null = null;
@@ -104,6 +105,7 @@ describe("connectToShell", () => {
       canReportBug: false,
       opensLocalFiles: false,
       isViewing: false,
+      shellId: "shell-1",
     });
     expect(handlers.onShown).toHaveBeenCalledTimes(1);
     expect(handlers.onHidden).toHaveBeenCalledTimes(1);
@@ -133,6 +135,7 @@ describe("connectToShell", () => {
       canReportBug: false,
       opensLocalFiles: false,
       isViewing: false,
+      shellId: "",
     });
   });
 
@@ -679,15 +682,41 @@ describe("startNewWithText's answer", () => {
     expect(await second).toEqual({ isOpened: false, failure });
   });
 
-  it("settles a request the shell never answered as not answered once a fresh handshake arrives", async () => {
+  it("keeps a request pending through the same shell's handshakes, and settles it on the answer", async () => {
+    const parent = shellFramed();
+    const pending = (connection as ShellConnection).startNewWithText("Fix this.");
+    const requestId = lastRequestId(parent);
+    // The shell greets a page again when the embedder says it opens a bug report, a window moves, viewing changes.
+    deliver({ ...HANDSHAKE, canReportBug: true }, parent);
+    deliver({ ...HANDSHAKE, desktopId: "work", isViewing: true }, parent);
+    expect(await settledValue(pending)).toBe("pending");
+    deliver({ type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId, isOpened: true }, parent);
+    expect(await pending).toEqual({ isOpened: true });
+  });
+
+  it("settles a request as not answered once a shell that started again greets the page", async () => {
     const parent = shellFramed();
     const pending = (connection as ShellConnection).startNewWithText("Fix this.");
     expect(await settledValue(pending)).toBe("pending");
-    deliver(HANDSHAKE, parent);
+    deliver({ ...HANDSHAKE, shellId: "shell-2" }, parent);
     expect(await pending).toEqual({
       isOpened: false,
       failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isReportable: false },
     });
+  });
+
+  it("hands a late answer to a request already settled as not answered to its late-answer callback", async () => {
+    const parent = shellFramed();
+    const late: StartNewOutcome[] = [];
+    const pending = (connection as ShellConnection).startNewWithText("Fix this.", (outcome) => late.push(outcome));
+    const requestId = lastRequestId(parent);
+    deliver({ ...HANDSHAKE, shellId: "shell-2" }, parent);
+    expect((await pending).isOpened).toBe(false);
+    expect(late).toEqual([]);
+
+    deliver({ type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId, isOpened: true }, parent);
+    deliver({ type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId, isOpened: true }, parent);
+    expect(late).toEqual([{ isOpened: true }]);
   });
 
   it("settles a pending request as not answered once the page disconnects", async () => {
