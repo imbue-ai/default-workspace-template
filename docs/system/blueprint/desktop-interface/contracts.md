@@ -62,7 +62,7 @@ Built-in manifests:
 | `screen` | false | false | `screen` | 30 | `{launch = "screen", mode = "focus"}`, `{launch = "browser", mode = "focus"}` | `screen` ("Screen", `/`, no params); `browser` ("Browser", POST `/launch/browser`, params `url` optional) |
 | `system-monitor` | false | true | `system-monitor` | 50 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open System Monitor", `/`) |
 
-The chat, terminal, Screen, Getting Started, and System Monitor manifests declare `system = true`; Routines does not.
+The chat, terminal, Screen, Getting Started, System Monitor, Files, and Routines manifests declare `system = true` (each is part of every workspace rather than an app built on it; the workspace app model's contracts say what follows from the flag).
 The Screen (`docs/system/specs/screen/spec.md`) is the workspace's one streamed Linux desktop; the browser is its `browser` launch path, and the browser app that used to hold a row here is gone.
 The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "independent"` (the default mode, `bar`, keeps the avatar in the tray) and `[[message_handlers]] type = "minds:focus-chat", path = "/api/focus-chat"`.
 The files manifest declares `[[message_handlers]] type = "open:file", show = "{path}?view", showing = ["{path}", "{path}/", "{path}/?view"]`, and the Screen's `[[message_handlers]] type = "open:url", path = "/api/open-url"`.
