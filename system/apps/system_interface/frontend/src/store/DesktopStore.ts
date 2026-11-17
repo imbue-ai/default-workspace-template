@@ -2832,7 +2832,10 @@ export class DesktopStore {
       this.takeDesktop(await this.deps.api.moveDesktopShortcut(desktop.id, app, launch, cell));
     } catch (error) {
       this.withShortcutCells(changes.map((entry) => ({ ...entry, cell: entry.storedCell })));
-      this.toastFailure("Couldn't move this shortcut, so it's back where it was", error, { isLasting: false });
+      this.toastFailure("Couldn't move this shortcut, so it's back where it was", error, {
+        isLasting: false,
+        retry: () => void this.dropShortcut(app, launch, cell, shown),
+      });
     }
   }
 

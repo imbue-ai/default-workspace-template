@@ -1896,6 +1896,25 @@ describe("gestures", () => {
     expect(cellsByApp(store)).toEqual({ docs: "0,0", notes: "1,0" });
     expect(notices()).toEqual(["Couldn't move this shortcut, so it's back where it was."]);
   });
+
+  it("offers Try again on a drop the shell failed with no reason, which makes the same move again", async () => {
+    const store = await shortcutStore();
+    api.refusal = refusedWith(500, null, "boom");
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    store.endShortcutDrag({ x: 130, y: 40 }, { x: 100, y: 0 });
+    await settle();
+    expect(cellsByApp(store)).toEqual({ docs: "0,0", notes: "1,0" });
+    const [toast] = store.toasts.current();
+    expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
+
+    api.refusal = null;
+    toast.actions[0].run();
+    await settle();
+    const moves = api.calls.filter((call) => call.startsWith("moveDesktopShortcut"));
+    expect(moves).toHaveLength(2);
+    expect(moves[1]).toBe(moves[0]);
+    expect(cellsByApp(store)).toEqual({ docs: "1,0", notes: "0,0" });
+  });
 });
 
 describe("presence", () => {
