@@ -728,7 +728,7 @@ def main_checkout_of_linked_worktree(repo_root: Path) -> Path | None:
     return None if main_checkout == repo_root else main_checkout
 
 
-def _refuses_registering_from_a_worktree(
+def refuses_registering_from_a_worktree(
     repo_root: Path, verb: str, alternative: str
 ) -> bool:
     """Whether ``repo_root`` is in a linked worktree, saying why a registration from it is refused."""
@@ -1131,7 +1131,7 @@ def up(
         # spend its whole budget on the dead wrapper before saying so.
         sys.stderr.write(f"up: --inner-path must start with '/', got {inner_path!r}.\n")
         return 1
-    if service_name is not None and _refuses_registering_from_a_worktree(
+    if service_name is not None and refuses_registering_from_a_worktree(
         repo_root,
         "up",
         ", keeping --cwd on the code to run, or drop --service-name for an instance "
@@ -1432,7 +1432,7 @@ def frame(
             f"frame: the inner path must start with '/', got {inner_path!r}.\n"
         )
         return 1
-    if _refuses_registering_from_a_worktree(repo_root, "frame", ""):
+    if refuses_registering_from_a_worktree(repo_root, "frame", ""):
         return 1
     state_path = _state_path(repo_root, name)
     previous_port: int | None = None
