@@ -317,7 +317,7 @@ def revive_app(name: str) -> ResponseReturnValue:
         shell.instance_reviver.revive(str(instance.app), instance.kind)
     except InstanceReviveError:
         return detail_response(f"This {INSTANCE_NOUN_BY_KIND[instance.kind]} didn't start.", HTTP_BAD_GATEWAY)
-    shell.inventory.refresh_liveness()
+    shell.inventory.sweep_once()
     refreshed = shell.inventory.entry(name)
     return model_response(
         AppRunningState(name=name, is_running=refreshed.is_running if refreshed is not None else False)

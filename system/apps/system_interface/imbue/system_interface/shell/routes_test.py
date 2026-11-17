@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from app_manifest.primitives import AppName
+from app_manifest.registry import IsolatedInstanceKind
 from flask import Flask
 from flask.testing import FlaskClient
 from workspace_layout.identity import ANONYMOUS_OWNER
@@ -26,6 +27,7 @@ from imbue.system_interface.shell.app_theming import AppThemingStore
 from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
 from imbue.system_interface.shell.desktops import DESKTOP_GLYPH_COLORS
 from imbue.system_interface.shell.errors import LaunchUnavailableError
+from imbue.system_interface.shell.instance_revival import REVIVE_SCRIPT_REL_BY_KIND
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
@@ -3563,3 +3565,29 @@ def test_an_app_that_is_no_preview_is_not_revived(tmp_path: Path, broadcaster: W
     assert answer.status_code == 400
     assert "not a preview or a UI sketch" in answer.get_json()["detail"]
     assert read_stub_revive_calls(repo_root) == []
+
+
+def test_a_revived_preview_answers_running_at_the_port_its_revive_registered(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A revive boots the preview on fresh ports and re-registers its row there as its last act; the answer probes
+    that row, not the one the inventory read before the revive."""
+    revived_url = "http://localhost:41299"
+    registry_path = write_two_app_registry(
+        tmp_path, registry_row_toml("today-preview", "http://localhost:41234", isolated_instance=("today", "change"))
+    )
+    revived_registry = write_two_app_registry(
+        tmp_path / "revived", registry_row_toml("today-preview", revived_url, isolated_instance=("today", "change"))
+    )
+    script = tmp_path / "repo" / REVIVE_SCRIPT_REL_BY_KIND[IsolatedInstanceKind.CHANGE]
+    script.parent.mkdir(parents=True)
+    script.write_text(f"import shutil\nshutil.copyfile({str(revived_registry)!r}, {str(registry_path)!r})\n")
+    inventory = build_inventory(
+        registry_path, broadcaster, prober=lambda rows: {name: url == revived_url for name, _program, url in rows}
+    )
+    client = shell_application(tmp_path, inventory, broadcaster).test_client()
+
+    answer = client.post("/api/apps/today-preview/revive")
+
+    assert answer.status_code == 200
+    assert answer.get_json() == {"name": "today-preview", "is_running": True}
