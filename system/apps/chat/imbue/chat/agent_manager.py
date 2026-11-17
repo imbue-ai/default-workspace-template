@@ -183,6 +183,7 @@ from imbue.chat.models import ChatCreationOutcome
 from imbue.chat.models import ChatPartlyDestroyedError
 from imbue.chat.models import ChatSegmentInfo
 from imbue.chat.models import ChatSnapshot
+from imbue.chat.models import ConnectReplay
 from imbue.chat.models import CreatedChat
 from imbue.chat.models import DiscardedChat
 from imbue.chat.models import DisplayDecisionFields
@@ -1496,8 +1497,9 @@ class AgentManager:
     # The chats deleted while their create ran. They are listed nowhere, and the agent the create
     # makes is destroyed as it lands.
     _abandoned_creates: set[ChatId]
-    # The provisional chats deleted lately, for the connect-time replay (``get_recent_discards``).
-    _recent_discards: dict[ChatId, DiscardedChat]
+    # The provisional chats deleted lately, as they were when deleted, and when (monotonic seconds), for the
+    # connect-time replay (``get_connect_replay``).
+    _recent_discards: dict[ChatId, tuple[ProvisionalChat, float]]
     _mngr_binary: str
     _host_dir: Path
     _activity_tracked_agents: set[str]
@@ -4920,6 +4922,9 @@ class AgentManager:
             if provisional is None:
                 return False
             del self._provisional_chats[parsed]
+            # Under the same lock as the removal, so a page's connect-time replay sees the chat one way or the other.
+            self._prune_recent_discards_locked()
+            self._recent_discards[parsed] = (provisional, time.monotonic())
             if provisional.phase is ProvisionalChatPhase.CREATING:
                 self._abandoned_creates.add(parsed)
             else:
@@ -4930,24 +4935,32 @@ class AgentManager:
                     self._delete_record_locked(parsed)
         self._auto_open.forget(parsed)
         held_sends = self._provisional_as_shown(provisional).held_sends
-        with self._lock:
-            self._recent_discards[parsed] = DiscardedChat(
-                chat_id=parsed, held_sends=held_sends, discarded_at=time.monotonic()
-            )
         self._broadcaster.broadcast_provisional_chat_completed(
             chat_id=parsed, success=False, error=None, held_sends=held_sends
         )
         self._broadcast_chats_updated()
         return True
 
-    def get_recent_discards(self) -> list[DiscardedChat]:
-        """The provisional chats deleted lately, oldest first, each with the messages dropped with it: what a page
-        whose socket was down then has to be told on connecting."""
+    def _prune_recent_discards_locked(self) -> None:
         cutoff = time.monotonic() - _DISCARD_REPLAYED_SECONDS
+        for chat_id in [key for key, (_, discarded_at) in self._recent_discards.items() if discarded_at < cutoff]:
+            del self._recent_discards[chat_id]
+
+    def get_connect_replay(self) -> ConnectReplay:
+        """What a page that connects is told before the chat list: the chats deleted lately, each with the messages
+        dropped with it (a page whose socket was down then puts its own back), and the provisional chats. Both are
+        read under one lock, so a chat deleted meanwhile is in exactly one of them."""
         with self._lock:
-            for chat_id in [key for key, discard in self._recent_discards.items() if discard.discarded_at < cutoff]:
-                del self._recent_discards[chat_id]
-            return list(self._recent_discards.values())
+            self._prune_recent_discards_locked()
+            discarded = [provisional for provisional, _ in self._recent_discards.values()]
+            provisional_chats = list(self._provisional_chats.values())
+        return ConnectReplay(
+            discarded_chats=tuple(
+                DiscardedChat(chat_id=chat.chat_id, held_sends=self._provisional_as_shown(chat).held_sends)
+                for chat in discarded
+            ),
+            provisional_chats=tuple(self._provisional_as_shown(chat) for chat in provisional_chats),
+        )
 
     def create_chat(
         self,

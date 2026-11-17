@@ -3203,11 +3203,12 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
         # process was running) can be dropped rather than waited on forever. Before the first
         # read of the agent list there is no list to send: an empty one would tell the page every
         # chat is gone, so the page waits for the push that follows that read instead.
-        for discarded in agent_manager.get_recent_discards():
+        replay = agent_manager.get_connect_replay()
+        for discarded in replay.discarded_chats:
             websocket.send(
                 json.dumps(provisional_chat_completed_message(discarded.chat_id, False, None, discarded.held_sends))
             )
-        for provisional in agent_manager.get_provisional_chats_as_shown():
+        for provisional in replay.provisional_chats:
             websocket.send(json.dumps(provisional_chat_created_message(provisional)))
         if agent_manager.is_agent_list_known():
             websocket.send(
