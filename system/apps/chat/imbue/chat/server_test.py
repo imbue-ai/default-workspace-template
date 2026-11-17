@@ -4839,6 +4839,52 @@ def test_a_page_that_connects_after_a_chat_was_discarded_hears_the_discard_with_
     assert second["type"] == "chats_updated"
 
 
+class _DiscardingAfterReplayReadAgentManager(AgentManager):
+    """Discards a chat once, right after a connect-time replay has read the provisional chats."""
+
+    discard_after_read: str | None = None
+
+    def get_provisional_chats(self) -> list[ProvisionalChat]:
+        provisional_chats = super().get_provisional_chats()
+        chat_id, self.discard_after_read = self.discard_after_read, None
+        if chat_id is not None:
+            self.discard_provisional_chat(chat_id)
+        return provisional_chats
+
+
+@pytest.mark.timeout(15)
+def test_a_chat_discarded_while_a_page_connects_is_replayed_as_its_record_then_its_discard(
+    config: Config, tmp_path: Path, messenger: RecordingMngrMessenger
+) -> None:
+    """A chat deleted between the replay's read of the provisional chats and its read of the discards is in both, and
+    its discard comes after its record, so the page drops the record again before the chat list ends the replay."""
+    manager = _DiscardingAfterReplayReadAgentManager.build(
+        WebSocketBroadcaster(), messenger=messenger, chat_files_root=tmp_path / "chats"
+    )
+    manager.note_agent_list_known()
+    app = create_application(build_test_state(config=config, agent_manager=manager))
+    with manager._lock:
+        manager._provisional_chats[ChatId("proto-1")] = ProvisionalChat(
+            chat_id=ChatId("proto-1"), name="Chat 9", account_id="acct-1", phase=ProvisionalChatPhase.CREATING
+        )
+    manager.hold_send_for_chat_being_created(ChatId("proto-1"), "m-1", "hello", HeldSendOrigin.CLIENT)
+    manager.discard_after_read = "proto-1"
+
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            replayed = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(3)]
+        finally:
+            close_ws(ws)
+
+    assert [(message["type"], message.get("chat_id")) for message in replayed] == [
+        ("provisional_chat_created", "proto-1"),
+        ("provisional_chat_completed", "proto-1"),
+        ("chats_updated", None),
+    ]
+    assert [(held["message_id"], held["text"]) for held in replayed[1]["held_sends"]] == [("m-1", "hello")]
+
+
 @pytest.mark.timeout(15)
 def test_a_page_that_connects_before_the_first_agent_listing_gets_its_chat_list_from_that_listing(
     config: Config, signed_in_account: str, tmp_path: Path, messenger: RecordingMngrMessenger
