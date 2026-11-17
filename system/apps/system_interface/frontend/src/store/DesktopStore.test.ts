@@ -1248,25 +1248,29 @@ describe("a launch into an app that is not running", () => {
     return store.toasts.current().map((toast) => [toast.message, toast.details, toast.actions.map((a) => a.label)]);
   }
 
-  it("says what the app's stopped window says, with the agent asked to start it", async () => {
+  const TERMINAL_STOPPED_DETAIL = "terminal is not running, so it could not take the launch: refused";
+
+  /** A store whose launch into the terminal the shell refused as one to a stopped app, leaving its note up. */
+  async function storeWithTerminalStoppedNote(): Promise<DesktopStore> {
     api.apps = [chat, terminal];
     const store = await startedStore();
     api.refusal = shellRefusal(
       502,
-      "terminal is not running, so it could not take the launch: refused",
+      TERMINAL_STOPPED_DETAIL,
       "Terminal isn't running right now, so it couldn't open that.",
       "app_stopped",
     );
     await store.runLaunch("terminal", "new", "new");
+    api.refusal = null;
+    return store;
+  }
+
+  it("says what the app's stopped window says, with the agent asked to start it", async () => {
+    const store = await storeWithTerminalStoppedNote();
 
     expect(toastsShown(store)).toEqual([
-      [
-        "Terminal isn't running.",
-        "HTTP 502\nterminal is not running, so it could not take the launch: refused",
-        ["Ask an agent to start it"],
-      ],
+      ["Terminal isn't running.", `HTTP 502\n${TERMINAL_STOPPED_DETAIL}`, ["Ask an agent to start it"]],
     ]);
-    api.refusal = null;
     store.toasts.current()[0].actions[0].run();
     await settle();
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
@@ -1275,16 +1279,7 @@ describe("a launch into an app that is not running", () => {
   });
 
   it("shows an agent asked for as pending until its launch settles, and a failed one in a toast of its own", async () => {
-    api.apps = [chat, terminal];
-    const store = await startedStore();
-    api.refusal = shellRefusal(
-      502,
-      "terminal is not running, so it could not take the launch: refused",
-      "Terminal isn't running right now, so it couldn't open that.",
-      "app_stopped",
-    );
-    await store.runLaunch("terminal", "new", "new");
-    api.refusal = null;
+    const store = await storeWithTerminalStoppedNote();
     const [ask] = store.toasts.current()[0].actions;
     expect(ask.pending?.label).toBe("Asking an agent…");
     expect(ask.pending?.isPending()).toBe(false);
@@ -1308,16 +1303,7 @@ describe("a launch into an app that is not running", () => {
   });
 
   it("takes the stopped app's note down once the app list says the app is running again", async () => {
-    api.apps = [chat, terminal];
-    const store = await startedStore();
-    api.refusal = shellRefusal(
-      502,
-      "terminal is not running, so it could not take the launch: refused",
-      "Terminal isn't running right now, so it couldn't open that.",
-      "app_stopped",
-    );
-    await store.runLaunch("terminal", "new", "new");
-    api.refusal = null;
+    const store = await storeWithTerminalStoppedNote();
     expect(notices()).toEqual(["Terminal isn't running."]);
 
     socket.deliver().onAppsUpdated([chat, { ...terminal, is_running: false }]);
