@@ -1051,3 +1051,46 @@ def test_a_siblings_own_revive_waits_for_the_revive_booting_it_and_boots_nothing
 
     assert codes == [0, 0]
     assert slow.ups() == ["chat-preview", "system_interface-preview"]
+
+
+def test_an_up_asked_for_while_a_revive_boots_the_preview_waits_for_it(
+    tmp_path: Path,
+) -> None:
+    """A window reads its preview as stopped while a re-up boots it, so a Start pressed then
+    must not boot a second instance beside the agent's."""
+    worktree = _write_worktree(tmp_path)
+    booting = threading.Event()
+    release = threading.Event()
+    reupped = threading.Event()
+
+    class _SlowInstances(_RecordingInstances):
+        def up(self, spec: mod.InstanceSpec, repo_root: Path) -> int:
+            if not booting.is_set():
+                booting.set()
+                assert release.wait(timeout=10)
+            else:
+                reupped.set()
+            return super().up(spec, repo_root)
+
+    instances = _RecordingInstances(tmp_path)
+    assert boot.up("notes", worktree, tmp_path, instances=instances) == 0
+    slow = _SlowInstances(tmp_path)
+    codes: list[int] = []
+    reviving = threading.Thread(
+        target=lambda: codes.append(boot.revive("notes", tmp_path, instances=slow))
+    )
+    reviving.start()
+    assert booting.wait(timeout=10)
+    upping = threading.Thread(
+        target=lambda: codes.append(
+            boot.up("notes", worktree, tmp_path, instances=slow)
+        )
+    )
+    upping.start()
+
+    assert not reupped.wait(timeout=1)
+    release.set()
+    reviving.join(timeout=10)
+    upping.join(timeout=10)
+    assert codes == [0, 0]
+    assert slow.ups() == ["notes-preview", "notes-preview"]

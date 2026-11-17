@@ -232,8 +232,32 @@ def up(
     """Frame the app as a mock with ``note``, then open (``surface="open"``) or reload (``"refresh"``) its window.
 
     A ``note`` or ``inner_path`` left out is the one the app's frame was last booted
-    with (the page defaults to ``/``); a first frame needs a note.
+    with (the page defaults to ``/``); a first frame needs a note. Holds the frame's lock,
+    so a ``revive`` asked for meanwhile waits.
     """
+    with serve_isolated_instance.instance_lock(repo_root, frame_name(app_name)):
+        return _up_locked(
+            app_name,
+            note,
+            repo_root,
+            inner_path=inner_path,
+            surface=surface,
+            frames=frames,
+            layout=layout,
+        )
+
+
+def _up_locked(
+    app_name: str,
+    note: str | None,
+    repo_root: Path,
+    *,
+    inner_path: str | None,
+    surface: str | None,
+    frames: Frames,
+    layout: Layout,
+) -> int:
+    """``up``, with the frame's lock already held."""
     if note is None or inner_path is None:
         recorded = frames.recorded(app_name, repo_root)
         if note is None:
@@ -313,7 +337,15 @@ def revive(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) ->
                 f"mock frame: the frame of {app_name!r} is already running.\n"
             )
             return 0
-        return up(app_name, None, repo_root, frames=frames, layout=layout)
+        return _up_locked(
+            app_name,
+            None,
+            repo_root,
+            inner_path=None,
+            surface=None,
+            frames=frames,
+            layout=layout,
+        )
 
 
 def down(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -> int:

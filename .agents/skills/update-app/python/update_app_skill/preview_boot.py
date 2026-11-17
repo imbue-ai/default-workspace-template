@@ -11,7 +11,7 @@ import contextlib
 import json
 import sys
 import tomllib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Generator, Sequence
 from pathlib import Path
 
 from agents_shared import serve_isolated_instance
@@ -224,7 +224,49 @@ def up(
     ``is_private`` boots it with no registrations, title, or instance key, for an agent
     to reach on its loopback port. Raises PreviewError for a preview with a window from a
     ``repo_root`` that is a linked git worktree, and for ``is_private`` with ``with_apps``.
+    Holds the lock of every instance it may boot, so a ``revive`` asked for meanwhile waits.
     """
+    with _instance_locks(
+        repo_root, [app_name, *with_apps, *_recorded_siblings(repo_root, app_name)]
+    ):
+        return _up_locked(
+            app_name,
+            worktree,
+            repo_root,
+            with_apps=with_apps,
+            instance_key=instance_key,
+            title=title,
+            is_private=is_private,
+            instances=instances,
+            dump_registry=dump_registry,
+        )
+
+
+@contextlib.contextmanager
+def _instance_locks(repo_root: Path, app_names: Sequence[str]) -> Generator[None]:
+    """Hold the instance lock of each app's preview, taken in one order so two holders never
+    wait on each other."""
+    with contextlib.ExitStack() as locks:
+        for name in sorted(set(app_names)):
+            locks.enter_context(
+                serve_isolated_instance.instance_lock(repo_root, instance_name(name))
+            )
+        yield
+
+
+def _up_locked(
+    app_name: str,
+    worktree: Path,
+    repo_root: Path,
+    *,
+    with_apps: Sequence[str],
+    instance_key: str | None,
+    title: str | None,
+    is_private: bool,
+    instances: Instances,
+    dump_registry: Callable[[list[dict[str, object]]], str] | None,
+) -> int:
+    """``up``, with the locks of the app and its siblings already held."""
     live_root = _live_root(
         repo_root, worktree, is_private=is_private, with_apps=with_apps
     )
@@ -253,11 +295,14 @@ def up(
         # A sibling opens on the same instance when its path takes one (the chat under a shell
         # preview opens on the user's conversation, like a chat preview of its own).
         if (
-            up(
+            _up_locked(
                 sibling,
                 worktree,
                 repo_root,
+                with_apps=(),
                 instance_key=instance_key,
+                title=None,
+                is_private=False,
                 instances=instances,
                 dump_registry=dump,
             )
@@ -353,13 +398,9 @@ def revive(app_name: str, repo_root: Path, *, instances: Instances) -> int:
     fails (a worktree that is gone, a build that no longer boots).
     """
     siblings = _recorded_siblings(repo_root, app_name)
-    with contextlib.ExitStack() as locks:
-        # Every instance this boots, its siblings' included, so a sibling's own revive waits
-        # for this one; taken in one order, so two revives never hold each other's.
-        for name in sorted({app_name, *siblings}):
-            locks.enter_context(
-                serve_isolated_instance.instance_lock(repo_root, instance_name(name))
-            )
+    # Every instance this boots, its siblings' included, so a sibling's own revive waits for
+    # this one.
+    with _instance_locks(repo_root, [app_name, *siblings]):
         record = _read_json(_preview_state_path(repo_root, app_name))
         if record is None:
             sys.stderr.write(
@@ -377,7 +418,7 @@ def revive(app_name: str, repo_root: Path, *, instances: Instances) -> int:
             return 0
         title = record.get("title")
         instance_key = record.get("instance_key")
-        return up(
+        return _up_locked(
             app_name,
             Path(str(record["worktree"])),
             repo_root,
@@ -386,4 +427,5 @@ def revive(app_name: str, repo_root: Path, *, instances: Instances) -> int:
             title=str(title) if title is not None else None,
             is_private=bool(record.get("is_private")),
             instances=instances,
+            dump_registry=None,
         )
