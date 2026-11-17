@@ -1226,6 +1226,17 @@ describe("MessageInput first send of a seeded chat", () => {
     expect(localStorage.getItem("message-text:agent-1")).toContain("Let's build something");
   });
 
+  it("says a launch a gateway gave up on may have started the chat, not that the chat couldn't be started", async () => {
+    // The gateway's own body carries a reason, but nothing says whether the chat app took the launch.
+    mocks.launchChat.mockRejectedValueOnce(refusal(502, { error: "upstream connection reset" }));
+
+    const after = await typeAndSend(MessageInput(), "agent-1", "Let's build something");
+
+    const text = renderedText(findByClass(after, "modal-message"));
+    expect(text).toContain("The workspace didn't answer, so Imbue Studio can't tell whether this chat started.");
+    expect(text).not.toContain("report a bug");
+  });
+
   it("leaves the composer empty when the create fails after the launch took the message", async () => {
     // The chat keeps the message for the page's "Try again", which delivers it: a copy in the
     // composer would be sent twice.

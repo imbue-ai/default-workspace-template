@@ -28,15 +28,15 @@ const SEND_REFUSED = "Your message wasn't delivered. Your text is back in the bo
  */
 export type ComposerFailureKind = SendFailureKind | "not_answered" | "unrecognised" | "chat_not_started";
 
-/** Whether nothing answered the send: a gateway that gave up counts even when its body carries a reason. */
-function isUnansweredSend(error: unknown, failure: Failure): boolean {
+/** Whether nothing answered the request: a gateway that gave up counts even when its body carries a reason. */
+function isUnanswered(error: unknown, failure: Failure): boolean {
   return isUnansweredRequest(error) || failure.cause === "not_answered";
 }
 
 export function composerFailureKindOf(error: unknown): ComposerFailureKind {
   if (error instanceof ChatNotStartedError) return "chat_not_started";
   const failure = describeRequestFailure(error);
-  if (isUnansweredSend(error, failure)) return "not_answered";
+  if (isUnanswered(error, failure)) return "not_answered";
   const kind = describeRequestErrorKind(error);
   return kind === "unknown" && failure.kind !== null && failure.kind !== "unknown" ? "unrecognised" : kind;
 }
@@ -45,7 +45,7 @@ export function composerFailureKindOf(error: unknown): ComposerFailureKind {
  *  sentence for its case stands as written; this words the rest. */
 export function describeSendFailure(error: unknown): FailureLines {
   const failure = describeRequestFailure(error);
-  if (isUnansweredSend(error, failure)) {
+  if (isUnanswered(error, failure)) {
     return { body: [SEND_NOT_ANSWERED], details: failure.details, isReportable: false };
   }
   // Trying again would meet the same refusal, so the sentence offers no Try again.
@@ -66,7 +66,7 @@ export function describeSendFailure(error: unknown): FailureLines {
 /** A first send whose launch of its chat was refused or got no answer: nothing was sent, and the text is back. */
 export function describeLaunchFailure(error: unknown): FailureLines {
   const failure = describeRequestFailure(error);
-  if (failure.cause === "not_answered") {
+  if (isUnanswered(error, failure)) {
     return {
       body: [
         "The workspace didn't answer, so Imbue Studio can't tell whether this chat started. Your message is back in " +
