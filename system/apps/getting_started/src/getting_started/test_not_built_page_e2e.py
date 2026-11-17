@@ -10,11 +10,11 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from flask import Flask
 from playwright.sync_api import Page
 from playwright.sync_api import expect
 
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from getting_started.pages import build_pages_app
 from getting_started.serving import serve_in_background
 from getting_started.template_catalog import TemplateCatalogStore
