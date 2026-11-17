@@ -80,7 +80,7 @@ _MOVE_REFUSAL_BY_SIDE: Final[dict[MoveSide, OsRefusal]] = {
     "destination": OsRefusal(403, "destination_not_writable", "The folder it would move into is read-only."),
     "source": OsRefusal(403, "source_not_writable", "The folder it's in is read-only."),
 }
-# Queries that ask for data or a download rather than a page, so a failure is answered in plain words.
+# Queries that ask for data or a download rather than a page, so a failure is never answered with Files' own pages.
 _NON_PAGE_QUERIES: Final[frozenset[str]] = frozenset({"json", "zip", "download"})
 # Queries that load in the hidden frame a download goes through, which can read only a plain-text refusal.
 _DOWNLOAD_QUERIES: Final[frozenset[str]] = frozenset({"zip", "download"})
@@ -329,7 +329,9 @@ def create_app(
         with ``name``, ``is_folder``, ``is_symlink``, ``size`` and ``mtime``), a file's bytes (``?view`` or ``?edit``
         its page, ``?json`` ``{"kind": "file", "is_text": ...}``), or ``?zip`` a folder as a zip. PUT writes a file
         from the body, MKCOL makes a folder, MOVE (to the ``Destination`` header) renames, DELETE removes. A refusal
-        is plain words under its status.
+        is an ``ErrorResponse`` under its status: ``detail``, with ``user_facing_message`` and ``kind`` when the cause
+        is one a person can act on. A refused ``?download`` or ``?zip``, or a page the browser loads, is answered with
+        the sentence as plain text instead.
         """
         return answer(local, "", _requested_path())
 

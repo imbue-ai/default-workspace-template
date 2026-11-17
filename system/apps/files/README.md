@@ -33,7 +33,7 @@ both offer the verbs `sources.py` names. For either:
   something already there; DELETE removes;
 - a path that isn't there is answered with `404.html` when a page was asked for
   (the request accepts `text/html` and is not a `?json`, `?zip`, or `?download`),
-  and in plain words otherwise.
+  and refused as below otherwise.
 
 A computer's file server has no MOVE, and a folder there is not offered as a zip,
 so those are refused, as is a MOVE from the workspace onto a computer. Each name
