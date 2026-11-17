@@ -71,8 +71,8 @@ def _wait_for_the_chat_app(shell_url: str) -> dict[str, Any]:
 def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: Path) -> None:
     """The chat reaches the shell's inventory as an app: running, with the launch paths of its manifest (the ``root``
     page, and ``main``, ``new``, ``send``, ``draft``, ``lounge``, ``app-chat``, and ``draft-into-chat`` as POSTs onto
-    its intake route with their presets and text, draft, mention, app, or chat-draft params) and its default shortcut, and nothing about the chats
-    inside it."""
+    its intake route with their presets and text, draft, mention, app, or chat-draft params) and its default shortcut,
+    and nothing about the chats inside it."""
     with running_workspace(tmp_path, find_free_port(), find_free_port()) as workspace:
         listed = _wait_for_the_chat_app(workspace.shell_url)
         assert listed["display_name"] == "Chat"
