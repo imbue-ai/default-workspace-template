@@ -149,7 +149,8 @@ Chats from agents that have run on this host -- current or past, including ones
 that were destroyed in the last 30 days -- are stored locally on this host and are
 recoverable, so never tell the user you can't access an earlier or deleted
 conversation without checking first. A deleted chat's transcripts are removed 30
-days after it was deleted (the daily `history-sweep` routine). Use the `find-transcripts` skill to find and read them.
+days after it was deleted (the daily `history-sweep` routine). Use the
+`find-transcripts` skill to find and read them.
 
 # Self-modification
 
