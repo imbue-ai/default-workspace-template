@@ -4576,6 +4576,26 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect(store.renderedRect(placement)).toEqual({ x: 0, y: 0, width: 1000, height: 800 + METRICS.taskbarHeight });
   });
 
+  it("answers an agent asked for while viewing with the stop-viewing note, told once and asking for no bug report", async () => {
+    const store = await viewerStore();
+    socket
+      .deliver()
+      .onAppsUpdated([
+        chatLikeAppRecord("chat", {
+          launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+        }),
+      ]);
+    await store.switchDesktop("alice");
+
+    expect(await store.startNewWithText("Please look at this.")).toEqual({
+      isOpened: false,
+      failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
+    });
+    await store.askAgent("Please look at this.", true);
+    expect(notices()).toEqual([STOP_VIEWING_FIRST_NOTICE]);
+    expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([]);
+  });
+
   it("never views on the phone: a window shrunk to phone width while viewing lands on the way back", async () => {
     api.ownerLayoutClientId = "alice-laptop";
     api.ownerViewport = { width: 2000, height: 1600 };

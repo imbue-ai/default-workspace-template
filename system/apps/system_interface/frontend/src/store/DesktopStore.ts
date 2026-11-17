@@ -883,8 +883,10 @@ export class DesktopStore {
         await this.startWithText(request);
         return;
       }
+      const isViewing = this.viewedDesktop() !== null;
       const outcome = await this.startNewWithText(request);
-      if (!outcome.isOpened) this.toastNotice({ ...outcome.failure, actions: [] }, { isLasting: true });
+      // While viewing, the refusal's own note has already said so.
+      if (!outcome.isOpened && !isViewing) this.toastNotice({ ...outcome.failure, actions: [] }, { isLasting: true });
     } finally {
       this.agentAsks.delete(request);
       this.notifyListeners();
@@ -3115,6 +3117,14 @@ export class DesktopStore {
     const row = this.newTextRow();
     if (row === undefined) {
       return { isOpened: false, failure: { message: `${NO_TEXT_APP_REASON}.`, details: null, isReportable: false } };
+    }
+    // The launch's own refusal while viewing tells the user in a note and hands nothing over.
+    if (this.viewedDesktop() !== null) {
+      this.refuseWhileViewing("ask an agent");
+      return {
+        isOpened: false,
+        failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
+      };
     }
     const whatFailed = `${row.app.display_name} couldn't open that`;
     let failure: FailureNotice | null = null;
