@@ -1,28 +1,32 @@
 import json
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from imbue.mngr.api.preservation import PRESERVATION_MANIFEST_FILENAME
-from imbue.mngr.api.preservation import PreservationManifest
-from imbue.mngr.api.preservation import PreservedAgentIdentity
-from imbue.mngr.primitives import AgentId
-from imbue.mngr.primitives import AgentName
-from imbue.mngr.primitives import AgentTypeName
-from imbue.mngr.primitives import HostId
-from imbue.mngr.primitives import HostName
-from imbue.mngr.primitives import ProviderInstanceName
+from imbue.mngr.api.preservation import (
+    PRESERVATION_MANIFEST_FILENAME,
+    PreservationManifest,
+    PreservedAgentIdentity,
+)
+from imbue.mngr.primitives import (
+    AgentId,
+    AgentName,
+    AgentTypeName,
+    HostId,
+    HostName,
+    ProviderInstanceName,
+)
 
-from history_sweep.sweep import RETENTION
-from history_sweep.sweep import RemovalReason
-from history_sweep.sweep import SweepRefusedError
-from history_sweep.sweep import SweepRoots
-from history_sweep.sweep import apply_sweep
-from history_sweep.sweep import plan_sweep
-from history_sweep.sweep import read_session_ids
+from history_sweep.sweep import (
+    RETENTION,
+    RemovalReason,
+    SweepRefusedError,
+    SweepRoots,
+    apply_sweep,
+    plan_sweep,
+    read_session_ids,
+)
 
 _NOW = datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)
 _ACCOUNT = "acct1"
@@ -42,7 +46,9 @@ def _new_agent_id() -> str:
     return str(AgentId.generate())
 
 
-def _write_session(roots: SweepRoots, session_id: str, account: str = _ACCOUNT) -> list[Path]:
+def _write_session(
+    roots: SweepRoots, session_id: str, account: str = _ACCOUNT
+) -> list[Path]:
     """Claude's files for one session in an account folder: the jsonl, its subagent folder, its file history."""
     account_dir = roots.accounts_root / account
     jsonl = account_dir / "projects" / _PROJECT / f"{session_id}.jsonl"
@@ -56,10 +62,14 @@ def _write_session(roots: SweepRoots, session_id: str, account: str = _ACCOUNT) 
     return [jsonl, subagents.parent, file_history]
 
 
-def _write_present_agent(roots: SweepRoots, agent_id: str, session_ids: list[str]) -> None:
+def _write_present_agent(
+    roots: SweepRoots, agent_id: str, session_ids: list[str]
+) -> None:
     agent_dir = roots.host_dir / "agents" / agent_id
     agent_dir.mkdir(parents=True)
-    (agent_dir / "claude_session_id_history").write_text("".join(f"{sid} hook\n" for sid in session_ids))
+    (agent_dir / "claude_session_id_history").write_text(
+        "".join(f"{sid} hook\n" for sid in session_ids)
+    )
 
 
 def _write_archive(
@@ -74,7 +84,9 @@ def _write_archive(
     (archive / "logs" / "claude_transcript" / "events.jsonl").write_text(
         '{"type":"user"}\n' if has_raw_transcript else ""
     )
-    (archive / "claude_session_id_history").write_text("".join(f"{sid}\n" for sid in session_ids))
+    (archive / "claude_session_id_history").write_text(
+        "".join(f"{sid}\n" for sid in session_ids)
+    )
     manifest = PreservationManifest(
         preserved_at=preserved_at,
         identity=PreservedAgentIdentity(
@@ -94,7 +106,10 @@ def _write_archive(
 def _write_chat_record(roots: SweepRoots, agent_ids: list[str]) -> None:
     chat_dir = roots.chats_root / agent_ids[0]
     chat_dir.mkdir(parents=True)
-    record = {"chat_id": agent_ids[0], "agents": [{"seq": i + 1, "agent_id": a} for i, a in enumerate(agent_ids)]}
+    record = {
+        "chat_id": agent_ids[0],
+        "agents": [{"seq": i + 1, "agent_id": a} for i, a in enumerate(agent_ids)],
+    }
     (chat_dir / "record.json").write_text(json.dumps(record))
 
 
@@ -102,10 +117,14 @@ def _planned(roots: SweepRoots) -> dict[Path, RemovalReason]:
     return {removal.path: removal.reason for removal in plan_sweep(roots, now=_NOW)}
 
 
-def test_recently_deleted_chat_loses_only_its_account_session_copy(roots: SweepRoots) -> None:
+def test_recently_deleted_chat_loses_only_its_account_session_copy(
+    roots: SweepRoots,
+) -> None:
     session_id = str(uuid4())
     copies = _write_session(roots, session_id)
-    archive = _write_archive(roots, _new_agent_id(), [session_id], preserved_at=_NOW - timedelta(days=1))
+    archive = _write_archive(
+        roots, _new_agent_id(), [session_id], preserved_at=_NOW - timedelta(days=1)
+    )
 
     planned = _planned(roots)
 
@@ -113,21 +132,34 @@ def test_recently_deleted_chat_loses_only_its_account_session_copy(roots: SweepR
     assert archive not in planned
 
 
-def test_archive_past_retention_is_removed_with_its_session_copies(roots: SweepRoots) -> None:
+def test_archive_past_retention_is_removed_with_its_session_copies(
+    roots: SweepRoots,
+) -> None:
     session_id = str(uuid4())
     copies = _write_session(roots, session_id)
-    archive = _write_archive(roots, _new_agent_id(), [session_id], preserved_at=_NOW - RETENTION)
+    archive = _write_archive(
+        roots, _new_agent_id(), [session_id], preserved_at=_NOW - RETENTION
+    )
 
     planned = _planned(roots)
 
-    assert planned == {**{path: RemovalReason.ORPHANED_SESSION_COPY for path in copies}, archive: RemovalReason.EXPIRED_ARCHIVE}
+    assert planned == {
+        **{path: RemovalReason.ORPHANED_SESSION_COPY for path in copies},
+        archive: RemovalReason.EXPIRED_ARCHIVE,
+    }
 
 
-def test_session_copies_stay_while_the_archive_has_no_raw_transcript(roots: SweepRoots) -> None:
+def test_session_copies_stay_while_the_archive_has_no_raw_transcript(
+    roots: SweepRoots,
+) -> None:
     session_id = str(uuid4())
     _write_session(roots, session_id)
     _write_archive(
-        roots, _new_agent_id(), [session_id], preserved_at=_NOW - timedelta(days=1), has_raw_transcript=False
+        roots,
+        _new_agent_id(),
+        [session_id],
+        preserved_at=_NOW - timedelta(days=1),
+        has_raw_transcript=False,
     )
 
     assert _planned(roots) == {}
@@ -138,17 +170,23 @@ def test_archive_of_a_present_agent_is_never_touched(roots: SweepRoots) -> None:
     session_id = str(uuid4())
     _write_session(roots, session_id)
     _write_present_agent(roots, agent_id, [session_id])
-    _write_archive(roots, agent_id, [session_id], preserved_at=_NOW - timedelta(days=90))
+    _write_archive(
+        roots, agent_id, [session_id], preserved_at=_NOW - timedelta(days=90)
+    )
 
     assert _planned(roots) == {}
 
 
-def test_archive_of_an_agent_a_chat_record_lists_is_never_touched(roots: SweepRoots) -> None:
+def test_archive_of_an_agent_a_chat_record_lists_is_never_touched(
+    roots: SweepRoots,
+) -> None:
     agent_id = _new_agent_id()
     session_id = str(uuid4())
     _write_session(roots, session_id)
     _write_chat_record(roots, [_new_agent_id(), agent_id])
-    _write_archive(roots, agent_id, [session_id], preserved_at=_NOW - timedelta(days=90))
+    _write_archive(
+        roots, agent_id, [session_id], preserved_at=_NOW - timedelta(days=90)
+    )
 
     assert _planned(roots) == {}
 
@@ -159,7 +197,12 @@ def test_session_a_present_agent_still_names_is_kept(roots: SweepRoots) -> None:
     shared_copies = _write_session(roots, shared_session)
     own_copies = _write_session(roots, own_session)
     _write_present_agent(roots, _new_agent_id(), [shared_session])
-    _write_archive(roots, _new_agent_id(), [shared_session, own_session], preserved_at=_NOW - timedelta(days=1))
+    _write_archive(
+        roots,
+        _new_agent_id(),
+        [shared_session, own_session],
+        preserved_at=_NOW - timedelta(days=1),
+    )
 
     planned = _planned(roots)
 
@@ -169,8 +212,12 @@ def test_session_a_present_agent_still_names_is_kept(roots: SweepRoots) -> None:
 
 def test_session_copies_are_found_in_every_account(roots: SweepRoots) -> None:
     session_id = str(uuid4())
-    copies = _write_session(roots, session_id, account="a") + _write_session(roots, session_id, account="b")
-    _write_archive(roots, _new_agent_id(), [session_id], preserved_at=_NOW - timedelta(days=1))
+    copies = _write_session(roots, session_id, account="a") + _write_session(
+        roots, session_id, account="b"
+    )
+    _write_archive(
+        roots, _new_agent_id(), [session_id], preserved_at=_NOW - timedelta(days=1)
+    )
 
     assert set(_planned(roots)) == set(copies)
 
@@ -178,7 +225,9 @@ def test_session_copies_are_found_in_every_account(roots: SweepRoots) -> None:
 def test_unreadable_chat_record_refuses_the_whole_sweep(roots: SweepRoots) -> None:
     session_id = str(uuid4())
     _write_session(roots, session_id)
-    _write_archive(roots, _new_agent_id(), [session_id], preserved_at=_NOW - timedelta(days=90))
+    _write_archive(
+        roots, _new_agent_id(), [session_id], preserved_at=_NOW - timedelta(days=90)
+    )
     (roots.chats_root / "broken").mkdir(parents=True)
     (roots.chats_root / "broken" / "record.json").write_text("{not json")
 
@@ -193,7 +242,9 @@ def test_nothing_to_sweep_on_an_empty_host(roots: SweepRoots) -> None:
 def test_apply_removes_planned_paths_and_reports_their_sizes(roots: SweepRoots) -> None:
     session_id = str(uuid4())
     copies = _write_session(roots, session_id)
-    archive = _write_archive(roots, _new_agent_id(), [session_id], preserved_at=_NOW - RETENTION)
+    archive = _write_archive(
+        roots, _new_agent_id(), [session_id], preserved_at=_NOW - RETENTION
+    )
     planned = plan_sweep(roots, now=_NOW)
 
     removed, failed = apply_sweep(planned)
@@ -204,7 +255,9 @@ def test_apply_removes_planned_paths_and_reports_their_sizes(roots: SweepRoots) 
     assert all(removal.size_bytes > 0 for removal in removed)
 
 
-def test_read_session_ids_takes_the_first_word_and_skips_unsafe_ids(tmp_path: Path) -> None:
+def test_read_session_ids_takes_the_first_word_and_skips_unsafe_ids(
+    tmp_path: Path,
+) -> None:
     history = tmp_path / "claude_session_id_history"
     history.write_text("abc-123 hook\n\n../../etc reset\nabc-123 resume\ndef-456\n")
 

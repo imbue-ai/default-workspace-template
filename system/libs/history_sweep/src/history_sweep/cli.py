@@ -7,18 +7,19 @@ one-line summary in its ``result.json``.
 
 import json
 import os
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
 
 import click
 
-from history_sweep.sweep import Removal
-from history_sweep.sweep import SweepRefusedError
-from history_sweep.sweep import SweepRoots
-from history_sweep.sweep import apply_sweep
-from history_sweep.sweep import plan_sweep
+from history_sweep.sweep import (
+    Removal,
+    SweepRefusedError,
+    SweepRoots,
+    apply_sweep,
+    plan_sweep,
+)
 
 _DEFAULT_CHATS_ROOT: Final[Path] = Path("data/.apps/chat/chats")
 _MIB: Final[int] = 1024**2
@@ -30,7 +31,9 @@ def default_roots(environ: dict[str, str], home: Path) -> SweepRoots:
     accounts_root = environ.get("MINDS_ACCOUNTS_ROOT", "").strip()
     return SweepRoots(
         host_dir=Path(host_dir) if host_dir else home / ".mngr",
-        accounts_root=Path(accounts_root) if accounts_root else home / ".minds" / "accounts",
+        accounts_root=Path(accounts_root)
+        if accounts_root
+        else home / ".minds" / "accounts",
         chats_root=_DEFAULT_CHATS_ROOT,
     )
 
@@ -44,8 +47,12 @@ def summarize(removals: tuple[Removal, ...], is_dry_run: bool) -> str:
     return f"{verb} {freed_mib:.1f} MiB from {agent_count} deleted chat agent(s)."
 
 
-@click.command(help="Remove what deleted chats leave on disk; never anything a listed chat can open.")
-@click.option("--dry-run", is_flag=True, help="Print what would be removed and remove nothing.")
+@click.command(
+    help="Remove what deleted chats leave on disk; never anything a listed chat can open."
+)
+@click.option(
+    "--dry-run", is_flag=True, help="Print what would be removed and remove nothing."
+)
 def main(dry_run: bool) -> None:
     roots = default_roots(dict(os.environ), Path.home())
     try:
@@ -58,13 +65,17 @@ def main(dry_run: bool) -> None:
         removed, failed = apply_sweep(planned)
     prefix = "would remove" if dry_run else "removed"
     for removal in removed:
-        click.echo(f"{prefix} {removal.reason.lower()} {removal.agent_id} {removal.size_bytes} {removal.path}")
+        click.echo(
+            f"{prefix} {removal.reason.lower()} {removal.agent_id} {removal.size_bytes} {removal.path}"
+        )
     for removal, error in failed:
         click.echo(f"could not remove {removal.path}: {error}", err=True)
     summary = summarize(removed, dry_run)
     click.echo(summary)
     run_dir = os.environ.get("ROUTINES_RUN_DIR", "").strip()
     if run_dir:
-        (Path(run_dir) / "result.json").write_text(json.dumps({"summary": summary}) + "\n")
+        (Path(run_dir) / "result.json").write_text(
+            json.dumps({"summary": summary}) + "\n"
+        )
     if failed:
         raise click.ClickException(f"{len(failed)} path(s) could not be removed")

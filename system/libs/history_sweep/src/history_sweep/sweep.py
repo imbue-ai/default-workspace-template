@@ -20,17 +20,17 @@ import os
 import re
 import shutil
 from collections.abc import Iterable
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 from enum import auto
 from pathlib import Path
 from typing import Final
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.mngr.api.preservation import PreservedAgentArchive
-from imbue.mngr.api.preservation import discover_preserved_agent_archives
+from imbue.mngr.api.preservation import (
+    PreservedAgentArchive,
+    discover_preserved_agent_archives,
+)
 from pydantic import Field
 
 RETENTION: Final[timedelta] = timedelta(days=30)
@@ -52,43 +52,68 @@ class RemovalReason(UpperCaseStrEnum):
 
 
 class SweepRoots(FrozenModel):
-    host_dir: Path = Field(description="mngr's host directory (agents/ and preserved/ live under it)")
+    host_dir: Path = Field(
+        description="mngr's host directory (agents/ and preserved/ live under it)"
+    )
     accounts_root: Path = Field(description="Where the provider account folders live")
-    chats_root: Path = Field(description="The chat app's chat records (data/.apps/chat/chats)")
+    chats_root: Path = Field(
+        description="The chat app's chat records (data/.apps/chat/chats)"
+    )
 
 
 class Removal(FrozenModel):
     path: Path = Field(description="The file or directory to remove")
-    size_bytes: int = Field(ge=0, description="Bytes it holds on disk, by apparent size")
+    size_bytes: int = Field(
+        ge=0, description="Bytes it holds on disk, by apparent size"
+    )
     reason: RemovalReason = Field(description="Why it goes")
     agent_id: str = Field(description="The destroyed agent it belonged to")
 
 
-def plan_sweep(roots: SweepRoots, now: datetime, retention: timedelta = RETENTION) -> tuple[Removal, ...]:
+def plan_sweep(
+    roots: SweepRoots, now: datetime, retention: timedelta = RETENTION
+) -> tuple[Removal, ...]:
     """Everything the sweep would remove now, without removing anything."""
     present_agent_dirs = _present_agent_dirs(roots.host_dir)
-    protected_agent_ids = {path.name for path in present_agent_dirs} | _listed_agent_ids(roots.chats_root)
+    protected_agent_ids = {
+        path.name for path in present_agent_dirs
+    } | _listed_agent_ids(roots.chats_root)
     protected_session_ids: set[str] = set()
     for agent_dir in present_agent_dirs:
-        protected_session_ids.update(read_session_ids(agent_dir / SESSION_ID_HISTORY_FILENAME))
+        protected_session_ids.update(
+            read_session_ids(agent_dir / SESSION_ID_HISTORY_FILENAME)
+        )
 
     removals: list[Removal] = []
     for archive in discover_preserved_agent_archives(roots.host_dir):
         agent_id = str(archive.agent_id)
         if agent_id in protected_agent_ids:
             continue
-        session_ids = read_session_ids(archive.path / SESSION_ID_HISTORY_FILENAME) - protected_session_ids
+        session_ids = (
+            read_session_ids(archive.path / SESSION_ID_HISTORY_FILENAME)
+            - protected_session_ids
+        )
         session_copies = _session_copies(roots.accounts_root, session_ids)
         is_expired = now - _preserved_at(archive) >= retention
         if is_expired:
-            removals.extend(_removal(path, RemovalReason.ORPHANED_SESSION_COPY, agent_id) for path in session_copies)
-            removals.append(_removal(archive.path, RemovalReason.EXPIRED_ARCHIVE, agent_id))
+            removals.extend(
+                _removal(path, RemovalReason.ORPHANED_SESSION_COPY, agent_id)
+                for path in session_copies
+            )
+            removals.append(
+                _removal(archive.path, RemovalReason.EXPIRED_ARCHIVE, agent_id)
+            )
         elif _has_preserved_raw_transcript(archive.path):
-            removals.extend(_removal(path, RemovalReason.ORPHANED_SESSION_COPY, agent_id) for path in session_copies)
+            removals.extend(
+                _removal(path, RemovalReason.ORPHANED_SESSION_COPY, agent_id)
+                for path in session_copies
+            )
     return tuple(removals)
 
 
-def apply_sweep(removals: Iterable[Removal]) -> tuple[tuple[Removal, ...], tuple[tuple[Removal, OSError], ...]]:
+def apply_sweep(
+    removals: Iterable[Removal],
+) -> tuple[tuple[Removal, ...], tuple[tuple[Removal, OSError], ...]]:
     """Remove each planned path; returns what was removed and what could not be."""
     removed: list[Removal] = []
     failed: list[tuple[Removal, OSError]] = []
@@ -139,7 +164,9 @@ def _listed_agent_ids(chats_root: Path) -> set[str]:
             record = json.loads(record_file.read_text())
             agent_ids.update(str(entry["agent_id"]) for entry in record["agents"])
         except (OSError, ValueError, KeyError, TypeError) as e:
-            raise SweepRefusedError(f"cannot read chat record {record_file}: {e}") from e
+            raise SweepRefusedError(
+                f"cannot read chat record {record_file}: {e}"
+            ) from e
     return agent_ids
 
 
@@ -151,12 +178,17 @@ def _session_copies(accounts_root: Path, session_ids: set[str]) -> tuple[Path, .
     for account_dir in sorted(accounts_root.iterdir()):
         if not account_dir.is_dir():
             continue
-        project_dirs = sorted(path for path in (account_dir / "projects").glob("*") if path.is_dir())
+        project_dirs = sorted(
+            path for path in (account_dir / "projects").glob("*") if path.is_dir()
+        )
         for session_id in sorted(session_ids):
             for project_dir in project_dirs:
                 copies.extend(
                     path
-                    for path in (project_dir / f"{session_id}.jsonl", project_dir / session_id)
+                    for path in (
+                        project_dir / f"{session_id}.jsonl",
+                        project_dir / session_id,
+                    )
                     if path.exists()
                 )
             file_history = account_dir / "file-history" / session_id
@@ -179,7 +211,9 @@ def _has_preserved_raw_transcript(archive_dir: Path) -> bool:
 
 
 def _removal(path: Path, reason: RemovalReason, agent_id: str) -> Removal:
-    return Removal(path=path, size_bytes=_size_bytes(path), reason=reason, agent_id=agent_id)
+    return Removal(
+        path=path, size_bytes=_size_bytes(path), reason=reason, agent_id=agent_id
+    )
 
 
 def _size_bytes(path: Path) -> int:

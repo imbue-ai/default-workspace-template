@@ -601,7 +601,12 @@ def test_parse_supervisord_ports_reads_the_real_template_config(
     # The shell, the chat, the terminal, and Files register from inside their own processes
     # (the registry scan covers them); the others register from their program lines.
     assert ("screen", 8090) in {(port.name, port.port) for port in ports}
-    assert not {port.name for port in ports} & {"system_interface", "terminal", "chat", "files"}
+    assert not {port.name for port in ports} & {
+        "system_interface",
+        "terminal",
+        "chat",
+        "files",
+    }
     assert [port.name for port in ports].count("screen") == 1
 
 
