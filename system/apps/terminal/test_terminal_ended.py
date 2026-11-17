@@ -164,7 +164,11 @@ def test_a_terminal_tmux_would_not_start_says_so_and_offers_try_again_an_agent_a
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
     [reported] = shell_messages(page, "shell:report-bug")
     assert reported["message"] == "This terminal couldn't start. Try again. If this persists, report a bug."
-    assert reported["details"] == "no server running on /tmp/tmux-1000/default"
+    # The report also carries the failed ask still shown under the agent button.
+    assert reported["details"] == (
+        "no server running on /tmp/tmux-1000/default\n\n"
+        "Asking an agent to fix this failed too:\nChat couldn't open that.\nHTTP 400"
+    )
 
     ended.get_by_role("button", name="Try again").click()
     expect(ended).to_be_hidden()
@@ -250,10 +254,18 @@ def test_a_pending_ask_survives_the_shell_greeting_again_and_takes_its_late_answ
     )
     told = ended.get_by_role("alert")
     expect(told).to_contain_text("The workspace couldn't do that.")
-    told.get_by_role("button", name="Report a bug").click()
+    # One Report a bug, the page's, files the ending and the failed ask together.
+    expect(told.get_by_role("button", name="Report a bug")).to_have_count(0)
+    report = ended.get_by_role("button", name="Report a bug")
+    expect(report).to_have_count(1)
+    report.click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
     [reported] = shell_messages(page, "shell:report-bug")
-    assert (reported["message"], reported["details"]) == ("The workspace couldn't do that.", "boom")
+    assert reported["message"] == "This terminal couldn't start. Try again. If this persists, report a bug."
+    assert reported["details"] == (
+        "no server running on /tmp/tmux-1000/default\n\n"
+        "Asking an agent to fix this failed too:\nThe workspace couldn't do that.\nboom"
+    )
 
 
 def test_an_ask_about_an_earlier_ending_never_shows_under_a_later_one(desktop_context: BrowserContext) -> None:
@@ -303,6 +315,26 @@ def test_a_failure_page_for_unreadable_saved_terminals_asks_an_agent_through_the
     assert task.startswith("The Terminal app can't open terminals: it can't read this workspace's saved terminals.")
     assert "the terminal store /x/instances.json is not valid JSON: x\n```" in task
     _expect_asking_then_told_why(page, wrapper.locator("body"))
+    expect(wrapper.get_by_role("button", name="Report a bug")).to_be_hidden()
+
+    # An ask that fails in a way to report brings the page's one Report a bug, which files both failures.
+    wrapper.get_by_role("button", name="Ask an agent to fix this").click()
+    page.wait_for_function(
+        "window.shellMessages.filter((message) => message.type === 'shell:start-new-with-text').length === 2"
+    )
+    answer_start_new_with_text(
+        page,
+        {"isOpened": False, "failure": {"message": "The workspace couldn't do that.", "details": "boom", "isReportable": True}},
+    )
+    report = wrapper.get_by_role("button", name="Report a bug")
+    expect(report).to_have_count(1)
+    report.click()
+    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
+    [reported] = shell_messages(page, "shell:report-bug")
+    assert reported["message"] == "This workspace's saved terminals can't be read, so terminals can't open."
+    assert str(reported["details"]).endswith(
+        "\n\nAsking an agent to fix this failed too:\nThe workspace couldn't do that.\nboom"
+    )
 
 
 def test_a_failure_page_while_tmux_does_not_answer_offers_only_try_again(desktop_context: BrowserContext) -> None:

@@ -177,7 +177,6 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   <div id="ended-ask-failure" role="alert" hidden>
     <p id="ended-ask-failure-message"></p>
     <details id="ended-ask-failure-details" hidden><summary>See details</summary><pre id="ended-ask-failure-details-text"></pre></details>
-    <button type="button" id="ended-ask-failure-report" hidden>Report a bug</button>
   </div>
 </div>
 <div id="keys" role="toolbar" aria-label="Terminal keys" hidden>
@@ -212,6 +211,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   // page loads neither.
   let connection = null;
   let askAgentToFix = null;
+  let withAskFailure = null;
   // Whether the shell says this window is being looked at on somebody else's desktop: the pty then attaches as a
   // viewer (read-only, and never the client tmux sizes the window by), through the path's viewer argument.
   let isViewing = false;
@@ -299,7 +299,9 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   // the bug report where the shell's embedder opens one.
   function syncShellButtons() {
     endedAsk.hidden = !endedActions.includes("ask") || connection === null || !connection.hasShell();
-    endedReport.hidden = !endedActions.includes("report") || connection === null || !connection.canReportBug();
+    // One Report a bug files the ending and a failed ask's failure together.
+    const isReportable = endedActions.includes("report") || askFailure?.isReportable === true;
+    endedReport.hidden = !isReportable || connection === null || !connection.canReportBug();
   }
 
   // The kind comes from the pty's output, so only ENDINGS' own keys count (not "constructor" and the like).
@@ -327,13 +329,8 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     document.getElementById("ended-ask-failure-message").textContent = failure?.message ?? "";
     document.getElementById("ended-ask-failure-details").hidden = !failure?.details;
     document.getElementById("ended-ask-failure-details-text").textContent = failure?.details ?? "";
-    document.getElementById("ended-ask-failure-report").hidden =
-      !failure?.isReportable || connection === null || !connection.canReportBug();
+    syncShellButtons();
   }
-
-  document.getElementById("ended-ask-failure-report").addEventListener("click", () => {
-    if (askFailure !== null) connection.reportBug({ message: askFailure.message, details: askFailure.details });
-  });
 
   endedAsk.addEventListener("click", async () => {
     const askedAbout = endingCount;
@@ -355,7 +352,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     showOutcome(outcome);
   });
   endedReport.addEventListener("click", () =>
-    connection.reportBug({ message: endedSentence, details: endedDetail || null }),
+    connection.reportBug(withAskFailure({ message: endedSentence, details: endedDetail || null }, askFailure)),
   );
   endedNew.addEventListener("click", async () => {
     endedNew.disabled = true;
@@ -626,6 +623,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     import("__CONTRACT_PATH__")
       .then((contract) => {
         askAgentToFix = contract.askAgentToFix;
+        withAskFailure = contract.withAskFailure;
         connection = contract.connectToShell({
           capabilities: { navigation: true, closeChord: false },
           onHandshake: (handshake) => {
@@ -678,40 +676,37 @@ _FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <div data-ask-failure role="alert" hidden>
   <p data-ask-failure-message></p>
   <details data-ask-failure-details hidden><summary>See details</summary><pre></pre></details>
-  <button type="button" data-ask-failure-report hidden>Report a bug</button>
 </div>
 <script type="application/json" id="terminal-failure">__CONFIG__</script>
 <script>
   document.querySelector('[data-action="retry"]').addEventListener("click", () => location.reload());
 </script>
 <script type="module">
-  import { askAgentToFix, connectToShell } from "__CONTRACT_PATH__";
+  import { askAgentToFix, connectToShell, withAskFailure } from "__CONTRACT_PATH__";
   const config = JSON.parse(document.getElementById("terminal-failure").textContent);
   const ask = document.querySelector('[data-action="ask"]');
   const report = document.querySelector('[data-action="report"]');
+  let askPresses = 0;
+  let shownFailure = null;
   const connection = connectToShell({ onHandshake: syncShellButtons });
   // Each shows once the shell's handshake says it can work: the agent with any shell, the bug report where the
   // shell's embedder opens one.
   function syncShellButtons() {
     ask.hidden = config.agent_fix === null || !connection.hasShell();
-    report.hidden = !config.is_reportable || !connection.canReportBug();
+    // One Report a bug files the page's failure and a failed ask's together.
+    const isReportable = config.is_reportable || shownFailure?.isReportable === true;
+    report.hidden = !isReportable || !connection.canReportBug();
   }
   const askFailure = document.querySelector("[data-ask-failure]");
   const askFailureDetails = document.querySelector("[data-ask-failure-details]");
-  const askFailureReport = document.querySelector("[data-ask-failure-report]");
-  let askPresses = 0;
-  let shownFailure = null;
   function showAskFailure(failure) {
     shownFailure = failure;
     askFailure.hidden = failure === null;
     document.querySelector("[data-ask-failure-message]").textContent = failure?.message ?? "";
     askFailureDetails.hidden = !failure?.details;
     askFailureDetails.querySelector("pre").textContent = failure?.details ?? "";
-    askFailureReport.hidden = !failure?.isReportable || !connection.canReportBug();
+    syncShellButtons();
   }
-  askFailureReport.addEventListener("click", () =>
-    connection.reportBug({ message: shownFailure.message, details: shownFailure.details }),
-  );
   // Pending until the shell says the chat opened; a failure comes back under the button, and an answer the shell
   // sends after a restart settled the ask replaces it unless the button was pressed again since.
   ask.addEventListener("click", async () => {
@@ -734,10 +729,11 @@ _FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
     }
     show(outcome);
   });
-  // The report carries what this page says and what its "See details" holds.
+  // The report carries what this page says and what its "See details" holds, and a failed ask's failure.
   report.addEventListener("click", () => {
     const details = document.querySelector("details pre").textContent;
-    connection.reportBug({ message: document.querySelector(".failure-message").textContent, details: details || null });
+    const page = { message: document.querySelector(".failure-message").textContent, details: details || null };
+    connection.reportBug(withAskFailure(page, shownFailure));
   });
 </script>
 </body>
