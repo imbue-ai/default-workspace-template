@@ -233,23 +233,21 @@ def up(
 
     A ``note`` or ``inner_path`` left out is the one the app's frame was last booted
     with (the page defaults to ``/``); a first frame needs a note. Refused from a git
-    worktree, whose registry the workspace never reads. Holds the frame's lock, so a
-    ``revive`` asked for meanwhile waits.
+    worktree, whose registry the workspace never reads.
     """
     if serve_isolated_instance.refuses_registering_from_a_worktree(
         repo_root, "mock frame", ""
     ):
         return 1
-    with serve_isolated_instance.instance_lock(repo_root, frame_name(app_name)):
-        code = _up_locked(
-            app_name,
-            note,
-            repo_root,
-            inner_path=inner_path,
-            surface=surface,
-            frames=frames,
-            layout=layout,
-        )
+    code = _frame_up(
+        app_name,
+        note,
+        repo_root,
+        inner_path=inner_path,
+        surface=surface,
+        frames=frames,
+        layout=layout,
+    )
     if code == 0 and surface is None:
         sys.stderr.write(
             f"mock frame up: open it with `uv run --no-sync workspace-layout open {frame_name(app_name)} --beside`.\n"
@@ -257,7 +255,7 @@ def up(
     return code
 
 
-def _up_locked(
+def _frame_up(
     app_name: str,
     note: str | None,
     repo_root: Path,
@@ -267,7 +265,7 @@ def _up_locked(
     frames: Frames,
     layout: Layout,
 ) -> int:
-    """``up``, with the frame's lock already held; with no ``surface``, the window is left alone."""
+    """``up`` without its hint to open the window; with no ``surface``, the window is left alone."""
     if note is None or inner_path is None:
         recorded = frames.recorded(app_name, repo_root)
         if note is None:
@@ -329,56 +327,50 @@ def refresh(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -
 def revive(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -> int:
     """Boot the app's frame again as recorded, with the app hidden again, unless it still runs.
 
-    Its window is left as it is; it shows the frame again once the frame answers. Two
-    revives at once boot it once.
+    Its window is left as it is; it shows the frame again once the frame answers.
     """
-    with serve_isolated_instance.instance_lock(repo_root, frame_name(app_name)):
-        if frames.recorded(app_name, repo_root) is None:
-            sys.stderr.write(
-                f"mock frame: no mock frame is recorded for {app_name!r}, so there is "
-                "nothing to start again.\n"
-            )
-            return 1
-        if frames.is_running(app_name, repo_root):
-            sys.stderr.write(
-                f"mock frame: the frame of {app_name!r} is already running.\n"
-            )
-            return 0
-        return _up_locked(
-            app_name,
-            None,
-            repo_root,
-            inner_path=None,
-            surface=None,
-            frames=frames,
-            layout=layout,
+    if frames.recorded(app_name, repo_root) is None:
+        sys.stderr.write(
+            f"mock frame: no mock frame is recorded for {app_name!r}, so there is "
+            "nothing to start again.\n"
         )
+        return 1
+    if frames.is_running(app_name, repo_root):
+        sys.stderr.write(f"mock frame: the frame of {app_name!r} is already running.\n")
+        return 0
+    return _frame_up(
+        app_name,
+        None,
+        repo_root,
+        inner_path=None,
+        surface=None,
+        frames=frames,
+        layout=layout,
+    )
 
 
 def down(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -> int:
     """Close the mock window, remove the frame, and make the app an ordinary app again.
 
     The frame comes down even when the app itself is gone (removed while still a mock);
-    its registration is then left alone, since registering it would add it back. Holds
-    the frame's lock, so it never tears down a frame an ``up`` or a ``revive`` is booting.
+    its registration is then left alone, since registering it would add it back.
     """
-    with serve_isolated_instance.instance_lock(repo_root, frame_name(app_name)):
-        if layout.run(["close", frame_name(app_name)]) != 0:
-            sys.stderr.write(
-                f"note: the {frame_name(app_name)} window was not closed (see above; most "
-                "often none was open); the frame comes down regardless.\n"
-            )
-        code = frames.down(app_name, repo_root)
-        try:
-            app = find_app(app_name, repo_root)
-        except MockFrameError as exc:
-            sys.stderr.write(
-                f"mock frame: the frame is down, but {app_name!r}'s registration is left as "
-                f"it is: {exc}\n"
-            )
-            return code
-        _register(app, repo_root, None)
+    if layout.run(["close", frame_name(app_name)]) != 0:
+        sys.stderr.write(
+            f"note: the {frame_name(app_name)} window was not closed (see above; most "
+            "often none was open); the frame comes down regardless.\n"
+        )
+    code = frames.down(app_name, repo_root)
+    try:
+        app = find_app(app_name, repo_root)
+    except MockFrameError as exc:
+        sys.stderr.write(
+            f"mock frame: the frame is down, but {app_name!r}'s registration is left as "
+            f"it is: {exc}\n"
+        )
         return code
+    _register(app, repo_root, None)
+    return code
 
 
 def main(argv: Sequence[str] | None = None) -> int:

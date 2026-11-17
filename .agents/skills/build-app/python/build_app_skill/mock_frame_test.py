@@ -9,14 +9,12 @@ booted and nothing reaches a shell.
 
 from __future__ import annotations
 
-import threading
 import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from agents_shared import serve_isolated_instance
 from agents_shared.testing import add_linked_worktree
 from app_registration import forward_port
 
@@ -347,29 +345,6 @@ def test_revive_boots_nothing_while_the_frame_runs_and_fails_with_none_recorded(
     assert mock_frame.revive(_APP, tmp_path, frames=frames, layout=layout) == 1
     assert mock_frame.up(_APP, _NOTE, tmp_path, frames=frames, layout=layout) == 0
     assert mock_frame.revive(_APP, tmp_path, frames=frames, layout=layout) == 0
-
-    assert len(frames.ups) == 1
-
-
-def test_up_waits_while_a_revive_of_the_frame_holds_its_lock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An agent's ``up`` (or ``refresh``) asked for while the window's Start boots the frame
-    again must not frame the app a second time beside it."""
-    _registered_app(tmp_path, monkeypatch)
-    frames = _RecordingFrames()
-    upping = threading.Thread(
-        target=lambda: mock_frame.up(
-            _APP, _NOTE, tmp_path, frames=frames, layout=_RecordingLayout()
-        )
-    )
-
-    with serve_isolated_instance.instance_lock(tmp_path, mock_frame.frame_name(_APP)):
-        upping.start()
-        upping.join(timeout=1)
-        assert upping.is_alive()
-        assert frames.ups == []
-    upping.join(timeout=10)
 
     assert len(frames.ups) == 1
 

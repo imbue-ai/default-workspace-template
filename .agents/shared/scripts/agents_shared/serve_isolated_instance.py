@@ -97,8 +97,6 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import contextlib
-import fcntl
 import json
 import os
 import re
@@ -113,7 +111,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Callable, Generator, NamedTuple, Sequence
+from typing import Callable, NamedTuple, Sequence
 
 from app_registration import forward_port
 from disk_headroom.space import read_disk_space
@@ -153,8 +151,6 @@ _HOST_PLACEHOLDER_KIND = "host"
 # the state dir, one per name, overwritten each time -- so the path in the message
 # still exists when the agent goes to read more of it.
 FAILED_LOG_SUFFIX = "-failed.log"
-# Beside the state directories: the lock each flow's verbs on an instance hold.
-LOCK_SUFFIX = ".lock"
 
 # How to spell this script in a message an agent will copy: repo-root-relative,
 # like every other command it prints. The follow-up commands it names
@@ -1737,17 +1733,6 @@ def is_running(name: str, repo_root: Path, *, runner: Runner) -> bool:
         elif current or not runner.process_group_alive(pid):
             return False
     return True
-
-
-@contextlib.contextmanager
-def instance_lock(repo_root: Path, name: str) -> Generator[None]:
-    """Held while a flow boots, revives, refreshes, or tears down instance ``name``, so
-    two callers at once (two windows, or a window and an agent) never act on it together."""
-    lock_path = repo_root / STATE_ROOT / f"{name}{LOCK_SUFFIX}"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "w") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
-        yield
 
 
 def refresh(

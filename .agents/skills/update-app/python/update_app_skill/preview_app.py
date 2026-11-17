@@ -50,11 +50,10 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 import sys
 import tomllib
-from collections.abc import Callable, Generator, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -312,22 +311,9 @@ def _reframe_previews_naming(
         )
 
 
-@contextlib.contextmanager
-def _instance_locks(repo_root: Path, app_names: Sequence[str]) -> Generator[None]:
-    """Hold the instance lock of each app's preview, taken in one order so two holders never
-    wait on each other."""
-    with contextlib.ExitStack() as locks:
-        for name in sorted(set(app_names)):
-            locks.enter_context(
-                serve_isolated_instance.instance_lock(repo_root, instance_name(name))
-            )
-        yield
-
-
 def refresh(app_name: str, repo_root: Path, *, instances: Instances) -> int:
     """Re-boot the preview's inner process in place, after a rebuild in its worktree."""
-    with _instance_locks(repo_root, [app_name]):
-        return instances.refresh(instance_name(app_name), repo_root)
+    return instances.refresh(instance_name(app_name), repo_root)
 
 
 def _recorded_siblings(repo_root: Path, app_name: str) -> list[str]:
@@ -350,25 +336,7 @@ def down(
 
     A preview that another live preview frames (a chat taken down on its own under a
     shell preview) leaves that preview's registry copy pointing at the live app again.
-    Holds the lock of the preview and each sibling, so it never tears down one that an
-    ``up`` or a ``revive`` is booting.
     """
-    with _instance_locks(
-        repo_root, [app_name, *_recorded_siblings(repo_root, app_name)]
-    ):
-        return _down_locked(
-            app_name, repo_root, instances=instances, dump_registry=dump_registry
-        )
-
-
-def _down_locked(
-    app_name: str,
-    repo_root: Path,
-    *,
-    instances: Instances,
-    dump_registry: Callable[[list[dict[str, object]]], str] | None,
-) -> int:
-    """``down``, with the locks of the preview and its siblings already held."""
     siblings = _recorded_siblings(repo_root, app_name)
     dump = dump_registry if dump_registry is not None else forward_port.dump_registry
     code = instances.down(instance_name(app_name), repo_root)
@@ -378,7 +346,7 @@ def _down_locked(
     _preview_state_path(repo_root, app_name).unlink(missing_ok=True)
     _reframe_previews_naming(repo_root, app_name, dump)
     for sibling in siblings:
-        code = _down_locked(sibling, repo_root, instances=instances, dump_registry=dump)
+        code = down(sibling, repo_root, instances=instances, dump_registry=dump)
         if code != 0:
             return code
     return 0

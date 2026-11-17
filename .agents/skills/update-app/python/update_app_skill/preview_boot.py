@@ -29,7 +29,6 @@ from update_app_skill.preview_app import (
     Instances,
     InstanceSpec,
     PreviewWindow,
-    _instance_locks,
     _instance_state_path,
     _preview_state_path,
     _read_json,
@@ -224,37 +223,7 @@ def up(
     ``is_private`` boots it with no registrations, title, or instance key, for an agent
     to reach on its loopback port. Raises PreviewError for a preview with a window from a
     ``repo_root`` that is a linked git worktree, and for ``is_private`` with ``with_apps``.
-    Holds the lock of every instance it may boot, so a ``revive`` asked for meanwhile waits.
     """
-    with _instance_locks(
-        repo_root, [app_name, *with_apps, *_recorded_siblings(repo_root, app_name)]
-    ):
-        return _up_locked(
-            app_name,
-            worktree,
-            repo_root,
-            with_apps=with_apps,
-            instance_key=instance_key,
-            title=title,
-            is_private=is_private,
-            instances=instances,
-            dump_registry=dump_registry,
-        )
-
-
-def _up_locked(
-    app_name: str,
-    worktree: Path,
-    repo_root: Path,
-    *,
-    with_apps: Sequence[str],
-    instance_key: str | None,
-    title: str | None,
-    is_private: bool,
-    instances: Instances,
-    dump_registry: Callable[[list[dict[str, object]]], str] | None,
-) -> int:
-    """``up``, with the locks of the app and its siblings already held."""
     live_root = _live_root(
         repo_root, worktree, is_private=is_private, with_apps=with_apps
     )
@@ -283,7 +252,7 @@ def _up_locked(
         # A sibling opens on the same instance when its path takes one (the chat under a shell
         # preview opens on the user's conversation, like a chat preview of its own).
         if (
-            _up_locked(
+            up(
                 sibling,
                 worktree,
                 repo_root,
@@ -381,40 +350,34 @@ def revive(app_name: str, repo_root: Path, *, instances: Instances) -> int:
     What a workspace restart leaves of a preview is its record and the rows its window
     shows; this re-runs that ``up``, which keeps those rows, so an open window shows the
     preview again where it was, over a fresh copy of the live data. A preview whose
-    processes all still run is left alone, and two revives at once boot it once.
+    processes all still run is left alone.
     Returns 1, saying why on stderr, when no preview of the app is recorded or the boot
     fails (a build that no longer boots). Raises PreviewError when the recorded worktree
     is gone or no longer holds the app's manifest.
     """
-    siblings = _recorded_siblings(repo_root, app_name)
-    # Every instance this boots, its siblings' included, so a sibling's own revive waits for
-    # this one.
-    with _instance_locks(repo_root, [app_name, *siblings]):
-        record = _read_json(_preview_state_path(repo_root, app_name))
-        if record is None:
-            sys.stderr.write(
-                f"preview: no preview of {app_name!r} is recorded, so there is nothing to "
-                "start again; boot one with 'up'.\n"
-            )
-            return 1
-        if all(
-            instances.is_running(instance_name(name), repo_root)
-            for name in [app_name, *siblings]
-        ):
-            sys.stderr.write(
-                f"preview: the preview of {app_name!r} is already running.\n"
-            )
-            return 0
-        title = record.get("title")
-        instance_key = record.get("instance_key")
-        return _up_locked(
-            app_name,
-            Path(str(record["worktree"])),
-            repo_root,
-            with_apps=siblings,
-            instance_key=str(instance_key) if instance_key is not None else None,
-            title=str(title) if title is not None else None,
-            is_private=bool(record.get("is_private")),
-            instances=instances,
-            dump_registry=None,
+    record = _read_json(_preview_state_path(repo_root, app_name))
+    if record is None:
+        sys.stderr.write(
+            f"preview: no preview of {app_name!r} is recorded, so there is nothing to "
+            "start again; boot one with 'up'.\n"
         )
+        return 1
+    siblings = _recorded_siblings(repo_root, app_name)
+    if all(
+        instances.is_running(instance_name(name), repo_root)
+        for name in [app_name, *siblings]
+    ):
+        sys.stderr.write(f"preview: the preview of {app_name!r} is already running.\n")
+        return 0
+    title = record.get("title")
+    instance_key = record.get("instance_key")
+    return up(
+        app_name,
+        Path(str(record["worktree"])),
+        repo_root,
+        with_apps=siblings,
+        instance_key=str(instance_key) if instance_key is not None else None,
+        title=str(title) if title is not None else None,
+        is_private=bool(record.get("is_private")),
+        instances=instances,
+    )
