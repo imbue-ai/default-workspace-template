@@ -1,7 +1,6 @@
 # Review gates
 
-The gates a worker runs before it reports its work done: a harden worker on
-every pass, an update worker on a merge that needed work. Your own guide says
+The gates a worker runs before it reports its work done. Your own guide says
 which command prints the test gate for your change, which commit is the tree
 before your change, and where a flaky test goes in your report. The rest is
 here.
