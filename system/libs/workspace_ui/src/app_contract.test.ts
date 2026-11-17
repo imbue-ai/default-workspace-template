@@ -30,6 +30,7 @@ import {
   ShellContractError,
   askAgentToFix,
   bugReportText,
+  withAskFailure,
   connectToShell,
   followShellTheme,
   reportedFailureOf,
@@ -798,6 +799,17 @@ describe("startNewWithText's answer", () => {
     });
     deliver({ type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId: lastRequestId(parent), isOpened: true }, parent);
     expect(await asked).toEqual({ isOpened: true });
+  });
+});
+
+describe("withAskFailure", () => {
+  it("adds a refused ask's failure under the page's details, labelled, and leaves the page's failure alone without one", () => {
+    const page = { message: "The terminal couldn't start.", details: null };
+    expect(withAskFailure(page, null)).toEqual(page);
+    expect(withAskFailure(page, { message: "No app in this workspace can start a chat.", details: null })).toEqual({
+      message: "The terminal couldn't start.",
+      details: "Asking an agent to fix this failed too:\nNo app in this workspace can start a chat.",
+    });
   });
 });
 

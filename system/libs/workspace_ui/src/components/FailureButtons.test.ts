@@ -13,7 +13,8 @@ import {
   SHELL_START_NEW_WITH_TEXT_RESULT,
   connectToShell,
 } from "../app_contract";
-import type { ShellConnection } from "../app_contract";
+import { withAskFailure } from "../app_contract";
+import type { ShellConnection, ShownFailure } from "../app_contract";
 import { AskAgentToFixButton, ReportBugButton } from "./FailureButtons";
 
 const HANDSHAKE = { type: SHELL_HANDSHAKE, clientId: "client-1", windowId: "win-1", desktopId: "home", app: "docs" };
@@ -145,6 +146,76 @@ describe("Ask an agent to fix this", () => {
     handshake(parent, { canReportBug: false });
     m.render(root, view());
     expect(root.querySelector(".ask-agent-failure .report-bug")).toBeNull();
+  });
+
+  it("leaves Report a bug to a page that offers its own, which reports its failure and the refused ask's together", async () => {
+    root = document.createElement("div");
+    const parent = framed();
+    const live = connectToShell({});
+    connection = live;
+    handshake(parent, { canReportBug: true });
+    const pageFailure = {
+      message: "The Screen couldn't load. Try again. If this persists, report a bug.",
+      details: "HTTP 500",
+    };
+    let askFailure: ShownFailure | null = null;
+    const changes: (ShownFailure | null)[] = [];
+    const view = (): m.Children => [
+      m(AskAgentToFixButton, {
+        connection: live,
+        failure: FAILURE,
+        pageReportBug: {
+          onFailureChange: (failure) => {
+            askFailure = failure;
+            changes.push(failure);
+          },
+        },
+      }),
+      m(ReportBugButton, {
+        connection: live,
+        failure: withAskFailure(pageFailure, askFailure),
+        extra: "page-report-bug",
+      }),
+    ];
+    m.render(root, view());
+    root.querySelector<HTMLButtonElement>(".ask-agent-to-fix")?.click();
+    const [asked] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    const refused = {
+      message: "Chat couldn't open that. Try again. If this persists, report a bug.",
+      details: "HTTP 502\nchat answered 500",
+      isReportable: true,
+    };
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          type: SHELL_START_NEW_WITH_TEXT_RESULT,
+          requestId: asked.requestId,
+          isOpened: false,
+          failure: refused,
+        },
+        source: parent as unknown as Window,
+      }),
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    m.render(root, view());
+
+    expect(root.querySelector(".ask-agent-failure-message")?.textContent).toBe(refused.message);
+    expect(root.querySelector(".ask-agent-failure .see-details pre")?.textContent).toBe(refused.details);
+    expect(root.querySelectorAll(".report-bug")).toHaveLength(1);
+    root.querySelector<HTMLButtonElement>(".page-report-bug")?.click();
+    const [report] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect(report).toEqual({
+      type: SHELL_REPORT_BUG,
+      message: pageFailure.message,
+      details:
+        "HTTP 500\n\n" +
+        "Asking an agent to fix this failed too:\n" +
+        "Chat couldn't open that. Try again. If this persists, report a bug.\n" +
+        "HTTP 502\nchat answered 500",
+    });
+
+    root.querySelector<HTMLButtonElement>(".ask-agent-to-fix")?.click();
+    expect(changes).toEqual([refused, null]);
   });
 
   it("takes an answer that comes after a restarted shell settled its request as not answered", async () => {
