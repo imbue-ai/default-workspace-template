@@ -76,8 +76,11 @@ TICKET_ID=$(tk create "heal $CREATIONS" -t bug -d "Worker: heal-$SLUG" \
 echo "$TICKET_ID"
 ```
 
-Then start it with the id that printed, as its own tool call with nothing
-chained: `tk start <ticket-id>`.
+Then, in its own call:
+
+```bash
+tk start <ticket-id>
+```
 
 ## Step 2: Write the task file
 
