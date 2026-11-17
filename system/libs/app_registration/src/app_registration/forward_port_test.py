@@ -23,6 +23,11 @@ from app_manifest.primitives import (
     DisplayName,
     describe_app_name_problem,
 )
+from app_manifest.registry import (
+    IsolatedInstanceKind,
+    IsolatedInstanceRef,
+    read_registry,
+)
 from build_app_skill import scaffold_flask_lib
 
 from app_registration import forward_port
@@ -1571,6 +1576,33 @@ def test_register_and_remove_in_process_edit_the_same_registry_as_the_script(
     forward_port.remove(apps_file, "preview-2")
     forward_port.remove(apps_file, "never-registered")
     assert _read_apps(apps_file) == []
+
+
+def test_the_isolated_instance_tag_reaches_the_shells_reader_and_is_cleared_by_a_registration_without_it(
+    tmp_path: Path,
+) -> None:
+    apps_file = tmp_path / "apps.toml"
+    forward_port.register(
+        apps_file,
+        "inbox-sketch",
+        "http://localhost:9001",
+        is_icon_declined=True,
+        display_name="Inbox (UI sketch)",
+        isolated_instance={"name": "inbox-sketch", "kind": "mock"},
+    )
+
+    [row] = read_registry(apps_file)
+    assert row.isolated_instance == IsolatedInstanceRef(
+        name="inbox-sketch", kind=IsolatedInstanceKind.MOCK
+    )
+
+    forward_port.register(
+        apps_file, "inbox-sketch", "http://localhost:9002", is_icon_declined=True
+    )
+
+    [raw_row] = _read_apps(apps_file)
+    assert "isolated_instance" not in raw_row
+    assert read_registry(apps_file)[0].isolated_instance is None
 
 
 def test_register_refuses_what_the_script_refuses(tmp_path: Path) -> None:
