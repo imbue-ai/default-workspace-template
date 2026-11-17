@@ -81,7 +81,9 @@ def test_every_claude_hook_names_its_files_from_the_project_dir() -> None:
     """claude runs a hook in whatever directory the agent's shell is in, so a path the
     command leaves relative resolves against wherever the agent last `cd`ed to."""
     config = json.loads(_CLAUDE_SETTINGS.read_text())
-    commands = [c for event in _all_events(config) for c in _hook_commands(config, event)]
+    commands = [
+        c for event in _all_events(config) for c in _hook_commands(config, event)
+    ]
     unanchored = [
         f"{command!r} names {match.group(0)}"
         for command in commands
@@ -89,7 +91,8 @@ def test_every_claude_hook_names_its_files_from_the_project_dir() -> None:
         if not command[: match.start()].endswith(_CLAUDE_PROJECT_DIR_PREFIX)
     ]
     assert not unanchored, (
-        f"Prefix these paths with {_CLAUDE_PROJECT_DIR_PREFIX}:\n" + "\n".join(unanchored)
+        f"Prefix these paths with {_CLAUDE_PROJECT_DIR_PREFIX}:\n"
+        + "\n".join(unanchored)
     )
 
 

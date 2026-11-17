@@ -628,7 +628,9 @@ def _missing_uv_run_scripts(
     """Every ``(file, path as written)`` for a ``uv run <path>.py`` whose script is not in the tree."""
     missing: list[tuple[Path, str]] = []
     for path in files:
-        for line in map(_unquote_project_dir, path.read_text(errors="replace").splitlines()):
+        for line in map(
+            _unquote_project_dir, path.read_text(errors="replace").splitlines()
+        ):
             for match in _UV_RUN_SCRIPT_RE.finditer(line):
                 written = match.group(2)
                 if _names_no_tree_file(written):

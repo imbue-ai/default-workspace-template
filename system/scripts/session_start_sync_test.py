@@ -35,7 +35,9 @@ def _cache_dir(root: Path) -> Path:
     return root.parent / "cache" / "uv"
 
 
-def _run_hook(root: Path, shell_dir: Path | None = None) -> subprocess.CompletedProcess[str]:
+def _run_hook(
+    root: Path, shell_dir: Path | None = None
+) -> subprocess.CompletedProcess[str]:
     # Offline: the probe project has no dependencies, so nothing here needs an index. The
     # cache is the test's own, so the venv the hook links lands beside it, not in the real one.
     # The probe is the session's project; an agent's own work dir must not leak in from the env.
