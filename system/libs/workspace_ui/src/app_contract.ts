@@ -711,6 +711,20 @@ export function reportedFailureOf(payload: Readonly<Record<string, unknown>>): R
   return { message, details: details ?? null };
 }
 
+/** The failure a page's own "Report a bug" files when its "Ask an agent to fix this" was refused too: the page's
+ *  failure, with the refused ask's sentence and details added under its details, labelled; the page's failure as it
+ *  is while there is no refused ask. */
+export function withAskFailure(page: ReportedFailure, ask: ReportedFailure | null): ReportedFailure {
+  if (ask === null) return page;
+  const askText = ["Asking an agent to fix this failed too:", ask.message, ask.details]
+    .filter((line): line is string => line !== null && line.trim() !== "")
+    .join("\n");
+  return {
+    message: page.message,
+    details: page.details === null || page.details.trim() === "" ? askText : `${page.details}\n\n${askText}`,
+  };
+}
+
 /** The text a bug report carries for ``failure``: the sentence the user saw, then everything under it (the shape
  *  Imbue Studio's own reports carry). */
 export function bugReportText({ message, details }: ReportedFailure): string {

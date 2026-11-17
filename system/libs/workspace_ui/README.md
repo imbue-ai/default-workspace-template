@@ -59,7 +59,12 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   goes to `onLateAnswer`), and the button reads "Asking an
   agent…", disabled, until it settles, then shows a failure under itself,
   with "Report a bug" for that failure when it asks for one, and takes a late
-  answer in place of a not-answered one. The connection's `startWithText`,
+  answer in place of a not-answered one. A page that offers its own
+  "Report a bug" beside the button passes `pageReportBug: {onFailureChange}`:
+  the button then shows a refused ask's failure without a second "Report a
+  bug", and hands it to `onFailureChange`, so the page's one report files both
+  (`withAskFailure(pageFailure, askFailure)` adds the ask's sentence and
+  details under the page's details, labelled). The connection's `startWithText`,
   for a request that goes to the main chat (such as "Ask an agent to free up
   space"), answers the same way through `shell:start-with-text-result`. A
   call without `{showsOutcome: true}` leaves a failure to the shell's toast.
@@ -100,9 +105,10 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   after its frame's `load`):
 
   ```js
-  import { connectToShell, askAgentToFix } from "/_static/app_contract.js";
+  import { connectToShell, askAgentToFix, withAskFailure } from "/_static/app_contract.js";
 
   const connection = connectToShell({ onHandshake: showFailureButtons });
+  let askFailure = null; // a refused ask, which the page's one Report a bug files too
   function showFailureButtons() {
     askButton.hidden = !connection.hasShell();
     reportButton.hidden = !connection.canReportBug();
@@ -117,9 +123,11 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
     );
     askButton.disabled = false;
     askButton.textContent = "Ask an agent to fix this";
-    if (!outcome.isOpened) showFailure(outcome.failure);
+    if (!outcome.isOpened) showFailure(outcome.failure); // its sentence and details, no Report a bug of its own
+    askFailure = outcome.isOpened ? null : outcome.failure;
   };
-  reportButton.onclick = () => connection.reportBug({ message: sentence, details: output });
+  reportButton.onclick = () =>
+    connection.reportBug(withAskFailure({ message: sentence, details: output }, askFailure));
   ```
 
   `src/element_reference.ts`, `src/context_menu_rows.ts`, and
