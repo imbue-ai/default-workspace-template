@@ -163,7 +163,10 @@ def test_a_window_whose_saved_terminals_are_from_a_newer_version_says_so(
     response = pages_client.get("/?session=terminal-1")
 
     message, details, _is_retryable, shell_buttons = _failure_page_parts(response.text)
-    assert message.startswith("This workspace's saved terminals were written by a newer version")
+    assert message == (
+        "This workspace's saved terminals were written by a newer version of the workspace's software "
+        "(for example before an update was rolled back), so terminals can't open."
+    )
     assert "written by a newer version of the app" in details
     agent_fix = shell_buttons["agent_fix"]
     assert isinstance(agent_fix, dict) and agent_fix["details"] == details

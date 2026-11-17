@@ -685,7 +685,7 @@ def page_failure(error: TerminalAppError, raw_session: str) -> PageFailure:
         case TerminalStoreVersionError():
             return PageFailure(
                 message="This workspace's saved terminals were written by a newer version of the workspace's "
-                "software (for example before an update was rolled back).",
+                "software (for example before an update was rolled back), so terminals can't open.",
                 details=details,
                 is_retryable=False,
                 agent_fix=AgentFix(
