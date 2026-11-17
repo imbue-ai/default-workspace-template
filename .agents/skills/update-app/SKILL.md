@@ -92,7 +92,7 @@ window keeps showing the old page until it is refreshed. The live change loop
 2. One editor at a time.
 3. Make the change.
 4. Apply and verify it.
-5. Show it, and end the turn. *Ends the turn.*
+5. Show it, and end the turn.
 6. Harden the change, only once the user is satisfied.
 
 ## Step 1: Size the change
