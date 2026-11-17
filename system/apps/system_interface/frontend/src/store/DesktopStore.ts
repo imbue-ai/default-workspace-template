@@ -27,7 +27,6 @@ import {
   isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
-import { FOCUS_CHAT } from "@imbue/workspace-ui/src/embed";
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
@@ -2237,7 +2236,7 @@ export class DesktopStore {
    *  the app that did not take it), a chat to show, or anything else. */
   private relayWhatFailed(type: string, error: unknown): string {
     if (type === OPEN_FILE_MESSAGE) return "Couldn't open that file";
-    if (type === FOCUS_CHAT) return "Couldn't show that chat";
+    if (type === FOCUS_CHAT_MESSAGE_TYPE) return "Couldn't show that chat";
     if (!type.startsWith(OPEN_MESSAGE_PREFIX)) return "Couldn't do that";
     const app = undeliveredAppOf(error);
     return app === null ? "Couldn't open this link" : `${this.displayNameOf(app)} couldn't open this link`;
