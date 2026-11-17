@@ -578,7 +578,8 @@ against the landed merge) or carry the gate run's own evidence (fix commits
 kept or reverted, or a clean run, plus architecture-gate verdicts); a
 side-picked conflict must carry the discarded-side accounting; and it must
 carry the §4d **Agent restarts** verdict with the changed files that decided
-it. A report missing any of this -- including one that openly discloses
+it. When `has_local_footprint` is true it must also carry the §4a `Screen
+ports` line. A report missing any of this -- including one that openly discloses
 skipping a gate outside the rule -- goes back to the worker via the Step 4
 cycle (say what is missing, consume the report into
 `data/.tasks/update-self/reports/consumed/`, re-arm). Do not run the apply
@@ -826,11 +827,12 @@ that no longer imports, a consumer the report names that the update broke:
    `--detail` line naming what is still broken and what was tried, and the
    results message says the same in plain words.
 
-- **The Screen** -- the apply probes only the critical apps, so read
-  `supervisorctl status screen` yourself. When it is not `RUNNING` and
-  `/var/log/supervisor/screen-stderr.log` shows it could not bind its port, a
-  program of the user's holds one of the Screen's ports (the worker guide,
-  4a): fix it as above, moving the user's program and never the Screen.
+- **The Screen** -- the apply probes only the critical apps, and the Screen
+  retries its start without ever settling as failed, so a single status read
+  proves nothing. Read the end of `/var/log/supervisor/screen-stderr.log`:
+  an "address already in use" error written since the restart means a program
+  of the user's holds one of the Screen's ports (the worker guide, 4a). Fix it
+  as above, moving the user's program and never the Screen.
 - **`shared_runtime` live consumers** -- the apply's restart has already put
   every built-in service on the merged code. What the report can still name is
   a *user-created* consumer (an app or skill of theirs reading something the

@@ -313,8 +313,9 @@ itself. Any other hit is a user program (provenance as in item 5). Move each
 one, as its own commit, to the lowest port above 8091 that no
 `system/supervisord.conf.d/*.conf` and no registry row names and `ss -tln`
 shows unbound. Change the number everywhere the program carries it: the
-`--url http://localhost:<port>` in its drop-in, and its own code
-(`git grep -n <old port> -- <its directory>`). Never move the Screen, and do
+`--url http://localhost:<port>` in its drop-in, its own code
+(`git grep -n <old port> -- <its directory>`), and anything else of the
+user's that calls it by that port. Never move the Screen, and do
 not restart the live program: the apply's restart starts it on the new port
 and registers it there. The edit is yours, so 4b and 4c run for that program.
 Report a `Screen ports` line under **Impact analysis**: `clear`, or each
@@ -609,8 +610,9 @@ Valid `name:` values:
     `<your work_dir>/system/apps/screen/src/screen/static`, and
     `<your work_dir>/system/apps/style_guide/src/style_guide_app/static`); omit
     when you did not build.
-  - **Impact analysis** -- what you checked and how, and any user-created app
-    or skill depending on a changed file; or, when the 4a rule skipped it,
+  - **Impact analysis** -- what you checked and how, any user-created app
+    or skill depending on a changed file, and the 4a `Screen ports` line; or,
+    when the 4a rule skipped it,
     the footprint evidence (`has_local_footprint: false` and the `local_only`
     paths).
   - **Dockerfile split** (if it merged) -- each hunk live-applicable or
