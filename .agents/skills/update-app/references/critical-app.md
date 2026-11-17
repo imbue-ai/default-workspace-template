@@ -421,7 +421,8 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    merge on any failure**. `--keep-rollback-point` keeps the snapshots and a
    record of what it touched afterwards, which is what the notice below offers
    back; any later apply replaces them. Interpret the exit code and report it,
-   per `update-self`'s `apply-outcomes.md`:
+   per `.agents/shared/references/apply-exit-codes.md`, which also covers an apply
+   that was interrupted:
 
    - `0`: applied; the live app is updated and healthy.
    - `2`: the change was bad and was **automatically rolled back**; the live

@@ -1,50 +1,24 @@
 # Apply outcomes, records, and rollbacks
 
-What `update_self.py apply` leaves behind on each exit, what to tell the user,
-and how to act on the records it writes under `data/.state/update-apply/`.
+What this pass does on each exit of `update_self.py apply`, what to tell the
+user, and which verdict ends the pass. What each exit means for any caller of
+the apply (the closing stderr lines and their follow-ups, the
+`provision-incomplete` and `emergency.json` records, an interrupted apply, the
+phase timings line) is in
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`:
+read its section for the exit you got before the one here.
 
 ## Exit 0 -- applied
 
-The update is landed, recorded in `docs/VERSION_HISTORY.md`, and the live
-workspace confirmed healthy; the environment advanced to the merged apt
-snapshot (summarize the env-converge delta in plain language). Read the
-closing stderr lines before signing off:
-
-- A workspace whose frontend was already broken beforehand still lands and
-  still exits 0, but the final line names the breakage instead of confirming
-  health. Pass it on as a separate problem; never repackage it as success.
-- A non-fatal warning (the ledger could not be committed, `env-converge
-  upgrade` failed) rides on stderr with its own follow-up; carry it out or
-  surface it.
-- **`applied with incomplete provisioning`**: a provisioner run
-  (`system/scripts/setup_system.sh`) that fails does not roll the update back
-  on its own -- a failed tool install leaves the tree and services consistent,
-  so the apply carries on to the restart and the probes, and a load-bearing
-  provisioner change still fails those and still rolls back. When the probes
-  pass over a failed provisioner, the gap is recorded at
-  `data/.state/update-apply/provision-incomplete.json` (reason, merge, agent).
-  That record is yours to close: diagnose the failure from the stderr excerpt
-  (often no network, or a download that never completed), fix the cause, and
-  re-run `bash system/scripts/setup_system.sh` by hand (idempotent). Only an
-  apply's own successful provisioner run clears the record automatically, so
-  once your manual run exits 0, `rm` it yourself. Tell the user the update is
-  in and working but one tool-install step is still pending -- never that
-  everything completed.
-
-Every apply also prints one `apply phase timings:` line -- per-phase durations
-from the apply marker, the benchmarking input for the apply's poll and step
-budgets. When an apply took unusually long, quote it rather than guessing
-which step was slow.
+The update is landed and recorded in `docs/VERSION_HISTORY.md`, and the
+environment advanced to the merged apt snapshot (summarize the env-converge
+delta in plain language). A warning that the ledger could not be committed, or
+that `env-converge upgrade` failed, is one of the non-fatal warnings the
+shared file describes: carry out its follow-up or surface it.
 
 ## Exit 2 -- automatically rolled back
 
-The apply reverted the **entire landed merge -- every class, not just the
-failing one** -- as a forward revert commit, restored the pre-apply state, and
-confirmed the workspace healthy on the previous revision. The update did not
-land. A forward step that outlived its wall-clock budget (`<step> did not
-finish within <N>s`) is one cause: the apply never waits open-endedly on a
-hung `npm ci`, build, refresh, provisioner or restart, so treat that message
-as "it hung", with the timings line saying where.
+The update did not land.
 
 **You judge the retry; nobody is there to ask.** Read the cause from the
 stderr and the `apply phase timings:` line, then:
@@ -82,48 +56,21 @@ safe** ("the update hit a problem while being applied, so I automatically
 undid it -- everything is back exactly as it was, and nothing is broken");
 **what failed**, in plain terms, at whatever level of cause the stderr
 established, with what you already tried; and **the way forward**: what would
-have to change before another attempt can succeed. If the closing line said the
-frontend was already broken beforehand, report that alongside.
+have to change before another attempt can succeed.
 
-Because the rollback is a forward revert, the merge stays in history while its
-content does not, and re-running the apply of that same merge is refused. The
-worker's retry -- like any later pass, to this release or a newer one -- reverts
-the rollback commit on its branch (the worker reference says how): git counts
-the reverted content as already merged, so a plain merge lands only what the
-target changed since. The apply refuses a merge ref that leaves the rollback in
-place (exit 1, nothing changed), naming the commits to revert.
+The rolled-back merge cannot be applied again, so the worker's retry -- like
+any later pass, to this release or a newer one -- reverts the rollback commit
+on its branch (the worker reference says how): git counts the reverted content
+as already merged, so a plain merge lands only what the target changed since.
+The apply refuses a merge ref that leaves the rollback in place (exit 1,
+nothing changed), naming the commits to revert.
 
 ## Exit 3 -- emergency
 
-Even the rollback could not restore a healthy workspace. Escalate immediately.
-The pre-apply copies are kept under `data/.state/update-apply/snapshots/`, and
-when the apply touched the frontend the stderr names the bundle copy --
-putting that one back is a plain file copy needing neither npm nor a registry,
-so pass the path on. Read the stderr rather than assuming a path is there;
-after a backend-only or provisioner-only apply it names none.
-
-The apply leaves `data/.state/update-apply/emergency.json` beside the marker
-naming the reason, the driving agent, and where the copies are; the system
-interface shows a banner keyed off its mere presence. Nothing takes the record
-down by itself, so **clearing it is part of the repair**. Only an outcome that
-ends with the live workspace *confirmed healthy*, frontend included, clears it:
-a later update that lands over a UI it could confirm, or a `recover` of a
-*new* interruption that probes the workspace afterwards. Neither is the
-ordinary case -- the boot-time recovery runs before anything is up and has
-nothing to probe, and an apply over a UI that was already broken exits 0
-naming that breakage rather than confirming health. This exit already cleared
-the marker and its rollback already put the tree content back, so a bare
-`recover` finds nothing to do and re-running the same `apply` is refused. When
-the repair was by hand: verify the workspace is actually healthy, then delete
-`emergency.json` and tell the user what happened. Leaving it in place means a
-workspace that is fine goes on telling its user it may be broken.
+Escalate immediately, and repair as the shared file says. The pass ends
+`STUCK`.
 
 ## Exit 1 -- precondition; nothing changed
-
-A dirty tree; a refused fast-forward (`HEAD` moved under the pass); another
-apply in flight; an interrupted apply of a *different* merge that needs
-`recover` first; or this merge having already been landed **and rolled back**
-(see exit 2).
 
 With the other chats paused, a dirty tree or a refused fast-forward means
 something wrote after the pause (the user, or a chat they woke). Neither makes
@@ -160,15 +107,9 @@ its branch), and the decision is then that update's to ask again.
 
 ## An interrupted apply
 
-Nothing is stranded. The apply writes its marker under
-`data/.state/update-apply/` before the merge, updates it per phase, and every
-step tolerates re-entry -- so when you come back, **re-run the exact same
-`apply` command**; it resumes from the recorded state. If nobody comes back
-the workspace heals itself: bootstrap rolls a stale marker back at the next
-container start, and a recovery cron (`recover --if-stale`) does the same
-within minutes for a kill without a restart. Both leave the tree matching the
-pre-update revision with the worker branch intact; as above, that is a forward
-revert, so a retry goes back to the worker as after exit 2.
+Re-run the exact same `apply` command, as the shared file says. When the
+workspace healed itself instead, the rollback it made is a forward revert, so
+a retry goes back to the worker as after exit 2.
 
 One carve-out, exactly once per workspace: both unattended triggers live in the
 *running* container, not in the merge being applied. On the very first apply
