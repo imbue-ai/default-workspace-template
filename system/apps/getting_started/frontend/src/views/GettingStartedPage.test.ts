@@ -3,6 +3,7 @@ import "@imbue/workspace-ui/src/testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it } from "vitest";
+import type { StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
 import type { TemplateCatalogState } from "../models/TemplateCatalog";
 import { catalogTemplateRecord } from "../testing/records";
 import { GettingStartedPage } from "./GettingStartedPage";
@@ -29,9 +30,20 @@ const LOADED: TemplateCatalogState = {
   },
 };
 
-function render(catalog: TemplateCatalogState = LOADED): { root: HTMLElement; started: string[] } {
+function render(
+  catalog: TemplateCatalogState = LOADED,
+  outcome: StartNewOutcome = { isOpened: true },
+): { root: HTMLElement; started: string[] } {
   const started: string[] = [];
-  const root = mountView(() => m(GettingStartedPage, { catalog, onStartWithText: (text) => started.push(text) }));
+  const root = mountView(() =>
+    m(GettingStartedPage, {
+      catalog,
+      onStartWithText: (text) => {
+        started.push(text);
+        return Promise.resolve(outcome);
+      },
+    }),
+  );
   return { root, started };
 }
 
@@ -53,6 +65,16 @@ describe("the Getting Started page", () => {
 
     root.querySelector<HTMLElement>('[data-start="build-app"]')!.click();
     expect(started).toEqual([START_OPTIONS.find((option) => option.key === "build-app")!.prompt]);
+  });
+
+  it("says in a toast why a tile's chat could not start", async () => {
+    const failure = { message: "No app in this workspace can start a chat.", details: null, isReportable: false };
+    const { root } = render(LOADED, { isOpened: false, failure });
+    expect(root.querySelector("[data-toast]")).toBeNull();
+    root.querySelector<HTMLElement>('[data-start="build-app"]')!.click();
+    await Promise.resolve();
+    m.redraw.sync();
+    expect(root.querySelector("[data-toast]")?.textContent).toContain(failure.message);
   });
 
   it("shows the shelves, and a card opens the detail page whose back control returns", () => {
