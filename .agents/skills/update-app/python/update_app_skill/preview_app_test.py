@@ -335,6 +335,27 @@ def test_a_private_instance_from_a_worktree_registers_nothing_and_reads_the_live
     ]
 
 
+def test_a_private_chat_from_a_worktree_boots_without_an_instance_key(
+    tmp_path: Path,
+) -> None:
+    worktree = _worktree_of_a_live_checkout(tmp_path)
+    instances = _RecordingInstances(worktree)
+
+    assert (
+        boot.up(
+            "chat",
+            worktree,
+            worktree,
+            is_private=True,
+            instances=instances,
+            dump_registry=_dump_registry,
+        )
+        == 0
+    )
+
+    assert instances.up_spec("chat-preview").service_name is None
+
+
 def test_a_private_shell_from_a_worktree_reads_the_live_checkouts_registry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -273,19 +273,22 @@ def up(
             preview_url_by_app,
             dump,
         )
+    # A private instance has no frame to open on a page, so it needs no instance key.
     if is_private:
         frame_title = None
+        inner_path = "/"
     else:
         frame_title = (
             title if title is not None else f"{manifest.display_name} (preview)"
         )
+        inner_path = resolve_open_path(manifest, instance_key)
     spec = build_instance_spec(
         manifest,
         worktree,
         live_root,
         frame_title,
         registry_copy,
-        resolve_open_path(manifest, instance_key),
+        inner_path,
     )
     # An earlier ``up --with`` of this preview may have booted siblings this call does not
     # name; they are still running, and ``down`` finds them only through this record.
