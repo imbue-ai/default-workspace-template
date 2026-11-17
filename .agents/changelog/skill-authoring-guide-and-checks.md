@@ -1,6 +1,6 @@
 Skills are now held to the skill authoring guide (`docs/system/skill_authoring_guide.md`).
 
-- **`validate_skill.py` checks five more things.** `size` (SKILL.md at most 14,000 bytes, the 5,000 tokens an agent keeps of a skill after a compaction, and 500 body lines), `reachability` (every file in the skill's directory is linked), `depth` (no reference more than two links from SKILL.md), `paths` (every path named under `.agents/`, `system/` or `docs/` exists) and `contents` (a long file has a list naming its sections). A failure states the goal and says restructuring is permitted.
+- **`validate_skill.py` checks five more things.** `size` (SKILL.md at most 14,000 bytes, the 5,000 tokens an agent keeps of a skill after a compaction, and 500 body lines), `reachability` (every file in the skill's directory is linked), `depth` (no reference more than two links from SKILL.md), `paths` (every path named under `.agents/`, `system/` or `docs/` exists) and `contents` (a long file has a list naming its sections; a numbered entry `3. Make the change` names `## Step 3: Make the change`). A failure states the goal and says restructuring is permitted.
 
 - **Exemptions.** A skill that fails a check carries `exempt-checks` and `exempt-reason` in its frontmatter `metadata`. 18 built-in skills carry one, with the reason `awaiting-restructure`. A stale exemption fails. `--no-exemptions` refuses one, and a new skill is validated that way (`op-crystallize.md`). `--edited` is the mode for a skill that was edited (`type-skill.md`): it refuses `predates-checks`, the reason a user's own skill carries, so the edit clears it; it honours `awaiting-restructure`, so nobody is asked to restructure a built-in skill locally ahead of the release that does.
 
@@ -8,7 +8,7 @@ Skills are now held to the skill authoring guide (`docs/system/skill_authoring_g
 
 - **`imbue-studio` is listed as a third-party skill**, so the checks leave it out; it is restructured in the mngr repository.
 
-- **Contents lists** were added to 28 long SKILL.md and reference files, and `publish-template`'s checklist names its last section.
+- **Contents lists** were added to 28 long SKILL.md and reference files, and `publish-template`'s checklist names its last section. The Caretaker's welcome message is a fenced block, so its headings are no longer read as sections of the skill.
 
 - **`spec-summary.md`** now holds only this workspace's packaging rules; the rest moved to the guide. The product terms skills use are in a new shared `glossary.md`, which `AGENTS.md` names.
 
