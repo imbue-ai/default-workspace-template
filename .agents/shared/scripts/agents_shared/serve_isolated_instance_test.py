@@ -1552,6 +1552,7 @@ def _frame(
     http: _FakeHttp | None = None,
     spawner: _FakeSpawner | None = None,
     note: str | None = "Sample data; refresh does not work yet.",
+    framed_app: mod.FramedAppRegistration | None = None,
 ) -> int:
     return mod.frame(
         _FRAME_NAME,
@@ -1562,6 +1563,7 @@ def _frame(
         display_name="Inbox (UI sketch)",
         kind=FrameKind.MOCK,
         note=note,
+        framed_app=framed_app,
         runner=runner or _RecordingRunner(),
         registry=registry or _RecordingRegistry(),
         http=http or _FakeHttp(_all_healthy),
@@ -2100,36 +2102,14 @@ _FRAMED_INBOX = mod.FramedAppRegistration(
 )
 
 
-def _frame_of_a_framed_app(
-    tmp_path: Path,
-    runner: _RecordingRunner,
-    registry: _RecordingRegistry,
-    spawner: _FakeSpawner,
-) -> int:
-    return mod.frame(
-        _FRAME_NAME,
-        tmp_path,
-        inner_service="inbox",
-        frame_service_name=_FRAME_NAME,
-        title="Inbox",
-        display_name="Inbox (UI sketch)",
-        kind=FrameKind.MOCK,
-        note="Sample data.",
-        framed_app=_FRAMED_INBOX,
-        runner=runner,
-        registry=registry,
-        http=_FakeHttp(_all_healthy),
-        spawner=spawner,
-        sleeper=lambda _seconds: None,
-    )
-
-
 def test_a_revived_frame_frames_its_app_the_way_it_was_framed(tmp_path: Path) -> None:
     """After a restart the framed app's own program registers it from its manifest alone; the revive registers it
     with the frame's overrides again before booting the frame."""
     spawner = _FakeSpawner()
     runner = _RecordingRunner(start_times={spawner.detached_pid: "boot"})
-    assert _frame_of_a_framed_app(tmp_path, runner, _RecordingRegistry(), spawner) == 0
+    assert (
+        _frame(tmp_path, runner=runner, spawner=spawner, framed_app=_FRAMED_INBOX) == 0
+    )
     _restart(runner, spawner)
     registry = _RecordingRegistry()
 
@@ -2146,19 +2126,18 @@ def test_a_frame_that_does_not_come_back_leaves_its_app_registered_plainly(
 ) -> None:
     spawner = _FakeSpawner()
     runner = _RecordingRunner(start_times={spawner.detached_pid: "boot"})
-    assert _frame_of_a_framed_app(tmp_path, runner, _RecordingRegistry(), spawner) == 0
+    assert (
+        _frame(tmp_path, runner=runner, spawner=spawner, framed_app=_FRAMED_INBOX) == 0
+    )
     _restart(runner, spawner)
     registry = _RecordingRegistry()
 
-    code = mod.revive(
-        _FRAME_NAME,
+    code = _revive(
         tmp_path,
+        _FRAME_NAME,
         runner=runner,
         registry=registry,
         http=_FakeHttp(lambda _url: 503),
-        spawner=_FakeSpawner(detached_pid=7000),
-        venv_linker=_RecordingVenvLinker(),
-        sleeper=lambda _seconds: None,
     )
 
     assert code == 1
