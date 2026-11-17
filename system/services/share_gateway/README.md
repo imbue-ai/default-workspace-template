@@ -39,11 +39,10 @@ three things running:
    yet bound by the app) gets a separate not-responding page instead: it
    reloads every 3 seconds while the address has gone unanswered for less
    than a minute, then stops and says the page is not responding, with a
-   "Try again" button. For an app
-   the shell never starts on demand (a critical app, a row with no program, a
-   non-loopback address) it adds that the workspace owner may need to restart
-   it. The minute is counted per address across all visitors, and starts over
-   after 30 seconds with no such request.
+   "Try again" button. For an app the shell never starts on demand (a critical
+   app, a row with no program, a non-loopback address) it adds that the
+   workspace owner may need to restart it. The minute is counted per address
+   across all visitors, and starts over after 30 seconds with no such request.
    Every response it sends, a service's or its own, carries the browser
    hardening headers (`Strict-Transport-Security`, `X-Content-Type-Options:
    nosniff`, `Referrer-Policy: same-origin`, and a `frame-ancestors` policy
