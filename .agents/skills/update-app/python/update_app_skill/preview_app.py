@@ -325,7 +325,10 @@ def _add_repo_root_arg(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
         "--repo-root",
         default=".",
-        help="Path to the live repository root (default: current directory).",
+        help=(
+            "The checkout the preview's state is kept under (default: current directory); "
+            "a preview with a window must use the live one, not a git worktree."
+        ),
     )
 
 
