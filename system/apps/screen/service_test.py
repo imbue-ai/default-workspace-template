@@ -390,6 +390,23 @@ def test_a_stop_notice_never_overrides_what_happened_while_it_waited_for_the_she
     assert service.stack.stop_cause is None
 
 
+def test_a_member_that_leaves_before_the_stack_runs_ended_the_start_rather_than_crashed(
+    service: ScreenService, fake_supervisor: FakeSupervisor, fake_neko: FakeNeko
+) -> None:
+    def a_member_leaves_while_the_start_waits_for_neko() -> None:
+        _stop_every_member(fake_supervisor)
+        assert service.notify_stopped("screen-neko", "screen-neko could not be started", None)
+
+    fake_neko.on_next_health_check = a_member_leaves_while_the_start_waits_for_neko
+    service.ensure_started()
+
+    assert wait_until(lambda: service.stack.lifecycle == Lifecycle.STOPPED)
+    assert (service.stack.stop_cause, service.stack.stop_reason) == (
+        StopCause.START_FAILED,
+        "screen-neko could not be started",
+    )
+
+
 def test_an_install_that_failed_this_boot_is_reported_while_the_stack_waits_for_it(
     client: FlaskClient, service: ScreenService, fake_install: FakeInstall
 ) -> None:

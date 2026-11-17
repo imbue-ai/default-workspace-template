@@ -401,7 +401,14 @@ class ScreenService(MutableModel):
             # The first member to go names the reason; the others leaving afterwards is the group ending as designed.
             return True
         generation = self.stack.start_generation()
-        cause = StopCause.OUT_OF_MEMORY if pid is not None and self._was_shed_by_now(pid) else StopCause.CRASHED
+        # A member that leaves before the stack reached RUNNING ended the start, not a running Screen.
+        is_running = self.stack.lifecycle == Lifecycle.RUNNING
+        if pid is not None and self._was_shed_by_now(pid):
+            cause = StopCause.OUT_OF_MEMORY
+        elif is_running:
+            cause = StopCause.CRASHED
+        else:
+            cause = StopCause.START_FAILED
         # A Quit or a failed start recorded during the wait says how the group ended, and a start begun since is not
         # this notice's to abort.
         if self.stack.lifecycle == Lifecycle.STOPPED or self.stack.start_generation() != generation:
