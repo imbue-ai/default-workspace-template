@@ -10,13 +10,7 @@ import { TOAST_DURATION_MS } from "@imbue/workspace-ui/src/models/toasts";
 import { notAnsweredSentence, readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
-import {
-  activeFocusedWindowId,
-  activePlacements,
-  barEntries,
-  findWindow,
-  isLayoutDirty,
-} from "../reducers/desktopState";
+import { activeFocusedWindowId, activePlacements, barEntries, isLayoutDirty } from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
 import {
