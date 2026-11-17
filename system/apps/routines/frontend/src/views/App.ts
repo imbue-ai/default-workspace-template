@@ -5,7 +5,6 @@
 
 import m from "mithril";
 
-import type { StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 
@@ -39,8 +38,8 @@ export const RUNNING_REFRESH_MS = 5_000;
 export interface AppHost {
   /** Tell the shell where the page is and what it is called. */
   reportLocation: (path: string, title: string) => void;
-  /** Start a chat with the text (the list's add field); settles with how it went. */
-  startWithText: (text: string) => Promise<StartNewOutcome>;
+  /** Start a chat with the text (the list's add field). */
+  startWithText: (text: string) => void;
   /** Ask the user to confirm removing a routine. */
   confirmRemove: (title: string) => Promise<boolean>;
   navigate: (path: string) => void;
@@ -240,11 +239,8 @@ export class AppModel {
     })();
   }
 
-  /** The shell answers a failed start to the page and shows nothing itself, so the page's toast says it. */
-  async startWithText(text: string): Promise<void> {
-    const outcome = await this.host.startWithText(text);
-    if (outcome.isOpened) return;
-    this.toasts.show(outcome.failure.message, { isLasting: false, details: outcome.failure.details });
+  startWithText(text: string): void {
+    this.host.startWithText(text);
   }
 }
 
@@ -270,7 +266,7 @@ export const App: m.Component<AppAttrs> = {
       case "list":
         body = m(ListPage, {
           listing: loaded.listing,
-          onStartWithText: (text) => void model.startWithText(text),
+          onStartWithText: (text) => model.startWithText(text),
         });
         break;
       case "routine":
