@@ -69,7 +69,8 @@ running one of this package's entry points from the workspace venv
   and "Report a bug" for a terminal that could not start, or Start a new terminal (a
   `POST /new` from the page, then the window moves to it, with "Report a bug" if that
   fails) for one that closed, and tmux's text behind "See details". The user's
-  own exit prints nothing, so ttyd's overlay, which reconnects, stays its answer. It decompresses the OSC 52-capable
+  own exit prints nothing, so ttyd's overlay, which reconnects, stays its answer.
+  `terminal-pty` decompresses the OSC 52-capable
   ttyd web client the `imbue-mngr-ttyd` package ships, adds the script in `pty_page.py`
   before its closing body tag, and serves it via `ttyd -I`, falling back to
   the stock client (with a warning) when the asset is missing or will not decompress,
