@@ -45,16 +45,28 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   server's own text go behind "See details" (`src/components/SeeDetails.ts`,
   which `NoticeDialog` draws from its `details`).
 - A failure's two buttons, both through the shell that frames the page
-  (`src/components/FailureButtons.ts`): `AskAgentToFixButton` starts a chat
-  that asks an agent to fix the failure (`askAgentToFix` in
-  `src/app_contract.ts`, one task text for every caller: what failed, the
-  details verbatim, and what to do), and renders nothing where no shell frames
-  the page; `ReportBugButton` asks the shell to open Imbue Studio's bug report
-  (`shell:report-bug`), and renders only where the shell's handshake said
-  `canReportBug` (the embedder's `opensHelp`, which only the shell hears; it
-  hands every page a fresh handshake when that changes). Each reads the
-  connection as it renders, so the page redraws on a handshake. The shell's own
-  toasts open the report directly (`src/report-bug.ts`).
+  (`src/components/FailureButtons.ts`): `AskAgentToFixButton` starts a new
+  chat that asks an agent to fix the failure (`askAgentToFix` in
+  `src/app_contract.ts`, through `shell:start-new-with-text`, one task text
+  for every caller: what failed, the details verbatim, and what to do), and
+  renders nothing where no shell frames the page; `ReportBugButton` asks the
+  shell to open Imbue Studio's bug report about the failure it is given (a
+  `ReportedFailure`: the sentence on screen and what its "See details" holds,
+  sent as `shell:report-bug {message, details}`), and renders only where the
+  shell's handshake said `canReportBug` (the embedder's `opensHelp`, which
+  only the shell hears; it hands every page a fresh handshake when that
+  changes). Each reads the connection as it renders, so the page redraws on a
+  handshake. The shell opens the report directly (`src/report-bug.ts`), with
+  the sentence and details attached as the report's `errorDetails`, capped at
+  the embed contract's `MAX_HELP_ERROR_DETAILS_LENGTH`.
+- Toasts (`src/models/toasts.ts`, drawn by `src/components/toasts.ts`): a
+  lasting toast says whether its message asks for a bug report
+  (`isReportable`), and `Toasts` draws "Report a bug" on it while the page
+  passes `onReportBug`, decided at each draw, so a toast shown before the page
+  learned it can open a bug report gains the button once it does. Pressing a
+  button dismisses its toast, except one marked `keepsToast` (a button that
+  hands the failure on, "Ask an agent to ...", and "Report a bug"), after
+  which the toast's other buttons still apply.
 - `src/app_contract.ts`: an app page's side of the browser-side contract
   (contracts.md section 10 of the workspace app model, extended by section 7
   of the desktop interface's contracts.md), which the shell's frontend also
@@ -78,7 +90,7 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   }
   askButton.onclick = () =>
     askAgentToFix(connection, { whatFailed: "The terminal couldn't start", details: output });
-  reportButton.onclick = () => connection.reportBug();
+  reportButton.onclick = () => connection.reportBug({ message: sentence, details: output });
   ```
 
   `src/element_reference.ts`, `src/context_menu_rows.ts`, and
