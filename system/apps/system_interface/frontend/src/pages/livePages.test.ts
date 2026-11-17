@@ -1723,7 +1723,7 @@ describe("raising the window the document's focus lands in", () => {
     expect(topWindowId()).toBe("win-1");
   });
 
-  it("posts the focused window's page no focus grant while a press the hold set aside waits in another window's page", () => {
+  it("posts the focused window's page no focus grant while a press whose raise the store refuses waits in another window's page", () => {
     blurIntoFrameOf("win-1");
     layer.reconcile();
     const grants = spyOnFrame("win-1");
