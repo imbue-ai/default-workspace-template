@@ -38,7 +38,7 @@ in the most expendable memory band, so under memory pressure they are shed befor
 ## The lease: the human always wins
 
 The Screen has one controller at a time, a human or an agent. Take the lease before you drive, with
-`screen control acquire` (or, for the browser, `use-browser acquire`, which is the same
+`screen control acquire` (or, for the browser, `browser acquire`, which is the same
 lease):
 
 - **`acquire` answers at once.** Exit 0 means the Screen is yours; 2 means a human holds it and you

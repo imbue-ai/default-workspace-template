@@ -395,7 +395,7 @@ The viewer-sizing, capture-backend and videopipe tests go with them; the lease, 
 ### 16.3 Names and the skill
 
 Browsers keep their names (`browser-1`), since the profile and the manifest are keyed by them, and the fleet still holds one.
-The fleet command (`agentic-browser-fleet` when this was designed, since renamed `use-browser`) keeps its verbs and exit codes against the Screen service; its skill text changes where the window-bound rule was: the browser no longer stops when its window closes, `new` opens the Screen window minimized as before, and `handoff` shows it.
+The fleet command (`agentic-browser-fleet` when this was designed, since renamed `browser`) keeps its verbs and exit codes against the Screen service; its skill text changes where the window-bound rule was: the browser no longer stops when its window closes, `new` opens the Screen window minimized as before, and `handoff` shows it.
 The skill says that the browser shares the Screen with everything else the user runs there, so an agent raises its window (`screen activate`) before relying on a screenshot.
 
 ## 17. The agent-facing command and skills

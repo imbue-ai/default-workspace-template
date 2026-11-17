@@ -1005,7 +1005,7 @@ def test_retired_names_lists_removed_commands_and_removed_or_renamed_skills(
     # command moves to another project, which retires nothing.
     _write(
         "system/apps/screen/pyproject.toml",
-        _scripts(use_browser="screen.fleet:main", screen="screen.service:main"),
+        _scripts(browser="screen.fleet:main", screen="screen.service:main"),
     )
     _write("system/libs/tools/pyproject.toml", '[project]\nname = "p"\n')
     _write("system/libs/other/pyproject.toml", _scripts(moved_tool="other.moved:main"))
@@ -1024,7 +1024,7 @@ def test_retired_names_lists_removed_commands_and_removed_or_renamed_skills(
                 "name": "agentic-browser-fleet",
                 "pyproject": "system/apps/screen/pyproject.toml",
                 "target": "screen.fleet:main",
-                "same_target": ["use-browser"],
+                "same_target": ["browser"],
             },
             {
                 "name": "old-tool",

@@ -1235,7 +1235,7 @@ def test_queued_command_attachment_carries_the_render_decision() -> None:
     assert events[0]["non_turn_tail"] is True
 
 
-# ``agentic-browser-fleet`` is the tag a nudge carried before the command was renamed ``use-browser``;
+# ``agentic-browser-fleet`` is the tag a nudge carried before the skill was renamed ``use-browser``;
 # a transcript from then still holds it.
 @pytest.mark.parametrize("tag", ["use-browser", "agentic-browser-fleet"])
 def test_chip_classification_survives_an_attachment_block(tag: str) -> None:
