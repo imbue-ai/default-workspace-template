@@ -124,8 +124,9 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   manual port checks (`ss -tln`) is unnecessary. If you are picking a port
   manually for the wrap-existing escape hatch, check `ss -tln` and avoid `8000`
   (system_interface), `8010` (the chat app), `8030` (the Getting Started app),
-  `8040` (the System Monitor app), `8083` (the Screen's CDP proxy) and `8090` (the
-  Screen service).
+  `8040` (the System Monitor app), `8083` (the Screen's CDP proxy), `8090` (the
+  Screen service) and `8091` (the Screen's video server, which listens only
+  while the Screen is in use, so `ss -tln` can show it free).
   Two things do not show up there: the `agent-observer` program binds no port at
   all, and a preview of any app (`update-app`'s `preview_app.py`) takes free
   ports at boot, so nothing to avoid is written down for it.
@@ -766,7 +767,7 @@ Two valid shapes:
 
   ```ini
   [program:docs-viewer]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/docs-viewer/app.toml --url http://localhost:8090 && exec jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/docs-viewer/app.toml --url http://localhost:8100 && exec jupyter notebook --port 8100 --ip 127.0.0.1 --no-browser"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -857,7 +858,7 @@ Flags:
   (reserved for workspace hostname coordinates). Registration fails
   loudly on an invalid name.
 - `--url`: full URL where the app is reachable from inside the
-  container (e.g. `http://localhost:8090`).
+  container (e.g. `http://localhost:8100`).
 - `--icon-file`: path to the app's `.svg` icon (SVG only -- no
   rasters), drawn instead of the generic letter monogram. **Required
   when creating a new entry** (unless `--internal` or `--no-icon`);

@@ -293,6 +293,33 @@ analysis can name is a *user-created* consumer -- an app, widget or skill of
 the user's that reads something the update changed. An impacted service still
 gets validated below; an impacted skill gets validated per its own contract.
 
+**Move a user program off the Screen's ports, on every pass.** The Screen
+(`system/apps/screen`) binds two fixed loopback ports, `SERVICE_PORT` (8090)
+and `NEKO_PORT` (8091) in `system/apps/screen/src/screen/primitives.py`. Its
+video server on 8091 runs only while the Screen is in use, so the port can
+look free. A user program on either port leaves the Screen unable to start,
+and the apply still reports healthy, because it probes only the critical apps.
+Search the merged tree and the lead's app registry, which is gitignored, so
+read it under `$LEAD_WORK_DIR` (the main worktree of this repo when unset, as
+in Step 6):
+
+```bash
+grep -nE '(localhost|127\.0\.0\.1):(8090|8091)\b' system/supervisord.conf.d/*.conf \
+    "$LEAD_WORK_DIR/data/.state/apps.toml"
+```
+
+A hit in a `screen*.conf` file or in the registry's `screen` row is the Screen
+itself. Any other hit is a user program (provenance as in item 5). Move each
+one, as its own commit, to the lowest port above 8091 that no
+`system/supervisord.conf.d/*.conf` and no registry row names and `ss -tln`
+shows unbound. Change the number everywhere the program carries it: the
+`--url http://localhost:<port>` in its drop-in, and its own code
+(`git grep -n <old port> -- <its directory>`). Never move the Screen, and do
+not restart the live program: the apply's restart starts it on the new port
+and registers it there. The edit is yours, so 4b and 4c run for that program.
+Report a `Screen ports` line under **Impact analysis**: `clear`, or each
+moved program's name, old port and new port.
+
 **Provisioning files** (`system/scripts/setup_system.sh`, the installers it
 chains, `.mngr/**`) and **global-dependency bumps** always count as impacted
 even though nothing imports them; work them per

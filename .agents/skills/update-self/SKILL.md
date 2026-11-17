@@ -826,6 +826,11 @@ that no longer imports, a consumer the report names that the update broke:
    `--detail` line naming what is still broken and what was tried, and the
    results message says the same in plain words.
 
+- **The Screen** -- the apply probes only the critical apps, so read
+  `supervisorctl status screen` yourself. When it is not `RUNNING` and
+  `/var/log/supervisor/screen-stderr.log` shows it could not bind its port, a
+  program of the user's holds one of the Screen's ports (the worker guide,
+  4a): fix it as above, moving the user's program and never the Screen.
 - **`shared_runtime` live consumers** -- the apply's restart has already put
   every built-in service on the merged code. What the report can still name is
   a *user-created* consumer (an app or skill of theirs reading something the
