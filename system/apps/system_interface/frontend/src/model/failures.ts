@@ -24,21 +24,7 @@ export interface FailureNotice {
   readonly isReportable: boolean;
 }
 
-/** What the shell's refusals name with ``kind`` (desktop contracts.md, the error body), for the desktop to word
- *  with what only it holds. */
-export type RefusalKind =
-  | "app_unavailable"
-  | "launch_path_gone"
-  | "window_gone"
-  | "out_of_space"
-  | "not_saved"
-  | "app_stopped"
-  | "app_could_not_start"
-  | "app_start_budget_spent"
-  | "app_still_starting"
-  | "launched_not_opened";
-
-const REFUSAL_KINDS: ReadonlySet<string> = new Set<RefusalKind>([
+const REFUSAL_KIND_VALUES = [
   "app_unavailable",
   "launch_path_gone",
   "window_gone",
@@ -49,7 +35,13 @@ const REFUSAL_KINDS: ReadonlySet<string> = new Set<RefusalKind>([
   "app_start_budget_spent",
   "app_still_starting",
   "launched_not_opened",
-]);
+] as const;
+
+/** What the shell's refusals name with ``kind`` (desktop contracts.md, the error body), for the desktop to word
+ *  with what only it holds. */
+export type RefusalKind = (typeof REFUSAL_KIND_VALUES)[number];
+
+const REFUSAL_KINDS: ReadonlySet<string> = new Set<RefusalKind>(REFUSAL_KIND_VALUES);
 
 /** What a window, a shortcut, or a launcher row says of an app that is not running and that the workspace does not
  *  start on a request: one it does not run itself, or one it treats as part of how it runs. */
