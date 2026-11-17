@@ -44,7 +44,9 @@ The shapes:
 - **Frame only** (``frame``, called by ``build-app``'s ``mock_frame.py``). The
   same labeled frame around a service something else already runs -- a new app's
   live program while it is still a mock -- with a banner kind and note of its own.
-  Nothing else is booted or registered, and ``down`` removes only the frame.
+  Nothing else is booted or registered, and ``down`` removes only the frame; how
+  the caller registers the framed app while it is framed is recorded, and
+  ``revive`` registers it that way again.
 
 The service must read its port (and, when relevant, its data dir) from the
 environment -- that is what ``--port-env`` / ``--env`` inject. Scaffolded Flask
@@ -1507,7 +1509,8 @@ def frame(
     registration -- and the origin an open window shows it at -- stays put; when
     another process has taken that port, the wrapper boots on a fresh one and its
     row is re-pointed there. ``down`` with the same ``name`` kills the wrapper and
-    deregisters it, and never touches the inner service.
+    deregisters it, and never touches the inner service. ``framed_app`` is only
+    recorded: it is how ``revive`` registers the inner service again.
 
     Returns 1 on failure. A failed boot is torn down, a re-frame's row deregistered
     with it; a failed re-frame keeps only its record (``read_frame``), so a later
