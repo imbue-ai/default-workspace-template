@@ -93,10 +93,8 @@ export async function listFolder(folder: string, signal?: AbortSignal): Promise<
   if (!response.ok) throw await readResponseFailure(response, "read");
   const data = (await response.json()) as PageData;
   if (data.kind !== "folder") {
-    const sentence = `${folder} is a file, not a folder.`;
-    throw new HttpError(
-      readFailure({ status: 400, body: { user_facing_message: sentence }, rawText: null, requestKind: "read" }),
-    );
+    const body = { detail: `${folder} is a file, not a folder.`, user_facing_message: "It's a file, not a folder." };
+    throw new HttpError(readFailure({ status: 400, body, rawText: null, requestKind: "read" }));
   }
   return { exists: true, entries: data.entries.map((record) => entryOf(folder, record)), stamp: data.stamp ?? null };
 }

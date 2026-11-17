@@ -46,6 +46,18 @@ describe("a refused request to the Files server", () => {
     expect(failure).toMatchObject({ cause: "not_answered", requestKind: "read", details: "HTTP 502\nBad Gateway" });
   });
 
+  it("says a path that is a file is not a folder, the path kept behind the details", async () => {
+    answering(200, JSON.stringify({ kind: "file", is_text: true }), "application/json");
+
+    const { failure } = await failureOf(listFolder("/home/notes.txt/"));
+
+    expect(failure).toMatchObject({
+      cause: "user_facing",
+      userFacingMessage: "It's a file, not a folder.",
+      details: "HTTP 400\n/home/notes.txt/ is a file, not a folder.",
+    });
+  });
+
   it("lists a folder that is not there as missing rather than failed", async () => {
     answering(404, JSON.stringify({ detail: "There's nothing at /gone/." }), "application/json");
 
