@@ -3,6 +3,7 @@
  *  4.2). */
 import { describe, expect, it } from "vitest";
 
+import { readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { Overlays, mayCancelPendingUrl } from "./overlays";
 import type { FailureHost } from "./overlays";
 import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
@@ -42,6 +43,7 @@ describe("Overlays", () => {
       () => undefined,
       () => undefined,
       () => undefined,
+      () => undefined,
     );
     overlays.update(state({}), "connected", OWNER, null, null);
     const dim = overlays.dimElement;
@@ -61,6 +63,7 @@ describe("Overlays", () => {
       () => {
         cancelled += 1;
       },
+      () => undefined,
     );
     overlays.update(
       state({ chromium: { state: "running", name: "browser-1", pending_url: "http://localhost:3000/app" } }),
@@ -82,6 +85,7 @@ describe("Overlays", () => {
 
   it("names the held page to a visitor who does not control and offers to open it, but not to drop it", () => {
     const overlays = new Overlays(
+      () => undefined,
       () => undefined,
       () => undefined,
       () => undefined,
@@ -118,6 +122,7 @@ describe("Overlays", () => {
 
   it("lifts the dim once a human holds control, whatever is held", () => {
     const overlays = new Overlays(
+      () => undefined,
       () => undefined,
       () => undefined,
       () => undefined,
@@ -166,11 +171,16 @@ function shown(overlays: Overlays): {
   };
 }
 
-function overlaysWith(host: FailureHost | null, onStart: () => void = () => undefined): Overlays {
+function overlaysWith(
+  host: FailureHost | null,
+  onStart: () => void = () => undefined,
+  onReload: () => void = () => undefined,
+): Overlays {
   const overlays = new Overlays(
     onStart,
     () => undefined,
     () => undefined,
+    onReload,
   );
   if (host !== null) overlays.setHost(host);
   return overlays;
@@ -341,18 +351,40 @@ describe("Overlays for the stack's state", () => {
     });
   });
 
-  it("shows a page that could not load its state in our words, with nothing to press", () => {
-    const overlays = overlaysWith(fakeHost());
+  it("names the Screen when its state got no answer, and Try again loads it again", () => {
+    let reloads = 0;
+    const overlays = overlaysWith(
+      fakeHost(),
+      () => undefined,
+      () => (reloads += 1),
+    );
     expect(shown(overlays).title).toBe("Loading the Screen");
-    overlays.showLoadFailure({
-      message: "The workspace didn't answer. Try again in a moment.",
-      details: "Failed to fetch",
-    });
+    overlays.showLoadFailure(readFailure({ status: 0, body: null, rawText: "Failed to fetch", requestKind: "read" }));
     expect(shown(overlays)).toEqual({
-      title: "The workspace didn't answer. Try again in a moment.",
-      body: null,
+      title: "The Screen couldn't load.",
+      body: "The workspace didn't answer. Try again in a moment.",
       details: "Failed to fetch",
-      buttons: [],
+      buttons: ["Try again"],
     });
+    overlays.element.querySelector<HTMLButtonElement>("[data-screen-reload]")?.click();
+    expect(reloads).toBe(1);
+  });
+
+  it("asks for a bug report when the service failed to answer its state for no reason it gave", () => {
+    const overlays = overlaysWith(fakeHost());
+    overlays.showLoadFailure(
+      readFailure({ status: 500, body: null, rawText: "Internal Server Error", requestKind: "read" }),
+    );
+    expect(shown(overlays)).toEqual({
+      title: "The Screen couldn't load. Try again. If this persists, report a bug.",
+      body: null,
+      details: "HTTP 500\nInternal Server Error",
+      buttons: ["Try again", "Report a bug"],
+    });
+  });
+
+  it("shows no agent dim before any state says an agent drives", () => {
+    const overlays = overlaysWith(fakeHost());
+    expect(overlays.dimElement.hidden).toBe(true);
   });
 });

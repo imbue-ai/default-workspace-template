@@ -9,7 +9,8 @@
 
 import { askAgentToFix } from "@imbue/workspace-ui/src/app_contract";
 import type { AgentFixRequest, ShellConnection } from "@imbue/workspace-ui/src/app_contract";
-import { REPORT_A_BUG_LABEL } from "@imbue/workspace-ui/src/models/failure";
+import { REPORT_A_BUG_LABEL, failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import type { Failure } from "@imbue/workspace-ui/src/models/failure";
 import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
 import { isOwnSessionController } from "./state";
 import type { StreamStatus } from "./webrtc";
@@ -32,6 +33,8 @@ export interface OverlayView {
   readonly details: string | null;
   /** The Start button's label, or null when it is not offered. */
   readonly startLabel: string | null;
+  /** Whether "Try again" loads the Screen's state again (the page never got one). */
+  readonly isReloadOffered: boolean;
   /** What "Ask an agent to fix this" hands the agent, or null when it is not offered. */
   readonly agentFix: AgentFixRequest | null;
   readonly isReportable: boolean;
@@ -40,6 +43,7 @@ export interface OverlayView {
 const INSTALL_FAILED_STEM = "The Screen couldn't be set up in this workspace";
 const START_FAILED_STEM = "The Screen couldn't start";
 const STOPPED_UNEXPECTEDLY_STEM = "The Screen stopped unexpectedly";
+const LOAD_FAILED_STEM = "The Screen couldn't load";
 
 function joinDetails(parts: readonly (string | null)[]): string | null {
   const kept = parts.filter((part): part is string => part !== null && part.trim() !== "");
@@ -47,7 +51,27 @@ function joinDetails(parts: readonly (string | null)[]): string | null {
 }
 
 function view(title: string, fields: Partial<Omit<OverlayView, "title">> = {}): OverlayView {
-  return { title, body: "", details: null, startLabel: null, agentFix: null, isReportable: false, ...fields };
+  return {
+    title,
+    body: "",
+    details: null,
+    startLabel: null,
+    isReloadOffered: false,
+    agentFix: null,
+    isReportable: false,
+    ...fields,
+  };
+}
+
+/** What the main overlay shows when the page could not load the Screen's state at all. */
+export function describeLoadFailure(failure: Failure): OverlayView {
+  const told = failureSentence(failure, LOAD_FAILED_STEM);
+  const fields = { details: told.details, isReloadOffered: true, isReportable: told.isReportable };
+  // These sentences do not name the Screen, so they go under a title that does.
+  if (failure.cause === "not_answered" || failure.cause === "user_facing") {
+    return view(`${LOAD_FAILED_STEM}.`, { ...fields, body: told.message });
+  }
+  return view(told.message, fields);
 }
 
 function stoppedView(state: ScreenStateDocument, startFailure: PageFailure | null): OverlayView {
@@ -139,6 +163,7 @@ export class Overlays {
   private readonly detailsText = document.createElement("pre");
   private readonly actions = document.createElement("div");
   private readonly startButton = document.createElement("button");
+  private readonly reloadButton = document.createElement("button");
   private readonly askAgentButton = document.createElement("button");
   private readonly reportBugButton = document.createElement("button");
   private readonly dim = document.createElement("div");
@@ -149,7 +174,7 @@ export class Overlays {
   private host: FailureHost | null = null;
   private agentFix: AgentFixRequest | null = null;
 
-  constructor(onStart: () => void, onTakeControl: () => void, onCancelPendingUrl: () => void) {
+  constructor(onStart: () => void, onTakeControl: () => void, onCancelPendingUrl: () => void, onReload: () => void) {
     this.element.className = "screen-overlay";
     this.element.dataset.screenOverlay = "true";
     this.title.className = "screen-overlay__title";
@@ -165,6 +190,10 @@ export class Overlays {
     this.startButton.className = "screen-button screen-button--primary";
     this.startButton.dataset.screenStart = "true";
     this.startButton.addEventListener("click", () => onStart());
+    this.reloadButton.className = "screen-button screen-button--primary";
+    this.reloadButton.textContent = "Try again";
+    this.reloadButton.dataset.screenReload = "true";
+    this.reloadButton.addEventListener("click", () => onReload());
     this.askAgentButton.className = "screen-button ask-agent-to-fix";
     this.askAgentButton.textContent = ASK_AGENT_TO_FIX_LABEL;
     this.askAgentButton.dataset.screenAskAgent = "true";
@@ -175,11 +204,12 @@ export class Overlays {
     this.reportBugButton.textContent = REPORT_A_BUG_LABEL;
     this.reportBugButton.dataset.screenReportBug = "true";
     this.reportBugButton.addEventListener("click", () => this.host?.reportBug());
-    this.actions.append(this.startButton, this.askAgentButton, this.reportBugButton);
+    this.actions.append(this.startButton, this.reloadButton, this.askAgentButton, this.reportBugButton);
     this.element.append(this.title, this.body, this.details, this.actions);
     // Until the first state arrives, the page is loading: nothing to start, nothing failed.
-    this.render(view("Loading the Screen"));
+    this.showLoading();
     this.dim.className = "screen-overlay screen-overlay--dim";
+    this.dim.hidden = true;
     this.dim.dataset.screenAgentOverlay = "true";
     this.dimTitle.className = "screen-overlay__title";
     this.dimPending.className = "screen-overlay__detail";
@@ -228,8 +258,13 @@ export class Overlays {
   }
 
   /** The page could not load the state at all; the service's events bring it once the service answers. */
-  showLoadFailure(failure: PageFailure): void {
-    this.render(view(failure.message, { details: failure.details }));
+  showLoadFailure(failure: Failure): void {
+    this.render(describeLoadFailure(failure));
+  }
+
+  /** Try again was pressed on a load failure: the page is loading again. */
+  showLoading(): void {
+    this.render(view("Loading the Screen"));
   }
 
   private render(shown: OverlayView | null): void {
@@ -245,6 +280,7 @@ export class Overlays {
     this.detailsText.textContent = shown.details ?? "";
     this.startButton.hidden = shown.startLabel === null;
     this.startButton.textContent = shown.startLabel ?? "";
+    this.reloadButton.hidden = !shown.isReloadOffered;
     this.agentFix = shown.agentFix;
     this.askAgentButton.hidden = shown.agentFix === null || this.host === null || !this.host.hasShell();
     this.reportBugButton.hidden = !shown.isReportable || this.host === null || !this.host.canReportBug();

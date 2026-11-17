@@ -127,6 +127,7 @@ class Viewer {
       () => void this.start(),
       () => this.takeControl(),
       () => this.cancelPendingUrl(),
+      () => void this.loadState(),
     );
     this.stage.className = "screen-stage screen-stage--not-controlling";
     this.stage.tabIndex = 0;
@@ -258,12 +259,16 @@ class Viewer {
     this.overlays.setHost(host);
   }
 
-  /** The first state could not be loaded; the service's events bring it once the service answers. */
-  showLoadFailure(error: unknown): void {
-    console.error("[screen] state failed", error);
-    if (this.state !== null) return;
-    const told = failureSentence(failureOf(error, "read"), "The Screen couldn't load");
-    this.overlays.showLoadFailure({ message: told.message, details: told.details });
+  /** Reads the Screen's state; a failure stays on the overlay until a state arrives, from here or the service's
+   *  events once the service answers. */
+  async loadState(): Promise<void> {
+    if (this.state === null) this.overlays.showLoading();
+    try {
+      this.handleEvent({ type: "state", ...(await fetchState()) });
+    } catch (error: unknown) {
+      console.error("[screen] state failed", error);
+      if (this.state === null) this.overlays.showLoadFailure(failureOf(error, "read"));
+    }
   }
 
   /** The overlay's Start (or Try again): a refusal, or no answer, is said under its title until the stack moves. */
@@ -623,10 +628,7 @@ function bootstrap(): void {
   window.addEventListener("focus", () => connection.focused());
   installElementContextMenu({ connection, handshake: () => handshake, open: createContextMenuOpener().open });
   const events = new ServiceEvents((event) => viewer.handleEvent(event));
-  fetchState()
-    .then((state) => viewer.handleEvent({ type: "state", ...state }))
-    .catch((error: unknown) => viewer.showLoadFailure(error))
-    .finally(() => events.start());
+  void viewer.loadState().finally(() => events.start());
 }
 
 window.addEventListener("load", bootstrap);
