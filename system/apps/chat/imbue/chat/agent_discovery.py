@@ -282,9 +282,9 @@ class SendFailedError(Exception):
     into the failure the composer shows. The other callers of ``send_message_to_agent`` check
     the returned reason instead, so this changes nothing for them.
 
-    ``kind`` is mngr's classification of the failure, which is what lets the chat decide what to
-    offer: trying again can clear a blocked input, where only a restart is left for an agent that would not start.
-    Unknown when mngr did not classify it.
+    ``kind`` is mngr's classification of the failure, or the chat app's own for a failure it met itself, which is
+    what lets the chat decide what to offer: trying again can clear a blocked input, where only a restart is left for
+    a pane that is gone. Unknown when mngr did not classify it.
     """
 
     def __init__(self, detail: str, kind: str = "unknown") -> None:

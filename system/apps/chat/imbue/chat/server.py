@@ -958,8 +958,8 @@ def _consider_naming_chat(state: ChatAppState, chat_id: ChatId, message: str) ->
 # list has not caught up with the sign-out sends and meets this.
 ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND: Final[str] = "account_signed_out"
 
-# What a refused send says for each of mngr's kinds, in place of mngr's reason, which is written for its own command
-# line and goes behind the page's details. An unclassified refusal (``unknown``) has no sentence of its own, and an
+# What a refused send says for each of mngr's kinds and the chat app's ``agent_start_failed``, in place of mngr's
+# reason, which is written for its own command line and goes behind the page's details. An unclassified refusal (``unknown``) has no sentence of its own, and an
 # unconfirmed one is worded by the page, which offers Send again for it.
 _SEND_FAILURE_SENTENCES: Final[dict[str, str]] = {
     SendFailureKind.INPUT_BLOCKED: "The agent is waiting on something in its terminal. Answer it there and try again.",
@@ -1061,7 +1061,7 @@ def _send_to_chat(
             # The harness's reason goes back as the detail, with its kind beside it, and the sentence for the kind:
             # only this side knows which case it met (a start that failed, a pane that is gone), while the page
             # decides what to offer by the kind (trying again can clear a blocked input, where only a restart is left
-            # for an agent that would not start). A /compact the chat declines is its own refusal, not a failure.
+            # for a pane that is gone). A /compact the chat declines is its own refusal, not a failure.
             logger.info("Send to chat {} failed: {}", chat_id, send_failure.kind)
             is_declined = send_failure.kind in _DECLINED_SEND_FAILURE_KINDS
             status_code = 409 if is_declined else 500
