@@ -236,7 +236,7 @@ The shell accepts `shell:draft-text` only from a frame it created, as it accepts
   A right-click on a thing with rows of its own (a taskbar or floating entry, a shortcut, the bare desktop, an overview thumbnail, a launcher row of an app shortcut, the tray's agent, the resource gauge for its owner) is the installer's too: `extraRows` answers that thing's rows, and `open` opens the thing's own menu, which reads its rows afresh as it renders and follows them with the rows after them (section 4.4). A long press opens the same menu with the reference rows.
   The window and desktops menus open from a button, not a right-click, and are unchanged.
   The shell's draft route is `store.draftText`.
-- `TaskbarEntry`, `FloatingEntries`, `ShortcutIcon`, `Backdrop`, `Overview`, `LauncherMenu`, and the tray's `AgentEntry` have no context menu handler of their own that opens a menu; a right-click on a shortcut still selects it.
+- `TaskbarEntry`, `FloatingEntries`, `ShortcutIcon`, `Backdrop`, `Overview`, `LauncherMenu`, and the tray's `AgentEntry` and `ResourceGauge` have no context menu handler of their own that opens a menu; a right-click on a shortcut still selects it.
 - `server.py` serves `/_static/context_menu.js` beside `/_static/app_contract.js`, with the same permissive CORS header, for the e2e stub pages.
 
 The shell's reference for its own chrome has `app` `"system_interface"` and `window_id` the id of the window whose chrome was clicked when the target sits inside a `[data-window-id]`, else `null`.
