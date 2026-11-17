@@ -646,9 +646,12 @@ and a run closes the menu and clears the field. A framed page starts a chat
 without naming the chat app through `shell:start-with-text`, which the shell
 answers by running the primary free-text row (the Getting Started app's
 intents and templates use it), starts a new one through
-`shell:start-new-with-text`, which runs the secondary free-text row (Chat's
-New Chat; a failure's "Ask an agent to fix this" uses it), and drafts a text into the chat on screen
-through `shell:draft-text`, which the shell answers by running the pinned
+`shell:start-new-with-text`, which the shell answers by running the secondary
+free-text row (Chat's New Chat; a failure's "Ask an agent to fix this" uses
+it) and then telling the page how it went with
+`shell:start-new-with-text-result` (the chat's window opened, or the failure
+for the page to show where it was pressed; the shell toasts nothing for it),
+and drafts a text into the chat on screen through `shell:draft-text`, which the shell answers by running the pinned
 app's launch path with a `draft_param` into the pinned window, as the avatar
 dialog's "Design your own..." does (the element context menu's "Explain..."
 uses it). The shell names no app in any of this. A
