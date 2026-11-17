@@ -454,7 +454,8 @@ describe("telling a failed change", () => {
 
     const message = `Couldn't move "b.txt" into "zeta". ${said}`;
     expect(model.toasts.current().map((toast) => [toast.message, toast.isLasting])).toEqual([[message, false]]);
-    expect(warn).toHaveBeenCalledWith(`[files] ${message}`, `HTTP 412\n${said}`);
+    // The reader drops a reason that only repeats the sentence.
+    expect(warn).toHaveBeenCalledWith(`[files] ${message}`, "HTTP 412");
     warn.mockRestore();
   });
 

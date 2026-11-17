@@ -34,7 +34,7 @@ describe("a refused request to the Files server", () => {
       userFacingMessage: said,
       requestKind: "change",
       status: 412,
-      details: `HTTP 412\n${said}`,
+      details: "HTTP 412",
     });
   });
 
