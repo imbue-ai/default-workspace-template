@@ -239,7 +239,7 @@ export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
       const tone = isNoticeSettled(notice) || isRollbackRunning(notice) ? "neutral" : "warning";
       return [
         m("div", { class: bannerClass(marker, tone) }, [
-          m("span", { class: `${marker}-text min-w-0` }, [
+          m("div", { class: `${marker}-text min-w-0` }, [
             text(state, notice),
             error === null
               ? null
