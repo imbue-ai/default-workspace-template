@@ -1148,6 +1148,23 @@ describe("MessageInput send to a chat still being created", () => {
       expect(findButton(after, "Retry")).toBeUndefined();
     });
 
+    it("puts several held messages back in the order they were sent", async () => {
+      mocks.sendMessage.mockResolvedValueOnce("held");
+      const component = MessageInput();
+      await typeAndSend(component, "agent-1", "first");
+      await typeAndSend(component, "agent-1", "second");
+      const calls = mocks.sendMessage.mock.calls as unknown as [string, string, string][];
+      const heldSends = [
+        { message_id: calls[calls.length - 2][2], text: "first" },
+        { message_id: calls[calls.length - 1][2], text: "second" },
+      ];
+
+      for (const listener of mocks.discardListeners) listener({ ...creating, held_sends: heldSends });
+
+      const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
+      expect(findByTag(after, "textarea")?.attrs?.value).toBe("first\n\nsecond");
+    });
+
     it("leaves alone a message Stop already took back, which the chat no longer held", async () => {
       const after = await sendThenDiscard("hello", false);
 

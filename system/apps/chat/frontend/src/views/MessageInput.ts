@@ -617,7 +617,8 @@ function putBackSendsHeldForDiscardedChat(discarded: ProvisionalChat): void {
   const stillHeldIds = new Set(discarded.held_sends.map((held) => held.message_id));
   const held = (noted ?? []).filter((send) => stillHeldIds.has(send.messageId));
   if (held.length === 0) return;
-  for (const send of held) {
+  // Last first: each put-back goes above what is in the box, so the box reads in the order they were sent.
+  for (const send of [...held].reverse()) {
     dropOutgoing(chatId, send.outgoingId);
     restoreToComposer(chatId, send.text, send.attachments);
   }
