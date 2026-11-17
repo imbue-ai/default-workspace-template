@@ -8,6 +8,7 @@ import pytest
 from flask import Flask
 from playwright.sync_api import Page
 from playwright.sync_api import expect
+from workspace_layout.identity import ANONYMOUS_OWNER
 
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_MESSAGE
 from imbue.system_interface.shell.launches import LaunchPost
@@ -18,6 +19,7 @@ from imbue.system_interface.shell.port_parking import ParkingTarget
 from imbue.system_interface.shell.port_parking import could_not_start_request
 from imbue.system_interface.shell.port_parking import parked_page_html
 from imbue.system_interface.shell.testing import build_inventory
+from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
 from imbue.system_interface.shell.testing import write_two_app_registry
@@ -70,6 +72,9 @@ def test_the_not_built_page_asks_an_agent_and_frames_its_chat_and_a_terminal_ses
         LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-1"}),
     ]
     with serve_app(_not_built_shell(tmp_path, outcomes, posts)) as served:
+        # The workspace's front door stamps every request it forwards with who sent it; a request under the
+        # coordinate's host that carries none is refused.
+        page.set_extra_http_headers(identity_headers(ANONYMOUS_OWNER))
         page.goto(f"http://shell-z.{_COORDINATE}:{served.port}/")
         # The command and the terminal wait behind "See details"; the agent is the way out on the page.
         expect(page.locator("#repair-command")).not_to_be_visible()
