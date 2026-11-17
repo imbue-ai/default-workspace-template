@@ -419,6 +419,15 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     );
   }
 
+  /** A failure shown above the providers, with its buttons under it when it has any. */
+  function inlineFailure(failure: ChooserFailure, actions: m.Children): m.Children {
+    return m("div", { class: `${css.HINT} text-red-600` }, [
+      m("p", failure.message),
+      m(SeeDetails, { details: failure.details }),
+      actions === null ? null : m("div", { class: `${css.FOOTER_ROW} mt-2` }, actions),
+    ]);
+  }
+
   function renderChooser(): m.Children {
     if (loadError !== null && isLoadFailureScreen()) {
       return statusScreen("error", "Could not load providers", loadError.message, failureMark(loadError));
@@ -432,22 +441,10 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     return [
       signedIn,
       // The providers are listed but the accounts may not be, so the failure sits above them with a way to load again.
-      loadError !== null
-        ? m("div", { class: `${css.HINT} text-red-600` }, [
-            m("p", loadError.message),
-            m(SeeDetails, { details: loadError.details }),
-            m("div", { class: `${css.FOOTER_ROW} mt-2` }, [reportBugButton(loadError), loadAgainButton()]),
-          ])
-        : null,
+      loadError !== null ? inlineFailure(loadError, [reportBugButton(loadError), loadAgainButton()]) : null,
       // Removing an account can fail -- a row with no folder, a store that will not write --
       // and without this the row simply stays put with no explanation.
-      error !== null
-        ? m("div", { class: `${css.HINT} text-red-600` }, [
-            m("p", error.message),
-            m(SeeDetails, { details: error.details }),
-            error.isReportable ? m("div", { class: `${css.FOOTER_ROW} mt-2` }, reportBugButton(error)) : null,
-          ])
-        : null,
+      error !== null ? inlineFailure(error, error.isReportable ? reportBugButton(error) : null) : null,
       signedIn !== null ? m("div", { class: `${css.SECTION_LABEL} mt-6` }, "Add more") : null,
       m("div", { class: css.ROW_STACK }, getLanes().map(laneRow)),
       roomRow(),
