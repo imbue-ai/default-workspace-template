@@ -22,6 +22,7 @@ from playwright.sync_api import Route
 from playwright.sync_api import expect
 
 from app_manifest.testing import SHELL_HANDSHAKE_COUNTER_SCRIPT
+from app_manifest.testing import shell_messages
 from app_manifest.testing import shell_stand_in_page
 
 pytestmark = [pytest.mark.browser, pytest.mark.timeout(60)]
@@ -116,10 +117,6 @@ def _open(context: BrowserContext) -> tuple[Page, Frame]:
     return page, viewer
 
 
-def _shell_messages(page: Page, message_type: str) -> list[dict[str, object]]:
-    return [message for message in page.evaluate("window.shellMessages") if message["type"] == message_type]
-
-
 def test_a_crash_offers_an_agent_and_a_bug_report_through_the_shell(desktop_context: BrowserContext) -> None:
     _serve(desktop_context, can_report_bug=True)
     page, viewer = _open(desktop_context)
@@ -129,11 +126,11 @@ def test_a_crash_offers_an_agent_and_a_bug_report_through_the_shell(desktop_cont
     viewer.locator("[data-screen-ask-agent]").click()
     viewer.locator("[data-screen-report-bug]").click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
-    started = _shell_messages(page, "shell:start-new-with-text")
+    started = shell_messages(page, "shell:start-new-with-text")
     assert len(started) == 1
     assert "The Screen stopped unexpectedly." in str(started[0]["text"])
     assert _CRASH_REASON in str(started[0]["text"])
-    [reported] = _shell_messages(page, "shell:report-bug")
+    [reported] = shell_messages(page, "shell:report-bug")
     assert (reported["message"], reported["details"]) == ("The Screen stopped unexpectedly.", _CRASH_REASON)
 
 
