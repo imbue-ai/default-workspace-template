@@ -838,6 +838,38 @@ describe("opening", () => {
     expect(pinned?.is_minimized).toBe(true);
   });
 
+  it("leaves the launcher's retry to its field, and has a toast's Try again send into the pinned window again", async () => {
+    const store = await startedStore();
+    offerApps(api, socket, [
+      appRecord("buddy", {
+        display_name: "Buddy",
+        pin: { path: "/", style: "plain", scope: "linked", default_mode: "bar" },
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+    ]);
+    api.desktops = [
+      desktopRecord("home", { windows: [windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "linked" })] }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    store.minimizeWindow("win-9");
+    api.refusal = refusedWith(502, { detail: "buddy answered the launch with 500: boom" });
+
+    // The launcher keeps the text in its field, whose Enter is the retry: a Try again on the line would send without
+    // letting the text go.
+    const reported: FailureNotice[] = [];
+    await store.runFreeText("buddy", "new", "hi", (notice) => reported.push(notice));
+    expect(reported.map((notice) => notice.actions.map((action) => action.label))).toEqual([[]]);
+
+    await store.runFreeText("buddy", "new", "hi");
+    const [toast] = store.toasts.current();
+    expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
+    api.refusal = null;
+    toast.actions[0].run();
+    await settle();
+    const pinned = activePlacements(store.getState()).find((placement) => placement.window_id === "win-9");
+    expect(pinned?.is_minimized).toBe(false);
+  });
+
   it("takes a send the app took as sent though the shell could not record the window's place, and says so", async () => {
     const store = await startedStore();
     offerApps(api, socket, [

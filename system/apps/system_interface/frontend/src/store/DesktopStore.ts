@@ -305,6 +305,9 @@ interface AskedFor {
 interface LaunchFailureCopy {
   readonly whatFailed?: string;
   readonly report?: FailureReport;
+  /** What a toast's Try again runs, when it is more than the launch itself; a surface that reports the failure
+   *  itself keeps its own retry (the launcher's field, which still holds the text). */
+  readonly retry?: () => void;
 }
 
 /** What a page's draft into the pinned window was for, which its failure names. */
@@ -3004,6 +3007,7 @@ export class DesktopStore {
               ? `Couldn't send that to ${name}`
               : `Couldn't send that to ${name}, so your text is still in the box`,
           report,
+          retry: () => void this.launchPinnedFirst(appName, launchId, params, report),
         },
       );
       if (launched === null) return false;
@@ -3135,7 +3139,10 @@ export class DesktopStore {
       const asked: AskedFor = {
         app,
         launchLabel: this.launchLabelOf(app, launchId),
-        retry: () => void this.launchAt(app, launchId, params, target, copy),
+        retry:
+          copy.report !== undefined
+            ? undefined
+            : (copy.retry ?? (() => void this.launchAt(app, launchId, params, target, copy))),
       };
       const notice = this.noticeFor(copy.whatFailed ?? `${this.displayNameOf(app)} couldn't open that`, error, asked);
       // Lasting for every launch, a shortcut's included: a text row or a page's draft has already let go of the text
