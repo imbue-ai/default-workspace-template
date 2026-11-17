@@ -397,11 +397,13 @@ seconds is retried rather than mistaken for an unknown chat. See `docs/system/bl
 A send naming its send-time id (`message_id`) goes through `send_ledger.py`: a
 page whose request got no answer sends it again under the same id, marked
 `is_repeat`, and the repeat gets the first send's answer, a refusal included
-(waiting for it while it is still under way), rather than a second delivery. A
+(waiting for it while it is still under way, and answered 503
+`submission_unconfirmed` if it still is), rather than a second delivery. A
 Retry under the same id gets a taken send's answer, but is sent afresh after a
 refusal. A page whose request still gets no answer cannot know whether the chat
 app took it, and the chat app is out of its reach, so nothing sends it again: it
-gets the "Couldn't confirm your message arrived" notice.
+gets the "Your message may not have been sent" notice, whose Send again repeats
+the id.
 
 A send mngr reports `agent_not_found` (the agent moved) or `not_submitted`
 (Claude never took it, and mngr cleared it from the input box) is sent again
