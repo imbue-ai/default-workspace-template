@@ -32,9 +32,7 @@ def app_url_port(app_url: AppUrl) -> int:
     try:
         port = urllib.parse.urlsplit(app_url).port
     except ValueError as e:
-        raise TerminalServeError(
-            f"the app URL {app_url!r} names no usable port: {e}"
-        ) from e
+        raise TerminalServeError(f"the app URL {app_url!r} names no usable port: {e}") from e
     if port is None:
         raise TerminalServeError(f"the app URL {app_url!r} names no port")
     return port
@@ -65,9 +63,7 @@ def serve_in_background(
         # duplicates it and skips its own bind, so this handle can close once the server has its own.
         with _bind_listening_socket(host, port) as listener:
             server = make_server(host, port, app, threaded=True, fd=listener.fileno())
-        server_thread = threading.Thread(
-            target=server.serve_forever, name=f"serve-{host}:{port}", daemon=True
-        )
+        server_thread = threading.Thread(target=server.serve_forever, name=f"serve-{host}:{port}", daemon=True)
         server_thread.start()
     try:
         yield server
@@ -91,9 +87,7 @@ def wait_for_shutdown_signal() -> int:
     SIGTERM, and the status says so.
     """
     if threading.current_thread() is not threading.main_thread():
-        raise TerminalServeError(
-            "the shutdown wait must run on the main thread so it can install signal handlers"
-        )
+        raise TerminalServeError("the shutdown wait must run on the main thread so it can install signal handlers")
     received: list[int] = []
     stop = threading.Event()
 

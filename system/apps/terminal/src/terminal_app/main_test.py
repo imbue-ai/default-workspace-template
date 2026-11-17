@@ -14,9 +14,7 @@ def test_the_fixed_wiring_agrees_with_the_manifest() -> None:
     manifest = load_manifest(_REPO_ROOT / MANIFEST_PATH)
 
     assert manifest.name == "terminal"
-    assert [
-        (launch_path.id, launch_path.path) for launch_path in manifest.launch_paths
-    ] == [("new", "/new")]
+    assert [(launch_path.id, launch_path.path) for launch_path in manifest.launch_paths] == [("new", "/new")]
     assert app_url_port(APP_URL) == 7681
     assert STORE_PATH == Path("data/.apps/terminal/instances.json")
     assert manifest.window_closed_path == WINDOW_CLOSED_PATH

@@ -645,9 +645,7 @@ _FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
 </body>
 </html>
 """
-_FAILURE_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(
-    r"__(MESSAGE|RETRY_HIDDEN|DETAILS|CONFIG|CONTRACT_PATH)__"
-)
+_FAILURE_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(MESSAGE|RETRY_HIDDEN|DETAILS|CONFIG|CONTRACT_PATH)__")
 
 
 class AgentFix(FrozenModel):
@@ -663,12 +661,8 @@ class PageFailure(FrozenModel):
     message: str = Field(description="Our sentence")
     details: str = Field(description="The raw reason, behind See details")
     is_retryable: bool = Field(description="Whether a Try again (a reload) can help")
-    agent_fix: AgentFix | None = Field(
-        description="What an agent is asked to fix; None where none can"
-    )
-    is_reportable: bool = Field(
-        description="Whether the sentence asks the person to report a bug"
-    )
+    agent_fix: AgentFix | None = Field(description="What an agent is asked to fix; None where none can")
+    is_reportable: bool = Field(description="Whether the sentence asks the person to report a bug")
     status: int = Field(description="The HTTP status the page is answered with")
 
 
@@ -737,9 +731,7 @@ def page_failure(error: TerminalAppError, raw_session: str) -> PageFailure:
 @pure
 def render_failure_page(failure: PageFailure) -> str:
     config = {
-        "agent_fix": None
-        if failure.agent_fix is None
-        else failure.agent_fix.model_dump(mode="json"),
+        "agent_fix": None if failure.agent_fix is None else failure.agent_fix.model_dump(mode="json"),
         "is_reportable": failure.is_reportable,
     }
     # `</` cannot appear inside a script element's text, whatever the JSON quoting says.
@@ -751,9 +743,7 @@ def render_failure_page(failure: PageFailure) -> str:
         "CONFIG": encoded,
         "CONTRACT_PATH": APP_CONTRACT_ROUTE,
     }
-    return _FAILURE_PLACEHOLDER.sub(
-        lambda match: values[match.group(1)], _FAILURE_PAGE_TEMPLATE
-    )
+    return _FAILURE_PLACEHOLDER.sub(lambda match: values[match.group(1)], _FAILURE_PAGE_TEMPLATE)
 
 
 class SessionPage(FrozenModel):
@@ -982,9 +972,7 @@ def build_pages_blueprint(
     def failure_page(error: TerminalAppError) -> ResponseReturnValue:
         """A page of ours for a window whose page could not be served: a JSON body would be the whole window."""
         failure = page_failure(error, request.args.get(SESSION_QUERY_KEY, ""))
-        response = Response(
-            render_failure_page(failure), status=failure.status, mimetype="text/html"
-        )
+        response = Response(render_failure_page(failure), status=failure.status, mimetype="text/html")
         response.headers["Cache-Control"] = "no-store"
         return response
 
