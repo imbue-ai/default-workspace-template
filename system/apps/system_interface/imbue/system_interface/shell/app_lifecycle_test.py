@@ -16,8 +16,8 @@ from imbue.system_interface.shell.app_lifecycle import ProgramAction
 from imbue.system_interface.shell.app_lifecycle import ProgramStatesReader
 from imbue.system_interface.shell.app_lifecycle import TRANSITION_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
-from imbue.system_interface.shell.app_lifecycle import WakeOutcome
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_WINDOW_SECONDS
+from imbue.system_interface.shell.app_lifecycle import WakeOutcome
 from imbue.system_interface.shell.app_lifecycle import WindowCountsReader
 from imbue.system_interface.shell.app_lifecycle import recent_wake_times
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
