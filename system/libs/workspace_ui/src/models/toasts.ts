@@ -9,6 +9,10 @@
 export interface ToastAction {
   readonly label: string;
   readonly run: () => void;
+  /** Leave the toast up once pressed: a button that hands the failure to someone else ("Ask an agent to ..."), after
+   *  which the toast's other buttons (Try again) still apply. A retry or a button that resolves the failure leaves
+   *  this unset, and the toast goes. */
+  readonly keepsToast?: boolean;
 }
 
 export type ToastOptions =
@@ -17,8 +21,12 @@ export type ToastOptions =
       readonly isLasting: true;
       /** What goes behind "See details"; none when null or absent. */
       readonly details?: string | null;
-      /** Buttons after the message (Try again, Report a bug, ...), in order. */
+      /** Buttons after the message (Try again, Ask an agent to ...), in order. */
       readonly actions?: readonly ToastAction[];
+      /** The message asks for a bug report: the toast offers "Report a bug" after its buttons wherever the page can
+       *  open one when the toast is drawn (``components/toasts.ts``'s ``onReportBug``), which may be only after the
+       *  toast went up. */
+      readonly isReportable?: boolean;
     };
 
 export interface Toast {
@@ -27,6 +35,8 @@ export interface Toast {
   readonly details: string | null;
   readonly actions: readonly ToastAction[];
   readonly isLasting: boolean;
+  /** A lasting toast whose message asks for a bug report; never a plain one. */
+  readonly isReportable: boolean;
 }
 
 /** How long a plain toast stays up. */
@@ -49,7 +59,8 @@ export class ToastQueue {
   show(message: string, options: ToastOptions = { isLasting: false }): void {
     const details = options.isLasting ? (options.details ?? null) : null;
     const actions = options.isLasting ? (options.actions ?? []) : [];
-    const toast: Toast = { id: this.nextId, message, details, actions, isLasting: options.isLasting };
+    const isReportable = options.isLasting && options.isReportable === true;
+    const toast: Toast = { id: this.nextId, message, details, actions, isLasting: options.isLasting, isReportable };
     this.nextId += 1;
     let kept = this.toasts.filter((other) => other.message !== message || other.details !== details);
     if (toast.isLasting) {

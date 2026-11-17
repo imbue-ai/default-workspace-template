@@ -6,7 +6,7 @@
 import "../testing/dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
-import { SHELL_HANDSHAKE, SHELL_REPORT_BUG, SHELL_START_WITH_TEXT, connectToShell } from "../app_contract";
+import { SHELL_HANDSHAKE, SHELL_REPORT_BUG, SHELL_START_NEW_WITH_TEXT, connectToShell } from "../app_contract";
 import type { ShellConnection } from "../app_contract";
 import { AskAgentToFixButton, ReportBugButton } from "./FailureButtons";
 
@@ -38,7 +38,7 @@ afterEach(() => {
 });
 
 describe("Ask an agent to fix this", () => {
-  it("renders nothing until a shell frames the page, then starts a chat with the failure on press", () => {
+  it("renders nothing until a shell frames the page, then starts a new chat with the failure on press", () => {
     root = document.createElement("div");
     expect(render(m(AskAgentToFixButton, { connection: null, failure: FAILURE }))).toBeNull();
 
@@ -53,7 +53,7 @@ describe("Ask an agent to fix this", () => {
     expect(button?.textContent).toBe("Ask an agent to fix this");
     button?.click();
     const [message] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
-    expect(message.type).toBe(SHELL_START_WITH_TEXT);
+    expect(message.type).toBe(SHELL_START_NEW_WITH_TEXT);
     expect(message.text).toContain("HTTP 502\nboom");
   });
 
@@ -65,12 +65,16 @@ describe("Ask an agent to fix this", () => {
 });
 
 describe("Report a bug", () => {
-  it("appears once the shell's handshake says Imbue Studio opens a bug report, and asks the shell on press", () => {
+  it("appears once the shell's handshake says Imbue Studio opens a bug report, and sends the shell its failure", () => {
     root = document.createElement("div");
     const parent = framed();
     const live = connectToShell({});
     connection = live;
-    const view = (): m.Children => m(ReportBugButton, { connection: live });
+    const failure = {
+      message: "Docs couldn't open that. Try again. If this persists, report a bug.",
+      details: "HTTP 502",
+    };
+    const view = (): m.Children => m(ReportBugButton, { connection: live, failure });
 
     handshake(parent);
     expect(render(view())).toBeNull();
@@ -80,7 +84,7 @@ describe("Report a bug", () => {
     const button = render(view());
     expect(button?.textContent).toBe("Report a bug");
     button?.click();
-    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: SHELL_REPORT_BUG }, "*");
+    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: SHELL_REPORT_BUG, ...failure }, "*");
 
     handshake(parent, { canReportBug: false });
     expect(render(view())).toBeNull();
