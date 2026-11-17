@@ -19,14 +19,8 @@ import { startDownload } from "@imbue/workspace-ui/src/download";
 
 import { isLiveShared } from "../models/connections";
 import * as server from "../models/server";
-import {
-  plainFailure,
-  reportBugAction,
-  toastFailures,
-  toldFailure,
-  type FailureHost,
-  type FilesFailure,
-} from "../models/failures";
+import { reportBugAction, toastFailures, toldFailure, type FailureHost, type FilesFailure } from "../models/failures";
+import { renameOnServer } from "../models/FilesModel";
 import { isTextLike, previewKindOf } from "../models/fileKinds";
 import { formatSize } from "../models/format";
 import { matchesKeybinding } from "../models/keybindings";
@@ -132,23 +126,13 @@ export class FilePageModel {
     const parent = parentOf(path);
     if (name === null || parent === null) return;
     const target = childPath(parent, name, false);
-    const failure = await this.renameOnServer(path, target, name);
+    const failure = await renameOnServer(path, target, name);
     if (failure !== null) {
       toastFailures(this.toasts, [failure], this.reporter);
       m.redraw();
       return;
     }
     window.location.replace(server.pageUrlOf(target, this.options.page));
-  }
-
-  private async renameOnServer(path: string, target: string, name: string): Promise<FilesFailure | null> {
-    try {
-      if (await server.exists(target)) return plainFailure(`"${name}" is already taken.`);
-      await server.movePath(path, target);
-      return null;
-    } catch (error) {
-      return toldFailure(error, `Couldn't rename "${nameOf(path)}" to "${name}"`, "item");
-    }
   }
 
   async copyPath(): Promise<void> {

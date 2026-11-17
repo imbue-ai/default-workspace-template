@@ -115,6 +115,18 @@ export function compareEntries(a: Entry, b: Entry, sort: SortOrder): number {
   return sort.descending ? -order : order;
 }
 
+/** Rename `path` to `target` (named `name`), as a folder's name field and a file's page both do; what went wrong, or
+ *  null once it is done. */
+export async function renameOnServer(path: string, target: string, name: string): Promise<FilesFailure | null> {
+  try {
+    if (await server.exists(target)) return plainFailure(`"${name}" is already taken.`);
+    await server.movePath(path, target);
+    return null;
+  } catch (error) {
+    return toldFailure(error, `Couldn't rename "${nameOf(path)}" to "${name}"`, "item");
+  }
+}
+
 export class FilesModel {
   folder: string;
   readonly folders = new Map<string, FolderState>();
@@ -418,7 +430,7 @@ export class FilesModel {
     }
     this.rename = { ...rename, isSaving: true };
     this.host.redraw();
-    const failure = await this.renameOnServer(rename.path, target, name);
+    const failure = await renameOnServer(rename.path, target, name);
     if (failure !== null) {
       // The name field says it where the name was typed; it has no room for the details, which go to the log.
       if (failure.details !== null) console.warn(`[files] ${failure.message}`, failure.details);
@@ -434,17 +446,6 @@ export class FilesModel {
       this.navigate(`${target}${this.folder.slice(rename.path.length)}`, { select: [target], history: "replace" });
     }
     await this.load(parent);
-  }
-
-  /** Rename `path` to `target` (named `name`); what went wrong, or null once it is done. */
-  private async renameOnServer(path: string, target: string, name: string): Promise<FilesFailure | null> {
-    try {
-      if (await server.exists(target)) return plainFailure(`"${name}" is already taken.`);
-      await server.movePath(path, target);
-      return null;
-    } catch (error) {
-      return toldFailure(error, `Couldn't rename "${nameOf(path)}" to "${name}"`, "item");
-    }
   }
 
   async deleteEntries(paths: readonly string[]): Promise<void> {
