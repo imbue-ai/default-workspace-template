@@ -903,6 +903,12 @@ export class DesktopStore {
     return !isPreviewShell() && isAppStoppable(this.state, app);
   }
 
+  /** Whether this shell can start the app again once it stops: a preview or UI sketch, and not from a preview
+   *  shell, whose revive would boot processes in the live workspace. */
+  canReviveApp(app: AppRecord): boolean {
+    return !isPreviewShell() && app.instance_kind !== null;
+  }
+
   /** The rectangle a placement renders at, in backdrop pixels (the fit applied; the whole viewport for a
    *  fullscreen window). A viewed desktop's fullscreen window fills its letterbox instead: the letterbox is the
    *  owner's backdrop alone, and the viewer's taskbar keeps "Stop viewing" (the multiplayer spec, 8.3). */
@@ -2983,7 +2989,7 @@ export class DesktopStore {
   refreshWindow(windowId: string): void {
     const found = findWindow(this.state, windowId);
     const app = found === null ? undefined : appByName(this.state, found.window.app);
-    if (app !== undefined && app.instance_kind !== null && isAppShownStopped(this.state, app)) {
+    if (app !== undefined && this.canReviveApp(app) && isAppShownStopped(this.state, app)) {
       void this.reviveApp(app.name);
       return;
     }

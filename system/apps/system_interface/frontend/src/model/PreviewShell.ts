@@ -1,9 +1,9 @@
 /**
  * Whether this page is a preview shell: a second shell booted over a copy of the live state
  * to show a proposed change. The backend marks its page with a meta tag and refuses the verbs
- * that would reach the live workspace (an app's stop, start, and quit, the update notice's, the
- * embedder-message relay); the store reads this to withhold Quit and the relay rather than
- * offer a refusal. Read from the document each time, so a page needs no plumbing to know, and
+ * that would reach the live workspace (an app's stop, start, quit, and revive, the update
+ * notice's, the embedder-message relay); the store reads this to withhold Quit, Start it again,
+ * and the relay rather than offer a refusal. Read from the document each time, so a page needs no plumbing to know, and
  * code that runs with no document (a pure test) is never a preview.
  */
 

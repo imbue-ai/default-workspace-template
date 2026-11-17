@@ -114,6 +114,7 @@ export interface StoppedInstanceActions {
 
 /** The store verbs a stopped preview's or UI sketch's placeholder drives. */
 export interface StoppedInstanceVerbs {
+  canReviveApp(app: AppRecord): boolean;
   instanceRevival(appName: string): InstanceRevival;
   reviveApp(appName: string): Promise<void>;
   closeOrMinimizeWindow(windowId: string): Promise<void>;
@@ -133,7 +134,7 @@ export function stoppedInstanceActionsOf(
   windowId: string,
 ): StoppedInstanceActions | null {
   const kind = app?.instance_kind ?? null;
-  if (app === undefined || kind === null) return null;
+  if (app === undefined || kind === null || !verbs.canReviveApp(app)) return null;
   return {
     revival: verbs.instanceRevival(app.name),
     onStart: () => void verbs.reviveApp(app.name),
