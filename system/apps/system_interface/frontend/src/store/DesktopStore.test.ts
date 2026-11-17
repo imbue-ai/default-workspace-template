@@ -868,6 +868,10 @@ describe("opening", () => {
     expect(notices()).toEqual([
       "Buddy got it, but this workspace is out of space, so its window's place wasn't saved.",
     ]);
+    // A full disk offers its agent here too, and no Try again, which would ask the app a second time.
+    expect(last(store.toasts.current())?.actions.map((action) => action.label)).toEqual([
+      "Ask an agent to free up space",
+    ]);
   });
 
   it("reads the desktops again after a launch into a window that has gone, so a second try finds it as it is", async () => {

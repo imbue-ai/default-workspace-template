@@ -801,14 +801,7 @@ export class DesktopStore {
         void this.refreshInventory();
         break;
       case "out_of_space":
-        return this.noticeOf(failureSentence(failure, whatFailed), [
-          {
-            label: "Ask an agent to free up space",
-            run: () => void this.startWithText(FREE_SPACE_REQUEST),
-            keepsToast: true,
-          },
-          ...tryAgain,
-        ]);
+        return this.noticeOf(failureSentence(failure, whatFailed), [this.freeSpaceAction(), ...tryAgain]);
       case "not_saved":
         return this.noticeOf(failureSentence(failure, whatFailed), tryAgain);
       case "app_stopped":
@@ -827,6 +820,15 @@ export class DesktopStore {
         break;
     }
     return this.noticeOf(failureSentence(failure, whatFailed), isRetryable(failure) ? tryAgain : []);
+  }
+
+  /** What a full disk offers: an agent, in the main chat, asked to free up space; its toast stays up. */
+  private freeSpaceAction(): ToastAction {
+    return {
+      label: "Ask an agent to free up space",
+      run: () => void this.startWithText(FREE_SPACE_REQUEST),
+      keepsToast: true,
+    };
   }
 
   /** An app that could not start, as its could-not-start page says it: ``sentence``, then ``actions`` and an agent
@@ -3162,6 +3164,7 @@ export class DesktopStore {
     if (unsavedKind === "out_of_space") {
       return this.plainNotice(
         `${name} got it, but this workspace is out of space, so its window's place wasn't saved.`,
+        [this.freeSpaceAction()],
       );
     }
     return this.noticeOf({
