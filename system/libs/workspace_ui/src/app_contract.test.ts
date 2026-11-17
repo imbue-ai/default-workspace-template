@@ -683,6 +683,17 @@ describe("startNewWithText's answer", () => {
     expect(await second).toEqual({ isOpened: false, failure });
   });
 
+  it("tells the shell a request's outcome is shown by the page only when the caller says so", () => {
+    const parent = shellFramed();
+    const live = connection as ShellConnection;
+    void live.startWithText("Add a routine: water the plants");
+    void live.startNewWithText("Fix this.");
+    void live.startNewWithText("Fix that.", { showsOutcome: true });
+    const sent = (parent.postMessage.mock.calls as [Record<string, unknown>, string][]).slice(-3).map(([m]) => m);
+    expect(sent.map((message) => "showsOutcome" in message)).toEqual([false, false, true]);
+    expect(sent[2].showsOutcome).toBe(true);
+  });
+
   it("keeps a request pending through the same shell's handshakes, and settles it on the answer", async () => {
     const parent = shellFramed();
     const pending = (connection as ShellConnection).startNewWithText("Fix this.");
@@ -699,9 +710,12 @@ describe("startNewWithText's answer", () => {
     const parent = shellFramed();
     const live = connection as ShellConnection;
     const late: StartNewOutcome[] = [];
-    const asked = live.startWithText("Free up space.", (outcome) => late.push(outcome));
+    const asked = live.startWithText("Free up space.", {
+      showsOutcome: true,
+      onLateAnswer: (outcome) => late.push(outcome),
+    });
     const [message] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
-    expect(message).toMatchObject({ type: SHELL_START_WITH_TEXT, text: "Free up space." });
+    expect(message).toMatchObject({ type: SHELL_START_WITH_TEXT, text: "Free up space.", showsOutcome: true });
     deliver({ ...HANDSHAKE, canReportBug: true }, parent);
     expect(await settledValue(asked)).toBe("pending");
     deliver({ ...HANDSHAKE, shellId: "shell-2" }, parent);
@@ -730,7 +744,10 @@ describe("startNewWithText's answer", () => {
   it("hands a late answer to a request already settled as not answered to its late-answer callback", async () => {
     const parent = shellFramed();
     const late: StartNewOutcome[] = [];
-    const pending = (connection as ShellConnection).startNewWithText("Fix this.", (outcome) => late.push(outcome));
+    const pending = (connection as ShellConnection).startNewWithText("Fix this.", {
+      showsOutcome: true,
+      onLateAnswer: (outcome) => late.push(outcome),
+    });
     const requestId = lastRequestId(parent);
     deliver({ ...HANDSHAKE, shellId: "shell-2" }, parent);
     expect((await pending).isOpened).toBe(false);
