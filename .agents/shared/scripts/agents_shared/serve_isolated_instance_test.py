@@ -1948,6 +1948,23 @@ def test_revive_refuses_to_boot_over_a_copy_that_is_gone(tmp_path: Path) -> None
     assert revived.detached_spawns == []
 
 
+def test_revive_refuses_to_boot_from_a_checkout_that_is_gone(tmp_path: Path) -> None:
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    spawner = _FakeSpawner()
+    runner = _RecordingRunner(start_times={spawner.detached_pid: "boot"})
+    assert _up(tmp_path, runner=runner, spawner=spawner, cwd=worktree) == 0
+    worktree.rmdir()
+    _restart(runner, spawner)
+    revived = _FakeSpawner(detached_pid=7000)
+
+    assert (
+        _revive(tmp_path, runner=runner, spawner=revived)
+        == mod.REVIVE_IMPOSSIBLE_EXIT_CODE
+    )
+    assert revived.detached_spawns == []
+
+
 def test_two_revives_at_once_boot_the_instance_once(tmp_path: Path) -> None:
     runner, spawner, _booted = _booted_preview(tmp_path)
     _restart(runner, spawner)

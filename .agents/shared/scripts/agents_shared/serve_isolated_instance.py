@@ -99,8 +99,9 @@ Exit codes:
        ``up --service-name``, ``--repo-root`` is a git worktree (refused before
        anything boots); or a bad argument / unreadable state file.
     3  For ``revive``: the instance cannot come back as it was -- no record, a
-       record from before revives, a recorded port another process now holds, or
-       a copy that is gone -- so only a fresh ``up`` brings it back.
+       record from before revives, a recorded port another process now holds, a
+       copy that is gone, or a checkout it was booted from that is gone -- so only
+       a fresh ``up`` brings it back.
 """
 
 from __future__ import annotations
@@ -162,8 +163,8 @@ _HOST_PLACEHOLDER_KIND = "host"
 # still exists when the agent goes to read more of it.
 FAILED_LOG_SUFFIX = "-failed.log"
 # What ``revive`` exits with when the instance cannot come back as it was (no record, a
-# record from before revives, a port another process holds, a copy gone): only a fresh
-# ``up`` brings it back, so a caller should not offer to try again.
+# record from before revives, a port another process holds, a copy or its checkout gone):
+# only a fresh ``up`` brings it back, so a caller should not offer to try again.
 REVIVE_IMPOSSIBLE_EXIT_CODE = 3
 # Held by a ``revive`` from its first look at an instance until its state is written, so
 # two at once (two windows, or a window and an agent) boot it once.
@@ -1848,7 +1849,7 @@ def revive(
     record. Two revives of one instance at once boot it once. Returns 1 when a boot
     fails, and ``REVIVE_IMPOSSIBLE_EXIT_CODE`` when only a fresh ``up`` can bring it
     back: no record, a record from before revives, a recorded port another process now
-    holds, or a copy that is gone.
+    holds, or a copy or the checkout it was booted from that is gone.
     """
     lock_path = repo_root / STATE_ROOT / f"{name}{REVIVE_LOCK_SUFFIX}"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1962,6 +1963,12 @@ def _revive_locked(
         if gone:
             sys.stderr.write(
                 f"revive: the copies of '{name}' at {', '.join(gone)} are gone; boot it again with `up`.\n"
+            )
+            return REVIVE_IMPOSSIBLE_EXIT_CODE
+        # Nor can it boot from a checkout (a preview's worktree) that has been removed.
+        if not Path(str(state["cwd"])).is_dir():
+            sys.stderr.write(
+                f"revive: the checkout '{name}' was booted from, {state['cwd']}, is gone; boot it again with `up`.\n"
             )
             return REVIVE_IMPOSSIBLE_EXIT_CODE
 
