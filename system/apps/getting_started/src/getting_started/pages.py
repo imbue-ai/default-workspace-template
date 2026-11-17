@@ -64,8 +64,9 @@ _REBUILD_REQUEST: Final[str] = (
 
 # Served in place of the page while the frontend has not been built (``static/`` is build output): it checks again
 # on its own, offers a Reload, and, once a shell has greeted it, an agent to rebuild it; the build command, and a failed
-# ask's reason, are behind "See details". The contract module it asks the shell with is the shell's, served from this origin; when it cannot
-# be loaded (the shell's frontend is not built either), or no shell greets the page, the agent button stays hidden.
+# ask's reason, are behind "See details". The contract module it asks the shell with is the shell's, served from this
+# origin; when it cannot be loaded (the shell's frontend is not built either), or no shell greets the page, the agent
+# button stays hidden.
 _NOT_BUILT_PAGE: Final[str] = (
     """<!doctype html>
 <html><head><meta charset="utf-8"><title>Getting Started</title>
