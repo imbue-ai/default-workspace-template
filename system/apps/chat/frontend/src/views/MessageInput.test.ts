@@ -104,6 +104,10 @@ const mocks = vi.hoisted(() => {
     // Whether the page offers dictation, and the dictation the composer made: a stand-in whose state the test
     // sets and whose events the test fires, as the engine would.
     isDictationSupported: false,
+    // The kind of device the composer asked dictation for, once per dictation it made.
+    dictationDeviceClasses: [] as string[],
+    // Every value the composer handed the screen wake lock, in order.
+    screenWakeWanted: [] as boolean[],
     makeFakeDictation: () => ({
       state: "idle",
       isHeld: false,
@@ -279,16 +283,20 @@ vi.mock("@imbue/workspace-voice/src/dictation", () => ({
     return mocks.dictation;
   },
 }));
+vi.mock("../models/screenWakeLock", () => ({
+  browserWakeLockHost: () => null,
+  createScreenWakeLock: () => ({ setWanted: (isWanted: boolean) => mocks.screenWakeWanted.push(isWanted) }),
+}));
 vi.mock("@imbue/workspace-voice/src/support", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@imbue/workspace-voice/src/support")>()),
   isDictationSupported: () => mocks.isDictationSupported,
-  pageDictationOptions: () => ({
-    engineId: "moonshine-base",
-    preferredDevice: null,
-    assetBase: "https://chat.test/assets/voice/",
-  }),
+  pageDictationOptions: (_storage: unknown, _basePath: string, _pageUrl: string, deviceClass: string) => {
+    mocks.dictationDeviceClasses.push(deviceClass);
+    return { engineId: "moonshine-base", preferredDevice: null, assetBase: "https://chat.test/assets/voice/" };
+  },
 }));
 
+import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
 import { isApplePlatform } from "@imbue/workspace-voice/src/support";
 import { ChatNotStartedError } from "../models/Chats";
@@ -2834,11 +2842,14 @@ describe("MessageInput dictation", () => {
     mocks.isDictationSupported = true;
     mocks.dictation = null;
     mocks.dictationEvents = null;
+    mocks.dictationDeviceClasses = [];
+    mocks.screenWakeWanted = [];
     localStorage.clear();
   });
 
   afterEach(() => {
     mocks.isDictationSupported = false;
+    vi.unstubAllGlobals();
   });
 
   function composer() {
@@ -2873,6 +2884,17 @@ describe("MessageInput dictation", () => {
     const toolbar = flatten(tree).filter((vnode) => vnode.tag === "button");
     const labels = toolbar.map((vnode) => vnode.attrs?.["aria-label"]);
     expect(labels.indexOf("Dictate")).toBe(labels.indexOf("Send message") - 1);
+  });
+
+  it("dictates with the touch device's engine where a finger is the primary pointer, else the desktop's", () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === TOUCH_MEDIA_QUERY }));
+    startDictating(composer().render);
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    startDictating(composer().render);
+    // A page with no window to ask has no pointer, and dictates as a desktop.
+    vi.unstubAllGlobals();
+    startDictating(composer().render);
+    expect(mocks.dictationDeviceClasses).toEqual(["touch", "desktop", "desktop"]);
   });
 
   it("locks the box while listening, shows the words at the caret, and saves only the final ones", () => {
@@ -2972,6 +2994,35 @@ describe("MessageInput dictation", () => {
     expect(mocks.dictation!.retryHeld).toHaveBeenCalledTimes(1);
     (findByClass(tree, "message-input-dictation-discard")!.attrs!.onclick as () => void)();
     expect(mocks.dictation!.discardHeld).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the screen awake from a dictation's first state until it is idle, and lets go when the composer leaves", () => {
+    const windowListeners = new Map<string, unknown>();
+    vi.stubGlobal("window", {
+      addEventListener: (type: string, fn: unknown) => windowListeners.set(type, fn),
+      removeEventListener: (type: string) => windowListeners.delete(type),
+    });
+    try {
+      const { render } = composer();
+      const root = findByClass(render(), "message-input mx-auto")!;
+      (root.attrs!.oncreate as () => void)();
+      const lastWanted = () => mocks.screenWakeWanted[mocks.screenWakeWanted.length - 1];
+      startDictating(render, "loading");
+      expect(mocks.screenWakeWanted).toEqual([true]);
+      setDictationState("starting");
+      setDictationState("listening");
+      expect(lastWanted()).toBe(true);
+      setDictationState("idle");
+      expect(lastWanted()).toBe(false);
+      // A dictation still running when the composer leaves is let go of without a state change of its own.
+      (findByAttr(render(), "aria-label", "Dictate")!.attrs!.onclick as () => void)();
+      setDictationState("listening");
+      expect(lastWanted()).toBe(true);
+      (root.attrs!.onremove as () => void)();
+      expect(lastWanted()).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("toggles dictation from the shortcut anywhere on the page, and lets go of it when the composer leaves", () => {

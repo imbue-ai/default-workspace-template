@@ -11,8 +11,14 @@ is the one surface that uses it.
 - `src/engines.ts` and `src/voice_models.json`: the engine registry. Every
   engine dictation can run, with the Hugging Face commit its files are taken
   at, each file's size and SHA-256, a variant per device (WebGPU or
-  WebAssembly), the most audio one call may carry, and its licence. Moonshine
-  Base is the default and, so far, the only engine.
+  WebAssembly), the most audio one call may carry, and its licence; and the
+  engine each kind of device runs by default: Moonshine Base on a desktop, and
+  Moonshine Tiny, the lighter model and the smaller download, on a touch
+  device (a phone or tablet, told by a finger being the primary pointer),
+  which also runs it on WebAssembly's quantized weights even where it has
+  WebGPU, a third of the memory of the full-precision ones. A browser's
+  overrides name any registered engine and device instead, for a side-by-side
+  evaluation.
 - `src/download.ts` and `src/fileStore.ts`: getting an engine's pinned files:
   from the store the last load kept them in when they check out, else straight
   from Hugging Face, each checked against its size and hash before the engine
