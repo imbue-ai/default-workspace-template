@@ -68,6 +68,8 @@ function bootstrap(): void {
     onHandshake: (received) => {
       handshake = received;
       filesApp?.setOpensLocalFiles(received.opensLocalFiles);
+      // What the page drew before it (a failure's Report a bug) reads the connection again.
+      m.redraw();
     },
     onShown: () => filesApp?.setShownByShell(true),
     onHidden: () => filesApp?.setShownByShell(false),
