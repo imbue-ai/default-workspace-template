@@ -7,7 +7,7 @@
 # all; it can match more than it should, and Python still decides what is pending.
 #
 # The ledger path mirrors oom_priority.paths.shed_ledger_path, except that the
-# project dir comes before the hook's own folder, which follows the agent's `cd`s;
+# project dir comes before the folder the hook runs in, which follows the agent's `cd`s;
 # Python is handed the resolved dir so it reads the ledger checked here.
 set -euo pipefail
 
