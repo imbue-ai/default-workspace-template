@@ -1060,8 +1060,8 @@ def test_a_siblings_own_revive_waits_for_the_revive_booting_it_and_boots_nothing
 def test_an_up_asked_for_while_a_revive_boots_the_preview_waits_for_it(
     tmp_path: Path,
 ) -> None:
-    """A window reads its preview as stopped while a re-up boots it, so a Start pressed then
-    must not boot a second instance beside the agent's."""
+    """An agent's ``up`` asked for while the window's Start boots the preview again must not
+    boot a second instance beside the revive's."""
     worktree = _write_worktree(tmp_path)
     instances = _RecordingInstances(tmp_path)
     assert boot.up("notes", worktree, tmp_path, instances=instances) == 0

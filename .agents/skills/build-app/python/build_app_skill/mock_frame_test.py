@@ -332,8 +332,8 @@ def test_revive_boots_nothing_while_the_frame_runs_and_fails_with_none_recorded(
 def test_up_waits_while_a_revive_of_the_frame_holds_its_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A frame's window reads stopped while a refresh boots it again, so a Start pressed then
-    must not frame the app a second time beside it."""
+    """An agent's ``up`` (or ``refresh``) asked for while the window's Start boots the frame
+    again must not frame the app a second time beside it."""
     _registered_app(tmp_path, monkeypatch)
     frames = _RecordingFrames()
     upping = threading.Thread(
