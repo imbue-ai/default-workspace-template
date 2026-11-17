@@ -24,6 +24,7 @@ import {
   SHELL_START_NEW_WITH_TEXT,
   SHELL_START_NEW_WITH_TEXT_RESULT,
   SHELL_START_WITH_TEXT,
+  SHELL_START_WITH_TEXT_RESULT,
   CHANGE_NOT_ANSWERED_SENTENCE,
   SHELL_THEME,
   ShellContractError,
@@ -232,7 +233,7 @@ describe("connectToShell", () => {
       [{ type: SHELL_LOCATION, path: "/docs", title: "Docs" }, "*"],
       [{ type: SHELL_OPEN, path: "/?chat=agent-3", ifPresent: "focus" }, "*"],
       [{ type: SHELL_OPEN, path: "/new", ifPresent: "new" }, "*"],
-      [{ type: SHELL_START_WITH_TEXT, text: "Free up space." }, "*"],
+      [{ type: SHELL_START_WITH_TEXT, text: "Free up space.", requestId: expect.any(String) }, "*"],
       [{ type: SHELL_START_NEW_WITH_TEXT, text: "Fix this.", requestId: expect.any(String) }, "*"],
       [{ type: SHELL_DRAFT_TEXT, text: "Explain this element:" }, "*"],
       [{ type: SHELL_MESSAGE, message: { type: "open:file", path: "/home/user/plan.md" } }, "*"],
@@ -692,6 +693,27 @@ describe("startNewWithText's answer", () => {
     expect(await settledValue(pending)).toBe("pending");
     deliver({ type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId, isOpened: true }, parent);
     expect(await pending).toEqual({ isOpened: true });
+  });
+
+  it("answers startWithText the same way, through shell:start-with-text-result, late answers included", async () => {
+    const parent = shellFramed();
+    const live = connection as ShellConnection;
+    const late: StartNewOutcome[] = [];
+    const asked = live.startWithText("Free up space.", (outcome) => late.push(outcome));
+    const [message] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect(message).toMatchObject({ type: SHELL_START_WITH_TEXT, text: "Free up space." });
+    deliver({ ...HANDSHAKE, canReportBug: true }, parent);
+    expect(await settledValue(asked)).toBe("pending");
+    deliver({ ...HANDSHAKE, shellId: "shell-2" }, parent);
+    expect((await asked).isOpened).toBe(false);
+    const failure = { message: "Chat couldn't open that.", details: "HTTP 400", isReportable: false };
+    deliver({ type: SHELL_START_WITH_TEXT_RESULT, requestId: message.requestId, isOpened: false, failure }, parent);
+    expect(late).toEqual([{ isOpened: false, failure }]);
+
+    const second = live.startWithText("Free up space.");
+    const [again] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    deliver({ type: SHELL_START_WITH_TEXT_RESULT, requestId: again.requestId, isOpened: true }, parent);
+    expect(await second).toEqual({ isOpened: true });
   });
 
   it("settles a request as not answered once a shell that started again greets the page", async () => {

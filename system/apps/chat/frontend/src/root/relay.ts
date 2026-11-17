@@ -29,7 +29,8 @@
  * to open, which the page's card flips on and whose activity strip covers the wait for the agent
  * to be told) are passed down to the root's inner frames, as are the shell's
  * ``shell:keybindings-changed`` (each inner page re-fetches its resolved chords) and its
- * ``shell:start-new-with-text-result`` (each inner page settles only a request it sent, by its id). Everything else
+ * ``shell:start-new-with-text-result`` and ``shell:start-with-text-result`` (each inner page settles only a request it
+ * sent, by its id). Everything else
  * the chrome sends is the root's own to handle.
  *
  * Trust: a message going up counts only when its source is one of the root's own inner frames,
@@ -50,6 +51,7 @@ import {
   SHELL_START_NEW_WITH_TEXT,
   SHELL_START_NEW_WITH_TEXT_RESULT,
   SHELL_START_WITH_TEXT,
+  SHELL_START_WITH_TEXT_RESULT,
 } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { PERMISSION_RESOLUTIONS, PROVIDER_SIGN_IN_ACK } from "@imbue/workspace-ui/src/embed";
@@ -72,6 +74,7 @@ const FORWARDED_TO_INNER_TYPES: ReadonlySet<string> = new Set([
   PERMISSION_RESOLUTIONS,
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_START_NEW_WITH_TEXT_RESULT,
+  SHELL_START_WITH_TEXT_RESULT,
 ]);
 
 /** Whether a posted message is one the root passes up to the shell. */

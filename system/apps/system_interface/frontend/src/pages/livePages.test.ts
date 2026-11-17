@@ -29,6 +29,7 @@ import {
   SHELL_START_NEW_WITH_TEXT,
   SHELL_START_NEW_WITH_TEXT_RESULT,
   SHELL_START_WITH_TEXT,
+  SHELL_START_WITH_TEXT_RESULT,
 } from "@imbue/workspace-ui/src/app_contract";
 import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { BOTTOM_RIGHT_QUARTER_FRAME } from "../geometry/frames";
@@ -1266,10 +1267,12 @@ describe("the contract", () => {
       notes,
     ];
     offerApps(api, socket, textApps);
-    messageFromPage("win-1", { type: SHELL_START_WITH_TEXT, text: "hello there" });
+    const spy = spyOnFrame("win-1");
+    messageFromPage("win-1", { type: SHELL_START_WITH_TEXT, text: "hello there", requestId: "req-0" });
     await settle();
     expect(api.calls).toContain(`launch:home:docs:new:{"message":"hello there"}:new`);
     expect(api.calls).toContain("openWindow:home:docs:/new?message=hello+there:new");
+    expect(spy).toHaveBeenCalledWith({ type: SHELL_START_WITH_TEXT_RESULT, requestId: "req-0", isOpened: true }, "*");
     messageFromPage("win-1", { type: SHELL_START_WITH_TEXT });
     await settle();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("shell:start-with-text ignored"));
