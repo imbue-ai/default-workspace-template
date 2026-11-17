@@ -8,7 +8,7 @@
 
 - **The impact analysis covers every name an update retires.** `update_self.py retired-names --base <ref> --target <ref>` (new) lists removed `[project.scripts]` commands and removed or renamed skill directories as JSON. The worker also reads the template's and mngr's changelog entries for removed flags, environment variables, ports and routes, and searches the user's creations for each name. A use with a stated replacement is rewritten in its branch; any other hit is reported.
 
-- **One home each** for the ceiling's rules, the apply's exit codes, and the licence to stop chats and apps.
+- **One home each** for the ceiling's rules, what the pass does on each exit of the apply (what an exit means for any caller is the shared `apply-exit-codes.md`, read from its staged copy), and the licence to stop chats and apps.
 
 - **The skill-exemption commit is not an edit of the worker's.** The worker commits what `validate_skill.py --stamp` wrote, alone, as `Record skill-check exemptions`. That commit selects no suite, and does not end the clean-pull skip of the review gates.
 
