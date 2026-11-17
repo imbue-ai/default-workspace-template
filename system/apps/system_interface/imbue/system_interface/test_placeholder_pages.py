@@ -133,7 +133,7 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         expect(ask).to_be_hidden()
         handshake = (
             "(shellId) => document.getElementById('app').contentWindow.postMessage("
-            "{ type: 'shell:handshake', windowId: 'w', shellId }, '*')"
+            "{ type: 'shell:handshake', windowId: 'w', shellId, canReportBug: true }, '*')"
         )
         page.evaluate(handshake, "shell-1")
         ask.click()
@@ -165,12 +165,31 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         expect(framed.locator("#ask-agent-failure")).to_have_text("Chat couldn't open that.")
         framed.get_by_text("See details", exact=True).click()
         expect(framed.locator("#ask-agent-failure-details")).to_have_text("HTTP 500\nboom")
+        # The failure asks for a bug report and the shell can open one, so the page offers it, carrying the failure.
+        report = framed.get_by_role("button", name="Report a bug")
+        expect(report).to_be_visible()
+        report.click()
+        page.wait_for_function("window.received.some((message) => message.type === 'shell:report-bug')")
+        reported = page.evaluate("window.received.filter((message) => message.type === 'shell:report-bug')")
+        assert reported == [
+            {"type": "shell:report-bug", "message": "Chat couldn't open that.", "details": "HTTP 500\nboom"}
+        ]
+        # The shell greeting the page again to say it can no longer open one takes the offer away.
+        page.evaluate(
+            "document.getElementById('app').contentWindow.postMessage("
+            "{ type: 'shell:handshake', windowId: 'w', shellId: 'shell-1', canReportBug: false }, '*')"
+        )
+        expect(report).to_be_hidden()
+        page.evaluate(handshake, "shell-1")
+        expect(report).to_be_visible()
 
         # The same shell greeting the page again (a window moved, Imbue Studio said it opens help) leaves the ask out.
         ask.click()
         expect(framed.locator("#ask-agent-failure")).to_be_hidden()
-        page.wait_for_function("window.received.length === 2")
-        second = page.evaluate("window.received[1]")
+        expect(report).to_be_hidden()
+        asks = "window.received.filter((message) => message.type === 'shell:start-new-with-text')"
+        page.wait_for_function(f"{asks}.length === 2")
+        second = page.evaluate(f"{asks}[1]")
         page.evaluate(handshake, "shell-1")
         page.wait_for_timeout(300)
         expect(ask).to_be_disabled()
@@ -182,6 +201,8 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         expect(framed.locator("#ask-agent-failure")).to_have_text(
             "The workspace didn't answer, so Imbue Studio can't tell whether this went through."
         )
+        # Not answered asks for no bug report.
+        expect(report).to_be_hidden()
         page.evaluate(reply, {"requestId": second["requestId"], "isOpened": True})
         expect(framed.locator("#ask-agent-failure")).to_be_hidden()
     finally:

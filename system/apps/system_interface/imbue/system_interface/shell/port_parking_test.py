@@ -19,6 +19,7 @@ from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.port_parking import ParkedPort
 from imbue.system_interface.shell.port_parking import ParkingTarget
 from imbue.system_interface.shell.port_parking import SHELL_HANDSHAKE_TYPE
+from imbue.system_interface.shell.port_parking import SHELL_REPORT_BUG_TYPE
 from imbue.system_interface.shell.port_parking import SHELL_START_NEW_WITH_TEXT_RESULT_TYPE
 from imbue.system_interface.shell.port_parking import SHELL_START_NEW_WITH_TEXT_TYPE
 from imbue.system_interface.shell.port_parking import STARTING_REFRESH_SECONDS
@@ -180,6 +181,7 @@ def test_the_could_not_start_pages_wire_is_the_app_contracts() -> None:
         (app_contract_ts, "SHELL_HANDSHAKE", SHELL_HANDSHAKE_TYPE),
         (app_contract_ts, "SHELL_START_NEW_WITH_TEXT", SHELL_START_NEW_WITH_TEXT_TYPE),
         (app_contract_ts, "SHELL_START_NEW_WITH_TEXT_RESULT", SHELL_START_NEW_WITH_TEXT_RESULT_TYPE),
+        (app_contract_ts, "SHELL_REPORT_BUG", SHELL_REPORT_BUG_TYPE),
         (app_contract_ts, "CHANGE_NOT_ANSWERED_SENTENCE", CHANGE_NOT_ANSWERED_SENTENCE),
         (failure_buttons_ts, "ASKING_AN_AGENT_LABEL", ASKING_AN_AGENT_LABEL),
     ):
