@@ -15,6 +15,13 @@ class RefusalKind(LowerCaseStrEnum):
     # A state file could not be written: the frontend offers to try the change again.
     OUT_OF_SPACE = auto()
     NOT_SAVED = auto()
+    # A POST launch reached an app that is not running: stopped and not started on a request, or woken and not up.
+    APP_STOPPED = auto()
+    APP_COULD_NOT_START = auto()
+    APP_START_BUDGET_SPENT = auto()
+    APP_STILL_STARTING = auto()
+    # The app took the launch, but the shell could not write the window that would show it.
+    LAUNCHED_NOT_OPENED = auto()
 
 
 APP_UNAVAILABLE_SENTENCE: Final[str] = "This app isn't available in this workspace right now, so nothing was changed."
@@ -110,10 +117,17 @@ class DesktopValueError(ShellError, ValueError):
 class LaunchFailureError(ShellError):
     """A launch that opened nothing. The message is for the log and "See details". ``user_facing_message`` is a
     sentence the app itself wrote for people about it, passed on as written, and ``reportable`` the app's own word on
-    whether that sentence asks for a bug report; both are None when the app gave none (the frontends word it then)."""
+    whether that sentence asks for a bug report; both are None when the app gave none (the frontends word it then).
+    ``kind`` is set only where the shell knows why the app could not take the launch (it is not running)."""
 
-    def __init__(self, message: str, user_facing_message: str | None = None, reportable: bool | None = None) -> None:
-        super().__init__(message, user_facing_message=user_facing_message, reportable=reportable)
+    def __init__(
+        self,
+        message: str,
+        user_facing_message: str | None = None,
+        reportable: bool | None = None,
+        kind: RefusalKind | None = None,
+    ) -> None:
+        super().__init__(message, user_facing_message=user_facing_message, kind=kind, reportable=reportable)
 
 
 class LaunchRefusedError(LaunchFailureError, ValueError):
@@ -124,6 +138,14 @@ class LaunchRefusedError(LaunchFailureError, ValueError):
 class LaunchUnavailableError(LaunchFailureError, RuntimeError):
     """A POST launch could not be completed: the app could not be reached, timed out, or answered something other
     than a page path (answered 502)."""
+
+
+class LaunchUnreachableError(LaunchUnavailableError):
+    """Nothing listens at the app's address: the POST launch's connection was refused (answered 502)."""
+
+
+class LaunchedNotOpenedError(ShellError):
+    """The app took the launch, but no window could be written to show its page (answered 500)."""
 
 
 class WindowNotFoundError(ShellError, LookupError):

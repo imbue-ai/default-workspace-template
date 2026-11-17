@@ -36,7 +36,17 @@ export function noticeOf(
 
 /** What the shell's refusals name with ``kind`` (desktop contracts.md, the error body), for the desktop to word
  *  with what only it holds. */
-export type RefusalKind = "app_unavailable" | "launch_path_gone" | "window_gone" | "out_of_space" | "not_saved";
+export type RefusalKind =
+  | "app_unavailable"
+  | "launch_path_gone"
+  | "window_gone"
+  | "out_of_space"
+  | "not_saved"
+  | "app_stopped"
+  | "app_could_not_start"
+  | "app_start_budget_spent"
+  | "app_still_starting"
+  | "launched_not_opened";
 
 const REFUSAL_KINDS: ReadonlySet<string> = new Set<RefusalKind>([
   "app_unavailable",
@@ -44,6 +54,11 @@ const REFUSAL_KINDS: ReadonlySet<string> = new Set<RefusalKind>([
   "window_gone",
   "out_of_space",
   "not_saved",
+  "app_stopped",
+  "app_could_not_start",
+  "app_start_budget_spent",
+  "app_still_starting",
+  "launched_not_opened",
 ]);
 
 /** What a window, a shortcut, or a launcher row says of an app that is not running and that the workspace does not
@@ -52,7 +67,31 @@ export function stoppedSentence(app: AppRecord): string {
   return app.program === "" ? `${app.display_name} isn't running.` : `${app.display_name} is not running right now.`;
 }
 
+/** What an agent asked to look at an app that could not start is told (the could-not-start page asks the same). */
+export function couldNotStartRequest(app: AppRecord): string {
+  return (
+    `${app.display_name} couldn't start in this workspace. Its program's log may say why ` +
+    `(supervisorctl tail ${app.program} stderr). Please find out why and get it running again.`
+  );
+}
+
 /** The kind of refusal the shell answered ``failure`` with, or null for any other failure. */
 export function refusalKindOf(failure: Failure): RefusalKind | null {
   return failure.kind !== null && REFUSAL_KINDS.has(failure.kind) ? (failure.kind as RefusalKind) : null;
+}
+
+/** Whether pressing the same control again is what ``failure``'s words ask for: the fallback sentence ("Try again.
+ *  If this persists, report a bug.", for a failure with no reason or a reason that is not a refusal) or a read nothing
+ *  answered. Never a change nothing answered, which may have gone through, nor a refusal with its reason. */
+export function isRetryable(failure: Failure): boolean {
+  switch (failure.cause) {
+    case "no_reason":
+      return true;
+    case "reason":
+      return failure.status === null || failure.status < 400 || failure.status >= 500;
+    case "not_answered":
+      return failure.requestKind === "read";
+    case "user_facing":
+      return false;
+  }
 }

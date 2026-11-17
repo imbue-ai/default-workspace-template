@@ -31,7 +31,7 @@ import { FOCUS_CHAT } from "@imbue/workspace-ui/src/embed";
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import { noticeOf, refusalKindOf, stoppedSentence } from "../model/failures";
+import { couldNotStartRequest, isRetryable, noticeOf, refusalKindOf, stoppedSentence } from "../model/failures";
 import type { FailureNotice } from "../model/failures";
 import { refreshShellKeybindings } from "../model/keybindings";
 import {
@@ -760,7 +760,8 @@ export class DesktopStore {
    * ``failureSentence``'s words for ``whatFailed``. A refusal for an app or a launch path that went in the meantime
    * names them as this window last knew them; a launch into a window that has gone re-reads the desktops, so a second
    * try finds the window as it is now; a change that could not be saved offers to try again (and, on a full disk, an
-   * agent to free up space).
+   * agent to free up space); a launch into an app that is not running says what its window would; and a failure
+   * whose sentence ends in the fallback's "Try again", or a read nothing answered, offers ``asked.retry``.
    */
   private noticeFor(whatFailed: string, error: unknown, asked: AskedFor = {}): FailureNotice {
     const failure = describeRequestFailure(error);
@@ -791,10 +792,42 @@ export class DesktopStore {
         ]);
       case "not_saved":
         return this.noticeOf(failureSentence(failure, whatFailed), tryAgain);
+      case "app_stopped":
+        if (app === undefined) break;
+        return { ...this.stoppedNotice(app), details: failure.details };
+      case "app_could_not_start":
+        if (app === undefined) break;
+        return this.couldNotStartNotice(app, `${app.display_name} couldn't start.`, failure.details, tryAgain);
+      case "app_start_budget_spent":
+        if (app === undefined) break;
+        return this.couldNotStartNotice(app, failureSentence(failure, whatFailed).message, failure.details, []);
+      case "app_still_starting":
+        return this.noticeOf(failureSentence(failure, whatFailed), tryAgain);
+      case "launched_not_opened":
       case null:
         break;
     }
-    return this.noticeOf(failureSentence(failure, whatFailed));
+    return this.noticeOf(failureSentence(failure, whatFailed), isRetryable(failure) ? tryAgain : []);
+  }
+
+  /** An app that could not start, as its could-not-start page says it: ``sentence``, then ``actions`` and an agent
+   *  asked to look at it, unless the app is the one agents are asked through, which can only be reported. */
+  private couldNotStartNotice(
+    app: AppRecord,
+    sentence: string,
+    details: string | null,
+    actions: readonly ToastAction[],
+  ): FailureNotice {
+    if (this.isAskedThrough(app)) {
+      return this.noticeOf(
+        { message: `${sentence} If this persists, report a bug.`, details, isReportable: true },
+        actions,
+      );
+    }
+    return this.noticeOf({ message: sentence, details, isReportable: false }, [
+      ...actions,
+      { label: "Ask an agent to look at it", run: () => void this.startWithText(couldNotStartRequest(app)) },
+    ]);
   }
 
   /** Tell the user, in a toast, that what they asked for failed with ``error`` (see ``noticeFor`` and
@@ -1053,11 +1086,10 @@ export class DesktopStore {
 
   /** What a window of ``app``, stopped and not started by the workspace on a request, says: that it isn't running,
    *  and the next step the workspace has. That is an agent asked to start it, unless the app is the one agents are
-   *  asked through (the launcher's primary text action's, Chat on a stock workspace), which can only be reported. */
+   *  asked through, which can only be reported. */
   stoppedNotice(app: AppRecord): FailureNotice {
     const sentence = stoppedSentence(app);
-    const askedThrough = freeTextRowsOf(openableApps(this.state))[0]?.app.name ?? null;
-    if (askedThrough === null || askedThrough === app.name) {
+    if (this.isAskedThrough(app)) {
       return this.noticeOf({
         message: `${sentence} If this persists, report a bug.`,
         details: null,
@@ -1068,6 +1100,13 @@ export class DesktopStore {
     return this.plainNotice(sentence, [
       { label: "Ask an agent to start it", run: () => void this.startWithText(request) },
     ]);
+  }
+
+  /** Whether ``app`` is the one agents are asked through (the launcher's primary text action's, Chat on a stock
+   *  workspace), or there is none, so no agent can be asked about it. */
+  private isAskedThrough(app: AppRecord): boolean {
+    const askedThrough = freeTextRowsOf(openableApps(this.state))[0]?.app.name ?? null;
+    return askedThrough === null || askedThrough === app.name;
   }
 
   /** Whether this shell can stop and start the app: supervised, not critical, not inside a critical program, and

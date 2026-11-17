@@ -1069,6 +1069,107 @@ describe("a stopped app's window", () => {
   });
 });
 
+describe("a launch into an app that is not running", () => {
+  const chat = appRecord("chat", {
+    display_name: "Chat",
+    launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+  });
+  const terminal = appRecord("terminal", {
+    display_name: "Terminal",
+    program: "",
+    launch_paths: [launchPathRecord({ id: "new", path: "/new", method: "POST" })],
+  });
+  const docs = appRecord("docs", { launch_paths: [launchPathRecord({ id: "new", path: "/new", method: "POST" })] });
+
+  function toastsShown(store: DesktopStore): [string, string | null, string[]][] {
+    return store.toasts.current().map((toast) => [toast.message, toast.details, toast.actions.map((a) => a.label)]);
+  }
+
+  it("says what the app's stopped window says, with the agent asked to start it", async () => {
+    api.apps = [chat, terminal];
+    const store = await startedStore();
+    api.refusal = shellRefusal(
+      502,
+      "terminal is not running, so it could not take the launch: refused",
+      "Terminal isn't running right now, so it couldn't open that.",
+      "app_stopped",
+    );
+    await store.runLaunch("terminal", "new", "new");
+
+    expect(toastsShown(store)).toEqual([
+      [
+        "Terminal isn't running.",
+        "HTTP 502\nterminal is not running, so it could not take the launch: refused",
+        ["Ask an agent to start it"],
+      ],
+    ]);
+    api.refusal = null;
+    store.toasts.current()[0].actions[0].run();
+    await settle();
+    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
+      `launch:home:chat:new:${JSON.stringify({ message: "Terminal (terminal) isn't running in this workspace. Please start it again." })}:new`,
+    );
+  });
+
+  it("words a wake that brought nothing up as the app's could-not-start page does", async () => {
+    api.apps = [chat, docs];
+    const store = await startedStore();
+    api.refusal = shellRefusal(
+      502,
+      "docs is stopped and could not be started",
+      "Docs couldn't start.",
+      "app_could_not_start",
+    );
+    await store.runLaunch("docs", "new", "new");
+    const spent =
+      "Docs failed to start several times in the last few minutes, so it wasn't started again. Try again in a few minutes.";
+    api.refusal = shellRefusal(502, "docs wake budget is spent", spent, "app_start_budget_spent");
+    await store.runLaunch("docs", "new", "new");
+    api.refusal = shellRefusal(
+      502,
+      "docs did not answer in time",
+      "Docs is still starting. Try again in a moment.",
+      "app_still_starting",
+    );
+    await store.runLaunch("docs", "new", "new");
+
+    expect(toastsShown(store).map(([message, , actions]) => [message, actions])).toEqual([
+      ["Docs couldn't start.", ["Try again", "Ask an agent to look at it"]],
+      [spent, ["Ask an agent to look at it"]],
+      ["Docs is still starting. Try again in a moment.", ["Try again"]],
+    ]);
+    api.refusal = null;
+    store.toasts.current()[0].actions[1].run();
+    await settle();
+    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
+      `launch:home:chat:new:${JSON.stringify({
+        message:
+          "Docs couldn't start in this workspace. Its program's log may say why (supervisorctl tail docs stderr). " +
+          "Please find out why and get it running again.",
+      })}:new`,
+    );
+    store.toasts.current()[2].actions[0].run();
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("launch:home:docs:new"))).toHaveLength(4);
+  });
+
+  it("offers only a bug report when the app that could not start is the one agents are asked through", async () => {
+    api.apps = [chat];
+    const store = await startedStore();
+    store.setCanReportBug(true);
+    api.refusal = shellRefusal(
+      502,
+      "chat is stopped and could not be started",
+      "Chat couldn't start.",
+      "app_could_not_start",
+    );
+    await store.launchAt("chat", "new", { message: "hi" }, { kind: "new" });
+    expect(toastsShown(store).map(([message, , actions]) => [message, actions])).toEqual([
+      ["Chat couldn't start. If this persists, report a bug.", ["Try again", "Report a bug"]],
+    ]);
+  });
+});
+
 describe("failure toasts", () => {
   async function storeReportingBugs(reportBug: () => void, isOpeningHelp: boolean): Promise<DesktopStore> {
     const store = makeStore(() => undefined, { reportBug });
@@ -1092,7 +1193,7 @@ describe("failure toasts", () => {
     ]);
   });
 
-  it("words a launch the app could not answer as the fallback, which offers Report a bug", async () => {
+  it("words a launch the app could not answer as the fallback, which offers Try again and Report a bug", async () => {
     const reportBug = vi.fn();
     const store = await storeReportingBugs(reportBug, true);
     api.refusal = refusedWith(502, { detail: "docs answered the launch with 500: boom" });
@@ -1104,8 +1205,8 @@ describe("failure toasts", () => {
       details: "HTTP 502\ndocs answered the launch with 500: boom",
       isLasting: true,
     });
-    expect(toast.actions.map((action) => action.label)).toEqual(["Report a bug"]);
-    toast.actions[0].run();
+    expect(toast.actions.map((action) => action.label)).toEqual(["Try again", "Report a bug"]);
+    toast.actions[1].run();
     expect(reportBug).toHaveBeenCalledTimes(1);
   });
 
@@ -1113,10 +1214,10 @@ describe("failure toasts", () => {
     const store = await storeReportingBugs(vi.fn(), false);
     api.refusal = refusedWith(502, { detail: "docs answered the launch with 500: boom" });
     await store.runLaunch("docs", "new", "new");
-    expect(store.toasts.current()[0]).toMatchObject({
-      message: "Docs couldn't open that. Try again. If this persists, report a bug.",
-      actions: [],
-    });
+    expect(store.toasts.current()[0].message).toBe(
+      "Docs couldn't open that. Try again. If this persists, report a bug.",
+    );
+    expect(store.toasts.current()[0].actions.map((action) => action.label)).toEqual(["Try again"]);
   });
 
   it("shows an app's own sentence as written, and offers Report a bug only when the app asks for one", async () => {
@@ -1169,7 +1270,7 @@ describe("failure toasts", () => {
     expect(notices()).toEqual([]);
   });
 
-  it("keeps a failure that asks for a bug report up with its details, wherever it happened", async () => {
+  it("keeps a failure that asks for a bug report up with its details and a Try again that asks again", async () => {
     const store = await storeReportingBugs(vi.fn(), true);
     api.refusal = refusedWith(500, "<html>Internal Server Error</html>", "<html>Internal Server Error</html>");
     await store.closeWindow("win-1");
@@ -1181,7 +1282,21 @@ describe("failure toasts", () => {
         isLasting: true,
       },
     ]);
-    expect(store.toasts.current()[0].actions.map((action) => action.label)).toEqual(["Report a bug"]);
+    const [toast] = store.toasts.current();
+    expect(toast.actions.map((action) => action.label)).toEqual(["Try again", "Report a bug"]);
+    api.refusal = null;
+    toast.actions[0].run();
+    await settle();
+    expect(api.calls.filter((call) => call === "closeWindow:home:win-1")).toHaveLength(2);
+  });
+
+  it("offers no Try again for a change nothing answered, which may have gone through, nor a refusal with a reason", async () => {
+    const store = await startedStore();
+    api.refusal = refusedWith(504, null, "Backend timed out");
+    await store.closeWindow("win-1");
+    api.refusal = refusedWith(400, { detail: "Window win-1 shows a page that cannot be closed" });
+    await store.runLaunch("docs", "new", "new");
+    expect(store.toasts.current().map((toast) => toast.actions)).toEqual([[], []]);
   });
 
   it("lets a note with nothing behind it and nothing to press go on its own", async () => {

@@ -1026,6 +1026,46 @@ def test_launcher_free_text_rows_point_the_pinned_window_at_the_text(tmp_path: P
         assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
 
 
+@pytest.mark.timeout(90, func_only=False)
+def test_a_launch_into_an_app_that_is_not_running_says_so_and_offers_an_agent_to_start_it(
+    tmp_path: Path, page: Page
+) -> None:
+    """A POST launch nothing listens for, of an app the workspace does not start on a request, is told as the app's
+    stopped window tells it (not as a failed open to report), and the agent it offers is asked through the
+    launcher's primary text action."""
+    ghost_row = registry_row_toml(
+        "ghost",
+        f"http://127.0.0.1:{find_free_port()}",
+        display_name="Ghost",
+        default_shortcuts=[("new", "new")],
+        launch_paths=(("new", "New ghost", "/new"),),
+        launch_methods={"new": "POST"},
+    )
+    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar"), extra_rows=(ghost_row,)) as server:
+        _land(page, server)
+        windows_before = [window["id"] for window in _windows(server.base_url)]
+
+        page.locator('[data-shortcut="ghost:new"]').dblclick()
+
+        toast = page.locator("[data-toast]")
+        expect(toast).to_contain_text("Ghost isn't running.", timeout=10000)
+        expect(toast).not_to_contain_text("couldn't open that")
+        ask = toast.get_by_role("button", name="Ask an agent to start it")
+        expect(ask).to_be_visible()
+        ask.click()
+        wait_for(
+            lambda: any(
+                launch["body"].get(_PINNED_TEXT_PARAM)
+                == "Ghost (ghost) isn't running in this workspace. Please start it again."
+                for launch in _posted_launches(server.pinned_url)
+            ),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the request to start Ghost never reached the agent's app",
+        )
+        assert [window["id"] for window in _windows(server.base_url)] == windows_before
+
+
 @pytest.mark.timeout(60, func_only=False)
 def test_a_pages_element_menu_drafts_the_reference_into_the_pinned_window(tmp_path: Path, page: Page) -> None:
     """A right-click in a framed page opens the page's own element menu (the served module, as a scaffolded app's

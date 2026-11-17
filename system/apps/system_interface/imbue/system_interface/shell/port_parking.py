@@ -132,6 +132,19 @@ def could_not_start_request(display_name: str, program: str) -> str:
 
 
 @pure
+def could_not_start_sentence(display_name: str) -> str:
+    return f"{display_name} couldn't start."
+
+
+@pure
+def start_budget_spent_sentence(display_name: str) -> str:
+    return (
+        f"{display_name} failed to start several times in the last few minutes, so it wasn't started again. "
+        "Try again in a few minutes."
+    )
+
+
+@pure
 def parked_refresh_seconds(kind: ParkedPageKind) -> int:
     """How long a client that retries on its own should wait before asking again: the answer's Retry-After, and the
     starting page's own reload."""
@@ -169,7 +182,7 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
                 style=_PAGE_STYLE,
                 refresh="",
                 title=f"{name} couldn't start",
-                heading=f"{name} couldn't start.",
+                heading=html.escape(could_not_start_sentence(display_name), quote=False),
                 body=failed_body.replace("{sentence}", ""),
             )
         case ParkedPageKind.BUDGET_SPENT:
@@ -177,11 +190,9 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
                 style=_PAGE_STYLE,
                 refresh="",
                 title=f"{name} couldn't start",
-                heading=f"{name} couldn't start.",
+                heading=html.escape(could_not_start_sentence(display_name), quote=False),
                 body=failed_body.replace(
-                    "{sentence}",
-                    f"<p>{name} failed to start several times in the last few minutes, so it wasn't started again. "
-                    "Try again in a few minutes.</p>",
+                    "{sentence}", f"<p>{html.escape(start_budget_spent_sentence(display_name), quote=False)}</p>"
                 ),
             )
         case _ as unreachable:
