@@ -76,6 +76,11 @@ export const AskAgentToFixButton: m.ClosureComponent<AskAgentToFixButtonAttrs> =
   }
 
   return {
+    onremove() {
+      latestAsk += 1;
+      setFailure(null);
+      latestAttrs = null;
+    },
     view(vnode) {
       latestAttrs = vnode.attrs;
       const { connection, variant, sm, extra, pageReportBug } = vnode.attrs;
