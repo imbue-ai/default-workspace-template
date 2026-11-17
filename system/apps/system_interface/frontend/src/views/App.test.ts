@@ -664,6 +664,17 @@ describe("the element menu", () => {
     );
   }
 
+  /** The tray's resource gauge, its bars always shown, as the shell draws it once the gauge has arrived. */
+  function showResourceGauge(): HTMLElement {
+    applyResourceGauge(viewFromWire({ settings: { visibility: "always" } }), () => m.redraw());
+    m.redraw.sync();
+    return document.querySelector("[data-resource-gauge]") as HTMLElement;
+  }
+
+  afterEach(() => {
+    resetResourceGaugeForTesting();
+  });
+
   it("where the desktop app draws a native menu, still opens an entry's own menu, and leaves a Shift right-click to the app", () => {
     store.setDrawsContextMenus(true);
     m.redraw.sync();
@@ -756,20 +767,13 @@ describe("the element menu", () => {
   });
 
   it("leads the resource gauge's menu with its settings row, then the reference rows, and opens the settings", () => {
-    applyResourceGauge(viewFromWire({ settings: { visibility: "always" } }), () => m.redraw());
-    try {
-      m.redraw.sync();
-      const gauge = document.querySelector("[data-resource-gauge]") as HTMLElement;
-      expect(rightClick(gauge).defaultPrevented).toBe(true);
-      const keys = menuRowKeys();
-      expect(keys[0]).toBe("resource-gauge-settings");
-      expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
-      (document.querySelector('[data-menu-row="resource-gauge-settings"]') as HTMLElement).click();
-      m.redraw.sync();
-      expect(document.querySelector("[data-resource-gauge-dialog]")).not.toBeNull();
-    } finally {
-      resetResourceGaugeForTesting();
-    }
+    expect(rightClick(showResourceGauge()).defaultPrevented).toBe(true);
+    const keys = menuRowKeys();
+    expect(keys[0]).toBe("resource-gauge-settings");
+    expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
+    (document.querySelector('[data-menu-row="resource-gauge-settings"]') as HTMLElement).click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-resource-gauge-dialog]")).not.toBeNull();
   });
 
   it("gives a guest's right-click on the resource gauge the element menu alone, with no settings row", async () => {
@@ -782,17 +786,10 @@ describe("the element menu", () => {
     // On a desktop of her own, where the tray (and the gauge in it) shows in place of the viewing chip.
     socket.deliver().onDesktopsUpdated([...api.desktops, desktopRecord("alice", { owner: "user:user-alice-0001" })]);
     await store.switchDesktop("alice");
-    applyResourceGauge(viewFromWire({ settings: { visibility: "always" } }), () => m.redraw());
-    try {
-      m.redraw.sync();
-      const gauge = document.querySelector("[data-resource-gauge]") as HTMLElement;
-      expect(rightClick(gauge).defaultPrevented).toBe(true);
-      const keys = menuRowKeys();
-      expect(keys).not.toContain("resource-gauge-settings");
-      expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
-    } finally {
-      resetResourceGaugeForTesting();
-    }
+    expect(rightClick(showResourceGauge()).defaultPrevented).toBe(true);
+    const keys = menuRowKeys();
+    expect(keys).not.toContain("resource-gauge-settings");
+    expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
   });
 
   it("ends a taskbar entry's menu with the reference rows, and drafts the reference through the store", async () => {
