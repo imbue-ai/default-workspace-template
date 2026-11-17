@@ -184,7 +184,8 @@ depends on which folder refused, with the status and the server's text behind
 for a bug report leaves a toast that stays, with "See details" and, where the
 shell says Imbue Studio opens one, "Report a bug"; a full disk leaves one that
 stays with "Ask an agent to free up space", which asks in the chat already
-running (a new agent would need disk); any other leaves a note that goes, its
+running (a new agent would need disk) and reads "Asking an agent…" until the
+shell says the chat opened, a note saying why when it could not; any other leaves a note that goes, its
 details behind "See details" (opening them keeps it up). A rename says it in the name field (one that asks for a bug
 report ends the rename and leaves the toast that stays), and a folder that cannot be
 listed says it in place of the listing, with Try again and, for a sentence that

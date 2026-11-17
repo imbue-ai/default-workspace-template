@@ -6,7 +6,7 @@ import m from "mithril";
 
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 
-import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
+import type { ReportedFailure, StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
 
 import type { FailureHost } from "../models/failures";
 import * as server from "../models/server";
@@ -24,7 +24,7 @@ const PATH = "/home/user/workspace/notes.md";
 function reporter(canReport: boolean): FailureHost & { reportBug: Mock<(failure: ReportedFailure) => void> } {
   return {
     hasShell: () => true,
-    startWithText: vi.fn<(text: string) => void>(),
+    startWithText: vi.fn(async (): Promise<StartNewOutcome> => ({ isOpened: true })),
     canReportBug: () => canReport,
     reportBug: vi.fn<(failure: ReportedFailure) => void>(),
   };

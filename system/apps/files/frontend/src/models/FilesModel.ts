@@ -434,7 +434,7 @@ export class FilesModel {
     if (failure !== null && failure.isReportable) {
       // No name typed can fix it, and the name field has no room for Report a bug: the rename ends, told as a toast.
       this.rename = null;
-      toastFailures(this.toasts, [failure], this.host);
+      toastFailures(this.toasts, [failure], this.host, () => this.host.redraw());
       this.host.redraw();
       return;
     }
@@ -474,7 +474,7 @@ export class FilesModel {
       this.navigate(parentOf(enclosing) ?? ROOT, { history: "replace" });
     }
     await Promise.all([...new Set(entries.map((entry) => parentOf(entry.path) ?? ROOT))].map((f) => this.load(f)));
-    toastFailures(this.toasts, failures, this.host);
+    toastFailures(this.toasts, failures, this.host, () => this.host.redraw());
   }
 
   /** Make an "untitled folder" in the folder on show and start naming it. */
@@ -498,7 +498,7 @@ export class FilesModel {
     const path = childPath(folder, name, isFolder);
     const failure = await this.createOnServer(folder, path, name, isFolder, isLive);
     if (failure !== null) {
-      toastFailures(this.toasts, [failure], this.host);
+      toastFailures(this.toasts, [failure], this.host, () => this.host.redraw());
       return;
     }
     await this.load(folder);
@@ -546,7 +546,7 @@ export class FilesModel {
     this.selection = this.selection.filter((path) => !moved.has(path));
     const touched = new Set([folder, ...moving.map((path) => parentOf(path) ?? ROOT)]);
     await Promise.all([...touched].filter((f) => this.folders.has(f)).map((f) => this.load(f)));
-    toastFailures(this.toasts, failures, this.host);
+    toastFailures(this.toasts, failures, this.host, () => this.host.redraw());
   }
 
   /** Move `path` into `folder`; what went wrong, or null once it is there. */
