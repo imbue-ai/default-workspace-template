@@ -173,7 +173,7 @@ gate yourself vs. escalate to the user, re-arming the poll after a gate
 (the report is already archived), and acting on terminal statuses
 (`done` -> merge the worker's branch; `stuck` or 30m timeout without a
 report -> diagnose worker liveness, then surface to the user per
-`references/worker-failure.md` if the worker is genuinely wedged).
+`.agents/shared/references/lead-proxy/worker-failure.md` if the worker is genuinely wedged).
 
 Flow-specific substitutions when reading `lead-proxy.md`:
 
@@ -205,13 +205,13 @@ Flow-specific substitutions when reading `lead-proxy.md`:
   sub-agents. The report file is the contract.
 - If a task fails (stuck report, or 30m poll timeout with no report and
   the worker wedged, or dead and not brought back by
-  `references/dead-worker-recovery.md`), see `references/worker-failure.md`
+  `.agents/shared/references/lead-proxy/dead-worker-recovery.md`), see `.agents/shared/references/lead-proxy/worker-failure.md`
   -- do not silently retry.
 - If a worker is `STOPPED` with uncommitted work and its `archived_at` label
   is absent or empty, message it to continue with `create_worker.py reply`,
   which restarts it -- the worktree is preserved across the restart. One
   whose `archived_at` is set was stopped on purpose by its lead
-  after a failure; leave it. See `references/dead-worker-recovery.md` for the manual
+  after a failure; leave it. See `.agents/shared/references/lead-proxy/dead-worker-recovery.md` for the manual
   salvage fallback when restart isn't viable.
 - If `launch` refuses a taken name, destroy that worker
   (`create_worker.py destroy --name <name>`) if it is finished with, or pick

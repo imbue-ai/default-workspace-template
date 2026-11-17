@@ -326,7 +326,7 @@ launch, background-poll) with these specifics:
   conversation rather than reconstructing it from prose.
 
 - **Terminal handling:** on `done`, go to step 4. On `stuck` or a dead-worker
-  timeout, surface to the user per `launch-task`'s `worker-failure.md`; do not
+  timeout, surface to the user per `.agents/shared/references/lead-proxy/worker-failure.md`; do not
   merge or apply, and do not retry silently.
 
 **Optional final preview before merge.** When the worker produced **real work

@@ -546,14 +546,14 @@ Their answer, whenever it comes, arrives in this chat: follow
 ## 5. Terminal status
 
 - A worker that died without reporting is not yet a failure: recover it per
-  `.agents/skills/launch-task/references/dead-worker-recovery.md`, then re-arm
+  `.agents/shared/references/lead-proxy/dead-worker-recovery.md`, then re-arm
   the poll. It is stuck only once that recovery has not brought it back.
 - A **`stuck`** report that shows the merge cannot land without breaking the
   running workspace is a migration-required update: follow
   `references/apply-outcomes.md`, "Migration-required updates", which ends the
   pass `NEEDS_RECREATION`.
 - Any other **`stuck`**, or a dead worker its recovery did not bring back -> surface per
-  `.agents/skills/launch-task/references/worker-failure.md` (if the user
+  `.agents/shared/references/lead-proxy/worker-failure.md` (if the user
   then overrides, see `references/resuming-after-stuck.md`). Nothing is merged
   or applied. Compose it as a plain-language lead ("I couldn't complete this
   update cleanly; your workspace is untouched") followed by a clearly-marked

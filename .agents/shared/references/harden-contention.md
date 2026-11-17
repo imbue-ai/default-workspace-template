@@ -62,7 +62,7 @@ done
   there when it has a record whose `archived_at` is absent or empty (a
   revived worker's is blanked; a STOPPED one without it crashed, and the next
   message restarts it; see
-  `.agents/skills/launch-task/references/dead-worker-recovery.md`). No record,
+  `.agents/shared/references/lead-proxy/dead-worker-recovery.md`). No record,
   or one stopped on purpose (a non-empty `archived_at`), means the worker is
   gone.
   Then:
@@ -224,9 +224,7 @@ sed -i "s|^creations: .*|& $ADDED|" <TASK_FILE>
 sed -i "0,/^# /s|^# .*|& $ADDED|" "$TICKETS_DIR/<ticket-id>.md"
 ```
 
-The worker's side is `.agents/skills/harden-worker/references/harden-creation.md`
-("Catching up to a moved base"), or its own flow's catch-up section where one
-exists (`update-self`'s worker has its own). It merges your `HEAD` into its
+The worker catches up as its own guide says. It merges your `HEAD` into its
 branch, so merging that branch back into yours conflicts with nothing. It
 resolves every conflict on its side, regenerating lockfiles rather than
 choosing sides. The commits it brings in that touch a creation in the pass get
@@ -336,7 +334,7 @@ answering. That work is never dropped. The new pass carries it:
    its `mngr list --format jsonl` record and run `git -C <work_dir> status
    --porcelain`; commit anything there on that worktree's branch, per steps
    1-3 of "Last resort: manual worktree salvage" in
-   `.agents/skills/launch-task/references/dead-worker-recovery.md`.
+   `.agents/shared/references/lead-proxy/dead-worker-recovery.md`.
 2. **Destroy it, keeping its commits.**
 
    ```bash
