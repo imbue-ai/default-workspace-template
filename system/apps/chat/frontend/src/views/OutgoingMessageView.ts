@@ -6,7 +6,8 @@
  * replaces it, so a send reads as sent at once (contract A2). Where the send is (on
  * its way, or waiting for the agent to come up) is the status row under it
  * (ActivityIndicator), not the bubble. A failed send is NOT rendered here -- the composer handles that (popup +
- * text restored), and the bubble is dropped.
+ * text restored), and the bubble is dropped. A send the backend accepted whose arrival never
+ * came is captioned as possibly undelivered.
  */
 import m from "mithril";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
@@ -18,6 +19,7 @@ import {
   NOTICE_ROW_SPACING_CLASS,
   authorOfTurn,
   isSameSpeaker,
+  noticeOutcomeOf,
   renderNoticeRow,
   renderUserBubble,
   renderUserBubbleContent,
@@ -42,6 +44,8 @@ export interface NotYetRealBubble {
   isGroupSpaced?: boolean;
   /** Marker classes added to the row, for a caller whose bubbles a test or a style picks out. */
   extraRowClass?: string;
+  /** Nothing has confirmed the message arrived, long after it should have. */
+  isUnconfirmed?: boolean;
   /** The backend's render decision for the text; a notice (a background-task report) draws as one. */
   displayDecision?: DisplayDecision;
   /** Who sent it, for a message the backend reports (queued, or held); absent for the viewer's own send, which is
@@ -72,6 +76,8 @@ export function continuesPendingRun(run: PendingBubbleRun, author: TurnAuthor | 
   return isContinued;
 }
 
+export const UNCONFIRMED_CAPTION = "This message may not have been delivered.";
+
 /** A user message that is not yet a real turn, drawn as the user bubble it will become, or as the
  *  one-line notice when the backend decided its text renders as one (a background-task report).
  *  Every not-yet-delivered message renders through here (optimistic, held by a switch, re-sent by
@@ -88,14 +94,19 @@ export function renderNotYetRealBubble(bubble: NotYetRealBubble, run: PendingBub
     .join(" ");
   if (isNotice) {
     run.isOpen = false;
-    return renderNoticeRow(bubble.key, rowClass, cls);
+    return renderNoticeRow(bubble.key, rowClass, cls, noticeOutcomeOf(bubble.displayDecision ?? {}));
   }
   const isContinued = continuesPendingRun(run, author);
-  return m(
-    "div",
-    { class: rowClass, key: bubble.key },
+  return m("div", { class: rowClass, key: bubble.key }, [
     renderUserBubble(author, renderUserBubbleContent(cls.body), { isContinued }),
-  );
+    bubble.isUnconfirmed === true
+      ? m(
+          "div",
+          { class: "outgoing-message-unconfirmed mt-1 text-(length:--font-size-helper) text-warning" },
+          UNCONFIRMED_CAPTION,
+        )
+      : null,
+  ]);
 }
 
 /** The optimistic outgoing bubbles for a chat, in send order, drawn down `run`. Returns [] when
@@ -106,6 +117,7 @@ export function renderOutgoingMessages(chatId: string, run: PendingBubbleRun = c
       {
         key: outgoing.id,
         content: outgoing.content,
+        isUnconfirmed: outgoing.isUnconfirmed,
         displayDecision: outgoing.displayDecision,
         author: outgoing.author,
       },

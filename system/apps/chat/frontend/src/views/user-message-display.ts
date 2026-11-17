@@ -12,6 +12,7 @@
 
 import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import { MarkdownContent } from "../markdown";
 import { parseMessageAttachments } from "../models/attachments";
@@ -180,19 +181,47 @@ const NOTICE_FALLBACK_LABEL = "Background task completed";
 /** The space below a notice's row when it stands outside a stretch (a notice not yet on the transcript). */
 export const NOTICE_ROW_SPACING_CLASS = "mb-2";
 
-/** A one-line notice of the agent's: a tick, the lead, and the summary. The lead carries
- *  the weight because it is what the eye is scanning for down a long transcript; the summary is
- *  ordinary prose beside it. The tick is a stop on the stretch's line. */
-export function renderNotice(label: string, body: string): m.Vnode {
+/** What a notice's backend decision says beyond its lead and summary. */
+export interface NoticeOutcome {
+  /** The task it reports failed or was killed, so it gets a warning mark rather than the tick. */
+  readonly isFailed: boolean;
+  /** What goes behind "See details"; null when there is nothing. */
+  readonly details: string | null;
+}
+
+/** The outcome a ``user_message`` notice (or a queued one) carries. */
+export function noticeOutcomeOf(event: {
+  resolution?: UserMessageEvent["resolution"] | null;
+  display_details?: string | null;
+}): NoticeOutcome {
+  return { isFailed: event.resolution === "failed", details: event.display_details ?? null };
+}
+
+/** A one-line notice of the agent's: a tick (a warning mark for a failed task), the lead, and the summary. The lead
+ *  carries the weight because it is what the eye is scanning for down a long transcript; the summary is ordinary prose
+ *  beside it. The mark is a stop on the stretch's line. */
+export function renderNotice(
+  label: string,
+  body: string,
+  outcome: NoticeOutcome = { isFailed: false, details: null },
+): m.Vnode {
+  const mark = outcome.isFailed
+    ? m(
+        "span",
+        { class: "mt-px shrink-0 text-warning", ...railNodeAttrs("point") },
+        m.trust(icon("alert", { size: 13, strokeWidth: 2.5 })),
+      )
+    : m(
+        "span",
+        { class: "mt-px shrink-0 text-accent", ...railNodeAttrs("point") },
+        m.trust(icon("check", { size: 13, strokeWidth: 2.5 })),
+      );
   return m("div", { class: "message-notice flex items-start gap-1.5 text-(length:--font-size-helper)" }, [
-    m(
-      "span",
-      { class: "mt-px shrink-0 text-accent", ...railNodeAttrs("point") },
-      m.trust(icon("check", { size: 13, strokeWidth: 2.5 })),
-    ),
+    mark,
     m("span", { class: "min-w-0 text-secondary" }, [
-      m("span", { class: "font-medium text-primary" }, `${label}:`),
+      m("span", { class: "font-medium text-primary" }, body ? `${label}:` : label),
       body ? ` ${body}` : null,
+      m(SeeDetails, { details: outcome.details }),
     ]),
   ]);
 }
@@ -213,9 +242,14 @@ export function renderUserBubbleContent(content: string, requestedAt?: string): 
 
 /** A notice that is not on the transcript yet, as a row of its own on the bubbles' text edge, where the notice it
  *  becomes sits in its stretch. */
-export function renderNoticeRow(key: string, rowClass: string, cls: UserMessageClass): m.Vnode {
+export function renderNoticeRow(
+  key: string,
+  rowClass: string,
+  cls: UserMessageClass,
+  outcome?: NoticeOutcome,
+): m.Vnode {
   return m("div", { class: `${rowClass} ${AGENT_TEXT_EDGE_CLASS}`, key }, [
-    renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body),
+    renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body, outcome),
   ]);
 }
 
@@ -259,7 +293,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent; prev
         return renderSystemChip(cls.label ?? "System message", cls.body, `chip:${event.event_id}`);
       }
       if (cls.kind === UserMessageKind.Notice) {
-        return renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body);
+        return renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body, noticeOutcomeOf(event));
       }
 
       return renderUserBubble(author, renderUserBubbleContent(cls.body, event.timestamp), { isContinued });

@@ -119,6 +119,11 @@ observe`, its own supervised service) writes, and serves:
   after the restart. `agent_events` (`{"is_stream_healthy", "detail"}`) says
   whether lifecycle events are actually reaching this instance; `status` stays
   `ok` either way.
+- `GET /_static/app_contract.js`: the shell's built app contract module, for the
+  page `/` and the chat pages answer when this app's frontend is not built. That
+  page has no frontend code of its own; it imports the module to offer "Report a
+  bug" through the shell, shown only when the shell's handshake says Imbue Studio
+  can open one. `404` when the shell's frontend is not built either.
 - `GET /api/schema`: the OpenAPI document of these routes, built from the app's url map
   (`system/libs/app_schema`), with the request and response models of the routes that
   validate with pydantic published as schemas; the manifest's `api_schema_path`, which the
@@ -392,11 +397,13 @@ seconds is retried rather than mistaken for an unknown chat. See `docs/system/bl
 A send naming its send-time id (`message_id`) goes through `send_ledger.py`: a
 page whose request got no answer sends it again under the same id, marked
 `is_repeat`, and the repeat gets the first send's answer, a refusal included
-(waiting for it while it is still under way), rather than a second delivery. A
+(waiting for it while it is still under way, and answered 503
+`submission_unconfirmed` if it still is), rather than a second delivery. A
 Retry under the same id gets a taken send's answer, but is sent afresh after a
 refusal. A page whose request still gets no answer cannot know whether the chat
 app took it, and the chat app is out of its reach, so nothing sends it again: it
-gets the "Couldn't confirm your message arrived" notice.
+gets the "Your message may not have been sent" notice, whose Send again repeats
+the id.
 
 A send mngr reports `agent_not_found` (the agent moved) or `not_submitted`
 (Claude never took it, and mngr cleared it from the input box) is sent again

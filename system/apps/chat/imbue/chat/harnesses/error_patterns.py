@@ -33,6 +33,7 @@ frontend reads.
 from __future__ import annotations
 
 import re
+from typing import Final
 
 from imbue.chat.harnesses.auth_errors import is_auth_error_text
 
@@ -66,6 +67,13 @@ _TYPE_KINDS: dict[str, str] = {
 # earn the "not Imbue Studio's fault" note on the frontend.
 _PROVIDER_FAULT_KINDS: frozenset[str] = frozenset({"api_error", "overloaded"})
 
+# A conversation too long for the model's context. Anthropic refuses it as an ordinary 400
+# ``invalid_request_error`` ("prompt is too long: 214332 tokens > 200000 maximum"), and Claude
+# Code's own notice for it reads "Prompt is too long"; telling it apart matters because trying
+# again fails the same way, while a new chat or a compaction gets past it.
+CONTEXT_TOO_LONG_KIND: Final[str] = "context_too_long"
+_CONTEXT_TOO_LONG_RE: Final[re.Pattern[str]] = re.compile(r"\bprompt is too long\b", re.IGNORECASE)
+
 # ``API Error: <code> ...`` -- the surface form Claude Code writes for a failed request.
 _API_ERROR_STATUS_RE = re.compile(r"API Error:\s*(\d{3})\b", re.IGNORECASE)
 # pi's bare ``<status> {json}``, with no prefix at all. ANCHORED to the start of the string:
@@ -85,6 +93,8 @@ def classify_api_error(text: str) -> str | None:
     """
     if not text or is_auth_error_text(text):
         return None
+    if is_context_too_long_text(text):
+        return CONTEXT_TOO_LONG_KIND
     status_match = _API_ERROR_STATUS_RE.search(text) or _BARE_STATUS_RE.match(text)
     if status_match is not None:
         status_kind = _STATUS_KINDS.get(status_match.group(1))
@@ -96,6 +106,11 @@ def classify_api_error(text: str) -> str | None:
         if type_kind is not None:
             return type_kind
     return None
+
+
+def is_context_too_long_text(text: str) -> bool:
+    """True when ``text`` is a model refusing a conversation too long for its context."""
+    return _CONTEXT_TOO_LONG_RE.search(text) is not None
 
 
 def kind_for_status(status: int | None) -> str | None:

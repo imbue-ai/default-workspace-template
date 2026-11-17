@@ -1,0 +1,1 @@
+The chat send-failure spec (`docs/specs/chat-send-failure-system.md`) describes how send failures work now. The chat app writes the sentence for each kind of refused send, and the composer shows it as written. A send that got no answer has its own "Your message may not have been sent" notice, which offers only Send again.

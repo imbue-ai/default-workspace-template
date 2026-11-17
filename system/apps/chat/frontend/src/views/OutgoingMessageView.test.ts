@@ -1,9 +1,14 @@
 // @vitest-environment jsdom
 import m from "mithril";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildMessageWithAttachments } from "../models/attachments";
-import { addOutgoing } from "../models/OutgoingMessages";
+import {
+  UNCONFIRMED_AFTER_MS,
+  addOutgoing,
+  noteBackendArrivals,
+  noteOutgoingAccepted,
+} from "../models/OutgoingMessages";
 import { setParticipantsForTesting } from "../models/Participants";
 import { ownerAndVisitorRosterFixture } from "../models/participantFixture";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
@@ -145,5 +150,49 @@ describe("a not-yet-delivered message in a shared workspace", () => {
     m.render(root, renderOutgoingMessages(chatId));
 
     expect(root.querySelector(".message-author")?.textContent).toBe("Josh");
+  });
+});
+
+describe("a sent message nothing confirmed", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function rendered(chatId: string): HTMLElement {
+    const root = document.createElement("div");
+    m.render(root, renderOutgoingMessages(chatId));
+    return root;
+  }
+
+  it("says it may not have been delivered once its accepted send's arrival is overdue", () => {
+    vi.useFakeTimers();
+    const chatId = `agent-${Math.random().toString(36).slice(2)}`;
+    const id = addOutgoing(chatId, "hello");
+    noteOutgoingAccepted(chatId, id);
+
+    vi.advanceTimersByTime(UNCONFIRMED_AFTER_MS - 1);
+    expect(rendered(chatId).querySelector(".outgoing-message-unconfirmed")).toBeNull();
+
+    vi.advanceTimersByTime(1);
+    expect(rendered(chatId).querySelector(".outgoing-message-unconfirmed")?.textContent).toBe(
+      "This message may not have been delivered.",
+    );
+  });
+
+  it("never marks a bubble whose arrival came, nor one whose send is still waiting on the backend", () => {
+    vi.useFakeTimers();
+    const chatId = `agent-${Math.random().toString(36).slice(2)}`;
+    const arrived = addOutgoing(chatId, "arrives");
+    noteOutgoingAccepted(chatId, arrived);
+    noteBackendArrivals(chatId, ["evt-1"]);
+    addOutgoing(chatId, "still sending");
+
+    vi.advanceTimersByTime(UNCONFIRMED_AFTER_MS * 10);
+
+    const root = rendered(chatId);
+    expect(Array.from(root.querySelectorAll(".message-content")).map((node) => node.textContent)).toEqual([
+      "still sending",
+    ]);
+    expect(root.querySelector(".outgoing-message-unconfirmed")).toBeNull();
   });
 });

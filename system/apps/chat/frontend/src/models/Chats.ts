@@ -88,6 +88,8 @@ export interface DisplayDecision {
   display?: UserMessageEvent["display"] | null;
   display_label?: string | null;
   display_body?: string | null;
+  resolution?: UserMessageEvent["resolution"] | null;
+  display_details?: string | null;
 }
 
 /** Who sent a message not on the transcript yet, joined from the chat's author annotations as its turn's will
@@ -233,6 +235,10 @@ type WsEvent =
   | ({ type: "provisional_chat_created" } & ProvisionalChat)
   | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null }
   | { type: "accounts_updated" };
+
+/** A send refused because its chat never became an agent (its create failed, or it was closed first): there is no
+ *  agent behind it to retry or restart. */
+export class ChatNotStartedError extends Error {}
 
 export type ChatsUpdatedListener = (chats: ChatSnapshot[]) => void;
 /**
@@ -417,7 +423,10 @@ function handleEvent(event: WsEvent): void {
       replayedProvisionalIds?.add(provisional.chat_id);
       if (provisional.phase !== "awaiting_first_send") launchesInFlight.delete(provisional.chat_id);
       if (provisional.phase === "failed") {
-        settleRegistration(provisional.chat_id, new Error(provisional.error ?? "The chat could not be started"));
+        settleRegistration(
+          provisional.chat_id,
+          new ChatNotStartedError(provisional.error ?? "The chat could not be started"),
+        );
       }
       break;
     }
@@ -429,13 +438,13 @@ function handleEvent(event: WsEvent): void {
       } else if (event.error === null) {
         // Discarded before it launched: gone, with nothing to show.
         provisionalChats = provisionalChats.filter((p) => p.chat_id !== event.chat_id);
-        settleRegistration(event.chat_id, new Error("The chat was closed before it started"));
+        settleRegistration(event.chat_id, new ChatNotStartedError("The chat was closed before it started"));
       } else {
         const error = event.error;
         provisionalChats = provisionalChats.map((p) =>
           p.chat_id === event.chat_id ? { ...p, phase: "failed", error } : p,
         );
-        settleRegistration(event.chat_id, new Error(error));
+        settleRegistration(event.chat_id, new ChatNotStartedError(error));
       }
       break;
   }
@@ -471,7 +480,7 @@ function settleRegistration(chatId: string, error: Error | null): void {
 export function refuseSendToFailedChat(chatId: string): void {
   const provisional = getProvisionalChat(chatId);
   if (getChatById(chatId) === undefined && provisional?.phase === "failed") {
-    throw new Error(provisional.error ?? "The chat could not be started");
+    throw new ChatNotStartedError(provisional.error ?? "The chat could not be started");
   }
 }
 
@@ -479,7 +488,7 @@ export function whenChatRegistered(chatId: string): Promise<void> {
   const provisional = getProvisionalChat(chatId);
   if (getChatById(chatId) !== undefined || provisional === undefined) return Promise.resolve();
   if (provisional.phase === "failed") {
-    return Promise.reject(new Error(provisional.error ?? "The chat could not be started"));
+    return Promise.reject(new ChatNotStartedError(provisional.error ?? "The chat could not be started"));
   }
   return new Promise((resolve, reject) => {
     const waiters = registrationWaiters.get(chatId) ?? [];
