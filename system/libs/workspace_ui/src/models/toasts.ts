@@ -9,13 +9,6 @@
 export interface ToastAction {
   readonly label: string;
   readonly run: () => void;
-  /** Leave the toast up once pressed: a button that hands the failure to someone else ("Ask an agent to ..."), after
-   *  which the toast's other buttons (Try again) still apply. A retry or a button that resolves the failure leaves
-   *  this unset, and the toast goes. */
-  readonly keepsToast?: boolean;
-  /** While ``isPending()`` (read as the toast draws), the button is disabled under ``label`` ("Asking an agent…"):
-   *  what it started has not settled yet. */
-  readonly pending?: { readonly isPending: () => boolean; readonly label: string };
 }
 
 export type ToastOptions =
@@ -28,7 +21,7 @@ export type ToastOptions =
       readonly isLasting: true;
       /** What goes behind "See details"; none when null or absent. */
       readonly details?: string | null;
-      /** Buttons after the message (Try again, Ask an agent to ...), in order. */
+      /** Buttons after the message (Try again, ...), in order. */
       readonly actions?: readonly ToastAction[];
       /** The message asks for a bug report: the toast offers "Report a bug" after its buttons wherever the page can
        *  open one when the toast is drawn (``components/toasts.ts``'s ``onReportBug``), which may be only after the

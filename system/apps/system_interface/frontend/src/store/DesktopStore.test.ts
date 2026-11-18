@@ -660,13 +660,10 @@ describe("opening", () => {
     expect(store.getState().desktops[0].windows[0].path).toBe("/new?message=hi");
   });
 
-  it("shell:start-with-text runs the primary text action, and answers its failure without a toast", async () => {
+  it("shell:start-with-text runs the primary text action, and says so when there is none", async () => {
     const store = await startedStore();
-    expect(await store.startWithText("hello")).toEqual({
-      isOpened: false,
-      failure: { message: "No app in this workspace can start a chat.", details: null, isReportable: false },
-    });
-    expect(notices()).toEqual([]);
+    expect(await store.startWithText("hello")).toBe(false);
+    expect(last(notices())).toBe("No app in this workspace can start a chat");
     socket.deliver().onAppsUpdated([
       appRecord("docs", { launcher_rank: 20 }),
       appRecord("notes", {
@@ -677,54 +674,10 @@ describe("opening", () => {
         ],
       }),
     ]);
-    expect(await store.startWithText("hello")).toEqual({ isOpened: true });
+    expect(await store.startWithText("hello")).toBe(true);
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
       `launch:home:notes:new:{"message":"hello"}:new`,
     );
-  });
-
-  it("shell:start-new-with-text runs the secondary text action, else the primary, and answers once the window opened", async () => {
-    const store = await startedStore();
-    const notes = (launchIds: readonly string[]): ReturnType<typeof appRecord> =>
-      appRecord("notes", {
-        launch_paths: launchIds.map((id) =>
-          launchPathRecord({ id, path: `/${id}`, params: ["message"], text_param: "message" }),
-        ),
-      });
-    offerApps(api, socket, [notes(["main", "new", "send"])]);
-    expect(await store.startNewWithText("Fix this.")).toEqual({ isOpened: true });
-    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
-      `launch:home:notes:new:{"message":"Fix this."}:new`,
-    );
-    expect(store.getState().desktops[0].windows.some((window) => window.app === "notes")).toBe(true);
-    offerApps(api, socket, [notes(["main"])]);
-    expect(await store.startNewWithText("Fix this.")).toEqual({ isOpened: true });
-    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
-      `launch:home:notes:main:{"message":"Fix this."}:new`,
-    );
-  });
-
-  it("shell:start-new-with-text answers a failure for the page to show, and leaves no toast of its own", async () => {
-    const store = await startedStore();
-    expect(await store.startNewWithText("Fix this.")).toEqual({
-      isOpened: false,
-      failure: { message: "No app in this workspace can start a chat.", details: null, isReportable: false },
-    });
-    offerApps(api, socket, [
-      appRecord("notes", {
-        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
-      }),
-    ]);
-    api.refusal = "notes refused the launch: no account is signed in";
-    expect(await store.startNewWithText("Fix this.")).toEqual({
-      isOpened: false,
-      failure: {
-        message: "Notes couldn't open that.",
-        details: "HTTP 400\nnotes refused the launch: no account is signed in",
-        isReportable: false,
-      },
-    });
-    expect(notices()).toEqual([]);
   });
 
   it("shell:draft-text drafts through the first draft row when no pinned window takes one, and says so with none", async () => {
@@ -4206,20 +4159,6 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect(calls).toEqual([]);
     expect(api.calls.slice(callsBefore)).toEqual([]);
     expect(notices()).toEqual([STOP_VIEWING_FIRST_NOTICE]);
-  });
-
-  it("answers a page's Ask an agent while viewing with the refusal for the page to show, launching and toasting nothing", async () => {
-    api.apps = [chatLikeAppRecord("chat")];
-    const store = await viewerStore();
-    await store.switchDesktop("alice");
-    const callsBefore = api.calls.length;
-
-    expect(await store.startNewWithText("Fix this.")).toEqual({
-      isOpened: false,
-      failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
-    });
-    expect(api.calls.slice(callsBefore)).toEqual([]);
-    expect(notices()).toEqual([]);
   });
 
   it("refuses every change to a viewed desktop with one note, and reloads the owner's layout on every poll", async () => {

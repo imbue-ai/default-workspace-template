@@ -85,28 +85,6 @@ describe("Toasts", () => {
     expect(queue.current()).toEqual([]);
   });
 
-  it("keeps a lasting note up when the button pressed hands the failure on", () => {
-    const queue = new ToastQueue(() => m.redraw.sync());
-    const ask = vi.fn();
-    const retry = vi.fn();
-    queue.show("Docs couldn't open that.", {
-      isLasting: true,
-      actions: [
-        { label: "Try again", run: retry },
-        { label: "Ask an agent to fix this", run: ask, keepsToast: true },
-      ],
-    });
-    const root = mountQueue(queue);
-
-    const [tryAgain, askAgent] = Array.from(root.querySelectorAll<HTMLButtonElement>(".toast-action"));
-    askAgent.click();
-    expect(ask).toHaveBeenCalledTimes(1);
-    expect(queue.current()).toHaveLength(1);
-    tryAgain.click();
-    expect(retry).toHaveBeenCalledTimes(1);
-    expect(queue.current()).toEqual([]);
-  });
-
   it("offers Report a bug on a reportable note once the page can open one, with the note's failure, and keeps it up", () => {
     const queue = new ToastQueue(() => m.redraw.sync());
     queue.show("This window couldn't be closed. Try again. If this persists, report a bug.", {
@@ -157,39 +135,5 @@ describe("Toasts", () => {
     expect(hold).toHaveBeenCalledWith(queue.current()[0].id);
     withDetails.querySelector<HTMLButtonElement>("[data-toast-dismiss]")!.click();
     expect(queue.current().map((toast) => toast.message)).toEqual(["Could not move the shortcut."]);
-  });
-
-  it("draws a pending action disabled under its pending label, and as itself once it is no longer pending", () => {
-    const queue = new ToastQueue(() => m.redraw.sync());
-    let isAsking = false;
-    const ask = vi.fn(() => {
-      isAsking = true;
-    });
-    queue.show("Docs is not running right now.", {
-      isLasting: true,
-      actions: [
-        {
-          label: "Ask an agent to start it",
-          run: ask,
-          keepsToast: true,
-          pending: { isPending: () => isAsking, label: "Asking an agent…" },
-        },
-      ],
-    });
-    const root = mountQueue(queue);
-    const button = (): HTMLButtonElement => root.querySelector<HTMLButtonElement>(".toast-action")!;
-    expect(button().disabled).toBe(false);
-
-    button().click();
-    m.redraw.sync();
-    expect(button().textContent).toBe("Asking an agent…");
-    expect(button().disabled).toBe(true);
-    button().click();
-    expect(ask).toHaveBeenCalledTimes(1);
-
-    isAsking = false;
-    m.redraw.sync();
-    expect(button().textContent).toBe("Ask an agent to start it");
-    expect(button().disabled).toBe(false);
   });
 });
