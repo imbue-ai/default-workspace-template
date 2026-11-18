@@ -61,10 +61,9 @@ belong in tested code rather than agent prose:
     moved or not).
 
 ``changelog-entries``
-    List what the update brings from base to target -- the release sections of the root
-    ``CHANGELOG.md`` the base does not have, and the ``changelog/`` entries added between
-    the two refs -- the raw input for the worker's "what's new" report. ``--out`` writes
-    their text to one file.
+    List the target's root changelog sections for each release newer than the base's
+    -- the raw input for the worker's "what's new" report. ``--out`` writes their text
+    to one file.
 
 ``pending-rollbacks``
     List the rollbacks of earlier updates that nothing has undone yet, newest
@@ -254,10 +253,7 @@ from update_self_skill.update_target import (
     fetch_app_template_ref,
     resolve_target,
 )
-from update_self_skill.update_whats_new import (
-    LAST_TAG_WITH_ENTRY_FILES,
-    list_whats_new,
-)
+from update_self_skill.update_whats_new import list_whats_new
 
 # The repo-relative directory holding the update-self skill (SKILL.md,
 # references/, scripts/, python/). Used by ``bootstrap-skill`` to extract the target
@@ -633,13 +629,7 @@ def _cmd_footprint_ranges(args: argparse.Namespace) -> int:
 def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     print(
         json.dumps(
-            list_whats_new(
-                args.base,
-                args.target,
-                _repo_root(args),
-                args.out,
-                LAST_TAG_WITH_ENTRY_FILES,
-            )
+            list_whats_new(args.base, args.target, _repo_root(args), Runner(), args.out)
         )
     )
     return 0
@@ -1285,8 +1275,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     changelog_parser = sub.add_parser(
         "changelog-entries",
-        help="List the release sections of the root CHANGELOG.md the base does not have "
-        "and the changelog entry files added between two refs.",
+        help="List the target's root changelog sections for each release newer than "
+        "the base's.",
         parents=[common],
     )
     changelog_parser.add_argument("--base", required=True, help="Base ref.")
@@ -1295,7 +1285,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--out",
         type=Path,
         default=None,
-        help="Write the listed sections, then each listed entry's text, to this file.",
+        help="Write the listed sections' text to this file, newest first.",
     )
     changelog_parser.set_defaults(func=_cmd_changelog_entries)
 

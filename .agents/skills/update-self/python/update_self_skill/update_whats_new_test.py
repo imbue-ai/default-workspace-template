@@ -1,5 +1,4 @@
-"""Tests for what ``changelog-entries`` lists, against a template history that crosses the
-switch from entry files to release sections in the root ``CHANGELOG.md``."""
+"""Tests for the what's-new listing ``changelog-entries`` prints."""
 
 from __future__ import annotations
 
@@ -10,672 +9,167 @@ from pathlib import Path
 import pytest
 
 from update_self_skill import update_self
+from update_self_skill.update_runtime import Runner
 from update_self_skill.update_whats_new import (
     CHANGELOG_PATH,
-    LAST_TAG_WITH_ENTRY_FILES,
-    ChangelogSection,
+    UNABRIDGED_CHANGELOG_PATH,
     list_whats_new,
-    parse_changelog_sections,
-    release_labels,
-    select_unseen_sections,
 )
 
-# ``.agents/skills/update-self/python/update_self_skill/`` -> the workspace root.
-_WORKSPACE_ROOT = Path(__file__).parent.parents[4]
 
-_HEADER = "# Changelog - workspace template\n\nA summary of changes.\n\n"
-_V1_SECTION = "## [minds-v1] - 2026-01-01\n\n- Changed: v1 thing.\n"
-_V2_SECTION = (
-    "## [minds-v2] - 2026-02-01\n\nSummary of v2.\n\n### Added\n\n- Added: v2 thing.\n"
+def _section(version: str, body: str) -> str:
+    return f"## [minds-v{version}] - 2026-11-01\n\n{body}\n"
+
+
+_SUMMARY = {v: _section(v, f"- Summary of {v}.") for v in ("0.9.5", "0.10.5", "0.10.6")}
+_FULL = {v: _section(v, f"- Entry of {v}.") for v in ("0.9.5", "0.10.5", "0.10.6")}
+_FULL["0.9.4"] = _section(
+    "0.9.4", "- Entry of 0.9.4.\n\n## An entry's heading\n\nMore."
 )
-_V3_SECTION = "## [minds-v3] - 2026-03-01\n\n- Fixed: v3 thing.\n"
-_V4_SECTION = "## [minds-v4] - 2026-04-01\n\n- Added: v4 thing.\n"
-
-# The last tag of the history below whose tree still holds its changes as entry files.
-_LAST_ENTRY_TAG = "minds-v1"
-_ENTRIES_ADDED_BY_V1 = [
-    ".agents/changelog/third.md",
-    "system/apps/chat/changelog/second.md",
-]
 
 
-def _git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(
         ["git", "-c", "user.name=test", "-c", "user.email=test@example.com", *args],
         cwd=repo,
         capture_output=True,
-        text=True,
         check=True,
     )
-    return result.stdout.strip()
 
 
-def _changelog(*release_sections: str, unreleased: str = "") -> str:
-    return _HEADER + "\n".join([f"## [Unreleased]\n{unreleased}", *release_sections])
-
-
-def _commit_and_tag(repo: Path, tag: str, files: dict[str, str | None]) -> None:
-    """Write each file (or remove it, for ``None``), commit, and tag the commit."""
+def _commit(repo: Path, files: dict[str, str], tag: str | None = None) -> None:
     for relative, text in files.items():
-        path = repo / relative
-        if text is None:
-            path.unlink()
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text)
+        (repo / relative).write_text(text)
     _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", tag)
-    _git(repo, "tag", tag)
+    _git(repo, "commit", "-q", "-m", tag or "change")
+    if tag is not None:
+        _git(repo, "tag", tag)
 
 
-def _init_switched_template(tmp_path: Path) -> Path:
-    """A template whose releases cross the switch to release sections.
+def _root_changelogs(*versions: str, unreleased: str = "") -> dict[str, str]:
+    """The root changelogs of a release holding ``versions``, newest first."""
+    summary = [_SUMMARY[v] for v in versions if v in _SUMMARY]
+    return {
+        CHANGELOG_PATH: "# Changelog\n\n"
+        + "\n".join([f"## [Unreleased]\n{unreleased}", *summary]),
+        UNABRIDGED_CHANGELOG_PATH: "# Unabridged changelog\n\n"
+        + "\n".join(_FULL[v] for v in versions),
+    }
 
-    ``old`` holds entry files only, and ``rooted`` adds a ``CHANGELOG.md`` with no release
-    section. ``minds-v1`` is the last release that keeps its changes as entry files:
-    ``switch`` replaces them with a section for it. ``minds-v2`` and ``minds-v3`` each add
-    their own section, and ``minds-v3`` also has one entry file not consolidated yet.
-    """
+
+@pytest.fixture
+def template(tmp_path: Path) -> Path:
+    """Releases from minds-v0.9.3 (no root changelogs) to minds-v0.10.6, the summary
+    starting at minds-v0.9.5; an untagged ``main`` with an ``[Unreleased]`` line; a
+    ``workspace`` branch on minds-v0.9.3; and a ``rewritten`` branch with no release."""
     repo = tmp_path / "template"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
-    _commit_and_tag(repo, "old", {"system/changelog/first.md": "First change.\n"})
-    _commit_and_tag(repo, "rooted", {CHANGELOG_PATH: _changelog()})
-    _commit_and_tag(
-        repo,
-        "minds-v1",
-        {
-            "system/apps/chat/changelog/second.md": "Second change.\n",
-            ".agents/changelog/third.md": "Third change.\n",
-            "system/vendor/tk/changelog/vendored.md": "Not the template's.\n",
-        },
-    )
-    _commit_and_tag(
-        repo,
-        "switch",
-        {
-            "system/changelog/first.md": None,
-            "system/apps/chat/changelog/second.md": None,
-            ".agents/changelog/third.md": None,
-            CHANGELOG_PATH: _changelog(_V1_SECTION),
-        },
-    )
-    _commit_and_tag(
-        repo, "minds-v2", {CHANGELOG_PATH: _changelog(_V2_SECTION, _V1_SECTION)}
-    )
-    _commit_and_tag(
-        repo,
-        "minds-v3",
-        {
-            CHANGELOG_PATH: _changelog(_V3_SECTION, _V2_SECTION, _V1_SECTION),
-            "system/changelog/pending.md": "Pending change.\n",
-        },
-    )
+    _commit(repo, {"README.md": "0.9.3\n"}, "minds-v0.9.3")
+    _commit(repo, {"README.md": "0.9.4\n"}, "minds-v0.9.4")
+    _commit(repo, _root_changelogs("0.9.5", "0.9.4"), "minds-v0.9.5")
+    _commit(repo, _root_changelogs("0.10.5", "0.9.5", "0.9.4"), "minds-v0.10.5")
+    released = ("0.10.6", "0.10.5", "0.9.5", "0.9.4")
+    _commit(repo, _root_changelogs(*released), "minds-v0.10.6")
+    _commit(repo, _root_changelogs(*released, unreleased="\n- Not released yet.\n"))
+    _git(repo, "checkout", "-q", "-b", "workspace", "minds-v0.9.3")
+    _commit(repo, {"notes.md": "Mine.\n"})
+    _git(repo, "checkout", "-q", "--orphan", "rewritten")
+    _commit(repo, {"README.md": "Rewritten.\n"})
     return repo
 
 
-def _make_unreadable(repo: Path, ref: str, path: str) -> None:
-    """Remove the object holding ``path`` at ``ref``, leaving the tree that names it."""
-    sha = _git(repo, "rev-parse", f"{ref}:{path}")
-    (repo / ".git" / "objects" / sha[:2] / sha[2:]).unlink()
-
-
-def _truncate(repo: Path, ref: str, path: str) -> None:
-    """Cut the object holding ``path`` at ``ref`` in half, so git dies partway through it."""
-    sha = _git(repo, "rev-parse", f"{ref}:{path}")
-    loose = repo / ".git" / "objects" / sha[:2] / sha[2:]
-    data = loose.read_bytes()
-    loose.unlink()
-    loose.write_bytes(data[: len(data) // 2])
-
-
-def test_sections_are_the_labelled_ones_each_ending_at_the_next_heading() -> None:
-    text = _changelog(_V2_SECTION, "## Notes\n\nNot a release.\n", _V1_SECTION)
-
-    assert parse_changelog_sections(text) == [
-        ChangelogSection("Unreleased", "## [Unreleased]"),
-        ChangelogSection("minds-v2", _V2_SECTION.rstrip()),
-        ChangelogSection("minds-v1", _V1_SECTION.rstrip()),
-    ]
-    assert release_labels(parse_changelog_sections(text)) == ["minds-v2", "minds-v1"]
-    assert parse_changelog_sections("") == []
-
-
-def test_the_last_tag_with_entry_files_has_a_section_in_the_root_changelog() -> None:
-    changelog = (_WORKSPACE_ROOT / CHANGELOG_PATH).read_text(encoding="utf-8")
-
-    assert LAST_TAG_WITH_ENTRY_FILES in release_labels(
-        parse_changelog_sections(changelog)
-    )
+def _listed(*labels_and_files: tuple[str, str]) -> list[dict[str, str]]:
+    return [{"label": label, "file": file} for label, file in labels_and_files]
 
 
 @pytest.mark.parametrize(
-    ("base_labels", "last_tag_with_entry_files", "expected"),
+    ("base", "target", "release", "listed"),
     [
         pytest.param(
-            ["minds-v2", "minds-v1"], "minds-v1", ["minds-v3"], id="base-has-sections"
-        ),
-        pytest.param(
-            [], "minds-v1", ["minds-v3", "minds-v2"], id="base-predates-sections"
-        ),
-        pytest.param(
-            [],
-            "minds-v0",
-            ["minds-v3", "minds-v2", "minds-v1"],
-            id="last-entry-tag-has-no-section",
-        ),
-        pytest.param(
-            [], None, ["minds-v3", "minds-v2", "minds-v1"], id="no-last-entry-tag"
-        ),
-    ],
-)
-def test_unseen_sections_are_those_the_base_lacks_or_those_above_the_last_entry_tag(
-    base_labels: list[str], last_tag_with_entry_files: str | None, expected: list[str]
-) -> None:
-    target_sections = parse_changelog_sections(
-        _changelog(_V3_SECTION, _V2_SECTION, _V1_SECTION)
-    )
-
-    unseen = select_unseen_sections(
-        target_sections, base_labels, last_tag_with_entry_files
-    )
-
-    assert [section.label for section in unseen] == expected
-
-
-@pytest.mark.parametrize(
-    "base_labels",
-    [[], ["minds-v1"]],
-    ids=["base-predates-sections", "base-has-sections"],
-)
-def test_unreleased_is_listed_only_when_it_holds_something(
-    base_labels: list[str],
-) -> None:
-    pending = "\n### Added\n\n- Added: not released yet.\n"
-    with_content = parse_changelog_sections(_changelog(_V1_SECTION, unreleased=pending))
-    without_content = parse_changelog_sections(_changelog(_V1_SECTION))
-
-    assert [
-        section.label
-        for section in select_unseen_sections(with_content, base_labels, "minds-v1")
-    ] == ["Unreleased"]
-    assert select_unseen_sections(without_content, base_labels, "minds-v1") == []
-
-
-@pytest.mark.parametrize("base", ["old", "rooted"])
-def test_refs_without_a_release_section_list_only_the_entries_added_between_them(
-    tmp_path: Path, base: str
-) -> None:
-    repo = _init_switched_template(tmp_path)
-
-    assert list_whats_new(base, "minds-v1", repo, None, None) == {
-        "sections": [],
-        "added": _ENTRIES_ADDED_BY_V1,
-        "added_before_consolidation": None,
-        "unlisted": [],
-    }
-
-
-@pytest.mark.parametrize(
-    ("base", "target", "expected"),
-    [
-        pytest.param(
-            "old",
-            "minds-v2",
-            {
-                "sections": ["minds-v2"],
-                "added": [],
-                "added_before_consolidation": {
-                    "ref": "minds-v1",
-                    "paths": _ENTRIES_ADDED_BY_V1,
-                },
-                "unlisted": [],
-            },
-            id="older-than-the-switch-to-the-first-release-after-it",
-        ),
-        pytest.param(
-            "old",
-            "minds-v3",
-            {
-                "sections": ["minds-v3", "minds-v2"],
-                "added": ["system/changelog/pending.md"],
-                "added_before_consolidation": {
-                    "ref": "minds-v1",
-                    "paths": _ENTRIES_ADDED_BY_V1,
-                },
-                "unlisted": [],
-            },
-            id="older-than-the-switch-to-the-second-release-after-it",
-        ),
-        pytest.param(
-            "rooted",
-            "minds-v2",
-            {
-                "sections": ["minds-v2"],
-                "added": [],
-                "added_before_consolidation": {
-                    "ref": "minds-v1",
-                    "paths": _ENTRIES_ADDED_BY_V1,
-                },
-                "unlisted": [],
-            },
-            id="has-the-changelog-but-no-release-section",
-        ),
-        pytest.param(
-            "minds-v1",
-            "minds-v2",
-            {
-                "sections": ["minds-v2"],
-                "added": [],
-                "added_before_consolidation": {"ref": "minds-v1", "paths": []},
-                "unlisted": [],
-            },
-            id="on-the-last-entry-tag",
-        ),
-        pytest.param(
-            "minds-v2",
-            "minds-v3",
-            {
-                "sections": ["minds-v3"],
-                "added": ["system/changelog/pending.md"],
-                "added_before_consolidation": None,
-                "unlisted": [],
-            },
-            id="created-after-the-switch",
-        ),
-    ],
-)
-def test_an_update_across_the_switch_lists_unseen_sections_and_the_entries_of_skipped_releases(
-    tmp_path: Path, base: str, target: str, expected: dict[str, object]
-) -> None:
-    repo = _init_switched_template(tmp_path)
-
-    assert list_whats_new(base, target, repo, None, _LAST_ENTRY_TAG) == expected
-    # Git runs wherever the caller is; the changelog is still the one at the repository root.
-    assert (
-        list_whats_new(base, target, repo / "system", None, _LAST_ENTRY_TAG) == expected
-    )
-
-
-def test_a_base_past_the_last_entry_tag_reads_no_entry_it_already_has(
-    tmp_path: Path,
-) -> None:
-    repo = _init_switched_template(tmp_path)
-    _git(repo, "checkout", "-q", "-b", "dev", _LAST_ENTRY_TAG)
-    _commit_and_tag(
-        repo,
-        "dev-after-v1",
-        {
-            ".agents/changelog/third.md": None,
-            ".agents/changelog/third-renamed.md": "Third change.\n",
-        },
-    )
-
-    assert list_whats_new("dev-after-v1", "minds-v2", repo, None, _LAST_ENTRY_TAG) == {
-        "sections": ["minds-v2"],
-        "added": [],
-        "added_before_consolidation": {"ref": _LAST_ENTRY_TAG, "paths": []},
-        "unlisted": [],
-    }
-
-
-def test_out_holds_the_sections_then_each_entry_as_it_is_at_the_ref_that_has_it(
-    tmp_path: Path,
-) -> None:
-    repo = _init_switched_template(tmp_path)
-    out = tmp_path / "scratch" / "whats-new.md"
-
-    list_whats_new("old", "minds-v3", repo, out, _LAST_ENTRY_TAG)
-
-    assert out.read_text() == (
-        "# Release sections of CHANGELOG.md new to this workspace\n\n"
-        f"{_V3_SECTION}\n{_V2_SECTION}\n"
-        "# Changelog entries the update adds, as they are at minds-v3\n\n"
-        "## system/changelog/pending.md\n\nPending change.\n\n"
-        "# Changelog entries the update adds, as they are at minds-v1\n\n"
-        "## .agents/changelog/third.md\n\nThird change.\n\n"
-        "## system/apps/chat/changelog/second.md\n\nSecond change.\n"
-    )
-
-
-def test_out_is_empty_when_the_update_brings_no_changelog_text(tmp_path: Path) -> None:
-    repo = _init_switched_template(tmp_path)
-    out = tmp_path / "whats-new.md"
-
-    list_whats_new("minds-v2", "minds-v2", repo, out, _LAST_ENTRY_TAG)
-
-    assert out.read_text() == ""
-
-
-def test_an_entry_identical_to_one_the_update_deletes_is_still_listed(
-    tmp_path: Path,
-) -> None:
-    repo = tmp_path / "template"
-    repo.mkdir()
-    _git(repo, "init", "-q", "-b", "main")
-    text = "".join(f"A line of the entry, number {index}.\n" for index in range(20))
-    _commit_and_tag(repo, "base", {"system/changelog/consolidated.md": text})
-    _commit_and_tag(
-        repo,
-        "target",
-        {"system/changelog/consolidated.md": None, "system/changelog/renamed.md": text},
-    )
-
-    added = list_whats_new("base", "target", repo, None, None)["added"]
-
-    assert added == ["system/changelog/renamed.md"]
-
-
-def test_an_entry_the_base_has_in_another_folder_is_not_read_at_the_last_entry_tag(
-    tmp_path: Path,
-) -> None:
-    repo = tmp_path / "template"
-    repo.mkdir()
-    _git(repo, "init", "-q", "-b", "main")
-    text = "".join(f"A line of the entry, number {index}.\n" for index in range(20))
-    _commit_and_tag(
-        repo,
-        "base",
-        {
-            "apps/chat/changelog/moved.md": text,
-            "apps/chat/changelog/edited.md": text.upper(),
-        },
-    )
-    _commit_and_tag(
-        repo,
-        _LAST_ENTRY_TAG,
-        {
-            "apps/chat/changelog/moved.md": None,
-            "apps/chat/changelog/edited.md": None,
-            "system/apps/chat/changelog/moved.md": text,
-            "system/apps/chat/changelog/edited.md": text.upper().replace(
-                "NUMBER 3.", "NUMBER THREE."
+            "workspace",
+            "minds-v0.10.6",
+            "minds-v0.9.3",
+            _listed(
+                ("minds-v0.10.6", CHANGELOG_PATH),
+                ("minds-v0.10.5", CHANGELOG_PATH),
+                ("minds-v0.9.5", CHANGELOG_PATH),
+                ("minds-v0.9.4", UNABRIDGED_CHANGELOG_PATH),
             ),
-            "system/changelog/new.md": "New change.\n",
-        },
-    )
-    _commit_and_tag(
-        repo,
-        "switch",
-        {
-            "system/apps/chat/changelog/moved.md": None,
-            "system/apps/chat/changelog/edited.md": None,
-            "system/changelog/new.md": None,
-            CHANGELOG_PATH: _changelog(_V1_SECTION),
-        },
-    )
-
-    earlier = list_whats_new("base", "switch", repo, None, _LAST_ENTRY_TAG)[
-        "added_before_consolidation"
-    ]
-
-    assert earlier == {"ref": _LAST_ENTRY_TAG, "paths": ["system/changelog/new.md"]}
-
-
-def test_a_changelog_folder_readme_or_non_markdown_file_is_not_an_entry(
-    tmp_path: Path,
-) -> None:
-    repo = tmp_path / "template"
-    repo.mkdir()
-    _git(repo, "init", "-q", "-b", "main")
-    _commit_and_tag(repo, "base", {"system/changelog/first.md": "First change.\n"})
-    _commit_and_tag(
-        repo,
-        "target",
-        {
-            "system/apps/chat/changelog/README.md": "# changelog/\n\nFolder doc.\n",
-            "system/apps/chat/changelog/.gitkeep": "",
-            "system/apps/chat/changelog/second.md": "Second change.\n",
-        },
-    )
-
-    added = list_whats_new("base", "target", repo, None, None)["added"]
-
-    assert added == ["system/apps/chat/changelog/second.md"]
-
-
-def test_a_missing_last_entry_tag_leaves_out_only_its_entries(tmp_path: Path) -> None:
-    repo = _init_switched_template(tmp_path)
-    _git(repo, "tag", "-d", _LAST_ENTRY_TAG)
-
-    answer = list_whats_new("old", "minds-v3", repo, None, _LAST_ENTRY_TAG)
-
-    unlisted = answer.pop("unlisted")
-    assert answer == {
-        "sections": ["minds-v3", "minds-v2"],
-        "added": ["system/changelog/pending.md"],
-        "added_before_consolidation": None,
-    }
-    assert isinstance(unlisted, list) and len(unlisted) == 1
-    assert unlisted[0].startswith(
-        "the changelog entries at minds-v1 could not be listed: "
-    )
-
-
-def test_an_unreadable_base_changelog_lists_every_section_above_the_last_entry_tag(
-    tmp_path: Path,
-) -> None:
-    repo = _init_switched_template(tmp_path)
-    _make_unreadable(repo, "minds-v2", CHANGELOG_PATH)
-
-    answer = list_whats_new("minds-v2", "minds-v3", repo, None, _LAST_ENTRY_TAG)
-
-    unlisted = answer.pop("unlisted")
-    assert answer == {
-        "sections": ["minds-v3", "minds-v2"],
-        "added": ["system/changelog/pending.md"],
-        "added_before_consolidation": None,
-    }
-    assert isinstance(unlisted, list) and len(unlisted) == 1
-    assert unlisted[0].startswith("CHANGELOG.md at minds-v2 could not be read")
-
-
-def test_an_unreadable_target_changelog_still_lists_the_entries(tmp_path: Path) -> None:
-    repo = _init_switched_template(tmp_path)
-    _make_unreadable(repo, "minds-v3", CHANGELOG_PATH)
-
-    answer = list_whats_new("old", "minds-v3", repo, None, _LAST_ENTRY_TAG)
-
-    unlisted = answer.pop("unlisted")
-    assert answer == {
-        "sections": [],
-        "added": ["system/changelog/pending.md"],
-        "added_before_consolidation": {
-            "ref": "minds-v1",
-            "paths": _ENTRIES_ADDED_BY_V1,
-        },
-    }
-    assert isinstance(unlisted, list) and len(unlisted) == 1
-    assert unlisted[0].startswith("CHANGELOG.md at minds-v3 could not be read")
-
-
-@pytest.mark.parametrize(
-    ("v4_changelog", "expected_sections", "problem"),
-    [
-        pytest.param(
-            _changelog(_V4_SECTION.replace("[minds-v4]", "minds-v4"), _V3_SECTION),
-            ["minds-v3"],
-            "has headings that are not '## [<label>]' ones: '## minds-v4 - 2026-04-01'",
-            id="unbracketed-heading",
+            id="older-than-every-summarized-release",
         ),
         pytest.param(
-            _changelog(_V4_SECTION, _V3_SECTION, _V3_SECTION),
-            ["minds-v4", "minds-v3", "minds-v3"],
-            "has more than one section for [minds-v3]",
-            id="repeated-label",
+            "minds-v0.10.5",
+            "minds-v0.10.6",
+            "minds-v0.10.5",
+            _listed(("minds-v0.10.6", CHANGELOG_PATH)),
+            id="on-a-summarized-release",
+        ),
+        pytest.param(
+            "minds-v0.10.6", "minds-v0.10.6", "minds-v0.10.6", [], id="on-the-newest"
+        ),
+        pytest.param(
+            "minds-v0.10.6",
+            "main",
+            "minds-v0.10.6",
+            _listed(("Unreleased", CHANGELOG_PATH)),
+            id="untagged-target",
         ),
     ],
 )
-def test_a_target_changelog_with_a_misplaced_heading_names_it(
-    tmp_path: Path, v4_changelog: str, expected_sections: list[str], problem: str
+def test_each_release_newer_than_the_workspaces_is_listed(
+    template: Path, base: str, target: str, release: str, listed: list[dict[str, str]]
 ) -> None:
-    repo = _init_switched_template(tmp_path)
-    _commit_and_tag(repo, "minds-v4", {CHANGELOG_PATH: v4_changelog})
+    answer = list_whats_new(base, target, template, Runner(), None)
 
-    answer = list_whats_new("minds-v2", "minds-v4", repo, None, _LAST_ENTRY_TAG)
-
-    assert answer["sections"] == expected_sections
-    assert answer["unlisted"] == [
-        f"CHANGELOG.md at minds-v4 {problem}, so the sections listed may be incomplete"
-    ]
+    assert answer == {"release": release, "sections": listed, "note": None}
 
 
-def test_a_base_changelog_with_no_bracketed_release_heading_reads_no_earlier_release(
+def test_a_workspace_with_no_release_found_gets_the_newest_release(
+    template: Path,
+) -> None:
+    assert list_whats_new("rewritten", "minds-v0.10.6", template, Runner(), None) == {
+        "release": None,
+        "sections": _listed(("minds-v0.10.6", CHANGELOG_PATH)),
+        "note": "The workspace's release is unknown, so only the newest is listed.",
+    }
+
+
+def test_a_target_without_a_changelog_lists_nothing(template: Path) -> None:
+    assert list_whats_new("workspace", "minds-v0.9.4", template, Runner(), None) == {
+        "release": "minds-v0.9.3",
+        "sections": [],
+        "note": "minds-v0.9.4 has no CHANGELOG.md, so nothing is listed.",
+    }
+
+
+@pytest.mark.parametrize(
+    ("base", "listed", "text"),
+    [
+        (
+            "workspace",
+            _listed(
+                ("minds-v0.9.5", CHANGELOG_PATH),
+                ("minds-v0.9.4", UNABRIDGED_CHANGELOG_PATH),
+            ),
+            f"{_SUMMARY['0.9.5'].rstrip()}\n\n{_FULL['0.9.4'].rstrip()}\n",
+        ),
+        ("minds-v0.9.5", [], ""),
+    ],
+)
+def test_the_command_prints_the_listing_and_writes_the_sections(
+    template: Path,
     tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    base: str,
+    listed: list[dict[str, str]],
+    text: str,
 ) -> None:
-    repo = _init_switched_template(tmp_path)
-    unbracketed = _V3_SECTION.replace("[minds-v3]", "minds-v3")
-    _commit_and_tag(repo, "bad-base", {CHANGELOG_PATH: _changelog(unbracketed)})
-    _commit_and_tag(
-        repo, "minds-v4", {CHANGELOG_PATH: _changelog(_V4_SECTION, _V3_SECTION)}
-    )
+    out = tmp_path / "scratch" / "whats-new.md"
+    argv = ["changelog-entries", "--base", base, "--target", "minds-v0.9.5"]
 
-    answer = list_whats_new("bad-base", "minds-v4", repo, None, _LAST_ENTRY_TAG)
-
-    assert answer == {
-        "sections": ["minds-v4", "minds-v3"],
-        "added": [],
-        "added_before_consolidation": None,
-        "unlisted": [
-            "CHANGELOG.md at bad-base could not be read, so release sections the "
-            "workspace already has may be listed again and no entry is read at an "
-            "earlier release: it has headings that are not '## [<label>]' ones: "
-            "'## minds-v3 - 2026-03-01'"
-        ],
-    }
-
-
-def test_out_leaves_out_an_entry_that_cannot_be_read_and_names_it(
-    tmp_path: Path,
-) -> None:
-    repo = _init_switched_template(tmp_path)
-    _make_unreadable(repo, _LAST_ENTRY_TAG, ".agents/changelog/third.md")
-    out = tmp_path / "whats-new.md"
-
-    answer = list_whats_new("old", "minds-v2", repo, out, _LAST_ENTRY_TAG)
-
-    assert answer["unlisted"] == [
-        ".agents/changelog/third.md at minds-v1 could not be read: git answered "
-        "'minds-v1:.agents/changelog/third.md missing'"
-    ]
-    assert out.read_text() == (
-        "# Release sections of CHANGELOG.md new to this workspace\n\n"
-        f"{_V2_SECTION}\n"
-        "# Changelog entries the update adds, as they are at minds-v1\n\n"
-        "## system/apps/chat/changelog/second.md\n\nSecond change.\n"
-    )
-
-
-def test_out_reads_no_entry_from_a_batch_that_git_cuts_short(tmp_path: Path) -> None:
-    repo = _init_switched_template(tmp_path)
-    _truncate(repo, _LAST_ENTRY_TAG, _ENTRIES_ADDED_BY_V1[0])
-    out = tmp_path / "whats-new.md"
-
-    answer = list_whats_new("old", "minds-v2", repo, out, _LAST_ENTRY_TAG)
-
-    unlisted = answer["unlisted"]
-    assert isinstance(unlisted, list) and len(unlisted) == len(_ENTRIES_ADDED_BY_V1)
-    for path, line in zip(_ENTRIES_ADDED_BY_V1, unlisted):
-        prefix = f"{path} at minds-v1 could not be read: "
-        assert line.startswith(prefix) and line.removeprefix(prefix).strip()
-    assert out.read_text() == (
-        "# Release sections of CHANGELOG.md new to this workspace\n\n"
-        f"{_V2_SECTION}\n"
-        "# Changelog entries the update adds, as they are at minds-v1\n"
-    )
-
-
-def test_the_command_prints_the_listing_and_writes_out(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    repo = _init_switched_template(tmp_path)
-    out = tmp_path / "whats-new.md"
-
-    code = update_self.main(
-        [
-            "changelog-entries",
-            "--base",
-            "minds-v2",
-            "--target",
-            "minds-v3",
-            "--out",
-            str(out),
-            "--repo-root",
-            str(repo),
-        ]
-    )
+    code = update_self.main([*argv, "--out", str(out), "--repo-root", str(template)])
 
     assert code == 0
-    assert json.loads(capsys.readouterr().out) == {
-        "sections": ["minds-v3"],
-        "added": ["system/changelog/pending.md"],
-        "added_before_consolidation": None,
-        "unlisted": [],
-    }
-    assert out.read_text() == (
-        "# Release sections of CHANGELOG.md new to this workspace\n\n"
-        f"{_V3_SECTION}\n"
-        "# Changelog entries the update adds, as they are at minds-v3\n\n"
-        "## system/changelog/pending.md\n\nPending change.\n"
-    )
-
-
-def test_the_command_survives_a_changelog_it_cannot_read(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    repo = _init_switched_template(tmp_path)
-    _make_unreadable(repo, "minds-v3", CHANGELOG_PATH)
-
-    code = update_self.main(
-        [
-            "changelog-entries",
-            "--base",
-            "minds-v2",
-            "--target",
-            "minds-v3",
-            "--repo-root",
-            str(repo),
-        ]
-    )
-
-    assert code == 0
-    answer = json.loads(capsys.readouterr().out)
-    assert answer["sections"] == []
-    assert answer["added"] == ["system/changelog/pending.md"]
-    assert len(answer["unlisted"]) == 1
-
-
-def test_the_command_reads_a_base_before_the_switch_at_the_last_tag_with_entry_files(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    last_tag = LAST_TAG_WITH_ENTRY_FILES
-    assert last_tag is not None
-    repo = _init_switched_template(tmp_path)
-    _git(repo, "tag", last_tag, _LAST_ENTRY_TAG)
-    last_section = _V1_SECTION.replace(f"[{_LAST_ENTRY_TAG}]", f"[{last_tag}]")
-    _commit_and_tag(
-        repo, "target", {CHANGELOG_PATH: _changelog(_V2_SECTION, last_section)}
-    )
-
-    code = update_self.main(
-        [
-            "changelog-entries",
-            "--base",
-            "old",
-            "--target",
-            "target",
-            "--repo-root",
-            str(repo),
-        ]
-    )
-
-    assert code == 0
-    assert json.loads(capsys.readouterr().out) == {
-        "sections": ["minds-v2"],
-        "added": ["system/changelog/pending.md"],
-        "added_before_consolidation": {
-            "ref": last_tag,
-            "paths": _ENTRIES_ADDED_BY_V1,
-        },
-        "unlisted": [],
-    }
+    assert json.loads(capsys.readouterr().out)["sections"] == listed
+    assert out.read_text() == text

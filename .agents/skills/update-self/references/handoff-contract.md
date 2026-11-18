@@ -106,22 +106,11 @@ second parent of a catch-up merge instead.
 
 ## What the what's-new listing assumes of each release
 
-`changelog-entries` runs from the target's copy against a base of any age. It
-counts a workspace as having seen exactly the release sections of its base's
-root `CHANGELOG.md`, or, for a base with none, `LAST_TAG_WITH_ENTRY_FILES`
-(`python/update_self_skill/update_whats_new.py`) and every section below it.
-So every `minds-v*` tag must be cut one of two ways:
-
-- **From a tree whose `CHANGELOG.md` has release sections**: the tag holds no
-  `changelog/<file>.md` entry file, and its newest section is its own, under an
-  empty `[Unreleased]`. An entry file or an `[Unreleased]` line left in the tag
-  reaches the next release's section as well, and a workspace on the tag is
-  shown it twice.
-- **From a tree with none** (a patch on a release from before the root
-  changelog): the tag becomes `LAST_TAG_WITH_ENTRY_FILES`, and its section goes
-  directly above the section of the release it patches, in the root
-  `CHANGELOG.md` of the release that names it. Otherwise a workspace on the tag
-  is shown its own release again.
+`changelog-entries` runs from the target's copy against a base of any age and
+lists the target's section of each release newer than the base's nearest
+`minds-v*` tag. So every `minds-v*` tag's `CHANGELOG.md` holds its own section
+under an empty `[Unreleased]`: a release without one shows nothing for itself,
+and an `[Unreleased]` line left in a tag is shown again with the next release.
 
 ## Trust
 
