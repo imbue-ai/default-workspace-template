@@ -45,6 +45,9 @@ export interface ActiveAgent {
   // A send is in flight and waiting for the agent to come up: the Connecting sub-state of
   // Sending, shown on the status row at the end of the transcript.
   is_connecting: boolean;
+  // The connecting send is starting the agent from stopped (an older chat left idle), not waiting on
+  // one already starting: the status row says "Waking up" rather than "Connecting".
+  is_waking_up: boolean;
   // The account was signed in again and the chat app is restarting the agent to send it the
   // message its sign-in failure refused, if any: the page offers no send of its own meanwhile.
   is_resending_after_sign_in: boolean;
