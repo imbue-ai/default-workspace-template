@@ -100,13 +100,13 @@ rebuild it</button></p>
     import("__CONTRACT_PATH__")
       .then(({ connectToShell }) => {
         const ask = document.getElementById("ask-agent");
-        // Only a shell can start a chat, so the button waits for one to greet the page.
         const report = document.getElementById("ask-agent-report");
         let shown = null;
         // A failure that asks for a bug report offers one while the shell's latest handshake says it can open one.
         const showReport = () => {
           report.hidden = !(shown !== null && shown.isReportable && shell.canReportBug());
         };
+        // Only a shell can start a chat, so the ask button waits for one to greet the page.
         const shell = connectToShell({
           onHandshake: () => {
             ask.hidden = false;
