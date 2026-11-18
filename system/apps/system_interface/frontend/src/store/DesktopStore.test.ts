@@ -1327,13 +1327,20 @@ describe("a stopped app's window", () => {
   });
 
   it("asks in the main chat on a machine where no app takes an ask about an app", async () => {
-    api.apps = [chatLikeAppRecord("chat"), terminal];
+    const chat = chatLikeAppRecord("chat");
+    api.apps = [chat, terminal];
     api.desktops = [desktopRecord("home", { windows: [windowRecord("win-terminal", "terminal", "/")] })];
     const store = await startedStore();
 
     store.stoppedNotice(terminal, "win-terminal").actions[0].run();
     await settle();
     expect(launchCalls()).toEqual([`launch:home:chat:new:${JSON.stringify({ message: START_TERMINAL_REQUEST })}:new`]);
+
+    // The app the main chat is in, stopped, would be asked about through itself, so it can only be reported.
+    expect(store.stoppedNotice({ ...chat, is_running: false }, null)).toMatchObject({
+      actions: [],
+      isReportable: true,
+    });
   });
 
   it("judges which app agents are asked through by the launch the ask would run, not the primary text row", async () => {
