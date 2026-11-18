@@ -14,6 +14,8 @@ import { activeFocusedWindowId, activePlacements, barEntries, isLayoutDirty } fr
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
 import {
+  appAskLaunchPathRecord,
+  appChatLaunchPathRecord,
   appRecord,
   chatLikeAppRecord,
   clientRecord,
@@ -683,44 +685,88 @@ describe("opening", () => {
     );
   });
 
-  it("shell:start-new-with-text runs the secondary text action, else the primary, and answers once the window opened", async () => {
+  /** A chat-like app that declares both launch paths about an app, a Docs app, and a hidden monitor, with the
+   *  chat's pinned window, a Docs window, and a monitor window on the home desktop; only the Docs window placed. */
+  function offerAppsWithAnAskPath(): void {
+    const chat = chatLikeAppRecord("chat", {
+      launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord(), appAskLaunchPathRecord()],
+    });
+    offerApps(api, socket, [
+      chat,
+      appRecord("docs", { display_name: "Docs" }),
+      appRecord("monitor", { internal: true }),
+    ]);
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [
+          windowRecord("win-chat", "chat", "/", { is_pinned: true, scope: "independent" }),
+          windowRecord("win-docs", "docs", "/?doc=1"),
+          windowRecord("win-monitor", "monitor", "/"),
+        ],
+      }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-docs")] });
+    api.postLaunchAnswer = "/?chat=agent-docs";
+  }
+
+  const launchCalls = (): string[] => api.calls.filter((call) => call.startsWith("launch"));
+
+  it("shell:ask-agent from an app's window sends the ask to the chat about that app, shown beside the window", async () => {
     const store = await startedStore();
-    const notes = (launchIds: readonly string[]): ReturnType<typeof appRecord> =>
-      appRecord("notes", {
-        launch_paths: launchIds.map((id) =>
-          launchPathRecord({ id, path: `/${id}`, params: ["message"], text_param: "message" }),
-        ),
-      });
-    offerApps(api, socket, [notes(["main", "new", "send"])]);
-    expect(await store.startNewWithText("Fix this.")).toEqual({ isOpened: true });
-    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
-      `launch:home:notes:new:{"message":"Fix this."}:new`,
-    );
-    expect(store.getState().desktops[0].windows.some((window) => window.app === "notes")).toBe(true);
-    offerApps(api, socket, [notes(["main"])]);
-    expect(await store.startNewWithText("Fix this.")).toEqual({ isOpened: true });
-    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
-      `launch:home:notes:main:{"message":"Fix this."}:new`,
-    );
+    offerAppsWithAnAskPath();
+
+    expect(await store.askAgent("Fix this.", "win-docs")).toEqual({ isOpened: true });
+
+    expect(launchCalls()).toEqual([
+      'launch:home:chat:app-ask:{"app":"docs","app_display_name":"Docs","message":"Fix this."}:show:beside:win-docs',
+    ]);
+    await settle();
+    // The chat's window, never placed here, takes the right half beside the asking window, on top, at the chat
+    // the launch answered.
+    expect(store.getState().layout.placements.map((placement) => [placement.window_id, placement.state])).toEqual([
+      ["win-docs", "SNAPPED_LEFT"],
+      ["win-chat", "SNAPPED_RIGHT"],
+    ]);
+    expect(store.getState().layout.window_paths["win-chat"]?.path).toBe("/?chat=agent-docs");
+    expect(notices()).toEqual([]);
   });
 
-  it("shell:start-new-with-text answers a failure for the page to show, and leaves no toast of its own", async () => {
+  it("shell:ask-agent runs the primary text action with no window, from an internal app, or with no ask launch path", async () => {
     const store = await startedStore();
-    expect(await store.startNewWithText("Fix this.")).toEqual({
+    offerAppsWithAnAskPath();
+    const primary = 'launch:home:chat:new:{"message":"Fix this."}:window:win-chat';
+
+    // The shell's own ask, an ask whose window closed meanwhile, and an ask from an app nothing is said about.
+    for (const windowId of [null, "win-gone", "win-monitor"]) {
+      expect(await store.askAgent("Fix this.", windowId)).toEqual({ isOpened: true });
+    }
+    expect(launchCalls()).toEqual([primary, primary, primary]);
+
+    // A machine whose apps declare the button's launch path alone has nowhere to send an ask about an app.
+    offerApps(api, socket, [
+      chatLikeAppRecord("chat", {
+        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord()],
+      }),
+      appRecord("docs", { display_name: "Docs" }),
+    ]);
+    expect(await store.askAgent("Fix this.", "win-docs")).toEqual({ isOpened: true });
+    expect(launchCalls()).toEqual([primary, primary, primary, primary]);
+  });
+
+  it("shell:ask-agent answers a failure for the page to show, and leaves no toast of its own", async () => {
+    const store = await startedStore();
+    expect(await store.askAgent("Fix this.", null)).toEqual({
       isOpened: false,
       failure: { message: "No app in this workspace can start a chat.", details: null, isReportable: false },
     });
-    offerApps(api, socket, [
-      appRecord("notes", {
-        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
-      }),
-    ]);
-    api.refusal = "notes refused the launch: no account is signed in";
-    expect(await store.startNewWithText("Fix this.")).toEqual({
+    offerAppsWithAnAskPath();
+    api.refusal = "chat refused the launch: An ask about an app names the app and its display name";
+    expect(await store.askAgent("Fix this.", "win-docs")).toEqual({
       isOpened: false,
       failure: {
-        message: "Notes couldn't open that.",
-        details: "HTTP 400\nnotes refused the launch: no account is signed in",
+        message: "Chat couldn't open that.",
+        details: "HTTP 400\nchat refused the launch: An ask about an app names the app and its display name",
         isReportable: false,
       },
     });
@@ -3651,18 +3697,7 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
   it("opens the chat about a window's app beside it through the app-chat launch path, and tells the user when there is none", async () => {
     const store = await startedStore();
     const chat = chatLikeAppRecord("chat", {
-      launch_paths: [
-        ...chatLikeAppRecord("chat").launch_paths,
-        launchPathRecord({
-          id: "app-chat",
-          label: "Chat about this app",
-          path: "/api/chats/intake",
-          method: "POST",
-          params: ["app", "app_display_name"],
-          presets: { target: "app_chat" },
-          app_params: { name: "app", display_name: "app_display_name" },
-        }),
-      ],
+      launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord()],
     });
     offerApps(api, socket, [chat, appRecord("docs", { display_name: "Docs" })]);
     api.desktops = [
@@ -4209,15 +4244,28 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   });
 
   it("answers a page's Ask an agent while viewing with the refusal for the page to show, launching and toasting nothing", async () => {
-    api.apps = [chatLikeAppRecord("chat")];
+    api.apps = [
+      chatLikeAppRecord("chat", {
+        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appAskLaunchPathRecord()],
+      }),
+      appRecord("docs"),
+    ];
     const store = await viewerStore();
+    api.desktops = api.desktops.map((desktop) =>
+      desktop.id === "alice" ? { ...desktop, windows: [windowRecord("win-a", "docs", "/a")] } : desktop,
+    );
+    socket.deliver().onDesktopsUpdated(api.desktops);
     await store.switchDesktop("alice");
     const callsBefore = api.calls.length;
 
-    expect(await store.startNewWithText("Fix this.")).toEqual({
-      isOpened: false,
-      failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
-    });
+    // An ask from a window of the viewed desktop, which would run the ask launch path, and one with no window,
+    // which would run the primary text action.
+    for (const windowId of ["win-a", null]) {
+      expect(await store.askAgent("Fix this.", windowId)).toEqual({
+        isOpened: false,
+        failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
+      });
+    }
     expect(api.calls.slice(callsBefore)).toEqual([]);
     expect(notices()).toEqual([]);
   });

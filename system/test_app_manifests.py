@@ -656,6 +656,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         ("draft", "/api/chats/intake", "POST"),
         ("lounge", "/api/chats/intake", "POST"),
         ("app-chat", "/api/chats/intake", "POST"),
+        ("app-ask", "/api/chats/intake", "POST"),
     ]
     assert [shortcut.launch for shortcut in by_name["chat"].default_shortcuts] == [
         "root"
@@ -692,6 +693,11 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "app",
         "app_display_name",
     ]
+    assert [param.name for param in by_name["chat"].launch_paths[7].params] == [
+        "app",
+        "app_display_name",
+        "message",
+    ]
     # The intake's presets (post-launch-paths plan section 3.5): how each launch path chooses the receiving chat.
     assert by_name["chat"].launch_paths[0].presets == {}
     assert by_name["chat"].launch_paths[1].presets == {"target": "main_chat"}
@@ -710,12 +716,25 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["chat"].launch_paths[6].presets == {"target": "app_chat"}
     app_params = by_name["chat"].launch_paths[6].app_params
     assert app_params is not None
-    assert (app_params.name, app_params.display_name) == ("app", "app_display_name")
+    assert (app_params.name, app_params.display_name, app_params.text) == (
+        "app",
+        "app_display_name",
+        None,
+    )
+    # A page's ask (``shell:ask-agent``): the same chat, sent the ask's text.
+    assert by_name["chat"].launch_paths[7].presets == {"target": "app_ask"}
+    ask_params = by_name["chat"].launch_paths[7].app_params
+    assert ask_params is not None
+    assert (ask_params.name, ask_params.display_name, ask_params.text) == (
+        "app",
+        "app_display_name",
+        "message",
+    )
     # The launcher's free-text rows (launcher-and-getting-started plan section 3.1): the chat's ``main`` (the
     # launcher's Enter) sends the typed text to the main chat, its ``new`` takes it as a new chat's first message,
     # its ``send`` as a message to an existing chat, and its ``draft`` as text for a composer; the ``lounge`` path
-    # declares the mention param alone (the multiplayer spec, section 7.5), the ``app-chat`` path the app params
-    # alone (section 9.2), and nothing else declares a text, draft, mention, or app param.
+    # declares the mention param alone (the multiplayer spec, section 7.5), the ``app-chat`` and ``app-ask`` paths
+    # the app params alone (section 9.2), and nothing else declares a text, draft, mention, or app param.
     assert by_name["chat"].launch_paths[0].text_param is None
     assert by_name["chat"].launch_paths[1].text_param == "message"
     assert by_name["chat"].launch_paths[2].text_param == "message"
@@ -728,12 +747,17 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert [entry.mention_param for entry in by_name["chat"].launch_paths[:5]] == [
         None
     ] * 5
-    assert by_name["chat"].launch_paths[6].mention_param is None
+    assert [entry.mention_param for entry in by_name["chat"].launch_paths[6:]] == [
+        None,
+        None,
+    ]
     assert [entry.text_param for entry in by_name["chat"].launch_paths[5:]] == [
+        None,
         None,
         None,
     ]
     assert [entry.draft_param for entry in by_name["chat"].launch_paths[5:]] == [
+        None,
         None,
         None,
     ]

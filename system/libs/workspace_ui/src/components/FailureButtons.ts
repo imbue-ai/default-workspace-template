@@ -1,12 +1,6 @@
 import m from "mithril";
 import { askAgentToFix } from "../app_contract";
-import type {
-  AgentFixRequest,
-  ReportedFailure,
-  ShellConnection,
-  ShownFailure,
-  StartNewOutcome,
-} from "../app_contract";
+import type { AgentFixRequest, ReportedFailure, ShellConnection, ShownFailure, StartOutcome } from "../app_contract";
 import { REPORT_A_BUG_LABEL } from "../models/failure";
 import { Button } from "./Button";
 import type { ButtonOptions, ButtonVariant } from "./Button";
@@ -15,7 +9,7 @@ import { TEXT_HELPER_SIZE } from "./typography";
 
 /**
  * The two buttons a failure in a framed app page offers beside its sentence, both of which go through the shell that
- * frames the page: "Ask an agent to fix this" starts a new chat with the failure as its task, and "Report a bug" opens
+ * frames the page: "Ask an agent to fix this" sends the failure to an agent as its task, and "Report a bug" opens
  * Imbue Studio's bug report with the failure attached. Each renders nothing where it could not work, so a surface
  * draws both unconditionally; it reads the connection at render time, so the page redraws when a handshake arrives (as
  * every page does).
@@ -30,7 +24,7 @@ interface FailureButtonOptions extends Pick<ButtonOptions, "sm" | "extra"> {
 
 export interface AskAgentToFixButtonAttrs extends FailureButtonOptions {
   /** The page's connection; null before it connects. */
-  readonly connection: Pick<ShellConnection, "hasShell" | "startNewWithText" | "canReportBug" | "reportBug"> | null;
+  readonly connection: Pick<ShellConnection, "hasShell" | "askAgent" | "canReportBug" | "reportBug"> | null;
   readonly failure: AgentFixRequest;
   /** The page offers its own Report a bug beside this button: a refused ask then shows its sentence and details
    *  without a Report a bug of its own, and is handed to ``onFailureChange`` (null once it is gone) so the page's one
@@ -38,9 +32,9 @@ export interface AskAgentToFixButtonAttrs extends FailureButtonOptions {
   readonly pageReportBug?: { readonly onFailureChange: (failure: ShownFailure | null) => void };
 }
 
-/** Nothing without a shell (a page opened on its own, a share visitor holding only this app): no chat can start.
- *  Pressed, it reads "Asking an agent…" and stays disabled until the shell says the chat's window opened or the start
- *  failed; a failure is shown under it, with Report a bug when it asks for one (unless the page reports bugs
+/** Nothing without a shell (a page opened on its own, a share visitor holding only this app): nothing can carry the
+ *  ask. Pressed, it reads "Asking an agent…" and stays disabled until the shell says the chat's window opened or the
+ *  ask failed; a failure is shown under it, with Report a bug when it asks for one (unless the page reports bugs
  *  itself), and the button is back for another try. An answer that comes after the press was settled as not answered replaces what is shown. */
 export const AskAgentToFixButton: m.ClosureComponent<AskAgentToFixButtonAttrs> = () => {
   let isAsking = false;
@@ -54,7 +48,7 @@ export const AskAgentToFixButton: m.ClosureComponent<AskAgentToFixButtonAttrs> =
     latestAttrs?.pageReportBug?.onFailureChange(next);
   }
 
-  function show(outcome: StartNewOutcome): void {
+  function show(outcome: StartOutcome): void {
     setFailure(outcome.isOpened ? null : outcome.failure);
     m.redraw();
   }
