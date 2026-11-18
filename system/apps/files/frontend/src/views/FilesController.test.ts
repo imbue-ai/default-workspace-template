@@ -204,9 +204,11 @@ describe("a folder that cannot be listed", () => {
     });
     await vi.waitFor(() => expect(ask.disabled).toBe(false));
     m.redraw.sync();
-    expect(root.querySelector(".files-empty .ask-agent-failure-message")?.textContent).toBe(
-      "Chat couldn't open that.",
-    );
+    // FailureActions puts the refused ask under the buttons by this class, as a child of its row; jsdom lays nothing
+    // out, so only this lookup says when the shared button stops drawing it that way.
+    expect(
+      root.querySelector(".files-failure-actions > .ask-agent-failure .ask-agent-failure-message")?.textContent,
+    ).toBe("Chat couldn't open that.");
     root.querySelector<HTMLButtonElement>(".files-empty .report-bug")?.click();
     expect(connection.reportBug).toHaveBeenCalledWith({
       message: LISTING_FAILED,
