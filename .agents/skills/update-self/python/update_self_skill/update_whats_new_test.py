@@ -49,13 +49,15 @@ def _changelog(*versions: str, unreleased: str = "## [Unreleased]\n") -> dict[st
 
 @pytest.fixture
 def template(tmp_path: Path) -> Path:
-    """Releases minds-v0.9.3 (no ``CHANGELOG.md``), minds-v0.9.5, minds-v0.10.5 and
-    minds-v0.10.6; an untagged ``main`` with an ``[Unreleased]`` line; a ``workspace``
-    branch on minds-v0.9.3; and a ``rewritten`` branch with no release."""
+    """Releases minds-v0.9.3 (no ``CHANGELOG.md``), minds-v0.9.4 (no release section),
+    minds-v0.9.5, minds-v0.10.5 and minds-v0.10.6; an untagged ``main`` with an
+    ``[Unreleased]`` line; a ``workspace`` branch on minds-v0.9.3; and a ``rewritten``
+    branch with no release."""
     repo = tmp_path / "template"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
     _commit(repo, {"README.md": "0.9.3\n"}, "minds-v0.9.3")
+    _commit(repo, _changelog(), "minds-v0.9.4")
     _commit(repo, _changelog("0.9.5"), "minds-v0.9.5")
     _commit(repo, _changelog("0.10.5", "0.9.5"), "minds-v0.10.5")
     _commit(repo, _changelog(*_RELEASED), "minds-v0.10.6")
@@ -119,11 +121,23 @@ def test_a_workspace_with_no_release_found_gets_the_newest_release(
     }
 
 
-def test_a_target_without_a_changelog_lists_nothing(template: Path) -> None:
-    assert list_whats_new("workspace", "minds-v0.9.3", template, Runner(), None) == {
+@pytest.mark.parametrize(
+    ("target", "note"),
+    [
+        ("minds-v0.9.3", "minds-v0.9.3 has no CHANGELOG.md, so nothing is listed."),
+        (
+            "minds-v0.9.4",
+            "minds-v0.9.4's CHANGELOG.md has no release section, so no release is listed.",
+        ),
+    ],
+)
+def test_a_target_without_a_release_section_lists_nothing(
+    template: Path, target: str, note: str
+) -> None:
+    assert list_whats_new("workspace", target, template, Runner(), None) == {
         "release": "minds-v0.9.3",
         "sections": [],
-        "note": "minds-v0.9.3 has no CHANGELOG.md, so nothing is listed.",
+        "note": note,
     }
 
 

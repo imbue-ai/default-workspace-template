@@ -27,7 +27,7 @@ Write it for a non-technical reader skimming top to bottom, in this order:
 2. **What's new** -- always first after the headline, and *detailed*: carry
    the worker's digest in prose a lay reader parses (what each change does,
    not file names), release by release. When the worker reports a `note`,
-   say the list may be incomplete. Some readers want the specifics; the rest
+   pass it on as written. Some readers want the specifics; the rest
    skim it.
 3. **Conflicts** -- "none", or what needed reconciling. When the worker kept
    local code over the release's version, do not present that as settled: say

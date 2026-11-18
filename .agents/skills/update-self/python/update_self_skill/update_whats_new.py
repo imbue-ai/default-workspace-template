@@ -52,6 +52,8 @@ def list_whats_new(
     note = None
     if shown.returncode != 0:
         note = f"{target} has no {CHANGELOG_PATH}, so nothing is listed."
+    elif not releases:
+        note = f"{target}'s {CHANGELOG_PATH} has no release section, so no release is listed."
     elif floor is None:
         note = "The workspace's release is unknown, so only the newest is listed."
         labels = labels[:1]
