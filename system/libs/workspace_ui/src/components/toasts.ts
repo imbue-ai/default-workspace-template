@@ -6,16 +6,12 @@
  * the shell's never stand between the user and what is under them, while a page whose notes run longer (Files lists
  * what failed) gives each a close button. A plain toast with details takes presses either way, for its "See details"
  * and close button; opening the details holds it up (``onHold``). A lasting toast (one that stays until dismissed)
- * takes presses and carries a close control wherever the page offers ``onDismiss``. A lasting toast whose message
- * asks for a bug report gets "Report a bug" while the page gives ``onReportBug``, decided as it draws: whether the
- * embedder opens a bug report can be learned after the toast went up.
+ * takes presses and carries a close control wherever the page offers ``onDismiss``.
  */
 
 import m from "mithril";
 
-import type { ReportedFailure } from "../app_contract";
-import { REPORT_A_BUG_LABEL } from "../models/failure";
-import type { Toast, ToastAction } from "../models/toasts";
+import type { Toast } from "../models/toasts";
 import { Button } from "./Button";
 import { SeeDetails } from "./SeeDetails";
 import { icon } from "./icons";
@@ -32,8 +28,6 @@ export interface ToastsAttrs {
   readonly closesPlainToasts?: boolean;
   /** Keep a plain toast up until dismissed: its reader opened its details. */
   readonly onHold?: (id: number) => void;
-  /** Open the bug report about a reportable toast's failure; absent or null where none can be opened now. */
-  readonly onReportBug?: ((failure: ReportedFailure) => void) | null;
 }
 
 function plainToastBody(
@@ -68,16 +62,7 @@ function plainToastHead(toast: Toast, onDismiss: ((id: number) => void) | null):
   ];
 }
 
-function lastingToastBody(
-  toast: Toast,
-  onDismiss: ((id: number) => void) | null,
-  onReportBug: ((failure: ReportedFailure) => void) | null,
-): m.Children {
-  const reportBug: ToastAction | null =
-    toast.isReportable && onReportBug !== null
-      ? { label: REPORT_A_BUG_LABEL, run: () => onReportBug({ message: toast.message, details: toast.details }) }
-      : null;
-  const actions = reportBug === null ? toast.actions : [...toast.actions, reportBug];
+function lastingToastBody(toast: Toast, onDismiss: ((id: number) => void) | null): m.Children {
   return [
     m("div", { class: "toast-head flex items-start gap-2" }, [
       m("span", { class: "toast-message min-w-0 flex-1 py-0.5" }, toast.message),
@@ -98,22 +83,22 @@ function lastingToastBody(
           ),
     ]),
     m(SeeDetails, { details: toast.details }),
-    actions.length === 0
+    toast.actions.length === 0
       ? null
       : m(
           "div",
           { class: "toast-actions -mx-2 flex flex-wrap gap-1" },
-          actions.map((action) =>
+          toast.actions.map((action) =>
             m(
               Button,
               {
                 variant: "ghost-inverse",
                 sm: true,
-                extra: action === reportBug ? "toast-action report-bug" : "toast-action",
+                extra: "toast-action",
                 // A retry or a resolving button has done the note's job, and a retry that fails again leaves a new
-                // one; Report a bug hands the failure on and leaves it up for its other buttons.
+                // one.
                 onclick: () => {
-                  if (action !== reportBug) onDismiss?.(toast.id);
+                  onDismiss?.(toast.id);
                   action.run();
                 },
               },
@@ -126,7 +111,7 @@ function lastingToastBody(
 
 export const Toasts: m.Component<ToastsAttrs> = {
   view(vnode) {
-    const { toasts, placementClass, onDismiss, closesPlainToasts, onHold, onReportBug } = vnode.attrs;
+    const { toasts, placementClass, onDismiss, closesPlainToasts, onHold } = vnode.attrs;
     const plainDismiss = (toast: Toast): ((id: number) => void) | null =>
       onDismiss !== undefined && (closesPlainToasts === true || toast.details !== null) ? onDismiss : null;
     return m(
@@ -155,7 +140,7 @@ export const Toasts: m.Component<ToastsAttrs> = {
               "px-4 py-2.5 text-(length:--font-size-body) whitespace-pre-line text-on-accent shadow-overlay",
           },
           toast.isLasting
-            ? lastingToastBody(toast, onDismiss ?? null, onReportBug ?? null)
+            ? lastingToastBody(toast, onDismiss ?? null)
             : plainToastBody(toast, plainDismiss(toast), onHold ?? null),
         ),
       ),
