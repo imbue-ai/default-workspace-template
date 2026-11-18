@@ -88,6 +88,10 @@ from imbue.chat.agent_manager import CHAT_CREATION_WAIT_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.api_models import HarnessCatalogEntry
 from imbue.chat.api_models import HarnessCatalogsResponse
+from imbue.chat.app_notes import AddAppNoteRequest
+from imbue.chat.app_notes import AppNote
+from imbue.chat.app_notes import AppNotesResponse
+from imbue.chat.app_notes import app_note_frame
 from imbue.chat.attachments import delete_upload
 from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
@@ -2839,6 +2843,30 @@ def _notification_endpoint(chat_id: str) -> Response:
     return model_response(OkResponse())
 
 
+def _get_app_notes_endpoint(chat_id: str) -> Response:
+    """The lines other apps in the workspace put into the chat, such as "Claude usage 2%", oldest first."""
+    if not AGENT_ID_PATTERN.fullmatch(chat_id):
+        return _chat_not_found_response(chat_id)
+    return model_response(AppNotesResponse(notes=get_state().app_notes.notes(chat_id)))
+
+
+def _add_app_note_endpoint(chat_id: str) -> Response:
+    """Put a one-line note from another app into the chat (loopback only): shown between the messages, never sent
+    to the agent, so nothing replies to it."""
+    refusal = require_loopback()
+    if refusal is not None:
+        return refusal
+    if not AGENT_ID_PATTERN.fullmatch(chat_id):
+        return _chat_not_found_response(chat_id)
+    body = parse_request_body(AddAppNoteRequest)
+    state = get_state()
+    if state.agent_manager.get_chat_snapshot(chat_id) is None:
+        return _chat_not_found_response(chat_id)
+    note = state.app_notes.add(chat_id, body.source, body.text)
+    state.event_queues.broadcast(chat_id, app_note_frame(note))
+    return model_response(note)
+
+
 # The terminal app's registered name: the chat's terminal back face is served from its origin.
 _TERMINAL_APP_NAME: Final[AppName] = AppName("terminal")
 # The origin ttyd itself is served from since the terminal split into a wrapper and a pty
@@ -3043,6 +3071,7 @@ _PER_CHAT_ROUTES: Final[tuple[tuple[str, Callable[..., Response], tuple[str, ...
     ("presence", _presence_endpoint, ("POST",)),
     ("watchers", _watchers_endpoint, ("GET",)),
     ("notification", _notification_endpoint, ("POST",)),
+    ("app-notes", _get_app_notes_endpoint, ("GET",)),
     ("model", _set_model_choice_endpoint, ("POST",)),
     ("model-options", _get_model_options_endpoint, ("GET",)),
     ("powered-by", _get_powered_by_endpoint, ("GET",)),
@@ -3151,6 +3180,8 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("POST", "/api/chats/{chat_id}/notification"): RouteModels(
         request_model=ChatNotificationRequest, response_model=OkResponse
     ),
+    ("GET", "/api/chats/{chat_id}/app-notes"): RouteModels(response_model=AppNotesResponse),
+    ("POST", "/api/chats/{chat_id}/app-notes"): RouteModels(request_model=AddAppNoteRequest, response_model=AppNote),
     ("POST", "/api/chats/{chat_id}/model"): RouteModels(
         request_model=SetModelChoiceRequest, response_model=SendMessageResponse, alternate_responses=(_CONVERGING,)
     ),
@@ -3302,6 +3333,12 @@ def create_application(state: ChatAppState) -> Flask:
         view_func=_put_fast_mode_endpoint,
         methods=["PUT"],
         endpoint="_put_fast_mode_endpoint",
+    )
+    application.add_url_rule(
+        "/api/chats/<chat_id>/app-notes",
+        view_func=_add_app_note_endpoint,
+        methods=["POST"],
+        endpoint="_add_app_note_endpoint",
     )
     application.add_url_rule("/api/chats/<chat_id>/autocompact", view_func=_get_autocompact_endpoint, methods=["GET"])
     application.add_url_rule(

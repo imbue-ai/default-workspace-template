@@ -42,8 +42,10 @@ import type { CompactionPart } from "./compaction-chips";
 import { buildSections, isGenuineUserTurn, type LiveCompaction, type SectionView } from "./turn-grouping";
 import { ProgressBlock } from "./ProgressBlock";
 import { renderFramedHandoffNode } from "./handoff-node";
-import { renderAgentTurn } from "./machine-bubbles";
+import { renderAgentTurn, STRETCH_TEXT_EDGE_CLASS } from "./machine-bubbles";
 import type { ResentTurns } from "../models/ResentSends";
+import type { AppNote } from "../models/AppNotes";
+import { renderNotice } from "./user-message-display";
 
 // Per-type fallback row heights, used until a row has been measured (live or
 // offscreen). Rough is fine: they only affect spacer sizing for not-yet-measured
@@ -161,6 +163,8 @@ function buildRows(
   resentTurnIds: ReadonlySet<string>,
   replyDraft: (() => AssistantMessageEvent | null) | null,
   liveTail: LiveTail | null,
+  notes: readonly AppNote[] = [],
+  timeByEventId: ReadonlyMap<string, number> = new Map(),
 ): RowDescriptor[] {
   const rows: RowDescriptor[] = [];
   // A stretch of the agent's output runs until a person speaks or another agent takes over; the system chips and
@@ -193,8 +197,21 @@ function buildRows(
     previousPersonTurn = null;
   };
   const addPart = (part: TurnPart): void => {
+    addNotesBefore(part.anchorEventId);
     parts.push(part);
     isLastTurnOpen = true;
+  };
+  // Other apps' notes (see models/AppNotes), oldest first: each joins the stretch of the agent's output open when it
+  // arrived, just before the first piece that came after it.
+  let noteIndex = 0;
+  const addNotesBefore = (anchorEventId: string | null): void => {
+    const time = anchorEventId === null ? undefined : timeByEventId.get(anchorEventId);
+    if (time === undefined) return;
+    while (noteIndex < notes.length && Date.parse(notes[noteIndex].timestamp) < time) {
+      const note = notes[noteIndex];
+      noteIndex++;
+      parts.push(appNotePart(note));
+    }
   };
   // The compactions that landed after a turn's reply: a chip run of their own below it.
   const addTrailingCompactions = (compactions: CompactionPart[]): void => {
@@ -212,6 +229,7 @@ function buildRows(
     const userEvent = section.user_event;
     if (userEvent !== null && !isHiddenUserMessage(userEvent)) {
       if (isGenuineUserTurn(userEvent) || isPersonsChipMessage(userEvent)) {
+        addNotesBefore(userEvent.event_id);
         endTurn();
         const previousTurn = previousPersonTurn;
         // A bash-mode command is the person's, but not words of theirs: it breaks the run of their turns.
@@ -368,10 +386,32 @@ function buildRows(
     }
     addTrailingCompactions(section.trailing_status);
   }
+  // The notes newer than every piece held: at the end, when the held window reaches the live end (the caller passes
+  // none past the window otherwise).
+  if (noteIndex < notes.length) {
+    for (const note of notes.slice(noteIndex)) {
+      parts.push(appNotePart(note));
+    }
+    noteIndex = notes.length;
+    isLastTurnOpen = true;
+  }
   const isTailOpen = isLastTurnOpen;
   endTurn();
   if (isTailOpen) rows[rows.length - 1].takesLiveTail = true;
   return rows;
+}
+
+/** Another app's note as a piece of a stretch: a one-line notice, "AI Usage Limits: Claude usage 2%". */
+function appNotePart(note: AppNote): TurnPart {
+  const key = `note-${note.note_id}`;
+  return {
+    key,
+    estimate: ESTIMATED_CHIP_ROW_HEIGHT_PX,
+    anchorEventId: null,
+    render: () =>
+      m("div", { key, class: `app-note ${STRETCH_TEXT_EDGE_CLASS}` }, renderNotice(note.source, note.text, "info")),
+    chipCallIds: [],
+  };
 }
 
 /** The transcript event a run's row stands at: its head's, or none for the compaction
@@ -420,14 +460,32 @@ export function buildConversationView(
   resentTurns: ResentTurns | null,
   replyDraft: (() => AssistantMessageEvent | null) | null,
   liveTail: LiveTail | null = null,
+  notes: readonly AppNote[] = [],
 ): ConversationView {
   const toolResults = buildToolResultsWithSkillExpansions(events);
   const hiddenEventIds = computeAuthErrorHiddenEventIds(events);
   for (const eventId of resentTurns?.foldedTurnIds ?? []) hiddenEventIds.add(eventId);
   const visibleEvents = hiddenEventIds.size > 0 ? events.filter((e) => !hiddenEventIds.has(e.event_id)) : events;
   const sections = buildSections(visibleEvents, toolResults, isTailSettled, liveCompaction);
+  const timeByEventId = new Map<string, number>();
+  if (notes.length > 0) {
+    for (const event of visibleEvents) {
+      const time = Date.parse(event.timestamp);
+      if (!Number.isNaN(time)) timeByEventId.set(event.event_id, time);
+    }
+  }
+  const sortedNotes = [...notes].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
   return {
-    rows: buildRows(chatId, sections, toolResults, resentTurns?.notedTurnIds ?? new Set(), replyDraft, liveTail),
+    rows: buildRows(
+      chatId,
+      sections,
+      toolResults,
+      resentTurns?.notedTurnIds ?? new Set(),
+      replyDraft,
+      liveTail,
+      sortedNotes,
+      timeByEventId,
+    ),
     isReplyDraftInStep: sections.some((section) => section.live_step_id !== null),
   };
 }

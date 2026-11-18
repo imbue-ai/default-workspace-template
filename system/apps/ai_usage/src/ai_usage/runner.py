@@ -43,7 +43,7 @@ from app_schema.api_schema import (
     SchemalessRoute,
     register_api_schema_route,
 )
-from app_schema.routes import model_response
+from app_schema.routes import model_response, parse_request_body
 from flask import Flask, Response, abort, request, send_file
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import setup_logging
@@ -51,6 +51,7 @@ from loguru import logger
 from pydantic import Field
 from werkzeug.serving import run_simple
 
+from ai_usage.chat_updates import Settings
 from ai_usage.usage import (
     OUTSIDE,
     AgentInfo,
@@ -295,6 +296,8 @@ ROUTE_TABLE: RouteTable = {
     ("GET", "/assets/{name}"): SchemalessRoute(reason="the page's script and styles"),
     ("GET", "/api/usage"): RouteModels(response_model=UsageResponse),
     ("POST", "/api/check"): RouteModels(response_model=UsageResponse),
+    ("GET", "/api/settings"): RouteModels(response_model=Settings),
+    ("PUT", "/api/settings"): RouteModels(request_model=Settings, response_model=Settings),
     ("POST", "/api/activity"): SchemalessRoute(
         reason="a chat hook's raw event, forwarded as the hook received it"
     ),
@@ -469,6 +472,18 @@ def check_now() -> Response:
     store.refresh_agents_now()
     store.take_all_readings(trigger={"chat_id": None, "event": "check-now"}, wait=True)
     return model_response(build_usage())
+
+
+@app.route("/api/settings")
+def get_settings() -> Response:
+    """What the user chose on the page: whether chats get a one-line note each time a usage limit goes up."""
+    return model_response(store.settings.read())
+
+
+@app.route("/api/settings", methods=["PUT"])
+def put_settings() -> Response:
+    """Change what the user chose on the page, such as turning chat updates on or off."""
+    return model_response(store.settings.write(parse_request_body(Settings)))
 
 
 @app.route("/api/activity", methods=["POST"])

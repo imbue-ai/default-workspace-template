@@ -41,6 +41,7 @@ from loguru import logger
 from pydantic import Field
 
 from ai_usage import provider as base
+from ai_usage.chat_updates import SettingsStore, increase_text, send_notes
 from ai_usage.claude_p import ClaudeCLIError, claude_p_completion
 from ai_usage.provider import UsageProvider
 from ai_usage.providers import PROVIDERS
@@ -370,6 +371,9 @@ class UsageStore:
         self.readings_path = data_dir / "readings.jsonl"
         self.activity_path = data_dir / "activity.jsonl"
         self.summaries_path = data_dir / "summaries.jsonl"
+        self.settings = SettingsStore(data_dir)
+        # Puts a usage line into chats; replaced in tests.
+        self._send_notes = send_notes
         self._lock = threading.Lock()
         self._summariser = summarise_prompt
         self._summary_pool = ThreadPoolExecutor(
@@ -561,6 +565,7 @@ class UsageStore:
                 # The AI asked to be left alone for a while; skip until then.
                 return None
             self._last_reading_at[source.key] = time.time()
+            previous = self.latest_reading(source.key)
             credentials = provider.credentials(source.account)
             token = (
                 provider.access_token(credentials) if credentials is not None else None
@@ -630,9 +635,35 @@ class UsageStore:
                     f"Couldn't reach {provider.label} to check usage."
                 )
             self._append(self.readings_path, record)
+            if record.get("status") == 200:
+                self._announce_increase(source, previous, record)
             return record
         finally:
             lock.release()
+
+    def _announce_increase(
+        self, source: Source, previous: dict[str, Any] | None, record: dict[str, Any]
+    ) -> None:
+        """When chat updates are on, put a line naming each limit that went up into the chats that were working."""
+        if previous is None or not self.settings.read().chat_updates:
+            return
+        try:
+            before = source.provider.parse_limits(previous["raw"])
+            after = source.provider.parse_limits(record["raw"])
+        except (KeyError, TypeError, ValueError):
+            return
+        text = increase_text(source.provider.label, before, after)
+        if text is None:
+            return
+        start, end = parse_time(previous["t"]), parse_time(record["t"])
+        members = {a.chat_id for a in self.agents() if source_key_for(a) == source.key}
+        windows = self.work_windows()
+        working = sorted(
+            chat_id
+            for chat_id in members
+            if any(w.start <= end and w.end >= start for w in windows.get(chat_id, []))
+        )
+        self._send_notes(working, text)
 
     def _read_extras(
         self,

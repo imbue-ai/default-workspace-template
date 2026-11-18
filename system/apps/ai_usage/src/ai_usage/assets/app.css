@@ -6,6 +6,8 @@ header { display:flex; align-items:baseline; justify-content:space-between; gap:
 h1 { font-size: 22px; margin:0; font-weight:650; letter-spacing:-0.01em; }
 .header-right { display:flex; gap:12px; align-items:center; }
 .checked { color:var(--muted); font-size:13px; }
+.chat-updates { display:flex; gap:6px; align-items:center; font-size:13px; cursor:pointer; user-select:none; }
+.chat-updates input { margin:0; accent-color:var(--ink); cursor:pointer; }
 .error { color:var(--hot); font-size:14px; margin:0 0 12px; }
 button { font:inherit; font-size:13px; padding:6px 12px; border:1px solid var(--line); background:#fff; border-radius:8px; cursor:pointer; color:var(--ink); }
 button:hover { border-color:#c9ccc4; }

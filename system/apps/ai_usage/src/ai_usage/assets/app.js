@@ -371,6 +371,34 @@ $("check-now").addEventListener("click", async () => {
   }
 });
 
+// Updates in chat: off until the user turns it on; the server keeps the choice.
+async function loadSettings() {
+  const response = await fetch("/api/settings");
+  if (!response.ok) return;
+  const box = $("chat-updates");
+  box.checked = (await response.json()).chat_updates;
+  box.disabled = false;
+}
+
+$("chat-updates").addEventListener("change", async () => {
+  const box = $("chat-updates");
+  const wanted = box.checked;
+  box.disabled = true;
+  try {
+    const response = await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_updates: wanted }),
+    });
+    box.checked = response.ok ? (await response.json()).chat_updates : !wanted;
+  } catch {
+    box.checked = !wanted;
+  } finally {
+    box.disabled = false;
+  }
+});
+
+loadSettings();
 load();
 // Often enough that a renamed or newly created chat shows up soon after the tracker notices it.
 setInterval(load, 10000);

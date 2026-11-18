@@ -20,6 +20,7 @@
  */
 
 import m from "mithril";
+import { getAppNotes, getAppNotesVersion, type AppNote } from "../models/AppNotes";
 import { isSlotClaimed } from "../slots";
 import {
   addMessageSentListener,
@@ -36,6 +37,7 @@ import {
   getRenderVersion,
   getTotalEventCount,
   hasMoreAfter,
+  hasMoreBefore,
   isConversationNotFound,
   noteLoadedArrivals,
   removeMessageSentListener,
@@ -158,6 +160,21 @@ function renderAgentLiveTail(chatId: string, opensStretch: boolean, isReplyDraft
       ? []
       : [renderAssistantMessage(draft, NO_TOOL_RESULTS, chatId, opensStretch && handoffNode === null)]),
   ];
+}
+
+/** Other apps' notes that fall inside the held window: none older than its first event while history above it is
+ *  unloaded, and none newer than its last while events below it are, so a note never shows out of place. */
+function appNotesInWindow(chatId: string, events: readonly TranscriptEvent[]): readonly AppNote[] {
+  const notes = getAppNotes(chatId);
+  if (notes.length === 0) return notes;
+  const first = events.length > 0 ? Date.parse(events[0].timestamp) : NaN;
+  const last = events.length > 0 ? Date.parse(events[events.length - 1].timestamp) : NaN;
+  return notes.filter((note) => {
+    const time = Date.parse(note.timestamp);
+    if (hasMoreBefore(chatId) && !(time >= first)) return false;
+    if (hasMoreAfter(chatId) && !(time <= last)) return false;
+    return true;
+  });
 }
 
 /** Whether the last row holds the live end of the transcript: the row is an open stretch of the agent's output, and
@@ -834,7 +851,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // render version (bumped on any data mutation) plus those two -- so a
     // scroll-only redraw reuses the cached rows.
     const renderKey =
-      `${chatId}|${getRenderVersion(chatId)}|${getResentSendsKey(chatId)}|${tailTurnSettled ? 1 : 0}|` +
+      `${chatId}|${getRenderVersion(chatId)}|${getAppNotesVersion(chatId)}|${getResentSendsKey(chatId)}|` +
+      `${tailTurnSettled ? 1 : 0}|` +
       `${liveCompaction === null ? "-" : (liveCompaction.cause ?? "unknown")}`;
     if (renderKey !== rowsCacheKey) {
       // Both structure and decoration come from the transcript walk; there is no
@@ -855,6 +873,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 ...renderAgentLiveTail(chatId, false, isReplyDraftInStep),
                 ...stretchStatusNodes(chatId, getEventsForChat(chatId), isRunningCallInline(chatId, cachedRows)),
               ],
+        appNotesInWindow(chatId, events),
       );
       cachedRows = view.rows;
       isReplyDraftInStep = view.isReplyDraftInStep;

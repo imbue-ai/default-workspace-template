@@ -22,6 +22,7 @@ import {
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
 import { addChatActivityListener, addChatsUpdatedListener } from "./Chats";
 import { applyReplyDraftFrame, clearReplyDraft, isReplyDraftFrame } from "./ReplyDrafts";
+import { applyAppNoteFrame, fetchAppNotes, isAppNoteFrame } from "./AppNotes";
 
 const activeStreams = new Map<string, EventSource>();
 // Set so an error-triggered reconnect timeout can tell an intentional close
@@ -70,11 +71,15 @@ export function connectToStream(chatId: string): void {
   console.info(`[si-sse] opening stream for chat ${chatId}`);
   const eventSource = new EventSource(apiUrl(`/api/chats/${encodeURIComponent(chatId)}/stream`));
   activeStreams.set(chatId, eventSource);
+  // Other apps' notes are read at once, not only once the stream opens, which can take a while.
+  void fetchAppNotes(chatId);
 
   eventSource.onopen = () => {
     console.info(`[si-sse] stream open for chat ${chatId}`);
     // A successful (re)connection resets this agent's backoff.
     getBackoff(chatId).reset();
+    // Notes that arrived while the stream was closed are read on every (re)open.
+    void fetchAppNotes(chatId);
   };
 
   eventSource.onmessage = (messageEvent: MessageEvent) => {
@@ -85,6 +90,11 @@ export function connectToStream(chatId: string): void {
     // A draft is not a transcript event: it is held beside the transcript, never in it.
     if (isReplyDraftFrame(raw)) {
       applyReplyDraftFrame(chatId, raw);
+      return;
+    }
+    // Nor is another app's note: it is held beside the transcript too.
+    if (isAppNoteFrame(raw)) {
+      applyAppNoteFrame(chatId, raw);
       return;
     }
     const event = raw as TranscriptEvent;
