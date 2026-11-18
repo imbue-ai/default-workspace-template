@@ -19,7 +19,7 @@ import type { TranscriptEvent } from "./Response";
 
 const ENTRY_KEY_PREFIX = "transcript-cache:";
 const INDEX_KEY = "transcript-cache-index";
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 // The characters all of a window's snapshots may take together. Chromium keeps sessionStorage twice
 // (the browser process and the page's renderer, two bytes a character each), so this is about 1 MB
