@@ -109,7 +109,8 @@ def test_a_wake_the_budget_refused_says_the_app_failed_several_times(closed_port
         b"Docs failed to start several times in the last few minutes, so it wasn't started again. "
         b"Try again in a few minutes." in body
     )
-    assert b">Try again</button>" in body and b"supervisorctl tail docs stderr" in body
+    # The budget refuses the next wake too, so the page offers no Try again; it still names the log.
+    assert b"Try again</button>" not in body and b"supervisorctl tail docs stderr" in body
     assert b"http-equiv" not in body
 
 
