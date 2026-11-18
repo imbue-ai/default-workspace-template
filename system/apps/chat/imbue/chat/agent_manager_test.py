@@ -1817,7 +1817,13 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
     ``mngr`` of this fixture fails at once, which would settle it again)."""
     # The account the conftest signed in: what the failed record binds to and the retry names.
     (signed_in,) = read_index().accounts
-    failed = seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1", account_id=signed_in.id)
+    failed = seed_failed_chat(
+        agent_manager,
+        ChatId("failed-1"),
+        "Chat 1",
+        account_id=signed_in.id,
+        failure_kind=CreateFailureKind.CODEX_PLUGIN_INSTALL_REFUSED,
+    )
     q = broadcaster.register()
 
     created = agent_manager.create_chat("", chat_id="failed-1", account_id=failed.account_id)
@@ -1837,6 +1843,7 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
         "labels": {},
         "phase": "creating",
         "error": None,
+        "failure_kind": None,
         "is_seeded": False,
         "held_sends": [],
         "model_pick": None,
