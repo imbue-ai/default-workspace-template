@@ -1710,6 +1710,78 @@ def test_a_send_mngr_could_not_confirm_is_sent_again_and_says_so_under_the_messa
         expect(reloaded.locator(".message-resent-note")).to_have_count(1)
 
 
+_PASTE_JS = """(textbox, text) => {
+    const data = new DataTransfer();
+    data.setData("text/plain", text);
+    textbox.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+}"""
+
+# Long enough to become an attachment, its last line one a truncated copy would lose.
+_LONG_PASTE = "".join(f"line {index} of the pasted report\n" for index in range(1, 500)) + "LAST-LINE-OF-THE-PASTE"
+
+
+def _paste(textbox: Locator, text: str) -> None:
+    textbox.evaluate(_PASTE_JS, text)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_long_paste_is_sent_as_an_attachment_the_agent_reads_whole(tmp_path: Path, page: Page) -> None:
+    """A long paste becomes a chip saying how many lines it holds, the typed words stay in the box, and the agent is
+    sent those words with a line naming the uploaded file, which holds the whole paste and lives in the chat's own
+    folder."""
+    sent: list[str] = []
+    messenger = scripted_send_mngr_messenger([], sent)
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+        _allow_mngr_config_in_pytest(tmp_path)
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        textbox = chat.locator(".message-input-textbox")
+        expect(textbox).to_be_editable(timeout=15000)
+
+        textbox.fill("Summarize this:")
+        _paste(textbox, _LONG_PASTE)
+        chip = chat.locator(".composer-attachment--ready")
+        expect(chip).to_contain_text("pasted-text-1.txt", timeout=15000)
+        expect(chip).to_contain_text("Pasted text, 500 lines")
+        expect(textbox).to_have_value("Summarize this:")
+
+        textbox.press("Enter")
+        wait_for(lambda: len(sent) == 1, timeout=15.0, error_message="the message with the paste was never sent")
+        match = re.fullmatch(r"Summarize this:\n\nSee attachment here: \[pasted-text-1\.txt\]\((\S+)\)", sent[0])
+        assert match is not None, sent[0]
+        stored = Path(match.group(1))
+        assert stored.name == "pasted-text-1.txt"
+        assert stored.parent.parent == (tmp_path / "chats" / FIXTURE_AGENT_ID / "uploads").absolute()
+        assert stored.read_text() == _LONG_PASTE
+        expect(chat.locator(".composer-attachment")).to_have_count(0)
+        link = chat.locator(".message-user", has_text="Summarize this:").get_by_role("link", name="pasted-text-1.txt")
+        expect(link).to_be_visible(timeout=15000)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_long_paste_goes_back_into_the_box_as_text(tmp_path: Path, page: Page) -> None:
+    """The chip's "Paste as text" puts the whole paste back where the caret is and deletes its uploaded copy."""
+    with running_workspace(tmp_path, find_free_port(), find_free_port()) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        textbox = chat.locator(".message-input-textbox")
+        expect(textbox).to_be_editable(timeout=15000)
+
+        textbox.fill("Before: ")
+        _paste(textbox, _LONG_PASTE)
+        chip = chat.locator(".composer-attachment--ready")
+        expect(chip).to_contain_text("pasted-text-1.txt", timeout=15000)
+        chip.hover()
+        chip.get_by_role("button", name="Paste as text").click()
+        expect(chat.locator(".composer-attachment")).to_have_count(0)
+        expect(textbox).to_have_value(f"Before: {_LONG_PASTE}")
+        wait_for(
+            lambda: not list((tmp_path / "chats").rglob("pasted-text-1.txt")),
+            timeout=15.0,
+            error_message="the pasted text's uploaded copy was left behind",
+        )
+
+
 @pytest.mark.timeout(120, func_only=False)
 def test_a_send_still_unconfirmed_when_sent_again_asks_the_user_to_check_before_sending_it_once_more(
     tmp_path: Path, page: Page
@@ -2084,10 +2156,13 @@ def test_a_chat_with_no_user_turn_switches_at_once_and_leaves_no_handoff_node(tm
         _open_provider_menu(chat)
         chat.locator('[data-menu-part="submenu"] button', has_text="OpenAI").first.click()
 
-        # Nothing to hand over, so nothing asks and nothing is armed: the switch runs at once, and only the
-        # line by the composer reports it while it does.
-        expect(chat.locator('.agent-activity-indicator[data-state^="HANDOFF_"]')).to_contain_text("Starting Codex")
-        expect(chat.locator("[data-handoff-status]")).to_have_count(0)
+        # Nothing to hand over, so nothing asks and nothing is armed: the switch runs at once, one line in the
+        # conversation says the chat is starting on Codex (no handoff, and nothing by the composer), and the chip
+        # names Codex rather than the model it is leaving.
+        expect(chat.locator('[data-handoff-status="active"]')).to_contain_text("Starting Codex")
+        expect(chat.locator(".message-list")).not_to_contain_text("Handing off")
+        expect(chat.locator(".agent-activity-indicator")).to_have_count(0)
+        expect(chat.locator(".model-selector-trigger")).to_contain_text("Codex")
         expect(chat.locator(".modal-card")).to_have_count(0)
         expect(chat.locator(".message-input-switch-strip")).to_have_count(0)
 
@@ -2127,12 +2202,12 @@ def test_a_chat_switches_to_another_harness_from_the_page(tmp_path: Path, page: 
         _choose_pending_account(chat, "OpenAI", "OpenAI (Codex)")
         _switch_and_send(chat, "Carry on in Codex")
 
-        # The typed message stays visible as a held bubble, the handoff node reports the switch's
-        # progress, and the strip above the composer reports the switch rather than a turn.
+        # The typed message stays visible as a held bubble, and the handoff node in the conversation is the one
+        # place that reports the switch's progress: nothing by the composer meanwhile.
         held = chat.locator(".held-send", has_text="Carry on in Codex")
         expect(held).to_be_visible(timeout=15000)
-        expect(chat.locator('[data-handoff-status="active"]')).to_contain_text("Handing off to Codex")
-        expect(chat.locator('.agent-activity-indicator[data-state^="HANDOFF_"]')).to_be_visible()
+        expect(chat.locator('[data-handoff-status="active"]')).to_be_visible()
+        expect(chat.locator(".agent-activity-indicator")).to_have_count(0)
         expect(chat.locator(".message-input-send-button--switch")).to_have_count(0)
         expect(chat.locator(".message-input-switch-strip")).to_have_count(0)
 
@@ -2445,7 +2520,7 @@ def test_a_switch_is_cancelled_while_the_summary_is_written_and_the_message_come
         # period, long enough to call the switch off. The node reports the switch meanwhile.
         cancel = chat.locator(".message-input-cancel-switch-button")
         expect(cancel).to_be_visible(timeout=15000)
-        expect(chat.locator('[data-handoff-status="active"]')).to_contain_text("Handing off to Codex")
+        expect(chat.locator('[data-handoff-status="active"]')).to_contain_text("Claude Code is writing a summary")
         cancel.click()
 
         expect(chat.locator(".message-input-textbox")).to_have_value("Carry on in Codex", timeout=15000)

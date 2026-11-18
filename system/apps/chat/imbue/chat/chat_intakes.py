@@ -89,6 +89,13 @@ def app_chat_prefill(app_display_name: str) -> str:
 
 
 @pure
+def app_ask_message(app_display_name: str, ask: str) -> str:
+    """An ask from a page of an app as the chat that takes it receives it: led by the sentence that tells the agent
+    which app the ask is about, which the page's own text does not say."""
+    return f"This is about the {app_display_name} app.\n\n{ask}"
+
+
+@pure
 def intake_path(chat_id: ChatId | None, token: str | None) -> str:
     """The root path an intake answers: the selection, with the pending intake's token when one is held."""
     params: dict[str, str] = {}
