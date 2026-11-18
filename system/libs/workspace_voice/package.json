@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "@huggingface/transformers": "3.8.1",
-    "@ricky0123/vad-web": "0.0.31"
+    "@ricky0123/vad-web": "0.0.31",
+    "@tanstack/query-core": "^5.107.1"
   },
   "devDependencies": {
     "@types/node": "^25.4.0",

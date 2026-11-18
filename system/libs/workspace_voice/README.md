@@ -11,8 +11,14 @@ is the one surface that uses it.
 - `src/engines.ts` and `src/voice_models.json`: the engine registry. Every
   engine dictation can run, with the Hugging Face commit its files are taken
   at, each file's size and SHA-256, a variant per device (WebGPU or
-  WebAssembly), the most audio one call may carry, and its licence. Moonshine
-  Base is the default and, so far, the only engine.
+  WebAssembly), the most audio one call may carry, and its licence; and the
+  engine each kind of device runs by default: Moonshine Base on a desktop, and
+  Moonshine Tiny, the lighter model and the smaller download, on a touch
+  device (a phone or tablet, told by a finger being the primary pointer),
+  which also runs it on WebAssembly's quantized weights even where it has
+  WebGPU, a third of the memory of the full-precision ones. A browser's
+  overrides name any registered engine and device instead, for a side-by-side
+  evaluation.
 - `src/download.ts` and `src/fileStore.ts`: getting an engine's pinned files:
   from the store the last load kept them in when they check out, else straight
   from Hugging Face, each checked against its size and hash before the engine
@@ -25,7 +31,25 @@ is the one surface that uses it.
   origin and engine (a dedicated worker where the browser has none), which
   every chat page connects to; it gets the files, picks the device, loads the
   engine, transcribes one job at a time in arrival order, and keeps the engine
-  loaded for as long as a page of the workspace is open.
+  loaded for as long as a page of the workspace is open. It tells each page
+  what it already holds as the page connects, and every page each step of a
+  load, whichever page asked for it.
+- `src/devicePick.ts`: the device an engine runs on here (WebGPU with an
+  adapter, else WebAssembly, the page's preference first), picked the same way
+  by the worker for the load and by the page for the probe below.
+- `src/downloadProbe.ts`: whether the speech model is already on this device,
+  asked by a page as its composer mounts: the files of the variant this device
+  runs, looked for in the page's own Cache Storage, with the size the download
+  would be. Presence alone; the load checks every file again.
+- `src/speechModel.ts`: the page's speech models, one managed load per engine
+  held in a TanStack Query cache (`@tanstack/query-core`). A surface observes
+  an engine's load, asks for it (one load runs however many ask, and a load in
+  flight is joined), reads the download's progress, finds out what the
+  workspace's worker already holds, and gets the page's port to transcribe
+  on, all from one place. The worker is the authority: what it tells the
+  page's port is mirrored into the cache, so a page learns a model came ready
+  whichever page asked, and a page that hears another ask for a model connects
+  to hear the worker load it.
 - `src/transformersEngine.ts`: the transformers.js adapter the worker loads an
   engine with, its caches off; imported by the worker alone, since it carries
   the speech runtime.
@@ -38,10 +62,19 @@ is the one surface that uses it.
 - `src/scheduler.ts`: the one inference lane: commits in audio order ahead of
   the newest preview, a failed commit retried twice in place, and the words
   held for Retry or Discard when it keeps failing.
-- `src/dictation.ts`: what a composer drives: start, stop, cancel, and the
-  events it draws from (the state, the download's progress, the input level,
-  final words, the unfinished tail, and problems). One dictation runs per
-  workspace: a start anywhere stops the one running elsewhere.
+- `src/dictation.ts`: what a composer drives once the speech model is loaded:
+  start, stop, cancel, and the events it draws from (the state, the input
+  level, final words, the unfinished tail, and problems). A dictation loads
+  nothing itself: the composer asks the page's speech models for the model
+  first, and the dictation transcribes on the page's port to the engine
+  worker, which it leaves open when it is disposed.
+  `describeSpeechModelLoadError` puts a failed load in the words a composer
+  shows, and `isSpeechModelLoadProblem` tells such a problem from the others. One dictation runs per workspace: a start anywhere stops the one
+  running elsewhere.
+- `src/readyChime.ts`: the two short bell tones a composer plays as dictation
+  reaches listening, so a user who pressed the mic and looked away knows when
+  to speak; woken from the press, since the browser lets a page sound only
+  after a gesture.
 - `src/liveSpan.ts`: where the words land in a box of text: at the caret, the
   unfinished tail rewritten in place, only final words saved, and words fitted
   to the sentence around them.

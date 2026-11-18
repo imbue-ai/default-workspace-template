@@ -15,6 +15,8 @@ export type PageMessage =
   | { type: "transcribe"; id: number; audio: ArrayBuffer };
 
 export type WorkerMessage =
+  /** What a port is told as it connects: the engine the worker already holds, or null. */
+  | { type: "hello"; loaded: { engineId: EngineId; device: Device } | null }
   | { type: "progress"; loadedBytes: number; totalBytes: number }
   /** The files are down and checked; the engine is loading, which reports no progress. */
   | { type: "loading" }
