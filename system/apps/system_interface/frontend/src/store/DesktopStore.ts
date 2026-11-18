@@ -28,6 +28,7 @@ import {
 } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
 import { DEFAULT_WHAT_FAILED, failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { refreshShellKeybindings } from "../model/keybindings";
 import {
@@ -305,6 +306,8 @@ export interface PageDriver {
   requestClose(windowId: string): void;
   /** Whether the window's page declared it owns the close chord (``closeChord: true``). */
   ownsCloseChord(windowId: string): boolean;
+  /** Send every page that has loaded its handshake again, for a change it carries. */
+  greetAll(): void;
 }
 
 /** What the shell asks the embedding chrome for when a window is pulled out (the pull-out-window spec). */
@@ -431,6 +434,9 @@ export interface StoreDependencies {
   readonly popOut?: PopOutBridge;
   /** Where external links open when no app takes them; absent opens none. */
   readonly outsideLinks?: OutsideLinkOpener;
+  /** Open the bug report a failure's "Report a bug" asks for, with the failure attached (null: a page that sent
+   *  none); absent opens none. */
+  readonly reportBug?: (failure: ReportedFailure | null) => void;
   /** The immersive-mode conversation with the embedder; absent means no embedder. */
   readonly immersive?: ImmersiveBridge;
   /** The one window this shell shows edge to edge (a pulled-out window's own desktop window), else null. */
@@ -580,6 +586,7 @@ export class DesktopStore {
   private markAppsLoaded: () => void = () => undefined;
   private readonly popOut: PopOutBridge;
   private readonly outsideLinks: OutsideLinkOpener;
+  private readonly reportBug: (failure: ReportedFailure | null) => void;
   private readonly immersiveBridge: ImmersiveBridge;
   private readonly soloWindowId: string | null;
   /** Whether the embedder can pull a window out; off until it says so (an older chrome, a plain browser). */
@@ -588,6 +595,8 @@ export class DesktopStore {
   private outsideLinkCapabilities = NO_OUTSIDE_LINK_CAPABILITIES;
   /** Whether the embedder opens its settings for the files shared from the user's computer; off until it says so. */
   private opensLocalFiles = false;
+  /** Whether the embedder opens its bug report (its ``opensHelp``); off until it says so. */
+  private canReportBug = false;
   /** Whether the embedder takes immersive-mode requests; off until it says so (an older chrome, a plain browser). */
   private canImmerse = false;
   /** Immersive mode while the chrome says it is on; never persisted (the integration spec, S4). */
@@ -658,6 +667,7 @@ export class DesktopStore {
     this.metrics = deps.metrics;
     this.popOut = deps.popOut ?? NULL_POP_OUT_BRIDGE;
     this.outsideLinks = deps.outsideLinks ?? NULL_OUTSIDE_LINK_OPENER;
+    this.reportBug = deps.reportBug ?? (() => undefined);
     this.immersiveBridge = deps.immersive ?? NULL_IMMERSIVE_BRIDGE;
     this.soloWindowId = deps.soloWindowId ?? null;
     this.isSoloFirstLayoutPending = this.soloWindowId !== null;
@@ -676,7 +686,8 @@ export class DesktopStore {
    * Tell the user that what they asked for failed with ``error``, in ``failureSentence``'s words for ``whatFailed``
    * (a sentence stem naming it), with the status and the server's own text behind "See details". A call site whose
    * retry is the control just pressed asks for a plain note; any other, and any failure that asks for a bug report,
-   * shows one that stays.
+   * shows one that stays, which for a failure that asks for one offers "Report a bug" wherever the embedder opens a bug
+   * report when the toast is drawn (``reportBugAction``).
    */
   private toastFailure(whatFailed: string, error: unknown, { isLasting }: { readonly isLasting: boolean }): void {
     const told = failureSentence(describeRequestFailure(error), whatFailed);
@@ -684,7 +695,11 @@ export class DesktopStore {
       this.toasts.show(told.message, { isLasting: false, details: told.details });
       return;
     }
-    this.toasts.show(told.message, { isLasting: true, details: told.details });
+    this.toasts.show(told.message, {
+      isLasting: true,
+      details: told.details,
+      isReportable: told.isReportable,
+    });
   }
 
   /** Whether this window is viewing somebody else's desktop, in which case the change named by ``action`` is
@@ -732,6 +747,33 @@ export class DesktopStore {
    *  already greeted hear it as the shell's rebroadcast of that message. */
   setOpensLocalFiles(opensLocalFiles: boolean): void {
     this.opensLocalFiles = opensLocalFiles;
+  }
+
+  /** Whether "Report a bug" can work: the embedder opens its bug report. The pages learn it from their handshake. */
+  getCanReportBug(): boolean {
+    return this.canReportBug;
+  }
+
+  /** The embedder said whether it opens its bug report (``opensHelp`` in ``minds:embedder-capabilities``). It says
+   *  so once, after the pages may have loaded, so a change is handed to every page in a fresh handshake. */
+  setCanReportBug(canReportBug: boolean): void {
+    if (this.canReportBug === canReportBug) return;
+    this.canReportBug = canReportBug;
+    this.pageDriver?.greetAll();
+    // The toasts already up decide their "Report a bug" as they draw.
+    this.notifyListeners();
+  }
+
+  /** What a reportable toast's "Report a bug" runs: the bug report about its failure, or null while the embedder
+   *  opens none. */
+  reportBugAction(): ((failure: ReportedFailure) => void) | null {
+    return this.canReportBug ? (failure) => this.reportBug(failure) : null;
+  }
+
+  /** A page's ``shell:report-bug``: the bug report about ``failure`` opens, where the embedder opens one; null opens
+   *  it with nothing attached. */
+  reportBugFromPage(failure: ReportedFailure | null): void {
+    if (this.canReportBug) this.reportBug(failure);
   }
 
   /** Whether the embedder can take the app window immersive for a window of this desktop. */

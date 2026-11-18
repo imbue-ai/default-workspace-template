@@ -9,6 +9,7 @@ import { getRoster, resetRosterForTesting } from "../model/Roster";
 import { TOAST_DURATION_MS } from "@imbue/workspace-ui/src/models/toasts";
 import { notAnsweredSentence, readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
+import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { activeFocusedWindowId, activePlacements, barEntries, isLayoutDirty } from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
@@ -106,7 +107,10 @@ function notices(): string[] {
 
 function makeStore(
   redraw: () => void = () => undefined,
-  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks" | "immersive"> = {},
+  extra: Pick<
+    StoreDependencies,
+    "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks" | "reportBug" | "immersive"
+  > = {},
 ): DesktopStore {
   const store = new DesktopStore({
     clientId: CLIENT,
@@ -765,6 +769,7 @@ describe("windows", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
+      greetAll: () => undefined,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual([]);
@@ -783,6 +788,7 @@ describe("windows", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
+      greetAll: () => undefined,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual(["win-1"]);
@@ -799,6 +805,7 @@ describe("windows", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: (id) => id === "win-1",
+      greetAll: () => undefined,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual(["win-1"]);
@@ -845,6 +852,7 @@ describe("windows", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
+      greetAll: () => undefined,
     });
     socket.deliver().onLayoutOp({ op: "refresh", args: { window: "win-1" }, requester: "" });
     socket.deliver().onLayoutOp({ op: "refresh", args: { app: "docs" }, requester: "" });
@@ -861,6 +869,7 @@ describe("windows", () => {
       reloadApp: () => undefined,
       resendTheme: (app) => void resent.push(app),
       broadcastKeybindingsChanged: () => undefined,
+      greetAll: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
     });
@@ -889,6 +898,17 @@ describe("failure toasts", () => {
     return new HttpError(readFailure({ status, body, rawText, requestKind: "change" }));
   }
 
+  async function storeReportingBugs(
+    reportBug: (failure: ReportedFailure | null) => void,
+    isOpeningHelp: boolean,
+    redraw: () => void = () => undefined,
+  ): Promise<DesktopStore> {
+    const store = makeStore(redraw, { reportBug });
+    store.setCanReportBug(isOpeningHelp);
+    await store.start(NO_LINK);
+    return store;
+  }
+
   it("words an app's refusal of a launch by its display name, with the app's reason behind See details", async () => {
     const store = await startedStore();
     api.refusal = refusedWith(400, { detail: "docs refused the launch: no account is signed in" });
@@ -904,23 +924,59 @@ describe("failure toasts", () => {
     ]);
   });
 
-  it("words a launch the app could not answer as the fallback, the app's reason behind See details", async () => {
-    const store = await startedStore();
+  it("words a launch the app could not answer as the fallback, whose Report a bug files the toast's failure", async () => {
+    const reportBug = vi.fn();
+    const store = await storeReportingBugs(reportBug, true);
     api.refusal = refusedWith(502, { detail: "docs answered the launch with 500: boom" });
     await store.runLaunch("docs", "new", "new");
 
-    expect(store.toasts.current()).toMatchObject([
-      {
-        message: "Docs couldn't open that. Try again. If this persists, report a bug.",
-        details: "HTTP 502\ndocs answered the launch with 500: boom",
-        actions: [],
-        isLasting: true,
-      },
-    ]);
+    const [toast] = store.toasts.current();
+    expect(toast).toMatchObject({
+      message: "Docs couldn't open that. Try again. If this persists, report a bug.",
+      details: "HTTP 502\ndocs answered the launch with 500: boom",
+      actions: [],
+      isLasting: true,
+      isReportable: true,
+    });
+    store.reportBugAction()?.({ message: toast.message, details: toast.details });
+    expect(reportBug).toHaveBeenCalledWith({
+      message: "Docs couldn't open that. Try again. If this persists, report a bug.",
+      details: "HTTP 502\ndocs answered the launch with 500: boom",
+    });
   });
 
-  it("shows an app's own sentence as written", async () => {
-    const store = await startedStore();
+  it("offers Report a bug on a toast already up once the embedder says it opens one, and redraws for it", async () => {
+    const reportBug = vi.fn();
+    const redraw = vi.fn();
+    const store = await storeReportingBugs(reportBug, false, redraw);
+    api.refusal = refusedWith(502, { detail: "docs answered the launch with 500: boom" });
+    await store.runLaunch("docs", "new", "new");
+    expect(store.toasts.current()[0].isReportable).toBe(true);
+    expect(store.reportBugAction()).toBeNull();
+
+    redraw.mockClear();
+    store.setCanReportBug(true);
+    expect(redraw).toHaveBeenCalled();
+    store.reportBugAction()?.({ message: "m", details: null });
+    expect(reportBug).toHaveBeenCalledWith({ message: "m", details: null });
+
+    store.setCanReportBug(false);
+    expect(store.reportBugAction()).toBeNull();
+  });
+
+  it("opens a page's bug report with its failure, or with none, only while the embedder opens one", async () => {
+    const reportBug = vi.fn();
+    const store = await storeReportingBugs(reportBug, false);
+    store.reportBugFromPage({ message: "Docs couldn't save.", details: "HTTP 500" });
+    expect(reportBug).not.toHaveBeenCalled();
+    store.setCanReportBug(true);
+    store.reportBugFromPage({ message: "Docs couldn't save.", details: "HTTP 500" });
+    store.reportBugFromPage(null);
+    expect(reportBug.mock.calls).toEqual([[{ message: "Docs couldn't save.", details: "HTTP 500" }], [null]]);
+  });
+
+  it("shows an app's own sentence as written, and offers Report a bug only when the app asks for one", async () => {
+    const store = await storeReportingBugs(vi.fn(), true);
     api.refusal = refusedWith(502, {
       detail: "docs answered the launch with 503: still loading",
       user_facing_message: "Docs is still starting. Try again in a few seconds.",
@@ -933,9 +989,9 @@ describe("failure toasts", () => {
     });
     await store.runLaunch("docs", "new", "new");
 
-    expect(store.toasts.current().map((toast) => toast.message)).toEqual([
-      "Docs is still starting. Try again in a few seconds.",
-      "Docs couldn't read its notes. If this persists, report a bug.",
+    expect(store.toasts.current().map((toast) => [toast.message, toast.isReportable])).toEqual([
+      ["Docs is still starting. Try again in a few seconds.", false],
+      ["Docs couldn't read its notes. If this persists, report a bug.", true],
     ]);
   });
 
@@ -967,7 +1023,7 @@ describe("failure toasts", () => {
   });
 
   it("keeps a failure that asks for a bug report up with its details, wherever it happened", async () => {
-    const store = await startedStore();
+    const store = await storeReportingBugs(vi.fn(), true);
     api.refusal = refusedWith(500, "<html>Internal Server Error</html>", "<html>Internal Server Error</html>");
     await store.closeWindow("win-1");
     vi.advanceTimersByTime(TOAST_DURATION_MS);
@@ -976,6 +1032,7 @@ describe("failure toasts", () => {
         message: "Could not close the window. Try again. If this persists, report a bug.",
         details: "HTTP 500\n<html>Internal Server Error</html>",
         isLasting: true,
+        isReportable: true,
       },
     ]);
   });
@@ -3081,6 +3138,7 @@ describe("the phone layout", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
+      greetAll: () => undefined,
     });
     socket.deliver().onConnected();
     socket.deliver().onConnected();
