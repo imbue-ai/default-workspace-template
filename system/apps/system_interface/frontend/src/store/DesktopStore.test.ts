@@ -37,6 +37,7 @@ import { STANDARD_CHROME, type ThemeChrome } from "../model/themes";
 import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
 import {
   DesktopStore,
+  FREE_SPACE_REQUEST,
   IMMERSIVE_REFUSED_NOTICE,
   NO_CHAT_APP_REASON,
   NO_MENTION_APP_REASON,
@@ -996,12 +997,17 @@ describe("opening", () => {
     expect(api.calls.filter((call) => call === "fetchInventory")).toHaveLength(readsBefore + 1);
   });
 
-  it("shows the free-up-space agent as pending until its send settles, and toasts a refused one", async () => {
+  it("asks the free-up-space agent in the main chat, pending until its send settles, and toasts a refused one", async () => {
     const store = await startedStore();
+    // A full disk is no app's, so the ask runs the primary text action whatever else the chat app declares.
     offerApps(api, socket, [
       appRecord("buddy", {
         display_name: "Buddy",
-        launch_paths: [launchPathRecord({ id: "main", path: "/main", params: ["message"], text_param: "message" })],
+        launch_paths: [
+          launchPathRecord({ id: "main", path: "/main", params: ["message"], text_param: "message" }),
+          launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" }),
+          appAskLaunchPathRecord(),
+        ],
       }),
     ]);
     api.refusal = shellRefusal(
@@ -1012,6 +1018,12 @@ describe("opening", () => {
     );
     await store.openWindowAt("docs", "/x", "new");
     const [ask] = store.toasts.current()[0].actions;
+    api.refusal = null;
+    ask.run();
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([
+      `launch:home:buddy:main:${JSON.stringify({ message: FREE_SPACE_REQUEST })}:new`,
+    ]);
     api.refusal = refusedWith(400, { detail: "buddy refused the launch: no account is signed in" });
 
     ask.run();
