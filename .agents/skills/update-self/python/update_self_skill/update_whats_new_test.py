@@ -12,12 +12,16 @@ import pytest
 from update_self_skill import update_self
 from update_self_skill.update_whats_new import (
     CHANGELOG_PATH,
+    LAST_TAG_WITH_ENTRY_FILES,
     ChangelogSection,
     list_whats_new,
     parse_changelog_sections,
     release_labels,
     select_unseen_sections,
 )
+
+# ``.agents/skills/update-self/python/update_self_skill/`` -> the workspace root.
+_WORKSPACE_ROOT = Path(__file__).parent.parents[4]
 
 _HEADER = "# Changelog - workspace template\n\nA summary of changes.\n\n"
 _V1_SECTION = "## [minds-v1] - 2026-01-01\n\n- Changed: v1 thing.\n"
@@ -135,6 +139,14 @@ def test_sections_are_the_labelled_ones_each_ending_at_the_next_heading() -> Non
     ]
     assert release_labels(parse_changelog_sections(text)) == ["minds-v2", "minds-v1"]
     assert parse_changelog_sections("") == []
+
+
+def test_the_last_tag_with_entry_files_has_a_section_in_the_root_changelog() -> None:
+    changelog = (_WORKSPACE_ROOT / CHANGELOG_PATH).read_text(encoding="utf-8")
+
+    assert LAST_TAG_WITH_ENTRY_FILES in release_labels(
+        parse_changelog_sections(changelog)
+    )
 
 
 @pytest.mark.parametrize(
