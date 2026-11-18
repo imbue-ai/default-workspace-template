@@ -402,12 +402,7 @@ describe("ChatRail refused rename", () => {
 
   it("holds the notice while another chat's name is being typed, and shows it when that field closes", async () => {
     mount([first, second]);
-    let refuse: (error: unknown) => void = () => undefined;
-    verbs.renameChat.mockReturnValueOnce(
-      new Promise<undefined>((_resolve, reject) => {
-        refuse = reject;
-      }),
-    );
+    const [refuse] = holdRenames(1);
 
     renameInPlace(first.chatId, "Taken");
     const field = renameInPlace(second.chatId, "Half typ", null);
