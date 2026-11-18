@@ -158,6 +158,7 @@ function commitRename(row: ChatRow): void {
 
 function refuseRename(row: ChatRow, title: string, error: unknown): void {
   dropPendingRename(row.chatId, title);
+  console.warn(`[chat-root] could not rename chat ${row.chatId}`, error);
   raiseRootNotice({
     title: "Couldn't rename the chat",
     body: failureBody(error, {
@@ -218,6 +219,7 @@ function deleteChat(attrs: RowMenuContext, row: ChatRow): void {
   destroyChat(row.chatId).catch((error: unknown) => {
     dropPendingDelete(row.chatId);
     attrs.onDeleteRefused();
+    console.warn(`[chat-root] could not delete chat ${row.chatId}`, error);
     raiseRootNotice({
       title: isRoom(row) ? "Couldn't delete the room" : "Couldn't delete the chat",
       body: failureBody(error, {
