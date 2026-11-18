@@ -94,10 +94,11 @@ Triage each conflict; the first rule that applies wins:
 - **The template's changelog -> take the target's side**: `git checkout
   --theirs -- <path> && git add <path>` for the root `CHANGELOG.md` and
   `UNABRIDGED_CHANGELOG.md`, and `git rm <path>` for a `changelog/` entry file
-  the target deletes (its text has moved into those two files). Before taking
-  the target's root file over one this workspace wrote itself, save the
-  workspace's to a new path (`git show :2:<path> > <new path>`) and name the
-  move in your report.
+  the target deletes (its text has moved into those two files). When the
+  workspace's side holds text the target's lacks (its own lines in a root
+  file, or its edit to an entry file), first save the workspace's version to a
+  new path outside any `changelog/` folder (`git show :2:<path> > <new path>`)
+  and name the move in your report.
 - **Mixed files (`CLAUDE.md` and similar) -> merge by judgment.** Keep the
   agent-specific customizations, fold in the upstream additions. Side-picking
   one side of a code file outside the agent-owned rule is a last resort, and
@@ -548,8 +549,14 @@ text. The printed JSON names what went into the file: `sections`, `added`
 releases the workspace skipped, read at the last release that kept them as
 files; `null` when there is no such release to read). Under `unlisted` it names
 anything that could not be read: repeat each of those lines in your report
-rather than presenting a partial list as the whole. The verbatim entries behind
-the sections are in `UNABRIDGED_CHANGELOG.md` at the target.
+rather than presenting a partial list as the whole.
+
+The entries under `added_before_consolidation` span every release the
+workspace skipped and name none of them. `UNABRIDGED_CHANGELOG.md` at the
+target holds the same text under one `## [<release>]` heading per release, and
+the verbatim entries behind the sections: read it to say which release a change
+shipped in. For a workspace many releases behind, both files are larger than
+one read: read them in parts.
 
 ## 6. Report back
 

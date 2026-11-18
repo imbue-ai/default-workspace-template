@@ -26,7 +26,8 @@ Write it for a non-technical reader skimming top to bottom, in this order:
    I undid it; everything is safe".
 2. **What's new** -- always first after the headline, and *detailed*: carry
    the worker's digest in prose a lay reader parses (what each change does,
-   not file names), release by release when it covers more than one. When the
+   not file names), release by release where the digest says which release a
+   change shipped in. When the
    worker reports changelog text it could not read, say the list may be
    incomplete. Some readers want the specifics; the rest skim it.
 3. **Conflicts** -- "none", or what needed reconciling. When the worker kept

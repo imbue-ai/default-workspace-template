@@ -12,7 +12,8 @@ from typing import NamedTuple, Sequence
 CHANGELOG_PATH = "CHANGELOG.md"
 UNABRIDGED_CHANGELOG_PATH = "UNABRIDGED_CHANGELOG.md"
 
-# The last release whose tree holds every released change as an entry file, e.g. ``minds-v1.2.3``.
+# The last release whose root CHANGELOG.md has no release section, so whose tree holds every
+# released change as an entry file, e.g. ``minds-v1.2.3``.
 # CLEANUP: remove this constant, the entries read at it and the sections it hides once no
 # supported workspace predates the first release whose CHANGELOG.md has release sections.
 LAST_TAG_WITH_ENTRY_FILES: str | None = "minds-v0.10.5"
