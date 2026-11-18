@@ -264,10 +264,11 @@ vi.mock("../models/HarnessCatalog", async () => {
 });
 vi.mock("../models/Chats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Chats")>()),
-  getChatById: () =>
-    mocks.isChatRegistered
+  getChatById: (chatId: string) =>
+    (mocks.chats as ChatSnapshot[]).find((chat) => chat.chat_id === chatId) ??
+    (mocks.isChatRegistered
       ? { title: "Chat 1", active_agent: mocks.agent, handoff: mocks.switching.handoff }
-      : undefined,
+      : undefined),
   getChats: () => mocks.chats,
   getMainChatId: () => mocks.mainChatId,
   getProvisionalChat: () => mocks.provisional,
@@ -329,7 +330,7 @@ import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
 import { isApplePlatform } from "@imbue/workspace-voice/src/support";
 import { EngineLoadError } from "@imbue/workspace-voice/src/workerClient";
 import { ChatNotStartedError } from "../models/Chats";
-import type { DiscardedChat, ProvisionalChat } from "../models/Chats";
+import type { ChatSnapshot, DiscardedChat, ProvisionalChat } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture } from "../models/chatSnapshotFixture";
 import { DICTATION_NOTE, hasDictatedSpeech, withDictationNote } from "../models/dictationNote";
 import { stubShellConnection } from "../shellConnectionFixture";
@@ -4653,7 +4654,10 @@ describe("MessageInput offers a way out of a chat whose agent cannot start", () 
     mocks.beginSwitchToAccountId.mockClear();
     mocks.openChatPage.mockClear();
     mocks.refuseSendToFailedChat.mockReset();
-    mocks.chats = [chatSnapshotFixture("chat-main"), chatSnapshotFixture("chat-other", { last_messaged_at: 900 })];
+    mocks.chats = [
+      chatSnapshotFixture("chat-main", { title: "Main chat" }),
+      chatSnapshotFixture("chat-other", { last_messaged_at: 900 }),
+    ];
     mocks.mainChatId = "chat-main";
     mocks.agent.account_id = "acct-1";
     mocks.agent.harness = "claude";
@@ -4849,20 +4853,33 @@ describe("MessageInput offers a way out of a chat whose agent cannot start", () 
     expect(findButton(tree, "Switch provider")).toBeDefined();
   });
 
-  it("says in the notice why the ask could not be sent, and offers it again", async () => {
-    const render = await composerAfterRefusedSend(startFailed());
-    mocks.sendMessage.mockRejectedValueOnce(refusal(500, { detail: "mngr message exited 1" }));
+  it.each([
+    ["an agent that would not start", () => composerAfterRefusedSend(startFailed())],
+    ["a chat whose create failed", () => composerAfterSendToFailedCreate()],
+  ])(
+    "says in the notice for %s that the chat it asked could not be asked, and offers the ask again",
+    async (_case, composer) => {
+      const render = await composer();
+      mocks.sendMessage.mockRejectedValueOnce(
+        refusal(500, {
+          detail: "A dialog (a permission prompt) is open in the agent's terminal. Clear it there.",
+          user_facing_message: "The agent is waiting on something in its terminal. Answer it there and try again.",
+          kind: "input_blocked",
+        }),
+      );
 
-    press(render(), "Ask an agent to fix this");
-    await flushAsync();
+      press(render(), "Ask an agent to fix this");
+      await flushAsync();
 
-    const refused = render();
-    expect(renderedText(findByClass(refused, "ask-agent-failure-message")).trim()).toBe(
-      "The agent couldn't be asked. Try again. If this persists, report a bug.",
-    );
-    expect(renderedText(findByClass(refused, "ask-agent-failure"))).toContain("mngr message exited 1");
-    expect(renderedText(findByClass(refused, "modal-message"))).toContain(START_FAILED_SENTENCE);
-    expect(findButton(refused, "Ask an agent to fix this")?.attrs?.["aria-disabled"]).toBeUndefined();
-    expect(mocks.openChatPage).not.toHaveBeenCalled();
-  });
+      const refused = render();
+      expect(renderedText(findByClass(refused, "ask-agent-failure-message")).trim()).toBe(
+        'Couldn\'t ask "Main chat". The agent is waiting on something in its terminal. Answer it there and try again.',
+      );
+      expect(renderedText(findByClass(refused, "ask-agent-failure"))).toContain(
+        "A dialog (a permission prompt) is open",
+      );
+      expect(findButton(refused, "Ask an agent to fix this")?.attrs?.["aria-disabled"]).toBeUndefined();
+      expect(mocks.openChatPage).not.toHaveBeenCalled();
+    },
+  );
 });
