@@ -80,6 +80,7 @@ from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_records import ChatRecord
+from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_settings import FastModeMode
@@ -170,6 +171,7 @@ from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.ws_broadcaster import provisional_chat_created_message
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
+from imbue.concurrency_group.thread_utils import ObservableThread
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.errors import AgentIdNotFoundError
@@ -622,6 +624,73 @@ def test_delete_attachment_missing_is_ok(client: FlaskClient) -> None:
     response = client.delete("/api/uploads/deadbeef/missing.png")
 
     assert response.status_code == 200
+
+
+_UPLOAD_CHAT_ID = "agent-0000000000000000000000000000c4a7"
+
+
+def test_a_chat_upload_is_stored_in_the_chats_folder_served_and_deleted(client: FlaskClient, app: Flask) -> None:
+    """A chat's own upload lands under its folder in the chat files root, is served and deleted through the chat's
+    route, and is not reachable through the workspace uploads route."""
+    upload = client.post(
+        f"/api/chats/{_UPLOAD_CHAT_ID}/uploads",
+        data={"file": (io.BytesIO(b"pasted words"), "pasted-text-1.txt")},
+        content_type="multipart/form-data",
+    )
+
+    assert upload.status_code == 201
+    stored = Path(upload.get_json()["path"])
+    chats_root = state_of(app).agent_manager.chat_files_root.absolute()
+    assert stored.is_absolute()
+    assert stored.parent.parent == chats_root / _UPLOAD_CHAT_ID / "uploads"
+    assert stored.read_bytes() == b"pasted words"
+    relative_path = _upload_relative_path(str(stored))
+    assert client.get(f"/api/chats/{_UPLOAD_CHAT_ID}/uploads/{relative_path}").data == b"pasted words"
+    assert client.get(f"/api/uploads/{relative_path}").status_code == 404
+
+    assert client.delete(f"/api/chats/{_UPLOAD_CHAT_ID}/uploads/{relative_path}").status_code == 200
+    assert not stored.exists()
+
+
+def test_a_chat_upload_refuses_an_id_that_is_not_a_chats(client: FlaskClient) -> None:
+    """The chat id names a folder, so one not shaped like a chat's is refused before anything is written."""
+    response = client.post(
+        "/api/chats/not-a-chat/uploads",
+        data={"file": (io.BytesIO(b"x"), "pasted-text-1.txt")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 404
+    assert client.get("/api/chats/not-a-chat/uploads/abc/pasted-text-1.txt").status_code == 404
+    assert client.delete("/api/chats/not-a-chat/uploads/abc/pasted-text-1.txt").status_code == 404
+
+
+def test_a_chats_uploads_go_with_the_chat_when_it_is_destroyed(tmp_path: Path) -> None:
+    """A pasted text lives in the chat's folder, so the chat's destroy removes it with the rest of the chat."""
+    mngr_binary, _log_path = write_recording_mngr_binary(tmp_path)
+    chats_root = tmp_path / "chats"
+    manager = AgentManager.build(
+        WebSocketBroadcaster(),
+        messenger=RecordingMngrMessenger(),
+        mngr_binary=mngr_binary,
+        chat_record_store=FileChatRecordStore(root=chats_root),
+        chat_files_root=chats_root,
+    )
+    manager.note_agent_list_known()
+    seed_agent_state(manager, _UPLOAD_CHAT_ID, name="Chat-1")
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    upload = client.post(
+        f"/api/chats/{_UPLOAD_CHAT_ID}/uploads",
+        data={"file": (io.BytesIO(b"pasted words"), "pasted-text-1.txt")},
+        content_type="multipart/form-data",
+    )
+    stored = Path(upload.get_json()["path"])
+    assert stored.exists()
+
+    assert client.post(f"/api/chats/{_UPLOAD_CHAT_ID}/destroy").status_code == 200
+
+    assert not stored.exists()
+    assert not (chats_root / _UPLOAD_CHAT_ID).exists()
 
 
 def test_get_events_with_session_files(client: FlaskClient, app: Flask, tmp_path: Path) -> None:
@@ -5116,6 +5185,51 @@ def test_a_converging_chat_carries_the_model_it_was_switched_to(tmp_path: Path) 
     assert [chat["handoff"]["model_pick"] for chat in listed if chat["chat_id"] == other] == [None]
 
 
+def test_an_interrupt_waits_out_a_landed_handoffs_deliveries_and_then_stops_the_successor(tmp_path: Path) -> None:
+    """Once the successor is the chat's agent the page offers Stop; the route holds it until the switch has
+    delivered everything it owes the successor, so the restart cannot race a delivery, then interrupts."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first, successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SWITCHING)
+    _track_claude_agent(app, successor, "Chat-1", tmp_path / "claude_config")
+    manager: AgentManager = state_of(app).agent_manager
+    record = manager._chat_record_store.read(ChatId(first))
+    assert record is not None and record.handoff is not None
+    landed = record.model_copy_update(
+        to_update(
+            record.field_ref().agents,
+            (
+                make_chat_agent_entry(1, first, is_archived=True),
+                make_chat_agent_entry(2, successor, is_archived=False),
+            ),
+        )
+    )
+    manager._chat_record_store.write(landed)
+    manager.refresh_chat_records()
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert [(chat["handoff"]["has_landed"], chat["active_agent"]["agent_id"]) for chat in listed] == [
+        (True, successor)
+    ]
+
+    restarted = FinishedProcess(
+        returncode=0, stdout="Restarted", stderr="", command=("mngr",), is_output_already_logged=False
+    )
+    answers: list[int] = []
+    with patch("imbue.chat.server.run_local_command_modern_version", return_value=restarted) as run:
+        interrupter = ObservableThread(
+            target=lambda: answers.append(client.post(f"/api/chats/{first}/interrupt").status_code),
+            name="interrupter",
+        )
+        interrupter.start()
+        interrupter.join(timeout=0.3)
+        assert interrupter.is_alive() and answers == [] and run.call_count == 0
+        manager._chat_record_store.write(landed.model_copy_update(to_update(landed.field_ref().handoff, None)))
+        manager.refresh_chat_records()
+        interrupter.join(timeout=10.0)
+    assert answers == [200]
+    assert run.call_args.kwargs["command"][:3] == ["mngr", "start", "Chat-1"]
+
+
 def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cancelled(tmp_path: Path) -> None:
     app, log_path = _recording_app(tmp_path)
     client = app.test_client()
@@ -5274,8 +5388,10 @@ def test_a_failed_handoff_retries_the_create_through_the_route(tmp_path: Path) -
     assert retried.get_json() == {"status": "converging", "phase": "switching"}
     wait_for(lambda: manager.get_handoff_state(ChatId(first)) is None, timeout=15.0)
     argv = log_path.read_text().splitlines()
-    assert [line.split(" ")[0] for line in argv] == ["stop", "rename", "create"]
-    assert f"--id {successor}" in argv[2] and "--type codex" in argv[2]
+    verbs = [line.split(" ")[0] for line in argv]
+    assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
+    create = argv[verbs.index("create")]
+    assert f"--id {successor}" in create and "--type codex" in create
     listed_after = client.get("/api/chats").get_json()["chats"]
     assert [(chat["chat_id"], chat["active_agent"]["agent_id"], chat["agent_ids"]) for chat in listed_after] == [
         (first, successor, [first, successor])
@@ -7418,6 +7534,8 @@ def test_an_app_chat_intake_with_nothing_signed_in_mints_the_titled_chat_awaitin
 
 
 _ASK = "The preview couldn't load. Find out why this failed and fix it."
+# The ask as a chat receives it from a page of the Docs app: the page's task does not say which app failed.
+_ASK_NAMING_DOCS = f"This is about the Docs app.\n\n{_ASK}"
 
 
 def _ask_about_docs(client: FlaskClient, **fields: object) -> Any:
@@ -7441,7 +7559,8 @@ def _ask_about_docs(client: FlaskClient, **fields: object) -> Any:
 )
 def test_an_app_ask_is_sent_to_the_agent_chat_about_the_app(tmp_path: Path, docs_chat_labels: dict[str, str]) -> None:
     """An ask from a page of an app goes to the chat about that app, found as ``app_chat`` finds it, as a message
-    through the ordinary send path: nothing is drafted, and no chat is made."""
+    through the ordinary send path, led by the sentence that names the app: nothing is drafted, and no chat is
+    made."""
     messenger = RecordingMngrMessenger()
     app = _peopled_app(tmp_path, messenger)
     manager = state_of(app).agent_manager
@@ -7452,9 +7571,51 @@ def test_an_app_ask_is_sent_to_the_agent_chat_about_the_app(tmp_path: Path, docs
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"path": f"/?chat={_DOCS_CHAT_ID}"}
-    assert messenger.sent == [(_DOCS_CHAT_ID, _ASK)]
+    assert messenger.sent == [(_DOCS_CHAT_ID, _ASK_NAMING_DOCS)]
     assert len(manager.get_chat_snapshots()) == chat_count
     assert manager.get_provisional_chats() == []
+
+
+def test_an_app_ask_with_no_text_sends_nothing_to_the_chat_about_the_app(tmp_path: Path) -> None:
+    """The sentence that names the app leads a text; alone it is no message, so an ask with no text only opens the
+    chat about the app, as any intake with no text opens its chat."""
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+    seed_agent_state(state_of(app).agent_manager, _DOCS_CHAT_ID, name="Docs-Chat", labels={"app_chat": "docs"})
+
+    response = _ask_about_docs(app.test_client(), message="")
+
+    assert response.status_code == 200, response.get_json()
+    assert response.get_json() == {"path": f"/?chat={_DOCS_CHAT_ID}"}
+    assert messenger.sent == []
+
+
+@pytest.mark.parametrize(
+    "target_fields",
+    [
+        pytest.param({"target": "main_chat"}, id="the-main-chat"),
+        pytest.param({"target": "chat", "chat_id": _MAIN_ID}, id="a-named-chat"),
+    ],
+)
+def test_an_intake_that_is_not_an_app_ask_is_sent_as_it_arrived_though_it_names_an_app(
+    tmp_path: Path, target_fields: dict[str, str]
+) -> None:
+    """Only an ask from a page of an app is led by the app's name: the same text and the same app fields under any
+    other target reach the chat untouched."""
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+
+    response = _intake(
+        app.test_client(),
+        message=_ASK,
+        app="docs",
+        app_display_name="Docs",
+        is_delivery_awaited=True,
+        **target_fields,
+    )
+
+    assert response.status_code == 200, response.get_json()
+    assert messenger.sent == [(_MAIN_ID, _ASK)]
 
 
 def test_an_app_ask_for_a_chat_about_the_app_still_being_created_is_held_for_it(tmp_path: Path) -> None:
@@ -7473,9 +7634,13 @@ def test_an_app_ask_for_a_chat_about_the_app_still_being_created_is_held_for_it(
     path = response.get_json()["path"]
     assert _chat_id_of(path) == _DOCS_CHAT_ID
     held = client.get(f"/api/chats/intakes/{_token_of(path)}").get_json()
-    assert (held["chat_id"], held["message"], held["is_draft"]) == (_DOCS_CHAT_ID, _ASK, False)
+    assert (held["chat_id"], held["message"], held["is_draft"]) == (_DOCS_CHAT_ID, _ASK_NAMING_DOCS, False)
     applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={}).get_json()
-    assert (applied["chat_id"], applied["composer_text"], applied["first_message"]) == (_DOCS_CHAT_ID, _ASK, None)
+    assert (applied["chat_id"], applied["composer_text"], applied["first_message"]) == (
+        _DOCS_CHAT_ID,
+        _ASK_NAMING_DOCS,
+        None,
+    )
     assert messenger.sent == []
     assert [chat.chat_id for chat in manager.get_provisional_chats()] == [ChatId(_DOCS_CHAT_ID)]
 
@@ -7484,8 +7649,8 @@ def test_an_app_ask_with_no_chat_about_the_app_creates_it_with_the_ask_as_its_fi
     tmp_path: Path, signed_in_account: str
 ) -> None:
     """With an account signed in and no chat about the app, the ask makes it: titled and labelled as the window's
-    button would make it, with the ask as the first message its create delivers, attributed to the person who
-    pressed and raising the bubble a new chat's first message is due."""
+    button would make it, with the ask, led by the sentence that names the app, as the first message its create
+    delivers, attributed to the person who pressed and raising the bubble a new chat's first message is due."""
     messenger = RecordingMngrMessenger()
     app = _peopled_app(tmp_path, messenger)
     state = state_of(app)
@@ -7507,7 +7672,7 @@ def test_an_app_ask_with_no_chat_about_the_app_creates_it_with_the_ask_as_its_fi
     assert (created.name, created.labels, created.message, created.account_id, created.phase) == (
         "Docs Chat",
         {"app_chat": "docs"},
-        _ASK,
+        _ASK_NAMING_DOCS,
         signed_in_account,
         ProvisionalChatPhase.CREATING,
     )
@@ -7517,12 +7682,16 @@ def test_an_app_ask_with_no_chat_about_the_app_creates_it_with_the_ask_as_its_fi
     visitors_chat_id = _chat_id_of(visitors.get_json()["path"])
     visitors_chat = manager.get_provisional_chat(visitors_chat_id)
     assert visitors_chat is not None
-    assert (visitors_chat.name, visitors_chat.message) == ("Notes Chat", f"[from: Bob] {_ASK}")
+    ask_naming_notes = f"This is about the Notes app.\n\n{_ASK}"
+    assert (visitors_chat.name, visitors_chat.message) == ("Notes Chat", f"[from: Bob] {ask_naming_notes}")
     (annotation,) = state.authors.annotations(ChatId(visitors_chat_id))
-    assert (str(annotation.author), annotation.text_sha256) == (_VISITOR_KEY, text_sha256(f"[from: Bob] {_ASK}"))
+    assert (str(annotation.author), annotation.text_sha256) == (
+        _VISITOR_KEY,
+        text_sha256(f"[from: Bob] {ask_naming_notes}"),
+    )
     wait_until_true(lambda: len(shell.bubbles) == 1, 10.0, "the visitor's first message's bubble to reach the shell")
     assert [(str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text) for bubble in shell.bubbles] == [
-        (_VISITOR_KEY, visitors_chat_id, "Notes Chat", _ASK)
+        (_VISITOR_KEY, visitors_chat_id, "Notes Chat", ask_naming_notes)
     ]
 
 
@@ -7550,7 +7719,8 @@ def test_an_app_ask_goes_to_the_main_chat_when_the_chat_about_the_app_cannot_tak
     tmp_path: Path, signed_in_account: str, seed_the_docs_chat: Callable[[AgentManager], None]
 ) -> None:
     """A chat about the app that is a room, or is not an agent and is not becoming one, is left as it is: the ask
-    follows the ``main_chat`` rules instead, and no second chat about the app is made beside it."""
+    follows the ``main_chat`` rules instead, still naming the app the main chat would not otherwise know of, and no
+    second chat about the app is made beside it."""
     messenger = RecordingMngrMessenger()
     app = _peopled_app(tmp_path, messenger)
     manager = state_of(app).agent_manager
@@ -7562,7 +7732,7 @@ def test_an_app_ask_goes_to_the_main_chat_when_the_chat_about_the_app_cannot_tak
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"path": f"/?chat={_MAIN_ID}"}
-    assert messenger.sent == [(_MAIN_ID, _ASK)]
+    assert messenger.sent == [(_MAIN_ID, _ASK_NAMING_DOCS)]
     assert manager.get_provisional_chats() == provisional_before
     assert len(manager.get_chat_snapshots()) == chat_count
 
@@ -7577,7 +7747,7 @@ def test_an_app_ask_with_nothing_signed_in_goes_to_the_main_chat_and_makes_no_ch
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"path": f"/?chat={_MAIN_ID}"}
-    assert messenger.sent == [(_MAIN_ID, _ASK)]
+    assert messenger.sent == [(_MAIN_ID, _ASK_NAMING_DOCS)]
     assert manager.get_provisional_chats() == []
 
 
@@ -7593,7 +7763,7 @@ def test_an_app_ask_whose_chat_cannot_be_created_goes_to_the_main_chat(tmp_path:
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"path": f"/?chat={_MAIN_ID}"}
-    assert messenger.sent == [(_MAIN_ID, _ASK)]
+    assert messenger.sent == [(_MAIN_ID, _ASK_NAMING_DOCS)]
     assert manager.get_provisional_chats() == []
 
 
@@ -7613,9 +7783,27 @@ def test_an_app_ask_to_be_drafted_with_no_chat_about_the_app_is_held_for_the_mai
     path = response.get_json()["path"]
     assert _chat_id_of(path) == _MAIN_ID
     applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={})
-    assert applied.get_json()["composer_text"] == _ASK
+    assert applied.get_json()["composer_text"] == _ASK_NAMING_DOCS
     assert messenger.sent == []
     assert manager.get_provisional_chats() == []
+
+
+def test_an_app_ask_with_no_chat_at_all_and_nothing_signed_in_is_the_first_message_of_the_chat_it_awaits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ``main_chat`` rules with no chat to fall back to mint one awaiting its first send: the ask held for it
+    names the app too, since that chat is not the one about the app."""
+    manager, client = _signed_out_app(tmp_path, monkeypatch)
+
+    response = _ask_about_docs(client)
+
+    assert response.status_code == 200, response.get_json()
+    path = response.get_json()["path"]
+    awaiting = manager.get_provisional_chat(_chat_id_of(path))
+    assert awaiting is not None
+    assert (awaiting.phase, awaiting.labels) == (ProvisionalChatPhase.AWAITING_FIRST_SEND, {})
+    applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={}).get_json()
+    assert (applied["composer_text"], applied["first_message"]) == (None, _ASK_NAMING_DOCS)
 
 
 def test_an_app_ask_that_names_no_app_or_no_display_name_is_refused(tmp_path: Path) -> None:

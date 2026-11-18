@@ -186,9 +186,13 @@ Other clients create the page when the window is first restored there, and keep 
 The top non-minimized window is focused.
 Raising moves a placement to the end of the list and saves.
 A click on a window's chrome raises it.
-A click into a page cannot reach the shell across origins, so the pages of every window but the focused one are inert (`pointer-events: none` on their iframes), the press lands on a transparent shield over the window, and the shell raises it and makes its page interactive; the first press is consumed.
-While a menu or the launcher is open the shield covers the focused window too, so the click that dismisses them reaches the shell.
+A click into a page cannot reach the shell across origins, so the shell raises a window when the document's focus lands in its page's frame.
+On a non-touch client every page takes the pointer, the pages of unfocused windows included: a wheel or trackpad scroll over a background window scrolls its page, and a press there is delivered to the page and raises the window; the first press is not consumed.
 A page that receives keyboard focus by other means reports `shell:focused`, and the shell raises its window.
+On a non-touch client the shell also raises the window of a page that sends no report when the page focuses itself while its window is unfocused, except for a focus the page takes in answer to a message the shell has just sent it (section 6.4); a page's own `shell:focused` is not subject to that exception.
+A press into a page that does not move the focus into its frame (a page that cancels the press, such as the chat page while its own popover is open) is not seen by the shell, so that window raises on a later press.
+A touch client keeps the pages of every window but the focused one inert (`pointer-events: none` on their iframes) under a transparent shield: the press lands on the shield, and the shell raises the window and makes its page interactive; the first press is consumed.
+While a menu or the launcher is open the shield covers every window, the focused one too, so the click that dismisses them reaches the shell.
 
 ### 4.3 Moving, resizing, snapping, maximizing, minimizing
 
@@ -272,7 +276,7 @@ A phone-sized viewport gets the phone layout instead of the desktop, as `plan-ph
 Touch mode is on while the primary pointer is coarse.
 Both are `matchMedia` subscriptions that set `data-phone` and `data-touch` on the root element; every style keys off those attributes, and every behaviour reads the same two flags, so there is one source for each.
 
-Touch: hit targets are at least the theme's touch target size; long-press replaces right-click on windows, entries, and shortcuts; hover-revealed controls are always shown; resize handles are hidden; the inert-page rule and the shield work unchanged, since touch fires pointer events.
+Touch: hit targets are at least the theme's touch target size; long-press replaces right-click on windows, entries, and shortcuts; hover-revealed controls are always shown; resize handles are hidden; the inert pages and the shield of section 4.2 cover every window but the focused one, since touch fires pointer events; a non-touch client has them only for the cases of section 4.2 (an open menu or the launcher, a press on a handle).
 A phone is both; a desktop browser window as small as a phone is phone only; a touch laptop or a tablet is touch only.
 
 ### 4.13 Keyboard
@@ -326,7 +330,7 @@ The update apply's post-restart probes change from "every critical app's instanc
 - `geometry/`: pure functions with no DOM: `frames.ts` (fractions to pixels, fit, nudge, min size, snap zones, cascade), `grid.ts` (cells, nearest free cell, reading order), `stack.ts` (raise, focus, the missing-placement default).
 - `reducers/`: pure state transitions over one `DesktopState` record: every verb of section 4 as `(state, event) -> state`, plus the URL-following decision.
 - `store/`: the one implementation class, `DesktopStore`, holding the client's state (desktops, apps, the active desktop's layout, live pages, the gesture in progress, the open overlay), applying reducers, saving with debounce and conflict handling, and subscribing to the socket. Nothing else holds mutable state.
-- `pages/`: the live-page layer (`livePages.ts`), keyed by window id: create once, position, show and hide, make inert, navigate, destroy.
+- `pages/`: the live-page layer (`livePages.ts`), keyed by window id: create once, position, show and hide, make inert, raise the window a page's focus lands in, navigate, destroy.
 - `gestures/`: `pointerGestures.ts`, the one module that listens to pointer events for window drag, resize, and shortcut drag, behind a `GestureSource` interface that yields `{begin, move, end}` with deltas, so it can be swapped for interact.js without touching a reducer.
 - `views/`: Mithril components, each a pure function of records and callbacks: `Backdrop`, `ShortcutIcon`, `Window`, `TitleBar`, `WindowMenu`, `Taskbar`, `TaskbarEntry`, `LauncherField`, `LauncherOverlay` (hosting today's New Tab sections), `SystemTray`, `OverviewButton`, `Overview`, `WallpaperChooserDialog`, `SnapPreview`, and the shared `Popover` and `Menu` (today's `placeMenu` rule, moved).
 - `relay.ts`, `embed.ts`: unchanged.
@@ -352,6 +356,18 @@ So a theme is a token file, a look is a component, and a behaviour is a reducer 
 
 One iframe per window per client, keyed by window id, created when the window is first shown in this client and destroyed only when the window closes or its desktop is deleted.
 The layer sits above the backdrop and below the window chrome in z-order per window, so the chrome's resize edges and shield stay clickable over a cross-origin page; the reconcile step positions each page over its window's content box.
+The shield is the chrome's transparent cover over a window's content: it lies over every window while a menu or the launcher is open, and on a touch client over every window but the focused one.
+Every page takes the pointer except on a touch client, where only the focused window's page does, and except for the length of a press on a handle, when every page is inert.
+The layer raises the window whose page frame holds the document's focus while that window is unfocused, through the store's `raiseWindow`, so a viewed desktop and a window being moved or resized refuse the raise.
+It reads the document's active element when the window loses focus to a frame and on a timer every 100 ms (a tick), because a move of the focus from one frame to another fires no event on the shell's document; it does nothing while a gesture is in progress, in the overview, on a viewed desktop, or on a touch client.
+Both waits below are counted in ticks, not in milliseconds, so a thread too busy to run the timer ages neither.
+In this reading, a focus read within two ticks of the layer's own `shell:shown` or `ttyd-focus` to that page is the page's answer to it, not a press (a terminal's wrapper focuses its pty on both): it raises nothing, and the next tick hands the document's focus back to the layer's host element, so a later press into the page still lands as a change of the active element.
+The page takes the focus a few milliseconds after the post, and the timer reads it at its next tick, or at the one after when the post came just before a tick.
+A real press into an unfocused window's page that the layer reads within those two ticks of showing or reloading that page is taken for the page's answer too: the page receives the press, but the window is not raised by it and the focus goes back to the host element; the next press raises the window.
+A landing already waiting in the page when the layer posts it `shell:shown` is judged without that message, so a press that loads another page in the frame (a link, a form) raises the window however soon that page loads; `ttyd-focus` goes only to the focused window's page, where no landing waits.
+After a raise of the layer's takes effect (the store may refuse one, as it does while another window is gestured) it raises no other window for three ticks, so pages that take the focus back whenever they lose it do not turn every press into a fight over the stack; a landing that comes meanwhile stays in the document's focus and is raised by the first tick after the hold.
+The layer posts the focused window's page no `ttyd-focus` while a landing it takes for a press waits in another window's page, not yet read by the timer or held, so no grant takes the focus from it.
+The page-reported `shell:focused` of section 4.2 raises the same window and is subject to neither that exception nor the hold: a page that reports its own focus has its window raised whatever the layer had just sent it.
 Hidden pages (minimized, on another desktop) are parked: moved out of the viewport and made invisible, which stops every engine rendering them while the page keeps its size, layout, and scroll (`display: none` would collapse its viewport and lose its document scroll, and Safari keeps rendering it).
 A shown page that the windows in front of it wholly cover within the backdrop, and the taskbar's band too while a fullscreen window paints over it (so one dragged wholly below that counts), is parked the same way but stays shown to the contract (it gets no `shell:hidden`); the focused window's page never is, so the keyboard stays in the window the user is in.
 A page is covered only where the windows are both drawn now and going, and never while a window is being moved or resized, so a window travelling over it covers it once it lands and one moving away uncovers it at once.
@@ -361,7 +377,7 @@ The handshake, shown, hidden, close-request, and navigate messages go through `r
 ### 6.5 Gestures
 
 `pointerGestures.ts` uses pointer capture, a start threshold, and the `GestureSource` interface.
-It makes every iframe inert for the gesture's duration and restores the focused page's interactivity after.
+It makes every iframe inert for the gesture's duration and restores the pages' interactivity after: every page's on a non-touch client, the focused page's on a touch client.
 Touch needs nothing extra beyond `touch-action: none` on handles.
 
 ### 6.6 Theme and metrics
