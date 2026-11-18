@@ -1550,7 +1550,7 @@ def running_workspace(
 
     registry_path = tmp_path / "registry" / "apps.toml"
     # The chat's row as ``forward_port.py`` writes it from ``system/apps/chat/app.toml``: the chat list at ``/`` and
-    # the five POST launch paths onto the intake route (post-launch-paths plan section 7.1; the multiplayer spec,
+    # the POST launch paths onto the intake route (post-launch-paths plan section 7.1; the multiplayer spec,
     # section 7.5, for the mention into the Lounge).
     write_registry(
         registry_path,
