@@ -23,6 +23,7 @@ import {
   isUnansweredRequest,
 } from "@imbue/workspace-ui/src/models/request-error";
 import { getChatById } from "../models/Chats";
+import { withoutDictationNotes } from "../models/dictationNote";
 import { addOutgoing, dropOutgoing, dropOutgoingNoTurnWillRetire } from "../models/OutgoingMessages";
 import { accountForAgent } from "../models/Providers";
 import { mintMessageId, sendMessage } from "../models/Response";
@@ -109,8 +110,10 @@ export function refusedTurns(events: readonly TranscriptEvent[]): RefusedTurn[] 
   return turns;
 }
 
+/** The user's own words in a message. The note a dictated message carries is not among them, so the same
+ *  words typed again count as its copy. */
 function wordsOf(prompt: UserMessageEvent): string {
-  return classifyUserMessage(prompt).body.trim();
+  return withoutDictationNotes(classifyUserMessage(prompt).body).text.trim();
 }
 
 /** The user's messages sent after the turn's last failure, in transcript order: copies of what it

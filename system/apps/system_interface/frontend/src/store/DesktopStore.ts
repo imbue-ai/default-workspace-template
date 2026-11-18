@@ -29,13 +29,14 @@ import {
 import { StalePlacementsSaveError } from "../model/api";
 import { DEFAULT_WHAT_FAILED, failureSentence, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { FailureMessage } from "@imbue/workspace-ui/src/models/failure";
-import type { ReportedFailure, StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
-import type { TextAction } from "../reducers/launcherRows";
+import type { ReportedFailure, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { refreshShellKeybindings } from "../model/keybindings";
 import {
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
+  appAskLaunchOf,
+  appAskParams,
   appChatLaunchOf,
   appChatParams,
   appShortcutsOf,
@@ -2756,41 +2757,65 @@ export class DesktopStore {
   }
 
   /** A page's ``shell:start-with-text`` (launcher plan section 3.7), and the shell's own "Ask an agent to free up
-   *  space": the primary text action runs with the text (the main chat on a stock machine). Settles as
-   *  ``startNewWithText`` does, toasting nothing. */
-  async startWithText(text: string): Promise<StartNewOutcome> {
-    return this.startTextRow(text, "primary");
-  }
-
-  /** A page's ``shell:start-new-with-text`` ("Ask an agent to fix this"): the secondary text action runs with the
-   *  text (Chat's New Chat on a stock machine), else the primary one. Settles once the window is on the desktop, or
-   *  with the failure for the caller to show where the press was: nothing is toasted. */
-  async startNewWithText(text: string): Promise<StartNewOutcome> {
-    return this.startTextRow(text, "secondary");
-  }
-
-  private async startTextRow(text: string, textAction: TextAction): Promise<StartNewOutcome> {
-    if (this.viewedDesktop() !== null) {
-      console.info("[si] refused to start a chat while viewing somebody else's desktop");
-      return {
-        isOpened: false,
-        failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
-      };
-    }
-    const [primary, secondary] = freeTextRowsOf(openableApps(this.state));
-    const row = textAction === "secondary" ? (secondary ?? primary) : primary;
+   *  space": the primary text action runs with the text (the main chat on a stock machine). Settles once the window
+   *  is on the desktop, or with the failure for the caller to show where the press was: nothing is toasted. */
+  async startWithText(text: string): Promise<StartOutcome> {
+    const refusal = this.startRefusalWhileViewing();
+    if (refusal !== null) return refusal;
+    const [row] = freeTextRowsOf(openableApps(this.state));
     if (row === undefined) {
       return { isOpened: false, failure: { message: `${NO_TEXT_APP_REASON}.`, details: null, isReportable: false } };
     }
+    return this.startOutcomeOf(row.app, (onFailure) =>
+      this.runFreeText(row.app.name, row.launchPath.id, text, onFailure),
+    );
+  }
+
+  /** A page's ``shell:ask-agent`` ("Ask an agent to fix this"; ``windowId`` is the asking page's window, null for
+   *  an ask of the shell's own): the text is sent to the chat about that window's app, through the first launch
+   *  path of the machine that takes an ask's text, whose page is put on screen by the show rule and laid out beside
+   *  the window, as "Chat about this app" lays it out. With no such window, a window of an internal app, or no such
+   *  launch path, the primary text action runs with the text instead. Settles as ``startWithText`` does. */
+  async askAgent(text: string, windowId: string | null): Promise<StartOutcome> {
+    const refusal = this.startRefusalWhileViewing();
+    if (refusal !== null) return refusal;
+    const asking = windowId === null ? null : findWindow(this.state, windowId);
+    const about = asking === null ? undefined : appByName(this.state, asking.window.app);
+    const launch = about === undefined || about.internal ? null : appAskLaunchOf(openableApps(this.state));
+    if (asking === null || about === undefined || launch === null) return this.startWithText(text);
+    const params = appAskParams(launch.launchPath, about, text);
+    return this.startOutcomeOf(launch.app, async (onFailure) => {
+      const target: LaunchTarget = { kind: "show", besideWindowId: asking.window.id };
+      return (await this.launchAt(launch.app.name, launch.launchPath.id, params, target, onFailure)) !== null;
+    });
+  }
+
+  /** The refusal a start gets while this client views somebody else's desktop, for the caller to show; null on a
+   *  desktop of its own. Read before anything launches, since a refused launch toasts. */
+  private startRefusalWhileViewing(): StartOutcome | null {
+    if (this.viewedDesktop() === null) return null;
+    console.info("[si] refused to start a chat while viewing somebody else's desktop");
+    return {
+      isOpened: false,
+      failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
+    };
+  }
+
+  /** How ``launch`` went, as a start answers it: opened, or the failure the launch handed its sink, else the
+   *  fallback that names ``app``, the app the launch ran. */
+  private async startOutcomeOf(
+    app: AppRecord,
+    launch: (onFailure: LaunchFailureSink) => Promise<boolean>,
+  ): Promise<StartOutcome> {
     let failure: FailureMessage | null = null;
-    const isOpened = await this.runFreeText(row.app.name, row.launchPath.id, text, (told) => {
+    const isOpened = await launch((told) => {
       failure = told;
     });
     if (isOpened) return { isOpened: true };
     return {
       isOpened: false,
       failure: failure ?? {
-        message: fallbackSentence(`${row.app.display_name} couldn't open that`),
+        message: fallbackSentence(`${app.display_name} couldn't open that`),
         details: null,
         isReportable: true,
       },

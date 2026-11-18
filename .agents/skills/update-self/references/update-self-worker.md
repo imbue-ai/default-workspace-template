@@ -298,6 +298,12 @@ chains, `.mngr/**`) and **global-dependency bumps** always count as impacted
 even though nothing imports them; work them per
 `references/worker-provisioning-changes.md` and report each there.
 
+**A user app on port 8090 or 8091 is moved.** Those are the Screen's service
+and neko ports, which older scaffolds could hand out, breaking the Screen. Move
+any workspace-added app on either to a free port in your branch (its program
+line's `--url` and its runner's `PORT` default), and name the move under
+**Impact analysis**.
+
 ### 4b. Validate
 
 **Validation depth is decided by rule, not by judgment**, the same way the

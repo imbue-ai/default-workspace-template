@@ -74,16 +74,18 @@ export const SHELL_OPEN = "shell:open";
  *  the shell runs its launcher's primary text action with it, so a page never names the app that takes it, and
  *  answers with ``shell:start-with-text-result``. */
 export const SHELL_START_WITH_TEXT = "shell:start-with-text";
-/** Shell to app: how a page's ``shell:start-with-text`` went, in ``shell:start-new-with-text-result``'s shape. */
+/** Shell to app: how a page's ``shell:start-with-text`` went, in ``shell:ask-agent-result``'s shape. */
 export const SHELL_START_WITH_TEXT_RESULT = "shell:start-with-text-result";
-/** App to shell: start something new with a text (``{text, requestId}``): the shell runs its launcher's secondary text
- *  action with it (a new chat on a stock machine, where the primary one sends to the main chat), else the primary one
- *  where there is no second, and answers with ``shell:start-new-with-text-result``. */
-export const SHELL_START_NEW_WITH_TEXT = "shell:start-new-with-text";
-/** Shell to app: how a page's ``shell:start-new-with-text`` went (``{requestId, isOpened: true}``, or
- *  ``{requestId, isOpened: false, failure: {message, details, isReportable}}``), once the window it opened is on
- *  the desktop or the launch failed. */
-export const SHELL_START_NEW_WITH_TEXT_RESULT = "shell:start-new-with-text-result";
+/** App to shell: ask an agent something about the app this page belongs to (``{text, requestId}``): the shell sends
+ *  the text to the chat about the page's app, shown beside the page's window, through the launch path that declares
+ *  where an ask's text goes, so a page never names the app that takes it; with no such launch path, or from a page
+ *  of an internal app, it runs its launcher's primary text action instead. It answers with
+ *  ``shell:ask-agent-result``. */
+export const SHELL_ASK_AGENT = "shell:ask-agent";
+/** Shell to app: how a page's ``shell:ask-agent`` went (``{requestId, isOpened: true}``, or
+ *  ``{requestId, isOpened: false, failure: {message, details, isReportable}}``), once the chat's window is on the
+ *  desktop or the launch failed. */
+export const SHELL_ASK_AGENT_RESULT = "shell:ask-agent-result";
 /** App to shell: draft a text into a chat, unsent (element-reference-menu plan section 5): the shell runs the
  *  pinned app's draft launch path with it, as its own "Design your own..." does, so a page never names the app. */
 export const SHELL_DRAFT_TEXT = "shell:draft-text";
@@ -229,15 +231,16 @@ export interface ShellConnection {
   /** Ask the shell to open a page of this app at a path beside this one. */
   openPath(path: string, ifPresent: OpenIfPresent): void;
   /** Ask the shell to start something with ``text``: its launcher's primary text action (the main chat on a stock
-   *  machine). Settles as ``startNewWithText`` does. */
-  startWithText(text: string, options?: StartOptions): Promise<StartNewOutcome>;
-  /** Ask the shell to start something new with ``text``: its launcher's secondary text action (a new chat on a stock
-   *  machine). Settles on the shell's answer; as not answered at once without a shell, when a handshake from a shell
-   *  that started again comes first (it forgot the request), and on ``disconnect``, after which no answer is heard,
-   *  so a later call settles at once too. The shell toasts a failure itself unless ``options`` say the page shows the
-   *  outcome; an answer that arrives after all for a request settled as not answered goes to their
-   *  ``onLateAnswer``. */
-  startNewWithText(text: string, options?: StartOptions): Promise<StartNewOutcome>;
+   *  machine). Settles as ``askAgent`` does. */
+  startWithText(text: string, options?: StartOptions): Promise<StartOutcome>;
+  /** Ask the shell to send ``text`` to an agent as a message about this page's app: to the chat about the app, shown
+   *  beside this page's window, or through its launcher's primary text action (the main chat on a stock machine)
+   *  when the app is internal or no app takes an ask. Settles on the shell's answer; as not answered at once
+   *  without a shell, when a handshake from a shell that started again comes first (it forgot the request), and on
+   *  ``disconnect``, after which no answer is heard, so a later call settles at once too. The shell toasts a failure
+   *  itself unless ``options`` say the page shows the outcome; an answer that arrives after all for a request
+   *  settled as not answered goes to their ``onLateAnswer``. */
+  askAgent(text: string, options?: StartOptions): Promise<StartOutcome>;
   /** Whether "Report a bug" would do anything: the shell's latest handshake said ``canReportBug``. */
   canReportBug(): boolean;
   /** Ask the shell to open Imbue Studio's bug report about ``failure``, which the report carries. */
@@ -448,11 +451,11 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
   let isDisconnected = false;
   let shellId: string | null = null;
   interface PendingStart {
-    readonly settle: (outcome: StartNewOutcome) => void;
-    readonly onLateAnswer: ((outcome: StartNewOutcome) => void) | null;
+    readonly settle: (outcome: StartOutcome) => void;
+    readonly onLateAnswer: ((outcome: StartOutcome) => void) | null;
   }
   const pendingStarts = new Map<string, PendingStart>();
-  const startsSettledAsNotAnswered = new Map<string, (outcome: StartNewOutcome) => void>();
+  const startsSettledAsNotAnswered = new Map<string, (outcome: StartOutcome) => void>();
 
   function settlePendingStartsAsNotAnswered(): void {
     const pending = Array.from(pendingStarts.entries());
@@ -463,10 +466,10 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     }
   }
 
-  function askToStart(type: string, text: string, options?: StartOptions): Promise<StartNewOutcome> {
+  function askToStart(type: string, text: string, options?: StartOptions): Promise<StartOutcome> {
     if (!hasShell || isDisconnected) return Promise.resolve(START_NOT_ANSWERED);
     const requestId = newRequestId();
-    const outcome = new Promise<StartNewOutcome>((settle) =>
+    const outcome = new Promise<StartOutcome>((settle) =>
       pendingStarts.set(requestId, { settle, onLateAnswer: options?.onLateAnswer ?? null }),
     );
     send(type, options === undefined ? { text, requestId } : { text, requestId, showsOutcome: true });
@@ -512,18 +515,18 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
         return;
       }
       case SHELL_START_WITH_TEXT_RESULT:
-      case SHELL_START_NEW_WITH_TEXT_RESULT: {
+      case SHELL_ASK_AGENT_RESULT: {
         const requestId = message.requestId;
         if (typeof requestId !== "string") return;
         const pending = pendingStarts.get(requestId);
         if (pending !== undefined) {
           pendingStarts.delete(requestId);
-          pending.settle(readStartNewOutcome(message));
+          pending.settle(readStartOutcome(message));
           return;
         }
         const onLateAnswer = startsSettledAsNotAnswered.get(requestId);
         startsSettledAsNotAnswered.delete(requestId);
-        onLateAnswer?.(readStartNewOutcome(message));
+        onLateAnswer?.(readStartOutcome(message));
         return;
       }
       default:
@@ -577,7 +580,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     location: (path: string, title: string) => send(SHELL_LOCATION, { path, title }),
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
     startWithText: (text: string, options?: StartOptions) => askToStart(SHELL_START_WITH_TEXT, text, options),
-    startNewWithText: (text: string, options?: StartOptions) => askToStart(SHELL_START_NEW_WITH_TEXT, text, options),
+    askAgent: (text: string, options?: StartOptions) => askToStart(SHELL_ASK_AGENT, text, options),
     canReportBug: () => canReportBug,
     reportBug: (failure: ReportedFailure) =>
       send(SHELL_REPORT_BUG, { message: failure.message, details: failure.details }),
@@ -627,16 +630,16 @@ function agentFixTask({ whatFailed, details }: AgentFixRequest): string {
   return parts.join("\n\n");
 }
 
-/** "Ask an agent to fix this": start a new chat whose first message asks an agent to fix ``failure``, through the
- *  shell's ``shell:start-new-with-text`` (a page passes its connection; the shell, which is not framed, its own
- *  ``startNewWithText``). A new chat, so the task does not land in the middle of a conversation about something
- *  else. Settles once the chat's window opened or the start failed. */
+/** "Ask an agent to fix this": send an agent a message asking it to fix ``failure``, through the shell's
+ *  ``shell:ask-agent`` (a page passes its connection; the shell, which is not framed, its own ``askAgent``). The
+ *  message goes to the chat about the app the failure was in, so the agent that knows the app takes it. Settles once
+ *  the chat's window opened or the ask failed. */
 export function askAgentToFix(
-  starter: Pick<ShellConnection, "startNewWithText">,
+  asker: Pick<ShellConnection, "askAgent">,
   failure: AgentFixRequest,
   options?: StartOptions,
-): Promise<StartNewOutcome> {
-  return starter.startNewWithText(agentFixTask(failure), options);
+): Promise<StartOutcome> {
+  return asker.askAgent(agentFixTask(failure), options);
 }
 
 /** How a page that shows a start's outcome itself (a button that reads "Asking an agent…" and then shows the failure)
@@ -645,7 +648,7 @@ export function askAgentToFix(
  *  the shell's toast. */
 export interface StartOptions {
   readonly showsOutcome: true;
-  readonly onLateAnswer?: (outcome: StartNewOutcome) => void;
+  readonly onLateAnswer?: (outcome: StartOutcome) => void;
 }
 
 /** A failure as a surface shows it: its sentence, what goes behind "See details" (null when nothing), and whether the
@@ -656,10 +659,9 @@ export interface ShownFailure {
   readonly isReportable: boolean;
 }
 
-/** How a ``startWithText`` or ``startNewWithText`` went: the window opened, or the failure to show where the press
+/** How a ``startWithText`` or an ``askAgent`` went: the window opened, or the failure to show where the press
  *  was. */
-export type StartNewOutcome =
-  { readonly isOpened: true } | { readonly isOpened: false; readonly failure: ShownFailure };
+export type StartOutcome = { readonly isOpened: true } | { readonly isOpened: false; readonly failure: ShownFailure };
 
 /** What a change nothing answered says, here since this module imports nothing (``models/failure.ts`` takes it from
  *  here). Never "nothing was changed": a gateway status can arrive after the request was carried out, and a
@@ -667,7 +669,7 @@ export type StartNewOutcome =
 export const CHANGE_NOT_ANSWERED_SENTENCE =
   "The workspace didn't answer, so Imbue Studio can't tell whether this went through.";
 
-const START_NOT_ANSWERED: StartNewOutcome = {
+const START_NOT_ANSWERED: StartOutcome = {
   isOpened: false,
   failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isReportable: false },
 };
@@ -678,9 +680,9 @@ function newRequestId(): string {
   return Array.from(crypto.getRandomValues(new Uint32Array(4)), (part) => part.toString(16)).join("");
 }
 
-/** The outcome a ``shell:start-new-with-text-result`` carries; one that says it failed without a readable failure
- *  shows the not-answered sentence's caution rather than nothing. */
-function readStartNewOutcome(message: Readonly<Record<string, unknown>>): StartNewOutcome {
+/** The outcome a ``shell:start-with-text-result`` or a ``shell:ask-agent-result`` carries; one that says it failed
+ *  without a readable failure shows the not-answered sentence's caution rather than nothing. */
+function readStartOutcome(message: Readonly<Record<string, unknown>>): StartOutcome {
   if (message.isOpened === true) return { isOpened: true };
   const failure = message.failure;
   if (failure === null || typeof failure !== "object") return START_NOT_ANSWERED;
