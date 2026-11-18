@@ -11,6 +11,7 @@ from typing import Final
 
 import pytest
 from flask import Flask
+from playwright.sync_api import Browser
 from playwright.sync_api import Page
 from playwright.sync_api import expect
 
@@ -63,8 +64,8 @@ def _free_port() -> int:
 
 
 @contextlib.contextmanager
-def _framed_not_built_page(tmp_path: Path, page: Page, can_report_bug: bool) -> Generator[None, None, None]:
-    """Getting Started with no bundle, framed by a stand-in shell on another origin that refuses its ask."""
+def _framed_not_built_page(tmp_path: Path, browser: Browser, can_report_bug: bool) -> Generator[Page, None, None]:
+    """Getting Started with no bundle, framed by a stand-in shell on another origin, once the shell refused its ask."""
     contract_path = tmp_path / "app_contract.js"
     shutil.copyfile(_BUILT_CONTRACT, contract_path)
     store = TemplateCatalogStore(
@@ -84,7 +85,9 @@ def _framed_not_built_page(tmp_path: Path, page: Page, can_report_bug: bool) -> 
     with (
         serve_in_background("127.0.0.1", app_port, build_pages_app(tmp_path / "static", store, contract_path)),
         serve_in_background("127.0.0.1", shell_port, shell),
+        contextlib.closing(browser.new_context()) as context,
     ):
+        page = context.new_page()
         page.goto(f"http://localhost:{shell_port}/")
         page.evaluate(_REFUSE_ASK, _FAILURE)
         ask = page.frame_locator("#page").locator("#ask-agent")
@@ -96,11 +99,11 @@ def _framed_not_built_page(tmp_path: Path, page: Page, can_report_bug: bool) -> 
         expect(ask).to_be_visible()
         ask.click()
         expect(page.frame_locator("#page").locator("#ask-agent-failure")).to_have_text(str(_FAILURE["message"]))
-        yield
+        yield page
 
 
-def test_a_refused_ask_offers_a_bug_report_that_carries_its_failure(tmp_path: Path, page: Page) -> None:
-    with _framed_not_built_page(tmp_path, page, can_report_bug=True):
+def test_a_refused_ask_offers_a_bug_report_that_carries_its_failure(tmp_path: Path, module_browser: Browser) -> None:
+    with _framed_not_built_page(tmp_path, module_browser, can_report_bug=True) as page:
         report = page.frame_locator("#page").get_by_role("button", name="Report a bug")
         expect(report).to_be_visible()
         report.click()
@@ -111,6 +114,6 @@ def test_a_refused_ask_offers_a_bug_report_that_carries_its_failure(tmp_path: Pa
         ]
 
 
-def test_a_refused_ask_offers_no_bug_report_where_none_can_be_opened(tmp_path: Path, page: Page) -> None:
-    with _framed_not_built_page(tmp_path, page, can_report_bug=False):
+def test_a_refused_ask_offers_no_bug_report_where_none_can_be_opened(tmp_path: Path, module_browser: Browser) -> None:
+    with _framed_not_built_page(tmp_path, module_browser, can_report_bug=False) as page:
         expect(page.frame_locator("#page").get_by_role("button", name="Report a bug")).to_be_hidden()
