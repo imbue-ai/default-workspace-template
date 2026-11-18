@@ -8474,6 +8474,23 @@ def test_an_apply_with_no_worker_on_record_stops_nothing(
     assert runner.argvs_starting("mngr", "stop") == []
 
 
+def test_another_chats_apply_leaves_a_running_updates_worker_alone(
+    apply_repo: Path, monkeypatch
+) -> None:
+    """A critical-app pass lands through the same apply, maybe while the update's worker is mid-work."""
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    root = ["--repo-root", str(apply_repo)]
+    assert update_self.main(["run-status", "start", *root]) == 0
+    assert update_self.main(["run-status", "delegate", "update-self", *root]) == 0
+    monkeypatch.setenv("MNGR_AGENT_NAME", "critical-app-chat")
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert runner.argvs_starting("mngr", "stop") == []
+
+
 def test_an_apply_whose_worker_will_not_stop_lands_anyway(
     apply_repo: Path, monkeypatch, capsys
 ) -> None:

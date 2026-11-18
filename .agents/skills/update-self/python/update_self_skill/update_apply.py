@@ -971,16 +971,20 @@ def _report_emergency(
             )
 
 
-def _stop_update_worker(repo_root: Path, runner: Runner) -> None:
+def _stop_update_worker(repo_root: Path, runner: Runner, dri_agent: str) -> None:
     """Stop the worker the run record names, keeping it, so its idle session's memory is free
     for the apply's boots and build.
 
-    Its ``done`` is already in hand, and a retry's catch-up message starts it again with its
-    branch and conversation intact. A stop that fails holds the apply back no more than a
-    worker left running would.
+    Only when ``dri_agent`` is the run's lead: a critical-app pass lands through this same
+    apply from another chat, possibly while the update's worker is still mid-work. By the
+    lead's apply the worker's ``done`` is in hand, and a retry's catch-up message starts it
+    again with its branch and conversation intact. A stop that fails holds the apply back no
+    more than a worker left running would.
     """
     status = read_run_status(repo_root)
-    worker = status.worker_agent_name if status is not None else None
+    if status is None or not dri_agent or status.chat_agent_name != dri_agent:
+        return
+    worker = status.worker_agent_name
     if not worker:
         return
     try:
@@ -1149,7 +1153,7 @@ def apply_update(
     write_marker(marker, repo_root, now)
     # Before the refresh, which may replace the mngr this calls.
     if marker.phase == PHASE_STARTED:
-        _stop_update_worker(repo_root, runner)
+        _stop_update_worker(repo_root, runner, marker.dri_agent)
 
     def _advance(phase: str) -> None:
         marker.phase = phase
