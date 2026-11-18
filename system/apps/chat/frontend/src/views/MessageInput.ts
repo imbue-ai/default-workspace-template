@@ -4,12 +4,11 @@ import type { AgentFixRequest, ShownFailure } from "@imbue/workspace-ui/src/app_
 import { ASKING_AN_AGENT_LABEL, ASK_AGENT_TO_FIX_LABEL } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import type { NoticeAction, NoticeDialogAttrs } from "@imbue/workspace-ui/src/components/NoticeDialog";
-import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import type { SendFailureKind } from "@imbue/workspace-ui/src/models/request-error";
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { startChatOnAccount } from "../shell";
 import { getShellConnection } from "../shellConnection";
-import { askConnectionToChat, chatToAskAbout, chatToAskAboutFailedCreate } from "./ask-running-agent";
+import { askConnectionToChat, chatToAskAbout, chatToAskAboutFailedCreate, withRefusedAsk } from "./ask-running-agent";
 import { reportBugActions } from "./failure-actions";
 import { SWITCH_PROVIDER_LABEL, chooseProviderToSwitchChat } from "./provider-switch";
 import {
@@ -2151,7 +2150,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       /** The notice's "Ask an agent to fix this": hand the failure to ``chatToAskId``'s agent, which closes the
-       *  notice and shows that chat. A refused ask says why in the notice, which stays as it was. */
+       *  notice and shows that chat. A refused ask says why in the notice, under the failure it was about. */
       async function askRunningAgentToFix(chatToAskId: string, request: AgentFixRequest): Promise<void> {
         if (actionFailureInFlight !== null) return;
         const noticeAsked = actionFailure;
@@ -2484,15 +2483,17 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                 isRestartOffered ? (SEND_FAILURE_RESTART_SENTENCES[actionFailureKind] ?? null) : null,
               ],
             };
-        const askFailure = actionFailureAskFailure;
+        // A refused ask is told as part of the notice, so the notice keeps one "See details" and its bug report
+        // files both. The ask itself is handed the failure alone.
+        const told = withRefusedAsk(shown, actionFailureAskFailure);
         const notice: NoticeDialogAttrs = {
           title: isUnconfirmed
             ? "Couldn't confirm your message arrived"
             : isNotAnswered
               ? "Your message may not have been sent"
               : actionFailureTitle,
-          body: shown.body,
-          details: shown.details,
+          body: told.body,
+          details: told.details,
           dismissLabel:
             isRepeatable ||
             isRestartOffered ||
@@ -2557,7 +2558,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   },
                 ]
               : []),
-            ...reportBugActions(getShellConnection(), shown),
+            ...reportBugActions(getShellConnection(), told),
             ...(!isRestartOffered
               ? []
               : [
@@ -2571,16 +2572,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                 ]),
           ],
         };
-        return m(
-          actionFailureNotice,
-          notice,
-          askFailure === null
-            ? null
-            : m("div", { class: "ask-agent-failure mb-4 text-secondary", role: "alert" }, [
-                m("p", { class: "ask-agent-failure-message" }, askFailure.message),
-                m(SeeDetails, { details: askFailure.details }),
-              ]),
-        );
+        return m(actionFailureNotice, notice);
       }
 
       /**

@@ -650,15 +650,6 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 },
                 "Choose a provider",
               ),
-          chatToAskId === null
-            ? null
-            : m(AskAgentToFixButton, {
-                connection: askConnectionToChat(chatToAskId),
-                failure: {
-                  whatFailed: `The chat "${provisional.name}" couldn't be started`,
-                  details: joinDetailLines([provisional.error, launchError?.details ?? null]),
-                },
-              }),
           m(
             Button,
             {
@@ -668,6 +659,17 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
             },
             "Remove this chat",
           ),
+          // Last in the row: the button says under itself what a refused ask came to, which then ends the page
+          // rather than sitting between its buttons.
+          chatToAskId === null
+            ? null
+            : m(AskAgentToFixButton, {
+                connection: askConnectionToChat(chatToAskId),
+                failure: {
+                  whatFailed: `The chat "${provisional.name}" couldn't be started`,
+                  details: joinDetailLines([provisional.error, launchError?.details ?? null]),
+                },
+              }),
         ]),
       ],
     );

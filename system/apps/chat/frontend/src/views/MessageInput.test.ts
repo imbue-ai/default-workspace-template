@@ -325,6 +325,7 @@ vi.mock("@imbue/workspace-voice/src/downloadProbe", () => ({
 }));
 vi.mock("@imbue/workspace-voice/src/readyChime", () => ({ createReadyChime: () => mocks.readyChime }));
 
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
 import { isApplePlatform } from "@imbue/workspace-voice/src/support";
@@ -488,6 +489,20 @@ function findButton(node: unknown, label: string): AnyVnode | undefined {
 
 function findByTag(node: unknown, tag: string): AnyVnode | undefined {
   return flatten(node).find((vnode) => vnode.tag === tag);
+}
+
+/** The paragraphs of the notice in the tree, in order. */
+function noticeParagraphs(node: unknown): string[] {
+  return flatten(node)
+    .filter((vnode) => String(vnode.attrs?.className ?? "").includes("modal-message"))
+    .map((vnode) => renderedText(vnode).trim());
+}
+
+/** What each "See details" in the tree holds. */
+function detailsShown(node: unknown): string[] {
+  return flatten(node)
+    .filter((vnode) => vnode.tag === SeeDetails)
+    .map((vnode) => String(vnode.attrs?.details));
 }
 
 /** Find a vnode by an exact attribute value (e.g. a stable aria-label). */
@@ -4853,33 +4868,89 @@ describe("MessageInput offers a way out of a chat whose agent cannot start", () 
     expect(findButton(tree, "Switch provider")).toBeDefined();
   });
 
+  const ASK_REFUSED_SENTENCE =
+    'Couldn\'t ask "Main chat". The agent is waiting on something in its terminal. Answer it there and try again.';
+  const ASK_REFUSED_DETAILS =
+    'Asking "Main chat":\nHTTP 500\nA dialog (a permission prompt) is open in the agent\'s terminal. Clear it there.';
+  const askRefused = (): Error =>
+    refusal(500, {
+      detail: "A dialog (a permission prompt) is open in the agent's terminal. Clear it there.",
+      user_facing_message: "The agent is waiting on something in its terminal. Answer it there and try again.",
+      kind: "input_blocked",
+    });
+
   it.each([
-    ["an agent that would not start", () => composerAfterRefusedSend(startFailed())],
-    ["a chat whose create failed", () => composerAfterSendToFailedCreate()],
+    [
+      "an agent that would not start",
+      () => composerAfterRefusedSend(startFailed()),
+      START_FAILED_SENTENCE,
+      "HTTP 500\nCould not start agent 'Chat-1' for a send: mngr start exited 1",
+    ],
+    [
+      "a chat whose create failed",
+      () => composerAfterSendToFailedCreate(),
+      "Your message wasn't delivered. Your text is back in the box, so nothing was lost.",
+      "mngr create exited with code 3",
+    ],
   ])(
-    "says in the notice for %s that the chat it asked could not be asked, and offers the ask again",
-    async (_case, composer) => {
+    "says under the failure of %s that the chat it asked could not be asked, with one See details for both",
+    async (_case, composer, failureSentence, failureDetails) => {
       const render = await composer();
-      mocks.sendMessage.mockRejectedValueOnce(
-        refusal(500, {
-          detail: "A dialog (a permission prompt) is open in the agent's terminal. Clear it there.",
-          user_facing_message: "The agent is waiting on something in its terminal. Answer it there and try again.",
-          kind: "input_blocked",
-        }),
-      );
+      mocks.sendMessage.mockRejectedValueOnce(askRefused());
 
       press(render(), "Ask an agent to fix this");
       await flushAsync();
 
       const refused = render();
-      expect(renderedText(findByClass(refused, "ask-agent-failure-message")).trim()).toBe(
-        'Couldn\'t ask "Main chat". The agent is waiting on something in its terminal. Answer it there and try again.',
-      );
-      expect(renderedText(findByClass(refused, "ask-agent-failure"))).toContain(
-        "A dialog (a permission prompt) is open",
-      );
+      expect(noticeParagraphs(refused)).toEqual([failureSentence, ASK_REFUSED_SENTENCE]);
+      expect(detailsShown(refused)).toEqual([`${failureDetails}\n\n${ASK_REFUSED_DETAILS}`]);
       expect(findButton(refused, "Ask an agent to fix this")?.attrs?.["aria-disabled"]).toBeUndefined();
       expect(mocks.openChatPage).not.toHaveBeenCalled();
     },
   );
+
+  it("files the refused ask with the failure it was about", async () => {
+    const connection = stubShellConnection(true);
+    const render = await composerAfterRefusedSend(startFailed());
+    mocks.sendMessage.mockRejectedValueOnce(askRefused());
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+
+    press(render(), "Report a bug");
+
+    expect(connection.reportBug).toHaveBeenCalledExactlyOnceWith({
+      message: `${START_FAILED_SENTENCE} ${ASK_REFUSED_SENTENCE}`,
+      details: "HTTP 500\nCould not start agent 'Chat-1' for a send: mngr start exited 1\n\n" + ASK_REFUSED_DETAILS,
+    });
+  });
+
+  it("offers a bug report once a refused ask's sentence asks for one, on a notice that had none", async () => {
+    stubShellConnection(true);
+    const render = await composerAfterSendToFailedCreate();
+    expect(findButton(render(), "Report a bug")).toBeUndefined();
+    mocks.sendMessage.mockRejectedValueOnce(refusal(500, { detail: "mngr message exited 1" }));
+
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+
+    expect(noticeParagraphs(render())).toEqual([
+      "Your message wasn't delivered. Your text is back in the box, so nothing was lost.",
+      'Couldn\'t ask "Main chat". Try again. If this persists, report a bug.',
+    ]);
+    expect(findButton(render(), "Report a bug")).toBeDefined();
+  });
+
+  it("asks again with the failure's own details, not what the refused ask said", async () => {
+    const render = await composerAfterRefusedSend(startFailed());
+    mocks.sendMessage.mockRejectedValueOnce(askRefused());
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+
+    const task = (mocks.sendMessage.mock.calls[2] as unknown as [string, string])[1];
+    expect(task).toContain("Could not start agent 'Chat-1' for a send: mngr start exited 1");
+    expect(task).not.toContain("A dialog (a permission prompt) is open");
+  });
 });

@@ -23,7 +23,7 @@ vi.mock("../shellConnection", () => ({ getShellConnection: () => mocks.shellConn
 import { askAgentToFix } from "@imbue/workspace-ui/src/app_contract";
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
-import { askConnectionToChat, chatToAskAbout } from "./ask-running-agent";
+import { askConnectionToChat, chatToAskAbout, withRefusedAsk } from "./ask-running-agent";
 
 /** A refusal as mithril rejects with it: the parsed body, its status as ``code``, and the raw body as the message. */
 function refusal(status: number, body: Record<string, unknown>): Error {
@@ -127,7 +127,9 @@ describe("an ask sent to a running chat", () => {
       failure: {
         message:
           'Couldn\'t ask "Main chat". The agent is waiting on something in its terminal. Answer it there and try again.',
-        details: expect.stringContaining("A dialog (a permission prompt) is open in the agent's terminal."),
+        details:
+          'Asking "Main chat":\nHTTP 500\n' +
+          "A dialog (a permission prompt) is open in the agent's terminal. Clear it there.",
         isReportable: false,
       },
     });
@@ -181,5 +183,46 @@ describe("an ask sent to a running chat", () => {
 
     expect(connection.canReportBug()).toBe(true);
     expect(reportBug).toHaveBeenCalledExactlyOnceWith({ message: "The agent couldn't be asked.", details: null });
+  });
+});
+
+describe("a failure told together with the refused ask about it", () => {
+  const ASK_SENTENCE = 'Couldn\'t ask "Main chat". Try again. If this persists, report a bug.';
+
+  it.each([
+    [
+      "both have details",
+      "HTTP 500\nmngr start exited 1",
+      'Asking "Main chat":\nHTTP 502',
+      'HTTP 500\nmngr start exited 1\n\nAsking "Main chat":\nHTTP 502',
+    ],
+    ["only the ask has details", null, 'Asking "Main chat":\nHTTP 502', 'Asking "Main chat":\nHTTP 502'],
+    ["only the failure has details", "HTTP 500\nmngr start exited 1", null, "HTTP 500\nmngr start exited 1"],
+    ["neither has details", null, null, null],
+  ])("keeps one set of details when %s", (_case, failureDetails, askDetails, expected) => {
+    const told = withRefusedAsk(
+      { body: ["The agent isn't running and didn't start."], details: failureDetails, isReportable: false },
+      { message: ASK_SENTENCE, details: askDetails, isReportable: true },
+    );
+
+    expect(told.details).toBe(expected);
+  });
+
+  it("says the ask's sentence last and asks for a bug report when either sentence does", () => {
+    const told = withRefusedAsk(
+      {
+        body: ["The agent isn't running and didn't start.", "Restart it to send your message."],
+        details: null,
+        isReportable: false,
+      },
+      { message: ASK_SENTENCE, details: null, isReportable: true },
+    );
+
+    expect(told.body).toEqual([
+      "The agent isn't running and didn't start.",
+      "Restart it to send your message.",
+      ASK_SENTENCE,
+    ]);
+    expect(told.isReportable).toBe(true);
   });
 });
