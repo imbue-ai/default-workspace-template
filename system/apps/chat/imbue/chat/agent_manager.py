@@ -1961,6 +1961,11 @@ class AgentManager:
         a test injects brings its broadcaster with it)."""
         return self._broadcaster
 
+    @property
+    def chat_files_root(self) -> Path:
+        """The directory holding one folder per chat, which goes with the chat when it is destroyed."""
+        return self._chat_files_root
+
     def is_agent_list_known(self) -> bool:
         """Whether the agent list has been read from mngr at least once."""
         with self._lock:
