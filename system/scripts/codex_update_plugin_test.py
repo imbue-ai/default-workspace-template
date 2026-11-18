@@ -91,10 +91,15 @@ def test_install_outage_warns_and_strict_fails(
     assert "installation failed" in result.stderr
 
 
+# The chat app matches this marker in a failed create's output (``create_failure_kind`` in
+# ``system/apps/chat/imbue/chat/chat_handoffs.py``), so both refusals must keep printing it.
+_REFUSED_MARKER = "error: codex-plugin-install-refused: "
+
+
 def test_refuses_install_before_mngr_writes_config(tmp_path: Path) -> None:
     result, calls, _ = _run(tmp_path, provisioned=False)
     assert result.returncode == 1
-    assert "must be provisioned" in result.stderr
+    assert result.stderr == f"{_REFUSED_MARKER}Codex must be provisioned before installing its plugins\n"
     assert calls == []
 
 
@@ -106,7 +111,7 @@ def test_refuses_install_without_agent_state(tmp_path: Path) -> None:
         ["bash", str(_SCRIPT)], env=env, capture_output=True, text=True, check=False
     )
     assert result.returncode == 1
-    assert "refusing a shared-home install" in result.stderr
+    assert result.stderr == f"{_REFUSED_MARKER}MNGR_AGENT_STATE_DIR is required; refusing a shared-home install\n"
 
 
 @pytest.mark.parametrize("args", [("--unknown",), ("--strict", "extra")])
