@@ -41,6 +41,16 @@ def _isolate_tool_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("TOOL_ENV_HOME", str(tmp_path / "pinned-tool-home"))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_shed_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep the pre-flight boot's read of the memory guard's shed ledger off the live one.
+
+    A workspace agent's environment pins ``OOM_PRIORITY_RUNTIME_DIR`` to the workspace's own
+    ledger, which a real shed of a pid a fake boot reports would turn into the test's verdict.
+    """
+    monkeypatch.setenv("OOM_PRIORITY_RUNTIME_DIR", str(tmp_path / "oom-priority-runtime"))
+
+
 @pytest.fixture
 def recording_messengers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
