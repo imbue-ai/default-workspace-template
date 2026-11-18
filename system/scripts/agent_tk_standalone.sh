@@ -18,7 +18,10 @@
 # tk uses the TICKETS_DIR env var (absolute) and works from any directory, so a
 # `cd` to the repo root is never needed.
 #
-# Scope: ONLY `start` and `close`. `create` is exempt -- agents legitimately
+# Scope: ONLY `start` and `close`, and only when the target is (or may be) a
+# step; a command whose every start/close provably targets a regular ticket is
+# allowed, since the view renders steps alone (see the checker's docstring).
+# `create` is exempt -- agents legitimately
 # batch several `tk create --step ...` up front when declaring the plan, and a
 # create carries no positional transition the view must group around. A close
 # followed by the next start in one call is the normal step boundary: the view

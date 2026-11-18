@@ -4,7 +4,9 @@ The guard blocks a `tk start`/`tk close` that shares its Bash tool call with
 anything but other tk lifecycle commands run in sequence (no leading `cd`, no
 real work, no pipe or background `&`, no output redirection), so the progress
 view always sees every transition's output and position. `tk create` and
-non-tk commands that merely mention a tk verb are left alone.
+non-tk commands that merely mention a tk verb are left alone, and so is a
+start or close that provably targets a regular ticket, since the progress view
+renders only steps.
 """
 
 from __future__ import annotations
@@ -95,10 +97,11 @@ def test_routes_to_the_right_block_reason() -> None:
         == checker._BEFORE
     )
     assert checker.classify("tk start cod-step-x >/dev/null") == checker._REDIRECT
-    assert checker.classify('tk close a "s" && echo hi') == checker._CHAIN
+    assert checker.classify('tk close cod-step-a "s" && echo hi') == checker._CHAIN
     assert checker.classify("tk start cod-step-x &") == checker._CHAIN
     assert (
-        checker.classify('tk close a "s" >/dev/null; tk start b') == checker._REDIRECT
+        checker.classify('tk close cod-step-a "s" >/dev/null; tk start cod-step-b')
+        == checker._REDIRECT
     )
 
 
@@ -106,3 +109,66 @@ def test_main_exit_codes() -> None:
     """main() exits 0 for a clean close, 2 for a redirected one."""
     assert checker.main(["check", 'tk close cod-step-x "done"']) == 0
     assert checker.main(["check", "tk close cod-step-x >/dev/null"]) == 2
+
+
+# The ticket block the crystallize, heal and update skills shipped before they
+# split it: real work around a start whose target is a regular ticket.
+_HARDEN_TICKET_BLOCK = """mkdir -p data/.tasks/harden/crystallize-$NAME
+TICKET_ID=$(tk create "crystallize $NAME" -t task \\
+    --acceptance "task file written; worker launched; worker DONE; branch merged")
+tk start "$TICKET_ID"
+echo "$TICKET_ID" > data/.tasks/harden/crystallize-$NAME/ticket_id.txt
+"""
+
+# A start or close whose target is provably a regular ticket: ALLOWED however chained.
+_REGULAR_TARGET_ALLOWED = [
+    _HARDEN_TICKET_BLOCK,
+    'mkdir -p d\nID=$(tk create "t" -t bug -d "w")\ntk start "$ID"',  # the heal form
+    'ID=$(tk create "t" -t task); tk start "$ID"',
+    'ID=$(tk create "t" -t task) && tk start "$ID" && echo done',
+    'ID=$(tk create "t"); tk start "${ID}"; echo hi',  # braced reference
+    'ID=$(tk create "t"); tk start $ID >/dev/null 2>&1',  # redirected
+    'ID=$(tk create "t"); tk start "$ID" | tee log',  # piped
+    "cd /x && tk start cod-f1zl",  # literal regular id after a cd
+    "tk start cod-f1zl >/dev/null",
+    'tk close cod-f1zl "done" && pytest',
+    "tk start cod-f1zl &",
+    'tk close cod-a1b2 "s"; tk close cod-c3d4 "s"; rm -f x',  # several regular targets
+    'L=$(tk create "lease" -t chore); tk start "$L"; ./edit.sh; tk close "$L" "done"',
+    # A step create in the same command does not taint a regular capture.
+    'tk create --step "plan"; ID=$(tk create "t" -t task); tk start "$ID"; echo hi',
+]
+
+# A target that is a step, or that cannot be shown to be a regular ticket: still BLOCKED.
+_STEP_OR_UNKNOWN_TARGET_BLOCKED = [
+    'cd /x && tk start "$ID"',  # variable never assigned in this command
+    "cd /x && tk start $UNSET",
+    'S=$(tk create --step "plan"); tk start "$S"; echo hi',  # captured from a step create
+    'S=$(tk create "t" --step); tk start "$S"',  # flag after the title
+    'ID=$(tk create "t"); ID=cod-step-x; tk start "$ID"; echo hi',  # reassigned after capture
+    'ID=$(tk create "t"); ID=$(cat f); tk start "$ID"; echo hi',  # reassigned from another command
+    'ID=$(tk create "t" | cut -c1-8); tk start "$ID"; echo hi',  # capture is not tk create alone
+    'ID=$(echo x); tk start "$ID"; echo hi',  # captured from something other than tk create
+    'ID="$(tk create "t")"; tk start "$ID"; echo hi',  # quoted capture is not recognised
+    'tk start "$ID"; ID=$(tk create "t"); echo hi',  # assigned only after the start
+    'cd /x; tk close "$(cat data/ticket_id.txt)"',  # command substitution as the target
+    "cd /x; tk start cod-$N",  # partial expansion in the id
+    "cd /x && tk start",  # no target at all
+    'ID=$(tk create "t"); tk start "$ID"; tk start cod-step-b; echo hi',  # one step target among them
+    'tk close cod-f1zl "s"; tk close cod-step-a "s" >/dev/null',
+    "cd /x && tk start cod-step-f1zl",  # literal step id
+]
+
+
+def test_allows_chained_lifecycle_on_regular_tickets() -> None:
+    for cmd in _REGULAR_TARGET_ALLOWED:
+        assert checker.classify(cmd) is None, f"should be allowed: {cmd!r}"
+
+
+def test_blocks_chained_lifecycle_on_step_or_unknown_targets() -> None:
+    for cmd in _STEP_OR_UNKNOWN_TARGET_BLOCKED:
+        assert checker.classify(cmd) is not None, f"should be blocked: {cmd!r}"
+
+
+def test_main_allows_the_harden_ticket_block() -> None:
+    assert checker.main(["check", _HARDEN_TICKET_BLOCK]) == 0
