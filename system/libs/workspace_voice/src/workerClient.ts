@@ -2,7 +2,9 @@
  * A page's handle on the engine worker (``workerProtocol.ts``): connect to the workspace's worker for an engine,
  * ask for the engine to be loaded, and send it audio one job at a time. The worker is a SharedWorker, so every
  * chat page of the workspace reaches the same loaded model; where the browser has none (Chrome on Android), each
- * page owns a dedicated worker instead, and only a page that dictates loads one.
+ * page owns a dedicated worker instead, and only a page that dictates loads one. What the worker says on the port,
+ * and its loss, are also handed to listeners, which is how the page's speech models (``speechModel.ts``) follow a
+ * model another page loaded.
  */
 
 import type { Device, EngineId } from "./engines";
@@ -46,6 +48,12 @@ export interface EngineWorkerClient {
   transcribe(audio: Float32Array): Promise<TranscriptionResult>;
   /** Called when the worker let the engine go. */
   onUnloaded(listener: () => void): void;
+  /** Called with every message the worker sends this port, after the client has acted on it; among them what
+   *  the worker holds as the port connects, and each step of a load, which it tells every port whoever asked. */
+  onMessage(listener: (message: WorkerMessage) => void): void;
+  /** Called once, the client already dead, when the worker is taken for lost (a load gone quiet, a job
+   *  unanswered, the worker's own error); never for the page's own ``dispose``. */
+  onLost(listener: () => void): void;
   /** Stop listening to the worker; pending jobs fail as lost. */
   dispose(): void;
 }
@@ -85,6 +93,8 @@ export function connectEngineWorker(
   const port = createPort(engineId);
   const pending = new Map<number, PendingTranscription>();
   const unloadedListeners: (() => void)[] = [];
+  const messageListeners: ((message: WorkerMessage) => void)[] = [];
+  const lostListeners: (() => void)[] = [];
   let pendingLoads: PendingLoad[] = [];
   let stallTimer: ReturnType<typeof setTimeout> | null = null;
   let nextId = 0;
@@ -109,11 +119,18 @@ export function connectEngineWorker(
     port.onmessage = null;
   };
 
+  /** The worker went from under the page, which is told after what was pending has failed. */
+  const lose = (message: string): void => {
+    if (isDead) return;
+    die(new EngineWorkerLostError(message));
+    for (const listener of lostListeners) listener();
+  };
+
   // A load that has gone quiet is a worker that is gone: one that never started, or one that died downloading.
   const armStallTimer = (): void => {
     clearStallTimer();
     if (pendingLoads.length === 0) return;
-    stallTimer = setTimeout(() => die(new EngineWorkerLostError("The speech engine stopped answering")), stallMs);
+    stallTimer = setTimeout(() => lose("The speech engine stopped answering"), stallMs);
   };
 
   const settleLoads = (settle: (load: PendingLoad) => void): void => {
@@ -159,9 +176,10 @@ export function connectEngineWorker(
         break;
       }
     }
+    for (const listener of messageListeners) listener(message);
   };
-  port.onmessageerror = () => die(new EngineWorkerLostError("The speech engine sent something unreadable"));
-  port.onerror = (event) => die(new EngineWorkerLostError(event.message || "The speech engine worker failed"));
+  port.onmessageerror = () => lose("The speech engine sent something unreadable");
+  port.onerror = (event) => lose(event.message || "The speech engine worker failed");
 
   return {
     engineId,
@@ -183,8 +201,9 @@ export function connectEngineWorker(
       return new Promise<TranscriptionResult>((resolve, reject) => {
         const timer = setTimeout(() => {
           pending.delete(id);
-          die(new EngineWorkerLostError("The speech engine stopped answering"));
+          // Ahead of the page being told of the loss, so a listener that fails cannot leave the job unanswered.
           reject(new EngineWorkerLostError("The speech engine stopped answering"));
+          lose("The speech engine stopped answering");
         }, timeoutMs);
         pending.set(id, { resolve, reject, timer });
         // The buffer moves to the worker rather than being copied; the caller's view is spent.
@@ -195,6 +214,12 @@ export function connectEngineWorker(
     },
     onUnloaded(listener) {
       unloadedListeners.push(listener);
+    },
+    onMessage(listener) {
+      messageListeners.push(listener);
+    },
+    onLost(listener) {
+      lostListeners.push(listener);
     },
     dispose() {
       die(new EngineWorkerLostError("The page let go of the speech engine"));
@@ -207,11 +232,16 @@ export function engineWorkerName(engineId: EngineId): string {
   return `workspace-voice:${engineId}`;
 }
 
+/** Whether the engine worker is one every page of the workspace shares, rather than one of the page's own. */
+export function isEngineWorkerShared(): boolean {
+  return typeof SharedWorker === "function";
+}
+
 /** The page's port to the workspace's engine worker: a SharedWorker where the browser has them, else a worker of
  *  the page's own. The worker's URL is a literal here so the bundler emits it as a chunk of its own. A shared
  *  worker's errors arrive on the worker and its messages on its port, so the two are folded into one port. */
 export function openEngineWorkerPort(engineId: EngineId): EngineWorkerPort {
-  if (typeof SharedWorker === "function") {
+  if (isEngineWorkerShared()) {
     const worker = new SharedWorker(new URL("./engineWorker.ts", import.meta.url), {
       type: "module",
       name: engineWorkerName(engineId),
