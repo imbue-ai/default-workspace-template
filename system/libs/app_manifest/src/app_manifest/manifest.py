@@ -1,6 +1,7 @@
 import re
 import tomllib
 from enum import auto
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -138,17 +139,24 @@ class LaunchParam(FrozenModel):
 
 class AppParams(FrozenModel):
     """The declared params of a launch path about an app (the multiplayer spec, section 9.2): the shell fills them
-    with the name and the display name of the app whose window's "Chat about this app" button was pressed."""
+    with the name and the display name of an app. A path that names no ``text`` is the one a window's "Chat about
+    this app" button runs; one that names it is the one an ask from a page of the app runs, with the ask's text."""
 
     name: LaunchParamName = Field(description="The param that takes the app's registered name")
     display_name: LaunchParamName = Field(description="The param that takes the app's display name")
+    text: LaunchParamName | None = Field(
+        default=None,
+        description="The param that takes the text of an ask about the app; absent for a path that takes none",
+    )
 
     @model_validator(mode="after")
-    def _check_the_two_params_differ(self) -> Self:
-        if self.name == self.display_name:
-            raise InvalidManifestValueError(
-                f"app_params names one param {str(self.name)!r} for both the name and the display name"
-            )
+    def _check_the_params_differ(self) -> Self:
+        members = (("the name", self.name), ("the display name", self.display_name), ("the text", self.text))
+        for (first_role, first), (second_role, second) in combinations(members, 2):
+            if first is not None and first == second:
+                raise InvalidManifestValueError(
+                    f"app_params names one param {str(first)!r} for both {first_role} and {second_role}"
+                )
         return self
 
 
@@ -190,7 +198,8 @@ class LaunchPath(FrozenModel):
     app_params: AppParams | None = Field(
         default=None,
         description="The declared params the shell fills with the name and display name of the app whose window's "
-        '"Chat about this app" button was pressed (the multiplayer spec, section 9.2); never a launcher row',
+        '"Chat about this app" button was pressed (the multiplayer spec, section 9.2), or, when it names a ``text`` '
+        "param too, of the app a page asked an agent about, with the ask's text; never a launcher row",
     )
 
     @model_validator(mode="after")
@@ -207,6 +216,10 @@ class LaunchPath(FrozenModel):
             (
                 "app_params.display_name",
                 None if self.app_params is None else self.app_params.display_name,
+            ),
+            (
+                "app_params.text",
+                None if self.app_params is None else self.app_params.text,
             ),
         )
         for field_name, chosen in chosen_params:

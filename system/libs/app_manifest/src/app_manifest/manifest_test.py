@@ -563,6 +563,7 @@ def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_an
     manifest = AppManifest.model_validate({**data, "launch_paths": [about_an_app]})
     assert manifest.launch_paths[0].app_params is not None
     assert manifest.launch_paths[0].app_params.display_name == "app_display_name"
+    assert manifest.launch_paths[0].app_params.text is None
     with pytest.raises(
         ValidationError,
         match="app_params.display_name 'title' is not one of the launch path's params",
@@ -600,6 +601,52 @@ def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_an
                 ],
             }
         )
+
+
+def test_an_ask_launch_path_names_a_third_app_param_for_the_asks_text() -> None:
+    """``app_params.text`` makes a launch path about an app the one an ask runs: it names the param the ask's text
+    goes in, which is one of the launch path's params and neither the name's nor the display name's."""
+    data = _full_manifest_data()
+    params = [
+        {"name": "app", "label": "App", "required": True},
+        {"name": "app_display_name", "label": "App name", "required": True},
+        {"name": "message", "label": "Message", "required": False},
+    ]
+    ask = {
+        **_launch_path_data(),
+        "text_param": None,
+        "params": params,
+        "app_params": {
+            "name": "app",
+            "display_name": "app_display_name",
+            "text": "message",
+        },
+    }
+    manifest = AppManifest.model_validate({**data, "launch_paths": [ask]})
+    assert manifest.launch_paths[0].app_params is not None
+    assert manifest.launch_paths[0].app_params.text == "message"
+    for app_params, refusal in (
+        (
+            {"name": "app", "display_name": "app_display_name", "text": "body"},
+            "app_params.text 'body' is not one of the launch path's params",
+        ),
+        (
+            {"name": "app", "display_name": "app_display_name", "text": "app"},
+            "names one param 'app' for both the name and the text",
+        ),
+        (
+            {
+                "name": "app",
+                "display_name": "app_display_name",
+                "text": "app_display_name",
+            },
+            "names one param 'app_display_name' for both the display name and the text",
+        ),
+    ):
+        with pytest.raises(ValidationError, match=refusal):
+            AppManifest.model_validate(
+                {**data, "launch_paths": [{**ask, "app_params": app_params}]}
+            )
 
 
 def test_a_preset_may_not_shadow_a_param() -> None:
