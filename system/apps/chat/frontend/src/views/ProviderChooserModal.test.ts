@@ -32,6 +32,8 @@ const state: {
 const startFlow = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
 const requestProviderRelay = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => true));
 const loadLanesAndAccountsWithRetry = vi.hoisted(() => vi.fn(async () => undefined));
+const findLocalModelServers = vi.hoisted(() => vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined));
+const submitEndpoint = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
 
 vi.mock("../models/providerRelay", () => ({ requestProviderRelay }));
 
@@ -48,6 +50,8 @@ vi.mock("../models/Providers", async (importOriginal) => ({
   startFlow,
   submitCode: async () => undefined,
   submitKey: async () => undefined,
+  submitEndpoint,
+  findLocalModelServers,
   abortFlow: () => undefined,
   clearFlow: () => undefined,
 }));
@@ -718,5 +722,165 @@ describe("a sign-in finished in the browser", () => {
     [...root.querySelectorAll("button")].find((b) => b.textContent === "Sign in again")!.click();
 
     expect(startFlow).toHaveBeenCalledExactlyOnceWith("anthropic", "api_key", "a1");
+  });
+});
+
+describe("a local model", () => {
+  const LOCAL_MODEL = lane({
+    id: "local-model",
+    provider_name: "Local model",
+    harness: "pi-coding",
+    methods: [
+      {
+        id: "endpoint",
+        label: "Connect a model server",
+        description: "Pick a model from a server running on your computer, or name another server.",
+        signup_url: "",
+        note: "",
+        shape: "endpoint",
+        is_primary: true,
+      },
+    ],
+  });
+  const OLLAMA = { base_url: "http://host.docker.internal:11434/v1", name: "Ollama", models: ["qwen2.5:7b"] };
+
+  function found(servers: unknown[]): unknown {
+    return { servers, default_context_window: 32768, min_context_window: 16384 };
+  }
+
+  async function settled(): Promise<void> {
+    for (let index = 0; index < 5; index += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  /** Open the chooser on the local-model lane, returning its root and a way to draw it again. */
+  async function openForm(): Promise<{ root: HTMLElement; draw: () => void }> {
+    const root = document.createElement("div");
+    const draw = (): void => m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+    draw();
+    (root.querySelector('[data-e2e="lane-local-model"]') as HTMLElement).click();
+    await settled();
+    draw();
+    return { root, draw };
+  }
+
+  function press(root: HTMLElement, hook: string): void {
+    (root.querySelector(`[data-e2e="${hook}"]`) as HTMLElement).click();
+  }
+
+  function type(root: HTMLElement, hook: string, value: string): void {
+    const field = root.querySelector(`[data-e2e="${hook}"]`) as HTMLInputElement;
+    field.value = value;
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  beforeEach(() => {
+    state.lanes = [LOCAL_MODEL];
+    state.accounts = [];
+    state.loaded = true;
+    state.flow = {
+      flow_id: "flow-1",
+      shape: "endpoint",
+      url: null,
+      code: null,
+      relay_url: null,
+      status: { state: "pending", detail: null, account_id: null },
+    };
+    startFlow.mockClear();
+    findLocalModelServers.mockReset();
+    submitEndpoint.mockClear();
+  });
+
+  it("looks for servers on opening, picks the only model found, and connects with it", async () => {
+    findLocalModelServers.mockResolvedValue(found([OLLAMA]));
+
+    const { root } = await openForm();
+
+    expect(findLocalModelServers).toHaveBeenCalledExactlyOnceWith(null, "");
+    expect(root.textContent).toContain("Connect a local model");
+    expect(root.textContent).toContain("qwen2.5:7b");
+    expect((root.querySelector('[data-e2e="local-model-context"]') as HTMLInputElement).value).toBe("32768");
+    press(root, "connect-local-model");
+    expect(submitEndpoint).toHaveBeenCalledExactlyOnceWith({
+      base_url: "http://host.docker.internal:11434/v1",
+      model_id: "qwen2.5:7b",
+      context_window: 32768,
+      api_key: "",
+    });
+  });
+
+  it("asks for an address when no server answers, and looks at the one named", async () => {
+    findLocalModelServers.mockResolvedValueOnce(found([]));
+    findLocalModelServers.mockResolvedValueOnce(found([{ ...OLLAMA, base_url: "http://box.lan:9000/v1" }]));
+
+    const { root, draw } = await openForm();
+
+    expect(root.textContent).toContain("No model server answered on your computer.");
+    expect((root.querySelector('[data-e2e="connect-local-model"]') as HTMLButtonElement).disabled).toBe(true);
+    type(root, "local-model-address", "box.lan:9000");
+    type(root, "local-model-key", "sk-secret");
+    draw();
+    press(root, "local-model-find");
+    await settled();
+    draw();
+    expect(findLocalModelServers).toHaveBeenLastCalledWith("box.lan:9000", "sk-secret");
+    press(root, "connect-local-model");
+    expect(submitEndpoint).toHaveBeenCalledExactlyOnceWith({
+      base_url: "http://box.lan:9000/v1",
+      model_id: "qwen2.5:7b",
+      context_window: 32768,
+      api_key: "sk-secret",
+    });
+  });
+
+  it("says why a named server gave no models, and keeps the form up", async () => {
+    findLocalModelServers.mockResolvedValueOnce(found([]));
+    findLocalModelServers.mockRejectedValueOnce({
+      response: { detail: "No server answered at http://box.lan:9000/v1." },
+    });
+
+    const { root, draw } = await openForm();
+    type(root, "local-model-address", "box.lan:9000");
+    draw();
+    press(root, "local-model-find");
+    await settled();
+    draw();
+
+    expect(root.querySelector('[data-e2e="local-model-error"]')?.textContent).toBe(
+      "No server answered at http://box.lan:9000/v1.",
+    );
+    expect(root.querySelector('[data-e2e="local-model-form"]')).not.toBeNull();
+  });
+
+  it("says a server with no models needs one added", async () => {
+    findLocalModelServers.mockResolvedValue(found([{ ...OLLAMA, models: [] }]));
+
+    const { root } = await openForm();
+
+    expect(root.querySelector('[data-e2e="local-model-error"]')?.textContent).toContain(
+      "Ollama answered but lists no models",
+    );
+  });
+
+  it("will not connect with a context window too small to hold the workspace's instructions", async () => {
+    findLocalModelServers.mockResolvedValue(found([OLLAMA]));
+
+    const { root, draw } = await openForm();
+    type(root, "local-model-context", "4096");
+    draw();
+
+    expect((root.querySelector('[data-e2e="connect-local-model"]') as HTMLButtonElement).disabled).toBe(true);
+    press(root, "connect-local-model");
+    expect(submitEndpoint).not.toHaveBeenCalled();
+  });
+
+  it("offers a different server while one was found", async () => {
+    findLocalModelServers.mockResolvedValue(found([OLLAMA]));
+
+    const { root, draw } = await openForm();
+    expect(root.querySelector('[data-e2e="local-model-address"]')).toBeNull();
+    press(root, "local-model-name-server");
+    draw();
+
+    expect(root.querySelector('[data-e2e="local-model-address"]')).not.toBeNull();
   });
 });

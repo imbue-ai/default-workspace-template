@@ -19,6 +19,7 @@ from imbue.chat.harnesses.pi_coding.model import _parse_list_models
 from imbue.chat.harnesses.pi_coding.model import _supported_thinking_levels
 from imbue.chat.harnesses.pi_coding.model import build_catalog
 from imbue.chat.harnesses.pi_coding.model import flush_pi_queue_atomic
+from imbue.chat.harnesses.pi_coding.model import read_custom_model_options
 from imbue.chat.harnesses.registry import get_catalog
 from imbue.chat.testing import put_stand_in_pi_on_path
 
@@ -187,3 +188,42 @@ def test_flush_appends_the_sentinel_when_no_send_is_in_flight(tmp_path: Path) ->
     status = flush_pi_queue_atomic(tmp_path)
     assert status == PiFlushTapStatus.TAPPED
     assert (tmp_path / "pi_inbox").read_text().splitlines() == ['{"minds_interrupt": true}']
+
+
+def _write_models_file(config_dir: Path, providers: dict[str, Any]) -> None:
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "models.json").write_text(json.dumps({"providers": providers}))
+
+
+def test_custom_models_are_tagged_the_way_pi_reports_them(tmp_path: Path) -> None:
+    """The live model reads `provider/model`, so the option has to carry the same tag to match it."""
+    _write_models_file(tmp_path, {"local-model": {"baseUrl": "http://x/v1", "models": [{"id": "qwen2.5:7b"}]}})
+
+    (option,) = read_custom_model_options(tmp_path)
+
+    assert option.id == "local-model/qwen2.5:7b"
+    assert option.label == "local-model/qwen2.5:7b"
+    assert [effort.level for effort in option.efforts] == ["off"]
+    assert option.in_picker
+
+
+@pytest.mark.parametrize(
+    "content", [None, "not json", "[]", '{"providers": []}', '{"providers": {"p": {"models": 3}}}']
+)
+def test_a_missing_or_unreadable_models_file_adds_no_models(tmp_path: Path, content: str | None) -> None:
+    if content is not None:
+        (tmp_path / "models.json").write_text(content)
+
+    assert read_custom_model_options(tmp_path) == ()
+
+
+def test_an_account_on_a_local_model_offers_that_model_and_another_pi_account_the_catalog(tmp_path: Path) -> None:
+    local, keyed = tmp_path / "local", tmp_path / "keyed"
+    keyed.mkdir()
+    _write_models_file(local, {"local-model": {"models": [{"id": "qwen2.5:7b"}]}})
+
+    offered = PiModelResolver.list_account_options(local)
+
+    assert offered is not None
+    assert [option.id for option in offered] == ["local-model/qwen2.5:7b"]
+    assert PiModelResolver.list_account_options(keyed) is None

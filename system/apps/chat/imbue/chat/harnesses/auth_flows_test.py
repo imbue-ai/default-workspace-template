@@ -24,6 +24,7 @@ from imbue.chat.harnesses.auth_flows import FlowState
 from imbue.chat.harnesses.auth_flows import flow_shape
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import get_method
+from imbue.chat.harnesses.pi_coding.local_model import LocalModelError
 from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.sign_in_relay import RelayCallbackError
 from imbue.chat.harnesses.signed_in import SignedIn
@@ -65,6 +66,8 @@ def test_the_shape_comes_from_the_method_not_the_harness() -> None:
     assert flow_shape(get_method("anthropic", "api_key")) is FlowShape.PASTE
     # The same lane as the device flow above, with the other shape.
     assert flow_shape(get_method("openai", "api_key")) is FlowShape.PASTE
+    # Runs on Pi like the key lanes, and takes a server and a model where they take a key.
+    assert flow_shape(get_method("local-model", "endpoint")) is FlowShape.ENDPOINT
 
 
 def test_a_paste_flow_writes_pi_auth_json_and_commits(service: AuthFlowService, tmp_path: Path) -> None:
@@ -946,3 +949,110 @@ exec sleep 60''',
 
     assert argv_log.read_text().splitlines() == ["", "models"]
     assert env_log.read_text().splitlines() == ["true", "true"]
+
+
+def _accept_local_model(base_url: str, api_key: str, model_id: str, context_window: int) -> int:
+    """A server whose model passes, loaded with less context than was asked for."""
+    return min(context_window, 20_000)
+
+
+def _refuse_local_model(base_url: str, api_key: str, model_id: str, context_window: int) -> int:
+    raise LocalModelError(f"{model_id} answered without calling a tool.")
+
+
+def _local_model_service(
+    tmp_path: Path,
+    verifier: Callable[[str, str, str, int], int] = _accept_local_model,
+    probe: Callable[..., SignedIn] = lambda *_a: SignedIn.YES,
+) -> AuthFlowService:
+    return AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=probe, local_model_verifier=verifier
+    )
+
+
+def test_a_local_model_sign_in_writes_pi_s_provider_and_its_key_and_commits(tmp_path: Path) -> None:
+    service = _local_model_service(tmp_path)
+    started = service.start("local-model", "endpoint")
+    assert started.shape is FlowShape.ENDPOINT
+    assert service.poll(started.flow_id).state is FlowState.PENDING
+
+    status = service.submit_endpoint(started.flow_id, "host.docker.internal:11434", "qwen2.5:7b", 32_768)
+
+    assert status.state is FlowState.OK
+    (account,) = read_index(tmp_path).accounts
+    assert (account.lane, account.display) == ("local-model", "Local model")
+    assert harness_for(account) is HarnessType.PI_CODING
+    folder = tmp_path / ".minds" / "accounts" / account.id
+    # The address as typed became the server's root, and the window is what the server keeps.
+    assert json.loads((folder / "models.json").read_text()) == {
+        "providers": {
+            "local-model": {
+                "baseUrl": "http://host.docker.internal:11434/v1",
+                "api": "openai-completions",
+                "models": [{"id": "qwen2.5:7b", "contextWindow": 20_000, "maxTokens": 5_000}],
+            }
+        }
+    }
+    # pi lists a provider's models only once it holds some credential for it.
+    assert json.loads((folder / "auth.json").read_text()) == {"local-model": {"type": "api_key", "key": "local"}}
+
+
+def test_a_local_model_server_s_key_is_kept_in_the_credential_file_alone(tmp_path: Path) -> None:
+    service = _local_model_service(tmp_path)
+    started = service.start("local-model", "endpoint")
+
+    service.submit_endpoint(started.flow_id, "https://models.example.com/v1", "m", 32_768, "sk-secret")
+
+    (account,) = read_index(tmp_path).accounts
+    folder = tmp_path / ".minds" / "accounts" / account.id
+    assert json.loads((folder / "auth.json").read_text())["local-model"]["key"] == "sk-secret"
+    assert "sk-secret" not in (folder / "models.json").read_text()
+
+
+def test_a_model_that_fails_its_check_fails_the_sign_in_with_the_reason(tmp_path: Path) -> None:
+    service = _local_model_service(tmp_path, verifier=_refuse_local_model)
+    started = service.start("local-model", "endpoint")
+
+    status = service.submit_endpoint(started.flow_id, "localhost:11434", "qwen2.5-coder:7b", 32_768)
+
+    assert status.state is FlowState.FAILED
+    assert status.detail == "qwen2.5-coder:7b answered without calling a tool."
+    assert read_index(tmp_path).accounts == ()
+    assert list((tmp_path / ".minds" / "accounts").glob("*/")) == []
+
+
+def test_an_address_that_is_not_one_fails_the_sign_in_before_any_server_is_asked(tmp_path: Path) -> None:
+    service = _local_model_service(tmp_path, verifier=_refuse_local_model)
+    started = service.start("local-model", "endpoint")
+
+    status = service.submit_endpoint(started.flow_id, "ftp://nope", "m", 32_768)
+
+    assert status.state is FlowState.FAILED
+    assert status.detail is not None and "server address" in status.detail
+
+
+def test_a_rejected_local_model_re_auth_puts_the_working_one_back(tmp_path: Path) -> None:
+    """Both files are the account's live configuration, so both go back, byte for byte."""
+    verdicts = [SignedIn.YES, SignedIn.NO]
+    service = _local_model_service(tmp_path, probe=lambda *_a: verdicts.pop(0))
+    started = service.start("local-model", "endpoint")
+    service.submit_endpoint(started.flow_id, "localhost:11434", "good-model", 32_768)
+    (account,) = read_index(tmp_path).accounts
+    folder = tmp_path / ".minds" / "accounts" / account.id
+    accepted = {name: (folder / name).read_text() for name in ("auth.json", "models.json")}
+
+    again = service.start("local-model", "endpoint", account_id=account.id)
+    status = service.submit_endpoint(again.flow_id, "localhost:11434", "bad-model", 32_768, "another-key")
+
+    assert status.state is FlowState.FAILED
+    assert {name: (folder / name).read_text() for name in accepted} == accepted
+    assert read_index(tmp_path).accounts == (account,)
+
+
+def test_a_local_model_cannot_be_submitted_to_a_sign_in_of_another_kind(service: AuthFlowService) -> None:
+    started = service.start("opencode-go", "api_key")
+
+    with pytest.raises(FlowError, match="model server"):
+        service.submit_endpoint(started.flow_id, "localhost:11434", "m", 32_768)
+    with pytest.raises(FlowError):
+        service.submit_key(service.start("local-model", "endpoint").flow_id, "sk-test")

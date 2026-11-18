@@ -27,6 +27,10 @@ const API_KEY = `<svg width="{S}" height="{S}" viewBox="0 0 24 24" fill="none" s
 // the row reserves.
 const OPENROUTER = `<svg width="{S}" height="{S}" viewBox="0 1 63 45" aria-hidden="true"><path fill="#7624F4" fill-rule="evenodd" d="M21.5 3.2 L50 3.2 C57 3.2 62.4 8.6 62.4 15.5 L62.4 18.5 L48.3 28.1 L62.4 40.5 C62.9 42.9 60.7 44.6 57 44.6 L21.5 44.6 A20.7 20.7 0 0 1 21.5 3.2 Z M12.7 23.7 a11.6 11.6 0 1 0 23.2 0 a11.6 11.6 0 1 0 -23.2 0 Z"/></svg>`;
 
+// A processor, for a model that runs on the user's own machine -- not a brand, for the same
+// reason the key is not: the row is whichever server they run.
+const LOCAL_MODEL = `<svg width="{S}" height="{S}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="0.8"/><path d="M9.5 3v3M14.5 3v3M9.5 18v3M14.5 18v3M3 9.5h3M3 14.5h3M18 9.5h3M18 14.5h3"/></svg>`;
+
 const MARKS_BY_LANE: Readonly<Record<string, string>> = {
   anthropic: ANTHROPIC,
   openai: OPENAI,
@@ -34,6 +38,7 @@ const MARKS_BY_LANE: Readonly<Record<string, string>> = {
   "opencode-go": OPENCODE,
   openrouter: OPENROUTER,
   "api-key": API_KEY,
+  "local-model": LOCAL_MODEL,
 };
 
 /** The lane's brand mark as SVG markup, or "" when it has none. */

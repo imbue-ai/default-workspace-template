@@ -14,6 +14,7 @@
  *   menu       a lane's method, plus "Other ways to sign in" under it
  *   steps      one browser method, as the numbered 1-2 sequence
  *   apiKey     one paste method: pick a provider, paste the key
+ *   endpoint   one model server: pick one of its models, or name the server first
  *   verifying  the spinner screen
  *   success    a sign-in that has something to say about itself, with a Done footer
  *
@@ -30,8 +31,7 @@
  *     shows a code you carry to the browser rather than taking one back, so its step 2 is a
  *     code plus a Copy button.
  *
- * Which of the three shapes a method uses comes from the server, so nothing here knows what a
- * harness is.
+ * Which shape a method uses comes from the server, so nothing here knows what a harness is.
  */
 
 import m from "mithril";
@@ -47,12 +47,13 @@ import { renderMarkdown } from "../markdown";
 import { providerMark } from "./providerMarks";
 import { removeAccountDialog } from "./removeAccountDialog";
 import * as css from "./providerSignInStyles";
-import type { Lane, LaneMethod, UnpickableReason } from "../models/Providers";
+import type { Lane, LaneMethod, LocalModelServer, UnpickableReason } from "../models/Providers";
 import {
   abortFlow,
   areLanesLoaded,
   clearFlow,
   deleteAccount,
+  findLocalModelServers,
   getAccounts,
   getFlow,
   getLanes,
@@ -65,6 +66,7 @@ import {
   takeChooserAccountId,
   startFlow,
   submitCode,
+  submitEndpoint,
   submitKey,
 } from "../models/Providers";
 import { FIELD_PART, partAttrs } from "@imbue/workspace-ui/src/themes/parts";
@@ -74,7 +76,14 @@ export interface ProviderChooserModalAttrs {
   onDismiss: () => void;
 }
 
-type Mode = "chooser" | "relay" | "menu" | "steps" | "apiKey";
+type Mode = "chooser" | "relay" | "menu" | "steps" | "apiKey" | "endpoint";
+
+/** One row of the endpoint form's model picker: a model, and the server that lists it. */
+interface ModelChoice {
+  key: string;
+  server: LocalModelServer;
+  model: string;
+}
 
 /** The paste step's label: a relayed sign-in finishes by itself, and neither side can tell in
  *  advance whether the browser will end on a code instead. */
@@ -125,6 +134,19 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let relayAsk = 0;
   // Why the chooser moved the user to another way of signing in, shown above it.
   let notice: string | null = null;
+  // The endpoint form. `servers` is null until they have been looked for. All of it outlives a
+  // failed attempt, so "Try again" returns to the form as it was left rather than to an empty one.
+  let servers: LocalModelServer[] | null = null;
+  let isLookingForServers = false;
+  let isNamingServer = false;
+  let serverAddress = "";
+  let serverKey = "";
+  let serverError: string | null = null;
+  let pickedModel: string | null = null;
+  let contextWindow = "";
+  let minContextWindow = 0;
+  // Bumped by every look, so an answer that a newer look has overtaken stands down.
+  let serverLook = 0;
 
   function reset(): void {
     mode = "chooser";
@@ -143,11 +165,68 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     awaitingVerdict = false;
     isOpeningBrowser = false;
     notice = null;
+    servers = null;
+    isLookingForServers = false;
+    isNamingServer = false;
+    serverAddress = "";
+    serverKey = "";
+    serverError = null;
+    pickedModel = null;
+    contextWindow = "";
+    serverLook += 1;
     clearFlow();
   }
 
   function isPaste(candidate: LaneMethod): boolean {
     return candidate.shape === "paste";
+  }
+
+  function isEndpoint(candidate: LaneMethod): boolean {
+    return candidate.shape === "endpoint";
+  }
+
+  function modelChoices(): ModelChoice[] {
+    return (servers ?? []).flatMap((server) =>
+      server.models.map((model) => ({ key: `${server.base_url}\n${model}`, server, model })),
+    );
+  }
+
+  /** Look for model servers: on the usual ports of the user's machine, or at the one address given. */
+  async function lookForServers(address: string | null): Promise<void> {
+    serverLook += 1;
+    const look = serverLook;
+    isLookingForServers = true;
+    serverError = null;
+    m.redraw();
+    try {
+      const found = await findLocalModelServers(address, serverKey.trim());
+      if (look !== serverLook) return;
+      servers = found.servers;
+      minContextWindow = found.min_context_window;
+      if (contextWindow === "") contextWindow = String(found.default_context_window);
+      const choices = modelChoices();
+      if (!choices.some((choice) => choice.key === pickedModel)) {
+        pickedModel = choices.length === 1 ? choices[0].key : null;
+      }
+      if (choices.length === 0) {
+        // Nothing to pick from, so the way on is to name a server.
+        isNamingServer = true;
+        if (found.servers.length > 0) {
+          const names = found.servers.map((server) => server.name).join(", ");
+          serverError = `${names} answered but lists no models. Add one there, then look again.`;
+        }
+      }
+    } catch (e) {
+      if (look !== serverLook) return;
+      if (servers === null) servers = [];
+      isNamingServer = true;
+      serverError = errorText(e);
+    } finally {
+      if (look === serverLook) {
+        isLookingForServers = false;
+        m.redraw();
+      }
+    }
   }
 
   /** A lane's methods this page can offer: a browser-only sign-in needs a relay. */
@@ -201,7 +280,13 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     lane = chosen;
     method = chosenMethod;
     cameFromChooser = options.fromChooser;
-    mode = isPaste(chosenMethod) ? "apiKey" : chosen.methods.length > 1 && options.fromChooser ? "menu" : "steps";
+    mode = isPaste(chosenMethod)
+      ? "apiKey"
+      : isEndpoint(chosenMethod)
+        ? "endpoint"
+        : chosen.methods.length > 1 && options.fromChooser
+          ? "menu"
+          : "steps";
     error = null;
     activeStep = 1;
     copied = "";
@@ -217,8 +302,10 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     // gets the waiting screen. A paste lane has nothing to wait for -- minting a folder
     // takes milliseconds -- so showing one would be a flash of a spinner between the click
     // and a form that was always going to be there. Render the form and let the mint land
-    // behind it; the Save button needs the flow, and it cannot be clicked that fast.
-    busy = !isPaste(chosenMethod);
+    // behind it; the Save button needs the flow, and it cannot be clicked that fast. An endpoint
+    // lane is the same, and looks for its servers behind the form too.
+    busy = !isPaste(chosenMethod) && !isEndpoint(chosenMethod);
+    if (isEndpoint(chosenMethod) && servers === null) void lookForServers(null);
     // Which attempt this is. Two lanes clicked in quick succession both run this function, and
     // the second stamps the screen before the first's request resolves -- so without a
     // generation check the loser's `catch` writes "that didn't work" over the winner's screen,
@@ -767,6 +854,147 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     ]);
   }
 
+  /** One model server: the models found on the user's machine to pick from, or an address to
+   *  look at instead, and how much context the server gives the model. */
+  function endpointBody(): m.Children {
+    const choices = modelChoices();
+    const picked = choices.find((choice) => choice.key === pickedModel) ?? null;
+    const windowTokens = Number(contextWindow);
+    const isWindowValid = Number.isInteger(windowTokens) && windowTokens >= minContextWindow && windowTokens > 0;
+    const canSubmit = !busy && getFlow() !== null && picked !== null && isWindowValid;
+    const connect = (): void => {
+      if (!canSubmit || picked === null) return;
+      void send(() =>
+        submitEndpoint({
+          base_url: picked.server.base_url,
+          model_id: picked.model,
+          context_window: windowTokens,
+          api_key: serverKey.trim(),
+        }),
+      );
+    };
+    const canLook = !isLookingForServers && serverAddress.trim() !== "";
+    const look = (): void => {
+      if (canLook) void lookForServers(serverAddress.trim());
+    };
+    const errorClass = "mt-1.5 type-helper leading-snug text-danger";
+    return m("div", { "data-e2e": "local-model-form" }, [
+      m("p", { class: css.LEAD }, method?.description ?? ""),
+      stepLabel(null, "Model"),
+      // One of these three, never a hole: mithril refuses a fragment that mixes keyed and unkeyed.
+      servers === null || (isLookingForServers && choices.length === 0)
+        ? m("p", { class: css.HINT, "data-e2e": "local-model-looking" }, "Looking for a model server...")
+        : choices.length > 0
+          ? m(Dropdown<string>, {
+              options: choices.map((choice) => ({
+                value: choice.key,
+                label: choice.model,
+                detail: choice.server.name,
+              })),
+              value: pickedModel,
+              placeholder: "Choose a model...",
+              "aria-label": "Model",
+              onSelect: (key) => {
+                pickedModel = key;
+              },
+            })
+          : m("p", { class: css.HINT, "data-e2e": "local-model-none" }, "No model server answered on your computer."),
+      serverError !== null ? m("p", { class: errorClass, "data-e2e": "local-model-error" }, serverError) : null,
+      isNamingServer
+        ? m("div", { class: "mt-4" }, [
+            stepLabel(null, "Server address"),
+            m("div", { class: css.FIELD_ROW }, [
+              m("input", {
+                class: inputClass({ mono: true, extra: "flex-1" }),
+                ...FIELD_PART,
+                type: "text",
+                value: serverAddress,
+                placeholder: "http://localhost:11434",
+                spellcheck: false,
+                autocomplete: "off",
+                "data-e2e": "local-model-address",
+                oninput: (event: Event) => {
+                  serverAddress = (event.target as HTMLInputElement).value;
+                },
+                onkeydown: (event: KeyboardEvent) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    look();
+                  }
+                },
+              }),
+              m(
+                Button,
+                { variant: "secondary", disabled: !canLook, "data-e2e": "local-model-find", onclick: look },
+                "Find models",
+              ),
+            ]),
+            m("input", {
+              class: inputClass({ mono: true, extra: "mt-2 w-full" }),
+              ...FIELD_PART,
+              type: "password",
+              value: serverKey,
+              placeholder: "API key, if the server asks for one",
+              spellcheck: false,
+              autocomplete: "off",
+              "data-1p-ignore": "",
+              "data-e2e": "local-model-key",
+              oninput: (event: Event) => {
+                serverKey = (event.target as HTMLInputElement).value;
+              },
+            }),
+          ])
+        : m(
+            "p",
+            { class: css.HINT },
+            m(
+              "button",
+              {
+                type: "button",
+                class: css.HINT_ACTION,
+                "data-e2e": "local-model-name-server",
+                onclick: () => {
+                  isNamingServer = true;
+                },
+              },
+              "Use a different server",
+            ),
+          ),
+      m("div", { class: "mt-4" }, [
+        stepLabel(null, "Context window, in tokens"),
+        m("input", {
+          class: inputClass({ mono: true, extra: "w-full" }),
+          ...FIELD_PART,
+          type: "text",
+          inputmode: "numeric",
+          value: contextWindow,
+          spellcheck: false,
+          autocomplete: "off",
+          "data-e2e": "local-model-context",
+          oninput: (event: Event) => {
+            contextWindow = (event.target as HTMLInputElement).value.trim();
+          },
+        }),
+        m(
+          "p",
+          { class: contextWindow !== "" && !isWindowValid ? errorClass : css.HINT },
+          minContextWindow > 0
+            ? `How much the server gives this model. At least ${minContextWindow.toLocaleString("en-US")}; the server's own setting wins when it is lower.`
+            : "How much the server gives this model.",
+        ),
+      ]),
+      m(
+        "div",
+        { class: `${css.FOOTER_ROW} mt-4` },
+        m(
+          Button,
+          { variant: "primary", disabled: !canSubmit, "data-e2e": "connect-local-model", onclick: connect },
+          "Connect",
+        ),
+      ),
+    ]);
+  }
+
   /** The menu: this lane's primary method inline, with its alternates under it. The
    *  the harness's own menu, which is why the section labels read the way they do. */
   function menuBody(current: Lane): m.Children {
@@ -908,7 +1136,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           ? "Pick your AI provider"
           : mode === "apiKey" && current.key_providers.length > 1
             ? "Sign in with API key"
-            : `Sign in to ${current.provider_name}`;
+            : mode === "endpoint"
+              ? "Connect a local model"
+              : `Sign in to ${current.provider_name}`;
 
       let body: m.Children;
       if (current === null) {
@@ -957,19 +1187,28 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           ]),
         ];
       } else if (isPending) {
-        body = statusScreen(
-          "pending",
-          "Signing in...",
-          awaitingVerdict
-            ? "Checking your code with the provider."
-            : isOpeningBrowser
-              ? "Opening your browser."
-              : "Preparing your sign-in.",
-        );
+        body =
+          mode === "endpoint"
+            ? statusScreen(
+                "pending",
+                "Checking the model...",
+                "Asking it to answer and to call a tool. A model that is not loaded yet can take a minute.",
+              )
+            : statusScreen(
+                "pending",
+                "Signing in...",
+                awaitingVerdict
+                  ? "Checking your code with the provider."
+                  : isOpeningBrowser
+                    ? "Opening your browser."
+                    : "Preparing your sign-in.",
+              );
       } else if (mode === "relay") {
         body = relayBody(current);
       } else if (mode === "apiKey") {
         body = apiKeyBody(current);
+      } else if (mode === "endpoint") {
+        body = endpointBody();
       } else if (mode === "menu") {
         body = menuBody(current);
       } else {
