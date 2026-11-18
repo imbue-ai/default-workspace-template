@@ -353,7 +353,10 @@ def read_shed_percent(program_conf: Path) -> float | None:
         command = parser.get(EARLYOOM_PROGRAM_SECTION, "command")
     except (configparser.Error, OSError):
         return None
-    words = shlex.split(command)
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
     if EARLYOOM_THRESHOLD_FLAG not in words[:-1]:
         return None
     threshold = words[words.index(EARLYOOM_THRESHOLD_FLAG) + 1]

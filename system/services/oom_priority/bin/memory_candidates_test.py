@@ -960,8 +960,12 @@ def test_free_memory_says_how_much_of_it_is_left_before_the_memory_guard_acts(
 
 @pytest.mark.parametrize(
     "command",
-    ["/usr/local/bin/earlyoom -s 100,100 -r 0", "/usr/local/bin/earlyoom -m nope"],
-    ids=["no-threshold", "unparseable-threshold"],
+    [
+        "/usr/local/bin/earlyoom -s 100,100 -r 0",
+        "/usr/local/bin/earlyoom -m nope",
+        '/usr/local/bin/earlyoom -m 10,5 --avoid "^(sshd',
+    ],
+    ids=["no-threshold", "unparseable-threshold", "unbalanced-quote"],
 )
 def test_free_memory_without_a_readable_guard_threshold_says_only_the_free_memory(
     tmp_path: Path, command: str
