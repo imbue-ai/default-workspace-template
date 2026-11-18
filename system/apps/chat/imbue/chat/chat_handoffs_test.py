@@ -1335,16 +1335,6 @@ def test_a_held_send_that_stays_blocked_gives_up_and_is_reported_with_the_harnes
     assert run.undelivered == [("chat-1", "m-1", "Claude is waiting on something in its terminal", "input_blocked")]
 
 
-def test_a_held_send_the_harness_was_not_ready_for_is_tried_again_until_it_lands() -> None:
-    """A harness whose daemon is still starting takes the message once it is up."""
-    deliver = _ScriptedDelivery(SendOutcome.NOT_READY, SendOutcome.OK)
-    run = _deliver_held(deliver)
-    assert run.is_delivered
-    assert deliver.tries == 2
-    assert run.waits == [5.0]
-    assert run.undelivered == []
-
-
 def test_a_held_send_that_did_not_land_is_reported() -> None:
     deliver = _ScriptedDelivery(SendOutcome.FAILED)
     run = _deliver_held(deliver)

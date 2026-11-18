@@ -2609,7 +2609,7 @@ def test_a_first_message_that_landed_is_told_of_under_its_own_id_and_a_refused_o
 
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
         sent.append((agent_info.id, text, message_id))
-        return SendOutcome.OK if text != "refused" else SendOutcome.FAILED
+        return SendOutcome.OK if text != "refused" else SendOutcome.NOT_READY
 
     agent_manager.set_handoff_capabilities(
         HandoffCapabilities(
@@ -2648,7 +2648,7 @@ def test_a_first_message_that_landed_is_told_of_under_its_own_id_and_a_refused_o
             "chat_id": "test-id-2",
             "message_id": "m-test-id-2",
             "detail": UNDELIVERED_HELD_SEND_DETAIL,
-            "kind": "failed",
+            "kind": "not_ready",
         }
     ]
 
