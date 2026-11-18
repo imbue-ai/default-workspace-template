@@ -1004,7 +1004,9 @@ class IntakeRequest(FrozenModel):
         default="", description="The registered name of the app an ``app_chat`` or ``app_ask`` intake is about"
     )
     app_display_name: str = Field(
-        default="", description="The display name of that app, which titles its chat and words the composer's hint"
+        default="",
+        description="The display name of that app, which titles its chat, words the composer's hint, and names the "
+        "app in front of an ask's text",
     )
 
 

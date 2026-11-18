@@ -7036,6 +7036,8 @@ def test_an_app_chat_intake_with_nothing_signed_in_mints_the_titled_chat_awaitin
 
 
 _ASK = "The preview couldn't load. Find out why this failed and fix it."
+# The ask as a chat receives it from a page of the Docs app: the page's task does not say which app failed.
+_ASK_NAMING_DOCS = f"This is about the Docs app.\n\n{_ASK}"
 
 
 def _ask_about_docs(client: FlaskClient, **fields: object) -> Any:
@@ -7059,7 +7061,8 @@ def _ask_about_docs(client: FlaskClient, **fields: object) -> Any:
 )
 def test_an_app_ask_is_sent_to_the_agent_chat_about_the_app(tmp_path: Path, docs_chat_labels: dict[str, str]) -> None:
     """An ask from a page of an app goes to the chat about that app, found as ``app_chat`` finds it, as a message
-    through the ordinary send path: nothing is drafted, and no chat is made."""
+    through the ordinary send path, led by the sentence that names the app: nothing is drafted, and no chat is
+    made."""
     messenger = RecordingMngrMessenger()
     app = _peopled_app(tmp_path, messenger)
     manager = state_of(app).agent_manager
@@ -7070,9 +7073,51 @@ def test_an_app_ask_is_sent_to_the_agent_chat_about_the_app(tmp_path: Path, docs
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"path": f"/?chat={_DOCS_CHAT_ID}"}
-    assert messenger.sent == [(_DOCS_CHAT_ID, _ASK)]
+    assert messenger.sent == [(_DOCS_CHAT_ID, _ASK_NAMING_DOCS)]
     assert len(manager.get_chat_snapshots()) == chat_count
     assert manager.get_provisional_chats() == []
+
+
+def test_an_app_ask_with_no_text_sends_nothing_to_the_chat_about_the_app(tmp_path: Path) -> None:
+    """The sentence that names the app leads a text; alone it is no message, so an ask with no text only opens the
+    chat about the app, as any intake with no text opens its chat."""
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+    seed_agent_state(state_of(app).agent_manager, _DOCS_CHAT_ID, name="Docs-Chat", labels={"app_chat": "docs"})
+
+    response = _ask_about_docs(app.test_client(), message="")
+
+    assert response.status_code == 200, response.get_json()
+    assert response.get_json() == {"path": f"/?chat={_DOCS_CHAT_ID}"}
+    assert messenger.sent == []
+
+
+@pytest.mark.parametrize(
+    "target_fields",
+    [
+        pytest.param({"target": "main_chat"}, id="the-main-chat"),
+        pytest.param({"target": "chat", "chat_id": _MAIN_ID}, id="a-named-chat"),
+    ],
+)
+def test_an_intake_that_is_not_an_app_ask_is_sent_as_it_arrived_though_it_names_an_app(
+    tmp_path: Path, target_fields: dict[str, str]
+) -> None:
+    """Only an ask from a page of an app is led by the app's name: the same text and the same app fields under any
+    other target reach the chat untouched."""
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+
+    response = _intake(
+        app.test_client(),
+        message=_ASK,
+        app="docs",
+        app_display_name="Docs",
+        is_delivery_awaited=True,
+        **target_fields,
+    )
+
+    assert response.status_code == 200, response.get_json()
+    assert messenger.sent == [(_MAIN_ID, _ASK)]
 
 
 def test_an_app_ask_for_a_chat_about_the_app_still_being_created_is_held_for_it(tmp_path: Path) -> None:
@@ -7091,9 +7136,13 @@ def test_an_app_ask_for_a_chat_about_the_app_still_being_created_is_held_for_it(
     path = response.get_json()["path"]
     assert _chat_id_of(path) == _DOCS_CHAT_ID
     held = client.get(f"/api/chats/intakes/{_token_of(path)}").get_json()
-    assert (held["chat_id"], held["message"], held["is_draft"]) == (_DOCS_CHAT_ID, _ASK, False)
+    assert (held["chat_id"], held["message"], held["is_draft"]) == (_DOCS_CHAT_ID, _ASK_NAMING_DOCS, False)
     applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={}).get_json()
-    assert (applied["chat_id"], applied["composer_text"], applied["first_message"]) == (_DOCS_CHAT_ID, _ASK, None)
+    assert (applied["chat_id"], applied["composer_text"], applied["first_message"]) == (
+        _DOCS_CHAT_ID,
+        _ASK_NAMING_DOCS,
+        None,
+    )
     assert messenger.sent == []
     assert [chat.chat_id for chat in manager.get_provisional_chats()] == [ChatId(_DOCS_CHAT_ID)]
 
@@ -7102,8 +7151,8 @@ def test_an_app_ask_with_no_chat_about_the_app_creates_it_with_the_ask_as_its_fi
     tmp_path: Path, signed_in_account: str
 ) -> None:
     """With an account signed in and no chat about the app, the ask makes it: titled and labelled as the window's
-    button would make it, with the ask as the first message its create delivers, attributed to the person who
-    pressed and raising the bubble a new chat's first message is due."""
+    button would make it, with the ask, led by the sentence that names the app, as the first message its create
+    delivers, attributed to the person who pressed and raising the bubble a new chat's first message is due."""
     messenger = RecordingMngrMessenger()
     app = _peopled_app(tmp_path, messenger)
     state = state_of(app)
@@ -7125,7 +7174,7 @@ def test_an_app_ask_with_no_chat_about_the_app_creates_it_with_the_ask_as_its_fi
     assert (created.name, created.labels, created.message, created.account_id, created.phase) == (
         "Docs Chat",
         {"app_chat": "docs"},
-        _ASK,
+        _ASK_NAMING_DOCS,
         signed_in_account,
         ProvisionalChatPhase.CREATING,
     )
@@ -7135,12 +7184,16 @@ def test_an_app_ask_with_no_chat_about_the_app_creates_it_with_the_ask_as_its_fi
     visitors_chat_id = _chat_id_of(visitors.get_json()["path"])
     visitors_chat = manager.get_provisional_chat(visitors_chat_id)
     assert visitors_chat is not None
-    assert (visitors_chat.name, visitors_chat.message) == ("Notes Chat", f"[from: Bob] {_ASK}")
+    ask_naming_notes = f"This is about the Notes app.\n\n{_ASK}"
+    assert (visitors_chat.name, visitors_chat.message) == ("Notes Chat", f"[from: Bob] {ask_naming_notes}")
     (annotation,) = state.authors.annotations(ChatId(visitors_chat_id))
-    assert (str(annotation.author), annotation.text_sha256) == (_VISITOR_KEY, text_sha256(f"[from: Bob] {_ASK}"))
+    assert (str(annotation.author), annotation.text_sha256) == (
+        _VISITOR_KEY,
+        text_sha256(f"[from: Bob] {ask_naming_notes}"),
+    )
     wait_until_true(lambda: len(shell.bubbles) == 1, 10.0, "the visitor's first message's bubble to reach the shell")
     assert [(str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text) for bubble in shell.bubbles] == [
-        (_VISITOR_KEY, visitors_chat_id, "Notes Chat", _ASK)
+        (_VISITOR_KEY, visitors_chat_id, "Notes Chat", ask_naming_notes)
     ]
 
 
@@ -7168,7 +7221,8 @@ def test_an_app_ask_goes_to_the_main_chat_when_the_chat_about_the_app_cannot_tak
     tmp_path: Path, signed_in_account: str, seed_the_docs_chat: Callable[[AgentManager], None]
 ) -> None:
     """A chat about the app that is a room, or is not an agent and is not becoming one, is left as it is: the ask
-    follows the ``main_chat`` rules instead, and no second chat about the app is made beside it."""
+    follows the ``main_chat`` rules instead, still naming the app the main chat would not otherwise know of, and no
+    second chat about the app is made beside it."""
     messenger = RecordingMngrMessenger()
     app = _peopled_app(tmp_path, messenger)
     manager = state_of(app).agent_manager
@@ -7180,7 +7234,7 @@ def test_an_app_ask_goes_to_the_main_chat_when_the_chat_about_the_app_cannot_tak
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"path": f"/?chat={_MAIN_ID}"}
-    assert messenger.sent == [(_MAIN_ID, _ASK)]
+    assert messenger.sent == [(_MAIN_ID, _ASK_NAMING_DOCS)]
     assert manager.get_provisional_chats() == provisional_before
     assert len(manager.get_chat_snapshots()) == chat_count
 
@@ -7195,7 +7249,7 @@ def test_an_app_ask_with_nothing_signed_in_goes_to_the_main_chat_and_makes_no_ch
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"path": f"/?chat={_MAIN_ID}"}
-    assert messenger.sent == [(_MAIN_ID, _ASK)]
+    assert messenger.sent == [(_MAIN_ID, _ASK_NAMING_DOCS)]
     assert manager.get_provisional_chats() == []
 
 
@@ -7211,7 +7265,7 @@ def test_an_app_ask_whose_chat_cannot_be_created_goes_to_the_main_chat(tmp_path:
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"path": f"/?chat={_MAIN_ID}"}
-    assert messenger.sent == [(_MAIN_ID, _ASK)]
+    assert messenger.sent == [(_MAIN_ID, _ASK_NAMING_DOCS)]
     assert manager.get_provisional_chats() == []
 
 
@@ -7231,9 +7285,27 @@ def test_an_app_ask_to_be_drafted_with_no_chat_about_the_app_is_held_for_the_mai
     path = response.get_json()["path"]
     assert _chat_id_of(path) == _MAIN_ID
     applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={})
-    assert applied.get_json()["composer_text"] == _ASK
+    assert applied.get_json()["composer_text"] == _ASK_NAMING_DOCS
     assert messenger.sent == []
     assert manager.get_provisional_chats() == []
+
+
+def test_an_app_ask_with_no_chat_at_all_and_nothing_signed_in_is_the_first_message_of_the_chat_it_awaits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ``main_chat`` rules with no chat to fall back to mint one awaiting its first send: the ask held for it
+    names the app too, since that chat is not the one about the app."""
+    manager, client = _signed_out_app(tmp_path, monkeypatch)
+
+    response = _ask_about_docs(client)
+
+    assert response.status_code == 200, response.get_json()
+    path = response.get_json()["path"]
+    awaiting = manager.get_provisional_chat(_chat_id_of(path))
+    assert awaiting is not None
+    assert (awaiting.phase, awaiting.labels) == (ProvisionalChatPhase.AWAITING_FIRST_SEND, {})
+    applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={}).get_json()
+    assert (applied["composer_text"], applied["first_message"]) == (None, _ASK_NAMING_DOCS)
 
 
 def test_an_app_ask_that_names_no_app_or_no_display_name_is_refused(tmp_path: Path) -> None:

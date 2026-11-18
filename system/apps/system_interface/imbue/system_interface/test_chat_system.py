@@ -180,8 +180,8 @@ def test_an_ask_run_through_the_shell_reaches_the_chat_about_its_app_which_opens
 ) -> None:
     """The seam a page's ask crosses: the shell runs the chat's ``app-ask`` launch path as the registry row carries
     it (the app's name, its display name and the text as the params ``app_params`` names), the chat's intake sends
-    the text to the chat about that app, and the shell shows the chat it answers beside the window the ask came
-    from."""
+    the text to the chat about that app, led by the sentence that names the app, and the shell shows the chat it
+    answers beside the window the ask came from."""
     docs_chat_id = "agent-00000000000000000000000000000d0c"
     messenger = RecordingMngrMessenger()
     docs_row = registry_row_toml("docs", f"http://127.0.0.1:{find_free_port()}", display_name="Docs")
@@ -216,7 +216,7 @@ def test_an_ask_run_through_the_shell_reaches_the_chat_about_its_app_which_opens
             workspace.shell_state.shell.broadcaster.unregister(client_queue)
         assert (launched["window"]["app"], launched["path"]) == ("chat", f"/?chat={docs_chat_id}")
         wait_for(
-            lambda: messenger.sent == [(docs_chat_id, "The preview is blank. Fix it.")],
+            lambda: messenger.sent == [(docs_chat_id, "This is about the Docs app.\n\nThe preview is blank. Fix it.")],
             timeout=10.0,
             poll_interval=0.1,
             error_message=f"the ask never reached the chat about Docs alone: {messenger.sent}",
