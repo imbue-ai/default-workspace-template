@@ -54,10 +54,6 @@ from pathlib import Path
 from typing import NamedTuple
 
 from update_self_skill import user_packages, venv_links
-from update_self_skill.update_whats_new import (
-    CHANGELOG_PATH,
-    UNABRIDGED_CHANGELOG_PATH,
-)
 
 # What a package's tests need in its own venv: pytest, or, for tests that use the
 # workspace's ratchet helpers (as build-app's scaffold writes them), imbue-common's testing
@@ -80,7 +76,7 @@ _COOLDOWN_COMMENT = (
     "# once it has been public this long, so a compromised one can be yanked first.\n"
 )
 _AGENT_FACING_SUFFIXES = (".md", ".toml", ".sh", ".conf", ".py")
-_CONSOLIDATED_CHANGELOGS = frozenset({CHANGELOG_PATH, UNABRIDGED_CHANGELOG_PATH})
+_CONSOLIDATED_CHANGELOGS = frozenset({"CHANGELOG.md", "UNABRIDGED_CHANGELOG.md"})
 _TABLE_HEADER = re.compile(r"^\s*\[")
 # What separates the steps of a program's `bash -c` script, as user_packages splits them.
 _SCRIPT_SEPARATOR = re.compile(r"(&&|\|\||;|\n)")

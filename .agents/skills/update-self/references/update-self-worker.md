@@ -542,10 +542,9 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 
 `data/.tasks/update-self/whats-new.md` is what you digest: for each release
 newer than the workspace's (`release` in the printed JSON), newest first, its
-section of the target's root `CHANGELOG.md`, or of `UNABRIDGED_CHANGELOG.md`
-for a release the summary does not cover, plus `[Unreleased]` when the target
-has unreleased changes. `sections` names each one and its file. Repeat any
-`note` (a fallback the listing took) in your report. Read a long file in parts.
+section of the target's root `CHANGELOG.md`, plus `[Unreleased]` when the target
+has unreleased changes. `sections` names each one. Repeat any `note` (releases
+the listing could not cover) in your report. Read a long file in parts.
 
 ## 6. Report back
 
