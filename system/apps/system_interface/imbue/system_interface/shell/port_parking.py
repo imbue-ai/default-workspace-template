@@ -92,8 +92,8 @@ _PAGE_TEMPLATE: Final[str] = """<!DOCTYPE html>
 # The app contract's wire (system/libs/workspace_ui/src/app_contract.ts), which this page speaks without the
 # contract module: the parker answers every path with this page, so it cannot serve the module beside it.
 SHELL_HANDSHAKE_TYPE: Final[str] = "shell:handshake"
-SHELL_START_NEW_WITH_TEXT_TYPE: Final[str] = "shell:start-new-with-text"
-SHELL_START_NEW_WITH_TEXT_RESULT_TYPE: Final[str] = "shell:start-new-with-text-result"
+SHELL_ASK_AGENT_TYPE: Final[str] = "shell:ask-agent"
+SHELL_ASK_AGENT_RESULT_TYPE: Final[str] = "shell:ask-agent-result"
 SHELL_REPORT_BUG_TYPE: Final[str] = "shell:report-bug"
 ASKING_AN_AGENT_LABEL: Final[str] = "Asking an agent\u2026"
 CHANGE_NOT_ANSWERED_SENTENCE: Final[str] = (
@@ -180,7 +180,7 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     "ask.textContent = {asking};"
     "show(null);"
     "window.parent.postMessage("
-    '{ type: {start_new_with_text}, text: {request}, requestId: pendingId, showsOutcome: true }, "*");'
+    '{ type: {ask_agent}, text: {request}, requestId: pendingId, showsOutcome: true }, "*");'
     "});"
     "})();</script>"
 )
@@ -235,8 +235,8 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
     failed_body = (
         _FAILED_BODY_TEMPLATE.replace("{program}", html.escape(program))
         .replace("{handshake}", _script_literal(SHELL_HANDSHAKE_TYPE))
-        .replace("{start_new_with_text}", _script_literal(SHELL_START_NEW_WITH_TEXT_TYPE))
-        .replace("{result}", _script_literal(SHELL_START_NEW_WITH_TEXT_RESULT_TYPE))
+        .replace("{ask_agent}", _script_literal(SHELL_ASK_AGENT_TYPE))
+        .replace("{result}", _script_literal(SHELL_ASK_AGENT_RESULT_TYPE))
         .replace("{report_bug}", _script_literal(SHELL_REPORT_BUG_TYPE))
         .replace("{asking}", _script_literal(ASKING_AN_AGENT_LABEL))
         .replace("{not_answered}", _script_literal(CHANGE_NOT_ANSWERED_SENTENCE))

@@ -139,7 +139,7 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         ask.click()
         page.wait_for_function("window.received.length > 0")
         (asked,) = page.evaluate("window.received")
-        assert asked["type"] == "shell:start-new-with-text"
+        assert asked["type"] == "shell:ask-agent"
         assert asked["text"] == could_not_start_request("Docs", "docs")
         # The page shows the answer itself, so the shell is told not to toast it too.
         assert asked["showsOutcome"] is True
@@ -148,7 +148,7 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         expect(ask).to_be_disabled()
         reply = (
             "(answer) => document.getElementById('app').contentWindow.postMessage("
-            "Object.assign({ type: 'shell:start-new-with-text-result' }, answer), '*')"
+            "Object.assign({ type: 'shell:ask-agent-result' }, answer), '*')"
         )
         page.evaluate(reply, {"requestId": "some-other-request", "isOpened": True})
         expect(ask).to_be_disabled()
@@ -187,7 +187,7 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         ask.click()
         expect(framed.locator("#ask-agent-failure")).to_be_hidden()
         expect(report).to_be_hidden()
-        asks = "window.received.filter((message) => message.type === 'shell:start-new-with-text')"
+        asks = "window.received.filter((message) => message.type === 'shell:ask-agent')"
         page.wait_for_function(f"{asks}.length === 2")
         second = page.evaluate(f"{asks}[1]")
         page.evaluate(handshake, "shell-1")

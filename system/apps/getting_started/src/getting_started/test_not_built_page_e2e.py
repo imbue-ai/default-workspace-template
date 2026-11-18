@@ -43,8 +43,8 @@ window.addEventListener("message", (event) => {
   if (event.data.type === "shell:capabilities") {
     frame.postMessage({ type: "shell:handshake", clientId: "c", windowId: "w", desktopId: "d", app: "getting-started",
       path: "/", shellId: "shell-1", canReportBug: __CAN_REPORT_BUG__ }, "*");
-  } else if (event.data.type === "shell:start-new-with-text") {
-    frame.postMessage({ type: "shell:start-new-with-text-result", requestId: event.data.requestId, isOpened: false,
+  } else if (event.data.type === "shell:ask-agent") {
+    frame.postMessage({ type: "shell:ask-agent-result", requestId: event.data.requestId, isOpened: false,
       failure: __FAILURE__ }, "*");
   }
 });
