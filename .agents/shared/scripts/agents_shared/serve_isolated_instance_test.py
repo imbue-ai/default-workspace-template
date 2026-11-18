@@ -1425,6 +1425,14 @@ def test_wrapper_frames_the_inner_service_at_its_current_registered_label(
     assert _wrapper_page_label(second_page) == second_label
 
 
+def _wrapper_error(url: str) -> tuple[int, str]:
+    """The status and body of a request to ``url`` that the wrapper refuses."""
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        urllib.request.urlopen(url)
+    with excinfo.value as error:
+        return error.code, error.read().decode("utf-8")
+
+
 def test_wrapper_refuses_to_frame_a_service_with_no_registered_label(
     tmp_path: Path,
 ) -> None:
@@ -1432,19 +1440,18 @@ def test_wrapper_refuses_to_frame_a_service_with_no_registered_label(
     forward_port.register(apps_file, "other", "http://localhost:8301", is_icon_declined=True)
 
     with _running_wrapper(apps_file, "inbox") as url:
-        with pytest.raises(urllib.error.HTTPError) as excinfo:
-            urllib.request.urlopen(url)
+        status, body = _wrapper_error(url)
 
-    assert excinfo.value.code == 503
+    assert status == 503
+    assert "has no origin label" in body
 
 
 def test_wrapper_answers_503_when_the_registry_cannot_be_read(tmp_path: Path) -> None:
     with _running_wrapper(tmp_path / "missing.toml", "inbox") as url:
-        with pytest.raises(urllib.error.HTTPError) as excinfo:
-            urllib.request.urlopen(url)
+        status, body = _wrapper_error(url)
 
-    assert excinfo.value.code == 503
-    assert "could not be read" in excinfo.value.read().decode("utf-8")
+    assert status == 503
+    assert "could not be read" in body
 
 
 def test_a_mock_wrapper_page_says_it_is_a_mock_and_shows_the_note_escaped() -> None:
