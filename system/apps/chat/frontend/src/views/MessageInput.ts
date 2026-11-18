@@ -2061,7 +2061,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           if (currentChatId !== forChatId) return;
           clearActionFailureNotice();
           actionFailureTitle = "Couldn't paste the text back";
-          actionFailureDetail = "The attachment is still there, and will be sent as it is. Try again, or remove it.";
+          actionFailure = {
+            body: ["The attachment is still there, and will be sent as it is. Try again, or remove it."],
+            details: describeRequestFailure(error).details,
+            isReportable: false,
+          };
           m.redraw();
           return;
         } finally {

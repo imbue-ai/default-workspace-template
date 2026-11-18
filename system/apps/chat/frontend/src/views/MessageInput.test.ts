@@ -1003,6 +1003,7 @@ describe("MessageInput long paste", () => {
     (findByAttr(render(), "aria-label", "Paste as text")?.attrs?.onclick as () => void)();
     await flushAsync();
     expect(renderedText(render())).toContain("Couldn't paste the text back");
+    expect(renderedText(render())).toContain("The attachment is still there, and will be sent as it is.");
     expect(findByTag(render(), "textarea")?.attrs?.value).toBe("");
     vi.mocked(console.warn).mockRestore();
   });
