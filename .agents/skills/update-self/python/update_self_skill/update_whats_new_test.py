@@ -497,7 +497,8 @@ def test_out_leaves_out_an_entry_that_cannot_be_read_and_names_it(
     answer = list_whats_new("old", "minds-v2", repo, out, _LAST_ENTRY_TAG)
 
     assert answer["unlisted"] == [
-        ".agents/changelog/third.md at minds-v1 could not be read"
+        ".agents/changelog/third.md at minds-v1 could not be read: git answered "
+        "'minds-v1:.agents/changelog/third.md missing'"
     ]
     assert out.read_text() == (
         "# Release sections of CHANGELOG.md new to this workspace\n\n"
@@ -514,9 +515,11 @@ def test_out_reads_no_entry_from_a_batch_that_git_cuts_short(tmp_path: Path) -> 
 
     answer = list_whats_new("old", "minds-v2", repo, out, _LAST_ENTRY_TAG)
 
-    assert answer["unlisted"] == [
-        f"{path} at minds-v1 could not be read" for path in _ENTRIES_ADDED_BY_V1
-    ]
+    unlisted = answer["unlisted"]
+    assert isinstance(unlisted, list) and len(unlisted) == len(_ENTRIES_ADDED_BY_V1)
+    for path, line in zip(_ENTRIES_ADDED_BY_V1, unlisted):
+        prefix = f"{path} at minds-v1 could not be read: "
+        assert line.startswith(prefix) and line.removeprefix(prefix).strip()
     assert out.read_text() == (
         "# Release sections of CHANGELOG.md new to this workspace\n\n"
         f"{_V2_SECTION}\n"
