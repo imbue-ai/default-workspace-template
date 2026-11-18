@@ -120,7 +120,7 @@ describe("a file whose text could not be loaded", () => {
 
     expect([ask.textContent, ask.disabled]).toEqual(["Asking an agent…", true]);
     const [task, options] = host.askAgent.mock.calls[0];
-    expect(task).toContain("This file couldn't be opened.");
+    expect(task).toContain(`This file couldn't be opened (${PATH}).`);
     expect(task).toContain("HTTP 500\nInput/output error");
     expect(options?.showsOutcome).toBe(true);
 

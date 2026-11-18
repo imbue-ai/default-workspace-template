@@ -194,7 +194,7 @@ describe("a folder that cannot be listed", () => {
     expect([ask.textContent, ask.disabled]).toEqual(["Asking an agent…", true]);
     expect(connection.startWithText).not.toHaveBeenCalled();
     const [task, options] = askAgent.mock.calls[0];
-    expect(task).toContain("Couldn't open this folder.");
+    expect(task).toContain("Couldn't open this folder (/home/).");
     expect(task).toContain(`HTTP 500\n${LISTING_REASON}`);
     expect(options?.showsOutcome).toBe(true);
 
