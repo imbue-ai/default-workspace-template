@@ -241,7 +241,14 @@ function deleteChat(attrs: RowMenuContext, row: ChatRow): void {
         refused: `"${row.title}" was not deleted.`,
         unanswered: `The workspace didn't answer, so it isn't known whether "${row.title}" was deleted.`,
       }),
-      retry: { label: "Try again", run: () => deleteChat(latestMenuContext ?? attrs, row) },
+      retry: {
+        label: "Try again",
+        // A chat gone from the list was deleted after all, and trying again would be refused for it.
+        run: () => {
+          const context = latestMenuContext ?? attrs;
+          if (context.rows.some((listed) => listed.chatId === row.chatId)) deleteChat(context, row);
+        },
+      },
     });
   });
 }

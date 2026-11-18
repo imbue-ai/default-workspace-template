@@ -318,6 +318,24 @@ describe("ChatRail delete", () => {
     expect(withoutPendingDeletes([first, second])).toEqual([second]);
   });
 
+  it("does not try again to delete a chat that has left the list since", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    let rows: readonly ChatRow[] = [first, second];
+    mount(() => rows);
+    verbs.destroyChat.mockClear();
+    verbs.destroyChat.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+    deleteFromMenu(chatRailAttrsFixture({ rows: [first, second] }), first);
+    await vi.waitFor(() => expect(noticeText()).not.toBeNull());
+    rows = [second];
+    m.redraw.sync();
+
+    noticeButton("Try again").click();
+    m.redraw.sync();
+    expect(isRootNoticeUp()).toBe(false);
+    expect(verbs.destroyChat).toHaveBeenCalledTimes(1);
+  });
+
   it("says it is not known whether the chat was deleted when nothing answered", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     mount([first, second]);
