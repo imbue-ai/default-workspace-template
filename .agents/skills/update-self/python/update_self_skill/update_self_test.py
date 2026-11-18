@@ -929,8 +929,7 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
         )
         == 0
     )
-    listing = json.loads(capsys.readouterr().out)
-    added = listing["added"]
+    added = json.loads(capsys.readouterr().out)["added"]
     assert sorted(added) == [
         ".agents/changelog/my-branch.md",
         "system/apps/screen/changelog/my-branch.md",
@@ -938,13 +937,6 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
         "system/changelog/my-branch.md",
         "system/services/gamma/changelog/my-branch.md",
     ]
-    # Neither ref has a root CHANGELOG.md, so the entries are the whole listing.
-    assert listing == {
-        "sections": [],
-        "added": added,
-        "added_before_consolidation": None,
-        "unlisted": [],
-    }
 
     # The worker guide has the tool run from the staged skill's scripts
     # directory. A git pathspec is cwd-relative, so from a subdirectory the

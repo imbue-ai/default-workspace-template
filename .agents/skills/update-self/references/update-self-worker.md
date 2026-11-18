@@ -91,6 +91,13 @@ Triage each conflict; the first rule that applies wins:
   --package-lock-only` for npm) and `git add` the result.
 - **Agent-owned files -> keep local** (`PURPOSE.md`, `data/`):
   `git checkout --ours -- <path> && git add <path>`.
+- **The template's changelog -> take the target's side**: `git checkout
+  --theirs -- <path> && git add <path>` for the root `CHANGELOG.md` and
+  `UNABRIDGED_CHANGELOG.md`, and `git rm <path>` for a `changelog/` entry file
+  the target deletes (its text has moved into those two files). Before taking
+  the target's root file over one this workspace wrote itself, save the
+  workspace's to a new path (`git show :2:<path> > <new path>`) and name the
+  move in your report.
 - **Mixed files (`CLAUDE.md` and similar) -> merge by judgment.** Keep the
   agent-specific customizations, fold in the upstream additions. Side-picking
   one side of a code file outside the agent-owned rule is a last resort, and
@@ -535,17 +542,14 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 `data/.tasks/update-self/whats-new.md` is what you digest: first the release
 sections of the target's root `CHANGELOG.md` that this workspace does not have
 yet, newest first, then the text of each changelog entry file the update adds.
-An empty file means the update carries no changelog text. The printed JSON
-names what went into the file: `sections`, `added` (entries read at the
-target) and `added_before_consolidation` (entries of releases the workspace
-skipped, read at the last release that kept them as files; `null` when there
-is no such release to read). Under `unlisted` it names anything that could not
-be read: repeat each of those lines in your report rather than presenting a
-partial list as the whole. The verbatim entries behind the sections are in
-`UNABRIDGED_CHANGELOG.md` at the target, where
-`git diff "$BASE" "$TARGET_REF" -- UNABRIDGED_CHANGELOG.md` shows only the new
-text when `$BASE` has the file; read them when a section's bullet names a rule
-the workspace's own code must follow.
+An empty file and an empty `unlisted` mean the update carries no changelog
+text. The printed JSON names what went into the file: `sections`, `added`
+(entries read at the target) and `added_before_consolidation` (entries of
+releases the workspace skipped, read at the last release that kept them as
+files; `null` when there is no such release to read). Under `unlisted` it names
+anything that could not be read: repeat each of those lines in your report
+rather than presenting a partial list as the whole. The verbatim entries behind
+the sections are in `UNABRIDGED_CHANGELOG.md` at the target.
 
 ## 6. Report back
 

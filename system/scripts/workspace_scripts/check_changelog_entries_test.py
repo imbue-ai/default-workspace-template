@@ -216,28 +216,6 @@ def test_changelog_base_ref_overrides_the_reserved_github_variable(
     assert gate.resolve_diff_base(repo) == "stacked-base"
 
 
-_UNSTAMPED_CHANGELOG = "# Changelog\n\n## [Unreleased]\n\n- Added: A feature.\n"
-_STAMPED_CHANGELOG = "# Changelog\n\n## [Unreleased]\n\n## [minds-v1.1.0] - 2026-05-11\n\n- Added: A feature.\n"
-
-
-def _branch_changing_the_root_changelog(
-    tmp_path: Path, branch: str, before: str | None, after: str
-) -> Path:
-    """A repo whose ``branch`` touches a library and takes the root ``CHANGELOG.md``
-    from ``before`` (on main; ``None`` for no file) to ``after``."""
-    repo = _init_repo(tmp_path)
-    if before is not None:
-        (repo / gate.ROOT_CHANGELOG).write_text(before)
-        _git(repo, "add", "-A")
-        _git(repo, "commit", "-qm", "changelog")
-    _git(repo, "checkout", "-q", "-b", branch)
-    (repo / gate.ROOT_CHANGELOG).write_text(after)
-    (repo / "system/libs/alpha/new.py").write_text("print(1)\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "change the changelog and a library")
-    return repo
-
-
 def test_a_consolidation_branch_owes_no_entry(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -257,42 +235,22 @@ def test_only_a_consolidation_branch_is_exempt_by_name() -> None:
     assert not gate.is_exempt_branch("fork/mngr/changelog-consolidation")
 
 
-def test_a_pull_request_that_adds_a_release_section_owes_no_entry(
+def test_a_release_section_in_the_root_changelog_does_not_replace_the_entries(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    repo = _branch_changing_the_root_changelog(
-        tmp_path, "release", _UNSTAMPED_CHANGELOG, _STAMPED_CHANGELOG
+    repo = _init_repo(tmp_path)
+    (repo / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "changelog")
+    _git(repo, "checkout", "-q", "-b", "release")
+    (repo / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## [Unreleased]\n\n## [minds-v1.1.0] - 2026-05-11\n"
     )
-
-    assert gate.main(repo) == 0
-    assert "adds a release section" in capsys.readouterr().out
-
-
-@pytest.mark.parametrize(
-    ("before", "after"),
-    [
-        pytest.param(None, _UNSTAMPED_CHANGELOG, id="new-file-with-only-unreleased"),
-        pytest.param(
-            _UNSTAMPED_CHANGELOG,
-            _UNSTAMPED_CHANGELOG.replace("A feature.", "A better feature."),
-            id="unreleased-bullet",
-        ),
-        pytest.param(
-            _STAMPED_CHANGELOG,
-            _STAMPED_CHANGELOG.replace("A feature.", "A better feature."),
-            id="released-bullet",
-        ),
-    ],
-)
-def test_a_changelog_change_that_adds_no_release_section_still_owes_entries(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    before: str | None,
-    after: str,
-) -> None:
-    repo = _branch_changing_the_root_changelog(tmp_path, "correction", before, after)
+    (repo / "system/libs/alpha/new.py").write_text("print(1)\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "stamp a release and change a library")
 
     assert gate.main(repo) == 1
     err = capsys.readouterr().err
-    assert "system/changelog/correction.md" in err
-    assert "system/libs/alpha/changelog/correction.md" in err
+    assert "system/changelog/release.md" in err
+    assert "system/libs/alpha/changelog/release.md" in err

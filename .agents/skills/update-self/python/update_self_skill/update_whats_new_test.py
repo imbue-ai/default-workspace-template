@@ -9,11 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from update_self_skill import update_self, update_whats_new
+from update_self_skill import update_self
 from update_self_skill.update_whats_new import (
     CHANGELOG_PATH,
     ChangelogSection,
-    EntriesAtRef,
     list_whats_new,
     parse_changelog_sections,
     release_labels,
@@ -26,6 +25,7 @@ _V2_SECTION = (
     "## [minds-v2] - 2026-02-01\n\nSummary of v2.\n\n### Added\n\n- Added: v2 thing.\n"
 )
 _V3_SECTION = "## [minds-v3] - 2026-03-01\n\n- Fixed: v3 thing.\n"
+_V4_SECTION = "## [minds-v4] - 2026-04-01\n\n- Added: v4 thing.\n"
 
 # The last tag of the history below whose tree still holds its changes as entry files.
 _LAST_ENTRY_TAG = "minds-v1"
@@ -114,6 +114,15 @@ def _make_unreadable(repo: Path, ref: str, path: str) -> None:
     """Remove the object holding ``path`` at ``ref``, leaving the tree that names it."""
     sha = _git(repo, "rev-parse", f"{ref}:{path}")
     (repo / ".git" / "objects" / sha[:2] / sha[2:]).unlink()
+
+
+def _truncate(repo: Path, ref: str, path: str) -> None:
+    """Cut the object holding ``path`` at ``ref`` in half, so git dies partway through it."""
+    sha = _git(repo, "rev-parse", f"{ref}:{path}")
+    loose = repo / ".git" / "objects" / sha[:2] / sha[2:]
+    data = loose.read_bytes()
+    loose.unlink()
+    loose.write_bytes(data[: len(data) // 2])
 
 
 def test_sections_are_the_labelled_ones_each_ending_at_the_next_heading() -> None:
@@ -378,6 +387,62 @@ def test_an_unreadable_target_changelog_still_lists_the_entries(tmp_path: Path) 
     assert unlisted[0].startswith("CHANGELOG.md at minds-v3 could not be read")
 
 
+@pytest.mark.parametrize(
+    ("v4_changelog", "expected_sections", "problem"),
+    [
+        pytest.param(
+            _changelog(_V4_SECTION.replace("[minds-v4]", "minds-v4"), _V3_SECTION),
+            ["minds-v3"],
+            "has headings that are not '## [<label>]' ones: '## minds-v4 - 2026-04-01'",
+            id="unbracketed-heading",
+        ),
+        pytest.param(
+            _changelog(_V4_SECTION, _V3_SECTION, _V3_SECTION),
+            ["minds-v4", "minds-v3", "minds-v3"],
+            "has more than one section for [minds-v3]",
+            id="repeated-label",
+        ),
+    ],
+)
+def test_a_target_changelog_with_a_misplaced_heading_names_it(
+    tmp_path: Path, v4_changelog: str, expected_sections: list[str], problem: str
+) -> None:
+    repo = _init_switched_template(tmp_path)
+    _commit_and_tag(repo, "minds-v4", {CHANGELOG_PATH: v4_changelog})
+
+    answer = list_whats_new("minds-v2", "minds-v4", repo, None, _LAST_ENTRY_TAG)
+
+    assert answer["sections"] == expected_sections
+    assert answer["unlisted"] == [
+        f"CHANGELOG.md at minds-v4 {problem}, so the sections listed may be incomplete"
+    ]
+
+
+def test_a_base_changelog_with_no_bracketed_release_heading_reads_no_earlier_release(
+    tmp_path: Path,
+) -> None:
+    repo = _init_switched_template(tmp_path)
+    unbracketed = _V3_SECTION.replace("[minds-v3]", "minds-v3")
+    _commit_and_tag(repo, "bad-base", {CHANGELOG_PATH: _changelog(unbracketed)})
+    _commit_and_tag(
+        repo, "minds-v4", {CHANGELOG_PATH: _changelog(_V4_SECTION, _V3_SECTION)}
+    )
+
+    answer = list_whats_new("bad-base", "minds-v4", repo, None, _LAST_ENTRY_TAG)
+
+    assert answer == {
+        "sections": ["minds-v4", "minds-v3"],
+        "added": [],
+        "added_before_consolidation": None,
+        "unlisted": [
+            "CHANGELOG.md at bad-base could not be read, so release sections the "
+            "workspace already has may be listed again and no entry is read at an "
+            "earlier release: it has headings that are not '## [<label>]' ones: "
+            "'## minds-v3 - 2026-03-01'"
+        ],
+    }
+
+
 def test_out_leaves_out_an_entry_that_cannot_be_read_and_names_it(
     tmp_path: Path,
 ) -> None:
@@ -398,11 +463,21 @@ def test_out_leaves_out_an_entry_that_cannot_be_read_and_names_it(
     )
 
 
-def test_a_batch_read_that_does_not_finish_reads_no_entry(tmp_path: Path) -> None:
-    entries = EntriesAtRef("minds-v1", ["system/changelog/first.md"])
+def test_out_reads_no_entry_from_a_batch_that_git_cuts_short(tmp_path: Path) -> None:
+    repo = _init_switched_template(tmp_path)
+    _truncate(repo, _LAST_ENTRY_TAG, _ENTRIES_ADDED_BY_V1[0])
+    out = tmp_path / "whats-new.md"
 
-    # Outside a repository git exits non-zero before answering for any object.
-    assert update_whats_new._read_entries(entries, tmp_path) == {}
+    answer = list_whats_new("old", "minds-v2", repo, out, _LAST_ENTRY_TAG)
+
+    assert answer["unlisted"] == [
+        f"{path} at minds-v1 could not be read" for path in _ENTRIES_ADDED_BY_V1
+    ]
+    assert out.read_text() == (
+        "# Release sections of CHANGELOG.md new to this workspace\n\n"
+        f"{_V2_SECTION}\n"
+        "# Changelog entries the update adds, as they are at minds-v1\n"
+    )
 
 
 def test_the_command_prints_the_listing_and_writes_out(

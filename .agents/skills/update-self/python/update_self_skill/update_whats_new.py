@@ -67,6 +67,30 @@ def parse_changelog_sections(text: str) -> list[ChangelogSection]:
     return sections
 
 
+def changelog_problems(text: str) -> list[str]:
+    """The ``## `` headings of ``text`` that are not ``## [<label>]`` ones, and the labels it repeats."""
+    stray = [
+        line
+        for line in text.split("\n")
+        if line.startswith(_SECTION_HEADING_PREFIX)
+        and not line.startswith(_LABELLED_HEADING_PREFIX)
+    ]
+    labels = [section.label for section in parse_changelog_sections(text)]
+    repeated = [label for label in dict.fromkeys(labels) if labels.count(label) > 1]
+    problems: list[str] = []
+    if stray:
+        problems.append(
+            "has headings that are not '## [<label>]' ones: "
+            + ", ".join(map(repr, stray))
+        )
+    if repeated:
+        problems.append(
+            "has more than one section for "
+            + ", ".join(f"[{label}]" for label in repeated)
+        )
+    return problems
+
+
 def release_labels(sections: Sequence[ChangelogSection]) -> list[str]:
     return [section.label for section in sections if section.label != _UNRELEASED_LABEL]
 
@@ -165,6 +189,8 @@ def _gather_whats_new(
     unlisted: list[str] = []
 
     base_text, base_problem = _read_changelog(base, repo_root)
+    if base_problem is None and (base_text_problems := changelog_problems(base_text)):
+        base_problem = "; ".join(f"it {problem}" for problem in base_text_problems)
     target_text, target_problem = _read_changelog(target, repo_root)
     base_labels = release_labels(parse_changelog_sections(base_text))
     sections = select_unseen_sections(
@@ -181,6 +207,10 @@ def _gather_whats_new(
             f"{CHANGELOG_PATH} at {target} could not be read, so no release section "
             f"is listed: {target_problem}"
         )
+    unlisted.extend(
+        f"{CHANGELOG_PATH} at {target} {problem}, so the sections listed may be incomplete"
+        for problem in changelog_problems(target_text)
+    )
 
     # A base whose changelog has no release section predates the consolidation of the
     # entry files, so the releases it skipped are still entry files at the last such tag.
