@@ -33,6 +33,8 @@ let root: HTMLElement | null = null;
 afterEach(() => {
   settlePendingDeletes(new Set());
   vi.restoreAllMocks();
+  // A rename left open holds the notices, which the loop below could not then see.
+  endRenameOfUnlisted(new Set());
   while (isRootNoticeUp()) dismissNotice();
   if (root === null) return;
   m.mount(root, null);
