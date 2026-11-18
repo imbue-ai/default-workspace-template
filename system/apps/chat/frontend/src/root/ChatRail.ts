@@ -160,7 +160,7 @@ function refuseRename(row: ChatRow, title: string, error: unknown): void {
   dropPendingRename(row.chatId, title);
   console.warn(`[chat-root] could not rename chat ${row.chatId}`, error);
   raiseRootNotice({
-    title: "Couldn't rename the chat",
+    title: isRoom(row) ? "Couldn't rename the room" : "Couldn't rename the chat",
     body: failureBody(error, {
       refused: `"${row.title}" was not renamed to "${title}".`,
       unanswered: `The workspace didn't answer, so it isn't known whether "${row.title}" was renamed to "${title}".`,
