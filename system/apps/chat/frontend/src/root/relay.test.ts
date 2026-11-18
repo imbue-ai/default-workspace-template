@@ -38,7 +38,7 @@ describe("isForwardedToShell", () => {
       true,
     );
     expect(isForwardedToShell({ type: "shell:start-with-text", text: "Free up space." })).toBe(true);
-    expect(isForwardedToShell({ type: "shell:start-new-with-text", text: "Fix this." })).toBe(true);
+    expect(isForwardedToShell({ type: "shell:ask-agent", text: "Fix this." })).toBe(true);
     expect(isForwardedToShell({ type: "shell:report-bug" })).toBe(true);
   });
 
@@ -132,9 +132,7 @@ describe("passing the chrome's answers down", () => {
         resolutions: [{ requestId: "req-1", resolution: "granted" }],
       }),
     ).toBe(true);
-    expect(
-      isForwardedToInnerFrames({ type: "shell:start-new-with-text-result", requestId: "a1", isOpened: true }),
-    ).toBe(true);
+    expect(isForwardedToInnerFrames({ type: "shell:ask-agent-result", requestId: "a1", isOpened: true })).toBe(true);
     expect(isForwardedToInnerFrames({ type: "shell:start-with-text-result", requestId: "a2", isOpened: true })).toBe(
       true,
     );
