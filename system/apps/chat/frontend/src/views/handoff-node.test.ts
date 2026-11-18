@@ -87,8 +87,13 @@ describe("the handoff node's words", () => {
 
   it("follows the live switch while it runs, fails, or was called off", () => {
     const open: HandoffNode = { key: "u-req", request: REQUEST, events: [], switch: null, prompt: null };
+    // While it runs the node is the one place that says what the switch is doing: its phase.
     expect(handoffNodeText(open, chatWith(handoffStateFixture({ phase: "summarizing" })))).toEqual({
-      title: "Handing off to Codex…",
+      title: "Claude Code is writing a summary…",
+      status: "active",
+    });
+    expect(handoffNodeText(open, chatWith(handoffStateFixture({ phase: "switching" })))).toEqual({
+      title: "Starting Codex…",
       status: "active",
     });
     expect(handoffNodeText(open, chatWith(handoffStateFixture({ phase: "failed", error: "x" })))).toEqual({
@@ -120,7 +125,7 @@ describe("the handoff node's words", () => {
     };
     const second = chatWith(handoffStateFixture({ phase: "summarizing", started_at: "2026-09-16T00:44:10.000Z" }));
     expect(handoffNodeText(earlier, second)).toEqual({ title: "Handoff called off", status: "cancelled" });
-    expect(handoffNodeText(later, second)).toEqual({ title: "Handing off to Codex…", status: "active" });
+    expect(handoffNodeText(later, second)).toEqual({ title: "Claude Code is writing a summary…", status: "active" });
   });
 });
 
@@ -136,7 +141,7 @@ describe("the handoff node", () => {
     m.render(ROOT(), renderHandoffNode(open, "agent-a", new Map(), { isLast: true, expansionKey: "k" }));
     expect(ROOT().querySelector('[data-handoff-status="active"]')).not.toBeNull();
     expect(ROOT().querySelector(".spinner")).not.toBeNull();
-    expect(ROOT().textContent).toContain("Handing off to Codex…");
+    expect(ROOT().textContent).toContain("Claude Code is writing a summary…");
     // No rule while the switch runs: nothing below the node is the successor's yet.
     expect(ROOT().querySelector(".pv-handoff-rule")).toBeNull();
 
@@ -177,22 +182,26 @@ describe("the handoff node", () => {
     const tail = renderHandoffTailNode("agent-a", false);
     expect(tail).not.toBeNull();
     m.render(ROOT(), tail);
-    expect(ROOT().textContent).toContain("Handing off to Codex…");
+    expect(ROOT().textContent).toContain("Wrapping up with Claude Code…");
     // Once the request is on the stream the rows carry the node; nothing stands in.
     expect(renderHandoffTailNode("agent-a", true)).toBeNull();
     state.chat = chatWith(null);
     expect(renderHandoffTailNode("agent-a", false)).toBeNull();
   });
 
-  it("stands in for nothing while a chat restarts on another account: the line by the composer says it once", () => {
+  it("stands in while a chat restarts on another account, naming the restart", () => {
     state.chat = chatWith(rebindStateFixture());
 
-    expect(renderHandoffTailNode("agent-a", false)).toBeNull();
+    m.render(ROOT(), renderHandoffTailNode("agent-a", false));
+    expect(ROOT().textContent).toContain("Restarting Claude Code on Anthropic 2 (Claude Code)…");
   });
 
-  it("stands in for nothing while a chat with no user turn starts on another provider: there is nothing to hand off", () => {
-    state.chat = chatWith(handoffStateFixture({ phase: "switching", is_fresh_start: true, held_sends: [] }));
-
-    expect(renderHandoffTailNode("agent-a", false)).toBeNull();
+  it("stands in while a chat with no user turn starts on another provider, saying only that it is starting", () => {
+    for (const phase of ["draining", "summarizing", "switching"] as const) {
+      state.chat = chatWith(handoffStateFixture({ phase, is_fresh_start: true, held_sends: [] }));
+      m.render(ROOT(), renderHandoffTailNode("agent-a", false));
+      expect(ROOT().textContent).toContain("Starting Codex…");
+      expect(ROOT().textContent).not.toContain("Handing off");
+    }
   });
 });
