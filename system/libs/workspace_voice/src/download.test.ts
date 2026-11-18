@@ -41,6 +41,7 @@ function mapStore(initial: [string, Uint8Array][] = []) {
     initial.map(([url, bytes]) => [url, bytes.slice().buffer as ArrayBuffer]),
   );
   const store: PinnedFileStore = {
+    has: vi.fn(async (url: string) => entries.has(url)),
     read: vi.fn(async (url: string) => entries.get(url) ?? null),
     write: vi.fn(async (url: string, bytes: ArrayBuffer) => void entries.set(url, bytes)),
     prune: vi.fn(async () => undefined),
