@@ -21,9 +21,12 @@ _SECTION_HEADING_PREFIX = "## "
 _LABELLED_HEADING_PREFIX = "## ["
 _UNRELEASED_LABEL = "Unreleased"
 
-# Entry files sit one level under a ``changelog/`` directory at any depth, outside the vendored
-# snapshots; ``top`` anchors both pathspecs at the repository root whatever directory git runs in.
-_ENTRY_PATHSPECS = (":(top,glob)**/changelog/*", ":(top,exclude)system/vendor")
+# Every ``changelog/<file>.md`` but ``README.md`` outside ``system/vendor``, from the repository root.
+_ENTRY_PATHSPECS = (
+    ":(top,glob)**/changelog/*.md",
+    ":(top,exclude,glob)**/changelog/README.md",
+    ":(top,exclude)system/vendor",
+)
 
 
 class ChangelogSection(NamedTuple):
@@ -154,14 +157,14 @@ def _read_changelog(ref: str, repo_root: Path) -> tuple[str, str | None]:
 def _added_entries(
     base: str, ref: str, repo_root: Path
 ) -> subprocess.CompletedProcess[bytes]:
+    """The entry files ``ref`` adds since it and ``base`` diverged."""
     return _git(
         [
             "diff",
             "--name-only",
             "--diff-filter=A",
             "--no-renames",
-            base,
-            ref,
+            f"{base}...{ref}",
             "--",
             *_ENTRY_PATHSPECS,
         ],
@@ -235,8 +238,11 @@ def _gather_whats_new(
     )
 
 
-def _read_entries(entries: EntriesAtRef, repo_root: Path) -> dict[str, str]:
-    """The text of each entry that can be read at the entries' ref, by path."""
+def _read_entries(
+    entries: EntriesAtRef, repo_root: Path
+) -> tuple[dict[str, str], dict[str, str]]:
+    """The text of each entry that can be read at the entries' ref, and why each other entry
+    cannot be, both by path."""
     request = "".join(f"{entries.ref}:{path}\n" for path in entries.paths)
     batch = subprocess.run(
         ["git", "cat-file", "--batch"],
@@ -246,25 +252,31 @@ def _read_entries(entries: EntriesAtRef, repo_root: Path) -> dict[str, str]:
     )
     # A batch that was cut short answers for fewer objects than were asked for.
     if batch.returncode != 0:
-        return {}
+        return {}, dict.fromkeys(entries.paths, _failure(batch))
     # One answer per requested object, in order: ``<sha> <type> <size>``, the content and a
     # newline, or a single line such as ``<object> missing``.
     text_by_path: dict[str, str] = {}
+    problem_by_path: dict[str, str] = {}
     output = batch.stdout
     position = 0
     for path in entries.paths:
         header_end = output.find(b"\n", position)
         if header_end == -1:
-            break
-        header = output[position:header_end].split()
+            problem_by_path[path] = "git gave no answer for it"
+            continue
+        answer = output[position:header_end]
+        header = answer.split()
         position = header_end + 1
         if len(header) != 3 or not header[2].isdigit():
+            problem_by_path[path] = f"git answered '{_decoded(answer)}'"
             continue
         size = int(header[2])
         if header[1] == b"blob":
             text_by_path[path] = _decoded(output[position : position + size])
+        else:
+            problem_by_path[path] = f"it is a {_decoded(header[1])}, not a file"
         position += size + 1
-    return text_by_path
+    return text_by_path, problem_by_path
 
 
 def _render_whats_new(whats_new: WhatsNew, repo_root: Path) -> tuple[str, list[str]]:
@@ -281,12 +293,14 @@ def _render_whats_new(whats_new: WhatsNew, repo_root: Path) -> tuple[str, list[s
         blocks.append(
             f"# Changelog entries the update adds, as they are at {entries.ref}"
         )
-        text_by_path = _read_entries(entries, repo_root)
+        text_by_path, problem_by_path = _read_entries(entries, repo_root)
         for path in entries.paths:
             if path in text_by_path:
                 blocks.append(f"## {path}\n\n{text_by_path[path].strip()}")
             else:
-                unread.append(f"{path} at {entries.ref} could not be read")
+                unread.append(
+                    f"{path} at {entries.ref} could not be read: {problem_by_path[path]}"
+                )
     return "\n\n".join(blocks) + "\n" if blocks else "", unread
 
 

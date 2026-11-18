@@ -297,6 +297,28 @@ def test_an_update_across_the_switch_lists_unseen_sections_and_the_entries_of_sk
     )
 
 
+def test_a_base_past_the_last_entry_tag_reads_no_entry_it_already_has(
+    tmp_path: Path,
+) -> None:
+    repo = _init_switched_template(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "dev", _LAST_ENTRY_TAG)
+    _commit_and_tag(
+        repo,
+        "dev-after-v1",
+        {
+            ".agents/changelog/third.md": None,
+            ".agents/changelog/third-renamed.md": "Third change.\n",
+        },
+    )
+
+    assert list_whats_new("dev-after-v1", "minds-v2", repo, None, _LAST_ENTRY_TAG) == {
+        "sections": ["minds-v2"],
+        "added": [],
+        "added_before_consolidation": {"ref": _LAST_ENTRY_TAG, "paths": []},
+        "unlisted": [],
+    }
+
+
 def test_out_holds_the_sections_then_each_entry_as_it_is_at_the_ref_that_has_it(
     tmp_path: Path,
 ) -> None:
@@ -342,6 +364,28 @@ def test_an_entry_identical_to_one_the_update_deletes_is_still_listed(
     added = list_whats_new("base", "target", repo, None, None)["added"]
 
     assert added == ["system/changelog/renamed.md"]
+
+
+def test_a_changelog_folder_readme_or_non_markdown_file_is_not_an_entry(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "template"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _commit_and_tag(repo, "base", {"system/changelog/first.md": "First change.\n"})
+    _commit_and_tag(
+        repo,
+        "target",
+        {
+            "system/apps/chat/changelog/README.md": "# changelog/\n\nFolder doc.\n",
+            "system/apps/chat/changelog/.gitkeep": "",
+            "system/apps/chat/changelog/second.md": "Second change.\n",
+        },
+    )
+
+    added = list_whats_new("base", "target", repo, None, None)["added"]
+
+    assert added == ["system/apps/chat/changelog/second.md"]
 
 
 def test_a_missing_last_entry_tag_leaves_out_only_its_entries(tmp_path: Path) -> None:
@@ -465,7 +509,8 @@ def test_out_leaves_out_an_entry_that_cannot_be_read_and_names_it(
     answer = list_whats_new("old", "minds-v2", repo, out, _LAST_ENTRY_TAG)
 
     assert answer["unlisted"] == [
-        ".agents/changelog/third.md at minds-v1 could not be read"
+        ".agents/changelog/third.md at minds-v1 could not be read: git answered "
+        "'minds-v1:.agents/changelog/third.md missing'"
     ]
     assert out.read_text() == (
         "# Release sections of CHANGELOG.md new to this workspace\n\n"
@@ -482,9 +527,11 @@ def test_out_reads_no_entry_from_a_batch_that_git_cuts_short(tmp_path: Path) -> 
 
     answer = list_whats_new("old", "minds-v2", repo, out, _LAST_ENTRY_TAG)
 
-    assert answer["unlisted"] == [
-        f"{path} at minds-v1 could not be read" for path in _ENTRIES_ADDED_BY_V1
-    ]
+    unlisted = answer["unlisted"]
+    assert isinstance(unlisted, list) and len(unlisted) == len(_ENTRIES_ADDED_BY_V1)
+    for path, line in zip(_ENTRIES_ADDED_BY_V1, unlisted):
+        prefix = f"{path} at minds-v1 could not be read: "
+        assert line.startswith(prefix) and line.removeprefix(prefix).strip()
     assert out.read_text() == (
         "# Release sections of CHANGELOG.md new to this workspace\n\n"
         f"{_V2_SECTION}\n"
