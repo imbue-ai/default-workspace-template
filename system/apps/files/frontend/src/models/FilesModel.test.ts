@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
+import type { StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 
 import { fileEntry, folderEntry, httpFailure, memoryStorage } from "../testing/records";
 import * as server from "./server";
@@ -38,12 +38,15 @@ interface Harness {
   replaceAnswer: { value: ConflictChoice };
   /** Whether the shell says Imbue Studio opens a bug report here. */
   bugReport: { canReport: boolean };
+  /** Whether a shell frames the page. */
+  shell: { isFraming: boolean };
 }
 
 function harness(): Harness {
   const locations: [string, string, number][] = [];
   const replaceAnswer = { value: "replace" as ConflictChoice };
   const bugReport = { canReport: false };
+  const shell = { isFraming: true };
   const host: FilesHost = {
     redraw: vi.fn(),
     redrawNow: vi.fn(),
@@ -53,14 +56,15 @@ function harness(): Harness {
     confirmDelete: vi.fn(async () => true),
     confirmReplace: vi.fn(async () => replaceAnswer.value),
     askNewName: vi.fn(async () => null),
-    hasShell: () => true,
-    startWithText: vi.fn(async (): Promise<StartNewOutcome> => ({ isOpened: true })),
+    hasShell: () => shell.isFraming,
+    startWithText: vi.fn(async (): Promise<StartOutcome> => ({ isOpened: true })),
+    askAgent: vi.fn(async (): Promise<StartOutcome> => ({ isOpened: true })),
     canReportBug: () => bugReport.canReport,
     reportBug: vi.fn(),
   };
   // A copy: a test that adds to the model's entries must not add to every later test's.
   const model = new FilesModel(host, HOME, { exists: true, entries: [...ENTRIES] });
-  return { model, host, locations, replaceAnswer, bugReport };
+  return { model, host, locations, replaceAnswer, bugReport, shell };
 }
 
 beforeEach(() => {
@@ -504,7 +508,7 @@ describe("telling a failed change", () => {
     ]);
   });
 
-  it("keeps an out-of-space refusal up and asks an agent in the existing chat to free up space", async () => {
+  it("keeps an out-of-space refusal up and asks an agent in the main chat to free up space", async () => {
     const { model, host } = harness();
     const said = "This workspace is out of disk space.";
     vi.mocked(server.createFolder).mockRejectedValueOnce(
@@ -526,8 +530,8 @@ describe("telling a failed change", () => {
 
   it("reads Asking an agent… on the free-up-space button until the chat opens, and says why when it could not", async () => {
     const { model, host } = harness();
-    const answers: ((outcome: StartNewOutcome) => void)[] = [];
-    const lateAnswers: ((outcome: StartNewOutcome) => void)[] = [];
+    const answers: ((outcome: StartOutcome) => void)[] = [];
+    const lateAnswers: ((outcome: StartOutcome) => void)[] = [];
     vi.mocked(host.startWithText).mockImplementation((_text, options) => {
       lateAnswers.push(options?.onLateAnswer ?? (() => undefined));
       return new Promise((resolve) => answers.push(resolve));
@@ -592,7 +596,109 @@ describe("telling a failed change", () => {
     expect(toast.isLasting).toBe(true);
     expect(toast.isReportable).toBe(true);
     expect(toast.details).toBe("HTTP 500\nMOVE /home/b.txt: [Errno 5] Input/output error");
-    expect(toast.actions).toEqual([]);
+  });
+
+  it("offers to ask an agent to fix a change nothing explained, in the chat about Files, and keeps its toast up", async () => {
+    const { model, host } = harness();
+    vi.mocked(server.movePath).mockRejectedValueOnce(
+      httpFailure(500, { detail: "MOVE /home/b.txt: [Errno 5] Input/output error" }),
+    );
+    await model.moveInto(["/home/b.txt"], "/home/zeta/");
+    const [toast] = model.toasts.current();
+    expect(toast.actions.map((action) => [action.label, action.keepsToast])).toEqual([
+      ["Ask an agent to fix this", true],
+    ]);
+
+    toast.actions[0].run();
+
+    expect(host.startWithText).not.toHaveBeenCalled();
+    expect(host.askAgent).toHaveBeenCalledTimes(1);
+    const [task, options] = vi.mocked(host.askAgent).mock.calls[0];
+    expect(task).toContain('Couldn\'t move "b.txt" into "zeta".');
+    expect(task).toContain("HTTP 500\nMOVE /home/b.txt: [Errno 5] Input/output error");
+    expect(task).not.toContain("report a bug");
+    expect(options?.showsOutcome).toBe(true);
+  });
+
+  it("asks an agent once about several items one change failed on, naming each", async () => {
+    const { model, host } = harness();
+    vi.mocked(server.deletePath)
+      .mockRejectedValueOnce(httpFailure(500, { detail: "DELETE /home/b.txt: [Errno 5]" }))
+      .mockRejectedValueOnce(httpFailure(500, { detail: "DELETE /home/a.png: [Errno 5]" }));
+    await model.deleteEntries(["/home/b.txt", "/home/a.png"]);
+    const [toast] = model.toasts.current();
+    expect(toast.actions.map((action) => action.label)).toEqual(["Ask an agent to fix this"]);
+
+    toast.actions[0].run();
+
+    const [task] = vi.mocked(host.askAgent).mock.calls[0];
+    expect(task).toContain('Couldn\'t delete "b.txt". Couldn\'t delete "a.png".');
+    expect(task).toContain("DELETE /home/b.txt: [Errno 5]");
+    expect(task).toContain("DELETE /home/a.png: [Errno 5]");
+  });
+
+  it("reads Asking an agent… on the fix button until the chat opens, and says why when it could not", async () => {
+    const { model, host } = harness();
+    const answers: ((outcome: StartOutcome) => void)[] = [];
+    const lateAnswers: ((outcome: StartOutcome) => void)[] = [];
+    vi.mocked(host.askAgent).mockImplementation((_text, options) => {
+      lateAnswers.push(options?.onLateAnswer ?? (() => undefined));
+      return new Promise((resolve) => answers.push(resolve));
+    });
+    vi.mocked(server.movePath).mockRejectedValueOnce(httpFailure(500, { detail: "MOVE /home/b.txt: [Errno 5]" }));
+    await model.moveInto(["/home/b.txt"], "/home/zeta/");
+    const failed = model.toasts.current()[0];
+    const [fix] = failed.actions;
+
+    fix.run();
+    expect(fix.pending?.isPending()).toBe(true);
+    expect(fix.pending?.label).toBe("Asking an agent…");
+
+    answers[0]({
+      isOpened: false,
+      failure: { message: "Chat couldn't open that.", details: "HTTP 400", isReportable: true },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fix.pending?.isPending()).toBe(false);
+    const refused = model.toasts.current().find((toast) => toast.message === "Chat couldn't open that.");
+    // The refused ask asks for a bug report of its own, and offers no agent to fix the asking.
+    expect([refused?.details, refused?.isReportable, refused?.actions]).toEqual(["HTTP 400", true, []]);
+    expect(model.toasts.current()).toContain(failed);
+
+    // The shell's real answer, after a restart settled the ask, replaces what was said.
+    lateAnswers[0]({ isOpened: true });
+    expect(model.toasts.current().map((toast) => toast.message)).toEqual([failed.message]);
+  });
+
+  it("offers no agent for a change nothing explained on a page no shell frames", async () => {
+    const { model, shell } = harness();
+    shell.isFraming = false;
+    vi.mocked(server.movePath).mockRejectedValueOnce(httpFailure(500, { detail: "MOVE /home/b.txt: [Errno 5]" }));
+
+    await model.moveInto(["/home/b.txt"], "/home/zeta/");
+
+    const [toast] = model.toasts.current();
+    expect([toast.isReportable, toast.actions]).toEqual([true, []]);
+  });
+
+  it.each([
+    ["a read-only folder", 403, "read_only"],
+    ["a name already taken", 412, "already_exists"],
+    ["no permission", 403, "permission_denied"],
+    ["a full disk", 507, "out_of_space"],
+  ])("offers no agent to fix a refusal with a known cause: %s", async (_cause, status, kind) => {
+    const { model, host } = harness();
+    vi.mocked(server.movePath).mockRejectedValueOnce(
+      httpFailure(status, { detail: "MOVE /home/b.txt", user_facing_message: "The server said why.", kind }),
+    );
+
+    await model.moveInto(["/home/b.txt"], "/home/zeta/");
+
+    const labels = model.toasts.current().flatMap((toast) => toast.actions.map((action) => action.label));
+    expect(labels).not.toContain("Ask an agent to fix this");
+    for (const action of model.toasts.current().flatMap((toast) => toast.actions)) action.run();
+    expect(host.askAgent).not.toHaveBeenCalled();
   });
 
   it("says once that nothing answered a delete of several, never that nothing changed", async () => {

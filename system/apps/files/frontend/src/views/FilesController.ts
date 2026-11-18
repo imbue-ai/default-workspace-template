@@ -123,6 +123,7 @@ export class FilesController {
         askNewName: (suggested, isFolder) => this.dialogs.askNewName(suggested, isFolder),
         hasShell: () => connection.hasShell(),
         startWithText: (text, options) => connection.startWithText(text, options),
+        askAgent: (text, options) => connection.askAgent(text, options),
         canReportBug: () => connection.canReportBug(),
         reportBug: (failure) => connection.reportBug(failure),
       },

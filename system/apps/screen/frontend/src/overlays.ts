@@ -3,9 +3,9 @@
  *  control opens it, Cancel drops it, offered to the sessions the service lets drop it.
  *
  *  A failure says what happened in a sentence of ours, keeps the service's own text behind "See details", and offers
- *  what can help: Start, "Ask an agent to fix this" where a shell can start a chat, and "Report a bug" where the
- *  shell's handshake says Imbue Studio opens one (the workspace's failure wording, workspace_ui's models/failure.ts
- *  and app contract). */
+ *  what can help: Start, "Ask an agent to fix this" where a shell frames the page (it sends the ask to the chat about
+ *  the Screen), and "Report a bug" where the shell's handshake says Imbue Studio opens one (the workspace's failure
+ *  wording, workspace_ui's models/failure.ts and app contract). */
 
 import { askAgentToFix, withAskFailure } from "@imbue/workspace-ui/src/app_contract";
 import type {
@@ -13,7 +13,7 @@ import type {
   ReportedFailure,
   ShellConnection,
   ShownFailure,
-  StartNewOutcome,
+  StartOutcome,
 } from "@imbue/workspace-ui/src/app_contract";
 import { REPORT_A_BUG_LABEL, fallbackSentence, failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
@@ -25,7 +25,7 @@ export const ASK_AGENT_TO_FIX_LABEL = "Ask an agent to fix this";
 const ASKING_AN_AGENT_LABEL = "Asking an agent…";
 
 /** What the overlay needs of the shell connection for its failure buttons. */
-export type FailureHost = Pick<ShellConnection, "hasShell" | "startNewWithText" | "canReportBug" | "reportBug">;
+export type FailureHost = Pick<ShellConnection, "hasShell" | "askAgent" | "canReportBug" | "reportBug">;
 
 /** What the main overlay shows: hidden (null), or a title, a line under it, the details, and the offered actions. */
 export interface OverlayView {
@@ -298,7 +298,7 @@ export class Overlays {
     this.reportBugButton.hidden = !isReportable || this.host === null || !this.host.canReportBug();
   }
 
-  /** "Ask an agent to fix this": pending until the shell says the chat opened, or why it could not. */
+  /** "Ask an agent to fix this": pending until the shell says the chat about the Screen opened, or why it could not. */
   private async askAgent(): Promise<void> {
     if (this.host === null || this.agentFix === null || this.askingAbout === this.shownFailure) return;
     const askedAbout = this.shownFailure;
@@ -308,7 +308,7 @@ export class Overlays {
     this.showAskFailure(null);
     this.syncAskButton();
     // Applies only while the overlay still shows the failure asked about and no press came since.
-    const show = (outcome: StartNewOutcome): void => {
+    const show = (outcome: StartOutcome): void => {
       if (this.shownFailure === askedAbout && this.askPresses === press) {
         this.showAskFailure(outcome.isOpened ? null : outcome.failure);
       }

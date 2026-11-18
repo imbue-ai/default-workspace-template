@@ -5,7 +5,6 @@
 
 import m from "mithril";
 
-import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { alertDotIcon, icon } from "@imbue/workspace-ui/src/components/icons";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 
@@ -17,6 +16,7 @@ import type { FolderState } from "../models/FilesModel";
 import type { SortKey } from "../models/preferences";
 import { isWithin, parentOf } from "../models/paths";
 import { DROP_FOLDER_ATTR, EntryMenuButton, FOLDER_SURFACE_ATTR, RenameField, entryAttrs } from "./entries";
+import { FailureActions } from "./FailureActions";
 import { FileIcon, type IconBadge } from "./FileIcon";
 import type { FilesController } from "./FilesController";
 import { PreviewPane } from "./PreviewPane";
@@ -222,17 +222,12 @@ function columnBody(
   }
   if (state.status === "error" && entries.length === 0) {
     const failure = state.error;
-    return m("div", { class: "px-3 py-4 type-helper text-danger" }, [
+    return m("div.files-column-failure", { class: "px-3 py-4 type-helper text-danger" }, [
       failure?.message,
       m(SeeDetails, { details: failure?.details ?? null }),
-      failure?.isReportable
-        ? m(ReportBugButton, {
-            connection: app.failureHost,
-            failure: { message: failure.message, details: failure.details },
-            sm: true,
-            extra: "mt-2",
-          })
-        : null,
+      failure === null
+        ? null
+        : m(FailureActions, { host: app.failureHost, failure, path: folder, isCentred: false, extra: "mt-2" }),
     ]);
   }
   if (entries.length === 0) {

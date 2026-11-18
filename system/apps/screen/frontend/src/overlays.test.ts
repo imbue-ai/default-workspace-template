@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { Overlays, mayCancelPendingUrl } from "./overlays";
-import type { ReportedFailure, StartNewOutcome, StartOptions } from "@imbue/workspace-ui/src/app_contract";
+import type { ReportedFailure, StartOutcome, StartOptions } from "@imbue/workspace-ui/src/app_contract";
 import type { FailureHost } from "./overlays";
 import type { ControlDocument, NekoSessionAnswer, ScreenStateDocument } from "./state";
 
@@ -139,26 +139,26 @@ describe("Overlays", () => {
 function fakeHost(fields: { hasShell?: boolean; canReportBug?: boolean } = {}): FailureHost & {
   started: string[];
   /** Settles each ask in turn, as the shell's reply would. */
-  answers: ((outcome: StartNewOutcome) => void)[];
+  answers: ((outcome: StartOutcome) => void)[];
   /** Hands each ask an answer that came after it settled as not answered. */
-  lateAnswers: ((outcome: StartNewOutcome) => void)[];
+  lateAnswers: ((outcome: StartOutcome) => void)[];
   /** Whether each ask told the shell the page shows its outcome (so the shell toasts nothing). */
   showsOutcome: boolean[];
   reports: ReportedFailure[];
 } {
   const host = {
     started: [] as string[],
-    answers: [] as ((outcome: StartNewOutcome) => void)[],
-    lateAnswers: [] as ((outcome: StartNewOutcome) => void)[],
+    answers: [] as ((outcome: StartOutcome) => void)[],
+    lateAnswers: [] as ((outcome: StartOutcome) => void)[],
     showsOutcome: [] as boolean[],
     reports: [] as ReportedFailure[],
     hasShell: () => fields.hasShell ?? true,
     canReportBug: () => fields.canReportBug ?? true,
-    startNewWithText: (text: string, options?: StartOptions) => {
+    askAgent: (text: string, options?: StartOptions) => {
       host.started.push(text);
       host.showsOutcome.push(options?.showsOutcome === true);
       host.lateAnswers.push(options?.onLateAnswer ?? (() => undefined));
-      return new Promise<StartNewOutcome>((resolve) => host.answers.push(resolve));
+      return new Promise<StartOutcome>((resolve) => host.answers.push(resolve));
     },
     reportBug: (failure: ReportedFailure) => void host.reports.push(failure),
   };
@@ -300,7 +300,7 @@ describe("Overlays for the stack's state", () => {
     ask?.click();
     expect([ask?.textContent, ask?.disabled]).toEqual(["Asking an agent…", true]);
     expect(host.showsOutcome).toEqual([true]);
-    // A state that arrives while the shell is starting the chat leaves the press pending.
+    // A state that arrives while the shell is opening the chat leaves the press pending.
     overlays.update(crashed, "idle", null, null, null);
     expect([ask?.textContent, ask?.disabled]).toEqual(["Asking an agent…", true]);
 
@@ -423,7 +423,7 @@ describe("Overlays for the stack's state", () => {
     const host = fakeHost();
     const overlays = overlaysWith(host);
     const crashed = state({ ...STOPPED, stop_reason: "screen-neko exited unexpectedly", stop_cause: "crashed" });
-    const notOpened: StartNewOutcome = {
+    const notOpened: StartOutcome = {
       isOpened: false,
       failure: { message: "Chat couldn't open that.", details: null, isReportable: false },
     };

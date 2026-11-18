@@ -16,7 +16,7 @@ from typing import Final
 import pytest
 from app_manifest.testing import (
     SHELL_HANDSHAKE_COUNTER_SCRIPT,
-    answer_start_new_with_text,
+    answer_ask_agent,
     built_app_contract_source,
     resend_shell_handshake,
     shell_messages,
@@ -146,8 +146,8 @@ def test_a_terminal_tmux_would_not_start_says_so_and_offers_try_again_an_agent_a
     expect(ended.get_by_role("button", name="Start a new terminal")).to_be_hidden()
 
     ended.get_by_role("button", name="Ask an agent to fix this").click()
-    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:start-new-with-text')")
-    [asked] = shell_messages(page, "shell:start-new-with-text")
+    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:ask-agent')")
+    [asked] = shell_messages(page, "shell:ask-agent")
     # The page shows the outcome under the button, so the shell toasts nothing of its own.
     assert asked["showsOutcome"] is True
     task = str(asked["text"])
@@ -218,7 +218,7 @@ def _expect_asking_then_told_why(page: Page, surface: Locator) -> None:
     answers, and a failed answer brings it back with the failure's sentence and details beside it."""
     asking = surface.get_by_role("button", name="Asking an agent…")
     expect(asking).to_be_disabled()
-    answer_start_new_with_text(
+    answer_ask_agent(
         page,
         {"isOpened": False, "failure": {"message": "Chat couldn't open that.", "details": "HTTP 400", "isReportable": False}},
     )
@@ -248,7 +248,7 @@ def test_a_pending_ask_survives_the_shell_greeting_again_and_takes_its_late_answ
     resend_shell_handshake(page, "restarted-shell")
     expect(ended.get_by_role("alert")).to_contain_text("The workspace didn't answer")
     expect(ended.get_by_role("button", name="Ask an agent to fix this")).to_be_enabled()
-    answer_start_new_with_text(
+    answer_ask_agent(
         page,
         {"isOpened": False, "failure": {"message": "The workspace couldn't do that.", "details": "boom", "isReportable": True}},
     )
@@ -278,7 +278,7 @@ def test_an_ask_about_an_earlier_ending_never_shows_under_a_later_one(desktop_co
     ended.get_by_role("button", name="Try again").click()
     _print_end(pty, ENDED_NOT_STARTED, "second failure")
     expect(ended.get_by_role("button", name="Ask an agent to fix this")).to_be_enabled()
-    answer_start_new_with_text(
+    answer_ask_agent(
         page,
         {"isOpened": False, "failure": {"message": "Chat couldn't open that.", "details": None, "isReportable": False}},
     )
@@ -307,8 +307,8 @@ def test_a_failure_page_for_unreadable_saved_terminals_asks_an_agent_through_the
     expect(wrapper.get_by_role("button", name="Report a bug")).to_be_hidden()
     wrapper.get_by_role("button", name="Ask an agent to fix this").click()
 
-    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:start-new-with-text')")
-    [asked] = shell_messages(page, "shell:start-new-with-text")
+    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:ask-agent')")
+    [asked] = shell_messages(page, "shell:ask-agent")
     # The page shows the outcome under the button, so the shell toasts nothing of its own.
     assert asked["showsOutcome"] is True
     task = str(asked["text"])
@@ -320,9 +320,9 @@ def test_a_failure_page_for_unreadable_saved_terminals_asks_an_agent_through_the
     # An ask that fails in a way to report brings the page's one Report a bug, which files both failures.
     wrapper.get_by_role("button", name="Ask an agent to fix this").click()
     page.wait_for_function(
-        "window.shellMessages.filter((message) => message.type === 'shell:start-new-with-text').length === 2"
+        "window.shellMessages.filter((message) => message.type === 'shell:ask-agent').length === 2"
     )
-    answer_start_new_with_text(
+    answer_ask_agent(
         page,
         {"isOpened": False, "failure": {"message": "The workspace couldn't do that.", "details": "boom", "isReportable": True}},
     )
