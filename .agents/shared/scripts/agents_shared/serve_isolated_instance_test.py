@@ -31,7 +31,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from typing import Callable, Iterator, Sequence
+from typing import Callable, Generator, Sequence
 
 import pytest
 from app_registration import forward_port
@@ -1373,7 +1373,7 @@ def test_wrapper_page_escapes_the_title() -> None:
 
 
 @contextlib.contextmanager
-def _running_wrapper(apps_file: Path, inner_service: str) -> Iterator[str]:
+def _running_wrapper(apps_file: Path, inner_service: str) -> Generator[str]:
     handler = wrapper_mod.make_handler(
         apps_file=apps_file, inner_service=inner_service, title="Inbox", kind=FrameKind.MOCK
     )
