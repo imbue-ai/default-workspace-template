@@ -949,6 +949,59 @@ def test_a_reopened_long_chat_shows_its_bottom_at_once_and_says_so_while_earlier
         wait_for(shows_earlier_messages, timeout=20.0, poll_interval=0.3)
 
 
+# Records, on every frame of the chat page from its first, where its last user message sits and whether the page still
+# shows a window from the transcript cache (its "loading earlier messages" line).
+_LAST_MESSAGE_POSITION_TRACE = """
+(() => {
+  if (!location.pathname.startsWith('/agent-')) return;
+  window.__lastMessageTops = [];
+  const started = performance.now();
+  const tick = () => {
+    const bubbles = document.querySelectorAll('.message-user .message-user-bubble');
+    const last = bubbles[bubbles.length - 1];
+    if (last) {
+      window.__lastMessageTops.push({
+        text: last.textContent.trim(),
+        top: Math.round(last.getBoundingClientRect().top),
+        isCached: document.querySelector('.message-list-earlier-loading') !== null,
+      });
+    }
+    if (performance.now() - started < 3000) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+})();
+"""
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_reopened_chat_keeps_its_bottom_still_as_its_transcript_replaces_the_cached_one(
+    tmp_path: Path, page: Page
+) -> None:
+    """The cached bottom of a chat is drawn where the real transcript puts it: from the first frame the page paints to
+    after the transcript lands, the last message does not move."""
+    events = _make_long_conversation_events(150)
+    with _running_e2e_server(tmp_path, session_events=events) as server:
+        page.goto(f"{server.chat_url}{_FIXTURE_ROOT_PATH}")
+        expect(_shown_chat_of_root(page).locator(".message-user", has_text="msg-149")).to_be_visible(timeout=15000)
+        chat_frame = _chat_frame(page)
+        wait_for(
+            lambda: chat_frame.evaluate(f"sessionStorage.getItem('transcript-cache:{FIXTURE_AGENT_ID}') !== null"),
+            timeout=10.0,
+            poll_interval=0.1,
+        )
+
+        page.add_init_script(_LAST_MESSAGE_POSITION_TRACE)
+        page.reload()
+        expect(_shown_chat_of_root(page).locator(".turn-done-mark")).to_be_visible(timeout=15000)
+        page.wait_for_timeout(3500)
+
+        frames = _chat_frame(page).evaluate("window.__lastMessageTops")
+        assert frames and frames[0]["text"] == "msg-149" and frames[0]["isCached"], frames[:3]
+        assert any(not frame["isCached"] for frame in frames), "the transcript never replaced the cached window"
+        tops = {frame["top"] for frame in frames}
+        assert max(tops) - min(tops) <= 2, f"the last message moved: {sorted(tops)}"
+
+
 # layout ops
 
 

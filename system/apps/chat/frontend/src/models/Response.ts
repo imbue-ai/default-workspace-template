@@ -658,6 +658,8 @@ function scheduleTranscriptCacheWrite(chatId: string): void {
 
 // Chats whose window was placed from the transcript cache while earlier messages exist before it.
 const cachedWindowHasEarlierChatIds = new Set<string>();
+// The height the page drew under each cached window's last row when it was cached.
+const cachedTrailingPxByChat = new Map<string, number>();
 
 /**
  * Place the chat's cached tail as its window, for a page that holds nothing of the chat yet, so the
@@ -674,6 +676,7 @@ export function placeCachedTranscript(chatId: string): boolean {
   if (cached === null) return false;
   touchCachedTranscript(chatId);
   if (cached.offset > 0) cachedWindowHasEarlierChatIds.add(chatId);
+  cachedTrailingPxByChat.set(chatId, cached.trailingPx);
   storeFor(chatId).reset(cached.events, 0, cached.events.length);
   return true;
 }
@@ -713,6 +716,11 @@ export function isTranscriptLoaded(chatId: string): boolean {
 /** Whether the chat shows a window placed from the transcript cache that its snapshot has not replaced yet. */
 function isShowingCachedTranscript(chatId: string): boolean {
   return !loadedChatIds.has(chatId) && getEventCount(chatId) > 0;
+}
+
+/** The height drawn under the last row of the chat's cached window when it was cached; 0 once the snapshot replaced it. */
+export function cachedWindowTrailingPx(chatId: string): number {
+  return isShowingCachedTranscript(chatId) ? (cachedTrailingPxByChat.get(chatId) ?? 0) : 0;
 }
 
 /** Whether the chat shows a window from the transcript cache with earlier messages before it. */

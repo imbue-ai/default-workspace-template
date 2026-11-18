@@ -30,6 +30,9 @@ export const MAX_ENTRY_CHARS = 32_000;
 // How much more than a screen a snapshot keeps, so a small scroll or a taller window still finds
 // the conversation drawn.
 export const SCREEN_MARGIN = 1.25;
+// The most events one snapshot keeps, however little they draw: a long run of events that draw
+// nothing (hidden calls, results) would otherwise pull the whole held window in.
+export const MAX_SNAPSHOT_EVENTS = 200;
 // A row's chrome (a bubble's padding, a chip, a header) counted as this many characters of text.
 export const ROW_CHROME_CHARS = 60;
 
@@ -38,10 +41,12 @@ export interface ScreenMeasure {
   readonly heightPx: number;
   /** Characters of rendered text per pixel of transcript height; null when there was too little drawn to tell. */
   readonly charsPerPx: number | null;
+  /** The height of what the page draws under the transcript's last row (the turn's done mark, its status row). */
+  readonly trailingPx: number;
 }
 
 // Used until the page has measured its own screen (a page that has not been shown yet).
-export const DEFAULT_SCREEN: ScreenMeasure = { heightPx: 1000, charsPerPx: null };
+export const DEFAULT_SCREEN: ScreenMeasure = { heightPx: 1000, charsPerPx: null, trailingPx: 0 };
 // Characters per pixel of a typical transcript, for a screen that has not measured its own.
 export const DEFAULT_CHARS_PER_PX = 3;
 
@@ -64,6 +69,7 @@ export interface CachedTranscript {
   readonly events: TranscriptEvent[];
   readonly offset: number;
   readonly total: number;
+  readonly trailingPx: number;
 }
 
 interface StoredEntry {
@@ -71,6 +77,7 @@ interface StoredEntry {
   events: TranscriptEvent[];
   offset: number;
   total: number;
+  trailingPx: number;
 }
 
 /** One chat in the index: its id and the characters its entry takes. */
@@ -173,7 +180,7 @@ export function tailForScreen(
   const budget = screenChars(screen);
   let start = events.length;
   let filled = 0;
-  while (start > 0 && filled < budget) {
+  while (start > 0 && filled < budget && events.length - start < MAX_SNAPSHOT_EVENTS) {
     start -= 1;
     filled += renderedChars(events[start]);
   }
@@ -186,11 +193,21 @@ export function tailForScreen(
 }
 
 /** The serialized entry for the tail, dropping its earliest events past ``MAX_ENTRY_CHARS``; null when the last alone is over. */
-function encodeEntry(events: TranscriptEvent[], offset: number, total: number): string | null {
-  for (let skip = 0; skip < events.length; skip++) {
-    const entry: StoredEntry = { version: CACHE_VERSION, events: events.slice(skip), offset: offset + skip, total };
+function encodeEntry(events: TranscriptEvent[], offset: number, total: number, trailingPx: number): string | null {
+  let skip = 0;
+  while (skip < events.length) {
+    const entry: StoredEntry = {
+      version: CACHE_VERSION,
+      events: events.slice(skip),
+      offset: offset + skip,
+      total,
+      trailingPx,
+    };
     const encoded = JSON.stringify(entry);
     if (encoded.length <= MAX_ENTRY_CHARS) return encoded;
+    // Drop the share of the kept events the excess amounts to, so a large tail takes a few passes, not one per event.
+    const kept = events.length - skip;
+    skip += Math.max(1, Math.floor(kept * (1 - MAX_ENTRY_CHARS / encoded.length)));
   }
   return null;
 }
@@ -216,7 +233,12 @@ export function readCachedTranscript(chatId: string): CachedTranscript | null {
   ) {
     return null;
   }
-  return { events: entry.events, offset: entry.offset, total: entry.total };
+  return {
+    events: entry.events,
+    offset: entry.offset,
+    total: entry.total,
+    trailingPx: typeof entry.trailingPx === "number" ? entry.trailingPx : 0,
+  };
 }
 
 /** Drop chats from the end of ``index`` (the least recently viewed) until ``room`` more characters fit the budget. */
@@ -245,7 +267,7 @@ export function writeCachedTranscript(
   if (storage === null) return;
   try {
     const tail = tailForScreen(events, firstOffset, screen);
-    const encoded = encodeEntry(tail.events, tail.offset, total);
+    const encoded = encodeEntry(tail.events, tail.offset, total, screen.trailingPx);
     const index = readIndex(storage);
     const position = index.findIndex((entry) => entry.id === chatId);
     const others = index.filter((entry) => entry.id !== chatId);

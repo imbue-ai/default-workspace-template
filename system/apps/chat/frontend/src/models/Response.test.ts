@@ -1149,7 +1149,7 @@ describe("the transcript cache", () => {
     const events = Array.from({ length: 200 }, (_, index) => makeEvent(`e${index}`));
     mockRequest.mockResolvedValueOnce({ events, offset: 0, total: 200 });
     await fetchEvents(agent);
-    setScreenMeasurer(() => ({ heightPx: 100, charsPerPx: 1 }));
+    setScreenMeasurer(() => ({ heightPx: 100, charsPerPx: 1, trailingPx: 0 }));
 
     vi.advanceTimersByTime(1000);
     setScreenMeasurer(() => null);

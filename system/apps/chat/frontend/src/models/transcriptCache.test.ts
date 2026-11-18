@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TranscriptEvent } from "./Response";
 import {
   DEFAULT_SCREEN,
+  MAX_SNAPSHOT_EVENTS,
   MAX_ENTRY_CHARS,
   ROW_CHROME_CHARS,
   TOTAL_BUDGET_CHARS,
@@ -41,7 +42,7 @@ function contentOf(event: TranscriptEvent): string {
 }
 
 // A screen holding 1,000 characters of rendered text with its margin.
-const SMALL_SCREEN: ScreenMeasure = { heightPx: 200, charsPerPx: 4 };
+const SMALL_SCREEN: ScreenMeasure = { heightPx: 200, charsPerPx: 4, trailingPx: 0 };
 
 /** Characters one chat's entry takes in storage. */
 function storedChars(chatId: string): number {
@@ -66,7 +67,7 @@ describe("the snapshot of a chat's screen", () => {
     const events = makeEvents(50, "e", "x".repeat(100));
 
     const short = tailForScreen(events, 0, SMALL_SCREEN);
-    const tall = tailForScreen(events, 0, { heightPx: 600, charsPerPx: 4 });
+    const tall = tailForScreen(events, 0, { heightPx: 600, charsPerPx: 4, trailingPx: 0 });
 
     expect(tall.events.length).toBeGreaterThan(short.events.length * 2);
   });
@@ -91,6 +92,18 @@ describe("the snapshot of a chat's screen", () => {
     const tail = tailForScreen(events, 0, SMALL_SCREEN);
 
     expect(tail.events.map((event) => event.event_id)).toEqual(["e0", "e1", "e2", "hidden"]);
+  });
+
+  it("keeps at most MAX_SNAPSHOT_EVENTS events, however little they draw", () => {
+    const hidden = Array.from(
+      { length: MAX_SNAPSHOT_EVENTS * 3 },
+      (_, index) => ({ ...makeEvent(`h${index}`), display: "hidden" }) as TranscriptEvent,
+    );
+
+    const tail = tailForScreen(hidden, 0, SMALL_SCREEN);
+
+    expect(tail.events).toHaveLength(MAX_SNAPSHOT_EVENTS);
+    expect(tail.offset).toBe(MAX_SNAPSHOT_EVENTS * 2);
   });
 
   it("cuts a message's text at a line, reopening a code fence the cut fell inside", () => {
@@ -134,7 +147,7 @@ describe("the transcript cache", () => {
   it("never lets one chat's entry grow past its cap, keeping the latest events", () => {
     // A screen so dense it would take far more than the cap.
     const events = makeEvents(400, "e", "x".repeat(400));
-    writeCachedTranscript("chat-a", events, 0, 400, { heightPx: 10_000, charsPerPx: 10 });
+    writeCachedTranscript("chat-a", events, 0, 400, { heightPx: 10_000, charsPerPx: 10, trailingPx: 0 });
 
     const cached = readCachedTranscript("chat-a");
 
@@ -145,7 +158,7 @@ describe("the transcript cache", () => {
 
   it("holds all chats within one budget, evicting the chat viewed longest ago first", () => {
     const content = "z".repeat(800);
-    const screen: ScreenMeasure = { heightPx: 2_000, charsPerPx: 4 };
+    const screen: ScreenMeasure = { heightPx: 2_000, charsPerPx: 4, trailingPx: 0 };
     let written = 0;
     while (written * 20_000 < TOTAL_BUDGET_CHARS * 2) {
       writeCachedTranscript(`chat-${written}`, makeEvents(30, "e", content), 0, 30, screen);
@@ -165,7 +178,11 @@ describe("the transcript cache", () => {
   /** Write chats of one 20,000-character message each until the budget holds no more; their ids, oldest first. */
   function fillBudget(prefix: string): string[] {
     const write = (chatId: string): void =>
-      writeCachedTranscript(chatId, makeEvents(1, "e", "q".repeat(20_000)), 0, 1, { heightPx: 20_000, charsPerPx: 4 });
+      writeCachedTranscript(chatId, makeEvents(1, "e", "q".repeat(20_000)), 0, 1, {
+        heightPx: 20_000,
+        charsPerPx: 4,
+        trailingPx: 0,
+      });
     write(`${prefix}0`);
     const entryChars = storedChars(`${prefix}0`);
     const ids = [`${prefix}0`];
@@ -184,6 +201,7 @@ describe("the transcript cache", () => {
     writeCachedTranscript("chat-new", makeEvents(1, "e", "q".repeat(20_000)), 0, 1, {
       heightPx: 20_000,
       charsPerPx: 4,
+      trailingPx: 0,
     });
 
     expect(readCachedTranscript(ids[0])).not.toBeNull();
@@ -194,10 +212,15 @@ describe("the transcript cache", () => {
   it("does not count a rewrite as viewing, so a chat streaming behind another keeps its place", () => {
     const ids = fillBudget("chat-");
 
-    writeCachedTranscript(ids[0], makeEvents(2, "e", "q".repeat(10_000)), 0, 2, { heightPx: 20_000, charsPerPx: 4 });
+    writeCachedTranscript(ids[0], makeEvents(2, "e", "q".repeat(10_000)), 0, 2, {
+      heightPx: 20_000,
+      charsPerPx: 4,
+      trailingPx: 0,
+    });
     writeCachedTranscript("chat-new", makeEvents(1, "e", "q".repeat(20_000)), 0, 1, {
       heightPx: 20_000,
       charsPerPx: 4,
+      trailingPx: 0,
     });
 
     expect(readCachedTranscript(ids[0])).toBeNull();
@@ -213,6 +236,7 @@ describe("the transcript cache", () => {
     writeCachedTranscript("chat-old", makeEvents(1, "e", "s".repeat(20_000)), 0, 1, {
       heightPx: 20_000,
       charsPerPx: 4,
+      trailingPx: 0,
     });
 
     expect(readCachedTranscript("chat-old")).toBeNull();
@@ -233,7 +257,7 @@ describe("the transcript cache", () => {
   });
 
   it("reads the screen the page measures, and the last one measured while it is hidden", () => {
-    const measured: ScreenMeasure = { heightPx: 300, charsPerPx: 2 };
+    const measured: ScreenMeasure = { heightPx: 300, charsPerPx: 2, trailingPx: 0 };
     let isHidden = false;
     setScreenMeasurer(() => (isHidden ? null : measured));
 
@@ -247,6 +271,12 @@ describe("the transcript cache", () => {
     return import("./transcriptCache").then((fresh) => {
       expect(fresh.currentScreen()).toEqual(DEFAULT_SCREEN);
     });
+  });
+
+  it("keeps the height drawn under the last row with the snapshot", () => {
+    writeCachedTranscript("chat-a", makeEvents(2), 0, 2, { ...SMALL_SCREEN, trailingPx: 23 });
+
+    expect(readCachedTranscript("chat-a")?.trailingPx).toBe(23);
   });
 
   it("reads a corrupt or foreign entry as nothing cached", () => {
