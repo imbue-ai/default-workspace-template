@@ -75,14 +75,14 @@ def test_the_not_built_page_asks_an_agent_and_frames_the_main_chat_and_a_termina
         expect(ask).to_have_text("Ask an agent to fix this")
         expect(ask).to_be_enabled()
         expect(page.locator("#ask-agent-failure-message")).to_have_text(
-            "Couldn't start an agent. Try again. If this persists, report a bug."
+            "Couldn't ask an agent. Try again. If this persists, report a bug."
         )
         # The failure's reason is in the page's one "See details", at its top.
         see_details = page.get_by_text("See details", exact=True)
         expect(see_details).to_have_count(1)
         expect(page.locator("#ask-agent-failure-details")).not_to_be_visible()
         see_details.click()
-        expect(page.locator("#ask-agent-failure-reason")).to_contain_text("Why the agent didn't start:")
+        expect(page.locator("#ask-agent-failure-reason")).to_contain_text("Why the agent couldn't be asked:")
         expect(page.locator("#ask-agent-failure-details")).to_contain_text("HTTP 502")
         expect(page.locator("#ask-agent-failure-details")).to_contain_text("boom")
         # Reading the reason opens no terminal session: that waits for the terminal's own section.

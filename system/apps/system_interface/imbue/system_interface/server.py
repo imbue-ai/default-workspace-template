@@ -280,7 +280,7 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
   <details id="repair-details">
     <summary>See details</summary>
     <div id="ask-agent-failure-reason" hidden>
-      <p>Why the agent didn't start:</p>
+      <p>Why the agent couldn't be asked:</p>
       <pre id="ask-agent-failure-details"></pre>
     </div>
     <p>This creates an agent and tells it what you are looking at:</p>
@@ -407,7 +407,7 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
       askButton.textContent = "Asking an agent\u2026";
       document.getElementById("ask-agent-failure-message").hidden = true;
       document.getElementById("ask-agent-failure-reason").hidden = true;
-      launch("repair_agent", "Couldn't start an agent").then(function (answer) {
+      launch("repair_agent", "Couldn't ask an agent").then(function (answer) {
         var page = pageAt(answer);
         askButton.hidden = true;
         var started = document.getElementById("agent-started");

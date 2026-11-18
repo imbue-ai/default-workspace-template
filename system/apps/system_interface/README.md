@@ -835,7 +835,7 @@ refused attempt is told under it. Behind
 "See details" are the command, for whoever would rather run it themselves,
 "Open this workspace's terminal", whose session of the already-running terminal
 app is made in a frame only when that section is first opened, and, after a
-refused attempt, why the agent didn't start. With no app to ask an agent
+refused attempt, why the agent couldn't be asked. With no app to ask an agent
 through, the button is not offered and the details and the terminal start
 open; with no terminal, the details say so. The page cannot post to another app's origin,
 so both launches go through the shell's `POST /api/not-built/launch` (desktop
