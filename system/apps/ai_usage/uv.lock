@@ -107,7 +107,7 @@ requires-dist = [
     { name = "app-registration", editable = "../../libs/app_registration" },
     { name = "click", specifier = ">=8.1" },
     { name = "flask", specifier = ">=3.0" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=1a3f05d2077631ad0b43e1be3cec50fc5dc37749" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=5d744c0a84b90558e95df510dde8b63a1b4aa619" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pathspec", specifier = ">=1.1" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -149,7 +149,7 @@ testing = [
 requires-dist = [
     { name = "app-manifest", editable = "../../libs/app_manifest" },
     { name = "flask", specifier = ">=3.0" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=1a3f05d2077631ad0b43e1be3cec50fc5dc37749" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=5d744c0a84b90558e95df510dde8b63a1b4aa619" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "openapi-spec-validator", marker = "extra == 'testing'", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -598,7 +598,7 @@ wheels = [
 [[package]]
 name = "imbue-common"
 version = "0.1.22"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=1a3f05d2077631ad0b43e1be3cec50fc5dc37749#1a3f05d2077631ad0b43e1be3cec50fc5dc37749" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=5d744c0a84b90558e95df510dde8b63a1b4aa619#5d744c0a84b90558e95df510dde8b63a1b4aa619" }
 dependencies = [
     { name = "argon2-cffi" },
     { name = "boto3" },
@@ -1461,7 +1461,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "../../libs/app_manifest" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=1a3f05d2077631ad0b43e1be3cec50fc5dc37749" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=5d744c0a84b90558e95df510dde8b63a1b4aa619" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.12" },
 ]
