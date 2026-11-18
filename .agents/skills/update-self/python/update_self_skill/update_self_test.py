@@ -20,11 +20,11 @@ import sys
 import time
 import tomllib
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Sequence
 
 import pytest
+from oom_priority.ledger import append_shed_record
 
 from update_self_skill import (
     tool_env,
@@ -3913,45 +3913,36 @@ def test_a_failed_preflight_that_produced_no_output_says_so(
     assert "wrote nothing at all" in capsys.readouterr().err
 
 
-def _append_shed_record(ledger_path: Path, pid: int) -> None:
-    """Record the memory guard stopping ``pid``, as its after-kill hook does."""
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    record = {
-        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-        "type": "process_shed",
-        "pid": pid,
-        "comm": "system-interface",
-        "vm_rss_kib": 156744,
-    }
-    with ledger_path.open("a") as ledger:
-        ledger.write(json.dumps(record) + "\n")
+def _append_shed_record(pid: int) -> None:
+    """Record the memory guard stopping ``pid`` through its after-kill hook's own writer."""
+    append_shed_record(
+        pid=pid,
+        comm="system-interface",
+        agent_name=None,
+        is_worker=None,
+        vm_rss_kib=156744,
+    )
 
 
 @dataclass
 class _ShedBootSpawner(_FakeSpawner):
     """Every boot dies at once, and the memory guard's ledger records stopping the one with ``shed_pid_offset``."""
 
-    ledger_path: Path = Path()
     shed_pid_offset: int = 0
 
     def spawn(
         self, argv: Sequence[str], cwd: str, env: dict, output_path: Path
     ) -> _FakeSpawned:
         spawned = super().spawn(argv, cwd, env, output_path)
-        _append_shed_record(self.ledger_path, spawned.pid + self.shed_pid_offset)
+        _append_shed_record(spawned.pid + self.shed_pid_offset)
         return spawned
 
 
 def _shed_boot_spawner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shed_pid_offset: int
 ) -> _ShedBootSpawner:
-    runtime_dir = tmp_path / "oom-runtime"
-    monkeypatch.setenv("OOM_PRIORITY_RUNTIME_DIR", str(runtime_dir))
-    return _ShedBootSpawner(
-        exited=True,
-        ledger_path=runtime_dir / "events" / "shed.jsonl",
-        shed_pid_offset=shed_pid_offset,
-    )
+    monkeypatch.setenv("OOM_PRIORITY_RUNTIME_DIR", str(tmp_path / "oom-runtime"))
+    return _ShedBootSpawner(exited=True, shed_pid_offset=shed_pid_offset)
 
 
 def test_a_preflight_boot_the_memory_guard_stopped_is_named_as_a_memory_failure(
@@ -4009,7 +4000,7 @@ def test_a_preflight_boot_waits_for_a_guard_record_that_lands_after_it_is_seen_e
     def record_the_shed_once(_seconds: float) -> None:
         assert spawner.last is not None
         if not ledger_path.exists():
-            _append_shed_record(ledger_path, spawner.last.pid)
+            _append_shed_record(spawner.last.pid)
 
     failure = update_probes.preflight(
         _WORKSPACE_ROOT,
