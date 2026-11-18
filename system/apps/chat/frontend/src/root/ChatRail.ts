@@ -165,7 +165,13 @@ function refuseRename(row: ChatRow, title: string, error: unknown): void {
       refused: `"${row.title}" was not renamed to "${title}".`,
       unanswered: `The workspace didn't answer, so it isn't known whether "${row.title}" was renamed to "${title}".`,
     }),
-    retry: { label: "Rename again", run: () => beginRename(row, title) },
+    retry: {
+      label: "Rename again",
+      // A chat gone from the list has no field to draw, and its rename would hold every notice after this one.
+      run: () => {
+        if (latestMenuContext?.rows.some((listed) => listed.chatId === row.chatId) === true) beginRename(row, title);
+      },
+    },
   });
 }
 

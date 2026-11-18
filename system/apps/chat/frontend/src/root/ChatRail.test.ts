@@ -40,11 +40,13 @@ afterEach(() => {
   root = null;
 });
 
-function mount(rows: readonly ChatRow[]): HTMLElement {
+/** Mount the list over ``rows``, or over what ``rows`` answers at each draw for a test whose list changes. */
+function mount(rows: readonly ChatRow[] | (() => readonly ChatRow[])): HTMLElement {
+  const rowsNow = typeof rows === "function" ? rows : () => rows;
   const mounted = document.createElement("div");
   document.body.appendChild(mounted);
   root = mounted;
-  m.mount(mounted, { view: () => [m(ChatRail, chatRailAttrsFixture({ rows })), m(RootNoticeView)] });
+  m.mount(mounted, { view: () => [m(ChatRail, chatRailAttrsFixture({ rows: rowsNow() })), m(RootNoticeView)] });
   return mounted;
 }
 
@@ -455,6 +457,29 @@ describe("ChatRail refused rename", () => {
 
     field!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     m.redraw.sync();
+    expect(noticeText()).toContain(`"${second.title}" was not renamed to "Also taken".`);
+  });
+
+  it("closes the notice without holding the next one when Rename again's chat has left the list", async () => {
+    let rows: readonly ChatRow[] = [first, second];
+    mount(() => rows);
+    const refusals: ((error: unknown) => void)[] = [];
+    const heldRename = (): Promise<undefined> =>
+      new Promise<undefined>((_resolve, reject) => {
+        refusals.push(reject);
+      });
+    verbs.renameChat.mockReturnValueOnce(heldRename()).mockReturnValueOnce(heldRename());
+
+    renameInPlace(first.chatId, "Taken");
+    renameInPlace(second.chatId, "Also taken");
+    refusals.forEach((refuse) => refuse(new HttpError(409, "the name is taken")));
+    await vi.waitFor(() => expect(noticeText()).not.toBeNull());
+    rows = [second];
+    m.redraw.sync();
+
+    noticeButton("Rename again").click();
+    m.redraw.sync();
+    expect(root!.querySelector(".chat-rail-rename-input")).toBeNull();
     expect(noticeText()).toContain(`"${second.title}" was not renamed to "Also taken".`);
   });
 
