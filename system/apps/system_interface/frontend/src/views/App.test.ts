@@ -1064,6 +1064,59 @@ describe("a press outside what is open", () => {
   });
 });
 
+describe("a window behind the focused one", () => {
+  const MOVE_WIN_2 = { kind: "window-move", windowId: "win-2" } as const;
+  const shieldOf = (windowId: string): Element | null =>
+    document.querySelector(`[data-window-id="${windowId}"] [data-window-shield]`);
+  const pageOf = (windowId: string): HTMLElement =>
+    document.querySelector(`iframe[data-live-page="${windowId}"]`)?.parentElement as HTMLElement;
+
+  beforeEach(async () => {
+    unmountViews();
+    await mountApp({ laterWindowIds: ["win-2"] });
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    // Every box measures as empty under jsdom, and a page over a content box with no area is hidden rather than laid out.
+    for (const [windowId, left] of [
+      ["win-1", 100],
+      ["win-2", 500],
+    ] as const) {
+      const content = document.querySelector(`[data-window-id="${windowId}"] [data-window-content]`) as HTMLElement;
+      content.getBoundingClientRect = () => ({ left, top: 60, width: 300, height: 400 }) as DOMRect;
+    }
+    m.redraw.sync();
+  });
+
+  it("has no shield and an interactive page, so a wheel or a press over it reaches the page", () => {
+    expect(document.querySelector('[data-window-id="win-1"][data-focused="false"]')).not.toBeNull();
+    expect(shieldOf("win-1")).toBeNull();
+    expect(shieldOf("win-2")).toBeNull();
+    expect(pageOf("win-1").style.pointerEvents).toBe("auto");
+    expect(pageOf("win-2").style.pointerEvents).toBe("auto");
+  });
+
+  it("is shielded with the focused window while the launcher is open, and not once it closes", () => {
+    store.openLauncher();
+    m.redraw.sync();
+    expect(shieldOf("win-1")).not.toBeNull();
+    expect(shieldOf("win-2")).not.toBeNull();
+    store.closeLauncher();
+    m.redraw.sync();
+    expect(shieldOf("win-1")).toBeNull();
+    expect(shieldOf("win-2")).toBeNull();
+  });
+
+  it("has its page made inert from a press on a handle, and given back when the press ends", () => {
+    const listener = gestureListener as GestureListener;
+    listener.onPressStart(MOVE_WIN_2);
+    expect(pageOf("win-1").style.pointerEvents).toBe("none");
+    expect(pageOf("win-2").style.pointerEvents).toBe("none");
+    listener.onPressEnd(MOVE_WIN_2);
+    expect(pageOf("win-1").style.pointerEvents).toBe("auto");
+    expect(pageOf("win-2").style.pointerEvents).toBe("auto");
+  });
+});
+
 describe("a pulled-out window", () => {
   it("draws nothing in place of the window, and coming back returns the window to the desktop", async () => {
     api.writeLayout("home", CLIENT, {

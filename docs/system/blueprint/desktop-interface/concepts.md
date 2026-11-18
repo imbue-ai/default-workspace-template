@@ -209,7 +209,7 @@ The agent-facing `workspace-layout` speaks the same verbs, targets exactly one c
 
 ## 6. What each prototype contributes
 
-From Kanjun's `desktop-mode`: the snap zones with an edge threshold and the fractional re-hang on un-snap, the "scale from the user's own placement, never from the last clamped result" resize policy (here as fractional frames), the inert-background-page rule for click-to-raise, the taskbar entry click policy, and the Playwright coverage of window gestures.
+From Kanjun's `desktop-mode`: the snap zones with an edge threshold and the fractional re-hang on un-snap, the "scale from the user's own placement, never from the last clamped result" resize policy (here as fractional frames), the inert-background-page rule for click-to-raise (kept for touch clients only, plan section 4.2), the taskbar entry click policy, and the Playwright coverage of window gestures.
 Not taken: dockview floating groups, window state fanned across panel params, the pet subsystem, the chat app's draft flow, the hard-coded wallpaper.
 
 From Gleb's `desktop-shell`: the shape of a desktop document with pure editors on both sides of the wire, the icon grid with nearest-free-cell collision and drawn-position-versus-saved-cell, the resize edges, the chat list beside an inner chat frame with pages held alive across picks, and the taskbar built from live state rather than from stored entries.
