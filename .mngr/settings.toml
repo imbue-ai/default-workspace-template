@@ -165,7 +165,7 @@ auto_dismiss_dialogs_at_startup = true
 sensibly_deal_with_dialogs = ["ALL_KNOWN_AND_UNKNOWN_DIALOGS"]
 auto_allow_permissions = true
 auto_disable_questions = true
-cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
+cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode"""
 # fastMode defaults OFF here so every NON-interactive agent runs at standard
 # speed -- every claude role (automation, worker) resolves to this type, so
 # they all inherit it. Fast mode buys latency at a higher per-token
@@ -237,16 +237,6 @@ version_mismatch = "WARN"
 # create), so auth and sessions live per account; nothing sets the variable in
 # the host env, and ~/.claude holds no credential.
 isolate_local_config_dir = false
-# Claude-only instructions, appended to every claude agent's system prompt.
-append_system_prompt__extend = ["""# Claude-specific instructions
-
-Your built-in `TodoWrite` tool is disabled. Use `tk` instead -- step records (`tk create --step "..."`) are the replacement for `TodoWrite`. Do not use any other built-in memory or task-planning tools; `tk` is the only task tracker in this workspace.
-
-`.claude/skills` does not exist; it is symlinked to `.agents/skills/`.
-
-Use your built-in memory system. Your memory directory is `data/memories/` (configured via `autoMemoryDirectory` in `.claude/settings.json`).
-
-Give every Bash call a `description`, `tk` calls included: a few plain words saying what the command does. The chat shows the user that description instead of the raw command."""]
 
 # The "main" (services) agent type -- a plain `command` agent, NOT a claude
 # agent. No claude ever runs as this agent: window 0 only sleeps while the
@@ -1757,7 +1747,6 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 # AGENTS.md's finish-notification rule is addressed to chats and is prose-only.
 [create_templates.chat]
 transfer = "none"
-output_style = "Engineering Subordinate"
 env__extend = ["MNGR_AGENT_ROLE=chat"]
 
 # Fast: launches claude in fast mode so a new conversation feels responsive.
