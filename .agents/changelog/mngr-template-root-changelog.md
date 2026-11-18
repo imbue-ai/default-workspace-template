@@ -2,4 +2,4 @@ update-self's "what's new" reads the release sections of the root `CHANGELOG.md`
 
 An entry is a `changelog/<file>.md` other than `README.md`. The entries the update adds are listed with `--no-renames`, so an entry is not dropped for resembling one the update deletes; the skipped releases' entries are listed with rename detection, so an entry the base already has in another folder is not read again. A changelog or entry that cannot be read, a `CHANGELOG.md` heading that is not a `## [<label>]` one, and a repeated label are named under `unlisted`, and the command still exits 0.
 
-The worker's merge triage takes the target's side for the two root changelogs (saving a workspace's own copy to another path first) and for an entry file the target deletes. Converting a user package to a standalone project leaves the root changelogs as written.
+The worker's merge triage takes the target's side for the two root changelogs and for an entry file the target deletes, first saving the workspace's version to another path when it holds text the target's lacks. Converting a user package to a standalone project leaves the root changelogs as written.
