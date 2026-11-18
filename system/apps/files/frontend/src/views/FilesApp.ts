@@ -12,7 +12,6 @@ import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverToolt
 import { alertDotIcon, icon, type IconName } from "@imbue/workspace-ui/src/components/icons";
 import { createMenu, type Menu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { SegmentedControl } from "@imbue/workspace-ui/src/components/segmentedControl";
-import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 
 import { formatItemCount, formatSize } from "../models/format";
@@ -37,7 +36,6 @@ import type { SortKey, ViewMode } from "../models/preferences";
 import { folderPathOf, isWithin, segmentsOf } from "../models/paths";
 import { isFileDrag, sourcesFromDrop } from "../models/uploads";
 import { DROP_FOLDER_ATTR, ENTRY_DRAG_TYPE, FOLDER_SURFACE_ATTR } from "./entries";
-import { FailureActions } from "./FailureActions";
 import { menuRowsOf, type FilesController } from "./FilesController";
 import { cornerBadge, fileIconSvg } from "./FileIcon";
 import { ColumnView, IconView, ListView } from "./FolderViews";
@@ -229,16 +227,11 @@ function Sidebar(): m.Component<{ app: FilesController; floating: boolean }> {
         connectedBody = shareRows.map((row) => sidebarRow(app, row, row.key === current));
       } else {
         // With the manage entry below, an empty list needs no word on how to share.
-        const failure = model.connectionsError;
         const empty =
-          failure?.message ?? (connections === null ? "Looking…" : app.opensLocalFiles ? null : NOTHING_CONNECTED);
+          model.connectionsError ??
+          (connections === null ? "Looking…" : app.opensLocalFiles ? null : NOTHING_CONNECTED);
         connectedBody =
-          empty === null
-            ? null
-            : m("div.files-connected-empty", { class: "px-2 py-1 type-helper text-faint" }, [
-                empty,
-                m(SeeDetails, { details: failure?.details ?? null }),
-              ]);
+          empty === null ? null : m("div.files-connected-empty", { class: "px-2 py-1 type-helper text-faint" }, empty);
       }
       return m(
         "nav.files-sidebar",
@@ -469,23 +462,7 @@ function FolderBody(): m.Component<{ app: FilesController }> {
       if (state === undefined || (state.status === "loading" && entries.length === 0)) {
         empty = m("div", { class: "flex justify-center pt-16" }, m("div.spinner"));
       } else if (state.status === "error" && entries.length === 0) {
-        const failure = state.error;
-        const retry = m(Button, { sm: true, onclick: () => void model.load(model.folder) }, "Try again");
-        empty = message(
-          failure?.message ?? "",
-          "",
-          failure?.details ?? null,
-          failure === null
-            ? m("div", { class: "mt-3" }, retry)
-            : m(FailureActions, {
-                host: app.failureHost,
-                failure,
-                path: model.folder,
-                leading: retry,
-                isCentred: true,
-                extra: "mt-3",
-              }),
-        );
+        empty = message("Couldn't open this folder", state.error ?? "", () => void model.load(model.folder));
       } else if (!state.exists) {
         empty = message("This folder doesn't exist", "It may have been moved or deleted.");
       } else if (notice !== null && entries.length === 0) {
@@ -522,18 +499,11 @@ export function syncBanner(notice: SyncNotice): m.Vnode {
   );
 }
 
-/** A message in place of the folder's entries; `actions` are a failure's buttons, under what it says. */
-function message(
-  title: string,
-  detail: string,
-  seeDetails: string | null = null,
-  actions: m.Children = null,
-): m.Vnode {
+function message(title: string, detail: string, retry?: () => void): m.Vnode {
   return m("div.files-empty", { class: "flex flex-col items-center gap-1 px-6 pt-20 text-center" }, [
     m("div", { class: "type-label text-secondary" }, title),
     detail === "" ? null : m("div", { class: "max-w-[360px] type-helper text-faint" }, detail),
-    m(SeeDetails, { details: seeDetails }),
-    actions,
+    retry === undefined ? null : m(Button, { sm: true, extra: "mt-3", onclick: retry }, "Try again"),
   ]);
 }
 
@@ -599,21 +569,18 @@ function UploadPanel(): m.Component<{ app: FilesController }> {
                 [
                   m(
                     "span",
-                    { class: "min-w-0 flex-1 truncate text-primary", title: item.failure?.explanation ?? item.name },
+                    { class: "min-w-0 flex-1 truncate text-primary", title: item.error ?? item.name },
                     item.name,
                   ),
                   m(
                     "span",
-                    {
-                      class: `shrink-0 ${item.status === "failed" ? "text-danger" : "text-faint"}`,
-                      title: item.failure?.explanation,
-                    },
+                    { class: `shrink-0 ${item.status === "failed" ? "text-danger" : "text-faint"}` },
                     item.status === "uploading"
                       ? `${Math.round((item.loaded / Math.max(item.file.size, 1)) * 100)}%`
                       : item.status === "done"
                         ? m.trust(icon("check", { size: 13, className: "text-success" }))
-                        : item.failure !== null
-                          ? item.failure.line
+                        : item.status === "failed"
+                          ? "Failed"
                           : item.status === "canceled"
                             ? "Canceled"
                             : "Waiting",
@@ -747,8 +714,6 @@ export function FilesApp(): m.Component<{ app: FilesController }> {
           placementClass: "fixed bottom-10",
           onDismiss: (id: number) => app.model.toasts.dismiss(id),
           closesPlainToasts: true,
-          onReportBug: app.reportBugAction(),
-          onHold: (id: number) => app.model.toasts.hold(id),
         }),
         app.dialogs.view(),
       ]);

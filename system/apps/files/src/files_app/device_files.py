@@ -127,20 +127,15 @@ class DeviceFiles:
             raise FilesError(502, UNREACHABLE) from error
         if upstream.status_code == 403:
             upstream.close()
-            raise FilesError(403, "Your computer only shares this to read.", "shared_read_only")
+            raise FilesError(403, "Your computer only shares this to read.")
         return upstream
 
     def _change(self, method: str, path: str, headers: Mapping[str, str], body: Iterator[bytes] | None) -> None:
         upstream = self._send(method, path, headers, body)
         try:
             if upstream.status_code >= 400:
-                # The file server's own text goes behind the page's "See details", never on its visible line.
-                answered = upstream.read().decode("utf-8", "replace").strip()
-                detail = f"{method} {path}: {answered}" if answered else None
-                if upstream.status_code == 404:
-                    raise FilesError(404, "It's no longer there.", "not_found", detail=detail)
-                # The status goes behind "See details" with the rest; the page names what failed.
-                raise FilesError(upstream.status_code, "Your computer couldn't do this.", detail=detail)
+                detail = upstream.read().decode("utf-8", "replace").strip()
+                raise FilesError(upstream.status_code, detail or f"Your computer answered {upstream.status_code}.")
         finally:
             upstream.close()
 

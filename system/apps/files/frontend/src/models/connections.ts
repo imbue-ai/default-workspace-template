@@ -4,7 +4,7 @@
  * from the computer, or read live from the computer with no copy here.
  */
 
-import { fetchOrNotAnswered, readResponseFailure } from "@imbue/workspace-ui/src/models/http";
+import { ServerError } from "./server";
 import { nameOf } from "./paths";
 
 export const CONNECTIONS_API = "/__files/api/connections";
@@ -209,8 +209,21 @@ export function syncNoticeOf(connections: Connections | null, folder: string): S
   return null;
 }
 
+/** The server refuses with `{"detail": ...}` (app_schema's ErrorResponse); anything else is read as text. */
+async function refusalOf(response: Response): Promise<string> {
+  const isJson = (response.headers.get("Content-Type") ?? "").includes("application/json");
+  if (!isJson) return response.text().catch(() => "");
+  const body = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+  return typeof body?.detail === "string" ? body.detail : "";
+}
+
+async function failureOf(response: Response, what: string): Promise<ServerError> {
+  const detail = (await refusalOf(response)).trim();
+  return new ServerError(detail === "" ? `${what} (${response.status})` : detail, response.status);
+}
+
 export async function fetchConnections(): Promise<Connections> {
-  const response = await fetchOrNotAnswered(CONNECTIONS_API, {}, "read");
-  if (!response.ok) throw await readResponseFailure(response, "read");
+  const response = await fetch(CONNECTIONS_API);
+  if (!response.ok) throw await failureOf(response, "Couldn't read your connections");
   return (await response.json()) as Connections;
 }

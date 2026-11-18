@@ -1,21 +1,13 @@
-"""A gateway that answers in memory, and the workspace's files with folders that refuse, for the Files server's tests."""
+"""A gateway that answers in memory, for the Files server's tests."""
 
-import errno
 import json
-import os
-from collections.abc import Iterator
-from pathlib import Path
 from typing import Any
 from typing import Final
 
 import httpx
-from flask import Response
-from werkzeug.datastructures import Headers
 from werkzeug.test import TestResponse
 
 from files_app.gateway import Gateway
-from files_app.local_files import LocalFiles
-from files_app.sources import PageData
 
 DEVICE: Final[str] = "host-mac"
 
@@ -122,7 +114,7 @@ class FakeComputer:
         if request.method == "PUT":
             self.files[on_computer] = request.read()
             return httpx.Response(201)
-        return httpx.Response(404, text="Not Found")
+        return httpx.Response(404)
 
     def streamed(self, request: httpx.Request) -> httpx.Response:
         """The answer as the network gives it: a body still to be read, which the server relays as it arrives."""
@@ -138,61 +130,3 @@ class FakeComputer:
 
 def json_of(response: TestResponse) -> dict[str, Any]:
     return json.loads(response.get_data())
-
-
-class RefusingLocalFiles(LocalFiles):
-    """The workspace's files, where the folders a test names refuse as a folder without write permission does, and
-    the paths it names refuse to be read, as they would to anyone but root. Real modes cannot show that where the
-    tests run as root (CI), since root passes any mode.
-
-    Both sets are read at each request, so a test can add to them after the app is built; a path is a folder's
-    (``/reports/``) or a file's (``/notes.txt``), as the server is asked for it.
-    """
-
-    def __init__(self, root: Path, read_only_folders: set[str], unreadable_paths: set[str]) -> None:
-        super().__init__(root)
-        self._read_only_folders = read_only_folders
-        self._unreadable_paths = unreadable_paths
-
-    def _refused(self, path: str) -> PermissionError:
-        return PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(self._on_disk(path)))
-
-    def _is_in_read_only_folder(self, path: str) -> bool:
-        return not self.is_folder_writable(self._on_disk(path.rstrip("/")).parent)
-
-    def is_folder_writable(self, folder: Path) -> bool:
-        if any(folder == self._on_disk(read_only.rstrip("/")) for read_only in self._read_only_folders):
-            return False
-        return super().is_folder_writable(folder)
-
-    def _check_readable(self, path: str) -> None:
-        if path in self._unreadable_paths:
-            raise self._refused(path)
-
-    def describe(self, path: str) -> PageData:
-        self._check_readable(path)
-        return super().describe(path)
-
-    def read(self, path: str, headers: Headers) -> Response | None:
-        self._check_readable(path)
-        return super().read(path, headers)
-
-    def write(self, path: str, body: Iterator[bytes], length: int | None) -> None:
-        if self._is_in_read_only_folder(path):
-            raise self._refused(path)
-        super().write(path, body, length)
-
-    def make_folder(self, path: str) -> None:
-        if self._is_in_read_only_folder(path):
-            raise self._refused(path)
-        super().make_folder(path)
-
-    def delete(self, path: str) -> None:
-        if self._is_in_read_only_folder(path):
-            raise self._refused(path)
-        super().delete(path)
-
-    def move(self, path: str, destination: str) -> None:
-        if self._is_in_read_only_folder(path) or self._is_in_read_only_folder(destination):
-            raise self._refused(destination)
-        super().move(path, destination)

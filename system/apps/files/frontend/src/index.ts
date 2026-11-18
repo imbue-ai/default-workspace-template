@@ -68,8 +68,6 @@ function bootstrap(): void {
     onHandshake: (received) => {
       handshake = received;
       filesApp?.setOpensLocalFiles(received.opensLocalFiles);
-      // What the page drew before it (a failure's Report a bug) reads the connection again.
-      m.redraw();
     },
     onShown: () => filesApp?.setShownByShell(true),
     onHidden: () => filesApp?.setShownByShell(false),
@@ -81,14 +79,11 @@ function bootstrap(): void {
 
   const path = decodePathname(window.location.pathname);
   if (data.kind === "file") {
-    const page = new FilePageModel(
-      {
-        path,
-        page: new URLSearchParams(window.location.search).has("edit") ? "edit" : "view",
-        isText: data.is_text,
-      },
-      connection,
-    );
+    const page = new FilePageModel({
+      path,
+      page: new URLSearchParams(window.location.search).has("edit") ? "edit" : "view",
+      isText: data.is_text,
+    });
     document.title = titleOf(path);
     connection.location(window.location.pathname + window.location.search, titleOf(path));
     installElementContextMenu({ connection, handshake: () => handshake, open: opener.open });
