@@ -3,7 +3,8 @@
  * The rail's status marks: a chat waiting on a background task wears the dashed ring, a working one the breathing
  * dot (pending tasks or not, since the backend reports it working), and an idle one the hollow ring. And the
  * main chat: it leads in its own group, set off from the rest, and its row is marked. And the delete: a confirmed
- * chat leaves the list before the chat app answers, and comes back with the reason on a refusal.
+ * chat leaves the list before the chat app answers, and comes back with the reason in a notice on a refusal. And a
+ * refused rename: a notice says why, and waits while another chat's name is being typed.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -17,12 +18,14 @@ const verbs = vi.hoisted(() => ({
 vi.mock("./verbs", () => verbs);
 
 import m from "mithril";
+import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { setParticipantsForTesting } from "../models/Participants";
 import { ChatRail, rowMenuRows } from "./ChatRail";
 import type { RowMenuContext } from "./ChatRail";
 import { chatRailAttrsFixture } from "./chatRailAttrsFixture";
 import { chatRowFixture } from "./chatRowFixture";
 import { hasPendingDelete, settlePendingDeletes, withoutPendingDeletes } from "./pendingDeletes";
+import { RootNoticeView, isRootNoticeUp } from "./rootNotice";
 import type { ChatRow } from "./rows";
 
 let root: HTMLElement | null = null;
@@ -30,6 +33,7 @@ let root: HTMLElement | null = null;
 afterEach(() => {
   settlePendingDeletes(new Set());
   vi.restoreAllMocks();
+  while (isRootNoticeUp()) dismissNotice();
   if (root === null) return;
   m.mount(root, null);
   root.remove();
@@ -40,8 +44,35 @@ function mount(rows: readonly ChatRow[]): HTMLElement {
   const mounted = document.createElement("div");
   document.body.appendChild(mounted);
   root = mounted;
-  m.mount(mounted, { view: () => m(ChatRail, chatRailAttrsFixture({ rows })) });
+  m.mount(mounted, { view: () => [m(ChatRail, chatRailAttrsFixture({ rows })), m(RootNoticeView)] });
   return mounted;
+}
+
+function noticeText(): string | null {
+  return document.querySelector(".modal-card")?.textContent ?? null;
+}
+
+function noticeButton(label: string): HTMLButtonElement {
+  const button = [...document.querySelectorAll<HTMLButtonElement>(".modal-card button")].find(
+    (candidate) => candidate.textContent === label,
+  );
+  if (button === undefined) throw new Error(`no "${label}" button on the notice`);
+  return button;
+}
+
+function dismissNotice(): void {
+  if (root === null) {
+    // Nothing draws the notice: mount a bare view to press its OK.
+    const mounted = document.createElement("div");
+    document.body.appendChild(mounted);
+    m.mount(mounted, RootNoticeView);
+    document.querySelector<HTMLButtonElement>(".notice-dismiss")!.click();
+    m.mount(mounted, null);
+    mounted.remove();
+    return;
+  }
+  document.querySelector<HTMLButtonElement>(".notice-dismiss")!.click();
+  m.redraw.sync();
 }
 
 function dotClassOf(chatId: string): string {
@@ -253,19 +284,119 @@ describe("ChatRail delete", () => {
     expect(verbs.destroyChat).not.toHaveBeenCalled();
   });
 
-  it("brings the chat back and says why when the chat app refuses", async () => {
+  it("brings the chat back and says why in a notice when the chat app refuses, and tries again from it", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
-    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
-    verbs.destroyChat.mockRejectedValueOnce(new Error("mngr failed"));
+    mount([first, second]);
+    verbs.destroyChat.mockClear();
+    verbs.destroyChat.mockRejectedValueOnce(new HttpError(500, "mngr failed"));
     const onDeleteRefused = vi.fn<() => void>();
 
     deleteFromMenu(chatRailAttrsFixture({ rows: [first, second], onDeleteRefused }), first);
     expect(hasPendingDelete()).toBe(true);
 
-    await vi.waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(noticeText()).not.toBeNull());
+    m.redraw.sync();
     expect(withoutPendingDeletes([first, second])).toEqual([first, second]);
     expect(onDeleteRefused).toHaveBeenCalledTimes(1);
-    expect(alertSpy.mock.calls[0][0]).toContain("mngr failed");
+    expect(noticeText()).toContain("Couldn't delete the chat");
+    expect(noticeText()).toContain(`"${first.title}" was not deleted.`);
+    expect(noticeText()).toContain("mngr failed");
+
+    verbs.destroyChat.mockReturnValueOnce(new Promise<undefined>(() => undefined));
+    noticeButton("Try again").click();
+    expect(isRootNoticeUp()).toBe(false);
+    expect(verbs.destroyChat).toHaveBeenCalledTimes(2);
+    expect(withoutPendingDeletes([first, second])).toEqual([second]);
+  });
+
+  it("says it is not known whether the chat was deleted when nothing answered", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    mount([first, second]);
+    verbs.destroyChat.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+    deleteFromMenu(chatRailAttrsFixture({ rows: [first, second] }), first);
+
+    await vi.waitFor(() => expect(noticeText()).not.toBeNull());
+    expect(noticeText()).toContain(
+      `The workspace didn't answer, so it isn't known whether "${first.title}" was deleted.`,
+    );
+    expect(noticeText()).not.toContain("Failed to fetch");
+  });
+});
+
+describe("ChatRail refused rename", () => {
+  const first = chatRowFixture("agent-first");
+  const second = chatRowFixture("agent-second");
+
+  function renameInPlace(chatId: string, title: string, key: "Enter" | null = "Enter"): HTMLInputElement {
+    root!
+      .querySelector<HTMLElement>(`.chat-rail-row[data-chat-id="${chatId}"]`)!
+      .dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    m.redraw.sync();
+    const field = root!.querySelector<HTMLInputElement>(".chat-rail-rename-input")!;
+    field.value = title;
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    if (key !== null) field.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    m.redraw.sync();
+    return field;
+  }
+
+  it("says why in a notice, whose Rename again reopens the field on the name typed", async () => {
+    mount([first, second]);
+    verbs.renameChat.mockRejectedValueOnce(
+      new HttpError(409, "A chat named 'Taken' already exists; pick another name"),
+    );
+
+    renameInPlace(first.chatId, "Taken");
+    expect(root!.querySelector(".chat-rail-rename-input")).toBeNull();
+
+    await vi.waitFor(() => expect(noticeText()).not.toBeNull());
+    expect(noticeText()).toContain("Couldn't rename the chat");
+    expect(noticeText()).toContain(`"${first.title}" was not renamed to "Taken".`);
+    expect(noticeText()).toContain("A chat named 'Taken' already exists; pick another name");
+
+    noticeButton("Rename again").click();
+    m.redraw.sync();
+    expect(isRootNoticeUp()).toBe(false);
+    const field = root!.querySelector<HTMLInputElement>(`[data-chat-id="${first.chatId}"] .chat-rail-rename-input`);
+    expect(field?.value).toBe("Taken");
+  });
+
+  it("holds the notice while another chat's name is being typed, and shows it when that field closes", async () => {
+    mount([first, second]);
+    let refuse: (error: unknown) => void = () => undefined;
+    verbs.renameChat.mockReturnValueOnce(
+      new Promise<undefined>((_resolve, reject) => {
+        refuse = reject;
+      }),
+    );
+
+    renameInPlace(first.chatId, "Taken");
+    const field = renameInPlace(second.chatId, "Half typ", null);
+    refuse(new HttpError(409, "the chat is moving to another agent"));
+    await Promise.resolve();
+    await Promise.resolve();
+    m.redraw.sync();
+
+    expect(isRootNoticeUp()).toBe(false);
+    expect(root!.querySelector(".chat-rail-rename-input")).toBe(field);
+
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    m.redraw.sync();
+    expect(noticeText()).toContain(`"${first.title}" was not renamed to "Taken".`);
+    expect(noticeText()).toContain("the chat is moving to another agent");
+  });
+
+  it("says it is not known whether the chat was renamed when nothing answered", async () => {
+    mount([first, second]);
+    verbs.renameChat.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+    renameInPlace(first.chatId, "New name");
+
+    await vi.waitFor(() => expect(noticeText()).not.toBeNull());
+    expect(noticeText()).toContain(
+      `The workspace didn't answer, so it isn't known whether "${first.title}" was renamed to "New name".`,
+    );
   });
 });
 

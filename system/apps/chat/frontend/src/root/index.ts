@@ -61,6 +61,7 @@ import { ChatDrawer } from "./ChatDrawer";
 import { ChatHeader } from "./ChatHeader";
 import { ChatRail } from "./ChatRail";
 import type { ChatRailAttrs } from "./ChatRail";
+import { RootNoticeView, isRootNoticeUp } from "./rootNotice";
 import { SendPicker } from "./SendPicker";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
 import { initRailWidth } from "./railWidth";
@@ -437,7 +438,7 @@ const ChatRoot: m.Component = {
         isCompact && isDrawerOpen
           ? m(ChatDrawer, {
               rail,
-              isCovered: pendingPick !== null,
+              isCovered: pendingPick !== null || isRootNoticeUp(),
               onDismiss: () => {
                 isDrawerOpen = false;
               },
@@ -453,6 +454,7 @@ const ChatRoot: m.Component = {
                 newChatRefusal = null;
               },
             }),
+        m(RootNoticeView),
         pendingPick === null
           ? null
           : m(SendPicker, {

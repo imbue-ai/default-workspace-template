@@ -10,7 +10,14 @@
 import m from "mithril";
 import { createMenu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { kebabGlyph, listGlyph } from "../glyphs";
-import { BAR_ICON_BUTTON_CLASS, isRenaming, referenceRowsFor, renameField, rowMenuRows } from "./ChatRail";
+import {
+  BAR_ICON_BUTTON_CLASS,
+  isRenaming,
+  noteRowMenuContext,
+  referenceRowsFor,
+  renameField,
+  rowMenuRows,
+} from "./ChatRail";
 import type { RowMenuContext, RowReferenceContext } from "./ChatRail";
 import type { ChatRow } from "./rows";
 
@@ -46,6 +53,7 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
       menu.dispose();
     },
     view({ attrs }) {
+      noteRowMenuContext(attrs.context);
       const { row } = attrs;
       const triggerAttrs = menu.triggerAttrs();
       const buttonClass = attrs.isTouch ? BAR_ICON_BUTTON_CLASS : DENSE_BAR_ICON_BUTTON_CLASS;
