@@ -2635,29 +2635,26 @@ describe("pulled-out windows", () => {
     expect(socket.reports).toEqual([]);
   });
 
-  it("hides a pulled-out window's ghost and shows it again from its taskbar entry, the window staying out", async () => {
+  it("shows a pulled-out window's own desktop window from its taskbar entry, minimized or not, the window staying out", async () => {
     const { store, calls, reports } = makePopOutStore();
     await store.start(NO_LINK);
     store.setCanPopOut(true);
     await store.detachWindow("win-1");
     expect(calls).toHaveLength(1);
-    // The ghost's "Hide": out of sight, but still out, and still reported as such.
-    store.minimizeWindow("win-1");
-    expect(placementOf(store.getState().layout, "win-1")).toMatchObject({ is_detached: true, is_minimized: true });
-    expect(last(reports)).toMatchObject([{ windowId: "win-1" }]);
-    // The entry's click shows the ghost again where it stood, asking the chrome for nothing.
-    store.toggleTaskbarEntry("win-1");
-    expect(placementOf(store.getState().layout, "win-1")).toMatchObject({ is_detached: true, is_minimized: false });
-    expect(calls).toHaveLength(1);
-    // With the ghost showing, the click shows the window's own desktop window as before.
     store.toggleTaskbarEntry("win-1");
     expect(calls).toHaveLength(2);
     expect(calls[1]).toMatchObject(["request", { windowId: "win-1" }]);
-    await settle();
-    expect(storedPlacement("win-1")).toMatchObject({ is_detached: true, is_minimized: false });
+    // Minimized (an agent's ``layout.py minimize``): still out, still reported, and the click still shows it.
+    store.minimizeWindow("win-1");
+    expect(placementOf(store.getState().layout, "win-1")).toMatchObject({ is_detached: true, is_minimized: true });
+    expect(last(reports)).toMatchObject([{ windowId: "win-1" }]);
+    store.toggleTaskbarEntry("win-1");
+    expect(calls).toHaveLength(3);
+    expect(calls[2]).toMatchObject(["request", { windowId: "win-1" }]);
+    expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
   });
 
-  it("shows the avatar's pulled-out pinned window for a click on the agent, and its ghost when hidden", async () => {
+  it("shows the avatar's pulled-out pinned window for a click on the agent, minimized or not", async () => {
     api.apps = [chatLikeAppRecord("chat")];
     api.desktops = [
       desktopRecord("home", { windows: [windowRecord("win-chat", "chat", "/?chat=agent-2", { is_pinned: true })] }),
@@ -2673,8 +2670,9 @@ describe("pulled-out windows", () => {
     expect(calls[1]).toMatchObject(["request", { windowId: "win-chat" }]);
     store.minimizeWindow("win-chat");
     await store.openAgentChat();
-    expect(placementOf(store.getState().layout, "win-chat")).toMatchObject({ is_detached: true, is_minimized: false });
-    expect(calls).toHaveLength(2);
+    expect(placementOf(store.getState().layout, "win-chat")).toMatchObject({ is_detached: true });
+    expect(calls).toHaveLength(3);
+    expect(calls[2]).toMatchObject(["request", { windowId: "win-chat" }]);
     expect(api.calls.filter((call) => call.startsWith("launch:"))).toEqual([]);
   });
 
