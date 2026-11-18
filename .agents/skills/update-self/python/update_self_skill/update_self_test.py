@@ -8491,20 +8491,34 @@ def test_another_chats_apply_leaves_a_running_updates_worker_alone(
     assert runner.argvs_starting("mngr", "stop") == []
 
 
+@pytest.mark.parametrize(
+    ("stop_outcome", "expected_warning"),
+    [
+        (
+            _Result(returncode=1, stderr="no such agent"),
+            "could not stop the update worker update-self: `mngr stop` exited 1: no such agent",
+        ),
+        (
+            subprocess.TimeoutExpired(cmd="mngr stop update-self", timeout=120),
+            "could not stop the update worker update-self (TimeoutExpired: ",
+        ),
+    ],
+)
 def test_an_apply_whose_worker_will_not_stop_lands_anyway(
-    apply_repo: Path, monkeypatch, capsys
+    apply_repo: Path,
+    monkeypatch,
+    capsys,
+    stop_outcome: object,
+    expected_warning: str,
 ) -> None:
     _record_delegated_run(apply_repo, monkeypatch)
     runner = _apply_runner(_DOCS_DIFF, apply_repo)
-    runner.respond(("mngr", "stop"), _Result(returncode=1, stderr="no such agent"))
+    runner.respond(("mngr", "stop"), stop_outcome)
 
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
     assert code == 0
-    assert (
-        "could not stop the update worker update-self: `mngr stop` exited 1: no such agent"
-        in capsys.readouterr().err
-    )
+    assert expected_warning in capsys.readouterr().err
 
 
 def test_run_status_start_clears_the_previous_runs_landing(
