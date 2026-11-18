@@ -4735,6 +4735,18 @@ describe("MessageInput offers a way out of a chat whose agent cannot start", () 
     expect(findByTag(render(), "textarea")?.attrs?.value).toBe("hello");
   });
 
+  it("offers the switch only once the chat list names the chat, which the switch moves", async () => {
+    mocks.isChatRegistered = false;
+    const render = await composerAfterRefusedSend(startFailed());
+
+    expect(findButton(render(), "Switch provider")).toBeUndefined();
+    expect(findButton(render(), "Ask an agent to fix this")).toBeDefined();
+
+    mocks.isChatRegistered = true;
+
+    expect(findButton(render(), "Switch provider")).toBeDefined();
+  });
+
   it.each([
     ["nothing answered", () => noAnswer()],
     ["the agent's input is blocked", () => refusal(500, { detail: "a dialog is open", kind: "input_blocked" })],

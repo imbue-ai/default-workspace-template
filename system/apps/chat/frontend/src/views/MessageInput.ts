@@ -2454,8 +2454,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           isResendable && recovery !== null && !KINDS_RESTART_MUST_NOT_ANSWER.has(actionFailureKind);
         const failingChatId = recovery?.chatId ?? chatId;
         // An agent that would not start on this account may start on another; a chat that never became an agent
-        // has its own page for that.
-        const switchProviderChatId = actionFailureKind === "agent_start_failed" ? failingChatId : null;
+        // has its own page for that. It waits for the chat list, which can land after the page: the move needs the
+        // chat.
+        const switchProviderChatId =
+          actionFailureKind === "agent_start_failed" &&
+          failingChatId !== null &&
+          getChatById(failingChatId) !== undefined
+            ? failingChatId
+            : null;
         const chatToAskId =
           failingChatId === null ? null : chatToAskAboutRefusedSend(actionFailureKind, failingChatId);
         // The agent itself refused, so its terminal shows why.
