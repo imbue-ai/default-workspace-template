@@ -13,19 +13,19 @@ The user has already signed off on work in the foreground; the thorough pass has
 The task now is to prove the creation actually works under test, harden it, and pass the review
 gates. The bar is that the creation is **genuinely well-tested and clean** -- not "it ran once."
 
-When another skill the flow follows sets its own economy rules -- e.g.
-`data-pipeline-builder`'s per-step minute caps -- this contract wins wherever they conflict:
-an expired budget never justifies skipping tests, and never report `done` on a
-creation whose tests were skipped because time ran out. Rules that do not
-conflict with the bar (such as that skill's ban on benchmarks, timings, and
-parameter sweeps) still hold during hardening.
+Another skill the flow follows may set time or cost limits, such as
+`data-pipeline-builder`'s per-step minute caps. Where such a limit conflicts with this contract, this
+contract wins: running out of time never justifies skipping tests, and a creation whose tests were
+skipped for lack of time is never reported `done`. The other skill's rules that do not conflict
+still apply during hardening, such as `data-pipeline-builder`'s ban on benchmarks, timing runs and
+parameter sweeps.
 
 ## Isolation
 
-Do all of this on an **isolated branch / worktree**. Nothing should the
-live, user-facing state until the branch is merged. If the worktree has
-no `.venv`, sync once before any `uv run`. If a fix needs a new dependency, add
-it the normal way and commit the manifest changes so they appear in the merge.
+Do all of this on an **isolated branch / worktree**. Nothing should touch the
+live, user-facing state until the branch is merged. If the worktree has no `.venv`, sync once
+before any `uv run`. If a fix needs a new dependency, add it the normal way and commit the manifest
+changes so they appear in the merge.
 
 ## Reporting back to the lead
 
@@ -38,18 +38,16 @@ its flow uses, and `question` is available on top of them on every run.
 
 ## Parallelism & Sequencing
 
-Write tests and optimize in parallel, if possible. Avoid running full test suites 
-unless necessary, such as at the very end. The long tail is often review passes
-and full test suites at the end of hardening.
+Write tests and optimize in parallel, if possible. Avoid running full test suites
+unless necessary, such as at the very end.
 
 ## The scope file
 
-Every run computes the pass's footprint -- every creation in `CREATIONS` -- and
-writes it to `SCOPE_FILE`, beside your task file at
-`data/.tasks/harden/<slug>/scope.json`. Compute it before any other work when
-the creations already exist on disk; when you are building one from scratch (a
-skill `crystallize`), compute it as soon as its directory exists, since the
-command refuses a creation that is not there:
+Every run writes a scope file to `SCOPE_FILE` (`data/.tasks/harden/<slug>/scope.json`,
+beside your task file). It holds the footprint of each creation in `CREATIONS`: the paths that creation
+owns or touches, in the fields listed below. Write the scope file before any other work. When you are building
+a creation from scratch (a skill `crystallize`), write it as soon as that creation's directory exists,
+because the command refuses a creation that is not on disk:
 
 ```bash
 LEAD_HEAD=$(git -C "${LEAD_WORK_DIR:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")}" \
@@ -58,119 +56,129 @@ uv run --no-sync app-manifest pass-scope $(printf -- '--creation %s ' $CREATIONS
     --diff-base "$DIFF_BASE" --lead-ref "$LEAD_HEAD" --out "$SCOPE_FILE"
 ```
 
-`DIFF_BASE` comes from the task frontmatter's `diff_base`: the commit the lead
-recorded at dispatch as the one *before* the work being hardened began, so the
-scope file's `diff` covers the committed change you are verifying, and -- once
-you regenerate it -- your own commits too. The lead commits on a branch other
-chats commit to as well, so that diff also holds their work, landed between
-`DIFF_BASE` and your dispatch. `--lead-ref` names the lead's checkout's `HEAD`
-(`LEAD_WORK_DIR`; the repo's main worktree when it is unset), and from it the
-command finds where your branch forked: the newest commit of the lead's
-first-parent history your branch holds. The pass's own changes are what your
-branch changes relative to that commit, every file of your own commits, and
-every file of a commit the lead made in the window before it that touched a
-creation in the pass: that is how
-the change you are hardening reached your branch, and a commit of another
-chat's that touched none of them is not yours. A milestone the lead merged
-from you does not move the fork point, and a commit of the lead's you merged
-in does, so the lead's work that came in with that merge is not yours unless
-it touched a creation in the pass; your own commits from before it stay yours.
+The command takes `DIFF_BASE` from your task frontmatter's `diff_base` (the commit
+before the work being hardened began) and `--lead-ref` from the `HEAD` of the lead's checkout, as in the
+command above.
 
-The file holds one entry per creation under `creations` -- its `primary` (its
-own directories), `wiring` (the supervisord program blocks that run it, in the
-files that declare them), `references` (what its manifest claims outside its
-directory -- a skill that drives it, a script, a doc), `context` (paths to read
-but never change), `conventions`, and `exclude` (a hard denylist of globs) --
-and one `diff` for the whole pass: the changed files, split into those some
-creation's footprint accounts for, `outside_footprint` (your own changes none
-does), and `others` (the rest: other work in the window, which is not yours
-to explain or test). `system/libs/app_manifest/README.md` describes both. The freshness check
-the lead runs before merging reads the same footprints
-(`.agents/shared/references/harden-contention.md`). Regenerate the file
-whenever a footprint moves under you -- when you register a `[[references]]`
-entry, or when you add a supervisord section -- and once more immediately
-before your final report, after committing everything, so the `diff` it carries
-includes every commit you made (the diff reads commits only; an uncommitted
-edit is invisible to it).
+The pass's own changes are yours to account for: you test them, and you explain in your report any
+that no footprint covers. They are:
 
-A non-empty `diff.outside_footprint` in that final scope file is a claim to
-settle before you report. For each path, either add a `[[references]]` entry to
-the owning app's `app.toml` -- when the file genuinely belongs to it -- or name
-it in your final report under `Outside footprint:`, one line each on why it
-changed on this branch. A skill run's one sanctioned edit inside an app
-directory, the `[[references]]` entry it adds to that app's manifest, sits
-under the skill's `context` and is counted as inside the footprint.
+- everything your branch changed since it forked from the lead's branch, including every file of your
+  own commits;
+- every file of a lead commit in the commit window (between `DIFF_BASE` and where your branch forked)
+  that touched a creation in the pass.
+
+Any other change outside the pass's footprints is not yours to explain or test. The diff holds
+such changes because other chats commit to the lead's branch too, and because a lead commit you merge in
+brings the lead's other work with it.
+
+The scope file holds two things:
+
+- **one footprint per creation**, under `creations`, listing that creation's paths:
+  - `primary`: its own directories;
+  - `wiring`: the supervisord program blocks that run it, in the files that declare them;
+  - `references`: what its manifest claims outside its directory, such as a skill that drives it, a
+    script or a doc;
+  - `context`: paths to read but never change;
+  - `conventions`;
+  - `exclude`: a hard denylist of globs, never to be touched;
+- **one `diff` for the whole pass**, splitting the changed files three ways:
+  - files some creation's footprint accounts for;
+  - `outside_footprint`: your own changes that no footprint accounts for;
+  - `others`: everything else, such as other chats' work in the commit window. It is not yours to
+    explain or test.
+
+`system/libs/app_manifest/README.md` describes every field.
+
+The diff reads commits only, so an uncommitted edit is invisible to it. Regenerate the file:
+
+- whenever a footprint moves under you: when you register a `[[references]]` entry, or add a
+  supervisord section;
+- once more right before your final report, after committing everything, so the diff includes every
+  commit you made.
+
+Before you report, check `diff.outside_footprint` in the final scope file. Every path
+listed there needs one of these:
+
+- if the file genuinely belongs to an app, add a `[[references]]` entry for it to that app's
+  `app.toml`;
+- otherwise, list it in your final report under `Outside footprint:`, with one line on why it changed
+  on this branch.
+
+One edit never needs this: the `[[references]]` entry a skill run adds to an app's manifest. It falls
+under the skill's `context`, so it already counts as inside the footprint.
 
 ## Carried work from a superseded pass
 
-A task body with a `## Carried work` section replaces an earlier pass that
-ended without being merged, and names the branches its lead kept that pass's
-commits on (`harden-contention.md`, "Superseding a pass whose worker is
-gone"). That work is part of your change. When the section also names a
-revert of a milestone the earlier pass had merged, revert that revert first: a
-merge cannot bring back commits the lead's `HEAD` already holds, and a carried
-branch's later edits to the milestone merge cleanly only onto the milestone
-itself, so merging them before the revert would set them against its removal.
-What returns is carried work like the rest:
+A `## Carried work` section in your task body means an earlier pass on this work stopped
+before the lead merged it. The section lists the branches that hold that pass's commits. That work is part
+of your change. Before you start hardening, bring it into your branch in this order:
 
-```bash
-git revert --no-edit <the revert commit>
-```
+1. **If the section names a revert, revert that revert.** This happens when the earlier pass had a
+   milestone (a commit the lead merged early) that the lead later undid with a revert commit. Reverting the
+   revert puts the milestone's code back on your branch:
 
-Then merge each branch into yours before you start hardening:
+   ```bash
+   git revert --no-edit <the revert commit>
+   ```
 
-```bash
-git merge --no-ff <the carried branch> -m "Carry over <the carried branch>"
-```
+   Do this before step 2. The milestone's commits are already in the lead's history, so merging the
+   carried branch will not bring them back; it brings only the commits made after the milestone. Those
+   later commits edit the milestone's code, so they apply cleanly only once that code is back.
+2. **Merge each carried branch:**
 
-Resolve a conflict as a catch-up does (step 2 of "Catching up to a moved
-base"), except that here your side is the newer one: the carried commits are
-older work to fit around what the user has done since. Then harden them under
-this whole contract like the rest of the change. Keep each one that still
-holds, fix one that does not, and `git revert` one the current base has made
-wrong, so every carried commit ends up merged either way. From then on they
-are commits on your branch, so the scope file's diff and the test gate cover
-them with nothing extra. Your `done` report gets a `Carried:` section: each
-carried commit, and whether you kept, changed or reverted it, and why.
+   ```bash
+   git merge --no-ff <the carried branch> -m "Carry over <the carried branch>"
+   ```
+3. **Resolve conflicts** as step 2 of "Catching up to a moved base" says, with one difference: here
+   your side is the newer one, so fit the carried commits around what the user has done since.
+
+Then harden the carried commits under this whole contract. For each one, keep it if it still holds,
+fix it if it does not, or `git revert` it if the current base has made it wrong. Once merged they are
+commits on your branch, so the scope file's diff and the test gate cover them with nothing extra.
+
+Add a `Carried:` section to your `done` report: each carried commit, whether you kept, changed or
+reverted it, and why.
 
 ## Splitting the pass across sub-workers
 
-Split the pass across sibling sub-workers when the change has two or more
-parts a user would name separately and each is a whole job once tested;
-otherwise harden it yourself, since every sibling pays a venv converge and a
-plugin install before it does any work. A page with three views over an ingested
-export splits: the interface is one worker's job and the ingestion is another's.
-Two unrelated features split too. A single page whose backend only serves it
-does not, nor do a few small files or a script. Split by job, not by creation:
-a pass over two apps edited to work together is one job (the seam between them
-is what most needs testing, and only a worker holding both sides can test it),
-while a pass over two creations changed for unrelated reasons may be two.
+Split the pass across sibling sub-workers when the change has two or more parts a user would name
+separately, and each part is a complete job once tested. Otherwise harden it yourself: every sibling sets
+up a Python environment and installs plugins before it does any work. Some examples:
 
-Launch each sibling with the launch-task skill exactly as a chat agent would
-(`.agents/skills/launch-task/SKILL.md`). Name each sibling with your own worker
-name as the prefix (`update-roadmap-ingest`, `update-roadmap-frontend`): names
-are unique across the host in every state, so a re-run of the same pass reaches
-the same names only after the old pass has been superseded and destroyed. You
-are its lead, and the rules that are yours are in
-`.agents/shared/references/lead-proxy.md` under "When you are a worker
-yourself": answer a sibling's `question` yourself or re-raise it to your own
-lead, merge exactly one level with `--no-ff`, destroy a merged sibling and stop
-a stuck one, and await it with `--timeout 60m`.
+- split: a page with three views over an ingested export (the interface is one job, the ingestion
+  another); two unrelated features; two creations changed for unrelated reasons;
+- keep together: a single page whose backend only serves it; a few small files or a script; two apps
+  edited to work together (the connection between them needs the most testing, and only a worker holding
+  both sides can test it).
 
-- Each sibling's task file carries the same `operation` as yours, the
-  `creations` its boundary touches, its own `scope_file` beside its task file
-  (Step 1 fails loudly without them), its boundary in prose, and your
-  `diff_base`. Say in the body that it runs only its
-  scope's tests and **skips the "Review gates" section below**, because you run
-  that verification once on the merged result, and that a small out-of-scope
-  edit is allowed but must be listed in its `done` report.
-- When a sibling's `question` decides a shared interface, use your judgement per
-  case; the default is to message the affected sibling with the decision
-  immediately (`mngr message`) rather than let it find out at merge time.
-- Merge the siblings in a fixed order and resolve any conflicts yourself. Then
-  run exactly the verification a direct pass runs -- the "Review gates" section
-  below, against your own scope file, not a sibling's -- once on the
-  merged result, and report `done` with the same body a direct pass would.
+Launch each sibling with `.agents/skills/launch-task/SKILL.md`, as a chat agent would. Name each one with
+your own worker name as a prefix (`update-roadmap-ingest`, `update-roadmap-frontend`). Names are unique
+across the host, so a rerun of the same pass can reuse them only after the old pass is superseded and
+destroyed. You are each sibling's lead; your rules are in `.agents/shared/references/lead-proxy.md`, "When
+you are a worker yourself":
+
+- answer a sibling's `question` yourself, or pass it up to your own lead;
+- merge exactly one level, with `--no-ff`;
+- destroy a merged sibling, and stop a stuck one;
+- wait for a sibling with `--timeout 60m`.
+
+Each sibling's task file carries:
+
+- the same `operation` as yours, the `creations` its part touches, its own `scope_file` beside its task
+  file, and your `diff_base` (Step 1 fails without them);
+- its boundary, in prose;
+- a note that it runs only its own scope's tests and skips "Review gates" below, because you run that
+  once on the merged result, and that it may make a small out-of-scope edit if it lists the edit in its
+  `done` report.
+
+When a sibling's `question` decides an interface the siblings share, message the other affected sibling
+with the decision right away (`mngr message`), so it does not find out at merge time. Use your judgement
+for exceptions.
+
+Merge the siblings in a fixed order and resolve conflicts yourself. Then run the verification a direct
+pass runs ("Review gates" below, against your own scope file) once on the merged result, and report `done`
+with the same body a direct pass would.
 
 ## Testing and hardening contract
 
@@ -189,26 +197,19 @@ a stuck one, and await it with `--timeout 60m`.
 
 ## Optimize independent work -- parallelize what the incremental pass left serial
 
-The foreground pass optimizes for getting *something* working, so it tends to
-leave independent operations running one after another. The harden pass is where
-you make the creation fast, since the expensive rethink is deliberately deferred
-to here. **When the creation performs multiple independent I/O-bound operations
--- data fetches, API calls, subprocess invocations -- that do not depend on each
-other's results, run them concurrently rather than in a serial loop.** This is
-most impactful for fetch-heavy pipelines (the fetch-process-show shape), where a
-serial loop over many sources is often the dominant cost and parallelizing it is
-a large, cheap win.
+The foreground pass aims to get something working, so it often leaves independent operations running one
+after another. Make the creation fast here. When it performs several I/O-bound operations that do not
+depend on each other's results (data fetches, API calls, subprocess calls), run them concurrently. This
+matters most for pipelines that fetch from many sources, where a serial loop is often most of the run
+time.
 
-Guardrails:
+Rules:
 
-- **Bound the concurrency** and respect the provider's rate limits -- an
-  unbounded fan-out that trips throttling or bans is slower and worse than the
-  serial version. Use a semaphore / worker pool sized to what the source allows.
-- **Only parallelize genuinely independent work.** Keep steps serial where one
-  depends on another's output, where ordering matters, or where the source
-  requires sequential access (cursor pagination, stateful sessions).
-- Preserve deterministic output: collect concurrent results and order them
-  explicitly rather than relying on completion order, so tests and surfaces stay
+- Bound the concurrency with a semaphore or worker pool sized to what the source allows, and respect its
+  rate limits. An unbounded fan-out that trips throttling or a ban ends up slower than the serial version.
+- Parallelize only independent work. Keep steps serial where one needs another's output, where order
+  matters, or where the source requires sequential access (cursor pagination, stateful sessions).
+- Keep output deterministic: collect concurrent results and order them explicitly, so tests and pages stay
   stable.
 
 ## Tolerate partial failure and support resumption
@@ -237,7 +238,7 @@ more operations in flight means more failure surface.
 
 If the creation captures data, persist each record's **raw payload and a
 reference to its source, durably** -- not just the extracted/processed fields
-(see the preserve-and-surface principle in CLAUDE.md). A pipeline that fetches,
+(see the preserve-and-surface principle in AGENTS.md). A pipeline that fetches,
 transforms, and discards the raw payload cannot satisfy that principle no matter
 what consumers do: persisting it is what lets a later change in processing
 re-derive new fields with no refetch, and what lets surfaces show the raw record
@@ -246,57 +247,40 @@ faithfully later.
 
 ## Bound disk growth -- evict what the creation no longer needs
 
-This is an always-applies invariant, not a creation-time step. It holds
-**whenever** the creation persists anything across runs -- when you first build
-it, and equally when an `update` teaches a previously stateless skill or service
-to fetch or store, or enlarges a store it already had. The persist-and-preserve
-contracts above tell you to write records durably and incrementally. Left
-unqualified, that turns any creation you run more than once -- a recurring
-pipeline, a service that polls on a schedule, anything that appends results, raw
-payloads, logs, caches, or fixtures -- into an ever-growing store that
-eventually fills the disk. The harden pass is where you give every growing store
-a **bounded retention policy**; a creation that can only accrete and never
-evicts is not hardened, no matter how well-tested its happy path is.
+This applies whenever the creation keeps anything across runs: when you first build it, and when an
+`update` makes a stateless skill or service start fetching or storing, or makes an existing store larger.
+The sections above tell you to write records durably and incrementally. Without a limit, anything that
+runs repeatedly (a recurring pipeline, a service that polls, anything that appends results, raw payloads,
+logs, caches or fixtures) grows until it fills the disk. Give every growing store a retention limit; a
+creation whose stores only grow does not pass hardening, however well tested.
 
-- **Find every store the creation writes to and decide, explicitly, what bounds
-  each one.** Persisted results, raw-payload archives, on-disk caches, log
-  files, generated fixtures, temp/scratch directories -- for each, pick a bound
-  (a max age, a max count, a max total size, or "keep only the latest N runs")
-  and enforce it as part of the creation's own flow, not as a chore you hope
-  someone remembers.
-- **Evict as part of the same run that writes.** Prune on write (or on a step
-  the run always reaches) so the bound holds without a separate cleanup process.
-  A retention policy that depends on out-of-band manual cleanup is not a bound.
-- **Reconcile eviction with preserve-and-surface, don't skip it.** These pull in
-  opposite directions on purpose: keep the raw source records long enough to
-  re-derive and surface them, but cap how far back that retention goes. When a
-  record ages out, evict the derived data and its raw payload together so a
-  surface never points at a source that has been pruned out from under it.
-- **Prefer existing rotation/TTL machinery over hand-rolled deletion.** Use log
-  rotation, a store's built-in TTL/size cap, or the repo's existing retention
-  helpers before writing your own prune loop -- and never delete by a fragile
-  heuristic (glob-and-`rm`) that could take out data the creation still needs.
-- **Cover the bound with a test.** Assert that after writing past the limit the
-  store holds only what the policy allows and that the oldest entries are gone --
-  the eviction path is exactly the kind of behavior that silently rots if
-  nothing exercises it.
+- **List every store the creation writes, and set a limit for each.** Persisted results, raw-payload
+  archives, on-disk caches, log files, generated fixtures, temp directories: for each, pick a maximum
+  age, count, total size, or "keep only the latest N runs", and enforce it in the creation's own code.
+- **Evict in the same run that writes.** Prune on write, or in a step every run reaches, so the limit
+  holds without a separate or manual cleanup.
+- **Evict raw records with their derived data.** Keep raw records long enough to re-derive and show
+  them, up to the limit. When a record ages out, delete its derived data and its raw payload together, so
+  no page links to a source that is gone.
+- **Use existing rotation or TTL support first:** log rotation, a store's built-in TTL or size cap, or
+  the repo's retention helpers, before your own prune loop. Never delete by a loose pattern (glob and
+  `rm`) that could remove data the creation still needs.
+- **Cover the limit with a test.** Write past the limit and assert the store holds only what the policy
+  allows, with the oldest entries gone.
 
 ## Keep rebuildable data out of the backup
 
-This is also an always-applies invariant. The workspace's hourly backup
-(`host-backup`, a restic snapshot of the whole home tree) takes time in
-proportion to how many files and directories it walks, not their size: a store
-of a few hundred thousand small files adds minutes to every backup, every hour,
-even when none of them changed. A byte cap from the section above does not help
-here -- 8 GB of extracted source trees is a million files. So whenever the
-creation keeps a store it can rebuild -- downloaded or extracted archives,
-clones, fetched pages, thumbnails, model or package caches -- mark it:
+This also applies to every creation. The workspace's hourly backup (`host-backup`, a restic snapshot of
+the whole home tree) takes time in proportion to how many files and directories it walks, whatever their
+size. A store of a few hundred thousand small files adds minutes to every hourly backup, even when nothing
+changed, and a size limit from the section above does not help: 8 GB of extracted source trees is a
+million files. So mark every store the creation can rebuild (downloaded or extracted archives, clones,
+fetched pages, thumbnails, model or package caches):
 
-- **Give the rebuildable store its own directory** (e.g. `DATA_DIR / "repos"`),
-  apart from records only the user could recreate.
-- **Create an empty `.nobackup` file in that directory wherever the code
-  creates it**, so the marker comes back whenever the directory does. The
-  backup then keeps only the marker:
+- **Give each rebuildable store its own directory** (for example `DATA_DIR / "repos"`), apart from
+  records only the user could recreate.
+- **Create an empty `.nobackup` file in that directory wherever the code creates it**, so the marker
+  returns whenever the directory does. The backup then keeps only the marker:
 
   ```python
   def ensure_rebuildable_store_dir(path: Path) -> Path:
@@ -305,17 +289,15 @@ clones, fetched pages, thumbnails, model or package caches -- mark it:
       return path
   ```
 
-  (A `CACHEDIR.TAG` does nothing here: the backup ignores it on purpose,
-  because uv writes one into every virtualenv and tool environment.)
-- **Rebuild on demand.** A missing or empty store is a cold cache to refill,
-  never an error: a restore deletes whatever the backup did not hold, so after
-  one the directory is gone or holds only the marker.
-- **Mark only what really can be rebuilt from its source.** Anything the user
-  made, or that could not be fetched again (a source that may disappear, past
-  results of a paid call), stays unmarked. When in doubt, leave it in the
-  backup.
-- **Cover it with a test**: the directory holds the marker once the code has
-  created it, and the code refills the store after it is deleted.
+  A `CACHEDIR.TAG` file has no effect here: the backup ignores it on purpose, because uv writes one into
+  every virtualenv and tool environment.
+- **Rebuild on demand.** Treat a missing or empty store as a cache to refill. After a restore the
+  directory is gone or holds only the marker, because a restore deletes whatever the backup did not hold.
+- **Mark only what can be rebuilt from its source.** Leave unmarked anything the user made, or anything
+  that could not be fetched again (a source that may disappear, results of a paid call). When unsure,
+  leave it in the backup.
+- **Cover it with a test**: the directory holds the marker once the code creates it, and the code
+  refills the store after it is deleted.
 
 ## Review gates
 
@@ -333,16 +315,14 @@ with the command in "The scope file" above, then:
 uv run --no-sync app-manifest select-tests --scope-file "$SCOPE_FILE"
 ```
 
-The change it selects for is what the pass is responsible for: the changed
-files some creation's footprint accounts for, and every one of the pass's own
-changes, inside a footprint or not: what your branch changed and the files of
-the change you are hardening ("The scope file" above). Other work that landed in the window (the
-scope file's `others`) selects nothing, except that the lead's work you merged
-in runs the suites of the pass's creations it reaches ("Catching up to a moved
-base"). The selector reads commits, like the
-scope file. It refuses to run while the working tree holds an uncommitted or
-untracked change, naming it, and refuses a scope file whose diff does not run
-to `HEAD`; regenerate the file and run it again.
+The selector picks tests for the pass's own changes and for every changed file a creation's
+footprint accounts for (both defined in "The scope file" above). Other work in the commit window
+(the commits between `DIFF_BASE` and the point where your branch forked from the lead's) selects
+nothing; the scope file lists it under `others`. The one exception is the lead's work you merge in when
+catching up, which runs the suites of the pass's creations it reaches ("Catching up to a moved base",
+step 4). The selector reads commits only. It refuses to run while the working tree has an
+uncommitted or untracked change, and names it. It also refuses a scope file whose diff stops short of
+`HEAD`. In either case, commit, regenerate the scope file, and run it again.
 
 It prints shell lines, each under a comment naming the changed paths behind
 it. Run every line, in order, each as its own command: they include the
