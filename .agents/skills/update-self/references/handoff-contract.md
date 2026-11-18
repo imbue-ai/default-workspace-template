@@ -104,6 +104,24 @@ other chats made during the pass do not. A tool that walks the first-parent
 line to list the workspace's own commits misses them; find them through the
 second parent of a catch-up merge instead.
 
+## What the what's-new listing assumes of each release
+
+`changelog-entries` runs from the target's copy against a base of any age. It
+counts a workspace as having seen exactly the release sections of its base's
+root `CHANGELOG.md`, or, for a base with none, `LAST_TAG_WITH_ENTRY_FILES`
+(`python/update_self_skill/update_whats_new.py`) and every section below it.
+So every `minds-v*` tag must be cut one of two ways:
+
+- **From a tree whose `CHANGELOG.md` has release sections**: the tag holds no
+  `changelog/<file>.md` entry file, and its newest section is its own, under an
+  empty `[Unreleased]`. An entry file or an `[Unreleased]` line left in the tag
+  reaches the next release's section as well, and a workspace on the tag is
+  shown it twice.
+- **From a tree with none** (a patch on a release from before the root
+  changelog): the tag becomes `LAST_TAG_WITH_ENTRY_FILES`, and its section goes
+  into the root `CHANGELOG.md` of the release that names it. Otherwise a
+  workspace on the tag is shown its own release again.
+
 ## Trust
 
 The handoff runs the target ref's `update_self.py` and follows its prose
