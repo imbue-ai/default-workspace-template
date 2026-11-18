@@ -39,7 +39,7 @@ def list_whats_new(
         encoding="utf-8",
         errors="replace",
     )
-    by_label = parse_sections(shown.stdout) if shown.returncode == 0 else {}
+    by_label = parse_sections(shown.stdout)
     releases = sorted(
         (
             (version, label)
@@ -57,7 +57,7 @@ def list_whats_new(
     elif floor is None:
         note = "The workspace's release is unknown, so only the newest is listed."
         labels = labels[:1]
-    elif releases and floor < releases[-1][0]:
+    elif floor < releases[-1][0]:
         note = f"Releases before {releases[-1][1]} are not summarized."
     if by_label.get(_UNRELEASED, "").partition("\n")[2].strip():
         labels.insert(0, _UNRELEASED)
