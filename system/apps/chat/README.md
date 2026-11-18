@@ -1121,7 +1121,7 @@ The root keeps the pages of the four chats shown most recently alive
 nothing. So that page still shows the conversation at once, each page keeps a
 snapshot of the bottom of its chat in the window's session storage
 (`frontend/src/models/transcriptCache.ts`) and draws it the moment the chat opens,
-until the transcript request answers and replaces it. A snapshot holds only what
+until the transcript request answers and replaces it, drawn where the transcript will put it so nothing moves when it lands (it is held at the bottom of the screen, and keeps the height of what the page drew under its last row until the chat's live state arrives). A snapshot holds only what
 fills the chat's screen with a quarter screen of margin, sized by the text the
 screen shows (measured from the rows on it), and a message longer than that is
 kept only from the part that shows, so no one message makes a snapshot large; one
