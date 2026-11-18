@@ -117,7 +117,12 @@ function finishButton(store: DesktopStore, request: string): m.Children {
   const isAsking = store.isAskingAgent(request);
   return m(
     Button,
-    { sm: true, extra: "update-notice-finish", disabled: isAsking, onclick: () => void store.askAgent(request, true) },
+    {
+      sm: true,
+      extra: "update-notice-finish",
+      disabled: isAsking,
+      onclick: () => void store.askAgentFromShell(request),
+    },
     isAsking ? ASKING_AN_AGENT_LABEL : "Ask an agent to finish it",
   );
 }

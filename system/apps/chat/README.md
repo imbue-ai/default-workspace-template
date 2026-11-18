@@ -441,13 +441,20 @@ create refuses a taken name by (`naming.py`'s `is_name_conflict`: canonical
 forms compared case-insensitively, so "docs chat" is found rather than refused),
 made with that title and label on the default account when there is none (a
 window's "Chat about this app"; the intake is held with a `hint` the root puts
-on the composer); or `chat` with a `chat_id`),
+on the composer); `app_ask`, an ask from a page of an app (a failure's "Ask an
+agent to fix this"): that same chat about the `app` takes the text as a message
+when it is an agent chat, holds it while its create is still running, and is
+created with it as its first message on the default account when there is none
+(under the app chat's title and label, never auto-named), and the `main_chat`
+rules apply instead when it is a room, is awaiting its first send or was left by
+a failed create, nothing is signed in, the text is a draft and there is no such
+chat, or the create is refused; or `chat` with a `chat_id`),
 and whether the text is sent or drafted (`is_draft`), plus the sender's
 `client_id` and `desktop_id` for the shell's activity log. The chat's manifest
-declares the desktop's `main`, `new`, `send`, `draft`, `lounge`, and `app-chat`
-launch paths as POSTs onto it with those fields preset, so the launcher's rows, the
-Getting Started tiles, the avatar dialog's "Design your own...", a click on a
-person in the tray, and `workspace-layout open chat --launch new --param
+declares the desktop's `main`, `new`, `send`, `draft`, `lounge`, `app-chat`, and
+`app-ask` launch paths as POSTs onto it with those fields preset, so the launcher's
+rows, the Getting Started tiles, the avatar dialog's "Design your own...", a click on
+a person in the tray, a page's ask, and `workspace-layout open chat --launch new --param
 message=...` all arrive here through the shell. The route
 answers the pure path the shell opens or navigates a window at: `/?chat=<id>` for
 a send or a create it finished on the server (a send is delivered in the
@@ -988,7 +995,7 @@ every chat page of the workspace shares for as long as any of them is open; the
 workspace stores and runs nothing for voice. A phone or tablet also runs the
 model on WebAssembly's quantized weights even where it has WebGPU: the
 full-precision ones take three times the memory, more than a phone's browser
-gives a page. While a dictation runs, the page holds a screen wake lock
+gives a page. While a dictation runs or the model's load is shown, the page holds a screen wake lock
 (`frontend/src/models/screenWakeLock.ts`), so a phone's screen does not dim and
 lock mid-sentence while the person speaks without touching it; the lock is best
 effort, asked for again when the page comes back into view, and nothing is said
@@ -999,18 +1006,76 @@ every inference job short, so dictation has no length limit. The words land at
 the caret, fitted to the sentence around them; the unfinished tail is rewritten
 in place, and only final words reach the saved draft. The box is read-only while
 listening; Enter or Send finishes the words first and then sends; Escape drops
-the words that are not yet final. The mic carries every state (a ring while the
-model downloads, a spinner while starting and stopping, the neutral pressed tint
-with its capsule filling to the input level while listening), and a problem is
-told in a notice over the composer. The library is `system/libs/workspace_voice/`
-(its README has the pieces); `frontend/src/views/DictationButton.ts` draws the
-mic and the notice, and `MessageInput.ts` drives the dictation and writes its
-words. The page's policy admits the model's WebAssembly (`'wasm-unsafe-eval'`)
-and Hugging Face's hosts (see `create_application`), the manifest declares
-`uses_microphone`, and the root's inner frames allow the microphone. For a
-side-by-side evaluation, a browser's `localStorage` may name another registered
-engine under `workspace-voice:engine` and insist on a device (`webgpu` or
-`wasm`) under `workspace-voice:device`.
+the words that are not yet final.
+
+The speech model's load and dictation are two things. The model is the page's:
+one managed load, kept in step across the workspace's pages by the worker that
+holds the model. Dictation is the composer's, needs the model loaded, and loads
+nothing itself. The mic shows one of six states, named by its
+`data-dictation-state`:
+
+- `load-needed`: the model is not loaded. The glyph sits faint with a warning
+  badge on its corner, and the tooltip says what a press has to do before it
+  dictates: the one-time download with its size, when the page's own Cache
+  Storage does not hold the files of the variant this device runs, or the load
+  of files already here. A press means the whole of it: it asks for the model,
+  shows its load, and goes on to dictate when the load ends.
+- `loading`: the load is shown. The mic eases into a `Loading voice model` label
+  with the download's progress as a bar under it. The box around it is left as
+  it is: the text box stays live, so a press or a tap in it sets where the
+  dictated words will land.
+- `ready`: the model is loaded, and a press dictates at once.
+- `starting`, `listening`, `stopping`: a dictation is running (a spinner while
+  starting and stopping, the neutral pressed tint with its capsule filling to the
+  input level while listening). Two short bell tones say when the microphone is
+  open.
+
+A shown load can be dismissed: a press on the label, Escape, the mic's shortcut,
+text entered into the box, or the page going out of view. A press or a tap in
+the text box alone dismisses nothing, and neither does a press right behind the
+one that asked for the load, which is that press landing twice. Dismissing calls
+off the dictation the load was to go on to, but not the load: it runs on with
+the mic `load-needed`, and a press shows it again from where it has got to.
+After a dismissal made on the label, with the shortcut or with Escape, the text
+box takes the focus on a desktop; a touch device's focus stays where it is, so
+no keyboard comes up unasked. A load that ends while shown goes straight on to
+dictation, with no second press; one that fails is told in a notice over the
+composer, whose Retry asks again. A load that ends after a dismissal turns the
+mic `ready` with no sound and no notice, and starts nothing; one that fails
+then says nothing. A model loaded from another page of the workspace turns this page's mic
+`ready` as well. Until a page has found out the model's state as its composer
+mounts (five seconds at most), the mic is drawn `ready`, so a loaded model never
+flashes the badge.
+
+A problem with the microphone or with words that could not be transcribed is
+told in the same notice. The library is `system/libs/workspace_voice/` (its
+README has the pieces); `frontend/src/views/DictationButton.ts` draws the mic
+and the notice, and `MessageInput.ts` follows the page's speech model, drives
+the dictation, and writes its words. The page's policy admits the model's
+WebAssembly (`'wasm-unsafe-eval'`) and Hugging Face's hosts (see
+`create_application`), the manifest declares `uses_microphone`, and the root's
+inner frames allow the microphone. For a side-by-side evaluation, a browser's
+`localStorage` may name another registered engine under
+`workspace-voice:engine` and insist on a device (`webgpu` or `wasm`) under
+`workspace-voice:device`.
+
+Speech recognition mishears, so a message sent from a draft that dictation wrote
+into tells the model so: it ends with a dictation note, a short paragraph in a
+`<dictation-note>` tag pair set off from the words by a blank line (and ahead of
+the attachment block, which has to end the message). The composer keeps one mark
+per chat's draft, in `localStorage` under `message-dictated:<chat id>` beside
+the draft itself: set when final words land, kept through edits and partial
+deletes, and dropped once the box is emptied or the message is sent. A message
+put back in the composer (a failed send, a draft the switch dialog handed back)
+is marked again, and queued text returned to it comes back without its notes and
+marks the draft instead. A slash command or bash-mode input is sent without the
+note, since a harness reads one only as the whole message. The note is for the
+model alone: the agent receives it and the transcript keeps it, while every
+bubble that shows a person's message, the tray's notification bubbles, the
+notification the owner gets for a mention, and the chat-naming prompt take it
+out by its tags.
+`frontend/src/models/dictationNote.ts` holds the note and the marks, and
+`imbue/chat/dictation_note.py` the backend's half.
 
 ## Development
 

@@ -16,7 +16,9 @@ import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Pres
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import { FakeTourApi } from "../testing/fakeTour";
 import {
+  appAskLaunchPathRecord,
   appRecord,
+  chatLikeAppRecord,
   desktopRecord,
   launchPathRecord,
   placementRecord,
@@ -1382,6 +1384,41 @@ describe("the switch to the phone layout", () => {
     } finally {
       createElement.mockRestore();
     }
+  });
+});
+
+describe("a stopped app's window", () => {
+  it("asks an agent to start the app in the chat about it, beside the window it was pressed in, on the desktop and the phone", async () => {
+    offerApps(api, socket, [
+      chatLikeAppRecord("chat", {
+        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appAskLaunchPathRecord()],
+      }),
+      appRecord("docs", { is_running: false, program: "" }),
+    ]);
+    m.redraw.sync();
+    const pressAsk = async (placeholder: string): Promise<void> => {
+      const ask = Array.from(document.querySelectorAll<HTMLButtonElement>(`${placeholder} button`)).find(
+        (button) => button.textContent === "Ask an agent to start it",
+      );
+      ask?.click();
+      await settle();
+      m.redraw.sync();
+    };
+    const ask = `launch:home:chat:app-ask:${JSON.stringify({
+      app: "docs",
+      app_display_name: "Docs",
+      message: "Docs (docs) isn't running in this workspace. Please start it again.",
+    })}:show:beside:win-1`;
+
+    await pressAsk("[data-stopped-app]");
+    expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([ask]);
+
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+    m.redraw.sync();
+    store.showOnPhone({ kind: "window", windowId: "win-1" });
+    m.redraw.sync();
+    await pressAsk("[data-phone-page-host] [data-stopped-app]");
+    expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([ask, `${ask}:minimized`]);
   });
 });
 

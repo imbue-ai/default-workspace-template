@@ -160,14 +160,17 @@ export interface LaunchPath {
   /** The param the shell fills with a mention of the person whose tray entry was clicked (the multiplayer spec,
    *  section 7.5); never a launcher row; null for none. */
   readonly mention_param: string | null;
-  /** The params the shell fills with the name and display name of the app whose window's "Chat about this app"
-   *  button was pressed (the multiplayer spec, section 9.2); never a launcher row; null for none. */
+  /** The params the shell fills with the name and display name of an app: the one whose window's "Chat about this
+   *  app" button was pressed (the multiplayer spec, section 9.2), or, for a path that names a ``text`` param too,
+   *  the one a page asked an agent about; never a launcher row; null for none. */
   readonly app_params: AppParams | null;
 }
 
 export interface AppParams {
   readonly name: string;
   readonly display_name: string;
+  /** The param that takes the text of an ask about the app; null for a path that takes none (the button's). */
+  readonly text: string | null;
 }
 
 export interface DefaultShortcut {
@@ -601,6 +604,7 @@ function parseAppParams(raw: unknown): AppParams | null {
   return {
     name: asString(record.name, "launch_path.app_params.name"),
     display_name: asString(record.display_name, "launch_path.app_params.display_name"),
+    text: asOptionalString(record.text, "launch_path.app_params.text"),
   };
 }
 

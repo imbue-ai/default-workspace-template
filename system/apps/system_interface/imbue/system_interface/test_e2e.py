@@ -119,6 +119,7 @@ _PINNED_NEW_LAUNCH_ID = "new"
 _PINNED_SEND_LAUNCH_ID = "send"
 _PINNED_DRAFT_LAUNCH_ID = "draft"
 _PINNED_APP_CHAT_LAUNCH_ID = "app-chat"
+_PINNED_APP_ASK_LAUNCH_ID = "app-ask"
 _PINNED_APP_PARAM = "app"
 _PINNED_APP_DISPLAY_NAME_PARAM = "app_display_name"
 _PINNED_TEXT_PARAM = "message"
@@ -229,20 +230,27 @@ def _running_e2e_server(
                     pinned_served.http_url,
                     display_name=_PINNED_APP_DISPLAY_NAME,
                     pin=(_PINNED_HOME_PATH, *pin),
-                    # The pin's home path is a plain page, as the chat's root is; the other four are POST launch
-                    # paths as the chat's, two taking typed text, one a draft, and one about an app.
+                    # The pin's home path is a plain page, as the chat's root is; the other five are POST launch
+                    # paths as the chat's, two taking typed text, one a draft, one about an app, and one an ask
+                    # about an app.
                     launch_paths=(
                         ("root", _PINNED_APP_DISPLAY_NAME, _PINNED_HOME_PATH),
                         (_PINNED_NEW_LAUNCH_ID, f"New {_PINNED_APP_DISPLAY_NAME}", "/new"),
                         (_PINNED_SEND_LAUNCH_ID, f"Send to {_PINNED_APP_DISPLAY_NAME.lower()}...", "/send"),
                         (_PINNED_DRAFT_LAUNCH_ID, f"Draft into {_PINNED_APP_DISPLAY_NAME.lower()}", "/draft"),
                         (_PINNED_APP_CHAT_LAUNCH_ID, "Chat about this app", f"/{_PINNED_APP_CHAT_LAUNCH_ID}"),
+                        (_PINNED_APP_ASK_LAUNCH_ID, "Ask about this app", f"/{_PINNED_APP_ASK_LAUNCH_ID}"),
                     ),
                     launch_params={
                         _PINNED_NEW_LAUNCH_ID: [_PINNED_TEXT_PARAM],
                         _PINNED_SEND_LAUNCH_ID: [_PINNED_TEXT_PARAM],
                         _PINNED_DRAFT_LAUNCH_ID: [_PINNED_TEXT_PARAM],
                         _PINNED_APP_CHAT_LAUNCH_ID: [_PINNED_APP_PARAM, _PINNED_APP_DISPLAY_NAME_PARAM],
+                        _PINNED_APP_ASK_LAUNCH_ID: [
+                            _PINNED_APP_PARAM,
+                            _PINNED_APP_DISPLAY_NAME_PARAM,
+                            _PINNED_TEXT_PARAM,
+                        ],
                     },
                     launch_text_params={
                         _PINNED_NEW_LAUNCH_ID: _PINNED_TEXT_PARAM,
@@ -250,13 +258,16 @@ def _running_e2e_server(
                     },
                     launch_draft_params={_PINNED_DRAFT_LAUNCH_ID: _PINNED_TEXT_PARAM},
                     launch_app_params={
-                        _PINNED_APP_CHAT_LAUNCH_ID: (_PINNED_APP_PARAM, _PINNED_APP_DISPLAY_NAME_PARAM)
+                        _PINNED_APP_CHAT_LAUNCH_ID: (_PINNED_APP_PARAM, _PINNED_APP_DISPLAY_NAME_PARAM),
+                        _PINNED_APP_ASK_LAUNCH_ID: (_PINNED_APP_PARAM, _PINNED_APP_DISPLAY_NAME_PARAM),
                     },
+                    launch_app_text_params={_PINNED_APP_ASK_LAUNCH_ID: _PINNED_TEXT_PARAM},
                     launch_methods={
                         _PINNED_NEW_LAUNCH_ID: "POST",
                         _PINNED_SEND_LAUNCH_ID: "POST",
                         _PINNED_DRAFT_LAUNCH_ID: "POST",
                         _PINNED_APP_CHAT_LAUNCH_ID: "POST",
+                        _PINNED_APP_ASK_LAUNCH_ID: "POST",
                     },
                 )
             )
@@ -329,7 +340,8 @@ def themed_e2e_server(tmp_path: Path, request: pytest.FixtureRequest) -> Generat
 # A page for a stub window's frame, served by the stub app itself on its loopback origin (a page a Playwright route
 # fulfils has no network origin, and Chromium's local-network policy then refuses it the shell's contract module).
 # It imports the shell's served contract module and connects: it reports its location (path and a title derived
-# from it) once greeted, and exposes the verbs the tests drive (navigate in place, ask for an open). A navigable
+# from it) once greeted, and exposes the verbs the tests drive (navigate in place, ask for an open, ask an agent
+# about its app). A navigable
 # page declares the capability and shows a pushed path in place; a plain one declares nothing, so the shell reloads
 # its frame to move it. Its ``#held`` input is state no reload survives, and it records each shown and hidden it is
 # told. It installs the served element context menu as a scaffolded app's page does, so a right-click in the frame
@@ -373,6 +385,7 @@ window.__navigateTo = (path) => {
   connection.location(path, titleOf(path));
 };
 window.__openPath = (path, ifPresent) => connection.openPath(path, ifPresent);
+window.__askAgent = (text) => connection.askAgent(text, { showsOutcome: true });
 </script></body></html>"""
 
 # The cookie a browser context sets on a stub origin to be served the plain (non-navigable) page.
@@ -2230,6 +2243,43 @@ def test_the_title_bars_balloon_opens_the_chat_about_the_app_beside_its_window(t
         assert (placements[pinned["id"]]["state"], placements[window_id]["state"]) == ("SNAPPED_RIGHT", "SNAPPED_LEFT")
         assert placements[pinned["id"]]["is_minimized"] is False
         expect(chat.locator('[data-window-control="app-chat"]')).to_be_visible()
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_pages_ask_reaches_the_ask_launch_path_about_its_app_and_opens_the_answer_beside_its_window(
+    tmp_path: Path, page: Page
+) -> None:
+    """A page's ``shell:ask-agent`` (a failure's "Ask an agent to fix this"): the shell runs the pinned app's launch
+    path that takes an ask's text, with the asking window's app and the text, never the one the balloon runs; the
+    page is told the ask went through, this client's pinned window is pointed at the page the launch answers, and
+    the two windows are snapped side by side, the pinned one on the right and on top."""
+    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar")) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        client_id = _client_id(page)
+        window_id = _open_via_shortcut(page, server)
+        window = _window(page, window_id)
+
+        outcome = _page_frame(page, window_id).evaluate("() => window.__askAgent('The preview is blank. Fix it.')")
+
+        assert outcome == {"isOpened": True}
+        asked = {
+            _PINNED_APP_PARAM: _STUB_APP_NAME,
+            _PINNED_APP_DISPLAY_NAME_PARAM: _STUB_APP_DISPLAY_NAME,
+            _PINNED_TEXT_PARAM: "The preview is blank. Fix it.",
+        }
+        (posted,) = _posted_launches(server.pinned_url)
+        assert posted["path"] == f"/{_PINNED_APP_ASK_LAUNCH_ID}"
+        assert posted["body"] == {**asked, "client_id": client_id, "desktop_id": _HOME_DESKTOP_ID}
+        _wait_for_own_window_path(
+            server.base_url, client_id, pinned["id"], _launched_page_path(_PINNED_APP_ASK_LAUNCH_ID, asked)
+        )
+        chat = _window(page, pinned["id"])
+        expect(chat).to_be_visible(timeout=15000)
+        expect(chat).to_have_attribute("data-window-state", "SNAPPED_RIGHT")
+        expect(chat).to_have_attribute("data-focused", "true")
+        expect(window).to_have_attribute("data-window-state", "SNAPPED_LEFT")
+        expect(page.locator("[data-toast]")).to_have_count(0)
 
 
 def _pinned_window(base_url: str, desktop_id: str = _HOME_DESKTOP_ID) -> dict[str, Any]:

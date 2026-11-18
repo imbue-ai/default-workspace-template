@@ -14,6 +14,8 @@ import { activeFocusedWindowId, activePlacements, barEntries, isLayoutDirty } fr
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
 import {
+  appAskLaunchPathRecord,
+  appChatLaunchPathRecord,
   appRecord,
   chatLikeAppRecord,
   clientRecord,
@@ -30,7 +32,7 @@ import {
 } from "../testing/records";
 import { refusedWith } from "../testing/failures";
 import type { FailureNotice } from "../model/failures";
-import type { BubbleWire, GridCell } from "../model/records";
+import type { AppRecord, BubbleWire, GridCell, LaunchPath } from "../model/records";
 import { STANDARD_CHROME, type ThemeChrome } from "../model/themes";
 import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
 import {
@@ -725,44 +727,88 @@ describe("opening", () => {
     );
   });
 
-  it("shell:start-new-with-text runs the secondary text action, else the primary, and answers once the window opened", async () => {
+  /** A chat-like app that declares both launch paths about an app, a Docs app, and a hidden monitor, with the
+   *  chat's pinned window, a Docs window, and a monitor window on the home desktop; only the Docs window placed. */
+  function offerAppsWithAnAskPath(): void {
+    const chat = chatLikeAppRecord("chat", {
+      launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord(), appAskLaunchPathRecord()],
+    });
+    offerApps(api, socket, [
+      chat,
+      appRecord("docs", { display_name: "Docs" }),
+      appRecord("monitor", { internal: true }),
+    ]);
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [
+          windowRecord("win-chat", "chat", "/", { is_pinned: true, scope: "independent" }),
+          windowRecord("win-docs", "docs", "/?doc=1"),
+          windowRecord("win-monitor", "monitor", "/"),
+        ],
+      }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-docs")] });
+    api.postLaunchAnswer = "/?chat=agent-docs";
+  }
+
+  const launchCalls = (): string[] => api.calls.filter((call) => call.startsWith("launch"));
+
+  it("shell:ask-agent from an app's window sends the ask to the chat about that app, shown beside the window", async () => {
     const store = await startedStore();
-    const notes = (launchIds: readonly string[]): ReturnType<typeof appRecord> =>
-      appRecord("notes", {
-        launch_paths: launchIds.map((id) =>
-          launchPathRecord({ id, path: `/${id}`, params: ["message"], text_param: "message" }),
-        ),
-      });
-    offerApps(api, socket, [notes(["main", "new", "send"])]);
-    expect(await store.startNewWithText("Fix this.")).toEqual({ isOpened: true });
-    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
-      `launch:home:notes:new:{"message":"Fix this."}:new`,
-    );
-    expect(store.getState().desktops[0].windows.some((window) => window.app === "notes")).toBe(true);
-    offerApps(api, socket, [notes(["main"])]);
-    expect(await store.startNewWithText("Fix this.")).toEqual({ isOpened: true });
-    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
-      `launch:home:notes:main:{"message":"Fix this."}:new`,
-    );
+    offerAppsWithAnAskPath();
+
+    expect(await store.askAgent("Fix this.", "win-docs")).toEqual({ isOpened: true });
+
+    expect(launchCalls()).toEqual([
+      'launch:home:chat:app-ask:{"app":"docs","app_display_name":"Docs","message":"Fix this."}:show:beside:win-docs',
+    ]);
+    await settle();
+    // The chat's window, never placed here, takes the right half beside the asking window, on top, at the chat
+    // the launch answered.
+    expect(store.getState().layout.placements.map((placement) => [placement.window_id, placement.state])).toEqual([
+      ["win-docs", "SNAPPED_LEFT"],
+      ["win-chat", "SNAPPED_RIGHT"],
+    ]);
+    expect(store.getState().layout.window_paths["win-chat"]?.path).toBe("/?chat=agent-docs");
+    expect(notices()).toEqual([]);
   });
 
-  it("shell:start-new-with-text answers a failure for the page to show, and leaves no toast of its own", async () => {
+  it("shell:ask-agent runs the primary text action with no window, from an internal app, or with no ask launch path", async () => {
     const store = await startedStore();
-    expect(await store.startNewWithText("Fix this.")).toEqual({
+    offerAppsWithAnAskPath();
+    const primary = 'launch:home:chat:new:{"message":"Fix this."}:window:win-chat';
+
+    // The shell's own ask, an ask whose window closed meanwhile, and an ask from an app nothing is said about.
+    for (const windowId of [null, "win-gone", "win-monitor"]) {
+      expect(await store.askAgent("Fix this.", windowId)).toEqual({ isOpened: true });
+    }
+    expect(launchCalls()).toEqual([primary, primary, primary]);
+
+    // A machine whose apps declare the button's launch path alone has nowhere to send an ask about an app.
+    offerApps(api, socket, [
+      chatLikeAppRecord("chat", {
+        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord()],
+      }),
+      appRecord("docs", { display_name: "Docs" }),
+    ]);
+    expect(await store.askAgent("Fix this.", "win-docs")).toEqual({ isOpened: true });
+    expect(launchCalls()).toEqual([primary, primary, primary, primary]);
+  });
+
+  it("shell:ask-agent answers a failure for the page to show, and leaves no toast of its own", async () => {
+    const store = await startedStore();
+    expect(await store.askAgent("Fix this.", null)).toEqual({
       isOpened: false,
       failure: { message: "No app in this workspace can start a chat.", details: null, isReportable: false },
     });
-    offerApps(api, socket, [
-      appRecord("notes", {
-        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
-      }),
-    ]);
-    api.refusal = "notes refused the launch: no account is signed in";
-    expect(await store.startNewWithText("Fix this.")).toEqual({
+    offerAppsWithAnAskPath();
+    api.refusal = "chat refused the launch: An ask about an app names the app and its display name";
+    expect(await store.askAgent("Fix this.", "win-docs")).toEqual({
       isOpened: false,
       failure: {
-        message: "Notes couldn't open that.",
-        details: "HTTP 400\nnotes refused the launch: no account is signed in",
+        message: "Chat couldn't open that.",
+        details: "HTTP 400\nchat refused the launch: An ask about an app names the app and its display name",
         isReportable: false,
       },
     });
@@ -1209,65 +1255,127 @@ describe("windows", () => {
   });
 });
 
+/** A chat-like app that also declares the launch path an ask about an app runs. */
+function chatWithAskPathRecord(name: string): AppRecord {
+  return chatLikeAppRecord(name, {
+    launch_paths: [...chatLikeAppRecord(name).launch_paths, appChatLaunchPathRecord(), appAskLaunchPathRecord()],
+  });
+}
+
+const START_TERMINAL_REQUEST = "Terminal (terminal) isn't running in this workspace. Please start it again.";
+/** What the ask launch path is run with for the stopped Terminal. */
+const START_TERMINAL_ASK = JSON.stringify({
+  app: "terminal",
+  app_display_name: "Terminal",
+  message: START_TERMINAL_REQUEST,
+});
+
 describe("a stopped app's window", () => {
-  it("offers an agent to start an app the workspace does not start itself, through the app agents are asked in", async () => {
-    const chat = appRecord("chat", {
-      display_name: "Chat",
-      launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
-    });
-    const terminal = appRecord("terminal", { display_name: "Terminal", is_running: false, program: "" });
+  const terminal = appRecord("terminal", { display_name: "Terminal", is_running: false, program: "" });
+
+  function launchCalls(): string[] {
+    return api.calls.filter((call) => call.startsWith("launch"));
+  }
+
+  it("offers an agent to start an app the workspace does not start itself, in the chat about that app beside its window", async () => {
+    const chat = chatWithAskPathRecord("chat");
     api.apps = [chat, terminal];
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [
+          windowRecord("win-chat", "chat", "/", { is_pinned: true, scope: "independent" }),
+          windowRecord("win-terminal", "terminal", "/"),
+        ],
+      }),
+    ];
+    api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-terminal")] });
+    api.postLaunchAnswer = "/?chat=agent-terminal";
     const store = await startedStore();
 
-    const stopped = store.stoppedNotice(terminal);
+    const stopped = store.stoppedNotice(terminal, "win-terminal");
     expect(stopped.message).toBe("Terminal isn't running.");
     expect(stopped.actions.map((action) => action.label)).toEqual(["Ask an agent to start it"]);
     stopped.actions[0].run();
     await settle();
-    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
-      `launch:home:chat:new:${JSON.stringify({ message: "Terminal (terminal) isn't running in this workspace. Please start it again." })}:new`,
-    );
+    expect(launchCalls()).toEqual([`launch:home:chat:app-ask:${START_TERMINAL_ASK}:show:beside:win-terminal`]);
+    // The chat about the app is laid out beside the stopped window, as "Chat about this app" lays it out.
+    expect(store.getState().layout.placements.map((placement) => [placement.window_id, placement.state])).toEqual([
+      ["win-terminal", "SNAPPED_LEFT"],
+      ["win-chat", "SNAPPED_RIGHT"],
+    ]);
+    expect(store.getState().layout.window_paths["win-chat"]?.path).toBe("/?chat=agent-terminal");
 
     // Chat itself, stopped, has no agent to ask: it can only be reported (the window offers Report a bug as it
     // draws, where the embedder opens one).
-    expect(store.stoppedNotice({ ...chat, is_running: false })).toMatchObject({
+    expect(store.stoppedNotice({ ...chat, is_running: false }, "win-chat")).toMatchObject({
       message: "Chat is not running right now. If this persists, report a bug.",
       actions: [],
       isReportable: true,
     });
   });
 
-  it("judges which app agents are asked through by the new-chat row the agent button runs, not the primary one", async () => {
-    const textApp = (name: string, rank: number) =>
+  it("asks in the main chat on a machine where no app takes an ask about an app", async () => {
+    api.apps = [chatLikeAppRecord("chat"), terminal];
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-terminal", "terminal", "/")] })];
+    const store = await startedStore();
+
+    store.stoppedNotice(terminal, "win-terminal").actions[0].run();
+    await settle();
+    expect(launchCalls()).toEqual([`launch:home:chat:new:${JSON.stringify({ message: START_TERMINAL_REQUEST })}:new`]);
+  });
+
+  it("judges which app agents are asked through by the launch the ask would run, not the primary text row", async () => {
+    const textApp = (name: string, rank: number, extra: LaunchPath[] = []) =>
       appRecord(name, {
         display_name: name.toUpperCase(),
         launcher_rank: rank,
-        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+        launch_paths: [
+          launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" }),
+          ...extra,
+        ],
       });
     const primary = textApp("alpha", 1);
-    const secondary = textApp("beta", 2);
-    api.apps = [primary, secondary];
+    const asked = textApp("beta", 2, [appAskLaunchPathRecord()]);
+    api.apps = [primary, asked];
     const store = await startedStore();
 
-    // The app new chats go through, stopped, can only be reported.
-    expect(store.stoppedNotice({ ...secondary, is_running: false })).toMatchObject({
+    // The app an ask about an app goes through, stopped, can only be reported.
+    expect(store.stoppedNotice({ ...asked, is_running: false }, null)).toMatchObject({
       actions: [],
       isReportable: true,
     });
-    // The primary app, stopped, is asked about through the secondary.
-    const stopped = store.stoppedNotice({ ...primary, is_running: false });
+    // The app the main chat is in, stopped, is asked about through the other.
+    const stopped = store.stoppedNotice({ ...primary, is_running: false }, null);
     expect(stopped.actions.map((action) => action.label)).toEqual(["Ask an agent to start it"]);
     stopped.actions[0].run();
     await settle();
-    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toMatch(/^launch:home:beta:new:/);
+    expect(launchCalls()).toEqual([
+      `launch:home:beta:app-ask:${JSON.stringify({
+        app: "alpha",
+        app_display_name: "ALPHA",
+        message: "ALPHA (alpha) isn't running in this workspace. Please start it again.",
+      })}:show`,
+    ]);
+  });
+
+  it("asks about an internal app in the main chat", async () => {
+    const chat = chatWithAskPathRecord("chat");
+    const monitor = appRecord("monitor", { display_name: "Monitor", internal: true, is_running: false });
+    api.apps = [chat, monitor];
+    const store = await startedStore();
+
+    store.stoppedNotice(monitor, null).actions[0].run();
+    await settle();
+    expect(launchCalls()).toEqual([
+      `launch:home:chat:new:${JSON.stringify({
+        message: "Monitor (monitor) isn't running in this workspace. Please start it again.",
+      })}:new`,
+    ]);
   });
 });
 
 describe("a launch into an app that is not running", () => {
-  const chat = appRecord("chat", {
-    display_name: "Chat",
-    launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
-  });
+  const chat = chatWithAskPathRecord("chat");
   const terminal = appRecord("terminal", {
     display_name: "Terminal",
     program: "",
@@ -1296,7 +1404,7 @@ describe("a launch into an app that is not running", () => {
     return store;
   }
 
-  it("says what the app's stopped window says, with the agent asked to start it", async () => {
+  it("says what the app's stopped window says, with the agent asked to start it in the chat about the app", async () => {
     const store = await storeWithTerminalStoppedNote();
 
     expect(toastsShown(store)).toEqual([
@@ -1304,8 +1412,9 @@ describe("a launch into an app that is not running", () => {
     ]);
     store.toasts.current()[0].actions[0].run();
     await settle();
+    // The toast stands for no window, so the chat about the app goes wherever the show rule puts it.
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
-      `launch:home:chat:new:${JSON.stringify({ message: "Terminal (terminal) isn't running in this workspace. Please start it again." })}:new`,
+      `launch:home:chat:app-ask:${START_TERMINAL_ASK}:show`,
     );
   });
 
@@ -1374,11 +1483,13 @@ describe("a launch into an app that is not running", () => {
     store.toasts.current()[0].actions[1].run();
     await settle();
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
-      `launch:home:chat:new:${JSON.stringify({
+      `launch:home:chat:app-ask:${JSON.stringify({
+        app: "docs",
+        app_display_name: "Docs",
         message:
           "Docs couldn't start in this workspace. Its program's log may say why (supervisorctl tail docs stderr). " +
           "Please find out why and get it running again.",
-      })}:new`,
+      })}:show`,
     );
     store.toasts.current()[2].actions[0].run();
     await settle();
@@ -4236,18 +4347,7 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
   it("opens the chat about a window's app beside it through the app-chat launch path, and tells the user when there is none", async () => {
     const store = await startedStore();
     const chat = chatLikeAppRecord("chat", {
-      launch_paths: [
-        ...chatLikeAppRecord("chat").launch_paths,
-        launchPathRecord({
-          id: "app-chat",
-          label: "Chat about this app",
-          path: "/api/chats/intake",
-          method: "POST",
-          params: ["app", "app_display_name"],
-          presets: { target: "app_chat" },
-          app_params: { name: "app", display_name: "app_display_name" },
-        }),
-      ],
+      launch_paths: [...chatLikeAppRecord("chat").launch_paths, appChatLaunchPathRecord()],
     });
     offerApps(api, socket, [chat, appRecord("docs", { display_name: "Docs" })]);
     api.desktops = [
@@ -4616,11 +4716,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     ]);
     await store.switchDesktop("alice");
 
-    expect(await store.startNewWithText("Please look at this.")).toEqual({
-      isOpened: false,
-      failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
-    });
-    await store.askAgent("Please look at this.", true);
+    await store.askAgentFromShell("Please look at this.");
     expect(notices()).toEqual([STOP_VIEWING_FIRST_NOTICE]);
     expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([]);
   });
@@ -4630,7 +4726,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     socket.deliver().onAppsUpdated([]);
     await store.switchDesktop("alice");
 
-    await store.askAgent("Please look at this.", true);
+    await store.askAgentFromShell("Please look at this.");
     expect(notices()).toEqual([STOP_VIEWING_FIRST_NOTICE]);
   });
 
@@ -4821,15 +4917,28 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   });
 
   it("answers a page's Ask an agent while viewing with the refusal for the page to show, launching and toasting nothing", async () => {
-    api.apps = [chatLikeAppRecord("chat")];
+    api.apps = [
+      chatLikeAppRecord("chat", {
+        launch_paths: [...chatLikeAppRecord("chat").launch_paths, appAskLaunchPathRecord()],
+      }),
+      appRecord("docs"),
+    ];
     const store = await viewerStore();
+    api.desktops = api.desktops.map((desktop) =>
+      desktop.id === "alice" ? { ...desktop, windows: [windowRecord("win-a", "docs", "/a")] } : desktop,
+    );
+    socket.deliver().onDesktopsUpdated(api.desktops);
     await store.switchDesktop("alice");
     const callsBefore = api.calls.length;
 
-    expect(await store.startNewWithText("Fix this.")).toEqual({
-      isOpened: false,
-      failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
-    });
+    // An ask from a window of the viewed desktop, which would run the ask launch path, and one with no window,
+    // which would run the primary text action.
+    for (const windowId of ["win-a", null]) {
+      expect(await store.askAgent("Fix this.", windowId)).toEqual({
+        isOpened: false,
+        failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
+      });
+    }
     expect(api.calls.slice(callsBefore)).toEqual([]);
     expect(notices()).toEqual([]);
   });
