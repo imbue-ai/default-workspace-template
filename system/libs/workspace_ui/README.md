@@ -78,16 +78,21 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   handshake. The shell opens the report directly (`src/report-bug.ts`), with
   the sentence and details attached as the report's `errorDetails`, capped at
   the embed contract's `MAX_HELP_ERROR_DETAILS_LENGTH`.
-- Toasts (`src/models/toasts.ts`, drawn by `src/components/toasts.ts`): a
-  lasting toast says whether its message asks for a bug report
-  (`isReportable`), and `Toasts` draws "Report a bug" on it while the page
-  passes `onReportBug`, decided at each draw, so a toast shown before the page
-  learned it can open a bug report gains the button once it does. Pressing a
-  button dismisses its toast, except one marked `keepsToast` (a button that
-  hands the failure on, "Ask an agent to ...", and "Report a bug"), after
-  which the toast's other buttons still apply. An action with `pending`
-  (`{isPending, label}`) is drawn disabled under `label` while `isPending()`
-  holds, read at each draw. A plain toast may carry
+- Toasts (`src/models/toasts.ts`, drawn by `src/components/toasts.ts`):
+  the caller of `ToastQueue.show` says which kind it shows. A plain note goes
+  after five seconds; a lasting one (`isLasting: true`) stays until
+  dismissed, with a close control, its details behind "See details" and its
+  buttons ("Try again", ...), at most three on screen. A toast that says the
+  same as one already up (message and details) replaces it. A lasting toast
+  says whether its message asks for a bug report (`isReportable`), and
+  `Toasts` draws "Report a bug" on it while the page passes `onReportBug`,
+  decided at each draw, so a toast shown before the page learned it can open
+  a bug report gains the button once it does. Pressing a button dismisses
+  its toast, except one marked `keepsToast` (a button that hands the failure
+  on, "Ask an agent to ...", and "Report a bug"), after which the toast's
+  other buttons still apply. An action with `pending` (`{isPending, label}`)
+  is drawn disabled under `label` while `isPending()` holds, read at each
+  draw. A plain toast may carry
   details too: it then takes presses, shows "See details" and a close
   button, and stays once its details are opened (`ToastQueue.hold`, which
   `Toasts` calls through `onHold`).

@@ -1,4 +1,4 @@
-Failure toasts on the workspace desktop can now be read and acted on.
+Failure toasts on the workspace desktop say what failed in plain words, keep the details behind "See details", and stay up when nothing on screen would retry them.
 
 - Each failure says whether its toast stays: a failure whose retry is the control just pressed (closing a window, moving or removing a shortcut, a link) leaves a plain note that goes after five seconds, with its status and the server's own text behind "See details" (opening them keeps the note up); a launch, a failed startup read, a quit and a page's own move leave a toast that stays until dismissed, with a close control and a collapsed "See details" holding the status and the server's own text. A failure whose sentence asks for a bug report always stays, wherever it happened. The same toast twice replaces the first, and at most three lasting toasts stay on screen.
 
