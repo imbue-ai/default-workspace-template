@@ -929,8 +929,9 @@ to the flow. Before anything is kept the model is asked for one tool call, since
 a model that prints its tool calls as text runs nothing and still reports a
 finished turn, and Ollama is asked what context it loaded the model with, since
 it keeps its own (4,096 tokens unless configured) whatever pi is told; a context
-under 16,384 tokens, less than the workspace's own instructions leave room in,
-fails the sign-in with the setting that raises it. The account then holds pi's
+under 32,768 tokens fails the sign-in with the setting that raises it, since a
+new chat's first request alone measured about 24,000 (the workspace's
+instructions, its skills and pi's tools). The account then holds pi's
 custom provider in `models.json` (id `local-model`, one model, the smaller of
 the context asked for and the one loaded) beside the server's key in
 `auth.json`, and an agent's pi config dir links both. The model bar matches a

@@ -49,7 +49,7 @@ import {
   addOutgoing,
   clearOutgoing,
   dropOutgoing,
-  dropOutgoingNoTurnWillRetire,
+  settleOutgoing,
   getOutgoingMessages,
 } from "../models/OutgoingMessages";
 import {
@@ -1499,7 +1499,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             } else {
               await launchChat(chatId, choice.id, "", "agent");
               priorTurnIds = sentUserTurnIds(chatId);
-              dropOutgoingNoTurnWillRetire(chatId, outgoingId, await sendMessage(chatId, finalText, messageId));
+              settleOutgoing(chatId, outgoingId, await sendMessage(chatId, finalText, messageId));
               refocusAfterSend();
               return;
             }
@@ -1530,7 +1530,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // The send resolved: the message is now real (committed, queued, or held for the
           // agent the chat is switching to), so its "Sending…" bubble is removed by the arriving
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).
-          dropOutgoingNoTurnWillRetire(chatId, outgoingId, status);
+          settleOutgoing(chatId, outgoingId, status);
         } catch (err) {
           // The backend confirms delivery before resolving, so a rejection means the message was
           // NOT accepted. A /compact the server declined to run gets the declined-command notice
@@ -1999,7 +1999,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           refuseSendToFailedChat(recovery.chatId);
           priorTurnIds = sentUserTurnIds(recovery.chatId);
           const status = await sendMessage(recovery.chatId, recovery.sentText, messageId, true);
-          dropOutgoingNoTurnWillRetire(recovery.chatId, outgoingId, status);
+          settleOutgoing(recovery.chatId, outgoingId, status);
           // Landed, so take the restored copy back out of the composer.
           clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);
           stopWatchingUnconfirmedTurn(recovery);

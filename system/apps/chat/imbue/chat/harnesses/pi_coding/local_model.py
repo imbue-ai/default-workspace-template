@@ -10,7 +10,7 @@ pi 0.87.1, are checked here before an account is committed:
 * a model that lists tool support may still print its tool calls as text, which pi runs none of
   and reports as a finished turn;
 * Ollama loads a model with its own context length (4096 unless configured), whatever window pi
-  is told, and silently drops what does not fit -- less than a workspace's own instructions.
+  is told, and silently drops what does not fit -- a sixth of a new chat's first request.
 """
 
 import json
@@ -34,9 +34,10 @@ MODELS_FILENAME: Final = "models.json"
 # once it has some credential for it.
 PLACEHOLDER_API_KEY: Final = "local"
 
-DEFAULT_CONTEXT_WINDOW: Final = 32_768
-# A workspace's own instructions measure about 12,000 tokens before the first message.
-MIN_CONTEXT_WINDOW: Final = 16_384
+DEFAULT_CONTEXT_WINDOW: Final = 65_536
+# The first request of a new chat measured 24,046 input tokens: the workspace's own instructions,
+# its skills and pi's tools, before a word of the user's. The floor leaves room for one reply.
+MIN_CONTEXT_WINDOW: Final = 32_768
 _MAX_OUTPUT_TOKENS: Final = 8_192
 
 # Hosts a server on the user's own machine can answer on, as a workspace sees them: its own
@@ -239,7 +240,7 @@ def verify_model(client: httpx.Client, base_url: str, api_key: str, model_id: st
         raise LocalModelError(
             f"The server loaded {model_id} with a context of {loaded:,} tokens, and a chat here needs at least"
             f" {MIN_CONTEXT_WINDOW:,} to hold the workspace's own instructions. For Ollama, set"
-            f" OLLAMA_CONTEXT_LENGTH={DEFAULT_CONTEXT_WINDOW} where it runs, restart it, and try again."
+            f" OLLAMA_CONTEXT_LENGTH to {MIN_CONTEXT_WINDOW} or more where it runs, restart it, and try again."
         )
     return min(context_window, loaded)
 

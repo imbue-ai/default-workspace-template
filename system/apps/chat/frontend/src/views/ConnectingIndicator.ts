@@ -26,6 +26,15 @@ export function isChatConnecting(chatId: string): boolean {
   );
 }
 
+/** What the status row says once the agent has a message and nothing of its turn has reached the transcript:
+ *  the model the reply is waiting on, as far as the chat knows it. */
+export function awaitingReplyLabel(chatId: string): string {
+  const chat = getChatById(chatId);
+  const model =
+    chat === undefined ? null : (effectiveChoice(chatId, chat.active_agent.model_choice)?.matched?.label ?? null);
+  return model === null ? "Waiting for the model…" : `Waiting for ${model}…`;
+}
+
 /** What the status row says: the model and the provider the message is waiting for, as far as they are known. */
 export function connectingLabel(chatId: string): string {
   const chat = getChatById(chatId);

@@ -45,6 +45,10 @@ export interface OutgoingMessage {
   /** Whether the send opens the agent's next turn, rather than waiting behind one already running: the status
    *  row reporting that turn stays under it until it reaches the transcript. */
   opensTurn: boolean;
+  /** Whether the send route has answered that the agent has the message. It can stay out of the transcript
+   *  long after: pi writes nothing of a session's first turn until the model's first reply, which a model
+   *  hosted on the user's own machine can take minutes over. */
+  isWithAgent: boolean;
 }
 
 /** Just the render decision a backend record carries, or undefined for a plain message. */
@@ -85,6 +89,7 @@ export function addOutgoing(
     content,
     sentAt,
     opensTurn: opensTurn ?? !isTurnOpenedAhead,
+    isWithAgent: false,
     ...(messageId === undefined ? {} : { messageId }),
     ...(displayDecision === undefined ? {} : { displayDecision }),
     ...(author === undefined ? {} : { author }),
@@ -145,12 +150,19 @@ export function dropOutgoing(chatId: string, id: string): void {
   retainOutgoing(chatId, (entry) => entry.id !== id);
 }
 
-/** Drop the "Sending…" bubble of a send no transcript turn will retire: a /compact the server ran as a
- *  compaction (its own status and chips show what the send did), or a message Stop took back before it
- *  landed (it is in the composer again). */
-export function dropOutgoingNoTurnWillRetire(chatId: string, outgoingId: string, status: SendStatus | null): void {
+/** Apply the send route's answer to a send's "Sending…" bubble. A send no transcript turn will retire is
+ *  dropped: a /compact the server ran as a compaction (its own status and chips show what the send did), or
+ *  a message Stop took back before it landed (it is in the composer again). A send the agent has is marked
+ *  so, and its bubble stays until the transcript shows it. */
+export function settleOutgoing(chatId: string, outgoingId: string, status: SendStatus | null): void {
   if (status === "compaction_requested" || status === "withdrawn") {
     dropOutgoing(chatId, outgoingId);
+    return;
+  }
+  const list = byChat[chatId];
+  if ((status === "ok" || status === "resent") && list !== undefined) {
+    byChat[chatId] = list.map((entry) => (entry.id === outgoingId ? { ...entry, isWithAgent: true } : entry));
+    m.redraw();
   }
 }
 

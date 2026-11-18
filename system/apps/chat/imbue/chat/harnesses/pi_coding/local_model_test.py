@@ -205,15 +205,15 @@ def test_a_server_that_reports_no_loaded_models_gives_no_context() -> None:
 
 def test_the_window_pi_is_told_is_never_more_than_the_server_loaded() -> None:
     """Ollama keeps its own context length whatever pi is told, and truncates what does not fit."""
-    client = _ollama(("qwen2.5:7b",), _STRUCTURED_CALL, 20_000)
+    client = _ollama(("qwen2.5:7b",), _STRUCTURED_CALL, 40_000)
 
-    assert verify_model(client, _OLLAMA, "", "qwen2.5:7b", DEFAULT_CONTEXT_WINDOW) == 20_000
+    assert verify_model(client, _OLLAMA, "", "qwen2.5:7b", DEFAULT_CONTEXT_WINDOW) == 40_000
 
 
 def test_the_window_asked_for_stands_when_the_server_does_not_say() -> None:
     client = _ollama(("qwen2.5:7b",), _STRUCTURED_CALL, None)
 
-    assert verify_model(client, _OLLAMA, "", "qwen2.5:7b", 65_536) == 65_536
+    assert verify_model(client, _OLLAMA, "", "qwen2.5:7b", 100_000) == 100_000
 
 
 def test_a_smaller_window_than_the_server_loaded_is_kept() -> None:
@@ -223,7 +223,7 @@ def test_a_smaller_window_than_the_server_loaded_is_kept() -> None:
 
 
 def test_ollama_s_default_context_is_refused_with_the_setting_that_fixes_it() -> None:
-    """4096 is what Ollama loads a model with unless told otherwise: a third of a workspace's instructions."""
+    """4096 is what Ollama loads a model with unless told otherwise: a sixth of a new chat's first request."""
     client = _ollama(("qwen2.5:7b",), _STRUCTURED_CALL, 4096)
 
     with pytest.raises(LocalModelError, match="OLLAMA_CONTEXT_LENGTH"):
