@@ -86,7 +86,9 @@ needs a directory put on `sys.path`, and each stub says which. See
   after a restart docker made on its own; it records the restart as a
   `container_restarted` event through
   `workspace_bare_scripts/record_container_restart.py`).
-- The changelog gate: `workspace_scripts/check_changelog_entries.py`.
+- The changelog gate: `workspace_scripts/check_changelog_entries.py`. A changelog
+  consolidation branch owes no entry, and neither does a pull request that adds a
+  release section to the root `CHANGELOG.md`.
 
 Cohesive machinery lives in packages instead: the routines runner and its
 cron env wrapper in `system/libs/routines/`, the Caretaker check in

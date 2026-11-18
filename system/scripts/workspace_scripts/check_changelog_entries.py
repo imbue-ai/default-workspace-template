@@ -18,13 +18,19 @@ bucket's in ``system/changelog/``); a PR that touches a project must add
 ``<project_dir>/changelog/<branch>.md`` (slashes in the branch name replaced
 with dashes).
 
+Two kinds of PR owe no entry: one from a changelog consolidation branch
+(``mngr/changelog-consolidation-<timestamp>``), which moves the entries into the
+root ``CHANGELOG.md`` and ``UNABRIDGED_CHANGELOG.md``, and one whose root
+``CHANGELOG.md`` gains a release heading, whose section is its record of the
+change.
+
 Run it from the repo root::
 
     uv run --no-sync system/scripts/workspace_scripts/check_changelog_entries.py
 
 Exit codes:
-    0  -- ok (entries present, or nothing to check: not a PR branch / no
-          project files changed)
+    0  -- ok (entries present, or nothing to check: not a PR branch / exempt /
+          no project files changed)
     1  -- one or more touched projects are missing their entry file
     2  -- cannot establish a usable diff base (misconfiguration); never a
           silent pass
@@ -47,6 +53,12 @@ AGENTS_DIR = ".agents"
 # members (system/scripts and the .agents projects) fall into the dev and agents
 # buckets.
 PROJECT_PARENT_DIRS = ("system/libs", "system/services", "system/apps")
+
+_EXEMPT_BRANCH_PREFIXES = ("mngr/changelog-consolidation",)
+
+ROOT_CHANGELOG = "CHANGELOG.md"
+_ADDED_RELEASE_HEADING_PREFIX = "+## ["
+_ADDED_UNRELEASED_HEADING = "+## [Unreleased]"
 
 
 def project_for_path(rel_path: Path | str, repo_root: Path) -> str:
@@ -250,11 +262,46 @@ def find_missing_entries(branch: str, touched: set[str], repo_root: Path) -> lis
     return missing
 
 
+def is_exempt_branch(branch: str) -> bool:
+    """Whether ``branch`` owes no entries whatever it changes."""
+    return branch.startswith(_EXEMPT_BRANCH_PREFIXES)
+
+
+def adds_release_heading(base: str, repo_root: Path) -> bool:
+    """Whether the root ``CHANGELOG.md`` gains a release heading vs. ``base``.
+
+    A release heading is an added line starting ``## [`` other than
+    ``## [Unreleased]``, e.g. ``## [minds-v1.2.3] - 2026-05-11``. Raises
+    ``RuntimeError`` if ``git diff`` itself fails.
+    """
+    result = subprocess.run(
+        ["git", "diff", "-U0", f"{base}...HEAD", "--", ROOT_CHANGELOG],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git diff failed against {base} (exit {result.returncode}): {result.stderr.strip()}"
+        )
+    return any(
+        line.startswith(_ADDED_RELEASE_HEADING_PREFIX)
+        and line != _ADDED_UNRELEASED_HEADING
+        for line in result.stdout.splitlines()
+    )
+
+
 def main(repo_root: Path = _REPO_ROOT) -> int:
     branch = detect_branch(repo_root)
     if not branch or branch == "main":
         print(
             "changelog gate: not a PR branch (branch is empty or 'main'); nothing to check."
+        )
+        return 0
+    if is_exempt_branch(branch):
+        print(
+            f"changelog gate: branch '{branch}' is exempt from the changelog requirement."
         )
         return 0
 
@@ -263,6 +310,13 @@ def main(repo_root: Path = _REPO_ROOT) -> int:
     except RuntimeError as exc:
         print(f"changelog gate ERROR: {exc}", file=sys.stderr)
         return 2
+
+    if adds_release_heading(diff_base, repo_root):
+        print(
+            f"changelog gate: ok. Branch '{branch}' adds a release section to "
+            f"{ROOT_CHANGELOG} (diff base '{diff_base}'), which is its record of the change."
+        )
+        return 0
 
     changed_files = changed_files_against_base(diff_base, repo_root)
     touched = projects_requiring_entry(changed_files, repo_root)

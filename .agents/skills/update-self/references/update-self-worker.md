@@ -528,8 +528,24 @@ fallback is a restart.
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    changelog-entries --base "$BASE" --target "$TARGET_REF"
+    changelog-entries --base "$BASE" --target "$TARGET_REF" \
+    --out data/.tasks/update-self/whats-new.md
 ```
+
+`data/.tasks/update-self/whats-new.md` is what you digest: first the release
+sections of the target's root `CHANGELOG.md` that this workspace does not have
+yet, newest first, then the text of each changelog entry file the update adds.
+An empty file means the update carries no changelog text. The printed JSON
+names what went into the file: `sections`, `added` (entries read at the
+target) and `added_before_consolidation` (entries of releases the workspace
+skipped, read at the last release that kept them as files; `null` when there
+is no such release to read). Under `unlisted` it names anything that could not
+be read: repeat each of those lines in your report rather than presenting a
+partial list as the whole. The verbatim entries behind the sections are in
+`UNABRIDGED_CHANGELOG.md` at the target, where
+`git diff "$BASE" "$TARGET_REF" -- UNABRIDGED_CHANGELOG.md` shows only the new
+text when `$BASE` has the file; read them when a section's bullet names a rule
+the workspace's own code must follow.
 
 ## 6. Report back
 
@@ -567,7 +583,8 @@ Valid `name:` values:
 - `done` (`type: status`) -- merged, triaged, validated on `mngr/update-self`.
   The body gives the lead everything for the audit, the apply, and the results
   message:
-  - **What's new** -- a digest of the changelog entries.
+  - **What's new** -- a digest of Step 5's file: the release sections, then
+    the entries, and any `unlisted` line.
   - **Conflicts** -- each one and its resolution. For any side-pick, or claim
     that the kept side subsumes the other, list what the discarded side changed
     and where each change ended up, from the base-diff accounting of Step 2.

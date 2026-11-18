@@ -269,6 +269,8 @@ def test_documentation_alone_selects_nothing(workspace: Path) -> None:
             "docs/system/blueprint/plan.md",
             "system/changelog/work.md",
             ".agents/changelog/work.md",
+            "CHANGELOG.md",
+            "UNABRIDGED_CHANGELOG.md",
         ],
     )
 
