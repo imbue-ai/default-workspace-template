@@ -1045,8 +1045,8 @@ def test_a_launch_into_an_app_that_is_not_running_says_so_and_offers_an_agent_to
     tmp_path: Path, page: Page
 ) -> None:
     """A POST launch nothing listens for, of an app the workspace does not start on a request, is told as the app's
-    stopped window tells it (not as a failed open to report), and the agent it offers is asked through the
-    launcher's text action, the note staying up."""
+    stopped window tells it (not as a failed open to report), and the agent it offers is asked through the launch
+    path that takes an ask about an app, naming the stopped app, the note staying up."""
     ghost_row = registry_row_toml(
         "ghost",
         f"http://127.0.0.1:{find_free_port()}",
@@ -1068,15 +1068,20 @@ def test_a_launch_into_an_app_that_is_not_running_says_so_and_offers_an_agent_to
         expect(ask).to_be_visible()
         ask.click()
         wait_for(
-            lambda: any(
-                launch["body"].get(_PINNED_TEXT_PARAM)
-                == "Ghost (ghost) isn't running in this workspace. Please start it again."
-                for launch in _posted_launches(server.pinned_url)
-            ),
+            lambda: len(_posted_launches(server.pinned_url)) > 0,
             timeout=15.0,
             poll_interval=0.1,
             error_message="the request to start Ghost never reached the agent's app",
         )
+        (asked,) = _posted_launches(server.pinned_url)
+        assert asked["path"] == f"/{_PINNED_APP_ASK_LAUNCH_ID}"
+        assert asked["body"] == {
+            _PINNED_APP_PARAM: "ghost",
+            _PINNED_APP_DISPLAY_NAME_PARAM: "Ghost",
+            _PINNED_TEXT_PARAM: "Ghost (ghost) isn't running in this workspace. Please start it again.",
+            "client_id": _client_id(page),
+            "desktop_id": _HOME_DESKTOP_ID,
+        }
         # Handing the failure to an agent leaves the note up.
         expect(toast).to_contain_text("Ghost isn't running.")
         assert [window["id"] for window in _windows(server.base_url)] == windows_before
