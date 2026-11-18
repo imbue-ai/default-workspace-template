@@ -25,13 +25,16 @@ from imbue.chat.harnesses.pi_coding.local_model import verify_model
 from imbue.chat.harnesses.pi_coding.local_model import write_models_file
 
 _OLLAMA = "http://host.docker.internal:11434/v1"
-_STRUCTURED_CALL = {
+_STRUCTURED_CALL: dict[str, object] = {
     "role": "assistant",
     "content": "",
     "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}],
 }
 # What qwen2.5-coder:7b answered: the call it was asked for, as text pi cannot run.
-_CALL_AS_TEXT = {"role": "assistant", "content": '{"name": "get_weather", "arguments": {"city": "Paris"}}'}
+_CALL_AS_TEXT: dict[str, object] = {
+    "role": "assistant",
+    "content": '{"name": "get_weather", "arguments": {"city": "Paris"}}',
+}
 
 
 def _client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.Client:

@@ -851,6 +851,25 @@ describe("a local model", () => {
     expect(root.querySelector('[data-e2e="local-model-form"]')).not.toBeNull();
   });
 
+  it("looks again on request after a look that could not reach the workspace, saying so plainly", async () => {
+    // What a request reports when the proxy in front of the workspace answers with no JSON body.
+    findLocalModelServers.mockRejectedValueOnce(Object.assign(new Error("null"), { code: 503, response: null }));
+    findLocalModelServers.mockResolvedValueOnce(found([OLLAMA]));
+
+    const { root, draw } = await openForm();
+
+    expect(root.querySelector('[data-e2e="local-model-error"]')?.textContent).toBe(
+      "Could not reach the workspace. Try again.",
+    );
+    press(root, "local-model-look-again");
+    await settled();
+    draw();
+    expect(findLocalModelServers).toHaveBeenLastCalledWith(null, "");
+    expect(root.querySelector('[data-e2e="local-model-error"]')).toBeNull();
+    expect(root.textContent).toContain("qwen2.5:7b");
+    expect((root.querySelector('[data-e2e="connect-local-model"]') as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("says a server with no models needs one added", async () => {
     findLocalModelServers.mockResolvedValue(found([{ ...OLLAMA, models: [] }]));
 

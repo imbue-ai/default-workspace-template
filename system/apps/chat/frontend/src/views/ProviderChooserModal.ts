@@ -305,7 +305,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     // behind it; the Save button needs the flow, and it cannot be clicked that fast. An endpoint
     // lane is the same, and looks for its servers behind the form too.
     busy = !isPaste(chosenMethod) && !isEndpoint(chosenMethod);
-    if (isEndpoint(chosenMethod) && servers === null) void lookForServers(null);
+    // Looked for again on the way back in while there is still nothing to pick from: the first
+    // look may have failed, or the server may have been started since.
+    if (isEndpoint(chosenMethod) && modelChoices().length === 0) void lookForServers(null);
     // Which attempt this is. Two lanes clicked in quick succession both run this function, and
     // the second stamps the screen before the first's request resolves -- so without a
     // generation check the loser's `catch` writes "that didn't work" over the winner's screen,
@@ -898,7 +900,19 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                 pickedModel = key;
               },
             })
-          : m("p", { class: css.HINT, "data-e2e": "local-model-none" }, "No model server answered on your computer."),
+          : m("p", { class: css.HINT, "data-e2e": "local-model-none" }, [
+              "No model server answered on your computer. ",
+              m(
+                "button",
+                {
+                  type: "button",
+                  class: css.HINT_ACTION,
+                  "data-e2e": "local-model-look-again",
+                  onclick: () => void lookForServers(null),
+                },
+                "Look again",
+              ),
+            ]),
       serverError !== null ? m("p", { class: errorClass, "data-e2e": "local-model-error" }, serverError) : null,
       isNamingServer
         ? m("div", { class: "mt-4" }, [
@@ -1324,5 +1338,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
 function errorText(e: unknown): string {
   const response = (e as { response?: { detail?: string } })?.response;
   if (response?.detail) return response.detail;
-  return (e as Error)?.message ?? "Something went wrong.";
+  const message = (e as Error)?.message;
+  // A refusal that never reached the chat app (the proxy in front of a workspace that is not
+  // answering) has no JSON body, which a request reports as the message "null".
+  return message && message !== "null" ? message : "Could not reach the workspace. Try again.";
 }
