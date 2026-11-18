@@ -41,7 +41,7 @@ Pick a live agent and its claude process, and a subprocess it spawned (run a
 ```bash
 # A worker's main process sits at 600. A chat's sits somewhere in 300-1000
 # depending on how recently it was engaged with (300 = engaged right now,
-# 560 = idle but fresh, 800 = untouched for a day, 1000 = untouched for two);
+# 560 = idle but fresh, 1000 = untouched for eight hours);
 # a subprocess it spawned via the Bash tool should sit at 900.
 cat /proc/<claude_pid>/oom_score_adj          # 600 for a worker, 300-1000 for a chat
 cat /proc/<subprocess_pid>/oom_score_adj      # 900

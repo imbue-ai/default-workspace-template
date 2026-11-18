@@ -147,12 +147,12 @@ def test_primary_agent_is_pinned_to_the_never_shed_band() -> None:
 def test_chat_band_range_straddles_the_worker_band() -> None:
     # A fresh chat stays below WORKER_AGENT (workers are shed first) and above the
     # user-service band (a chat revives on its next message, so it is shed before a
-    # service). A stale one crosses the worker band -- but the stale band stays
-    # below AGENT_SUBPROCESS, so an agent's own subprocesses are shed before a
-    # chat that has only gone stale.
+    # service). An aged one is past every other band, Chromium's included: a shed
+    # costs it one slow message, which is less than a tab, a command or a worker
+    # costs.
     assert bands.USER_SERVICE < bands.CHAT_AGENT_FLOOR
     assert bands.CHAT_AGENT_FLOOR < bands.CHAT_AGENT_BASE < bands.WORKER_AGENT
-    assert bands.WORKER_AGENT < bands.CHAT_AGENT_STALE_CEILING < bands.AGENT_SUBPROCESS
+    assert bands.SHARED_BROWSER < bands.CHAT_STAGES["aged"].adj
 
 
 def test_chat_score_is_most_protected_when_fully_engaged() -> None:
@@ -205,9 +205,9 @@ def test_renderers_land_at_the_very_top_of_the_browser_band() -> None:
     # A renderer holds most of a browser's memory and costs a single tab to shed,
     # so it must be the most expendable process the browser runs -- not merely
     # somewhere inside the band. Scaling Chrome's gradation against 0..1000
-    # rather than its real 0..300 range put renderers at 937, leaving the top of
-    # the band to processes that had only *inherited* a high value and held
-    # almost no memory.
+    # rather than its real 0..300 range put renderers a third of the way up,
+    # leaving the top of the band to processes that had only *inherited* a high
+    # value and held almost no memory.
     assert (
         bands.shared_browser_oom_score_adj(bands.CHROMIUM_SELF_ASSIGNED_MAX)
         == bands.SHARED_BROWSER
@@ -230,11 +230,11 @@ def test_the_screen_service_is_shed_after_the_chromium_it_launches() -> None:
 def test_the_screen_stack_is_shed_after_every_agent_and_before_the_programs_on_it() -> (
     None
 ):
-    # The desktop an agent or the user launched goes before a worker and a chat at its
-    # stale band (a chat left longer climbs past it), and after what runs on
+    # The desktop an agent or the user launched goes before a worker and a chat that
+    # is still fresh (a chat left for hours climbs past it), and after what runs on
     # it: an agent's subprocesses (the programs `screen run` starts and the sweep
     # raises) and Chromium above them.
-    assert bands.CHAT_AGENT_STALE_CEILING < bands.SCREEN_STACK
+    assert bands.CHAT_AGENT_BASE < bands.SCREEN_STACK
     assert bands.WORKER_AGENT < bands.SCREEN_STACK
     assert bands.SCREEN_STACK < bands.AGENT_SUBPROCESS
     assert bands.SCREEN_STACK < bands.SHARED_BROWSER_FLOOR
@@ -278,66 +278,55 @@ def test_chat_score_always_within_the_chat_band() -> None:
                         # However engaged, a chat is shed before a user-created
                         # service.
                         assert bands.USER_SERVICE < adj
-                        # Through its first day idle, it is never shed before an
-                        # agent's own subprocesses.
-                        if idle is None or idle <= _DAY:
-                            assert adj < bands.AGENT_SUBPROCESS
+                        # While it is fresh, it is never shed before a worker.
+                        if (
+                            idle is None
+                            or idle <= bands.CHAT_STAGES["fresh"].idle_seconds
+                        ):
+                            assert adj < bands.WORKER_AGENT
 
 
 def test_an_abandoned_chat_is_shed_before_a_worker() -> None:
-    # The point of the stale ceiling: a chat nobody has touched in a day is worth
-    # less than the worker a live chat just spawned. It revives on its next message
-    # with its transcript intact; the worker's in-flight work does not.
-    assert _aged(24 * _HOUR) == bands.CHAT_AGENT_STALE_CEILING
-    assert _aged(24 * _HOUR) > bands.WORKER_AGENT
+    # A chat left long enough to count as aged is worth less than the worker a live
+    # chat just spawned. It revives on its next message with its transcript intact;
+    # the worker's in-flight work does not.
+    assert _aged(bands.CHAT_STAGES["aged"].idle_seconds) > bands.WORKER_AGENT
 
 
 def test_a_chat_left_long_enough_reaches_the_aged_band() -> None:
-    # The point of the aged stage: a chat nobody has touched for days is worth no
-    # more than a browser tab.
-    aged = bands.CHAT_STAGES["aged"]
+    # The point of the aged stage: a chat nobody has touched for that long costs
+    # less to shed than a browser tab, so it goes first, and stays there.
+    fresh, aged = bands.CHAT_STAGES["fresh"], bands.CHAT_STAGES["aged"]
     assert _aged(aged.idle_seconds) == aged.adj
-    assert aged.adj >= bands.SHARED_BROWSER
-    # On the way there it is past the stale band and still climbing, whatever its
-    # engagement.
-    halfway = (bands.CHAT_STAGES["stale"].idle_seconds + aged.idle_seconds) / 2
-    assert bands.CHAT_AGENT_STALE_CEILING < _aged(halfway) < aged.adj
-    assert _aged(halfway, is_open=True, is_visible=True, recency_rank=0) == _aged(
-        halfway
-    )
+    assert _aged(10 * aged.idle_seconds) == aged.adj
+    assert aged.adj > bands.SHARED_BROWSER
+    # On the way there it is past the fresh band and still climbing.
+    halfway = (fresh.idle_seconds + aged.idle_seconds) / 2
+    assert fresh.adj < _aged(halfway) < aged.adj
 
 
-def test_older_chats_have_a_stage_of_their_own_past_the_aged_one() -> None:
-    # However long a chat is left it ends at the last stage, a row of its own so
-    # that older chats can be placed apart from ones that have only just aged.
-    aged = bands.CHAT_STAGES["aged"]
-    last = list(bands.CHAT_STAGES.values())[-1]
-    assert last.idle_seconds > aged.idle_seconds
-    assert last.adj >= aged.adj
-    assert _aged(last.idle_seconds) == last.adj
-    assert _aged(10 * last.idle_seconds) == last.adj
-
-
-def test_staleness_crosses_the_worker_band_within_a_few_hours() -> None:
-    # The documented schedule for a chat with no engagement at all: unchanged for
-    # the first hour, still worth more than a worker at four hours, worth less by
-    # six. The exact crossing is a tunable, but it must land inside a working day.
-    assert _aged(0.5 * _HOUR) == bands.CHAT_AGENT_BASE
-    assert _aged(1 * _HOUR) == bands.CHAT_AGENT_BASE
-    assert _aged(4 * _HOUR) < bands.WORKER_AGENT
-    assert _aged(6 * _HOUR) > bands.WORKER_AGENT
+def test_staleness_crosses_the_worker_band_on_the_way_to_aged() -> None:
+    # A chat with no engagement at all is unchanged while it is fresh, and worth
+    # less than a worker well before it counts as aged.
+    fresh, aged = bands.CHAT_STAGES["fresh"], bands.CHAT_STAGES["aged"]
+    assert _aged(0.5 * fresh.idle_seconds) == bands.CHAT_AGENT_BASE
+    assert _aged(fresh.idle_seconds) == bands.CHAT_AGENT_BASE
+    assert _aged((fresh.idle_seconds + aged.idle_seconds) / 2) > bands.WORKER_AGENT
 
 
 def test_engagement_delays_the_climb_but_never_prevents_it() -> None:
-    # A visible, recently-ranked tab is still protected hours in -- but a tab left
-    # open and untouched for a day is not protection, so it ends at the ceiling
-    # like any other abandoned chat. Age wins over presence.
+    # A visible, recently-ranked tab is still protected part of the way up -- but
+    # a tab left open and untouched until the chat has aged is not protection, so
+    # it ends at the top like any other abandoned chat. Age wins over presence.
     def engaged(idle_seconds: float) -> int:
         return _aged(idle_seconds, is_open=True, is_visible=True, recency_rank=0)
 
-    assert engaged(6 * _HOUR) < bands.WORKER_AGENT
-    assert engaged(6 * _HOUR) > engaged(0.0)
-    assert engaged(24 * _HOUR) == bands.CHAT_AGENT_STALE_CEILING
+    fresh, aged = bands.CHAT_STAGES["fresh"], bands.CHAT_STAGES["aged"]
+    a_quarter_in = fresh.idle_seconds + (aged.idle_seconds - fresh.idle_seconds) / 4
+    assert engaged(a_quarter_in) < bands.WORKER_AGENT
+    assert engaged(a_quarter_in) < _aged(a_quarter_in)
+    assert engaged(a_quarter_in) > engaged(0.0)
+    assert engaged(aged.idle_seconds) == aged.adj
 
 
 def test_chat_score_rises_monotonically_with_idle_time() -> None:

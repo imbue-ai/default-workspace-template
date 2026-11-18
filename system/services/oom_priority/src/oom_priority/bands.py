@@ -88,8 +88,8 @@ WORKER_AGENT: Final[int] = 600
 AGENT_SUBPROCESS: Final[int] = 900
 # The Screen's stack (Xorg, XFCE, PulseAudio, neko and the watcher that ends them
 # together): the desktop an agent or the user launched, so it is shed before a
-# worker or a chat at its stale band (a chat left longer climbs past
-# it), and after the programs on it (an agent's subprocesses, and Chromium above
+# worker or a chat that is still fresh (a chat left for hours climbs past it),
+# and after the programs on it (an agent's subprocesses, and Chromium above
 # them), since ending the X server takes every program on the Screen with it
 # while ending one program may free enough. The Screen service that starts the
 # stack is an ordinary service (``SERVICE_BANDS["screen"]``): it holds little
@@ -105,17 +105,14 @@ SCREEN_STACK: Final[int] = 850
 # its freshness allows (see ``CHAT_ENGAGEMENT``). Reshape the schedule by
 # editing, adding, or removing a stage here -- nothing else encodes it.
 #
-# The range deliberately straddles ``WORKER_AGENT``. A chat the user last touched
-# days ago is worth less than the worker their current chat just spawned: the chat
-# revives on its next message with its transcript intact (only the next message
-# pays a cold start, and history stays readable while it is down), whereas
-# shedding a running worker destroys in-flight work. The stale stage still sits
-# below ``AGENT_SUBPROCESS``, so an agent's build/test/browser subprocess is shed
-# before a chat that has only gone stale.
-#
-# A chat left longer goes on to the aged stage. Shedding it still costs
-# one slow next message, where shedding a renderer takes the page someone was on
-# and shedding a subprocess takes work an agent in use is waiting for.
+# The range deliberately runs from below ``WORKER_AGENT`` to above everything
+# else. A chat the user has left alone is worth less than the worker their
+# current chat just spawned: the chat revives on its next message with its
+# transcript intact (only the next message pays a cold start, and history stays
+# readable while it is down), whereas shedding a running worker destroys
+# in-flight work. The aged stage sits above ``BROWSER`` by the same argument
+# taken further: a shed renderer takes the page someone was on, and a shed
+# subprocess takes work an agent in use is waiting for.
 #
 # Starting at the fresh stage rather than the floor means a chat that is never
 # re-tagged at all stays middling-expendable rather than pinned to the protected
@@ -123,13 +120,9 @@ SCREEN_STACK: Final[int] = 850
 CHAT_STAGES: Final[dict[str, ChatStage]] = {
     # Idle but fresh; also the chat launch band.
     "fresh": ChatStage(idle_seconds=1 * _HOUR, adj=560, freshness=1.0),
-    # Abandoned: shed before a worker, whatever its engagement.
-    "stale": ChatStage(idle_seconds=24 * _HOUR, adj=800, freshness=0.0),
-    # Left for two days: the highest ``oom_score_adj`` the kernel accepts.
-    "aged": ChatStage(idle_seconds=2 * 24 * _HOUR, adj=1000, freshness=0.0),
-    # Left for five: where older chats are placed, level with the aged stage
-    # because no band is higher.
-    "dormant": ChatStage(idle_seconds=5 * 24 * _HOUR, adj=1000, freshness=0.0),
+    # Abandoned for the length of a working day: shed before everything else,
+    # whatever its engagement. The highest ``oom_score_adj`` the kernel accepts.
+    "aged": ChatStage(idle_seconds=8 * _HOUR, adj=1000, freshness=0.0),
 }
 
 # How much each engagement signal protects a *fresh* chat, subtracted from the
@@ -256,8 +249,9 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     "terminal-session": USER_SERVICE,
 }
 
-# The shared-browser band: the absolute ceiling, one above AGENT_SUBPROCESS, so a
-# browser always outranks even an agent's build/test subprocess.
+# The shared-browser band: one above AGENT_SUBPROCESS, so a browser always
+# outranks even an agent's build/test subprocess, and short of the top of the
+# scale, which is left to a chat that has aged (see ``CHAT_STAGES``).
 #
 # Only the processes that actually hold a browser's memory belong here. Nothing
 # is tagged into this band at spawn: Chromium's processes arrive by self-writing
@@ -281,7 +275,9 @@ SERVICE_BANDS: Final[dict[str, int]] = {
 # value sticks.
 BROWSER: Final[BrowserBand] = BrowserBand(
     floor=910,
-    ceiling=1000,
+    # Below the aged chat stage, so that of a chat and a tab holding the same
+    # memory the chat is shed first.
+    ceiling=960,
     # What Chromium self-assigns to a renderer, the most expendable thing it
     # runs -- a value Chromium writes, never one this workspace assigns.
     chromium_self_assigned_max=300,
@@ -318,7 +314,6 @@ _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
 # The tables' values under the names the rest of the workspace reads them by.
 CHAT_AGENT_BASE: Final[int] = CHAT_STAGES["fresh"].adj
 CHAT_AGENT_FLOOR: Final[int] = CHAT_ENGAGEMENT.floor
-CHAT_AGENT_STALE_CEILING: Final[int] = CHAT_STAGES["stale"].adj
 SHARED_BROWSER_FLOOR: Final[int] = BROWSER.floor
 SHARED_BROWSER: Final[int] = BROWSER.ceiling
 CHROMIUM_SELF_ASSIGNED_MAX: Final[int] = BROWSER.chromium_self_assigned_max
@@ -397,7 +392,7 @@ def chat_agent_oom_score_adj(
     engaged with by any route) carries it from each stage toward the next,
     which lifts the score and scales the engagement bonuses down by the same
     measure. So engagement only ever *delays* the climb -- an abandoned chat
-    ends up at the stale stage's band even with a visible tab, since a shed
+    ends up at the last stage's band even with a visible tab, since a shed
     costs it nothing but a slow next message. ``is_mid_turn`` suspends the climb
     entirely (see ``_aging_idle_seconds``).
 
@@ -442,8 +437,8 @@ def shared_browser_oom_score_adj(self_assigned: int) -> int:
 
     The input range is Chromium's own gradation, ``0..CHROMIUM_SELF_ASSIGNED_MAX``,
     rather than the full 0..1000 an ``oom_score_adj`` could span. Scaling against
-    1000 would squeeze every Chromium process into the bottom third of the band
-    (renderers reaching only 937), leaving the top of the band to whatever merely
+    1000 would squeeze every Chromium process into the bottom third of the band,
+    leaving the top of the band to whatever merely
     *inherited* a high value -- which is never a renderer, because a renderer
     always self-writes. Renderers hold nearly all of a browser's memory and cost
     only one tab to shed, so they belong at the ceiling. Anything Chromium marks
