@@ -420,6 +420,27 @@ def test_a_resume_whose_only_pause_was_idle_still_names_the_chat_it_left_stopped
     assert fake_agents.notes() == {}
 
 
+def test_a_chat_left_stopped_that_the_user_started_again_is_not_named_as_stopped(
+    tmp_path: Path, fake_agents: FakeAgents, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Paused for memory early in the run, it is started by the user's next message long
+    before the resume, and idle again by 5b, which pauses only busy chats."""
+    fake_agents.set_agents(_workspace_agents())
+    assert _main(tmp_path, "run-status", "start") == 0
+    assert _main(tmp_path, "run-status", "stop-chats", "--agent", "Plan-the-trip") == 0
+    fake_agents.set_agents(_workspace_agents())
+    fake_agents.clear_calls()
+    capsys.readouterr()
+
+    assert _main(tmp_path, "run-status", "resume-chats") == 0
+
+    out = capsys.readouterr().out
+    assert "Left Plan-the-trip as it is" in out
+    assert "Left Plan-the-trip stopped" not in out
+    assert fake_agents.mngr_verbs() == []
+    assert fake_agents.notes() == {}
+
+
 def test_a_chat_named_for_memory_mid_turn_is_brought_back_like_any_busy_chat(
     tmp_path: Path, fake_agents: FakeAgents
 ) -> None:

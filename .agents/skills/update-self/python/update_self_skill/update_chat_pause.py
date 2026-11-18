@@ -532,6 +532,19 @@ def _is_agent_listed(run: CommandRunner, agent_id: str) -> bool:
     return any(agent.id == agent_id for agent in agents)
 
 
+def _live_agent_ids(run: CommandRunner) -> frozenset[str]:
+    """The ids of the agents ``mngr list`` shows running or waiting; a listing that fails shows none."""
+    try:
+        agents = list_agents(run)
+    except AgentListingError as exc:
+        print(
+            f"warning: could not tell whether a chat left stopped was started again: {exc}",
+            file=sys.stderr,
+        )
+        return frozenset()
+    return frozenset(agent.id for agent in agents if agent.is_live)
+
+
 def send_note(
     repo_root: Path, run: CommandRunner, chat_id: str, note: str
 ) -> subprocess.CompletedProcess[str]:
@@ -571,12 +584,23 @@ def resume(
     An agent that was idle when paused is left stopped and untold.
     """
     problems: list[str] = []
+    live_ids = (
+        _live_agent_ids(run)
+        if any(entry.is_idle_when_paused for entry in stopped)
+        else frozenset()
+    )
     for entry in stopped:
         if entry.is_idle_when_paused:
-            print(
-                f"Left {entry.name} stopped: it was idle when paused to free memory, and the next"
-                " message to it starts it."
-            )
+            if entry.id in live_ids:
+                print(
+                    f"Left {entry.name} as it is: it was idle when paused to free memory, and has"
+                    " been started again since."
+                )
+            else:
+                print(
+                    f"Left {entry.name} stopped: it was idle when paused to free memory, and the"
+                    " next message to it starts it."
+                )
             continue
         if entry.is_restarted:
             continue
