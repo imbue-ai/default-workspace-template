@@ -28,6 +28,7 @@ from imbue.chat.chat_handoffs import INLINE_SUMMARY_MAX_BYTES
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
 from imbue.chat.chat_handoffs import archive_rename_command
 from imbue.chat.chat_handoffs import archived_agent_name
+from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import has_user_turn
 from imbue.chat.chat_handoffs import is_duplicate_id_refusal
 from imbue.chat.chat_handoffs import is_summary_fresh
@@ -1248,3 +1249,93 @@ def test_a_runner_for_a_handoff_that_is_gone_does_nothing(tmp_path: Path) -> Non
 
     assert workspace.delivered == [] and workspace.argv_lines() == []
     assert workspace.record().handoff is not None
+
+
+class _ScriptedDelivery:
+    """A deliver that answers each try with the next scripted step: a ``SendOutcome``, or a ``SendFailedError`` raised."""
+
+    def __init__(self, *steps: SendOutcome | SendFailedError) -> None:
+        self._steps = list(steps)
+        self.tries = 0
+
+    def __call__(self, agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        step = self._steps[min(self.tries, len(self._steps) - 1)]
+        self.tries += 1
+        if isinstance(step, SendFailedError):
+            raise step
+        return step
+
+
+def _deliver_held(deliver: _ScriptedDelivery, is_stopping: bool = False) -> tuple[bool, list[float]]:
+    """Run ``deliver_held_send`` against ``deliver``; whether it landed, and every wait it took."""
+    waits: list[float] = []
+    agent_info = AgentInfo(
+        id="agent-new",
+        name="chat",
+        state="RUNNING",
+        agent_state_dir=Path("/nonexistent"),
+        claude_config_dir=Path("/nonexistent"),
+        labels={},
+        harness=HarnessType.CLAUDE,
+    )
+    held = HeldSend(
+        message_id="m-1", text="hello", origin=HeldSendOrigin.CLIENT, received_at=datetime.now(timezone.utc)
+    )
+    is_delivered = deliver_held_send(
+        deliver, agent_info, held, ChatId("chat-1"), waits.append, lambda: is_stopping
+    )
+    return is_delivered, waits
+
+
+_INPUT_NOT_DRAWN = SendFailedError("Claude is waiting on something in its terminal", kind="input_blocked")
+
+
+def test_a_held_send_refused_while_the_input_is_blocked_is_tried_again_until_it_lands() -> None:
+    """A new chat's first message refused while Claude was still drawing its input box reaches the agent once the
+    box is up, instead of being dropped with nothing on the page to say so."""
+    deliver = _ScriptedDelivery(_INPUT_NOT_DRAWN, _INPUT_NOT_DRAWN, SendOutcome.OK)
+    is_delivered, waits = _deliver_held(deliver)
+    assert is_delivered
+    assert deliver.tries == 3
+    assert waits == [5.0, 10.0]
+
+
+def test_a_held_send_the_harness_is_not_ready_for_is_tried_again() -> None:
+    deliver = _ScriptedDelivery(SendOutcome.NOT_READY, SendOutcome.OK)
+    is_delivered, waits = _deliver_held(deliver)
+    assert is_delivered
+    assert waits == [5.0]
+
+
+def test_a_held_send_that_stays_blocked_gives_up_after_its_retries() -> None:
+    deliver = _ScriptedDelivery(_INPUT_NOT_DRAWN)
+    is_delivered, waits = _deliver_held(deliver)
+    assert not is_delivered
+    assert waits == [5.0, 10.0, 20.0, 30.0]
+    assert deliver.tries == 5
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        SendFailedError("a dialog came up after it was taken", kind="input_blocked", is_delivered=True),
+        SendFailedError("the pane is gone", kind="agent_unreachable"),
+        SendFailedError("not confirmed", kind="submission_unconfirmed"),
+    ],
+    ids=["delivered-then-blocked", "unreachable", "unconfirmed"],
+)
+def test_a_held_send_is_not_sent_again_when_it_may_have_landed_or_cannot_land(refusal: SendFailedError) -> None:
+    """A send the agent may already hold would arrive twice, and one with nothing to talk to cannot land."""
+    deliver = _ScriptedDelivery(refusal, SendOutcome.OK)
+    is_delivered, waits = _deliver_held(deliver)
+    assert not is_delivered
+    assert deliver.tries == 1
+    assert waits == []
+
+
+def test_a_held_send_is_not_tried_again_once_the_app_is_stopping() -> None:
+    deliver = _ScriptedDelivery(_INPUT_NOT_DRAWN, SendOutcome.OK)
+    is_delivered, waits = _deliver_held(deliver, is_stopping=True)
+    assert not is_delivered
+    assert deliver.tries == 1
+    assert waits == []

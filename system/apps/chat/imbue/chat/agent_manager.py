@@ -3333,7 +3333,7 @@ class AgentManager:
             _loguru_logger.warning("Could not deliver {} held send(s) to agent {}", len(held_sends), agent_id)
             return
         for held in held_sends:
-            deliver_held_send(capabilities.deliver, agent_info, held, chat_id)
+            deliver_held_send(capabilities.deliver, agent_info, held, chat_id, self._pause, self._shutdown_event.is_set)
 
     def retry_handoff(self, chat_id: ChatId, account_id: str, kind: ChatKind = ChatKind.AGENT) -> HandoffPhase:
         """Run a failed switch's last step again on ``account_id``, or as a room (spec 5.10, and spec 6 for a rebind).
@@ -5537,11 +5537,13 @@ class AgentManager:
                     received_at=datetime.now(timezone.utc),
                 ),
                 chat_id,
+                self._pause,
+                self._shutdown_event.is_set,
             )
             if is_delivered and first_message.on_delivered is not None:
                 first_message.on_delivered(chat_id, first_message.message_id)
         for held in held_sends:
-            deliver_held_send(capabilities.deliver, agent_info, held, chat_id)
+            deliver_held_send(capabilities.deliver, agent_info, held, chat_id, self._pause, self._shutdown_event.is_set)
 
     def _mark_creation_failed_locked(self, chat_id: ChatId, error: str) -> None:
         """Keep the provisional chat, in the failed phase: its page shows the reason and can

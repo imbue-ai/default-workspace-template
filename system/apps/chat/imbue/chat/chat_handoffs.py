@@ -83,6 +83,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.mngr.errors import SendFailureKind
 
 logger = _loguru_logger
 
@@ -94,6 +95,14 @@ DEFAULT_PROMPT_TEMPLATE_PATH: Final[Path] = Path(".agents/shared/references/cont
 # summary can take a while; an agent that cannot write one (out of tokens, a full context
 # window) ends its turn within seconds and is caught by the idle rule long before this.
 _SUMMARY_TIMEOUT_SECONDS: Final[float] = 300.0
+# The waits before each new try at a held send refused for a reason that can pass. Each try that finds the input
+# blocked already waits mngr's own readiness window first, so these add up to a few minutes in all.
+_HELD_SEND_RETRY_DELAYS_SECONDS: Final[tuple[float, ...]] = (5.0, 10.0, 20.0, 30.0)
+# The refusals that type nothing and can clear without the user: Claude still drawing its input box reads to mngr as
+# a blocked input, and a harness not taking messages yet or a host too loaded to say are worth waiting out.
+_PASSING_HELD_SEND_REFUSAL_KINDS: Final[frozenset[str]] = frozenset(
+    (str(SendFailureKind.INPUT_BLOCKED), str(SendFailureKind.NOT_READY), str(SendFailureKind.STATE_UNKNOWN))
+)
 # The turn the request starts can be shorter than one poll, so an idle reading counts as the
 # turn having ended either after a busy reading or after this much time with none.
 _SUMMARY_IDLE_GRACE_SECONDS: Final[float] = 10.0
@@ -1017,6 +1026,8 @@ class HandoffRunner:
                 received_at=self._deps.now(),
             ),
             chat_id,
+            self._deps.sleep,
+            self._deps.shutdown_event.is_set,
         )
         self._update_handoff(
             chat_id,
@@ -1042,7 +1053,9 @@ class HandoffRunner:
             )
         self._deps.ensure_watcher(successor_info)
         while (held := self._deps.take_next_held_send(chat_id, handoff_id)) is not None:
-            if not deliver_held_send(self._deps.deliver, successor_info, held, chat_id):
+            if not deliver_held_send(
+                self._deps.deliver, successor_info, held, chat_id, self._deps.sleep, self._deps.shutdown_event.is_set
+            ):
                 self._update_handoff(
                     chat_id, handoff_id, lambda current: current.without_delivered_send(held.message_id)
                 )
@@ -1050,39 +1063,73 @@ class HandoffRunner:
 
 
 def deliver_held_send(
-    deliver: Callable[[AgentInfo, str, str], SendOutcome], agent_info: AgentInfo, held: HeldSend, chat_id: ChatId
+    deliver: Callable[[AgentInfo, str, str], SendOutcome],
+    agent_info: AgentInfo,
+    held: HeldSend,
+    chat_id: ChatId,
+    sleep: Callable[[float], None],
+    is_stopping: Callable[[], bool],
 ) -> bool:
     """Hand one held send to an agent through the message route's path; whether it landed.
 
     A refusal or a miss is logged rather than raised: the send was answered 202 when it was
-    held, and one that cannot land must not stop the ones behind it.
+    held, and one that cannot land must not stop the ones behind it. A refusal that typed nothing
+    and can pass (an agent still drawing its input box, a host too loaded to answer) is tried again
+    after each of ``_HELD_SEND_RETRY_DELAYS_SECONDS``, since nobody is at a composer to press Retry.
     """
-    try:
-        outcome = deliver(agent_info, held.text, held.message_id)
-    except SendFailedError as e:
-        logger.warning(
-            "Handoff of chat {}: held send {} to agent {} was refused: {}",
-            chat_id,
-            held.message_id,
-            agent_info.id,
-            e.detail,
-        )
-        return False
-    if outcome is SendOutcome.WITHDRAWN:
-        logger.info(
-            "Chat {}: held send {} was taken back by Stop before it reached the agent", chat_id, held.message_id
-        )
-        return False
-    if not outcome.is_delivered:
-        logger.warning(
-            "Handoff of chat {}: held send {} to agent {} did not land ({})",
-            chat_id,
-            held.message_id,
-            agent_info.id,
-            outcome.value,
-        )
-        return False
-    return True
+    retry_delays = iter(_HELD_SEND_RETRY_DELAYS_SECONDS)
+    while True:
+        try:
+            outcome = deliver(agent_info, held.text, held.message_id)
+        except SendFailedError as e:
+            delay_seconds = (
+                next(retry_delays, None) if _is_held_send_refusal_passing(e) and not is_stopping() else None
+            )
+            if delay_seconds is None:
+                logger.warning(
+                    "Handoff of chat {}: held send {} to agent {} was refused: {}",
+                    chat_id,
+                    held.message_id,
+                    agent_info.id,
+                    e.detail,
+                )
+                return False
+            logger.info(
+                "Chat {}: held send {} to agent {} was refused ({}); trying again in {}s",
+                chat_id,
+                held.message_id,
+                agent_info.id,
+                e.kind,
+                delay_seconds,
+            )
+            sleep(delay_seconds)
+            continue
+        if outcome is SendOutcome.NOT_READY and not is_stopping():
+            delay_seconds = next(retry_delays, None)
+            if delay_seconds is not None:
+                sleep(delay_seconds)
+                continue
+        if outcome is SendOutcome.WITHDRAWN:
+            logger.info(
+                "Chat {}: held send {} was taken back by Stop before it reached the agent", chat_id, held.message_id
+            )
+            return False
+        if not outcome.is_delivered:
+            logger.warning(
+                "Handoff of chat {}: held send {} to agent {} did not land ({})",
+                chat_id,
+                held.message_id,
+                agent_info.id,
+                outcome.value,
+            )
+            return False
+        return True
+
+
+@pure
+def _is_held_send_refusal_passing(error: SendFailedError) -> bool:
+    """Whether a held send was refused before anything was typed, for a reason that can clear on its own."""
+    return not error.is_delivered and error.kind in _PASSING_HELD_SEND_REFUSAL_KINDS
 
 
 # The environment a room's ``mngr create`` carries, which the workspace's create guard

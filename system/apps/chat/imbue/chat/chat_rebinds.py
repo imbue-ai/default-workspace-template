@@ -454,7 +454,9 @@ class RebindRunner:
                 f"agent {agent_id} of chat {chat_id} is untracked; its held sends stay on the record"
             )
         while (held := self._deps.take_next_held_send(chat_id, rebind_id)) is not None:
-            if not deliver_held_send(self._deps.deliver, agent_info, held, chat_id):
+            if not deliver_held_send(
+                self._deps.deliver, agent_info, held, chat_id, self._deps.sleep, self._deps.shutdown_event.is_set
+            ):
                 self._update_rebind(
                     chat_id, rebind_id, lambda current: current.without_delivered_send(held.message_id)
                 )
