@@ -8423,14 +8423,19 @@ def test_a_rolled_back_apply_records_no_landing(apply_repo: Path, monkeypatch) -
     assert status.applied_at is None
 
 
+def _record_delegated_run(repo_root: Path, monkeypatch) -> None:
+    """Record a run whose lead, ``update-lead``, has handed the merge to the worker ``update-self``."""
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    root = ["--repo-root", str(repo_root)]
+    assert update_self.main(["run-status", "start", *root]) == 0
+    assert update_self.main(["run-status", "delegate", "update-self", *root]) == 0
+
+
 def test_an_apply_stops_the_runs_worker_before_it_merges_or_boots_anything(
     apply_repo: Path, monkeypatch
 ) -> None:
     """The worker's idle session holds memory the pre-flight boots need, and its work is done."""
-    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
-    root = ["--repo-root", str(apply_repo)]
-    assert update_self.main(["run-status", "start", *root]) == 0
-    assert update_self.main(["run-status", "delegate", "update-self", *root]) == 0
+    _record_delegated_run(apply_repo, monkeypatch)
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
     spawner = _FakeSpawner()
     seen_at_stop: list[tuple[bool, int]] = []
@@ -8458,10 +8463,8 @@ def test_an_apply_with_no_worker_on_record_stops_nothing(
     # Without a run record (an apply run by hand) or with a run that never delegated, or whose
     # verdict already cleared the worker, there is nobody to stop.
     if has_run_record:
-        monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+        _record_delegated_run(apply_repo, monkeypatch)
         root = ["--repo-root", str(apply_repo)]
-        assert update_self.main(["run-status", "start", *root]) == 0
-        assert update_self.main(["run-status", "delegate", "update-self", *root]) == 0
         assert (
             update_self.main(["run-status", "verdict", "STUCK", "--detail", "x", *root])
             == 0
@@ -8478,10 +8481,7 @@ def test_another_chats_apply_leaves_a_running_updates_worker_alone(
     apply_repo: Path, monkeypatch
 ) -> None:
     """A critical-app pass lands through the same apply, maybe while the update's worker is mid-work."""
-    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
-    root = ["--repo-root", str(apply_repo)]
-    assert update_self.main(["run-status", "start", *root]) == 0
-    assert update_self.main(["run-status", "delegate", "update-self", *root]) == 0
+    _record_delegated_run(apply_repo, monkeypatch)
     monkeypatch.setenv("MNGR_AGENT_NAME", "critical-app-chat")
     runner = _apply_runner(_DOCS_DIFF, apply_repo)
 
@@ -8494,10 +8494,7 @@ def test_another_chats_apply_leaves_a_running_updates_worker_alone(
 def test_an_apply_whose_worker_will_not_stop_lands_anyway(
     apply_repo: Path, monkeypatch, capsys
 ) -> None:
-    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
-    root = ["--repo-root", str(apply_repo)]
-    assert update_self.main(["run-status", "start", *root]) == 0
-    assert update_self.main(["run-status", "delegate", "update-self", *root]) == 0
+    _record_delegated_run(apply_repo, monkeypatch)
     runner = _apply_runner(_DOCS_DIFF, apply_repo)
     runner.respond(("mngr", "stop"), _Result(returncode=1, stderr="no such agent"))
 
