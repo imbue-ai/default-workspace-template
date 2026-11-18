@@ -21,9 +21,14 @@ _SECTION_HEADING_PREFIX = "## "
 _LABELLED_HEADING_PREFIX = "## ["
 _UNRELEASED_LABEL = "Unreleased"
 
-# Entry files sit one level under a ``changelog/`` directory at any depth, outside the vendored
-# snapshots; ``top`` anchors both pathspecs at the repository root whatever directory git runs in.
-_ENTRY_PATHSPECS = (":(top,glob)**/changelog/*", ":(top,exclude)system/vendor")
+# Entry files are the ``changelog/<file>.md`` files at any depth other than ``README.md``, outside
+# the vendored snapshots; ``top`` anchors every pathspec at the repository root whatever directory
+# git runs in.
+_ENTRY_PATHSPECS = (
+    ":(top,glob)**/changelog/*.md",
+    ":(top,exclude,glob)**/changelog/README.md",
+    ":(top,exclude)system/vendor",
+)
 
 
 class ChangelogSection(NamedTuple):

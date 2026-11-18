@@ -332,6 +332,28 @@ def test_an_entry_identical_to_one_the_update_deletes_is_still_listed(
     assert added == ["system/changelog/renamed.md"]
 
 
+def test_a_changelog_folder_readme_or_non_markdown_file_is_not_an_entry(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "template"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _commit_and_tag(repo, "base", {"system/changelog/first.md": "First change.\n"})
+    _commit_and_tag(
+        repo,
+        "target",
+        {
+            "system/apps/chat/changelog/README.md": "# changelog/\n\nFolder doc.\n",
+            "system/apps/chat/changelog/.gitkeep": "",
+            "system/apps/chat/changelog/second.md": "Second change.\n",
+        },
+    )
+
+    added = list_whats_new("base", "target", repo, None, None)["added"]
+
+    assert added == ["system/apps/chat/changelog/second.md"]
+
+
 def test_a_missing_last_entry_tag_leaves_out_only_its_entries(tmp_path: Path) -> None:
     repo = _init_switched_template(tmp_path)
     _git(repo, "tag", "-d", _LAST_ENTRY_TAG)
