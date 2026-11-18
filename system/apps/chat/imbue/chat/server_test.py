@@ -7077,7 +7077,8 @@ def test_an_app_ask_is_sent_to_the_agent_chat_about_the_app(tmp_path: Path, docs
 
 def test_an_app_ask_for_a_chat_about_the_app_still_being_created_is_held_for_it(tmp_path: Path) -> None:
     """A second ask while the first one's chat is still being created waits for that chat rather than going
-    elsewhere: it is held for the root, which sends it once the chat is an agent."""
+    elsewhere: it is held for the root, as a send to any chat that is not yet an agent is. A root that applies it
+    while the create is still running is handed the text for that chat's composer, unsent."""
     messenger = RecordingMngrMessenger()
     app = _peopled_app(tmp_path, messenger)
     manager = state_of(app).agent_manager
@@ -7091,6 +7092,8 @@ def test_an_app_ask_for_a_chat_about_the_app_still_being_created_is_held_for_it(
     assert _chat_id_of(path) == _DOCS_CHAT_ID
     held = client.get(f"/api/chats/intakes/{_token_of(path)}").get_json()
     assert (held["chat_id"], held["message"], held["is_draft"]) == (_DOCS_CHAT_ID, _ASK, False)
+    applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={}).get_json()
+    assert (applied["chat_id"], applied["composer_text"], applied["first_message"]) == (_DOCS_CHAT_ID, _ASK, None)
     assert messenger.sent == []
     assert [chat.chat_id for chat in manager.get_provisional_chats()] == [ChatId(_DOCS_CHAT_ID)]
 
