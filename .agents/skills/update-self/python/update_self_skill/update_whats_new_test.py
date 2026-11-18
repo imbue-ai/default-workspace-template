@@ -354,6 +354,52 @@ def test_an_entry_identical_to_one_the_update_deletes_is_still_listed(
     assert added == ["system/changelog/renamed.md"]
 
 
+def test_an_entry_the_base_has_in_another_folder_is_not_read_at_the_last_entry_tag(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "template"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    text = "".join(f"A line of the entry, number {index}.\n" for index in range(20))
+    _commit_and_tag(
+        repo,
+        "base",
+        {
+            "apps/chat/changelog/moved.md": text,
+            "apps/chat/changelog/edited.md": text.upper(),
+        },
+    )
+    _commit_and_tag(
+        repo,
+        _LAST_ENTRY_TAG,
+        {
+            "apps/chat/changelog/moved.md": None,
+            "apps/chat/changelog/edited.md": None,
+            "system/apps/chat/changelog/moved.md": text,
+            "system/apps/chat/changelog/edited.md": text.upper().replace(
+                "NUMBER 3.", "NUMBER THREE."
+            ),
+            "system/changelog/new.md": "New change.\n",
+        },
+    )
+    _commit_and_tag(
+        repo,
+        "switch",
+        {
+            "system/apps/chat/changelog/moved.md": None,
+            "system/apps/chat/changelog/edited.md": None,
+            "system/changelog/new.md": None,
+            CHANGELOG_PATH: _changelog(_V1_SECTION),
+        },
+    )
+
+    earlier = list_whats_new("base", "switch", repo, None, _LAST_ENTRY_TAG)[
+        "added_before_consolidation"
+    ]
+
+    assert earlier == {"ref": _LAST_ENTRY_TAG, "paths": ["system/changelog/new.md"]}
+
+
 def test_a_changelog_folder_readme_or_non_markdown_file_is_not_an_entry(
     tmp_path: Path,
 ) -> None:
