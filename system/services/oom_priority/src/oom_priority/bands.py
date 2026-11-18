@@ -37,9 +37,6 @@ from typing import Final, NamedTuple
 
 _HOUR: Final[float] = 3600.0
 
-# An idle time no chat reaches: a stage set at it is skipped.
-NEVER: Final[float] = float("inf")
-
 
 class ChatStage(NamedTuple):
     """One stage of a chat nobody is engaging with."""
@@ -409,10 +406,10 @@ def chat_agent_oom_score_adj(
     measure. So engagement only ever *delays* the climb -- an abandoned chat
     ends up at the stale stage's band even with a visible tab, since a shed
     costs it nothing but a slow next message. ``is_mid_turn`` suspends the climb
-    entirely (see ``_aging_idle_seconds``). A stage set at ``NEVER`` is skipped.
+    entirely (see ``_aging_idle_seconds``).
 
-    The result is clamped between ``CHAT_ENGAGEMENT.floor`` and the band of the
-    last stage a chat can reach.
+    The result is clamped between ``CHAT_ENGAGEMENT.floor`` and the last stage's
+    band.
     """
     engagement_bonus = 0
     if is_open:
@@ -425,9 +422,9 @@ def chat_agent_oom_score_adj(
             CHAT_ENGAGEMENT.recency_max_bonus
             - CHAT_ENGAGEMENT.recency_step * max(0, recency_rank),
         )
-    reachable = [stage for stage in stages.values() if stage.idle_seconds != NEVER]
+    ordered = tuple(stages.values())
     aging_seconds = _aging_idle_seconds(idle_seconds, is_mid_turn)
-    earlier, later = _stages_around(reachable, aging_seconds)
+    earlier, later = _stages_around(ordered, aging_seconds)
     # How much of the earlier stage is left: 1.0 at it, 0.0 at the later one.
     remaining = _interpolate(
         aging_seconds, ((earlier.idle_seconds, 1.0), (later.idle_seconds, 0.0))
@@ -438,7 +435,7 @@ def chat_agent_oom_score_adj(
         + (1.0 - remaining) * (later.adj - earlier.adj)
         - freshness * engagement_bonus
     )
-    return max(CHAT_ENGAGEMENT.floor, min(reachable[-1].adj, adj))
+    return max(CHAT_ENGAGEMENT.floor, min(ordered[-1].adj, adj))
 
 
 def shared_browser_oom_score_adj(self_assigned: int) -> int:

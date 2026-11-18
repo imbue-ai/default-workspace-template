@@ -300,9 +300,13 @@ def test_a_chat_left_long_enough_reaches_the_aged_band() -> None:
     assert _aged(aged.idle_seconds) == aged.adj
     assert _aged(10 * aged.idle_seconds) == aged.adj
     assert aged.adj >= bands.SHARED_BROWSER
-    # On the way there it is past the stale band and still climbing.
+    # On the way there it is past the stale band and still climbing, whatever its
+    # engagement.
     halfway = (bands.CHAT_STAGES["stale"].idle_seconds + aged.idle_seconds) / 2
     assert bands.CHAT_AGENT_STALE_CEILING < _aged(halfway) < aged.adj
+    assert _aged(halfway, is_open=True, is_visible=True, recency_rank=0) == _aged(
+        halfway
+    )
 
 
 def test_staleness_crosses_the_worker_band_within_a_few_hours() -> None:
@@ -410,34 +414,6 @@ def test_the_chat_app_sits_between_the_shell_and_the_sharing_stack() -> None:
     )
 
 
-def _stages_with(**idle_seconds_by_stage: float) -> dict[str, bands.ChatStage]:
-    """The chat stages with the named stages' idle times replaced, and nothing else."""
-    return {
-        name: stage._replace(
-            idle_seconds=idle_seconds_by_stage.get(name, stage.idle_seconds)
-        )
-        for name, stage in bands.CHAT_STAGES.items()
-    }
-
-
-def _aged_under(
-    stages: dict[str, bands.ChatStage],
-    idle_seconds: float,
-    *,
-    is_engaged: bool = False,
-    is_mid_turn: bool = False,
-) -> int:
-    """The score, under ``stages``, for a chat last engaged with ``idle_seconds`` ago."""
-    return bands.chat_agent_oom_score_adj(
-        is_open=is_engaged,
-        is_visible=is_engaged,
-        recency_rank=0 if is_engaged else None,
-        idle_seconds=idle_seconds,
-        is_mid_turn=is_mid_turn,
-        stages=stages,
-    )
-
-
 def test_chat_stages_are_declared_in_the_order_a_chat_reaches_them() -> None:
     # The stages are read in order: each later one takes longer to reach and is
     # more expendable.
@@ -446,35 +422,18 @@ def test_chat_stages_are_declared_in_the_order_a_chat_reaches_them() -> None:
     assert stages == sorted(stages, key=lambda stage: stage.adj)
 
 
-def test_an_idle_time_on_the_aged_stage_is_all_it_takes_to_shed_old_chats_first() -> (
-    None
-):
-    stages = _stages_with(aged=7 * _DAY)
-    aged = stages["aged"].adj
-    assert _aged_under(stages, 7 * _DAY) == aged
-    assert _aged_under(stages, 30 * _DAY) == aged
-    # More expendable than anything an agent in use is running, and no less than
-    # the browser.
-    assert aged > bands.AGENT_SUBPROCESS
-    assert aged >= bands.SHARED_BROWSER
-    # On the way there a chat is past stale and still climbing; a day in, it has
-    # not started.
-    assert bands.CHAT_AGENT_STALE_CEILING < _aged_under(stages, 4 * _DAY) < aged
-    assert _aged_under(stages, 1 * _DAY) == bands.CHAT_AGENT_STALE_CEILING
-
-
-def test_the_climb_past_stale_ignores_engagement_and_spares_a_chat_mid_turn() -> None:
-    stages = _stages_with(aged=7 * _DAY)
-    assert _aged_under(stages, 7 * _DAY, is_engaged=True) == stages["aged"].adj
-    assert _aged_under(stages, 7 * _DAY, is_mid_turn=True) == bands.CHAT_AGENT_BASE
-
-
-def test_a_chat_never_reaches_a_stage_set_at_never() -> None:
-    # Left forever, it stops at the last stage that has an idle time.
-    never_aged = _stages_with(aged=bands.NEVER)
-    assert _aged_under(never_aged, float("inf")) == never_aged["stale"].adj
-    only_fresh = _stages_with(stale=bands.NEVER, aged=bands.NEVER)
-    assert _aged_under(only_fresh, 3650 * _DAY) == only_fresh["fresh"].adj
+def test_a_table_of_one_stage_keeps_a_chat_there() -> None:
+    # Removing a stage is an edit the table invites; with only the first left, a
+    # chat never ages.
+    only_fresh = {"fresh": bands.CHAT_STAGES["fresh"]}
     assert (
-        _aged_under(only_fresh, 3650 * _DAY, is_engaged=True) == bands.CHAT_AGENT_FLOOR
+        bands.chat_agent_oom_score_adj(
+            is_open=False,
+            is_visible=False,
+            recency_rank=None,
+            idle_seconds=3650 * _DAY,
+            is_mid_turn=False,
+            stages=only_fresh,
+        )
+        == bands.CHAT_AGENT_BASE
     )
