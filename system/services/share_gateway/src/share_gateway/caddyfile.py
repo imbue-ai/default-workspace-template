@@ -6,8 +6,8 @@ about every request (forward_auth), and routes by Host: each registered
 service's unguessable ``<label>.<domain>`` origin to that service's local
 backend, the dedicated ``auth-<rand>.<domain>`` label to the gateway's public
 ``/_auth/*`` surface (the login callback) and the ``/_agent/*`` surface
-(visiting agents), and unknown-but-plausible service
-origins to the gateway's auto-retrying loading page. A registered service caddy
+(visiting agents), and a registered service whose route is not loaded yet to
+the gateway's "Starting up..." page. A registered service caddy
 cannot reach gets the gateway's not-responding page instead, which retries for
 about a minute and then says the app is not answering (it covers the moment
 between an app stopping and the shell parking its port, or between the shell
@@ -27,10 +27,13 @@ passthrough and never sees a response, so caddy is the one place they can be
 set for every service alike.
 """
 
+import threading
 import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from share_gateway.log import log
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
@@ -65,14 +68,24 @@ class RegisteredApp:
         self.api_schema_path = api_schema_path
 
 
+class RegistryReadError(Exception):
+    """apps.toml exists but cannot be read as a list of apps."""
+
+
 def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
-    """Parse apps.toml rows into backend targets, skipping malformed or unlabeled entries."""
+    """Parse apps.toml rows into backend targets, skipping malformed or unlabeled entries.
+
+    Raises ``RegistryReadError`` when the text is not TOML or its ``apps`` value is not a list of rows.
+    """
     try:
         raw = tomllib.loads(apps_toml_text)
-    except tomllib.TOMLDecodeError:
-        return []
+    except tomllib.TOMLDecodeError as exc:
+        raise RegistryReadError(f"is not valid TOML ({exc})") from exc
+    rows = raw.get("apps", [])
+    if not isinstance(rows, list):
+        raise RegistryReadError(f"has an 'apps' value that is a {type(rows).__name__}, not a list of rows")
     apps: list[RegisteredApp] = []
-    for entry in raw.get("apps", []):
+    for entry in rows:
         if not isinstance(entry, dict):
             continue
         name = entry.get("name")
@@ -135,13 +148,50 @@ APPS_TOML_PATH = Path("data/.state/apps.toml")
 
 
 def read_registered_apps(apps_toml_path: Path) -> list[RegisteredApp]:
+    """The registry's rows; none while the file does not exist. Raises ``RegistryReadError`` when it cannot be read."""
     if not apps_toml_path.exists():
         return []
     try:
         text = apps_toml_path.read_text()
-    except OSError:
-        return []
+    except OSError as exc:
+        raise RegistryReadError(f"could not be read ({exc})") from exc
     return parse_registered_apps(text)
+
+
+class RegisteredAppsReader:
+    """The registry, read fresh on each call so an app registered while shared is recognized at once.
+
+    A file that cannot be read or parsed keeps the last good read, as the shell's own inventory does: a
+    hand-edited or half-written registry must not turn every app into an unknown address. Before any good
+    read (the file not written yet, or unreadable since the gateway started) there are no rows to keep.
+    """
+
+    def __init__(self, apps_toml_path: Path) -> None:
+        self._apps_toml_path = apps_toml_path
+        self._last_good_read: list[RegisteredApp] | None = None
+        self._is_failure_logged = False
+        self._lock = threading.Lock()
+
+    def read(self) -> list[RegisteredApp] | None:
+        """The registry's rows, or the last good read when the file cannot be read; None before any good read."""
+        try:
+            if not self._apps_toml_path.exists():
+                raise RegistryReadError("does not exist")
+            apps = read_registered_apps(self._apps_toml_path)
+        except RegistryReadError as exc:
+            with self._lock:
+                if not self._is_failure_logged:
+                    self._is_failure_logged = True
+                    log(f"Keeping the last good read of the app registry: {self._apps_toml_path} {exc}")
+                return self._last_good_read
+        with self._lock:
+            self._last_good_read = apps
+            self._is_failure_logged = False
+        return apps
+
+    def apps(self) -> list[RegisteredApp]:
+        """The registry's rows as ``read`` answers them, and none before any good read."""
+        return self.read() or []
 
 
 def build_frame_ancestors_policy(workspace_domain: str, chrome_origin: str) -> str:
@@ -227,10 +277,6 @@ def render_caddyfile(
     admin localhost:2019
     auto_https off
     https_port {https_port}
-    # Caddy's built-in directive order runs forward_auth BEFORE request_header,
-    # which would make the identity strip below delete the value forward_auth
-    # just injected. Reorder so the strip runs first.
-    order request_header before forward_auth
     servers {{
         # h1/h2 only: h3 is UDP, which the SNI-passthrough relay can never
         # carry, so advertising it (Alt-Svc) just makes browsers probe a
@@ -280,6 +326,14 @@ https://*.{workspace_domain}:{https_port} {{
         }}
     }}
 
+    # The gateway's identity header is trustworthy only because a client can
+    # never smuggle its own copy past the auth step: strip any inbound
+    # X-Imbue-Identity on every request, ahead of every route below (the auth
+    # label's and the error route included), so that the only value a request
+    # can carry is the one copy_headers injects from the verified /_auth/verify
+    # response.
+    request_header -X-Imbue-Identity
+
     # Labels are semi-secret (they gate the relay), so never leak one to
     # another site via the Referer of an outbound navigation.
     header Referrer-Policy same-origin
@@ -299,13 +353,13 @@ https://*.{workspace_domain}:{https_port} {{
         reverse_proxy {gateway_backend}
     }}
 
-    # A registered service whose backend refuses the connection gets the
-    # gateway's not-responding page rather than a bare 502. It is a path of its
-    # own, apart from the route-not-loaded fallback below, because only the
-    # gateway can tell how long the address has gone unanswered. The parker's
-    # own 503 is a backend answer, not a caddy error, and passes through as it
-    # does locally.
-    handle_errors 502 {{
+    # A registered service whose backend caddy cannot reach (a refused
+    # connection, a timeout) gets the gateway's not-responding page rather than
+    # a bare error status. It is a path of its own, apart from the
+    # route-not-loaded fallback below. A backend's own error answer, the
+    # parker's 503 included, is a response rather than a caddy error and passes
+    # through as it does locally.
+    handle_errors 5xx {{
 {error_hardening_headers}
         rewrite * /_auth/unresponsive
         reverse_proxy {gateway_backend}
@@ -333,15 +387,6 @@ https://*.{workspace_domain}:{https_port} {{
     }}
 
     handle {{
-        # The gateway's identity header is trustworthy only because a client can
-        # never smuggle its own copy past the auth step: strip any inbound
-        # X-Imbue-Identity before anything downstream sees the request, then let
-        # copy_headers below inject the value the verified /_auth/verify
-        # response carries. Textual position does not decide when this runs --
-        # the global ``order request_header before forward_auth`` does; without
-        # it caddy would run the strip after forward_auth and delete the
-        # injected value.
-        request_header -X-Imbue-Identity
         forward_auth {gateway_backend} {{
             uri /_auth/verify
             # forward_auth copies the original request's headers into the auth
@@ -360,9 +405,9 @@ https://*.{workspace_domain}:{https_port} {{
         }}
 
 {"".join(service_blocks)}\
-        # Unknown-but-plausible service origins get the auto-retrying loading
+        # A registered service with no route above gets the "Starting up..."
         # page (a service registered while shared becomes routable on the next
-        # render; until then this keeps the tab alive).
+        # render; until then this keeps the tab alive, for about a minute).
         handle {{
             rewrite * /_auth/loading
             reverse_proxy {gateway_backend}

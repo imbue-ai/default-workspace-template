@@ -4,6 +4,7 @@ import html
 import json
 import re
 from collections.abc import Callable
+from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -26,6 +27,8 @@ from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.identity import AgentIdentity
 from share_gateway.identity import IDENTITY_HEADER
 from share_gateway.identity import RequesterIdentity
+from share_gateway.identity import render_agent_identity_header
+from share_gateway.identity import render_identity_header
 from share_gateway.materials import ShareMaterials
 from share_gateway.request_counts import DENIED_AGENT_ACCESS_UNCONFIGURED
 from share_gateway.request_counts import DENIED_AGENT_TOKEN
@@ -34,6 +37,7 @@ from share_gateway.request_counts import DENIED_GRANTS_MISCONFIGURED
 from share_gateway.request_counts import DENIED_NO_GRANT
 from share_gateway.request_counts import DENIED_NO_SESSION
 from share_gateway.request_counts import DENIED_ORIGIN
+from share_gateway.request_counts import DENIED_REGISTRY_UNAVAILABLE
 from share_gateway.request_counts import METHOD_CLASS_READ
 from share_gateway.request_counts import METHOD_CLASS_WEBSOCKET
 from share_gateway.request_counts import METHOD_CLASS_WRITE
@@ -134,6 +138,7 @@ def _make_harness(
     chrome_origin: str = _CHROME_ORIGIN,
     request_counter: RequestCounter | None = None,
     admit_agent: Callable[[str, str | None], AgentIdentity | None] | None = None,
+    get_registered_apps: Callable[[], Sequence[RegisteredApp] | None] = lambda: _APPS,
 ) -> _GatewayHarness:
     grants_path = tmp_path / "share_grants.toml"
     grants_path.write_text(grants_text)
@@ -158,7 +163,7 @@ def _make_harness(
         pending_logins=pending_logins,
         unanswered_waits=UnansweredAddressWaits(clock=clock),
         auth_label=_AUTH_LABEL,
-        get_registered_apps=lambda: _APPS,
+        get_registered_apps=get_registered_apps,
         get_connect_info=lambda: {"ice_servers": [], "candidates": []},
         admit_agent=admit_agent,
         request_counter=request_counter,
@@ -315,6 +320,8 @@ def test_switching_account_ends_the_session_and_asks_the_broker_which_account_to
     query = _broker_query(resp)
     assert query["next"] == [f"https://{_SHELL_HOST}/desk"]
     assert "confirmed" not in query
+    # Even where the broker remembers this visitor's account, it shows the choice rather than signing them back in.
+    assert query["prompt"] == ["select_account"]
     nonce = harness.pending_logins.mint(is_retry=False)
     signed_in = harness.client.get(f"/_auth/callback?token={_mint_handoff(nonce)}&state={nonce}")
     set_by_sign_in = set_cookies_by_name(signed_in)
@@ -609,6 +616,7 @@ def test_callback_with_an_unknown_nonce_and_no_session_retries_through_the_broke
     query = _broker_query(resp)
     assert query["next"] == [f"https://{_WEB_HOST}/panel"]
     assert query["confirmed"] == ["1"]
+    assert "prompt" not in query
     retry = harness.pending_logins.consume(query["state"][0])
     assert retry is not None
     assert retry.is_retry is True
@@ -1290,3 +1298,137 @@ def test_verify_counts_the_agent_and_grants_denials_too(tmp_path: Path) -> None:
     assert _counted_keys(misconfigured_counter) == [
         ("web", REQUESTER_KIND_USER, _BOB_USER_ID, METHOD_CLASS_READ, DENIED_GRANTS_MISCONFIGURED, 1)
     ]
+
+
+def test_an_unread_registry_answers_every_address_as_unavailable_rather_than_unshared(tmp_path: Path) -> None:
+    counter = RequestCounter(tmp_path / "request_counts.jsonl")
+    harness = _make_harness(tmp_path, request_counter=counter, get_registered_apps=lambda: None)
+    harness.client.set_cookie(SESSION_COOKIE_NAME, _session_cookie_for("owner@example.com", is_owner=True))
+
+    resp = harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST))
+
+    page = resp.get_data(as_text=True)
+    assert resp.status_code == 503
+    assert "This page isn't available right now. Try again in a moment." in page
+    assert _buttons(page) == {"Try again": ""}
+    assert "Nothing is shared" not in page
+    assert [key[4] for key in _counted_keys(counter)] == [DENIED_REGISTRY_UNAVAILABLE]
+
+
+def test_a_sign_in_that_lands_while_the_registry_is_unread_is_told_to_try_again(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path, get_registered_apps=lambda: None)
+    nonce = harness.pending_logins.mint(is_retry=False)
+
+    resp = harness.client.get(
+        f"/_auth/callback?token={_mint_handoff(nonce)}&state={nonce}&next=https://{_WEB_HOST}/panel"
+    )
+
+    page = resp.get_data(as_text=True)
+    assert resp.status_code == 503
+    assert "This page isn't available right now. Try again in a moment." in page
+    assert "Not shared with you" not in page
+    assert "Set-Cookie" not in resp.headers
+
+
+def _loading_page(harness: _GatewayHarness, host: str, method: str = "GET") -> TestResponse:
+    return harness.client.open("/_auth/loading", method=method, headers={"Host": host})
+
+
+@pytest.mark.parametrize("method", ["GET", "POST", "PUT"])
+def test_an_address_caddy_has_not_routed_yet_is_waited_on_then_reported_as_still_unavailable(
+    tmp_path: Path, method: str
+) -> None:
+    harness = _make_harness(tmp_path)
+
+    first = _loading_page(harness, _WEB_HOST, method)
+    for _reload in range(20):
+        harness.clock.now += 3.0
+        last = _loading_page(harness, _WEB_HOST, method)
+
+    assert first.status_code == last.status_code == 503
+    assert "This page isn't ready yet. It will open as soon as it is." in first.get_data(as_text=True)
+    assert 'http-equiv="refresh"' in first.get_data(as_text=True)
+    assert "This page still isn't available. Let the person who shared it know." in last.get_data(as_text=True)
+    assert 'http-equiv="refresh"' not in last.get_data(as_text=True)
+    assert _buttons(last.get_data(as_text=True)) == {"Try again": ""}
+
+
+_OWNER_IDENTITY = render_identity_header(
+    RequesterIdentity(user_id="user-owner-1", email="o@example.com", is_owner=True)
+)
+_WORKSPACE_VISITOR_IDENTITY = render_identity_header(
+    RequesterIdentity(user_id=_BOB_USER_ID, email="bob@example.com", is_owner=False)
+)
+_WEB_ONLY_VISITOR_IDENTITY = render_identity_header(
+    RequesterIdentity(user_id="user-carol-1", email="carol@example.com", is_owner=False)
+)
+_AGENT_IDENTITY = render_agent_identity_header(AgentIdentity(agent_id="agt-1", agent_name="helper", granter="o"))
+
+
+def _given_up_page(harness: _GatewayHarness, host: str, identity: str, fetch_destination: str) -> str:
+    """The not-responding page after a minute of reloads, as caddy forwards it with the verified identity."""
+    headers = {"Host": host, IDENTITY_HEADER: identity, "Sec-Fetch-Dest": fetch_destination}
+    harness.client.get("/_auth/unresponsive", headers=headers)
+    for _reload in range(20):
+        harness.clock.now += 3.0
+        resp = harness.client.get("/_auth/unresponsive", headers=headers)
+    assert resp.status_code == 503
+    return resp.get_data(as_text=True)
+
+
+@pytest.mark.parametrize(
+    ("identity", "fetch_destination", "sentence", "buttons"),
+    [
+        (
+            _OWNER_IDENTITY,
+            "document",
+            "This app isn't responding right now. Try again in a moment.",
+            {"Try again": "", "Open the workspace": f"https://{_SHELL_HOST}/"},
+        ),
+        (
+            _OWNER_IDENTITY,
+            "iframe",
+            "This app isn't responding right now. Try again in a moment.",
+            {"Try again": ""},
+        ),
+        (
+            _WORKSPACE_VISITOR_IDENTITY,
+            "document",
+            "This page isn't responding right now. Let the person who shared it know, then try again.",
+            {"Try again": "", "Open the workspace": f"https://{_SHELL_HOST}/"},
+        ),
+        (
+            _WEB_ONLY_VISITOR_IDENTITY,
+            "document",
+            "This page isn't responding right now. Let the person who shared it know, then try again.",
+            {"Try again": ""},
+        ),
+        (
+            _AGENT_IDENTITY,
+            "document",
+            "This page isn't responding right now. Let the person who shared it know, then try again.",
+            {"Try again": ""},
+        ),
+    ],
+    ids=["owner", "owner-inside-a-window", "workspace-visitor", "visitor-of-this-app-only", "visiting-agent"],
+)
+def test_the_not_responding_page_speaks_to_the_owner_and_offers_the_workspace_to_whoever_may_open_it(
+    tmp_path: Path, identity: str, fetch_destination: str, sentence: str, buttons: dict[str, str]
+) -> None:
+    harness = _make_harness(tmp_path)
+
+    page = _given_up_page(harness, _WEB_HOST, identity, fetch_destination)
+
+    assert sentence in page
+    assert _buttons(page) == buttons
+
+
+def test_the_owner_is_told_they_may_need_to_restart_the_workspace_itself_with_no_way_to_open_it(
+    tmp_path: Path,
+) -> None:
+    harness = _make_harness(tmp_path)
+
+    page = _given_up_page(harness, _SHELL_HOST, _OWNER_IDENTITY, "document")
+
+    assert "This app isn't responding. You may need to restart it from the workspace." in page
+    assert _buttons(page) == {"Try again": ""}
