@@ -17,6 +17,7 @@ from pydantic import Field
 
 from imbue.chat.harnesses.claude.error_notice import ErrorNotice
 from imbue.chat.harnesses.claude.error_notice import classify_error_notice
+from imbue.chat.harnesses.claude.progress_updates import progress_update_text
 from imbue.chat.harnesses.claude.tool_labels import action_note
 from imbue.chat.harnesses.claude.tool_labels import action_parts
 from imbue.chat.harnesses.claude.tool_labels import shell_command
@@ -323,6 +324,13 @@ def _parse_assistant_message(
             text = block.get("text", "")
             if text:
                 text_parts.append(text)
+        elif block_type == "thinking":
+            # A progress update is prose for the user that the API carries in a thinking block;
+            # it reads as the assistant's own words at this point of the turn, like a text block.
+            # Reasoning blocks stay hidden.
+            update = progress_update_text(block)
+            if update:
+                text_parts.append(update)
         elif block_type == "tool_use":
             call_id: str = block.get("id", "")
             tool_name: str = block.get("name", "")
@@ -644,9 +652,11 @@ def parse_line_detail(raw_line: str) -> dict[str, dict[str, Any]]:
 
     The read half of the payload-free wire contract: the resident events carry no tool
     inputs or outputs, so an expand re-reads the source line and reconstructs them here,
-    whole and untruncated. Claude's thinking blocks are deliberately NOT surfaced: they are
-    encrypted and useless to the user, so no claude event ever stamps ``has_thinking`` and
-    nothing loads them. Returns {} for a line that yields no payload-bearing events.
+    whole and untruncated. Claude's reasoning is deliberately NOT surfaced: its blocks are
+    encrypted or hold only a summary, so no claude event ever stamps ``has_thinking`` and nothing
+    loads them (a progress update, the one kind of thinking block meant for the user, is resident
+    event text, see ``progress_updates``). Returns {} for a line that yields no payload-bearing
+    events.
     """
     try:
         raw = json.loads(raw_line.strip())

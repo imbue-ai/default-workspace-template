@@ -1,0 +1,1 @@
+The floating avatar (and any pinned app's floating entry) is named after its app on hover, "Chat" for the chat, rather than after the page its window is on, which for the chat was the name of whichever chat was open.
