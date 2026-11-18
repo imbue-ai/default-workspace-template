@@ -1,1 +1,0 @@
-The mouse pointer hides while you type into the shell's own fields (the launcher, the desktop settings) and comes back the moment the mouse moves, so it never sits over what is being typed. The framed pages do the same for themselves.
