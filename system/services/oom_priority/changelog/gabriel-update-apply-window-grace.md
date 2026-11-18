@@ -1,1 +1,3 @@
+`memory_candidates.py` now says how much of the free memory is left before the memory guard starts stopping processes, on its free memory line and as `shed_line_kib` / `room_kib` in its JSON. The guard acts at the share of `MemTotal` its `earlyoom.conf` program line passes as `-m`, not at zero, so "1051 MiB free" on a 6.4 GiB workspace is about 410 MiB of room; an update's lead read the first figure as room for an apply and had its pre-flight boot stopped. The threshold is read from the program line itself, and the clause is left out when it cannot be read.
+
 The shed ledger's path documentation names update-self's pre-flight boot as a second place that recomputes it.
