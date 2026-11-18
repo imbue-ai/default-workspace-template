@@ -114,6 +114,12 @@ const STARTING_STATUS = "Starting your chat…";
 const READY_STATUS = "Your chat is ready.";
 const EMPTY_CONVERSATION_STATUS_CLASS =
   "message-list-status pointer-events-none absolute inset-x-0 top-1/3 text-center text-sm text-secondary";
+// The failed-create page's buttons. The shared ask button draws a refused ask under itself as a block of its own
+// (`ask-agent-failure`), which is centred from here like the rest of the page.
+const FAILED_CREATE_BUTTONS_CLASS =
+  "flex flex-wrap items-center justify-center gap-2 " +
+  "[&_.ask-agent-failure]:flex [&_.ask-agent-failure]:flex-col [&_.ask-agent-failure]:items-center " +
+  "[&_.ask-agent-failure-message]:text-center";
 
 function getChatTerminalUrl(chatId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
@@ -637,7 +643,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         m("div", { class: "text-secondary" }, m(SeeDetails, { details: provisional.error })),
         renderFailureLines(launchError, "message-list-create-retry-failed"),
         renderFailureLines(pageActionError, "message-list-remove-failed"),
-        m("div", { class: "flex flex-wrap items-center justify-center gap-2" }, [
+        m("div", { class: FAILED_CREATE_BUTTONS_CLASS }, [
           hasAccount
             ? [
                 m(
