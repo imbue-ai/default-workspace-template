@@ -2486,6 +2486,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // A refused ask is told as part of the notice, so the notice keeps one "See details" and its bug report
         // files both. The ask itself is handed the failure alone.
         const told = withRefusedAsk(shown, actionFailureAskFailure);
+        // While one of the notice's actions runs, none of them can be pressed, whoever supplied it.
+        const disabledWhileBusy = (action: NoticeAction): NoticeAction =>
+          actionFailureInFlight === null ? action : { ...action, isDisabled: true };
         const notice: NoticeDialogAttrs = {
           title: isUnconfirmed
             ? "Couldn't confirm your message arrived"
@@ -2511,7 +2514,6 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   {
                     label: actionFailureInFlight === "retry" ? retryWording.inFlight : retryWording.label,
                     tooltip: retryWording.tooltip,
-                    isDisabled: actionFailureInFlight !== null,
                     run: () => void retryFailedSend(),
                   },
                 ]
@@ -2524,7 +2526,6 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     label: SWITCH_PROVIDER_LABEL,
                     tooltip: "Moves this chat to another provider. Your message stays in the box.",
                     isSecondary: true,
-                    isDisabled: actionFailureInFlight !== null,
                     run: () => {
                       clearActionFailureNotice();
                       m.redraw();
@@ -2539,7 +2540,6 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     label: actionFailureInFlight === "ask" ? ASKING_AN_AGENT_LABEL : ASK_AGENT_TO_FIX_LABEL,
                     tooltip: "Sends what failed to an agent that is already running, and shows its chat",
                     isSecondary: true,
-                    isDisabled: actionFailureInFlight !== null,
                     run: () =>
                       void askRunningAgentToFix(chatToAskId, failedStartFixRequest(failingChatId, shown.details)),
                   },
@@ -2566,11 +2566,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     label: actionFailureInFlight === "restart" ? "Restarting…" : "Restart",
                     tooltip: "Restarts the agent, then sends your message. Anything it's working on stops.",
                     isDestructive: true,
-                    isDisabled: actionFailureInFlight !== null,
                     run: () => void restartFailedSend(),
                   },
                 ]),
-          ],
+          ].map(disabledWhileBusy),
         };
         return m(actionFailureNotice, notice);
       }

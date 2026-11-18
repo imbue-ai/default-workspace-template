@@ -4737,6 +4737,16 @@ describe("MessageInput offers a way out of a chat whose agent cannot start", () 
     (button!.attrs!.onclick as () => void)();
   }
 
+  /** The notice's buttons in order: what each reads, and whether it is greyed out. */
+  function noticeButtons(tree: unknown): { label: string; isDisabled: boolean }[] {
+    return flatten(findByClass(tree, "modal-card"))
+      .filter((vnode) => vnode.tag === "button")
+      .map((vnode) => ({
+        label: renderedText(vnode).trim(),
+        isDisabled: vnode.attrs?.["aria-disabled"] === "true",
+      }));
+  }
+
   it("moves the chat off the account its agent would not start on, with the message still in the box", async () => {
     const render = await composerAfterRefusedSend(startFailed());
 
@@ -4938,6 +4948,48 @@ describe("MessageInput offers a way out of a chat whose agent cannot start", () 
       'Couldn\'t ask "Main chat". Try again. If this persists, report a bug.',
     ]);
     expect(findButton(render(), "Report a bug")).toBeDefined();
+  });
+
+  it("leaves no button of the notice to press while the ask is on its way, and gives them back once it is refused", async () => {
+    const connection = stubShellConnection(true);
+    const render = await composerAfterRefusedSend(startFailed());
+    let refuse: (error: unknown) => void = () => undefined;
+    mocks.sendMessage.mockImplementationOnce(() => new Promise<string>((_accept, reject) => (refuse = reject)));
+
+    press(render(), "Ask an agent to fix this");
+
+    expect(noticeButtons(render())).toEqual([
+      { label: "Cancel", isDisabled: true },
+      { label: "Retry", isDisabled: true },
+      { label: "Switch provider", isDisabled: true },
+      { label: "Asking an agent\u2026", isDisabled: true },
+      { label: "Report a bug", isDisabled: true },
+    ]);
+    press(render(), "Report a bug");
+    expect(connection.reportBug).not.toHaveBeenCalled();
+
+    refuse(askRefused());
+    await flushAsync();
+
+    expect(noticeButtons(render()).filter((button) => button.isDisabled)).toEqual([]);
+    press(render(), "Report a bug");
+    expect(connection.reportBug).toHaveBeenCalledOnce();
+  });
+
+  it("leaves no button of the notice to press while a retry is on its way", async () => {
+    stubShellConnection(true);
+    const render = await composerAfterRefusedSend(startFailed());
+    mocks.sendMessage.mockImplementationOnce(() => new Promise<string>(() => undefined));
+
+    press(render(), "Retry");
+
+    expect(noticeButtons(render())).toEqual([
+      { label: "Cancel", isDisabled: true },
+      { label: "Retrying\u2026", isDisabled: true },
+      { label: "Switch provider", isDisabled: true },
+      { label: "Ask an agent to fix this", isDisabled: true },
+      { label: "Report a bug", isDisabled: true },
+    ]);
   });
 
   it("asks again with the failure's own details, not what the refused ask said", async () => {
