@@ -2510,9 +2510,11 @@ def _app_chat_or_refusal(state: ChatAppState, intake: IntakeRequest) -> _Resolve
 
 
 def _can_chat_take_an_ask(agent_manager: AgentManager, chat_id: ChatId) -> bool:
-    """Whether a message sent to the chat reaches an agent: it is an agent chat, or one whose create is running. A
-    room has no agent to do the work, and a chat awaiting its first send or left by a failed create is launched by
-    its own page, not by a message from elsewhere."""
+    """Whether an ask goes to the chat: it is an agent chat, which takes the ask as a message, or one whose create is
+    running, for which the ask is held like any send to a chat that is not yet an agent (the root that applies it
+    sends it when the agent is up by then, else leaves it in that chat's composer). A room has no agent to do the
+    work, and a chat awaiting its first send or left by a failed create is launched by its own page, not by a
+    message from elsewhere."""
     snapshot = _agent_chat_snapshot(agent_manager, chat_id)
     if snapshot is not None:
         return snapshot.kind is ChatKind.AGENT
