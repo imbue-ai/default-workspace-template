@@ -5,3 +5,5 @@
 - The model picker now lists the model a chat is running on when no bundled catalog names it, so a local model shows in the model bar and its picker.
 
 - While a message the agent already has is still waiting on the model's first reply, the status row under it now reads "Waiting for <model>…" in place of "Sending to <harness>…". A model hosted on your own computer can take over a minute to read a new chat's instructions, and pi records nothing of that turn until the reply.
+
+- A local model that reasons before it answers is signed in as a reasoning model: a chat shows its thinking folded away above the reply, as for any other provider, and offers its thinking levels. For Ollama the "off" level stops the reasoning.

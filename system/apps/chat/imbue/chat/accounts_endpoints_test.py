@@ -25,6 +25,7 @@ from imbue.chat.accounts import read_index
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.codex.model import codex_model_options_path
 from imbue.chat.harnesses.codex.model import write_codex_model_options
+from imbue.chat.harnesses.pi_coding.local_model import LocalModelProfile
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
@@ -542,8 +543,8 @@ def test_a_visitor_cannot_make_the_workspace_look_for_model_servers() -> None:
     assert response.status_code == 403
 
 
-def _accept_local_model(base_url: str, api_key: str, model_id: str, context_window: int) -> int:
-    return context_window
+def _accept_local_model(base_url: str, api_key: str, model_id: str, context_window: int) -> LocalModelProfile:
+    return LocalModelProfile(context_window=context_window, is_reasoning=False)
 
 
 def test_a_local_model_sign_in_mints_an_account_and_lists_it(tmp_path: Path) -> None:

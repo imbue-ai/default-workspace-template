@@ -14,6 +14,7 @@ import pytest
 from imbue.chat.harnesses.pi_coding.local_model import DEFAULT_CONTEXT_WINDOW
 from imbue.chat.harnesses.pi_coding.local_model import LOCAL_MODEL_PROVIDER_ID
 from imbue.chat.harnesses.pi_coding.local_model import LocalModelError
+from imbue.chat.harnesses.pi_coding.local_model import LocalModelProfile
 from imbue.chat.harnesses.pi_coding.local_model import MIN_CONTEXT_WINDOW
 from imbue.chat.harnesses.pi_coding.local_model import check_tool_call
 from imbue.chat.harnesses.pi_coding.local_model import describe_server
@@ -30,6 +31,8 @@ _STRUCTURED_CALL: dict[str, object] = {
     "content": "",
     "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}],
 }
+# What qwen3:8b answered: its reasoning apart from the call, in the field Ollama uses for it.
+_CALL_AFTER_REASONING: dict[str, object] = {**_STRUCTURED_CALL, "reasoning": "The user wants the weather in Paris."}
 # What qwen2.5-coder:7b answered: the call it was asked for, as text pi cannot run.
 _CALL_AS_TEXT: dict[str, object] = {
     "role": "assistant",
@@ -154,7 +157,32 @@ def test_discovery_with_nothing_running_finds_nothing() -> None:
 
 
 def test_a_structured_tool_call_passes() -> None:
-    check_tool_call(_ollama(("qwen2.5:7b",), _STRUCTURED_CALL, None), _OLLAMA, "", "qwen2.5:7b")
+    assert check_tool_call(_ollama(("qwen2.5:7b",), _STRUCTURED_CALL, None), _OLLAMA, "", "qwen2.5:7b") is False
+
+
+def test_reasoning_sent_apart_from_the_answer_marks_a_reasoning_model() -> None:
+    assert check_tool_call(_ollama(("qwen3:8b",), _CALL_AFTER_REASONING, None), _OLLAMA, "", "qwen3:8b") is True
+
+
+@pytest.mark.parametrize("field", ["reasoning_content", "reasoning", "reasoning_text"])
+def test_reasoning_is_found_in_whichever_field_the_server_uses(field: str) -> None:
+    message: dict[str, object] = {**_STRUCTURED_CALL, field: "thinking it over"}
+
+    assert check_tool_call(_ollama(("m",), message, None), _OLLAMA, "", "m") is True
+
+
+def test_the_check_leaves_a_reasoning_model_room_to_think_before_it_calls() -> None:
+    """Reasoning counts against the token limit, so a tight one cuts the call off."""
+    bodies: list[dict[str, object]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": _CALL_AFTER_REASONING}]})
+
+    check_tool_call(_client(handle), _OLLAMA, "", "qwen3:8b")
+
+    (body,) = bodies
+    assert isinstance(body["max_tokens"], int) and body["max_tokens"] >= 1000
 
 
 def test_a_tool_call_printed_as_text_is_not_a_tool_call() -> None:
@@ -207,19 +235,40 @@ def test_the_window_pi_is_told_is_never_more_than_the_server_loaded() -> None:
     """Ollama keeps its own context length whatever pi is told, and truncates what does not fit."""
     client = _ollama(("qwen2.5:7b",), _STRUCTURED_CALL, 40_000)
 
-    assert verify_model(client, _OLLAMA, "", "qwen2.5:7b", DEFAULT_CONTEXT_WINDOW) == 40_000
+    assert verify_model(client, _OLLAMA, "", "qwen2.5:7b", DEFAULT_CONTEXT_WINDOW) == LocalModelProfile(
+        context_window=40_000, is_reasoning=False
+    )
 
 
 def test_the_window_asked_for_stands_when_the_server_does_not_say() -> None:
     client = _ollama(("qwen2.5:7b",), _STRUCTURED_CALL, None)
 
-    assert verify_model(client, _OLLAMA, "", "qwen2.5:7b", 100_000) == 100_000
+    assert verify_model(client, _OLLAMA, "", "qwen2.5:7b", 100_000).context_window == 100_000
 
 
 def test_a_smaller_window_than_the_server_loaded_is_kept() -> None:
     client = _ollama(("qwen2.5:7b",), _STRUCTURED_CALL, 131_072)
 
-    assert verify_model(client, _OLLAMA, "", "qwen2.5:7b", DEFAULT_CONTEXT_WINDOW) == DEFAULT_CONTEXT_WINDOW
+    profile = verify_model(client, _OLLAMA, "", "qwen2.5:7b", DEFAULT_CONTEXT_WINDOW)
+
+    assert profile.context_window == DEFAULT_CONTEXT_WINDOW
+
+
+def test_a_reasoning_model_on_ollama_is_told_how_its_reasoning_is_turned_off() -> None:
+    client = _ollama(("qwen3:8b",), _CALL_AFTER_REASONING, 40_960)
+
+    assert verify_model(client, _OLLAMA, "", "qwen3:8b", DEFAULT_CONTEXT_WINDOW) == LocalModelProfile(
+        context_window=40_960, is_reasoning=True, reasoning_off_effort="none"
+    )
+
+
+def test_a_reasoning_model_on_a_server_that_is_not_ollama_names_no_way_to_turn_it_off() -> None:
+    """What stops the reasoning was measured on Ollama alone, so no other server is sent it."""
+    client = _ollama(("qwen3:8b",), _CALL_AFTER_REASONING, None)
+
+    assert verify_model(client, _OLLAMA, "", "qwen3:8b", DEFAULT_CONTEXT_WINDOW) == LocalModelProfile(
+        context_window=DEFAULT_CONTEXT_WINDOW, is_reasoning=True
+    )
 
 
 def test_ollama_s_default_context_is_refused_with_the_setting_that_fixes_it() -> None:
@@ -244,7 +293,7 @@ def test_no_model_is_refused() -> None:
 
 
 def test_the_models_file_is_a_pi_custom_provider_holding_no_key(tmp_path: Path) -> None:
-    write_models_file(tmp_path, _OLLAMA, "qwen2.5:7b", 32_768)
+    write_models_file(tmp_path, _OLLAMA, "qwen2.5:7b", LocalModelProfile(context_window=32_768, is_reasoning=False))
 
     path = tmp_path / "models.json"
     provider = json.loads(path.read_text())["providers"][LOCAL_MODEL_PROVIDER_ID]
@@ -257,7 +306,33 @@ def test_the_models_file_is_a_pi_custom_provider_holding_no_key(tmp_path: Path) 
 
 
 def test_the_output_limit_leaves_room_in_a_small_window(tmp_path: Path) -> None:
-    write_models_file(tmp_path, _OLLAMA, "qwen2.5:7b", 16_384)
+    write_models_file(tmp_path, _OLLAMA, "qwen2.5:7b", LocalModelProfile(context_window=16_384, is_reasoning=False))
 
     (model,) = json.loads((tmp_path / "models.json").read_text())["providers"][LOCAL_MODEL_PROVIDER_ID]["models"]
     assert model["maxTokens"] == 4_096
+
+
+def test_a_reasoning_model_is_declared_one_with_what_ollama_needs(tmp_path: Path) -> None:
+    """The declaration alone would have pi send the instructions under a role Ollama drops."""
+    profile = LocalModelProfile(context_window=32_768, is_reasoning=True, reasoning_off_effort="none")
+
+    write_models_file(tmp_path, _OLLAMA, "qwen3:8b", profile)
+
+    (model,) = json.loads((tmp_path / "models.json").read_text())["providers"][LOCAL_MODEL_PROVIDER_ID]["models"]
+    assert model == {
+        "id": "qwen3:8b",
+        "contextWindow": 32_768,
+        "maxTokens": 8_192,
+        "reasoning": True,
+        "compat": {"supportsDeveloperRole": False},
+        "thinkingLevelMap": {"off": "none"},
+    }
+
+
+def test_a_reasoning_model_with_no_known_off_switch_names_none(tmp_path: Path) -> None:
+    write_models_file(tmp_path, _OLLAMA, "m", LocalModelProfile(context_window=32_768, is_reasoning=True))
+
+    (model,) = json.loads((tmp_path / "models.json").read_text())["providers"][LOCAL_MODEL_PROVIDER_ID]["models"]
+    assert model["reasoning"] is True
+    assert model["compat"] == {"supportsDeveloperRole": False}
+    assert "thinkingLevelMap" not in model

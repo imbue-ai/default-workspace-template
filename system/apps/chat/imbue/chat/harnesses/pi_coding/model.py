@@ -230,7 +230,7 @@ def read_custom_model_options(config_dir: Path) -> tuple[ModelOption, ...]:
         models = provider.get("models") if isinstance(provider, dict) else None
         for model in models if isinstance(models, list) else ():
             if isinstance(model, dict) and isinstance(model.get("id"), str):
-                tags.append((f"{provider_id}/{model['id']}", ("off",)))
+                tags.append((f"{provider_id}/{model['id']}", _supported_thinking_levels(model)))
     return to_options(tuple(tags))
 
 

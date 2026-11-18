@@ -934,7 +934,11 @@ new chat's first request alone measured about 24,000 (the workspace's
 instructions, its skills and pi's tools). The account then holds pi's
 custom provider in `models.json` (id `local-model`, one model, the smaller of
 the context asked for and the one loaded) beside the server's key in
-`auth.json`, and an agent's pi config dir links both. The model bar matches a
+`auth.json`, and an agent's pi config dir links both. A model whose check answer
+carries reasoning apart from its content is declared a reasoning model there, so
+pi records its thinking as thinking and the chat offers its thinking levels; the
+declaration turns off the `developer` role, which Ollama drops silently, and for
+Ollama names the effort that stops the reasoning. The model bar matches a
 pi agent's live model against the catalog plus the models of its own
 `models.json`, and its picker lists the model in use when no catalog names it.
 

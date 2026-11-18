@@ -11,6 +11,11 @@ pi 0.87.1, are checked here before an account is committed:
   and reports as a finished turn;
 * Ollama loads a model with its own context length (4096 unless configured), whatever window pi
   is told, and silently drops what does not fit -- a sixth of a new chat's first request.
+
+A model that reasons before it answers sends that reasoning apart from its answer, and pi records
+it as thinking, which a chat shows folded away above the reply like any other provider's. Such a
+model is declared a reasoning model to pi, so its thinking level can be set; see
+:func:`write_models_file` for what that declaration has to carry for Ollama.
 """
 
 import json
@@ -46,13 +51,16 @@ _CANDIDATE_HOSTS: Final = ("127.0.0.1", "host.docker.internal", "host.lima.inter
 _KNOWN_SERVERS: Final = ((11434, "Ollama"), (1234, "LM Studio"), (8080, "llama.cpp"))
 _SERVER_NAME_BY_PORT: Final = dict(_KNOWN_SERVERS)
 
+_OLLAMA_REASONING_OFF_EFFORT: Final = "none"
+
 _PROBE_TIMEOUT_SECONDS: Final = 2.0
 # A model that is not loaded yet is read off disk before it answers.
 _TOOL_CALL_TIMEOUT_SECONDS: Final = 180.0
 
 _TOOL_CALL_REQUEST: Final[dict[str, Any]] = {
     "stream": False,
-    "max_tokens": 200,
+    # Room for a reasoning model to think before the call: reasoning counts against the limit.
+    "max_tokens": 1000,
     "messages": [{"role": "user", "content": "Use the get_weather tool to look up the weather in Paris."}],
     "tools": [
         {
@@ -73,6 +81,22 @@ _TOOL_CALL_REQUEST: Final[dict[str, Any]] = {
 
 class LocalModelError(Exception):
     """A server could not be reached, or its model cannot run a chat here. The message is shown to the user."""
+
+
+# The fields an OpenAI-compatible server may carry a model's reasoning in, apart from its answer.
+# pi reads the same three.
+_REASONING_FIELDS: Final = ("reasoning_content", "reasoning", "reasoning_text")
+
+
+class LocalModelProfile(FrozenModel):
+    """What checking a model against its server found out about it, for the file pi reads."""
+
+    context_window: int = Field(description="The context window to tell pi, in tokens")
+    is_reasoning: bool = Field(description="Whether the model sends reasoning apart from its answer")
+    reasoning_off_effort: str | None = Field(
+        default=None,
+        description="The `reasoning_effort` that turns the model's reasoning off, where the server is known to take one",
+    )
 
 
 class LocalModelServer(FrozenModel):
@@ -157,8 +181,11 @@ def discover_servers(client: httpx.Client) -> tuple[LocalModelServer, ...]:
     return tuple(by_port.values())
 
 
-def check_tool_call(client: httpx.Client, base_url: str, api_key: str, model_id: str) -> None:
-    """Ask the model for one tool call, and raise unless it answers with a structured one."""
+def check_tool_call(client: httpx.Client, base_url: str, api_key: str, model_id: str) -> bool:
+    """Ask the model for one tool call, and raise unless it answers with a structured one.
+
+    Returns whether the answer carried reasoning apart from its content.
+    """
     try:
         response = client.post(
             f"{base_url}/chat/completions",
@@ -181,6 +208,7 @@ def check_tool_call(client: httpx.Client, base_url: str, api_key: str, model_id:
             f"{model_id} answered without calling a tool. Chats here work by calling tools,"
             " so pick a model that supports tool calling."
         )
+    return _has_reasoning(payload)
 
 
 def _error_text(payload: Any, status_code: int) -> str:
@@ -189,12 +217,21 @@ def _error_text(payload: Any, status_code: int) -> str:
     return message if isinstance(message, str) and message else f"it answered {status_code}"
 
 
-def _has_tool_call(payload: Any) -> bool:
+def _first_message(payload: Any) -> dict[str, Any]:
     choices = payload.get("choices") if isinstance(payload, dict) else None
     first = choices[0] if isinstance(choices, list) and choices else None
     message = first.get("message") if isinstance(first, dict) else None
-    tool_calls = message.get("tool_calls") if isinstance(message, dict) else None
+    return message if isinstance(message, dict) else {}
+
+
+def _has_tool_call(payload: Any) -> bool:
+    tool_calls = _first_message(payload).get("tool_calls")
     return isinstance(tool_calls, list) and len(tool_calls) > 0
+
+
+def _has_reasoning(payload: Any) -> bool:
+    message = _first_message(payload)
+    return any(isinstance(message.get(field), str) and message[field] != "" for field in _REASONING_FIELDS)
 
 
 def read_loaded_context_window(client: httpx.Client, base_url: str, model_id: str) -> int | None:
@@ -219,8 +256,10 @@ def read_loaded_context_window(client: httpx.Client, base_url: str, model_id: st
     return None
 
 
-def verify_model(client: httpx.Client, base_url: str, api_key: str, model_id: str, context_window: int) -> int:
-    """Check that ``model_id`` can run a chat here, and return the context window pi is to be told.
+def verify_model(
+    client: httpx.Client, base_url: str, api_key: str, model_id: str, context_window: int
+) -> LocalModelProfile:
+    """Check that ``model_id`` can run a chat here, and return what pi is to be told about it.
 
     The window is the smaller of what was asked for and what the server loaded the model with:
     telling pi a larger one than the server keeps makes it send turns the server truncates.
@@ -232,41 +271,56 @@ def verify_model(client: httpx.Client, base_url: str, api_key: str, model_id: st
             f"A chat here needs a context window of at least {MIN_CONTEXT_WINDOW:,} tokens"
             " to hold the workspace's own instructions."
         )
-    check_tool_call(client, base_url, api_key, model_id)
+    is_reasoning = check_tool_call(client, base_url, api_key, model_id)
     loaded = read_loaded_context_window(client, base_url, model_id)
     if loaded is None:
-        return context_window
+        return LocalModelProfile(context_window=context_window, is_reasoning=is_reasoning)
     if loaded < MIN_CONTEXT_WINDOW:
         raise LocalModelError(
             f"The server loaded {model_id} with a context of {loaded:,} tokens, and a chat here needs at least"
             f" {MIN_CONTEXT_WINDOW:,} to hold the workspace's own instructions. For Ollama, set"
             f" OLLAMA_CONTEXT_LENGTH to {MIN_CONTEXT_WINDOW} or more where it runs, restart it, and try again."
         )
-    return min(context_window, loaded)
+    # Only Ollama reports a loaded context, and Ollama takes "none" to stop a model reasoning
+    # (measured on 0.40: every other effort leaves it on).
+    return LocalModelProfile(
+        context_window=min(context_window, loaded),
+        is_reasoning=is_reasoning,
+        reasoning_off_effort=_OLLAMA_REASONING_OFF_EFFORT if is_reasoning else None,
+    )
 
 
-def verify_local_model(base_url: str, api_key: str, model_id: str, context_window: int) -> int:
+def verify_local_model(base_url: str, api_key: str, model_id: str, context_window: int) -> LocalModelProfile:
     """:func:`verify_model` over a client of its own, for the sign-in flow."""
     with httpx.Client() as client:
         return verify_model(client, base_url, api_key, model_id, context_window)
 
 
-def write_models_file(account_dir: Path, base_url: str, model_id: str, context_window: int) -> None:
-    """Write the `models.json` that makes ``model_id`` at ``base_url`` a pi provider of this account."""
+def write_models_file(account_dir: Path, base_url: str, model_id: str, profile: LocalModelProfile) -> None:
+    """Write the `models.json` that makes ``model_id`` at ``base_url`` a pi provider of this account.
+
+    A reasoning model is declared one, which is what gives a chat its thinking levels. Two things
+    ride with the declaration:
+
+    * pi sends a reasoning model its instructions under the `developer` role unless told the
+      server does not take it, and Ollama drops a `developer` message without a word (measured
+      on 0.40: the same instruction as `system` is followed, as `developer` it is not counted
+      in the prompt at all), which would leave the model with none of the workspace's rules;
+    * pi's "off" level sends nothing unless the model names what to send, so where the server
+      is known to take one, the effort that stops the reasoning is named.
+    """
+    model: dict[str, Any] = {
+        "id": model_id,
+        "contextWindow": profile.context_window,
+        "maxTokens": min(_MAX_OUTPUT_TOKENS, profile.context_window // 4),
+    }
+    if profile.is_reasoning:
+        model["reasoning"] = True
+        model["compat"] = {"supportsDeveloperRole": False}
+        if profile.reasoning_off_effort is not None:
+            model["thinkingLevelMap"] = {"off": profile.reasoning_off_effort}
     config = {
-        "providers": {
-            LOCAL_MODEL_PROVIDER_ID: {
-                "baseUrl": base_url,
-                "api": "openai-completions",
-                "models": [
-                    {
-                        "id": model_id,
-                        "contextWindow": context_window,
-                        "maxTokens": min(_MAX_OUTPUT_TOKENS, context_window // 4),
-                    }
-                ],
-            }
-        }
+        "providers": {LOCAL_MODEL_PROVIDER_ID: {"baseUrl": base_url, "api": "openai-completions", "models": [model]}}
     }
     path = account_dir / MODELS_FILENAME
     path.write_text(json.dumps(config, indent=2) + "\n")

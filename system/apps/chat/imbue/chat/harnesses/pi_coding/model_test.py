@@ -227,3 +227,13 @@ def test_an_account_on_a_local_model_offers_that_model_and_another_pi_account_th
     assert offered is not None
     assert [option.id for option in offered] == ["local-model/qwen2.5:7b"]
     assert PiModelResolver.list_account_options(keyed) is None
+
+
+def test_a_custom_reasoning_model_offers_its_thinking_levels(tmp_path: Path) -> None:
+    """Read by the same rule as the bundled catalog, so the effort control offers what pi will take."""
+    model = {"id": "qwen3:8b", "reasoning": True, "thinkingLevelMap": {"off": "none"}}
+    _write_models_file(tmp_path, {"local-model": {"models": [model]}})
+
+    (option,) = read_custom_model_options(tmp_path)
+
+    assert [effort.level for effort in option.efforts] == ["off", "minimal", "low", "medium", "high"]

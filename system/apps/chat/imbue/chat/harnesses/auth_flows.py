@@ -73,6 +73,7 @@ from imbue.chat.harnesses.lanes import SignInMethod
 from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.lanes import get_method
 from imbue.chat.harnesses.pi_coding.local_model import LocalModelError
+from imbue.chat.harnesses.pi_coding.local_model import LocalModelProfile
 from imbue.chat.harnesses.pi_coding.local_model import MODELS_FILENAME
 from imbue.chat.harnesses.pi_coding.local_model import PLACEHOLDER_API_KEY
 from imbue.chat.harnesses.pi_coding.local_model import normalize_base_url
@@ -304,8 +305,8 @@ class AuthFlowService:
     _clock: Callable[[], float]
     _connect_login_client: Callable[[Path], CodexLoginClient]
     # Checks a local model against its server: (base_url, api_key, model_id, context_window) to
-    # the context window pi is to be told, raising LocalModelError with words for the user.
-    _verify_local_model: Callable[[str, str, str, int], int]
+    # what pi is to be told about it, raising LocalModelError with words for the user.
+    _verify_local_model: Callable[[str, str, str, int], LocalModelProfile]
 
     @classmethod
     def create(
@@ -318,7 +319,7 @@ class AuthFlowService:
         fetch_callback: CallbackFetcher | None = None,
         clock: Callable[[], float] | None = None,
         login_client_connector: Callable[[Path], CodexLoginClient] | None = None,
-        local_model_verifier: Callable[[str, str, str, int], int] | None = None,
+        local_model_verifier: Callable[[str, str, str, int], LocalModelProfile] | None = None,
     ) -> "AuthFlowService":
         """`spawner` stands in for `spawn_pty`, `probe` for `is_signed_in`.
 
@@ -655,7 +656,7 @@ class AuthFlowService:
                 raise FlowError("this sign-in does not take a model server")
         try:
             base_url = normalize_base_url(base_url)
-            verified_window = self._verify_local_model(base_url, api_key, model_id, context_window)
+            profile = self._verify_local_model(base_url, api_key, model_id, context_window)
         except LocalModelError as e:
             with self._lock:
                 session = self._require_locked(flow_id, must_be_pending=True)
@@ -671,7 +672,7 @@ class AuthFlowService:
                 display = _write_paste(
                     PasteSink.PI_AUTH_JSON, path, api_key or PLACEHOLDER_API_KEY, None, session.lane
                 )
-                write_models_file(path, base_url, model_id, verified_window)
+                write_models_file(path, base_url, model_id, profile)
                 verdict = self._probe(session.lane.harness, path)
                 session.last_verdict = verdict
                 if verdict is SignedIn.NO:

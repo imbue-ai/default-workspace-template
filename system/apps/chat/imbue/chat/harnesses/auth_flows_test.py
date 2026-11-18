@@ -25,6 +25,7 @@ from imbue.chat.harnesses.auth_flows import flow_shape
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import get_method
 from imbue.chat.harnesses.pi_coding.local_model import LocalModelError
+from imbue.chat.harnesses.pi_coding.local_model import LocalModelProfile
 from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.sign_in_relay import RelayCallbackError
 from imbue.chat.harnesses.signed_in import SignedIn
@@ -951,18 +952,22 @@ exec sleep 60''',
     assert env_log.read_text().splitlines() == ["true", "true"]
 
 
-def _accept_local_model(base_url: str, api_key: str, model_id: str, context_window: int) -> int:
+def _accept_local_model(base_url: str, api_key: str, model_id: str, context_window: int) -> LocalModelProfile:
     """A server whose model passes, loaded with less context than was asked for."""
-    return min(context_window, 20_000)
+    return LocalModelProfile(context_window=min(context_window, 20_000), is_reasoning=False)
 
 
-def _refuse_local_model(base_url: str, api_key: str, model_id: str, context_window: int) -> int:
+def _accept_reasoning_model(base_url: str, api_key: str, model_id: str, context_window: int) -> LocalModelProfile:
+    return LocalModelProfile(context_window=context_window, is_reasoning=True, reasoning_off_effort="none")
+
+
+def _refuse_local_model(base_url: str, api_key: str, model_id: str, context_window: int) -> LocalModelProfile:
     raise LocalModelError(f"{model_id} answered without calling a tool.")
 
 
 def _local_model_service(
     tmp_path: Path,
-    verifier: Callable[[str, str, str, int], int] = _accept_local_model,
+    verifier: Callable[[str, str, str, int], LocalModelProfile] = _accept_local_model,
     probe: Callable[..., SignedIn] = lambda *_a: SignedIn.YES,
 ) -> AuthFlowService:
     return AuthFlowService.create(
@@ -995,6 +1000,19 @@ def test_a_local_model_sign_in_writes_pi_s_provider_and_its_key_and_commits(tmp_
     }
     # pi lists a provider's models only once it holds some credential for it.
     assert json.loads((folder / "auth.json").read_text()) == {"local-model": {"type": "api_key", "key": "local"}}
+
+
+def test_a_reasoning_local_model_is_signed_in_as_one(tmp_path: Path) -> None:
+    """What makes a chat fold the model's thinking away above its reply, and offer its thinking levels."""
+    service = _local_model_service(tmp_path, verifier=_accept_reasoning_model)
+    started = service.start("local-model", "endpoint")
+
+    assert service.submit_endpoint(started.flow_id, "localhost:11434", "qwen3:8b", 32_768).state is FlowState.OK
+
+    (account,) = read_index(tmp_path).accounts
+    models = json.loads((tmp_path / ".minds" / "accounts" / account.id / "models.json").read_text())
+    (model,) = models["providers"]["local-model"]["models"]
+    assert model["reasoning"] is True
 
 
 def test_a_local_model_server_s_key_is_kept_in_the_credential_file_alone(tmp_path: Path) -> None:
