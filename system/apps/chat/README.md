@@ -443,7 +443,9 @@ made with that title and label on the default account when there is none (a
 window's "Chat about this app"; the intake is held with a `hint` the root puts
 on the composer); `app_ask`, an ask from a page of an app (a failure's "Ask an
 agent to fix this"): that same chat about the `app` takes the text as a message
-when it is an agent chat, holds it while its create is still running, and is
+when it is an agent chat, has it held for its page while its create is still
+running (the root sends it when the agent is up by the time it applies the
+intake, else leaves it in the chat's composer, unsent), and is
 created with it as its first message on the default account when there is none
 (under the app chat's title and label, never auto-named), and the `main_chat`
 rules apply instead when it is a room, is awaiting its first send or was left by
