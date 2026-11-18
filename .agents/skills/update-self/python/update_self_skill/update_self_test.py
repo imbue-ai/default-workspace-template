@@ -8423,6 +8423,76 @@ def test_a_rolled_back_apply_records_no_landing(apply_repo: Path, monkeypatch) -
     assert status.applied_at is None
 
 
+def test_an_apply_stops_the_runs_worker_before_it_merges_or_boots_anything(
+    apply_repo: Path, monkeypatch
+) -> None:
+    """The worker's idle session holds memory the pre-flight boots need, and its work is done."""
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    root = ["--repo-root", str(apply_repo)]
+    assert update_self.main(["run-status", "start", *root]) == 0
+    assert update_self.main(["run-status", "delegate", "update-self", *root]) == 0
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    spawner = _FakeSpawner()
+    seen_at_stop: list[tuple[bool, int]] = []
+
+    def observe(argv: list[str]) -> None:
+        if argv[:2] == ["mngr", "stop"]:
+            seen_at_stop.append((runner.ran("git", "merge"), len(spawner.spawns)))
+
+    runner.on_command = observe
+
+    code = _apply(
+        runner, _FakeHttp(_all_healthy), spawner, apply_repo, target_ref="minds-v0.4.2"
+    )
+
+    assert code == 0
+    assert runner.argvs_starting("mngr", "stop") == [["mngr", "stop", "update-self"]]
+    assert seen_at_stop == [(False, 0)]
+    assert spawner.spawns, "the backend change should have been pre-flighted"
+
+
+@pytest.mark.parametrize("is_worker_recorded", [False, True])
+def test_an_apply_with_no_worker_on_record_stops_nothing(
+    apply_repo: Path, monkeypatch, is_worker_recorded: bool
+) -> None:
+    # Without a run record (an apply run by hand) or with a run that never delegated, or whose
+    # verdict already cleared the worker, there is nobody to stop.
+    if is_worker_recorded:
+        monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+        root = ["--repo-root", str(apply_repo)]
+        assert update_self.main(["run-status", "start", *root]) == 0
+        assert update_self.main(["run-status", "delegate", "update-self", *root]) == 0
+        assert (
+            update_self.main(["run-status", "verdict", "STUCK", "--detail", "x", *root])
+            == 0
+        )
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert runner.argvs_starting("mngr", "stop") == []
+
+
+def test_an_apply_whose_worker_will_not_stop_lands_anyway(
+    apply_repo: Path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    root = ["--repo-root", str(apply_repo)]
+    assert update_self.main(["run-status", "start", *root]) == 0
+    assert update_self.main(["run-status", "delegate", "update-self", *root]) == 0
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+    runner.respond(("mngr", "stop"), _Result(returncode=1, stderr="no such agent"))
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert (
+        "could not stop the update worker update-self: `mngr stop` exited 1: no such agent"
+        in capsys.readouterr().err
+    )
+
+
 def test_run_status_start_clears_the_previous_runs_landing(
     tmp_path, monkeypatch
 ) -> None:

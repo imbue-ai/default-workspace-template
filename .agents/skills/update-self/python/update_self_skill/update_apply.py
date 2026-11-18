@@ -55,6 +55,7 @@ from update_self_skill.update_apply_contract import (
     provision_incomplete_path,
     read_last_good,
     read_marker,
+    read_run_status,
     rollback_lock_path,
     snapshots_root,
     write_emergency,
@@ -67,6 +68,7 @@ from update_self_skill.update_banding import (
     as_expendable,
     keep_protected,
 )
+from update_self_skill.update_chat_pause import MNGR_STOP_START_TIMEOUT_SECONDS
 from update_self_skill.update_classification import (
     CLASS_DOCKERFILE,
     ApplyPlan,
@@ -969,6 +971,44 @@ def _report_emergency(
             )
 
 
+def _stop_update_worker(repo_root: Path, runner: Runner) -> None:
+    """Stop the worker the run record names, keeping it, so its idle session's memory is free
+    for the apply's boots and build.
+
+    Its ``done`` is already in hand, and a retry's catch-up message starts it again with its
+    branch and conversation intact. A stop that fails holds the apply back no more than a
+    worker left running would.
+    """
+    status = read_run_status(repo_root)
+    worker = status.worker_agent_name if status is not None else None
+    if not worker:
+        return
+    try:
+        completed = runner.run(
+            ["mngr", "stop", worker],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=MNGR_STOP_START_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        sys.stderr.write(
+            f"warning: could not stop the update worker {worker} ({type(exc).__name__}: {exc}); "
+            "applying with it running.\n"
+        )
+        return
+    if completed.returncode != 0:
+        sys.stderr.write(
+            f"warning: could not stop the update worker {worker}: `mngr stop` exited "
+            f"{completed.returncode}: {(completed.stderr or '').strip()}; applying with it running.\n"
+        )
+        return
+    sys.stderr.write(
+        f"stopped the update worker {worker} to free its memory for the apply.\n"
+    )
+
+
 def apply_update(
     merge_ref: str,
     repo_root: Path,
@@ -1107,6 +1147,9 @@ def apply_update(
             )
             return 1
     write_marker(marker, repo_root, now)
+    # Before the refresh, which may replace the mngr this calls.
+    if marker.phase == PHASE_STARTED:
+        _stop_update_worker(repo_root, runner)
 
     def _advance(phase: str) -> None:
         marker.phase = phase
