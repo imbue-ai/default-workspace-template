@@ -549,8 +549,14 @@ text. The printed JSON names what went into the file: `sections`, `added`
 releases the workspace skipped, read at the last release that kept them as
 files; `null` when there is no such release to read). Under `unlisted` it names
 anything that could not be read: repeat each of those lines in your report
-rather than presenting a partial list as the whole. The verbatim entries behind
-the sections are in `UNABRIDGED_CHANGELOG.md` at the target.
+rather than presenting a partial list as the whole.
+
+The entries under `added_before_consolidation` span every release the
+workspace skipped and name none of them. `UNABRIDGED_CHANGELOG.md` at the
+target holds the same text under one `## [<release>]` heading per release, and
+the verbatim entries behind the sections: read it to say which release a change
+shipped in. For a workspace many releases behind, both files are larger than
+one read: read them in parts.
 
 ## 6. Report back
 
