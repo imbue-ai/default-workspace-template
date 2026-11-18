@@ -155,15 +155,16 @@ def _read_changelog(ref: str, repo_root: Path) -> tuple[str, str | None]:
 
 
 def _added_entries(
-    base: str, ref: str, repo_root: Path
+    base: str, ref: str, repo_root: Path, *, find_renames: bool
 ) -> subprocess.CompletedProcess[bytes]:
-    """The entry files ``ref`` adds since it and ``base`` diverged."""
+    """The entry files ``ref`` adds since it and ``base`` diverged. With ``find_renames``, a
+    file git pairs with one the merge base has under another path is not among them."""
     return _git(
         [
             "diff",
             "--name-only",
             "--diff-filter=A",
-            "--no-renames",
+            "--find-renames" if find_renames else "--no-renames",
             f"{base}...{ref}",
             "--",
             *_ENTRY_PATHSPECS,
@@ -187,7 +188,7 @@ def _gather_whats_new(
     Raises ``subprocess.CalledProcessError`` when the entries between the two refs cannot
     be listed. Anything else that cannot be read is left out and named in ``unlisted``.
     """
-    added = _added_entries(base, target, repo_root)
+    added = _added_entries(base, target, repo_root, find_renames=False)
     added.check_returncode()
     unlisted: list[str] = []
 
@@ -220,7 +221,10 @@ def _gather_whats_new(
     added_before_consolidation: EntriesAtRef | None = None
     is_base_before_consolidation = base_problem is None and not base_labels
     if is_base_before_consolidation and last_tag_with_entry_files is not None:
-        added_earlier = _added_entries(base, last_tag_with_entry_files, repo_root)
+        # An entry moved to another folder before that tag is one the base already has.
+        added_earlier = _added_entries(
+            base, last_tag_with_entry_files, repo_root, find_renames=True
+        )
         if added_earlier.returncode == 0:
             added_before_consolidation = EntriesAtRef(
                 last_tag_with_entry_files, _names(added_earlier)
