@@ -29,6 +29,7 @@ const agentState: {
 // Every launch choice made for a chat with no agent yet, as (chat id, account id, pick).
 const launchChoices: [string, string, unknown][] = [];
 vi.mock("../models/Chats", () => ({
+  addHeldSendFailedListener: () => undefined,
   getChatById: () => agentState.agent ?? undefined,
   getMainChatId: () => agentState.mainChatId,
   getProvisionalChat: () => agentState.provisional,
