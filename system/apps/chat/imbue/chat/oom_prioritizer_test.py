@@ -225,7 +225,7 @@ def test_a_closed_report_releases_the_chat() -> None:
 def test_a_chat_left_alone_is_shed_before_a_freshly_spawned_worker() -> None:
     """The whole point of the staleness ramp, end to end.
 
-    ``stale`` was last messaged three days ago and its tab is still open; ``live``
+    ``stale`` was last messaged a day ago and its tab is still open; ``live``
     was just messaged and spawned the worker the user actually cares about. The
     stale chat must end up more expendable than the worker band, and the live one
     less.
@@ -233,7 +233,7 @@ def test_a_chat_left_alone_is_shed_before_a_freshly_spawned_worker() -> None:
     h = _Harness(chat_ids=["stale", "live"], pids={"stale": 10, "live": 20})
     h.report("stale", PresenceState.VISIBLE)
     h.prioritizer.record_message(ChatId("stale"))
-    for _ in range(3 * 24 * 6):
+    for _ in range(24 * 6):
         h.advance(10 * 60.0)
         h.report("stale", PresenceState.HIDDEN)
     h.report("live", PresenceState.VISIBLE)
@@ -242,7 +242,7 @@ def test_a_chat_left_alone_is_shed_before_a_freshly_spawned_worker() -> None:
     latest = h.latest_adj_by_pid()
     assert latest[10] > bands.WORKER_AGENT
     assert latest[20] < bands.WORKER_AGENT
-    # Still never shed before an agent's own subprocesses.
+    # A day in, still not shed before an agent's own subprocesses.
     assert latest[10] < bands.AGENT_SUBPROCESS
 
 
@@ -255,11 +255,15 @@ def test_idle_time_alone_re_tags_a_chat_with_no_new_reports() -> None:
     h.advance(6 * _HOUR)
     h.prioritizer.reapply()
     aged = h.latest_adj_by_pid()[10]
-    h.advance(24 * _HOUR)
+    h.advance(18 * _HOUR)
     h.prioritizer.reapply()
     abandoned = h.latest_adj_by_pid()[10]
-    assert fresh < aged < abandoned
+    h.advance(bands.CHAT_STAGES["aged"].idle_seconds)
+    h.prioritizer.reapply()
+    left_for_days = h.latest_adj_by_pid()[10]
+    assert fresh < aged < abandoned < left_for_days
     assert abandoned == bands.CHAT_AGENT_STALE_CEILING
+    assert left_for_days == bands.CHAT_STAGES["aged"].adj
 
 
 def test_a_mid_turn_chat_does_not_age_out() -> None:
@@ -312,10 +316,10 @@ def test_process_start_time_keeps_a_revived_chat_fresh() -> None:
 
 
 def test_an_untouched_long_running_process_ages_out() -> None:
-    # The converse: no reported engagement and a process that started days ago is
+    # The converse: no reported engagement and a process that started a day ago is
     # positive evidence of abandonment, not missing evidence.
     h = _Harness(chat_ids=["a"], pids={"a": 10})
-    h.process_started_at[ChatId("a")] = h.now - 3 * 24 * _HOUR
+    h.process_started_at[ChatId("a")] = h.now - 24 * _HOUR
     h.prioritizer.reapply()
     assert h.latest_adj_by_pid()[10] == bands.CHAT_AGENT_STALE_CEILING
 

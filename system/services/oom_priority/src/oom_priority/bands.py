@@ -96,13 +96,13 @@ USER_AGENT: Final[int] = 300
 WORKER_AGENT: Final[int] = 600
 AGENT_SUBPROCESS: Final[int] = 900
 # The Screen's stack (Xorg, XFCE, PulseAudio, neko and the watcher that ends them
-# together): the desktop an agent or the user launched, so it is shed before any
-# agent, even an abandoned chat at its stale ceiling, and after the programs on
-# it (an agent's subprocesses, and Chromium above them), since ending the X
-# server takes every program on the Screen with it while ending one program
-# may free enough. The Screen service that starts the stack is an ordinary
-# service (``SERVICE_BANDS["screen"]``): it holds little memory and brings the
-# stack back with Chromium's tabs.
+# together): the desktop an agent or the user launched, so it is shed before a
+# worker or a chat at its stale band (a chat left for days longer climbs past
+# it), and after the programs on it (an agent's subprocesses, and Chromium above
+# them), since ending the X server takes every program on the Screen with it
+# while ending one program may free enough. The Screen service that starts the
+# stack is an ordinary service (``SERVICE_BANDS["screen"]``): it holds little
+# memory and brings the stack back with Chromium's tabs.
 SCREEN_STACK: Final[int] = 850
 
 # The chat's dynamic band, as the stages of a chat nobody is engaging with.
@@ -119,8 +119,13 @@ SCREEN_STACK: Final[int] = 850
 # revives on its next message with its transcript intact (only the next message
 # pays a cold start, and history stays readable while it is down), whereas
 # shedding a running worker destroys in-flight work. The stale stage still sits
-# below ``AGENT_SUBPROCESS``, so any agent's build/test/browser subprocess is shed
-# before any agent itself.
+# below ``AGENT_SUBPROCESS``, so an agent's build/test/browser subprocess is shed
+# before a chat that has only gone stale.
+#
+# A chat left for days longer goes on to the aged stage, past the Screen's stack,
+# every agent's subprocesses and most of the browser. Shedding it still costs one
+# slow next message, where shedding a renderer takes the page someone was on and
+# shedding a subprocess takes work an agent in use is waiting for.
 #
 # Starting at the fresh stage rather than the floor means a chat that is never
 # re-tagged at all stays middling-expendable rather than pinned to the protected
@@ -131,9 +136,9 @@ CHAT_STAGES: Final[dict[str, ChatStage]] = {
     # Abandoned: shed before a worker, even with a visible tab, since a shed
     # costs it nothing but a slow next message.
     "stale": ChatStage(idle_seconds=24 * _HOUR, adj=800, freshness=0.0),
-    # Switched off. An idle time in place of ``NEVER`` carries a chat left that
-    # long on up to the highest ``oom_score_adj`` the kernel accepts.
-    "aged": ChatStage(idle_seconds=NEVER, adj=1000, freshness=0.0),
+    # Left for days: the highest ``oom_score_adj`` the kernel accepts, level with
+    # Chromium's renderers.
+    "aged": ChatStage(idle_seconds=5 * 24 * _HOUR, adj=1000, freshness=0.0),
 }
 
 # How much each engagement signal protects a *fresh* chat, subtracted from the
@@ -261,7 +266,8 @@ SERVICE_BANDS: Final[dict[str, int]] = {
 }
 
 # The shared-browser band: the absolute ceiling, one above AGENT_SUBPROCESS, so a
-# browser always outranks even an agent's build/test subprocess and is shed first.
+# browser always outranks even an agent's build/test subprocess and is shed
+# first, level only with a chat at the aged stage.
 #
 # Only the processes that actually hold a browser's memory belong here. Nothing
 # is tagged into this band at spawn: Chromium's processes arrive by self-writing

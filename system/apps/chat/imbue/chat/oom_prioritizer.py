@@ -2,9 +2,10 @@
 
 The launch wrapper tags every agent's ``oom_score_adj`` once at startup (see
 ``system/services/oom_priority``). This engine keeps *chat* agents' scores current: a chat
-the user is engaged with is protected from an out-of-memory shed, and a chat left
+the user is engaged with is protected from an out-of-memory shed, a chat left
 untouched long enough climbs past the worker band so a stale chat is shed before
-the worker a live chat just spawned.
+the worker a live chat just spawned, and one left for days climbs on to the top
+of the scale.
 
 Signals, and where each comes from:
 

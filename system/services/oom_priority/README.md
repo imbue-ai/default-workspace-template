@@ -76,11 +76,15 @@ ever acting on a laptop with swap.
   the agent observer at 24, itself just above the shell) <
   user-created services (`USER_SERVICE`, 200) < user agent (300) < worker agent
   (600) < the Screen's stack (`SCREEN_STACK`, 850: the desktop an agent or the user
-  launched, so it goes before any agent and after the programs on it) < agent
+  launched, so it goes before a worker or a stale chat and after the programs on
+  it) < agent
   subprocess (900) < Chromium's own processes (910-1000, renderers at the ceiling). Chat agents occupy a *dynamic* range that straddles the worker
-  band: `CHAT_AGENT_FLOOR` (300, a chat being engaged with right now) through
-  `CHAT_AGENT_BASE` (560, idle but recently used, and the launch band) up to
-  `CHAT_AGENT_STALE_CEILING` (800, untouched long enough to count as abandoned).
+  band and, for a chat left long enough, every band above it:
+  `CHAT_AGENT_FLOOR` (300, a chat being engaged with right now) through
+  `CHAT_AGENT_BASE` (560, idle but recently used, and the launch band) and
+  `CHAT_AGENT_STALE_CEILING` (800, untouched long enough to count as abandoned)
+  up to the aged stage (1000, untouched for days, level with Chromium's
+  renderers).
   The chat app's prioritizer moves a chat within that range from live
   engagement and elapsed idle time (see "Dynamic chat band" below).
   Bands are positive-only: a negative value (true "never kill")
@@ -230,7 +234,8 @@ idempotent. The same sweep is what raises everything else started from the Scree
 `xfwm4`, `xfce4-panel`, `xfdesktop`, `xfsettingsd`, `xfconfd`, the D-Bus daemon)
 in the stack's band (`SCREEN_STACK`, 850); under pressure the order is Chromium's
 renderers, then the programs on the Screen, then the stack, then the agents (the
-Screen spec, section 9.4).
+Screen spec, section 9.4), with a chat left for days climbing past each in turn
+(see "Dynamic chat band" below).
 
 The input range is Chrome's own gradation (0-300), **not** 0-1000. Scaling
 against 1000 would compress every Chromium process into 910-937, the bottom
@@ -260,8 +265,9 @@ Every agent's band is set once at launch and never changes -- with one exception
 expendable it should be depends on how engaged the user is with it, which is only
 known at runtime. So the launch wrapper tags a chat at `CHAT_AGENT_BASE` (560),
 and the chat app's `ChatOomPrioritizer` moves it in both directions from
-there: down toward `CHAT_AGENT_FLOOR` (300) as the user engages with it, and up
-toward `CHAT_AGENT_STALE_CEILING` (800) as it is left alone.
+there: down toward `CHAT_AGENT_FLOOR` (300) as the user engages with it, up
+toward `CHAT_AGENT_STALE_CEILING` (800) as it is left alone for a day, and on to
+the aged stage (1000) when it is left for five.
 
 Two forces, combined through a single **freshness** factor that decays with idle
 time (1.0 for the first hour, reaching 0.0 at 24 hours -- the schedule is the
@@ -280,6 +286,16 @@ transparently revives it (mngr restarts a `STOPPED`/`DONE` agent before
 delivering), so the only cost is a slower next message. Shedding a running worker
 destroys in-flight work. So a chat nobody has touched in hours is genuinely worth
 less than the worker a live chat just spawned.
+
+Past that day a chat goes on climbing on idle time alone, from the stale band to
+the `aged` stage of `CHAT_STAGES`: the top of the scale at five days, level with
+Chromium's renderers. On the way it passes the Screen's stack, then an agent's
+subprocesses, then the rest of Chromium. It is the same argument taken further.
+A shed renderer takes the page an agent or the user was on, and a shed
+subprocess takes work an agent in use is waiting for, while the chat still costs
+one slow message. The main chat climbs like any other. The chat app starts it
+again as soon as it is shed, and a process that has just started counts as
+fresh.
 
 The exception is a chat that is **mid-turn** (a running lifecycle state): it is
 doing work right now that a shed would destroy rather than defer, so its
@@ -333,11 +349,9 @@ that read the tables, so who is shed first changes by editing a table:
 | what an open tab, a visible tab, or a recent message is worth to a chat | `CHAT_ENGAGEMENT` |
 | where Chromium's processes land | `BROWSER` |
 
-`CHAT_STAGES` also declares a third stage, `aged`, switched off: its idle time is
-`NEVER`, which no chat reaches. An idle time in its place carries a chat left
-that long on from the stale band to the top of the scale, level with Chromium's
-renderers. `chat_agent_oom_score_adj` takes the stage table as an argument, so a
-schedule can be tried without editing the module.
+How long a chat must be left before it counts as aged is the one idle time on
+the `aged` row. `chat_agent_oom_score_adj` takes the stage table as an argument,
+so a schedule can be tried without editing the module.
 
 When earlyoom acts is not in `bands`: its two thresholds are the `-m` argument in
 `system/supervisord.conf.d/earlyoom.conf`.

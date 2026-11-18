@@ -9,6 +9,7 @@ services must keep the documented least- to most-expendable order.
 from oom_priority import bands
 
 _HOUR = 3600.0
+_DAY = 24 * _HOUR
 
 
 def _fresh(*, is_open: bool, is_visible: bool, recency_rank: int | None) -> int:
@@ -110,8 +111,8 @@ def test_unrecognized_supervisord_program_falls_back_to_the_user_service_band() 
 
 def test_supervisord_program_bands_preserve_the_shedding_order() -> None:
     # Program names that double as service keys resolve to their service band;
-    # the OOM machinery itself stays protected; Chromium's processes stay the single
-    # most-expendable thing, above even an agent's subprocesses.
+    # the OOM machinery itself stays protected; Chromium's processes stay above
+    # even an agent's subprocesses.
     for key in _BUILTIN_SERVICE_ORDER:
         assert bands.supervisord_program_band(key, {}) == bands.SERVICE_BANDS[key]
     assert bands.supervisord_program_band("earlyoom", {}) == bands.PROTECTED
@@ -146,9 +147,9 @@ def test_primary_agent_is_pinned_to_the_never_shed_band() -> None:
 def test_chat_band_range_straddles_the_worker_band() -> None:
     # A fresh chat stays below WORKER_AGENT (workers are shed first) and above the
     # user-service band (a chat revives on its next message, so it is shed before a
-    # service). A stale one crosses the worker band -- but never reaches
-    # AGENT_SUBPROCESS, so an agent's own subprocesses are always shed before any
-    # agent.
+    # service). A stale one crosses the worker band -- but the stale band stays
+    # below AGENT_SUBPROCESS, so an agent's own subprocesses are shed before a
+    # chat that has only gone stale.
     assert bands.USER_SERVICE < bands.CHAT_AGENT_FLOOR
     assert bands.CHAT_AGENT_FLOOR < bands.CHAT_AGENT_BASE < bands.WORKER_AGENT
     assert bands.WORKER_AGENT < bands.CHAT_AGENT_STALE_CEILING < bands.AGENT_SUBPROCESS
@@ -202,7 +203,7 @@ def test_browser_remap_lands_inside_the_band_and_preserves_chromes_order() -> No
 
 def test_renderers_land_at_the_very_top_of_the_browser_band() -> None:
     # A renderer holds most of a browser's memory and costs a single tab to shed,
-    # so it must be the most expendable process in the workspace -- not merely
+    # so it must be the most expendable process the browser runs -- not merely
     # somewhere inside the band. Scaling Chrome's gradation against 0..1000
     # rather than its real 0..300 range put renderers at 937, leaving the top of
     # the band to processes that had only *inherited* a high value and held
@@ -229,9 +230,10 @@ def test_the_screen_service_is_shed_after_the_chromium_it_launches() -> None:
 def test_the_screen_stack_is_shed_after_every_agent_and_before_the_programs_on_it() -> (
     None
 ):
-    # The desktop an agent or the user launched goes before any agent, an abandoned chat
-    # at its stale ceiling included, and after what runs on it: an agent's subprocesses
-    # (the programs `screen run` starts and the sweep raises) and Chromium above them.
+    # The desktop an agent or the user launched goes before a worker and a chat at its
+    # stale band (a chat left for days longer climbs past it), and after what runs on
+    # it: an agent's subprocesses (the programs `screen run` starts and the sweep
+    # raises) and Chromium above them.
     assert bands.CHAT_AGENT_STALE_CEILING < bands.SCREEN_STACK
     assert bands.WORKER_AGENT < bands.SCREEN_STACK
     assert bands.SCREEN_STACK < bands.AGENT_SUBPROCESS
@@ -271,11 +273,15 @@ def test_chat_score_always_within_the_chat_band() -> None:
                         assert (
                             bands.CHAT_AGENT_FLOOR
                             <= adj
-                            <= bands.CHAT_AGENT_STALE_CEILING
+                            <= bands.CHAT_STAGES["aged"].adj
                         )
-                        # However stale, a chat is never shed before an agent's own
-                        # subprocesses, and never before a user-created service.
-                        assert bands.USER_SERVICE < adj < bands.AGENT_SUBPROCESS
+                        # However engaged, a chat is shed before a user-created
+                        # service.
+                        assert bands.USER_SERVICE < adj
+                        # Through its first day idle, it is never shed before an
+                        # agent's own subprocesses.
+                        if idle is None or idle <= _DAY:
+                            assert adj < bands.AGENT_SUBPROCESS
 
 
 def test_an_abandoned_chat_is_shed_before_a_worker() -> None:
@@ -284,7 +290,19 @@ def test_an_abandoned_chat_is_shed_before_a_worker() -> None:
     # with its transcript intact; the worker's in-flight work does not.
     assert _aged(24 * _HOUR) == bands.CHAT_AGENT_STALE_CEILING
     assert _aged(24 * _HOUR) > bands.WORKER_AGENT
-    assert _aged(30 * 24 * _HOUR) == bands.CHAT_AGENT_STALE_CEILING
+
+
+def test_a_chat_left_long_enough_reaches_the_aged_band() -> None:
+    # A chat nobody has touched for days is worth no more than a browser tab: it
+    # revives on its next message with its transcript intact, where a shed
+    # renderer takes the page someone was on.
+    aged = bands.CHAT_STAGES["aged"]
+    assert _aged(aged.idle_seconds) == aged.adj
+    assert _aged(10 * aged.idle_seconds) == aged.adj
+    assert aged.adj >= bands.SHARED_BROWSER
+    # On the way there it is past the stale band and still climbing.
+    halfway = (bands.CHAT_STAGES["stale"].idle_seconds + aged.idle_seconds) / 2
+    assert bands.CHAT_AGENT_STALE_CEILING < _aged(halfway) < aged.adj
 
 
 def test_staleness_crosses_the_worker_band_within_a_few_hours() -> None:
@@ -390,9 +408,6 @@ def test_the_chat_app_sits_between_the_shell_and_the_sharing_stack() -> None:
         < bands.SERVICE_BANDS["chat"]
         < bands.SERVICE_BANDS["share-gateway"]
     )
-
-
-_DAY = 24 * _HOUR
 
 
 def _stages_with(**idle_seconds_by_stage: float) -> dict[str, bands.ChatStage]:
