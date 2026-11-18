@@ -514,7 +514,7 @@ desktop is shown as its owner has it, live: the layout read is the owner's newes
 client's written one (`?of=owner` on the placements read), refreshed on every
 `placements_updated` push for the desktop and by a slow backstop poll, and it
 is read-only from every side -- the desktop's stage (the wallpaper, the
-shortcut grid, the windows, the ghosts, the pages host) is `inert`, so nothing
+shortcut grid, the windows, the pages host) is `inert`, so nothing
 on it takes a press, a key, or focus and Tab reaches nothing inside it; the
 taskbar's entries mirror theirs without acting; the backdrop menu keeps "New
 desktop" and "Keyboard shortcuts..." (the viewer's own wherever they are) and

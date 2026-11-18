@@ -65,7 +65,7 @@ It has no status, no listing of what is inside an app, and no verbs on the app's
 
 ### 2.3 Placement and layout
 
-A placement is how one client keeps one window: the **frame** (a rectangle in fractions of the backdrop), the **state** (`NORMAL`, `SNAPPED_LEFT`, `SNAPPED_RIGHT`, `MAXIMIZED`, or `FULLSCREEN`, the last filling the whole viewport over the taskbar with no title bar; the Screen spec's L2 layer), whether it is **minimized**, and whether it is **detached** (pulled out into a desktop window of the embedding chrome's own, the desktop keeping a ghost at its frame; contracts section 4.2 and mngr's `specs/pull-out-window/spec.md`).
+A placement is how one client keeps one window: the **frame** (a rectangle in fractions of the backdrop), the **state** (`NORMAL`, `SNAPPED_LEFT`, `SNAPPED_RIGHT`, `MAXIMIZED`, or `FULLSCREEN`, the last filling the whole viewport over the taskbar with no title bar; the Screen spec's L2 layer), whether it is **minimized**, and whether it is **detached** (pulled out into a desktop window of the embedding chrome's own, the desktop drawing nothing in its place and keeping its frame for a return; contracts section 4.2 and mngr's `specs/pull-out-window/spec.md`).
 The frame is kept through every state, so restore always has somewhere to go, and minimized and detached are orthogonal to the state.
 A layout is one client's placements for one desktop, in stacking order, last on top.
 Raising, minimizing, maximizing, snapping, moving, and resizing are per client and never leave the client.
@@ -114,7 +114,7 @@ The taskbar is the bar along the bottom of the viewport.
 Left to right: the **launcher field**; one **taskbar entry** per window of the active desktop, in the order the windows were opened, minimized and pulled-out ones marked; then the **system tray**.
 An entry shows the app icon and the title.
 A pinned window's entry is a plain bar entry like any other window's (absent while this client has closed the window), and a client may draw the app's creature (the workspace's avatar) floating above the windows beside it (pinned-taskbar-entries plan section 4.2).
-Clicking an entry restores a minimized window and raises it, shows a pulled-out window's own desktop window (or, when its ghost is hidden, the ghost), minimizes the top window, or raises any other window.
+Clicking an entry restores a minimized window and raises it, shows a pulled-out window's own desktop window, minimized or not, minimizes the top window, or raises any other window.
 
 The launcher is the text field and the menu it opens above the field: one row per launch path of every app, window rows (every desktop's windows, while typing), and at the foot the free-text rows, which send the typed text to whichever app declares a launch path with a `text_param` (the chat's new chat, and its send to an existing chat).
 One row is always highlighted; Enter runs it, Ctrl+Enter (Cmd+Enter on macOS) runs the secondary free-text row, and typing filters the rows.

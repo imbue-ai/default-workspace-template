@@ -477,7 +477,7 @@ def _with_active_desktop(record: ClientRecord, active: DesktopId | None) -> Clie
 
 @pure
 def _popped_out_windows(desktop: Desktop, layout: DesktopLayout) -> tuple[PoppedOutWindow, ...]:
-    """The client's popped-out windows of one desktop, each with whether the user hid its ghost."""
+    """The client's popped-out windows of one desktop, each with whether it is also minimized."""
     return tuple(
         PoppedOutWindow(window_id=placement.window_id, desktop_id=desktop.id, is_ghost_hidden=placement.is_minimized)
         for placement in effective_placements(layout, desktop)
@@ -919,7 +919,7 @@ def _move_placement(
 @pure
 def _minimize_edit(window_id: WindowId, is_detached: bool) -> _LayoutEdit:
     """The edit ``minimize`` makes. A pulled-out window it takes out of sight comes back onto the desktop minimized,
-    since minimizing it where it stands would only hide its ghost and leave its own window up."""
+    since minimizing it where it stands would leave its own window up."""
     if is_detached:
         return lambda current: with_window_minimized_on_desktop(current, window_id)
     return lambda current: with_window_minimized(current, window_id)
