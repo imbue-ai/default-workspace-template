@@ -100,7 +100,7 @@ import { icon, spinnerIcon, stopIcon } from "@imbue/workspace-ui/src/components/
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";
-import { keydownMatchesChords } from "@imbue/workspace-ui/src/keybindings";
+import { isHandledByInputMethod, keydownMatchesChords } from "@imbue/workspace-ui/src/keybindings";
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { QueryObserver, skipToken } from "@tanstack/query-core";
 import {
@@ -1752,6 +1752,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       function handleKeydown(event: KeyboardEvent): void {
+        if (isHandledByInputMethod(event)) return;
         // Escape while dictating drops the words that are not yet final; the final ones stay (spec D5).
         if (dictation !== null && dictation.state !== "idle" && event.key === "Escape") {
           event.preventDefault();
