@@ -1441,6 +1441,23 @@ def seed_failed_chat(
     return proto
 
 
+def seed_creating_chat(
+    agent_manager: AgentManager, chat_id: ChatId, name: str, labels: Mapping[str, str] | None = None
+) -> ProvisionalChat:
+    """Plant a provisional chat whose create is still running, as the manager holds one from the moment a create is
+    accepted until its agent is listed."""
+    proto = ProvisionalChat(
+        chat_id=chat_id,
+        name=name,
+        account_id="acct-1",
+        labels=dict(labels or {}),
+        phase=ProvisionalChatPhase.CREATING,
+    )
+    with agent_manager._lock:
+        agent_manager._provisional_chats[chat_id] = proto
+    return proto
+
+
 def get_json(url: str) -> Any:
     """GET ``url`` and decode its JSON body, for assertions against a served app's API."""
     with urllib.request.urlopen(url, timeout=5) as response:
@@ -1551,6 +1568,7 @@ def running_workspace(
                 ("draft", "Draft into chat", "/api/chats/intake"),
                 ("lounge", "Mention in the Lounge", "/api/chats/intake"),
                 ("app-chat", "Chat about this app", "/api/chats/intake"),
+                ("app-ask", "Ask about this app", "/api/chats/intake"),
             ),
             launch_params={
                 "main": ("message",),
@@ -1559,11 +1577,13 @@ def running_workspace(
                 "draft": ("message",),
                 "lounge": ("message",),
                 "app-chat": ("app", "app_display_name"),
+                "app-ask": ("app", "app_display_name", "message"),
             },
             launch_text_params={"main": "message", "new": "message", "send": "message"},
             launch_draft_params={"draft": "message"},
             launch_mention_params={"lounge": "message"},
-            launch_app_params={"app-chat": ("app", "app_display_name")},
+            launch_app_params={"app-chat": ("app", "app_display_name"), "app-ask": ("app", "app_display_name")},
+            launch_app_text_params={"app-ask": "message"},
             launch_methods={
                 "main": "POST",
                 "new": "POST",
@@ -1571,6 +1591,7 @@ def running_workspace(
                 "draft": "POST",
                 "lounge": "POST",
                 "app-chat": "POST",
+                "app-ask": "POST",
             },
             launch_presets={
                 "main": {"target": "main_chat"},
@@ -1579,6 +1600,7 @@ def running_workspace(
                 "draft": {"target": "current_chat", "is_draft": "true"},
                 "lounge": {"target": "lounge", "is_draft": "true"},
                 "app-chat": {"target": "app_chat"},
+                "app-ask": {"target": "app_ask"},
             },
         ),
         *extra_rows,
