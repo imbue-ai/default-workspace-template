@@ -3,6 +3,7 @@
 offered only while the shell's handshake says Imbue Studio opens a bug report."""
 
 import contextlib
+import json
 import shutil
 from collections.abc import Generator
 from pathlib import Path
@@ -31,23 +32,23 @@ _FAILURE: Final[dict[str, object]] = {
     "isReportable": True,
 }
 
-# Greets the frame as the shell does; the page loads the contract module after its own load, so the stand-in greets
-# it until the ask button shows (a shell greets its pages again whenever what it says changes).
-_GREET: Final[str] = """(canReportBug) => document.getElementById("page").contentWindow.postMessage(
-  { type: "shell:handshake", clientId: "c", windowId: "w", desktopId: "d", app: "getting-started", path: "/",
-    shellId: "shell-1", canReportBug },
-  "*",
-)"""
-
-# Answers the page's ask with a failure, as a shell whose launch was refused does.
-_REFUSE_ASK: Final[str] = """(failure) => {
+# The stand-in shell: it records what the page posts, greets the page when its contract module connects (as the shell
+# does on a page's shell:capabilities) and refuses its ask, as a shell whose launch was refused does.
+_SHELL_PAGE: Final[str] = """<!doctype html><html><body><script>
+window.posted = [];
+window.addEventListener("message", (event) => {
+  window.posted.push(event.data);
   const frame = document.getElementById("page").contentWindow;
-  window.addEventListener("message", (event) => {
-    if (event.source !== frame || event.data.type !== "shell:start-new-with-text") return;
+  if (event.source !== frame) return;
+  if (event.data.type === "shell:capabilities") {
+    frame.postMessage({ type: "shell:handshake", clientId: "c", windowId: "w", desktopId: "d", app: "getting-started",
+      path: "/", shellId: "shell-1", canReportBug: __CAN_REPORT_BUG__ }, "*");
+  } else if (event.data.type === "shell:start-new-with-text") {
     frame.postMessage({ type: "shell:start-new-with-text-result", requestId: event.data.requestId, isOpened: false,
-      failure }, "*");
-  });
-}"""
+      failure: __FAILURE__ }, "*");
+  }
+});
+</script><iframe id="page" src="__PAGE_URL__"></iframe></body></html>"""
 
 
 @contextlib.contextmanager
@@ -68,21 +69,15 @@ def _framed_not_built_page(tmp_path: Path, browser: Browser, can_report_bug: boo
         )
         shell = Flask(__name__)
         shell_page = (
-            "<!doctype html><html><body><script>window.posted = [];"
-            "window.addEventListener('message', (event) => window.posted.push(event.data));</script>"
-            f"<iframe id='page' src='http://127.0.0.1:{app_server.socket.getsockname()[1]}/'></iframe></body></html>"
+            _SHELL_PAGE.replace("__CAN_REPORT_BUG__", json.dumps(can_report_bug))
+            .replace("__FAILURE__", json.dumps(_FAILURE))
+            .replace("__PAGE_URL__", f"http://127.0.0.1:{app_server.socket.getsockname()[1]}/")
         )
         shell.add_url_rule("/", "shell", lambda: shell_page)
         shell_port = stack.enter_context(serve_in_background("127.0.0.1", 0, shell)).socket.getsockname()[1]
         page = stack.enter_context(contextlib.closing(browser.new_context())).new_page()
         page.goto(f"http://localhost:{shell_port}/")
-        page.evaluate(_REFUSE_ASK, _FAILURE)
         ask = page.frame_locator("#page").locator("#ask-agent")
-        for _ in range(50):
-            page.evaluate(_GREET, can_report_bug)
-            if ask.is_visible():
-                break
-            page.wait_for_timeout(100)
         expect(ask).to_be_visible()
         ask.click()
         expect(page.frame_locator("#page").locator("#ask-agent-failure")).to_have_text(str(_FAILURE["message"]))
