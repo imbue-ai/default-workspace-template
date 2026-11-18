@@ -396,6 +396,25 @@ class CreationOutputTail(MutableModel):
         return "\n".join(self.lines)
 
 
+# What a held send that did not land tells the user when the harness gave no words of its own.
+UNDELIVERED_HELD_SEND_DETAIL: Final[str] = "The agent didn't take the message."
+
+
+class HeldSendDelivery(FrozenModel):
+    """How a held send reaches its agent: the message route's send, the pacing of its retries, and who is told
+    when it never lands."""
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    # The message route's send, revival included; raises ``SendFailedError`` like it.
+    deliver: Callable[[AgentInfo, str, str], SendOutcome]
+    sleep: Callable[[float], None]
+    is_stopping: Callable[[], bool]
+    # Told the chat, the message id, the reason and its kind for a send that never landed, so the page that sent it
+    # can hand it back.
+    report_undelivered: Callable[[ChatId, str, str, str], None]
+
+
 class SuccessorCreateSpec(FrozenModel):
     """What the successor's ``mngr create`` names, for the manager's shared argv builder."""
 
@@ -435,6 +454,8 @@ class HandoffDeps(FrozenModel):
     resolve_account: Callable[[str], Account]
     # The send path the message route takes, revival included; raises ``SendFailedError``.
     deliver: Callable[[AgentInfo, str, str], SendOutcome]
+    # Told of a held send that never landed (``HeldSendDelivery.report_undelivered``).
+    report_undelivered: Callable[[ChatId, str, str, str], None]
     # Apply a model pick to a running agent, validated against its option set as the model
     # bar's own pick is; raises ``ModelApplyError`` with the reason the failed page shows.
     apply_model: Callable[[AgentInfo, ModelPick], None]
@@ -473,6 +494,14 @@ class HandoffRunner:
         runner = cls.__new__(cls)
         runner._deps = deps
         return runner
+
+    def _held_send_delivery(self) -> HeldSendDelivery:
+        return HeldSendDelivery(
+            deliver=self._deps.deliver,
+            sleep=self._deps.sleep,
+            is_stopping=self._deps.shutdown_event.is_set,
+            report_undelivered=self._deps.report_undelivered,
+        )
 
     def _current(self, chat_id: ChatId, handoff_id: str) -> tuple[ChatRecord, ChatHandoffRecord]:
         if self._deps.shutdown_event.is_set():
@@ -1017,7 +1046,7 @@ class HandoffRunner:
         successor_info = self._require_successor_info(chat_id, handoff.next_agent_id)
         self._deps.ensure_watcher(successor_info)
         deliver_held_send(
-            self._deps.deliver,
+            self._held_send_delivery(),
             successor_info,
             HeldSend(
                 message_id=prompt_message_id(handoff_id),
@@ -1026,8 +1055,6 @@ class HandoffRunner:
                 received_at=self._deps.now(),
             ),
             chat_id,
-            self._deps.sleep,
-            self._deps.shutdown_event.is_set,
         )
         self._update_handoff(
             chat_id,
@@ -1053,33 +1080,29 @@ class HandoffRunner:
             )
         self._deps.ensure_watcher(successor_info)
         while (held := self._deps.take_next_held_send(chat_id, handoff_id)) is not None:
-            if not deliver_held_send(
-                self._deps.deliver, successor_info, held, chat_id, self._deps.sleep, self._deps.shutdown_event.is_set
-            ):
+            if not deliver_held_send(self._held_send_delivery(), successor_info, held, chat_id):
                 self._update_handoff(
                     chat_id, handoff_id, lambda current: current.without_delivered_send(held.message_id)
                 )
         logger.info("Handoff of chat {}: now running on agent {}", chat_id, successor_id)
 
 
-def deliver_held_send(
-    deliver: Callable[[AgentInfo, str, str], SendOutcome],
-    agent_info: AgentInfo,
-    held: HeldSend,
-    chat_id: ChatId,
-    sleep: Callable[[float], None],
-    is_stopping: Callable[[], bool],
-) -> bool:
+def deliver_held_send(delivery: HeldSendDelivery, agent_info: AgentInfo, held: HeldSend, chat_id: ChatId) -> bool:
     """Hand one held send to an agent through the message route's path; whether it landed.
 
-    A refusal or a miss is logged rather than raised: the send was answered 202 when it was
-    held, and one that cannot land must not stop the ones behind it. A refusal that typed nothing
+    A refusal or a miss is logged and reported rather than raised: the send was answered 202 when it
+    was held, and one that cannot land must not stop the ones behind it. A refusal that typed nothing
     and can pass (an agent still drawing its input box, a host too loaded to answer) is tried again
     after each of ``_HELD_SEND_RETRY_DELAYS_SECONDS``, since nobody is at a composer to press Retry.
+    A send Stop took back, or one the agent took before a dialog blocked it, is not reported: the
+    first is in the composer already and the second reached the agent.
     """
     for delay_seconds in _HELD_SEND_RETRY_DELAYS_SECONDS:
-        answer = _try_held_send(deliver, agent_info, held)
-        if not (isinstance(answer, SendFailedError) and _is_held_send_refusal_passing(answer)) or is_stopping():
+        answer = _try_held_send(delivery.deliver, agent_info, held)
+        if (
+            not (isinstance(answer, SendFailedError) and _is_held_send_refusal_passing(answer))
+            or delivery.is_stopping()
+        ):
             break
         logger.info(
             "Chat {}: held send {} to agent {} was refused ({}); trying again in {}s",
@@ -1089,9 +1112,9 @@ def deliver_held_send(
             answer.kind,
             delay_seconds,
         )
-        sleep(delay_seconds)
+        delivery.sleep(delay_seconds)
     else:
-        answer = _try_held_send(deliver, agent_info, held)
+        answer = _try_held_send(delivery.deliver, agent_info, held)
     if isinstance(answer, SendFailedError):
         logger.warning(
             "Handoff of chat {}: held send {} to agent {} was refused: {}",
@@ -1100,9 +1123,13 @@ def deliver_held_send(
             agent_info.id,
             answer.detail,
         )
+        if not answer.is_delivered:
+            delivery.report_undelivered(chat_id, held.message_id, answer.detail, answer.kind)
         return False
     if answer is SendOutcome.WITHDRAWN:
-        logger.info("Chat {}: held send {} was taken back by Stop before it reached the agent", chat_id, held.message_id)
+        logger.info(
+            "Chat {}: held send {} was taken back by Stop before it reached the agent", chat_id, held.message_id
+        )
         return False
     if not answer.is_delivered:
         logger.warning(
@@ -1112,6 +1139,7 @@ def deliver_held_send(
             agent_info.id,
             answer.value,
         )
+        delivery.report_undelivered(chat_id, held.message_id, UNDELIVERED_HELD_SEND_DETAIL, answer.value)
         return False
     return True
 

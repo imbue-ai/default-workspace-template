@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { describeRequestError, describeRequestErrorKind, isUnansweredRequest } from "./request-error";
+import {
+  describeRequestError,
+  describeRequestErrorKind,
+  isUnansweredRequest,
+  sendFailureKindOf,
+} from "./request-error";
 
 // Every case here is a shape mithril actually rejects with; the point of the
 // helper is that none of them can reach a user as a bare "null".
@@ -91,5 +96,13 @@ describe("isUnansweredRequest", () => {
     expect(isUnansweredRequest(Object.assign(new Error("{}"), { code: 500, response: { detail: "x" } }))).toBe(false);
     expect(isUnansweredRequest(null)).toBe(false);
     expect(isUnansweredRequest("a plain string")).toBe(false);
+  });
+});
+
+describe("sendFailureKindOf", () => {
+  it("keeps a kind it knows and reads anything else as unknown", () => {
+    expect(sendFailureKindOf("input_blocked")).toBe("input_blocked");
+    expect(sendFailureKindOf("failed")).toBe("unknown");
+    expect(sendFailureKindOf(undefined)).toBe("unknown");
   });
 });

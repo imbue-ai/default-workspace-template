@@ -32,6 +32,7 @@ from imbue.chat.accounts import AccountError
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.chat_autocompact import ChatAutocompactState
+from imbue.chat.chat_handoffs import HeldSendDelivery
 from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import failure_notice
 from imbue.chat.chat_handoffs import joined_blocks
@@ -135,6 +136,8 @@ class RebindDeps(FrozenModel):
     account_dir: Callable[[str], Path]
     # The send path the message route takes, revival included; raises ``SendFailedError``.
     deliver: Callable[[AgentInfo, str, str], SendOutcome]
+    # Told of a held send that never landed (``HeldSendDelivery.report_undelivered``).
+    report_undelivered: Callable[[ChatId, str, str, str], None]
     # Apply a model pick to a running agent, validated against its option set as the model bar's own
     # pick is; raises ``ModelPickRejectedError`` for a pick outside that set and ``ModelApplyError`` when
     # the harness refused the switch, each with the reason the failed page shows.
@@ -455,7 +458,15 @@ class RebindRunner:
             )
         while (held := self._deps.take_next_held_send(chat_id, rebind_id)) is not None:
             if not deliver_held_send(
-                self._deps.deliver, agent_info, held, chat_id, self._deps.sleep, self._deps.shutdown_event.is_set
+                HeldSendDelivery(
+                    deliver=self._deps.deliver,
+                    sleep=self._deps.sleep,
+                    is_stopping=self._deps.shutdown_event.is_set,
+                    report_undelivered=self._deps.report_undelivered,
+                ),
+                agent_info,
+                held,
+                chat_id,
             ):
                 self._update_rebind(
                     chat_id, rebind_id, lambda current: current.without_delivered_send(held.message_id)
