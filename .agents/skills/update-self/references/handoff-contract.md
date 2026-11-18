@@ -119,8 +119,9 @@ So every `minds-v*` tag must be cut one of two ways:
   shown it twice.
 - **From a tree with none** (a patch on a release from before the root
   changelog): the tag becomes `LAST_TAG_WITH_ENTRY_FILES`, and its section goes
-  into the root `CHANGELOG.md` of the release that names it. Otherwise a
-  workspace on the tag is shown its own release again.
+  directly above the section of the release it patches, in the root
+  `CHANGELOG.md` of the release that names it. Otherwise a workspace on the tag
+  is shown its own release again.
 
 ## Trust
 
