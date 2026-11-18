@@ -4678,26 +4678,38 @@ describe("MessageInput offers a way out of a chat whose agent cannot start", () 
     return () => component.view!({ attrs: { chatId: "agent-1" } } as never);
   }
 
-  /** A composer whose send to ``agent-1`` was refused because the chat's create had failed. */
-  async function composerAfterSendToFailedCreate(): Promise<() => unknown> {
+  /** A composer whose send to ``agent-1`` was refused with ``reason`` because the chat never became an agent:
+   *  ``failedCreate`` is the record of its failed create, absent for a chat that was closed before it started. */
+  async function composerAfterSendToChatNotStarted(
+    reason: string,
+    failedCreate: { account_id: string } | undefined,
+  ): Promise<() => unknown> {
     mocks.isChatRegistered = false;
-    mocks.provisional = {
-      chat_id: "agent-1",
-      name: "Chat 7",
-      account_id: "acct-1",
-      kind: "agent",
-      phase: "failed",
-      error: "mngr create exited with code 3",
-      is_seeded: false,
-      held_sends: [],
-      model_pick: null,
-    };
+    mocks.provisional =
+      failedCreate === undefined
+        ? undefined
+        : {
+            chat_id: "agent-1",
+            name: "Chat 7",
+            account_id: failedCreate.account_id,
+            kind: "agent",
+            phase: "failed",
+            error: reason,
+            is_seeded: false,
+            held_sends: [],
+            model_pick: null,
+          };
     mocks.refuseSendToFailedChat.mockImplementationOnce(() => {
-      throw new ChatNotStartedError("mngr create exited with code 3");
+      throw new ChatNotStartedError(reason);
     });
     const component = MessageInput();
     await typeAndSend(component, "agent-1", "hello");
     return () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+  }
+
+  /** A composer whose send to ``agent-1`` was refused because the chat's create had failed. */
+  function composerAfterSendToFailedCreate(): Promise<() => unknown> {
+    return composerAfterSendToChatNotStarted("mngr create exited with code 3", { account_id: "acct-1" });
   }
 
   function press(tree: unknown, label: string): void {
@@ -4742,6 +4754,22 @@ describe("MessageInput offers a way out of a chat whose agent cannot start", () 
     expect(findButton(tree, "Ask an agent to fix this")).toBeDefined();
     expect(findButton(tree, "Switch provider")).toBeUndefined();
     expect(renderedText(findByClass(tree, "notice-dismiss")).trim()).toBe("Cancel");
+  });
+
+  it.each([
+    [
+      "its create failed for want of a sign-in, which an agent cannot make",
+      "No provider account is signed in for this workspace.",
+      { account_id: "" },
+    ],
+    ["it was closed before it started, so no create failed", "The chat was closed before it started", undefined],
+  ])("offers no agent for a send to a chat that never started when %s", async (_case, reason, failedCreate) => {
+    const tree = (await composerAfterSendToChatNotStarted(reason, failedCreate))();
+
+    expect(findByClass(tree, "modal-message")).toBeDefined();
+    expect(findButton(tree, "Ask an agent to fix this")).toBeUndefined();
+    expect(findButton(tree, "Switch provider")).toBeUndefined();
+    expect(renderedText(findByClass(tree, "notice-dismiss")).trim()).toBe("OK");
   });
 
   it("asks the main chat to fix a failed create, naming the chat and its reason", async () => {

@@ -98,7 +98,7 @@ import { closeRunningCompactionChips } from "./compaction-chips";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { AskAgentToFixButton, ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
-import { askConnectionToChat, chatToAskAbout } from "./ask-running-agent";
+import { askConnectionToChat, chatToAskAboutFailedCreate } from "./ask-running-agent";
 import { SWITCH_PROVIDER_LABEL, chooseProviderInPlaceOf } from "./provider-switch";
 import {
   joinDetailLines,
@@ -598,8 +598,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       return renderEmptyConversation("message-list-empty message-list-awaiting", renderOutgoingMessages(chatId));
     }
     const hasAccount = provisional.account_id !== "";
-    // With no account the way out is a sign-in, which an agent cannot make.
-    const chatToAskId = hasAccount ? chatToAskAbout(chatId) : null;
+    const chatToAskId = chatToAskAboutFailedCreate(provisional);
     return m(
       "div",
       { class: "message-list-create-failed flex flex-col items-center justify-center h-full gap-4 p-8" },

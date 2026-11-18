@@ -9,7 +9,7 @@ import type { SendFailureKind } from "@imbue/workspace-ui/src/models/request-err
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { startChatOnAccount } from "../shell";
 import { getShellConnection } from "../shellConnection";
-import { askConnectionToChat, chatToAskAbout } from "./ask-running-agent";
+import { askConnectionToChat, chatToAskAbout, chatToAskAboutFailedCreate } from "./ask-running-agent";
 import { reportBugActions } from "./failure-actions";
 import { SWITCH_PROVIDER_LABEL, chooseProviderToSwitchChat } from "./provider-switch";
 import {
@@ -223,17 +223,21 @@ const KINDS_RESTART_MUST_NOT_ANSWER: ReadonlySet<ComposerFailureKind> = new Set(
   "not_answered",
   "unrecognised",
 ]);
-// Kinds of refused send whose chat has no agent it could start. What stopped it may be the workspace itself, which an
-// agent that is already running can look into.
-const KINDS_A_RUNNING_AGENT_MAY_FIX: ReadonlySet<ComposerFailureKind> = new Set([
-  "agent_start_failed",
-  "chat_not_started",
-]);
 // Kinds of send that may have reached the agent: its turn arriving takes the copy back out of the composer.
 const KINDS_THAT_MAY_HAVE_ARRIVED: ReadonlySet<ComposerFailureKind> = new Set([
   "submission_unconfirmed",
   "not_answered",
 ]);
+
+/** The running chat the notice of a refused send offers to ask, for a send whose chat has no agent it could start:
+ *  what stopped it may be the workspace itself, which an agent that is already running can look into. A chat that
+ *  was closed before it started has no failed create to look into. */
+function chatToAskAboutRefusedSend(kind: ComposerFailureKind, failingChatId: string): string | null {
+  if (kind === "agent_start_failed") return chatToAskAbout(failingChatId);
+  if (kind !== "chat_not_started") return null;
+  const provisional = getProvisionalChat(failingChatId);
+  return provisional?.phase === "failed" ? chatToAskAboutFailedCreate(provisional) : null;
+}
 
 // A NUL character cannot be typed into a terminal, so an agent that takes its input as keystrokes
 // refuses the whole message over one. A textarea does not show NULs anyway (they arrive by pasting
@@ -2445,9 +2449,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // has its own page for that.
         const switchProviderChatId = actionFailureKind === "agent_start_failed" ? failingChatId : null;
         const chatToAskId =
-          failingChatId !== null && KINDS_A_RUNNING_AGENT_MAY_FIX.has(actionFailureKind)
-            ? chatToAskAbout(failingChatId)
-            : null;
+          failingChatId === null ? null : chatToAskAboutRefusedSend(actionFailureKind, failingChatId);
         // The agent itself refused, so its terminal shows why.
         const isTerminalUseful =
           onTurnOnSourceView !== undefined &&

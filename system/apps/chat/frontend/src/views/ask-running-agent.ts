@@ -6,6 +6,7 @@
 
 import type { ShellConnection, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { getChats, getMainChatId } from "../models/Chats";
+import type { ProvisionalChat } from "../models/Chats";
 import { mintMessageId, sendMessage } from "../models/Response";
 import { openChatPage } from "../shell";
 import { getShellConnection } from "../shellConnection";
@@ -19,6 +20,12 @@ export function chatToAskAbout(failingChatId: string): string | null {
   if (others.some((chat) => chat.chat_id === mainChatId)) return mainChatId;
   const byRecency = [...others].sort((one, other) => (other.last_messaged_at ?? 0) - (one.last_messaged_at ?? 0));
   return byRecency[0]?.chat_id ?? null;
+}
+
+/** The chat an ask about ``provisional``'s failed create goes to (``chatToAskAbout``); null as well for a chat that
+ *  names no account, whose way out is a sign-in, which an agent cannot make. */
+export function chatToAskAboutFailedCreate(provisional: ProvisionalChat): string | null {
+  return provisional.account_id === "" ? null : chatToAskAbout(provisional.chat_id);
 }
 
 async function sendAsk(targetChatId: string, text: string): Promise<StartOutcome> {
