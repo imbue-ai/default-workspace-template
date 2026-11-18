@@ -28,7 +28,7 @@ const CENTRED =
 
 /** A press, and an ask the shell refused, belong to the failure they were made about: the same path failing the same
  *  way, however often it is read again. The refused ask is said under the buttons, and the one Report a bug files it
- *  with the failure. */
+ *  with the failure. The agent is told the path, which the surface shows rather than says in its sentence. */
 export const FailureActions: m.ClosureComponent<FailureActionsAttrs> = () => {
   let shownFailureKey: string | null = null;
   let askFailure: ShownFailure | null = null;
@@ -57,7 +57,7 @@ export const FailureActions: m.ClosureComponent<FailureActionsAttrs> = () => {
               ? null
               : m(AskAgentToFixButton, {
                   connection: host,
-                  failure: failure.agentFix,
+                  failure: { ...failure.agentFix, whatFailed: `${failure.agentFix.whatFailed} (${path})` },
                   sm: true,
                   pageReportBug: { onFailureChange: (next) => (askFailure = next) },
                 }),

@@ -197,8 +197,9 @@ keeps it up). A rename says it in the name field (one that asks for a bug
 report ends the rename and leaves the toast that stays), and a folder that cannot be
 listed says it in place of the listing, with Try again and, for a sentence that
 asks for a bug report, "Ask an agent to fix this" and "Report a bug"
-(`views/FailureActions.ts`: an ask the shell refused is said under the buttons,
-and the one Report a bug files it with the failure). A file whose text cannot
+(`views/FailureActions.ts`: the ask names the folder or file, an ask the shell
+refused is said under the buttons, and the one Report a bug files it with the
+failure). A file whose text cannot
 be loaded says so in place of the editor, with the same buttons; an upload that failed
 says why in its row (interrupted, a read-only folder, out of disk space, or
 failed), with the details on hover; and a file whose location is too long for a
