@@ -81,7 +81,7 @@ describe("Window", () => {
     expect(element.querySelector('[data-resize-edge="n"]')?.className).toContain("h-(--desk-resize-edge)");
   });
 
-  it("lays a shield over the content when asked, whose press raises an unfocused window and not a focused one", () => {
+  it("lays a shield over the content when asked, for a touch client's unfocused window or a window under a menu", () => {
     const onRaise = vi.fn();
     const unfocused = render({ isFocused: false, isShielded: true, onRaise });
     const shield = unfocused.querySelector("[data-window-shield]") as HTMLElement;

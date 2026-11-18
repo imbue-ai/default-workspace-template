@@ -616,6 +616,14 @@ class HandoffState(FrozenModel):
             "shows no handoff for it"
         ),
     )
+    has_landed: bool = Field(
+        default=False,
+        description=(
+            "Whether a handoff's successor is already the chat's agent, with only the prompt and the held sends "
+            "left to deliver: the page then shows the successor as it shows any agent, and an interrupt waits for "
+            "the delivery rather than being refused"
+        ),
+    )
 
 
 class SwitchChatRequest(SendMessageRequest):
@@ -1036,7 +1044,9 @@ class IntakeRequest(FrozenModel):
         default="", description="The registered name of the app an ``app_chat`` or ``app_ask`` intake is about"
     )
     app_display_name: str = Field(
-        default="", description="The display name of that app, which titles its chat and words the composer's hint"
+        default="",
+        description="The display name of that app, which titles its chat, words the composer's hint, and names the "
+        "app in front of an ask's text",
     )
 
 
