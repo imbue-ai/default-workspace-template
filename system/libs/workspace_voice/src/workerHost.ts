@@ -45,7 +45,7 @@ interface LoadedEngine {
 }
 
 export interface WorkerHost {
-  /** Register a port; answers the handler for its messages. */
+  /** Register a port and tell it what the worker already holds; answers the handler for its messages. */
   connect(port: HostPort): (message: PageMessage) => Promise<void>;
 }
 
@@ -158,6 +158,10 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
   return {
     connect(port) {
       ports.add(port);
+      port.postMessage({
+        type: "hello",
+        loaded: loaded === null ? null : { engineId: loaded.spec.id, device: loaded.device },
+      });
       return (message) => {
         switch (message.type) {
           case "load":

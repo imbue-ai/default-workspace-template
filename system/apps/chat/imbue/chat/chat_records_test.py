@@ -147,6 +147,19 @@ def test_a_records_rebind_names_its_running_agent_and_never_sits_beside_a_handof
         ChatRecord(chat_id=ChatId(first), agents=(archived_first, live_second), handoff=handoff, rebind=rebind)
 
 
+def test_a_switch_lists_its_confirming_message_until_it_fails_to_deliver_it() -> None:
+    rebind = make_chat_rebind_record(agent_id=_agent_id())
+    assert rebind.is_trigger_listed()
+    delivered = rebind.with_oldest_held_send_delivered()
+    assert delivered.is_trigger_listed()
+    assert not delivered.without_delivered_send(rebind.trigger_message_id).is_trigger_listed()
+
+    # A handoff whose prompt carries the confirming message takes it off the held list without delivering it.
+    handoff = make_chat_handoff_record(retiring_seq=1, next_agent_id=_agent_id(), held_sends=())
+    assert not handoff.is_trigger_listed()
+    assert handoff.model_copy_update(to_update(handoff.field_ref().prompt, "Carry on")).is_trigger_listed()
+
+
 def test_a_file_store_round_trips_a_record_and_deletes_its_folder(tmp_path: Path) -> None:
     store = FileChatRecordStore(root=tmp_path / "chats")
     first, second = _agent_id(), _agent_id()

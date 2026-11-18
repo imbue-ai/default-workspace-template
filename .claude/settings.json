@@ -75,6 +75,10 @@
           {
             "type": "command",
             "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_open_tickets_reminder.sh"
+          },
+          {
+            "type": "command",
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_resource_notice.sh"
           }
         ]
       }

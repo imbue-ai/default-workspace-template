@@ -213,9 +213,11 @@ def test_a_granted_account_that_never_arrived_is_named_from_the_desktops_identit
     source.share_grants.share_grants_path.write_text(_GRANTS)
     source.presence.heartbeat(_ANONYMOUS_OWNER, _T0)
 
-    # With nothing known, the id stands in for the name.
-    carol = source.document(_T0).participants[2]
-    assert (carol.key, carol.display_name, carol.email) == ("user:user-carol-1138", "user-carol-1138", None)
+    # With nothing known, a neutral label stands in for the name, never the account's id; two such people are told
+    # apart by their handles.
+    bob, carol = source.document(_T0).participants[1:3]
+    assert (carol.key, carol.display_name, carol.email) == ("user:user-carol-1138", "Guest", None)
+    assert (bob.display_name, bob.handle, carol.handle) == ("Guest", "Guest", "Guest-2")
 
     source.share_identities.share_identities_path.write_text(
         json.dumps(
@@ -436,6 +438,10 @@ def test_a_persons_picture_is_the_shells_own_route_versioned_by_the_connectors_u
         )
     )
     source.presence.heartbeat(_BOB, _T0)
+    refreshed = threading.Event()
+    pictured.profiles.add_refresh_listener(refreshed.set)
+    pictured.document(_T0)
+    assert refreshed.wait(timeout=10)
 
     bob = next(entry for entry in pictured.document(_T0).participants if str(entry.key) == "user:user-bob-4471")
     assert (
