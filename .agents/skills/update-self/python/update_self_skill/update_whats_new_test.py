@@ -49,10 +49,7 @@ def _changelog(*versions: str, unreleased: str = "## [Unreleased]\n") -> dict[st
 
 @pytest.fixture
 def template(tmp_path: Path) -> Path:
-    """Releases minds-v0.9.3 (no ``CHANGELOG.md``), minds-v0.9.4 (no release section),
-    minds-v0.9.5, minds-v0.10.5 and minds-v0.10.6; an untagged ``main`` with an
-    ``[Unreleased]`` line; a ``workspace`` branch on minds-v0.9.3; and a ``rewritten``
-    branch with no release."""
+    """Releases minds-v0.9.3 to minds-v0.10.6, an untagged ``main``, and ``workspace`` and ``rewritten`` branches."""
     repo = tmp_path / "template"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
