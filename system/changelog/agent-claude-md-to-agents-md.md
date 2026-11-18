@@ -1,0 +1,1 @@
+The step reminder hooks (including the pi harness extension) now say "See AGENTS.md > Task management", since `CLAUDE.md` only imports `AGENTS.md`. `README.md`, `docs/system/workspace-internals.md` and `.gitignore` point at `AGENTS.md` for the agent instructions as well.
