@@ -832,10 +832,14 @@ primary text action (the main chat on a stock workspace: the failure is the
 shell's own, so the ask is about no app), and frames that chat on the page; until
 the launch answers it reads "Asking an agent…" and takes no second press, and a
 refused attempt is told under it. Behind
-"See details" are the command, for whoever would rather run it themselves,
+"See details" are the command,
 "Open this workspace's terminal", whose session of the already-running terminal
 app is made in a frame only when that section is first opened, and, after a
-refused attempt, why the agent couldn't be asked. With no app to ask an agent
+refused attempt, why the agent couldn't be asked. The command is a different
+route from the button, and the page says so: run in a terminal, it starts a new
+chat with an agent straight through mngr instead of asking in the main chat, so
+it needs no Chat app and is there for when an agent can't be asked from the
+page. With no app to ask an agent
 through, the button is not offered and the details and the terminal start
 open; with no terminal, the details say so. The page cannot post to another app's origin,
 so both launches go through the shell's `POST /api/not-built/launch` (desktop

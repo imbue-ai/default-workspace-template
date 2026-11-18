@@ -283,7 +283,8 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
       <p>Why the agent couldn't be asked:</p>
       <pre id="ask-agent-failure-details"></pre>
     </div>
-    <p>This creates an agent and tells it what you are looking at:</p>
+    <p>Run in a terminal, this starts a new chat with an agent and tells it what you are looking at, for when
+       an agent can't be asked from this page:</p>
     <div id="repair">
       <pre id="repair-command">__REPAIR_COMMAND__</pre>
       <!-- Hidden until the script confirms it can actually copy, so the page

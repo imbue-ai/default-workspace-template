@@ -5,6 +5,7 @@ shell that frames it for an agent. Neither needs the built frontend: both are st
 from pathlib import Path
 
 import pytest
+from playwright.sync_api import FrameLocator
 from playwright.sync_api import Page
 from playwright.sync_api import Route
 from playwright.sync_api import expect
@@ -30,6 +31,36 @@ pytestmark = [
 # A workspace host: the placeholder derives an app's origin from the coordinate label in it (``*.localhost`` resolves
 # to loopback in Chromium).
 _COORDINATE: str = "host-abc123.localhost"
+
+# The stand-in shell's greeting to the page it frames, called with the shell's id.
+_GREET_FRAMED_PAGE: str = (
+    "(shellId) => document.getElementById('app').contentWindow.postMessage("
+    "{ type: 'shell:handshake', windowId: 'w', shellId, canReportBug: true }, '*')"
+)
+# The stand-in shell's answer to an ask, called with the answer's fields.
+_ANSWER_FRAMED_PAGE: str = (
+    "(answer) => document.getElementById('app').contentWindow.postMessage("
+    "Object.assign({ type: 'shell:ask-agent-result' }, answer), '*')"
+)
+
+
+def _parked_page(kind: ParkedPageKind, port: int) -> ParkedPort:
+    return ParkedPort(
+        app="docs",
+        target=ParkingTarget(host="127.0.0.1", port=port),
+        on_first_connection=lambda: kind,
+        page_for=lambda answered: parked_page_html(answered, "Docs", "docs"),
+    )
+
+
+def _framed_by_a_stand_in_shell(page: Page, port: int) -> FrameLocator:
+    """The page parked at ``port`` in a frame of a stand-in for the shell, which keeps what the page posts."""
+    page.set_content(
+        "<script>window.received = [];"
+        "window.addEventListener('message', (event) => window.received.push(event.data));</script>"
+        f"<iframe id='app' src='http://127.0.0.1:{port}/'></iframe>"
+    )
+    return page.frame_locator("#app")
 
 
 def test_the_not_built_page_asks_an_agent_and_frames_the_main_chat_and_a_terminal_session(
@@ -101,6 +132,14 @@ def test_the_not_built_page_asks_an_agent_and_frames_the_main_chat_and_a_termina
 
         page.get_by_text("See details", exact=True).click()
         expect(page.locator("#repair-command")).to_be_visible()
+        # The button asked in the main chat; the command is another way in, and the page says which.
+        expect(
+            page.get_by_text(
+                "Run in a terminal, this starts a new chat with an agent and tells it what you are looking at, "
+                "for when an agent can't be asked from this page:",
+                exact=True,
+            )
+        ).to_be_visible()
         assert terminal_launches == []
         page.get_by_text("Open this workspace's terminal", exact=True).click()
         expect(page.locator("#terminal")).to_have_attribute(
@@ -111,31 +150,17 @@ def test_the_not_built_page_asks_an_agent_and_frames_the_main_chat_and_a_termina
 
 
 def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(closed_port: int, page: Page) -> None:
-    parked = ParkedPort(
-        app="docs",
-        target=ParkingTarget(host="127.0.0.1", port=closed_port),
-        on_first_connection=lambda: ParkedPageKind.FAILED,
-        page_for=lambda kind: parked_page_html(kind, "Docs", "docs"),
-    )
+    parked = _parked_page(ParkedPageKind.FAILED, closed_port)
     parked.start()
     try:
-        # A stand-in for the shell: it frames the page, greets it on load, and keeps what the page posts.
-        page.set_content(
-            "<script>window.received = [];"
-            "window.addEventListener('message', (event) => window.received.push(event.data));</script>"
-            f"<iframe id='app' src='http://127.0.0.1:{closed_port}/'></iframe>"
-        )
-        framed = page.frame_locator("#app")
+        framed = _framed_by_a_stand_in_shell(page, closed_port)
         expect(framed.get_by_role("heading")).to_have_text("Docs couldn't start.")
+        expect(framed.get_by_role("button", name="Try again", exact=True)).to_be_visible()
         # Only a shell can ask an agent, so the button waits for its greeting.
         ask = framed.locator("#ask-agent")
         expect(ask).to_have_text("Ask an agent to look at it")
         expect(ask).to_be_hidden()
-        handshake = (
-            "(shellId) => document.getElementById('app').contentWindow.postMessage("
-            "{ type: 'shell:handshake', windowId: 'w', shellId, canReportBug: true }, '*')"
-        )
-        page.evaluate(handshake, "shell-1")
+        page.evaluate(_GREET_FRAMED_PAGE, "shell-1")
         ask.click()
         page.wait_for_function("window.received.length > 0")
         (asked,) = page.evaluate("window.received")
@@ -146,14 +171,10 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         # The button says the ask is out and takes no second press until the shell answers this request.
         expect(ask).to_have_text("Asking an agent…")
         expect(ask).to_be_disabled()
-        reply = (
-            "(answer) => document.getElementById('app').contentWindow.postMessage("
-            "Object.assign({ type: 'shell:ask-agent-result' }, answer), '*')"
-        )
-        page.evaluate(reply, {"requestId": "some-other-request", "isOpened": True})
+        page.evaluate(_ANSWER_FRAMED_PAGE, {"requestId": "some-other-request", "isOpened": True})
         expect(ask).to_be_disabled()
         page.evaluate(
-            reply,
+            _ANSWER_FRAMED_PAGE,
             {
                 "requestId": asked["requestId"],
                 "isOpened": False,
@@ -180,7 +201,7 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
             "{ type: 'shell:handshake', windowId: 'w', shellId: 'shell-1', canReportBug: false }, '*')"
         )
         expect(report).to_be_hidden()
-        page.evaluate(handshake, "shell-1")
+        page.evaluate(_GREET_FRAMED_PAGE, "shell-1")
         expect(report).to_be_visible()
 
         # The same shell greeting the page again (a window moved, Imbue Studio said it opens help) leaves the ask out.
@@ -190,20 +211,61 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         asks = "window.received.filter((message) => message.type === 'shell:ask-agent')"
         page.wait_for_function(f"{asks}.length === 2")
         second = page.evaluate(f"{asks}[1]")
-        page.evaluate(handshake, "shell-1")
+        page.evaluate(_GREET_FRAMED_PAGE, "shell-1")
         page.wait_for_timeout(300)
         expect(ask).to_be_disabled()
         expect(ask).to_have_text("Asking an agent…")
         # A greeting from a restarted shell settles it as not answered; the old shell's answer, if it still comes,
         # replaces that.
-        page.evaluate(handshake, "shell-2")
+        page.evaluate(_GREET_FRAMED_PAGE, "shell-2")
         expect(ask).to_be_enabled()
         expect(framed.locator("#ask-agent-failure")).to_have_text(
             "The workspace didn't answer, so Imbue Studio can't tell whether this went through."
         )
         # Not answered asks for no bug report.
         expect(report).to_be_hidden()
-        page.evaluate(reply, {"requestId": second["requestId"], "isOpened": True})
+        page.evaluate(_ANSWER_FRAMED_PAGE, {"requestId": second["requestId"], "isOpened": True})
         expect(framed.locator("#ask-agent-failure")).to_be_hidden()
+    finally:
+        parked.release()
+
+
+def test_a_page_whose_wake_budget_is_spent_offers_the_agent_and_no_try_again(closed_port: int, page: Page) -> None:
+    """A press cannot start an app whose wake budget is spent, so the page keeps everything but Try again."""
+    parked = _parked_page(ParkedPageKind.BUDGET_SPENT, closed_port)
+    parked.start()
+    try:
+        framed = _framed_by_a_stand_in_shell(page, closed_port)
+        expect(framed.get_by_role("heading")).to_have_text("Docs couldn't start.")
+        expect(
+            framed.get_by_text(
+                "Docs failed to start several times in the last few minutes, so it wasn't started again. "
+                "Try again in a few minutes.",
+                exact=True,
+            )
+        ).to_be_visible()
+        expect(framed.get_by_role("button", name="Try again", exact=True)).to_have_count(0)
+
+        ask = framed.get_by_role("button", name="Ask an agent to look at it")
+        expect(ask).to_be_hidden()
+        page.evaluate(_GREET_FRAMED_PAGE, "shell-1")
+        ask.click()
+        page.wait_for_function("window.received.length > 0")
+        (asked,) = page.evaluate("window.received")
+        assert asked["type"] == "shell:ask-agent"
+        assert asked["text"] == could_not_start_request("Docs", "docs")
+        page.evaluate(
+            _ANSWER_FRAMED_PAGE,
+            {
+                "requestId": asked["requestId"],
+                "isOpened": False,
+                "failure": {"message": "Chat couldn't open that.", "details": "HTTP 500\nboom", "isReportable": True},
+            },
+        )
+        expect(framed.locator("#ask-agent-failure")).to_have_text("Chat couldn't open that.")
+        expect(framed.get_by_role("button", name="Report a bug")).to_be_visible()
+        framed.get_by_text("See details", exact=True).click()
+        expect(framed.locator("#ask-agent-failure-details")).to_have_text("HTTP 500\nboom")
+        expect(framed.get_by_text("supervisorctl tail docs stderr")).to_be_visible()
     finally:
         parked.release()

@@ -100,15 +100,20 @@ CHANGE_NOT_ANSWERED_SENTENCE: Final[str] = (
     "The workspace didn't answer, so Imbue Studio can't tell whether this went through."
 )
 
-# What a page that could not start offers: a Try again that asks once more, an agent asked to look at it (shown once
+# What a page that could not start offers: a Try again that asks once more (left out when the wake budget is spent:
+# the budget refuses the next wake too, so a press could not help), an agent asked to look at it (shown once
 # a shell that frames the page has greeted it, since only a shell can ask one; while the shell has not answered the
 # ask it reads "Asking an agent...", and a failed ask is told under it, its details at the top of the page's one "See
 # details"), and the log's command for whoever wants it. A handshake from a shell with another ``shellId`` means the
 # shell restarted, so an ask still out is settled as not answered (the same shell greets the page again for ordinary
 # reasons); the old shell's answer, if it still comes, replaces that. A failed ask that asks for a bug report offers
 # "Report a bug" while the shell's latest handshake says it can open one.
+_TRY_AGAIN_BUTTON: Final[str] = '<button type="button" id="try-again">Try again</button> '
+_TRY_AGAIN_BINDING: Final[str] = (
+    'document.getElementById("try-again").addEventListener("click", function () { location.reload(); });'
+)
 _FAILED_BODY_TEMPLATE: Final[str] = (
-    '{sentence}<p><button type="button" id="try-again">Try again</button> '
+    "{sentence}<p>{try_again_button}"
     '<button type="button" id="ask-agent" hidden>Ask an agent to look at it</button></p>'
     '<p id="ask-agent-failure" hidden></p>'
     '<p><button type="button" id="ask-agent-report" hidden>Report a bug</button></p>'
@@ -117,7 +122,7 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     "<p>The program's log may say why: "
     "<code>supervisorctl tail {program} stderr</code></p></details>"
     "<script>(function () {"
-    'document.getElementById("try-again").addEventListener("click", function () { location.reload(); });'
+    "{try_again_binding}"
     'var ask = document.getElementById("ask-agent");'
     'var failure = document.getElementById("ask-agent-failure");'
     'var failureDetails = document.getElementById("ask-agent-failure-details");'
@@ -230,7 +235,8 @@ def parked_refresh_seconds(kind: ParkedPageKind) -> int:
 @pure
 def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> str:
     """The page the parker answers with: starting (reloading every few seconds until the app answers), or could not
-    start (with a Try again, an agent to look at it, and the program's log behind "See details")."""
+    start (with a Try again unless the wake budget is spent, an agent to look at it, and the program's log behind
+    "See details")."""
     name = html.escape(display_name)
     failed_body = (
         _FAILED_BODY_TEMPLATE.replace("{program}", html.escape(program))
@@ -257,7 +263,9 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
                 refresh="",
                 title=f"{name} couldn't start",
                 heading=html.escape(could_not_start_sentence(display_name), quote=False),
-                body=failed_body.replace("{sentence}", ""),
+                body=failed_body.replace("{try_again_button}", _TRY_AGAIN_BUTTON)
+                .replace("{try_again_binding}", _TRY_AGAIN_BINDING)
+                .replace("{sentence}", ""),
             )
         case ParkedPageKind.BUDGET_SPENT:
             return _PAGE_TEMPLATE.format(
@@ -265,7 +273,9 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
                 refresh="",
                 title=f"{name} couldn't start",
                 heading=html.escape(could_not_start_sentence(display_name), quote=False),
-                body=failed_body.replace(
+                body=failed_body.replace("{try_again_button}", "")
+                .replace("{try_again_binding}", "")
+                .replace(
                     "{sentence}", f"<p>{html.escape(start_budget_spent_sentence(display_name), quote=False)}</p>"
                 ),
             )
