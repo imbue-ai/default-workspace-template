@@ -1433,17 +1433,29 @@ def _wrapper_error(url: str) -> tuple[int, str]:
         return error.code, error.read().decode("utf-8")
 
 
-def test_wrapper_refuses_to_frame_a_service_with_no_registered_label(
-    tmp_path: Path,
+_SCRIPT_BREAKING_LABEL = "</script><script>alert(1)</script>"
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [{"name": "other", "url": "http://localhost:8301", "label": "other-a1b2c3d4"}],
+        [{"name": "inbox", "url": "http://localhost:8301", "label": _SCRIPT_BREAKING_LABEL}],
+    ],
+    ids=["unregistered", "label-not-a-hostname-label"],
+)
+def test_wrapper_refuses_to_frame_a_service_with_no_valid_registered_label(
+    tmp_path: Path, rows: list[dict[str, object]]
 ) -> None:
     apps_file = tmp_path / "apps.toml"
-    forward_port.register(apps_file, "other", "http://localhost:8301", is_icon_declined=True)
+    apps_file.write_text(forward_port.dump_registry(rows))
 
     with _running_wrapper(apps_file, "inbox") as url:
         status, body = _wrapper_error(url)
 
     assert status == 503
     assert "has no valid origin label" in body
+    assert _SCRIPT_BREAKING_LABEL not in body
 
 
 def test_wrapper_answers_503_when_the_registry_cannot_be_read(tmp_path: Path) -> None:
