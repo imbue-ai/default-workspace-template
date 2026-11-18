@@ -1286,8 +1286,7 @@ def build_parser() -> argparse.ArgumentParser:
     changelog_parser = sub.add_parser(
         "changelog-entries",
         help="List the release sections of the root CHANGELOG.md the base does not have "
-        "and the per-PR changelog entries added between two refs (across every project "
-        "bucket, not just the top-level changelog/).",
+        "and the changelog entry files added between two refs.",
         parents=[common],
     )
     changelog_parser.add_argument("--base", required=True, help="Base ref.")

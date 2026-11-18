@@ -21,9 +21,7 @@ _SECTION_HEADING_PREFIX = "## "
 _LABELLED_HEADING_PREFIX = "## ["
 _UNRELEASED_LABEL = "Unreleased"
 
-# Entry files are the ``changelog/<file>.md`` files at any depth other than ``README.md``, outside
-# the vendored snapshots; ``top`` anchors every pathspec at the repository root whatever directory
-# git runs in.
+# Every ``changelog/<file>.md`` but ``README.md`` outside ``system/vendor``, from the repository root.
 _ENTRY_PATHSPECS = (
     ":(top,glob)**/changelog/*.md",
     ":(top,exclude,glob)**/changelog/README.md",
