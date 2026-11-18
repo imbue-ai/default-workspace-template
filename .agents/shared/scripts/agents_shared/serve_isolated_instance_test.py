@@ -14,17 +14,24 @@ service registration routes the live UI at a dead port.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
+import tomllib
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
+from http.server import ThreadingHTTPServer
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Iterator, Sequence
 
 import pytest
 from app_registration import forward_port
@@ -508,8 +515,8 @@ def test_up_preview_boots_wrapper_registers_both_and_reports_tab(
     assert spawner.detached_spawns[0] == _LAUNCH
     wrapper_argv = spawner.detached_spawns[1]
     assert wrapper_argv[1] == str(Path(wrapper_mod.__file__).resolve())
-    assert "--inner-service" in wrapper_argv
-    assert "demo-app" in wrapper_argv
+    assert _wrapper_arg(wrapper_argv, "--inner-service") == "demo-app"
+    assert _wrapper_arg(wrapper_argv, "--apps-file") == str(forward_port.apps_file(tmp_path))
     assert "my change" in wrapper_argv
     # Registered both the inner app and the user-facing wrapper.
     assert [entry.service_name for entry in registry.registered] == [
@@ -1339,9 +1346,9 @@ def test_wrapper_page_derives_the_inner_origin_from_location_host() -> None:
     # so the page must derive the inner iframe's origin from ``location.host``
     # in JavaScript rather than bake in any static URL. The old path-prefix
     # scheme (``/service/<name>/``) no longer exists.
-    html = wrapper_mod.build_wrapper_html(inner_service="demo-app", title="my change")
+    html = wrapper_mod.build_wrapper_html(inner_label="demo-app-a1b2c3d4", title="my change")
 
-    assert '"demo-app"' in html
+    assert '"demo-app-a1b2c3d4"' in html
     assert "location.host" in html
     assert "/service/" not in html
     # No static src pointing anywhere: the iframe src is assigned in JS only.
@@ -1360,9 +1367,75 @@ def test_wrapper_page_opens_the_inner_service_at_the_given_path() -> None:
 
 
 def test_wrapper_page_escapes_the_title() -> None:
-    html = wrapper_mod.build_wrapper_html(inner_service="svc", title='<b>x</b> & "y"')
+    html = wrapper_mod.build_wrapper_html(inner_label="svc-a1b2c3d4", title='<b>x</b> & "y"')
     assert "<b>x</b>" not in html
     assert "&lt;b&gt;x&lt;/b&gt;" in html
+
+
+@contextlib.contextmanager
+def _running_wrapper(apps_file: Path, inner_service: str) -> Iterator[str]:
+    handler = wrapper_mod.make_handler(
+        apps_file=apps_file, inner_service=inner_service, title="Inbox", kind=FrameKind.MOCK
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def _wrapper_page_label(page: str) -> str:
+    match = re.search(r'var previewLabel = "([^"]+)";', page)
+    assert match is not None, page
+    return match.group(1)
+
+
+def _registered_label(apps_file: Path, service_name: str) -> str:
+    registry = tomllib.loads(apps_file.read_text())
+    [label] = [app["label"] for app in registry["apps"] if app["name"] == service_name]
+    return label
+
+
+def test_wrapper_frames_the_inner_service_at_its_current_registered_label(
+    tmp_path: Path,
+) -> None:
+    # A share routes only a service's registered ``<name>-<rand>`` label, never
+    # its bare name, so the frame must point at the label -- and at the one the
+    # registry holds now: a service removed and registered again gets a new one.
+    apps_file = tmp_path / "apps.toml"
+    forward_port.register(apps_file, "inbox", "http://localhost:8301", is_icon_declined=True)
+    first_label = _registered_label(apps_file, "inbox")
+
+    with _running_wrapper(apps_file, "inbox") as url:
+        with urllib.request.urlopen(url) as response:
+            first_page = response.read().decode("utf-8")
+        forward_port.remove(apps_file, "inbox")
+        forward_port.register(apps_file, "inbox", "http://localhost:8301", is_icon_declined=True)
+        second_label = _registered_label(apps_file, "inbox")
+        with urllib.request.urlopen(url) as response:
+            second_page = response.read().decode("utf-8")
+
+    assert first_label != "inbox"
+    assert _wrapper_page_label(first_page) == first_label
+    assert second_label != first_label
+    assert _wrapper_page_label(second_page) == second_label
+
+
+def test_wrapper_refuses_to_frame_a_service_with_no_registered_label(
+    tmp_path: Path,
+) -> None:
+    apps_file = tmp_path / "apps.toml"
+    forward_port.register(apps_file, "other", "http://localhost:8301", is_icon_declined=True)
+
+    with _running_wrapper(apps_file, "inbox") as url:
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(url)
+
+    assert excinfo.value.code == 503
 
 
 def test_a_mock_wrapper_page_says_it_is_a_mock_and_shows_the_note_escaped() -> None:
@@ -1497,6 +1570,7 @@ def test_frame_boots_only_a_mock_wrapper_and_registers_only_the_frame(
     [wrapper_argv] = spawner.detached_spawns
     assert wrapper_argv[1] == str(Path(wrapper_mod.__file__).resolve())
     assert _wrapper_arg(wrapper_argv, "--inner-service") == "inbox"
+    assert _wrapper_arg(wrapper_argv, "--apps-file") == str(forward_port.apps_file(tmp_path))
     assert _wrapper_arg(wrapper_argv, "--kind") == "mock"
     assert (
         _wrapper_arg(wrapper_argv, "--note")
