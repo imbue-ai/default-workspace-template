@@ -82,8 +82,9 @@ List each, in plain terms:
   and for a background agent, that its chat was told to pick it back up. One
   that was idle when paused to make room stays stopped: say so, and that
   sending it a message brings it back. Name any that could not be started
-  again, and that sending it a message brings it back. The main chat's line says it was interrupted instead: say its work was
-  stopped for the update and it was told what changed.
+  again, and that sending it a message brings it back. The main chat's line
+  says it was interrupted instead: say its work was stopped for the update and
+  it was told what changed.
 - **Each background command that was stopped** with a paused chat: that it was
   interrupted and its chat was told to run it again.
 - **Each cache, old worktree, or snapshot it pruned**, with what it held: a
