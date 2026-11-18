@@ -23,13 +23,7 @@ from getting_started.testing import FakeTemplateCatalogFetcher
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[5]
 _BUILT_CONTRACT: Final[Path] = _REPO_ROOT / SHELL_APP_CONTRACT_PATH
 
-pytestmark = [
-    pytest.mark.browser,
-    pytest.mark.skipif(
-        not _BUILT_CONTRACT.is_file(),
-        reason="The shell's app contract is not built (run `npm run build` in system/); skipping e2e.",
-    ),
-]
+pytestmark = pytest.mark.browser
 
 _FAILURE: Final[dict[str, object]] = {
     "message": "Chat couldn't open that. Try again. If this persists, report a bug.",
@@ -59,6 +53,8 @@ _REFUSE_ASK: Final[str] = """(failure) => {
 @contextlib.contextmanager
 def _framed_not_built_page(tmp_path: Path, browser: Browser, can_report_bug: bool) -> Generator[Page, None, None]:
     """Getting Started with no bundle, framed by a stand-in shell on another origin, once the shell refused its ask."""
+    if not _BUILT_CONTRACT.is_file():
+        pytest.fail("The shell's app contract is not built: run `npm run build` in system/ first")
     contract_path = tmp_path / "app_contract.js"
     shutil.copyfile(_BUILT_CONTRACT, contract_path)
     store = TemplateCatalogStore(
