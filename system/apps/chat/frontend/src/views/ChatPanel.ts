@@ -369,6 +369,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   // how the last one failed.
   let pageActionInFlight = false;
   let pageActionError: FailureLines | null = null;
+  // A failed create's "Ask an agent to fix this" waiting for its answer: the page's other ways out wait with it.
+  let askInFlight = false;
 
   async function fetchScreenCapture(chatId: string): Promise<void> {
     if (screenAttemptedChatId === chatId) {
@@ -439,6 +441,24 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         pageActionInFlight = false;
         m.redraw();
       });
+  }
+
+  /** What the failed-create page's "Ask an agent to fix this" asks ``targetChatId`` through
+   *  (``askConnectionToChat``), with the page told while the ask is pending. */
+  function pageAskConnection(targetChatId: string): ReturnType<typeof askConnectionToChat> {
+    const connection = askConnectionToChat(targetChatId);
+    return {
+      ...connection,
+      askAgent: async (text, options) => {
+        askInFlight = true;
+        try {
+          return await connection.askAgent(text, options);
+        } finally {
+          askInFlight = false;
+          m.redraw();
+        }
+      },
+    };
   }
 
   /** A failure line under a page's controls, with its details collapsed beneath it. */
@@ -626,6 +646,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                     variant: "primary",
                     extra: "message-list-create-retry",
                     readonly: launchInFlight,
+                    disabled: askInFlight,
                     onclick: () => void relaunch(chatId, provisional.account_id),
                   },
                   launchInFlight ? "Starting…" : "Try again",
@@ -635,6 +656,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                   {
                     extra: "message-list-switch-provider",
                     readonly: launchInFlight,
+                    disabled: askInFlight,
                     onclick: () => {
                       if (launchInFlight) return;
                       chooseProviderInPlaceOf(provisional.account_id, (accountId) => void launchOn(chatId, accountId));
@@ -657,6 +679,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
             {
               extra: "message-list-remove-chat",
               readonly: pageActionInFlight,
+              disabled: askInFlight,
               onclick: () => runPageAction(() => destroyChat(chatId), "This chat couldn't be removed"),
             },
             "Remove this chat",
@@ -666,7 +689,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
           chatToAskId === null
             ? null
             : m(AskAgentToFixButton, {
-                connection: askConnectionToChat(chatToAskId),
+                connection: pageAskConnection(chatToAskId),
                 failure: {
                   whatFailed: `The chat "${provisional.name}" couldn't be started`,
                   details: joinDetailLines([provisional.error, launchError?.details ?? null]),

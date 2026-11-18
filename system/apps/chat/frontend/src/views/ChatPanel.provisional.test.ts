@@ -627,6 +627,53 @@ describe("ChatPanel over a provisional chat", () => {
       expect(controls.map((control) => control.textContent)).toContain("Remove this chat");
       expect(controls[controls.length - 1].classList.contains("ask-agent-failure")).toBe(true);
     });
+
+    it.each([
+      { outcome: "sent", error: null },
+      {
+        outcome: "refused",
+        error: Object.assign(new Error("{}"), { code: 500, response: { detail: "mngr message exited 1" } }),
+      },
+    ])("lets no way out be pressed while an ask is pending, and every one again once it is $outcome", async (ask) => {
+      mocks.chats = [chatSnapshotFixture("chat-main")];
+      mocks.mainChatId = "chat-main";
+      failed("acct-1", "mngr create exited with code 1");
+      let settle: () => void = () => undefined;
+      mocks.sendMessage.mockImplementationOnce(
+        () =>
+          new Promise<string>((resolve, reject) => {
+            settle = () => (ask.error === null ? resolve("ok") : reject(ask.error));
+          }),
+      );
+      const render = mountPanel();
+      const page = mountView(() => render() as m.Children);
+      const buttons = (): [string | null, boolean][] =>
+        [...page.querySelectorAll<HTMLButtonElement>(".message-list-create-failed button")].map((button) => [
+          button.textContent,
+          button.disabled,
+        ]);
+
+      page.querySelector<HTMLButtonElement>(".ask-agent-to-fix")!.click();
+      m.redraw.sync();
+
+      expect(buttons()).toEqual([
+        ["Try again", true],
+        ["Switch provider", true],
+        ["Remove this chat", true],
+        ["Asking an agent…", true],
+      ]);
+
+      settle();
+      await flushAsync();
+      m.redraw.sync();
+
+      expect(buttons()).toEqual([
+        ["Try again", false],
+        ["Switch provider", false],
+        ["Remove this chat", false],
+        ["Ask an agent to fix this", false],
+      ]);
+    });
   });
 });
 
