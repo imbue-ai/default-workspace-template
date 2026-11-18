@@ -61,7 +61,7 @@ belong in tested code rather than agent prose:
     moved or not).
 
 ``changelog-entries``
-    List the target's root changelog sections for each release newer than the base's
+    List the target's root CHANGELOG.md section for each release newer than the base's
     -- the raw input for the worker's "what's new" report. ``--out`` writes their text
     to one file.
 
@@ -1275,7 +1275,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     changelog_parser = sub.add_parser(
         "changelog-entries",
-        help="List the target's root changelog sections for each release newer than "
+        help="List the target's root CHANGELOG.md section for each release newer than "
         "the base's.",
         parents=[common],
     )

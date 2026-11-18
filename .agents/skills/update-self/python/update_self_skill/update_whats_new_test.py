@@ -10,22 +10,14 @@ import pytest
 
 from update_self_skill import update_self
 from update_self_skill.update_runtime import Runner
-from update_self_skill.update_whats_new import (
-    CHANGELOG_PATH,
-    UNABRIDGED_CHANGELOG_PATH,
-    list_whats_new,
-)
+from update_self_skill.update_whats_new import CHANGELOG_PATH, list_whats_new
+
+_RELEASED = ("0.10.6", "0.10.5", "0.9.5")
+_UNRELEASED = "## [Unreleased]\n\n- Not released yet."
 
 
-def _section(version: str, body: str) -> str:
-    return f"## [minds-v{version}] - 2026-11-01\n\n{body}\n"
-
-
-_SUMMARY = {v: _section(v, f"- Summary of {v}.") for v in ("0.9.5", "0.10.5", "0.10.6")}
-_FULL = {v: _section(v, f"- Entry of {v}.") for v in ("0.9.5", "0.10.5", "0.10.6")}
-_FULL["0.9.4"] = _section(
-    "0.9.4", "- Entry of 0.9.4.\n\n## An entry's heading\n\nMore."
-)
+def _section(version: str) -> str:
+    return f"## [minds-v{version}] - 2026-11-01\n\n- Summary of {version}.\n"
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -46,32 +38,28 @@ def _commit(repo: Path, files: dict[str, str], tag: str | None = None) -> None:
         _git(repo, "tag", tag)
 
 
-def _root_changelogs(*versions: str, unreleased: str = "") -> dict[str, str]:
-    """The root changelogs of a release holding ``versions``, newest first."""
-    summary = [_SUMMARY[v] for v in versions if v in _SUMMARY]
+def _changelog(*versions: str, unreleased: str = "## [Unreleased]\n") -> dict[str, str]:
+    """The root ``CHANGELOG.md`` of a release holding ``versions``, newest first."""
     return {
-        CHANGELOG_PATH: "# Changelog\n\n"
-        + "\n".join([f"## [Unreleased]\n{unreleased}", *summary]),
-        UNABRIDGED_CHANGELOG_PATH: "# Unabridged changelog\n\n"
-        + "\n".join(_FULL[v] for v in versions),
+        CHANGELOG_PATH: "\n".join(
+            ["# Changelog\n", unreleased, *map(_section, versions)]
+        )
     }
 
 
 @pytest.fixture
 def template(tmp_path: Path) -> Path:
-    """Releases from minds-v0.9.3 (no root changelogs) to minds-v0.10.6, the summary
-    starting at minds-v0.9.5; an untagged ``main`` with an ``[Unreleased]`` line; a
-    ``workspace`` branch on minds-v0.9.3; and a ``rewritten`` branch with no release."""
+    """Releases minds-v0.9.3 (no ``CHANGELOG.md``), minds-v0.9.5, minds-v0.10.5 and
+    minds-v0.10.6; an untagged ``main`` with an ``[Unreleased]`` line; a ``workspace``
+    branch on minds-v0.9.3; and a ``rewritten`` branch with no release."""
     repo = tmp_path / "template"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
     _commit(repo, {"README.md": "0.9.3\n"}, "minds-v0.9.3")
-    _commit(repo, {"README.md": "0.9.4\n"}, "minds-v0.9.4")
-    _commit(repo, _root_changelogs("0.9.5", "0.9.4"), "minds-v0.9.5")
-    _commit(repo, _root_changelogs("0.10.5", "0.9.5", "0.9.4"), "minds-v0.10.5")
-    released = ("0.10.6", "0.10.5", "0.9.5", "0.9.4")
-    _commit(repo, _root_changelogs(*released), "minds-v0.10.6")
-    _commit(repo, _root_changelogs(*released, unreleased="\n- Not released yet.\n"))
+    _commit(repo, _changelog("0.9.5"), "minds-v0.9.5")
+    _commit(repo, _changelog("0.10.5", "0.9.5"), "minds-v0.10.5")
+    _commit(repo, _changelog(*_RELEASED), "minds-v0.10.6")
+    _commit(repo, _changelog(*_RELEASED, unreleased=f"{_UNRELEASED}\n"))
     _git(repo, "checkout", "-q", "-b", "workspace", "minds-v0.9.3")
     _commit(repo, {"notes.md": "Mine.\n"})
     _git(repo, "checkout", "-q", "--orphan", "rewritten")
@@ -79,50 +67,46 @@ def template(tmp_path: Path) -> Path:
     return repo
 
 
-def _listed(*labels_and_files: tuple[str, str]) -> list[dict[str, str]]:
-    return [{"label": label, "file": file} for label, file in labels_and_files]
-
-
 @pytest.mark.parametrize(
-    ("base", "target", "release", "listed"),
+    ("base", "target", "release", "sections", "note"),
     [
         pytest.param(
             "workspace",
             "minds-v0.10.6",
             "minds-v0.9.3",
-            _listed(
-                ("minds-v0.10.6", CHANGELOG_PATH),
-                ("minds-v0.10.5", CHANGELOG_PATH),
-                ("minds-v0.9.5", CHANGELOG_PATH),
-                ("minds-v0.9.4", UNABRIDGED_CHANGELOG_PATH),
-            ),
-            id="older-than-every-summarized-release",
+            ["minds-v0.10.6", "minds-v0.10.5", "minds-v0.9.5"],
+            "Releases before minds-v0.9.5 are not summarized.",
+            id="older-than-every-section",
         ),
         pytest.param(
-            "minds-v0.10.5",
+            "minds-v0.9.5",
             "minds-v0.10.6",
-            "minds-v0.10.5",
-            _listed(("minds-v0.10.6", CHANGELOG_PATH)),
-            id="on-a-summarized-release",
-        ),
-        pytest.param(
-            "minds-v0.10.6", "minds-v0.10.6", "minds-v0.10.6", [], id="on-the-newest"
+            "minds-v0.9.5",
+            ["minds-v0.10.6", "minds-v0.10.5"],
+            None,
+            id="on-the-oldest-section",
         ),
         pytest.param(
             "minds-v0.10.6",
             "main",
             "minds-v0.10.6",
-            _listed(("Unreleased", CHANGELOG_PATH)),
+            ["Unreleased"],
+            None,
             id="untagged-target",
         ),
     ],
 )
 def test_each_release_newer_than_the_workspaces_is_listed(
-    template: Path, base: str, target: str, release: str, listed: list[dict[str, str]]
+    template: Path,
+    base: str,
+    target: str,
+    release: str,
+    sections: list[str],
+    note: str | None,
 ) -> None:
     answer = list_whats_new(base, target, template, Runner(), None)
 
-    assert answer == {"release": release, "sections": listed, "note": None}
+    assert answer == {"release": release, "sections": sections, "note": note}
 
 
 def test_a_workspace_with_no_release_found_gets_the_newest_release(
@@ -130,31 +114,29 @@ def test_a_workspace_with_no_release_found_gets_the_newest_release(
 ) -> None:
     assert list_whats_new("rewritten", "minds-v0.10.6", template, Runner(), None) == {
         "release": None,
-        "sections": _listed(("minds-v0.10.6", CHANGELOG_PATH)),
+        "sections": ["minds-v0.10.6"],
         "note": "The workspace's release is unknown, so only the newest is listed.",
     }
 
 
 def test_a_target_without_a_changelog_lists_nothing(template: Path) -> None:
-    assert list_whats_new("workspace", "minds-v0.9.4", template, Runner(), None) == {
+    assert list_whats_new("workspace", "minds-v0.9.3", template, Runner(), None) == {
         "release": "minds-v0.9.3",
         "sections": [],
-        "note": "minds-v0.9.4 has no CHANGELOG.md, so nothing is listed.",
+        "note": "minds-v0.9.3 has no CHANGELOG.md, so nothing is listed.",
     }
 
 
 @pytest.mark.parametrize(
-    ("base", "listed", "text"),
+    ("base", "target", "sections", "text"),
     [
         (
-            "workspace",
-            _listed(
-                ("minds-v0.9.5", CHANGELOG_PATH),
-                ("minds-v0.9.4", UNABRIDGED_CHANGELOG_PATH),
-            ),
-            f"{_SUMMARY['0.9.5'].rstrip()}\n\n{_FULL['0.9.4'].rstrip()}\n",
+            "minds-v0.10.5",
+            "main",
+            ["Unreleased", "minds-v0.10.6"],
+            f"{_UNRELEASED}\n\n{_section('0.10.6')}",
         ),
-        ("minds-v0.9.5", [], ""),
+        ("minds-v0.10.6", "minds-v0.10.6", [], ""),
     ],
 )
 def test_the_command_prints_the_listing_and_writes_the_sections(
@@ -162,14 +144,15 @@ def test_the_command_prints_the_listing_and_writes_the_sections(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     base: str,
-    listed: list[dict[str, str]],
+    target: str,
+    sections: list[str],
     text: str,
 ) -> None:
     out = tmp_path / "scratch" / "whats-new.md"
-    argv = ["changelog-entries", "--base", base, "--target", "minds-v0.9.5"]
+    argv = ["changelog-entries", "--base", base, "--target", target]
 
     code = update_self.main([*argv, "--out", str(out), "--repo-root", str(template)])
 
     assert code == 0
-    assert json.loads(capsys.readouterr().out)["sections"] == listed
+    assert json.loads(capsys.readouterr().out)["sections"] == sections
     assert out.read_text() == text
