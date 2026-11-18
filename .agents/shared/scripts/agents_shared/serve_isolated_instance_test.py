@@ -1425,6 +1425,22 @@ def test_wrapper_frames_the_inner_service_at_its_current_registered_label(
     assert _wrapper_page_label(second_page) == second_label
 
 
+def test_wrapper_frames_a_service_whose_label_predates_the_hyphen_rule(tmp_path: Path) -> None:
+    # A label is never re-minted, so one minted while names' underscores were kept still has its underscore.
+    apps_file = tmp_path / "apps.toml"
+    apps_file.write_text(
+        forward_port.dump_registry(
+            [{"name": "my_inbox", "url": "http://localhost:8301", "label": "my_inbox-a1b2c3d4"}]
+        )
+    )
+
+    with _running_wrapper(apps_file, "my_inbox") as url:
+        with urllib.request.urlopen(url) as response:
+            page = response.read().decode("utf-8")
+
+    assert _wrapper_page_label(page) == "my_inbox-a1b2c3d4"
+
+
 def _wrapper_error(url: str) -> tuple[int, str]:
     """The status and body of a request to ``url`` that the wrapper refuses."""
     with pytest.raises(urllib.error.HTTPError) as excinfo:

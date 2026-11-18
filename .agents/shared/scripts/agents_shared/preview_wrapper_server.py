@@ -75,9 +75,10 @@ BANNER_COPY_BY_KIND: dict[FrameKind, BannerCopy] = {
 }
 
 
-# A single DNS hostname label; the registry is a file other programs write, and
-# the label is written into the page's script.
-_ORIGIN_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", re.IGNORECASE)
+# A single hostname label; the registry is a file other programs write, and the
+# label is written into the page's script. Underscores are admitted because a
+# label minted before ``forward_port`` turned them into hyphens keeps its own.
+_ORIGIN_LABEL_PATTERN = re.compile(r"^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$", re.IGNORECASE)
 
 
 def registered_origin_label(apps_file: Path, service_name: str) -> str | None:
