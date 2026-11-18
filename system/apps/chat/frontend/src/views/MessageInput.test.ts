@@ -609,6 +609,59 @@ describe("MessageInput send guard", () => {
   });
 });
 
+describe("MessageInput Enter during an input-method composition", () => {
+  beforeEach(() => {
+    mocks.sendMessage.mockClear();
+    mocks.agent.harness = "claude";
+    mocks.agent.activity_state = undefined;
+    localStorage.clear();
+  });
+
+  function typeDraft(component: m.Component<{ chatId: string | null }>, text: string): void {
+    const textarea = findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    (textarea?.attrs?.oninput as (event: unknown) => void)({ target: { value: text, style: {}, scrollHeight: 10 } });
+  }
+
+  function pressEnter(component: m.Component<{ chatId: string | null }>, init: Record<string, unknown>) {
+    const textarea = findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    const preventDefault = vi.fn();
+    (textarea?.attrs?.onkeydown as (event: unknown) => void)({
+      key: "Enter",
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false,
+      preventDefault,
+      ...init,
+    });
+    return preventDefault;
+  }
+
+  it("neither sends nor takes the keystroke from the input method", async () => {
+    const component = MessageInput();
+    typeDraft(component, "share the wo'r'k's'pa'ce");
+
+    const preventDefault = pressEnter(component, { isComposing: true });
+    await flushAsync();
+
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("sends the finished draft once, on the Enter that follows the composition", async () => {
+    const component = MessageInput();
+    typeDraft(component, "share the wo'r'k's'pa'ce");
+    pressEnter(component, { isComposing: true });
+    typeDraft(component, "share the workspace");
+
+    pressEnter(component, {});
+    await flushAsync();
+
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "share the workspace", expect.stringMatching(/^m-/));
+  });
+});
+
 describe("MessageInput placeholder", () => {
   beforeEach(() => {
     mocks.agent.activity_state = undefined;
