@@ -1,1 +1,0 @@
-update-self's "what's new" names minds-v0.10.5 as the last release whose changes are entry files. A workspace whose `CHANGELOG.md` has no release section is shown no section from minds-v0.10.5 down, and gets the entries of the releases it skipped under `added_before_consolidation`, read at minds-v0.10.5.
