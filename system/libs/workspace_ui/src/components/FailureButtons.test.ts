@@ -9,8 +9,8 @@ import m from "mithril";
 import {
   SHELL_HANDSHAKE,
   SHELL_REPORT_BUG,
-  SHELL_START_NEW_WITH_TEXT,
-  SHELL_START_NEW_WITH_TEXT_RESULT,
+  SHELL_ASK_AGENT,
+  SHELL_ASK_AGENT_RESULT,
   connectToShell,
 } from "../app_contract";
 import { withAskFailure } from "../app_contract";
@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 describe("Ask an agent to fix this", () => {
-  it("renders nothing until a shell frames the page, then starts a new chat with the failure on press", () => {
+  it("renders nothing until a shell frames the page, then asks an agent about the failure on press", () => {
     root = document.createElement("div");
     expect(render(m(AskAgentToFixButton, { connection: null, failure: FAILURE }))).toBeNull();
 
@@ -60,7 +60,7 @@ describe("Ask an agent to fix this", () => {
     expect(button?.textContent).toBe("Ask an agent to fix this");
     button?.click();
     const [message] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
-    expect(message.type).toBe(SHELL_START_NEW_WITH_TEXT);
+    expect(message.type).toBe(SHELL_ASK_AGENT);
     expect(message.text).toContain("HTTP 502\nboom");
   });
 
@@ -76,7 +76,7 @@ describe("Ask an agent to fix this", () => {
       const [message] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
       window.dispatchEvent(
         new MessageEvent("message", {
-          data: { type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId: message.requestId, ...reply },
+          data: { type: SHELL_ASK_AGENT_RESULT, requestId: message.requestId, ...reply },
           source: parent as unknown as Window,
         }),
       );
@@ -85,7 +85,7 @@ describe("Ask an agent to fix this", () => {
 
     render(view())?.click();
     const [request] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
-    expect(request).toMatchObject({ type: SHELL_START_NEW_WITH_TEXT, showsOutcome: true });
+    expect(request).toMatchObject({ type: SHELL_ASK_AGENT, showsOutcome: true });
     const pending = render(view());
     expect(pending?.textContent).toBe("Asking an agent…");
     expect(pending?.disabled).toBe(true);
@@ -128,7 +128,7 @@ describe("Ask an agent to fix this", () => {
     };
     window.dispatchEvent(
       new MessageEvent("message", {
-        data: { type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId: asked.requestId, isOpened: false, failure },
+        data: { type: SHELL_ASK_AGENT_RESULT, requestId: asked.requestId, isOpened: false, failure },
         source: parent as unknown as Window,
       }),
     );
@@ -188,7 +188,7 @@ describe("Ask an agent to fix this", () => {
     window.dispatchEvent(
       new MessageEvent("message", {
         data: {
-          type: SHELL_START_NEW_WITH_TEXT_RESULT,
+          type: SHELL_ASK_AGENT_RESULT,
           requestId: asked.requestId,
           isOpened: false,
           failure: refused,
@@ -236,7 +236,7 @@ describe("Ask an agent to fix this", () => {
       window.dispatchEvent(
         new MessageEvent("message", {
           data: {
-            type: SHELL_START_NEW_WITH_TEXT_RESULT,
+            type: SHELL_ASK_AGENT_RESULT,
             requestId: asked.requestId,
             isOpened: false,
             failure: refused,
@@ -275,7 +275,7 @@ describe("Ask an agent to fix this", () => {
 
     window.dispatchEvent(
       new MessageEvent("message", {
-        data: { type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId: asked.requestId, isOpened: true },
+        data: { type: SHELL_ASK_AGENT_RESULT, requestId: asked.requestId, isOpened: true },
         source: parent as unknown as Window,
       }),
     );

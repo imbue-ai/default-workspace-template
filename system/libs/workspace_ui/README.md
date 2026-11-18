@@ -45,12 +45,14 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   server's own text go behind "See details" (`src/components/SeeDetails.ts`,
   which `NoticeDialog` draws from its `details`).
 - A failure's two buttons, both through the shell that frames the page
-  (`src/components/FailureButtons.ts`): `AskAgentToFixButton` starts a new
-  chat that asks an agent to fix the failure (`askAgentToFix` in
-  `src/app_contract.ts`, through `shell:start-new-with-text`, one task text
-  for every caller: what failed, the details verbatim, and what to do), and
-  renders nothing where no shell frames the page. `askAgentToFix` answers a
-  promise that settles on the shell's `shell:start-new-with-text-result`
+  (`src/components/FailureButtons.ts`): `AskAgentToFixButton` asks an agent
+  to fix the failure, in a message to the chat about the app the page belongs
+  to, which the shell opens beside the page's window (the main chat where
+  the workspace offers no chat about an app, or the page's app is internal;
+  `askAgentToFix` in `src/app_contract.ts`, through `shell:ask-agent`, one
+  task text for every caller: what failed, the details verbatim, and what to
+  do), and renders nothing where no shell frames the page. `askAgentToFix`
+  answers a promise that settles on the shell's `shell:ask-agent-result`
   (`{isOpened: true}`, or `{isOpened: false, failure}`; as not answered at
   once without a shell, on a handshake from a shell that started again (a
   different `shellId`), and on `disconnect()`; the button passes
