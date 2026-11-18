@@ -1908,6 +1908,20 @@ The `datalib` skill now installs datalib v0.46.0, and tells an agent to start at
 
 `record_publish_test.py`'s first-publish test no longer fails in any workspace that has updated, so it stops showing up as a failing test during `update-self`. Its fixture copied the repo's own `docs/VERSION_HISTORY.md`, which in a workspace already has a `created from` line, so `record_publish.py` correctly skipped seeding one and the test's assertion found nothing. The fixture now starts from the ledger the template ships (`update_ledger.VERSION_HISTORY_STARTER`).
 
+A scheduled workspace update no longer stops to ask for memory it is allowed to free.
+
+An update's heaviest moments -- launching its background helper, its test gate, the frontend build -- are the ones the memory guard kills first, and the memory that would unblock them is usually held by the apps. The update could stop only the apps no window was showing, which on a real run freed almost nothing: the memory was in three apps with windows open, and the update waited six and a half hours for the user to say it could stop them.
+
+A scheduled update may now stop any app the memory candidates command lists, windows open or not. That list is the boundary, drawn so everything in it can be brought back: no critical app, nothing internal, nothing sharing a critical app's program, and nothing without a program to start again. A pressed "Update now" keeps the old rule, since the user is at the screen.
+
+`run-status started-by` tells the two apart from the record the app writes when it creates the update chat, matching on the chat's name or its id, either one -- renaming a chat renames its agent, and a scheduled run in a renamed chat would otherwise fall back to asking.
+
+`stop-apps` records each app before it stops the next, and `resume-apps` starts them again. The record matters because the pass stopping them is the one running out of memory, so its own chat may be killed before it restores anything; the next run carries over whatever this one never started. A landed update restarts every program regardless. The pass stops programs and never windows, so a window stays where it is and its page works again once its app is back.
+
+A background helper whose checks were killed now has the update free memory for it under that rule and report the room it made, rather than improvising. It reaches the user only when everything the update may stop is stopped and there is still not enough. Narrowing or skipping a check is never the answer -- and the helper now judges a kill by the figure the memory guard acts on, not the container's `/proc/meminfo`, which reads far more free than the guard sees and sent it straight back into another kill.
+
+New reference: `.agents/skills/update-self/references/freeing-memory-for-an-update.md`. Every other flow still offers the candidates and stops only what the user approves.
+
 ### system
 
 `tk` rejects an empty or whitespace-only ticket id with `Error: empty ticket ID`. It used to partial-match every ticket, so `tk close "$UNSET_VAR"` closed the only regular ticket among the step records -- in a workspace, often another chat's editing lease -- and exited 0. The `tk edit` plugin, which carries its own copy of the lookup, gets the same check.
@@ -1968,6 +1982,16 @@ Gave the package its own ruff config (one import per line, like its sibling apps
 
 The built-in theme icon test checks only the apps the template ships, so it no longer fails in a workspace that has apps the user built (a theme draws those from the app's own icon).
 
+### system/services/oom_priority
+
+The memory candidates command (`system/services/oom_priority/bin/memory_candidates.py`) now reports the free memory the memory daemon actually decides on, and lists the workspace's apps.
+
+Before, it read free memory from the container's `/proc/meminfo`. On a workspace with a memory cap that is not the figure earlyoom acts on: earlyoom reads the headroom file the workspace publishes for its `--host-meminfo`, and the two disagree. On the capped workspace whose stalled update prompted this, `/proc/meminfo` said 3.1 GB free while the real headroom was 1.0 GB, and an agent that believed the first figure kept rerunning a build that kept being killed; a second workspace checked while writing this read 3.3 GB against 1.2 GB at an idle moment. The command now prefers the headroom file while it is fresh, falls back to `/proc/meminfo`, and names which file and which field it read. The rule is the one `oom_priority.meminfo` already applied for the resource sampler and the system monitor.
+
+It also lists the apps the workspace may stop, each with how many windows show it, its supervisord program, whether the shell stops it by itself once no window shows it (`AUTO-STOP`, so an app that may be doing work between requests can be left for last), and the memory its program's process tree holds. A critical app, an app sharing a critical app's program, an internal app, an app with no program and one that is not running are all left out, and so is the browser, whose Chromium processes already have their own section. Before, the apps were missing entirely, so anyone freeing memory had to work out the list by hand.
+
+The apps and the browsers now come from one read of the shell's inventory document rather than two reads of its desktops; a shell that cannot be reached takes both sections to "unknown" together.
+
 ### system/services/share_gateway
 
 Gave the package its own ruff config (one import per line, like its sibling apps), which its code was already written in, and fixed the few findings under it so `ruff check`, which CI now runs, passes. Two test helpers now type their response instead of reaching `.headers` through `getattr`. No behavior change.
@@ -1979,20 +2003,6 @@ Gave the package its own ruff config (one import per line, like its sibling apps
 The `datalib` skill now installs datalib v0.45.0. A Gmail source can start from a Google Takeout of the same account and download only the mail newer than it, and ChatGPT keeps archived chats. In the Datalib app a source opens as one card (its documents, with its sync a tab away); sources, people and dates show as chips throughout, every date in a document in your own time zone; you can edit your own contact on its person card; and a right-click on the data root's size (or `datalib-dag --compact`) folds the rendered history to give back disk. Several sources re-render their documents on the first sync after the upgrade; the downloaded data is carried forward as it is, and an older datalib can no longer open the store.
 
 The caretaker and `manage-desktop` now surface a chat with `workspace-layout show chat --path "/?chat=<id>" --showing "/<id>" --repoint /`, which shows it in the pinned chat window. The `open chat --path "/?chat=<id>"` they used before never matched the pinned window, so each run added another chat window.
-
-A scheduled workspace update no longer stops to ask for memory it is allowed to free.
-
-An update's heaviest moments -- launching its background helper, its test gate, the frontend build -- are the ones the memory guard kills first, and the memory that would unblock them is usually held by the apps. The update could stop only the apps no window was showing, which on a real run freed almost nothing: the memory was in three apps with windows open, and the update waited six and a half hours for the user to say it could stop them.
-
-A scheduled update may now stop any app the memory candidates command lists, windows open or not. That list is the boundary, drawn so everything in it can be brought back: no critical app, nothing internal, nothing sharing a critical app's program, and nothing without a program to start again. A pressed "Update now" keeps the old rule, since the user is at the screen.
-
-`run-status started-by` tells the two apart from the record the app writes when it creates the update chat, matching on the chat's name or its id, either one -- renaming a chat renames its agent, and a scheduled run in a renamed chat would otherwise fall back to asking.
-
-`stop-apps` records each app before it stops the next, and `resume-apps` starts them again. The record matters because the pass stopping them is the one running out of memory, so its own chat may be killed before it restores anything; the next run carries over whatever this one never started. A landed update restarts every program regardless. The pass stops programs and never windows, so a window stays where it is and its page works again once its app is back.
-
-A background helper whose checks were killed now has the update free memory for it under that rule and report the room it made, rather than improvising. It reaches the user only when everything the update may stop is stopped and there is still not enough. Narrowing or skipping a check is never the answer -- and the helper now judges a kill by the figure the memory guard acts on, not the container's `/proc/meminfo`, which reads far more free than the guard sees and sent it straight back into another kill.
-
-New reference: `.agents/skills/update-self/references/freeing-memory-for-an-update.md`. Every other flow still offers the candidates and stops only what the user approves.
 
 New `docs/system/themeable-apps.md`: how to make an app themeable (`[theming] mode = "outside"`, serving and loading the page kit, the app's own look in a cascade layer, tokens with today's values as fallbacks, plain controls, `lint-app` to check). Only "Enable theming" points agents at it; app building does not read it.
 
@@ -2252,16 +2262,6 @@ The shared UI library takes part in workspace themes (`docs/system/blueprint/wor
 - New page kit (`src/page/`), a stylesheet and a script every app serves at `/_static/workspace_theme.css` and `/_static/workspace_theme.js`, so a page built as plain HTML wears the workspace's theme too. On such a page a plain `<button>`, text `<input>`, `<textarea>`, or `<select>` wears the theme as its part does, with no marking; `data-variant` on a plain button still gives it emphasis.
 
 - The app contract's `shell:theme` message (`{theme, revision, isPreview}`) reaches an app's `onTheme(theme, revision, isPreview)`, and `followShellTheme` follows the theme without connecting.
-
-### system/services/oom_priority
-
-The memory candidates command (`system/services/oom_priority/bin/memory_candidates.py`) now reports the free memory the memory daemon actually decides on, and lists the workspace's apps.
-
-Before, it read free memory from the container's `/proc/meminfo`. On a workspace with a memory cap that is not the figure earlyoom acts on: earlyoom reads the headroom file the workspace publishes for its `--host-meminfo`, and the two disagree. On the capped workspace whose stalled update prompted this, `/proc/meminfo` said 3.1 GB free while the real headroom was 1.0 GB, and an agent that believed the first figure kept rerunning a build that kept being killed; a second workspace checked while writing this read 3.3 GB against 1.2 GB at an idle moment. The command now prefers the headroom file while it is fresh, falls back to `/proc/meminfo`, and names which file and which field it read. The rule is the one `oom_priority.meminfo` already applied for the resource sampler and the system monitor.
-
-It also lists the apps the workspace may stop, each with how many windows show it, its supervisord program, whether the shell stops it by itself once no window shows it (`AUTO-STOP`, so an app that may be doing work between requests can be left for last), and the memory its program's process tree holds. A critical app, an app sharing a critical app's program, an internal app, an app with no program and one that is not running are all left out, and so is the browser, whose Chromium processes already have their own section. Before, the apps were missing entirely, so anyone freeing memory had to work out the list by hand.
-
-The apps and the browsers now come from one read of the shell's inventory document rather than two reads of its desktops; a shell that cannot be reached takes both sections to "unknown" together.
 
 ## [minds-v0.9.1] - 2026-10-24
 
@@ -4338,6 +4338,16 @@ If the report can't be delivered, the runner keeps retrying with backoff for up 
 
 `message_chat.py --system` is now `--browser-fleet`, after what it does: it wraps a message in the browser fleet's tag, which the chat shows as a "Browser fleet" chip. A codex lead had used `--system` to report a worker's result, and the chat showed that report as a browser-fleet message. `--system` still works, for a browser app that is still running the code from before an update; it goes once every release the app updates from passes the new name.
 
+Codex CLI bumped from 0.154.0 to 0.157.0 (`CODEX_VERSION` in `system/scripts/setup_system.sh`). 0.155.0 is the first release that can use GPT-6 Sol (`gpt-6-sol`) and GPT-6 Luna (`gpt-6-luna`); on 0.154.0 an account's model list does not offer them at all.
+
+New codex agents now start on GPT-6 Sol: `[agent_types.codex]` pins `model = "gpt-6-sol"`. Without a pin, codex starts on the first model of the account's server catalog, which is GPT-6 Astra. A chat can still switch to any model its account offers from the model bar. The catalog lists GPT-6 Sol for every ChatGPT plan GPT-6 Astra is listed for except `promax`; on an account without it, a new codex agent starts on the account's default model instead. Codex agents also now pin `service_tier = "default"`: GPT-6 Sol's catalog entry defaults to the fast (`priority`) tier, which codex's terminal UI would otherwise apply to any turn typed directly in the agent terminal. The `fast` create template still overrides it.
+
+Codex agents can no longer type into a running command. `features.unified_exec = false`, which was meant to remove `write_stdin` (a tool that fires no PreToolUse hook, so typing commands into a shell skipped every command guard), has been silently ignored since codex 0.154: codex forces unified exec back on unless a managed requirements file pins it. `[agent_types.codex]` now sets `features.unified_exec_tty = false` instead, so every command runs with its stdin closed and `write_stdin` can only poll a running command or interrupt it. Long-running commands still yield and can be polled.
+
+`suppress_unstable_features_warning` moved from codex's `[features]` table, where codex ignored it, to the top level of the config. Left where it was, codex 0.157.0 starts every session with two error items: "Codex is ignoring 1 unrecognized configuration setting" and "Under-development features enabled: code_mode_only". At the top level, neither appears.
+
+The first codex agent in a workspace no longer turns `/tmp` into mode 0700. codex 0.154.0 forced the parent directory of its app-server socket (`/tmp/mngr-codex-<hash>.sock`) to 0700, and since codex runs as root that made `/tmp` unwritable for other users, such as apt's `_apt` sandbox user. codex 0.157.0 keeps its sockets under `/tmp/codex-daemon-<uid>/` and leaves the parent alone.
+
 A codex account whose plan does not offer GPT-6 Sol no longer gets a codex agent that fails every turn. `[agent_types.codex]` now sets `fall_back_to_account_default_model = true` alongside its `model = "gpt-6-sol"` pin, so before mngr starts a new codex thread it reads the account's model list, and if GPT-6 Sol is not in it (the catalog leaves it out for `promax`) the thread starts on the account's default model instead. A chat whose thread already exists keeps its model.
 
 mngr is pinned to the public export of mngr's `gabriel/codex-model-fallback` branch, which adds that setting.
@@ -4628,16 +4638,6 @@ The guard no longer mistakes `||` for a pipe (`grep x f || tail -4 f` was refuse
 Replayed against the 4,540 Bash commands in one production workspace's agent history, the old guard blocks 214 and the new one blocks 80, and nothing the old one allowed. All 53 blocks of test runs, dependency syncs, fetches, network calls and commits are kept.
 
 pi agents now get every command guard from this repo, the same way claude, codex and agy do. `.pi/extensions/policy_guards.ts` feeds the same hook scripts claude runs (`agent_prevent_commit_rewrite.sh`, `agent_block_pipe_tail_head.sh`, `agent_latchkey_request_standalone.sh`, `agent_secrets_guard.sh`, `agent_tk_standalone.sh`) the payload they read on stdin (the secrets guard on pi's file tools too), then prefixes an allowed command with `agent_rewrite_bash_command.py --prefix-only`. Until now the pipe-into-`head`/`tail` block, the git history-rewrite block and the OOM/git-identity rewrite were copied into mngr's pi extension, so a change to any of them needed a matching mngr release, and pi's refusal messages had drifted from the scripts' wording. `agent_hook_wiring_test.py` now fails if pi's list of scripts differs from claude's. A guard or rewrite that fails (a missing script, a crash) lets the command run and is logged to `pi_policy_guards.log` in the agent's state dir.
-
-Codex CLI bumped from 0.154.0 to 0.157.0 (`CODEX_VERSION` in `system/scripts/setup_system.sh`). 0.155.0 is the first release that can use GPT-6 Sol (`gpt-6-sol`) and GPT-6 Luna (`gpt-6-luna`); on 0.154.0 an account's model list does not offer them at all.
-
-New codex agents now start on GPT-6 Sol: `[agent_types.codex]` pins `model = "gpt-6-sol"`. Without a pin, codex starts on the first model of the account's server catalog, which is GPT-6 Astra. A chat can still switch to any model its account offers from the model bar. The catalog lists GPT-6 Sol for every ChatGPT plan GPT-6 Astra is listed for except `promax`; on an account without it, a new codex agent starts on the account's default model instead. Codex agents also now pin `service_tier = "default"`: GPT-6 Sol's catalog entry defaults to the fast (`priority`) tier, which codex's terminal UI would otherwise apply to any turn typed directly in the agent terminal. The `fast` create template still overrides it.
-
-Codex agents can no longer type into a running command. `features.unified_exec = false`, which was meant to remove `write_stdin` (a tool that fires no PreToolUse hook, so typing commands into a shell skipped every command guard), has been silently ignored since codex 0.154: codex forces unified exec back on unless a managed requirements file pins it. `[agent_types.codex]` now sets `features.unified_exec_tty = false` instead, so every command runs with its stdin closed and `write_stdin` can only poll a running command or interrupt it. Long-running commands still yield and can be polled.
-
-`suppress_unstable_features_warning` moved from codex's `[features]` table, where codex ignored it, to the top level of the config. Left where it was, codex 0.157.0 starts every session with two error items: "Codex is ignoring 1 unrecognized configuration setting" and "Under-development features enabled: code_mode_only". At the top level, neither appears.
-
-The first codex agent in a workspace no longer turns `/tmp` into mode 0700. codex 0.154.0 forced the parent directory of its app-server socket (`/tmp/mngr-codex-<hash>.sock`) to 0700, and since codex runs as root that made `/tmp` unwritable for other users, such as apt's `_apt` sandbox user. codex 0.157.0 keeps its sockets under `/tmp/codex-daemon-<uid>/` and leaves the parent alone.
 
 `setup_system.sh` now fails the build if the installed codex npm package does not hold the native binary for this machine at `node_modules/@openai/codex-linux-<arch>/vendor/<triple>/bin/codex`, the one codex's npm entry point would run. The OOM launch wrapper execs that binary directly, so a codex version bump that moves it would otherwise quietly bring back unattributed OOM kills. The `.mngr/settings.toml` comment on the codex launch command now says the wrapper execs the native binary.
 
@@ -10895,6 +10895,14 @@ The `agentic-browser-fleet` skill now notes that, on resume after a human held t
 
 The `agentic-browser-fleet` and `manage-layout` skills now tell agents the browser pane is surfaced automatically when the user is watching that chat, so they shouldn't manage it by hand: never open a bare `service:browser` (rejected -- no browser bound); if a user explicitly asks to open one, use `service:browser?session=<name>`; otherwise point them at the "+ -> browser" menu.
 
+- `update-self` now runs the *target* version's own copy of the skill instead of the local one. Once the target ref is resolved, a new `bootstrap-skill` step (`update_self.py`) `git archive`s that ref's skill dir to a fixed staged path (`data/.tasks/update-self/skill-at-target/...`) and the rest of the pass -- lead and worker -- runs from there, so fixes to the update flow itself ship on the way in. The staged path is addressed by literal rather than a shell env var (which didn't survive Claude's fresh-shell-per-command Bash tool and silently fell back to the stale local copy); a ref that predates the skill stages the local copy instead.
+
+- The reveal step for a `service` / `system/supervisord.conf` / `bootstrap` change now prescribes a full services-agent restart (`mngr start --restart system-services`) and forbids the surgical `supervisorctl reread && update`, which doesn't re-run `bootstrap` and so misses `system/libs/bootstrap` changes.
+
+- Fixed the "what's new" collector (`update_self.py changelog-entries`): it scanned only the top-level `changelog/` dir, so it missed every entry under the current bucketed layout (`.agents/changelog/`, `system/changelog/`, `libs/*/changelog/`, ...). It now gathers newly-added entries from every project bucket (excluding the vendored subtree).
+
+The `manage-layout` skill now states up front where its script actually lives: `layout.py` sits at the repo root (`system/scripts/layout.py`, i.e. `/mngr/code/scripts/layout.py`), not inside the skill's own folder. Agents were reading the relative `python3 system/scripts/layout.py ...` commands as skill-relative and looking for a nonexistent `.agents/skills/manage-layout/scripts/layout.py`.
+
 Added a `migrate-workspace` skill: bring everything from another (older, broken, or replaced) workspace into this one -- apps, skills, documents, data, scheduled automations, and every past chat. An old workspace cannot update itself across the tree reorganization and the Debian 12 -> 13 base-image change, so the guidance becomes "create a fresh workspace and have its agent pull the old one in"; this skill is that pull. It is reached by description match alone, worded for how users actually phrase the request, and it has an escape hatch for being asked from the *old* side (it creates the new workspace, then hands off to that workspace's agent).
 
 The flow runs over a live SSH session brokered through the minds API, so the old workspace has to be startable; a source that will not start is handled in prose via a backup export instead. The lead agent gets access with one batched permission request, takes a fresh backup on both sides, checks that this workspace is genuinely fresh, and resolves what the user actually authored by diffing the source against *its own* template base -- which excludes template-version drift by construction. It then surfaces the whole inventory and every question it can up front (collisions, unmerged branches, billing-relevant AI decisions) before dispatching a worker for the transfer, path rewriting, app/job re-registration, and chat recreation.
@@ -10927,6 +10935,10 @@ A ceiling is now parsed as a full semantic version rather than only as a stable 
 
 Update the wording of the Latchkey skill to reflect changes related to per-account permissions.
 
+The `use-ai-integration` skill's keyed (litellm/direct-HTTP) path now resolves credentials from the shared Claude `settings.json` env block at call time (`read_workspace_ai_credentials()` in `claude_p.py`) instead of `os.environ`, so services pick up workspace auth changes without restarts. The skill docs and `references/billing-and-credentialing.md` describe the settings-env credential contract.
+
+Keyed integrations now pin their key at setup: the skill instructs snapshotting `ANTHROPIC_API_KEY` (+ `ANTHROPIC_BASE_URL`, never the subscription oauth token) into `data/.secrets/anthropic.env` via the new `write_anthropic_env_snapshot()` helper, and `read_workspace_ai_credentials()` resolves that snapshot first (then the settings env, then the process env). A built service therefore keeps billing against the key it was set up with when the user later switches the workspace's sign-in; the user asks the agent to rewrite or delete the snapshot to re-key or retire integrations.
+
 Skills updated for the system/scripts breakup: the caretaker, enable-caretaker, and manage-scheduled-tasks skills now reference the new package paths (`system/libs/automations/` for `with_agent_env.sh` / `run_job.sh` / `run_automation.sh` -- renamed from `run_schedule_agent.sh` -- and `system/services/caretaker/caretaker_check.sh`), with the singleton label renamed `schedule_agent=<skill>` -> `automation=<skill>` and the generic create template `schedule_agent` -> `automation`.
 
 The manage-scheduled-tasks skill's "schedule agent" section is reframed around the workspace's "automation" vocabulary; the build-app and github-sync skills and the service-processes reference use the new `system/services/oom_priority/bin/oom_tag_service.py` command prefix.
@@ -10950,6 +10962,124 @@ Skills and shared references move to the /home/user layout paths (`~/workspace`,
 Combined integration PR (carries mngr/break-apart-scripts and mngr/claude-config-dir): skills reference the new package paths from the system/scripts breakup (`system/libs/automations/`, `system/services/caretaker/`, `system/services/oom_priority/bin/`), the schedule-agent vocabulary is renamed to "automation", and the `use-ai-integration` credential resolver falls back to the shared `~/.claude` when `CLAUDE_CONFIG_DIR` is unset. See `mngr-break-apart-scripts.md` and `mngr-claude-config-dir.md` in this directory for details.
 
 - Updated the `layout.py` instructions in the `build-web-service`, `manage-layout`, `update-self`, `update-service`, and `update-system-interface` skills for the now-required `--layout` argument on mutating ops (`open`, `close`, etc.). The skills previously instructed the old bare form (e.g. `layout.py open <name>`), which now fails with an argparse usage error when an agent follows it verbatim. Surfacing/closing instructions now use a per-layout loop (`for L in desktop mobile; do ... --layout "$L" ...; done`) -- the op only applies on clients with that layout active, so the call for the layout the user is not on fails fast and harmlessly -- and the surrounding prose explains the `--layout` semantics.
+
+- New **`update-published-inspiration`** skill: the pathway for a publisher to create a new
+  version of an inspiration they already published (v2, v3, ...). It locates the
+  inspiration from the version ledger, shows what changed in the workspace since
+  the last publish, and ASKS the user which of those changes they want in the
+  update. It then launches a background worker to implement it -- and the core
+  safety rule is that it **re-assembles from the published tip, never from the
+  raw template base**, so the user's own customizations (the finished manifest
+  prose, the recipe, the bespoke thumbnail, the welcome, and adopters' adaptation
+  history) are preserved and only the approved changes are overlaid. The recipe's
+  exclusions and modification rules are re-applied, secrets are re-scanned, the
+  result is boot-checked, a `### v(n+1)` Publication-history entry is appended,
+  and exactly one clean commit is fast-forwarded onto the published repo (no
+  force). The workspace ledger records the new version only after the push
+  succeeds.
+
+- New **`update-installed-inspiration`** skill: the ADOPTER pathway to pull a newer
+  version of an already-adopted inspiration from its remote into the current
+  mind. It reuses `use-inspiration`'s safeguards -- the same trust gate (Imbue
+  has not verified it, it could be malicious; confirm before fetching), and a
+  merge done in an isolated worktree with a boot smoke-check that lands into the
+  live tree only when clean. Its central rule is to **preserve this mind's own
+  adaptations**: merge conflicts are surfaced as holes and resolved
+  interactively with the user, never mechanically or with a blanket "take
+  theirs", so the customizations that make it the user's mind are never thrown
+  away. It records the version it moved to under a new `## Adopted inspirations`
+  section of the ledger.
+
+- **Adopting an inspiration is now gated and verified.** Before the merge path
+  pulls a third-party inspiration into a mind, `use-inspiration` requires the
+  user to confirm they trust the source -- stating plainly that Imbue has not
+  verified it and it could contain malicious code -- and does nothing (no fetch,
+  merge, or execution) until they agree. The merge itself now happens in an
+  isolated worktree with a boot smoke-check, and only a clean, bootable result
+  is fast-forwarded into the live tree, so a broken or hostile inspiration can
+  never clobber the mind. A mind created directly FROM an inspiration is treated
+  as already trusted (creating it was the trust decision).
+
+- The workspace version ledger is `docs/VERSION_HISTORY.md`, with three
+  sections: `## Workspace` (template version created-from + each `update-self`
+  landing), `## Inspirations` (each inspiration this mind published, `v1`/`v2`...
+  per slug), and `## Adopted inspirations` (each inspiration this mind adopted
+  and the version it is on). Instead of a separate helper skill, each writer --
+  `update-self`, `publish-inspiration`, `update-published-inspiration`, and
+  `update-installed-inspiration` -- carries its own self-contained instructions
+  telling the agent exactly which line to append and how (section, format, how
+  the version number is computed, the idempotence check, and that it is one file
+  staged by name and committed, never `git add -A`). The two subtle rules are
+  spelled out where they apply: record the `update-self` MERGE commit, not
+  `HEAD` (committing the ledger moves `HEAD`), and resolve the template version
+  by reachability (`git describe`), not `git tag --points-at`.
+
+- **`update-self`** now records the version it moved to as part of landing an
+  update, so a workspace's template lineage is visible in its own git tree.
+
+- The publish skill now confirms the **adopter's required permissions with the
+  publisher**. The manifest's "Prerequisites" -- what the inspiration's user must
+  grant for the app to work -- are surfaced back in the chat confirmation in
+  plain language, and the publisher's answer is part of the go-ahead. A missing
+  or wrong line is fixed before the push, since a gap there silently breaks
+  adoption.
+
+- **An inspiration can be anything committable**, not just an app: a skill, a
+  chat customization or behavior, a workflow, a service, config, or seed data.
+  If the user wants to snapshot something that is not committed to git -- an
+  ephemeral chat behavior, conversation history, runtime-only state -- the skill
+  recognizes this and suggests turning it into something committable first (most
+  often by crystallizing it into a skill), since an inspiration must be
+  reconstructable from the committed tree.
+
+- **LLM access is now a first-class prerequisite.** Any inspiration whose code
+  calls Claude records how it reaches it, because that differs per environment:
+  the keyed path (`ANTHROPIC_API_KEY` set -> litellm, pay-per-token) or the
+  keyless path (`claude -p` -> the subscription credit pool). The manifest gains
+  a `requires_llm:` line naming the method the code was built against, so an
+  adopter on the other method knows to switch the model calls, and a hardcoded
+  path is also listed as a Hole.
+
+- **Published inspiration repos are locked down on creation** -- unconditionally
+  (public or private) and without asking, using GitHub's 2026 pull-request-access
+  setting. Right after the repo is created, one PATCH restricts pull requests to
+  collaborators (`pull_request_creation_policy: collaborators_only`, so arbitrary
+  outsiders cannot open a PR) and disables issues, wiki, projects, and
+  discussions outright. This closes every surface where a non-collaborator could
+  open or inject content. Two residual limits remain, surfaced only if the user
+  chooses public visibility: the REST API can only RESTRICT pull requests to
+  collaborators, not fully disable them (the disable toggle is UI-only), and
+  forking cannot be disabled on a personal public repo (GitHub allows that only
+  on org-owned repos). On a private inspiration neither matters, since outsiders
+  have no access at all.
+
+- **Published manifests now carry a changelog.** Each `inspiration-<slug>.md`
+  has a "Publication history" section -- the inspiration's own changelog of what
+  each published version changed, seeded at v1 with `### v1 (date) -- what this
+  first version publishes`. It is the publisher's log (a later update appends
+  `### v2 (date) -- what changed`), kept distinct from the adopters'
+  "Adaptation history". The section is FILL-IN-gated like the rest of the
+  manifest, so a publish cannot complete with it left as a placeholder.
+
+- **Published manifests now carry a version and a recipe.** Each
+  `inspiration-<slug>.md` records `version: v1` and a "Recipe" section: the
+  include paths, the deliberate exclusions, and the published-version
+  modification RULES (rules only -- never the removed values). An inspiration is
+  derived from its workspace by that recipe rather than being a fork of it, so a
+  later update re-runs the recipe against the current workspace instead of
+  diffing two repos -- which is what keeps anything deliberately excluded
+  excluded, even though it still exists in the source workspace.
+
+- A publish records its entry in the workspace's ledger only **after the push
+  succeeds** -- one single-file commit, documented as the one explicit exception
+  to the rule that the live workspace is untouched after assembly. An
+  unpublished inspiration is never recorded.
+
+- A published inspiration never ships version history at all: `docs/VERSION_HISTORY.md`
+  is a workspace artifact, so the assembled snapshot drops it entirely (rather
+  than shipping an empty copy). The slugs, repo URLs, and source commits of a
+  mind's other inspirations therefore never appear inside one it publishes, and a
+  mind created from the inspiration grows its own ledger on demand.
 
 Adds the Caretaker skills: `caretaker` (the weekly maintenance agent's run procedure -- verify the deterministic check's findings, system health, uncommitted work, fixes gated by a plain-language permissions file), `enable-caretaker` and `disable-caretaker` (the off-by-default beta switch: the schedule entry itself, written durably and installed live), `manage-scheduled-tasks` (how recurring jobs work on this host: the completion-tracked runner for any cadence vs plain cron lines, timezone re-checking, the env wrapper), and `check-app-errors` (scan supervisord services and logs for problems).
 
@@ -12232,141 +12362,11 @@ Combined integration PR (carries mngr/break-apart-scripts): the five OOM entry p
 
 ### .agents
 
-- `update-self` now runs the *target* version's own copy of the skill instead of the local one. Once the target ref is resolved, a new `bootstrap-skill` step (`update_self.py`) `git archive`s that ref's skill dir to a fixed staged path (`data/.tasks/update-self/skill-at-target/...`) and the rest of the pass -- lead and worker -- runs from there, so fixes to the update flow itself ship on the way in. The staged path is addressed by literal rather than a shell env var (which didn't survive Claude's fresh-shell-per-command Bash tool and silently fell back to the stale local copy); a ref that predates the skill stages the local copy instead.
-
-- The reveal step for a `service` / `system/supervisord.conf` / `bootstrap` change now prescribes a full services-agent restart (`mngr start --restart system-services`) and forbids the surgical `supervisorctl reread && update`, which doesn't re-run `bootstrap` and so misses `system/libs/bootstrap` changes.
-
-- Fixed the "what's new" collector (`update_self.py changelog-entries`): it scanned only the top-level `changelog/` dir, so it missed every entry under the current bucketed layout (`.agents/changelog/`, `system/changelog/`, `libs/*/changelog/`, ...). It now gathers newly-added entries from every project bucket (excluding the vendored subtree).
-
-The `manage-layout` skill now states up front where its script actually lives: `layout.py` sits at the repo root (`system/scripts/layout.py`, i.e. `/mngr/code/scripts/layout.py`), not inside the skill's own folder. Agents were reading the relative `python3 system/scripts/layout.py ...` commands as skill-relative and looking for a nonexistent `.agents/skills/manage-layout/scripts/layout.py`.
-
 Remove the obsolete "Notion hack" from the Latchkey skill.
 
 Bump Latchkey version to 3.0.0. Update the Latchkey skill to let
 agents know how to deal with multiple accounts and what to do
 with expired credentials.
-
-The `use-ai-integration` skill's keyed (litellm/direct-HTTP) path now resolves credentials from the shared Claude `settings.json` env block at call time (`read_workspace_ai_credentials()` in `claude_p.py`) instead of `os.environ`, so services pick up workspace auth changes without restarts. The skill docs and `references/billing-and-credentialing.md` describe the settings-env credential contract.
-
-Keyed integrations now pin their key at setup: the skill instructs snapshotting `ANTHROPIC_API_KEY` (+ `ANTHROPIC_BASE_URL`, never the subscription oauth token) into `data/.secrets/anthropic.env` via the new `write_anthropic_env_snapshot()` helper, and `read_workspace_ai_credentials()` resolves that snapshot first (then the settings env, then the process env). A built service therefore keeps billing against the key it was set up with when the user later switches the workspace's sign-in; the user asks the agent to rewrite or delete the snapshot to re-key or retire integrations.
-
-- New **`update-published-inspiration`** skill: the pathway for a publisher to create a new
-  version of an inspiration they already published (v2, v3, ...). It locates the
-  inspiration from the version ledger, shows what changed in the workspace since
-  the last publish, and ASKS the user which of those changes they want in the
-  update. It then launches a background worker to implement it -- and the core
-  safety rule is that it **re-assembles from the published tip, never from the
-  raw template base**, so the user's own customizations (the finished manifest
-  prose, the recipe, the bespoke thumbnail, the welcome, and adopters' adaptation
-  history) are preserved and only the approved changes are overlaid. The recipe's
-  exclusions and modification rules are re-applied, secrets are re-scanned, the
-  result is boot-checked, a `### v(n+1)` Publication-history entry is appended,
-  and exactly one clean commit is fast-forwarded onto the published repo (no
-  force). The workspace ledger records the new version only after the push
-  succeeds.
-
-- New **`update-installed-inspiration`** skill: the ADOPTER pathway to pull a newer
-  version of an already-adopted inspiration from its remote into the current
-  mind. It reuses `use-inspiration`'s safeguards -- the same trust gate (Imbue
-  has not verified it, it could be malicious; confirm before fetching), and a
-  merge done in an isolated worktree with a boot smoke-check that lands into the
-  live tree only when clean. Its central rule is to **preserve this mind's own
-  adaptations**: merge conflicts are surfaced as holes and resolved
-  interactively with the user, never mechanically or with a blanket "take
-  theirs", so the customizations that make it the user's mind are never thrown
-  away. It records the version it moved to under a new `## Adopted inspirations`
-  section of the ledger.
-
-- **Adopting an inspiration is now gated and verified.** Before the merge path
-  pulls a third-party inspiration into a mind, `use-inspiration` requires the
-  user to confirm they trust the source -- stating plainly that Imbue has not
-  verified it and it could contain malicious code -- and does nothing (no fetch,
-  merge, or execution) until they agree. The merge itself now happens in an
-  isolated worktree with a boot smoke-check, and only a clean, bootable result
-  is fast-forwarded into the live tree, so a broken or hostile inspiration can
-  never clobber the mind. A mind created directly FROM an inspiration is treated
-  as already trusted (creating it was the trust decision).
-
-- The workspace version ledger is `docs/VERSION_HISTORY.md`, with three
-  sections: `## Workspace` (template version created-from + each `update-self`
-  landing), `## Inspirations` (each inspiration this mind published, `v1`/`v2`...
-  per slug), and `## Adopted inspirations` (each inspiration this mind adopted
-  and the version it is on). Instead of a separate helper skill, each writer --
-  `update-self`, `publish-inspiration`, `update-published-inspiration`, and
-  `update-installed-inspiration` -- carries its own self-contained instructions
-  telling the agent exactly which line to append and how (section, format, how
-  the version number is computed, the idempotence check, and that it is one file
-  staged by name and committed, never `git add -A`). The two subtle rules are
-  spelled out where they apply: record the `update-self` MERGE commit, not
-  `HEAD` (committing the ledger moves `HEAD`), and resolve the template version
-  by reachability (`git describe`), not `git tag --points-at`.
-
-- **`update-self`** now records the version it moved to as part of landing an
-  update, so a workspace's template lineage is visible in its own git tree.
-
-- The publish skill now confirms the **adopter's required permissions with the
-  publisher**. The manifest's "Prerequisites" -- what the inspiration's user must
-  grant for the app to work -- are surfaced back in the chat confirmation in
-  plain language, and the publisher's answer is part of the go-ahead. A missing
-  or wrong line is fixed before the push, since a gap there silently breaks
-  adoption.
-
-- **An inspiration can be anything committable**, not just an app: a skill, a
-  chat customization or behavior, a workflow, a service, config, or seed data.
-  If the user wants to snapshot something that is not committed to git -- an
-  ephemeral chat behavior, conversation history, runtime-only state -- the skill
-  recognizes this and suggests turning it into something committable first (most
-  often by crystallizing it into a skill), since an inspiration must be
-  reconstructable from the committed tree.
-
-- **LLM access is now a first-class prerequisite.** Any inspiration whose code
-  calls Claude records how it reaches it, because that differs per environment:
-  the keyed path (`ANTHROPIC_API_KEY` set -> litellm, pay-per-token) or the
-  keyless path (`claude -p` -> the subscription credit pool). The manifest gains
-  a `requires_llm:` line naming the method the code was built against, so an
-  adopter on the other method knows to switch the model calls, and a hardcoded
-  path is also listed as a Hole.
-
-- **Published inspiration repos are locked down on creation** -- unconditionally
-  (public or private) and without asking, using GitHub's 2026 pull-request-access
-  setting. Right after the repo is created, one PATCH restricts pull requests to
-  collaborators (`pull_request_creation_policy: collaborators_only`, so arbitrary
-  outsiders cannot open a PR) and disables issues, wiki, projects, and
-  discussions outright. This closes every surface where a non-collaborator could
-  open or inject content. Two residual limits remain, surfaced only if the user
-  chooses public visibility: the REST API can only RESTRICT pull requests to
-  collaborators, not fully disable them (the disable toggle is UI-only), and
-  forking cannot be disabled on a personal public repo (GitHub allows that only
-  on org-owned repos). On a private inspiration neither matters, since outsiders
-  have no access at all.
-
-- **Published manifests now carry a changelog.** Each `inspiration-<slug>.md`
-  has a "Publication history" section -- the inspiration's own changelog of what
-  each published version changed, seeded at v1 with `### v1 (date) -- what this
-  first version publishes`. It is the publisher's log (a later update appends
-  `### v2 (date) -- what changed`), kept distinct from the adopters'
-  "Adaptation history". The section is FILL-IN-gated like the rest of the
-  manifest, so a publish cannot complete with it left as a placeholder.
-
-- **Published manifests now carry a version and a recipe.** Each
-  `inspiration-<slug>.md` records `version: v1` and a "Recipe" section: the
-  include paths, the deliberate exclusions, and the published-version
-  modification RULES (rules only -- never the removed values). An inspiration is
-  derived from its workspace by that recipe rather than being a fork of it, so a
-  later update re-runs the recipe against the current workspace instead of
-  diffing two repos -- which is what keeps anything deliberately excluded
-  excluded, even though it still exists in the source workspace.
-
-- A publish records its entry in the workspace's ledger only **after the push
-  succeeds** -- one single-file commit, documented as the one explicit exception
-  to the rule that the live workspace is untouched after assembly. An
-  unpublished inspiration is never recorded.
-
-- A published inspiration never ships version history at all: `docs/VERSION_HISTORY.md`
-  is a workspace artifact, so the assembled snapshot drops it entirely (rather
-  than shipping an empty copy). The slugs, repo URLs, and source commits of a
-  mind's other inspirations therefore never appear inside one it publishes, and a
-  mind created from the inspiration grows its own ledger on demand.
 
 ### system
 
