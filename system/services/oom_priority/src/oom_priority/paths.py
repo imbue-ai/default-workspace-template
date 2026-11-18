@@ -9,7 +9,9 @@ consumers. Two consumers recompute ``shed_ledger_path`` instead, so a change to 
 layout here must be made there too: the revival-notice hook's shell front
 (``bin/claude_shed_notice_hook.sh``), in bash, to decide whether to start Python at
 all, and update-self's pre-flight boot (``update_probes.shed_ledger_path``), which is
-standard library only and runs from a staged copy of another release.
+standard library only and runs from a staged copy of another release. The shell
+front also tries ``CLAUDE_PROJECT_DIR`` before the current directory and hands the
+directory it resolved to the Python half as ``OOM_PRIORITY_RUNTIME_DIR``.
 
 Everything lives under ``runtime/`` so it rides the runtime-backup branch and
 survives container loss. The base resolves from ``OOM_PRIORITY_RUNTIME_DIR``

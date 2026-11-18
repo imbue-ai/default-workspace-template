@@ -16,7 +16,7 @@ set -euo pipefail
 emit_as_codex=0
 [[ "${1:-}" == "--codex" ]] && emit_as_codex=1
 
-repo_root="${MNGR_AGENT_WORK_DIR:-$(pwd)}"
+repo_root="${MNGR_AGENT_WORK_DIR:-${CLAUDE_PROJECT_DIR:-$(pwd)}}"
 notice_file="${RESOURCE_AGENT_NOTICE_FILE:-${repo_root}/data/.state/system_interface/resource_agent_notice.txt}"
 
 # Drain stdin.
