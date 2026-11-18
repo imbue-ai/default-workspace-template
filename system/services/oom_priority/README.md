@@ -356,9 +356,9 @@ python3 system/services/oom_priority/bin/memory_candidates.py --json   # the sam
 python3 system/services/oom_priority/bin/memory_candidates.py --free-memory   # only the free memory line
 ```
 
-`--free-memory` reads nothing but the meminfo files, so it is cheap enough to
-poll while memory is short, when the full report's `mngr list` and service
-calls would add to the pressure.
+`--free-memory` reads nothing but the meminfo files and earlyoom's program file
+(for its threshold), so it is cheap enough to poll while memory is short, when
+the full report's `mngr list` and service calls would add to the pressure.
 
 It lists:
 

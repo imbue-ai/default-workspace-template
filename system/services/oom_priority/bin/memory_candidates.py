@@ -1148,7 +1148,8 @@ def main() -> None:
         action="store_const",
         dest="output_format",
         const=OutputFormat.FREE_MEMORY,
-        help="Print only the free memory line, reading nothing but the meminfo files",
+        help="Print only the free memory line, reading nothing but the meminfo files and the "
+        "memory guard's program file",
     )
     args = parser.parse_args()
     sys.stdout.write(_render_output(args.output_format))
