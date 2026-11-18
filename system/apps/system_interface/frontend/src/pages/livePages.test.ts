@@ -249,10 +249,13 @@ describe("creating and positioning", () => {
     expect(wrapper.style.pointerEvents).toBe("auto");
   });
 
-  it("hands the microphone to the frames of an app whose manifest listens, and to no other", () => {
-    expect(pageFrameAllow(appRecord("chat", { uses_microphone: true }))).toBe(`${PAGE_FRAME_ALLOW}; microphone`);
+  it("hands the microphone, and the screen wake lock dictation holds, to the frames of an app whose manifest listens, and to no other", () => {
+    expect(pageFrameAllow(appRecord("chat", { uses_microphone: true }))).toBe(
+      `${PAGE_FRAME_ALLOW}; microphone; screen-wake-lock`,
+    );
     expect(pageFrameAllow(appRecord("docs"))).toBe(PAGE_FRAME_ALLOW);
     expect(frameOf("win-1").getAttribute("allow")).not.toContain("microphone");
+    expect(frameOf("win-1").getAttribute("allow")).not.toContain("screen-wake-lock");
   });
 
   it("creates no page for a minimized window until it is restored", () => {
