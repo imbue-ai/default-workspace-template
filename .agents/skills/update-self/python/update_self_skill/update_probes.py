@@ -639,8 +639,7 @@ def _preflight_boot(
     env.pop("MNGR_AGENT_ID", None)
     with tempfile.TemporaryDirectory() as scratch:
         output_path = Path(scratch) / "preflight-boot.log"
-        # Second precision, as the guard's records are compared at, so a stop in the spawn's own second counts.
-        spawned_at = datetime.now(timezone.utc).replace(microsecond=0)
+        spawned_at = datetime.now(timezone.utc)
         try:
             spawned = spawner.spawn(
                 expend(argv),

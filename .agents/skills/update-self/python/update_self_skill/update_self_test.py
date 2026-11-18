@@ -20,6 +20,7 @@ import sys
 import time
 import tomllib
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -3925,7 +3926,7 @@ class _ShedBootSpawner(_FakeSpawner):
         spawned = super().spawn(argv, cwd, env, output_path)
         self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
         record = {
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000000Z", time.gmtime()),
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "type": "process_shed",
             "pid": spawned.pid + self.shed_pid_offset,
             "comm": "system-interface",

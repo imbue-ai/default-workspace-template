@@ -938,8 +938,7 @@ def test_free_memory_says_how_much_of_it_is_left_before_the_memory_guard_acts(
     tmp_path: Path,
 ) -> None:
     """The guard stops processes at a share of the total, not at zero: 1 GiB free on a 6.4 GiB
-    workspace is about 400 MiB of room, and reading it as a gigabyte is what made an update's
-    lead start a memory-heavy step it had no room for."""
+    workspace is about 400 MiB of room."""
     _write_meminfo(tmp_path, {"MemTotal": 6568960, "MemAvailable": 1076224})
     program = _write_earlyoom_program(
         tmp_path / "earlyoom.conf",
