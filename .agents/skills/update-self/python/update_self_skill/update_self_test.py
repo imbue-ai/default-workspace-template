@@ -3913,6 +3913,20 @@ def test_a_failed_preflight_that_produced_no_output_says_so(
     assert "wrote nothing at all" in capsys.readouterr().err
 
 
+def _append_shed_record(ledger_path: Path, pid: int) -> None:
+    """Record the memory guard stopping ``pid``, as its after-kill hook does."""
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        "type": "process_shed",
+        "pid": pid,
+        "comm": "system-interface",
+        "vm_rss_kib": 156744,
+    }
+    with ledger_path.open("a") as ledger:
+        ledger.write(json.dumps(record) + "\n")
+
+
 @dataclass
 class _ShedBootSpawner(_FakeSpawner):
     """Every boot dies at once, and the memory guard's ledger records stopping the one with ``shed_pid_offset``."""
@@ -3924,16 +3938,7 @@ class _ShedBootSpawner(_FakeSpawner):
         self, argv: Sequence[str], cwd: str, env: dict, output_path: Path
     ) -> _FakeSpawned:
         spawned = super().spawn(argv, cwd, env, output_path)
-        self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
-        record = {
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-            "type": "process_shed",
-            "pid": spawned.pid + self.shed_pid_offset,
-            "comm": "system-interface",
-            "vm_rss_kib": 156744,
-        }
-        with self.ledger_path.open("a") as ledger:
-            ledger.write(json.dumps(record) + "\n")
+        _append_shed_record(self.ledger_path, spawned.pid + self.shed_pid_offset)
         return spawned
 
 
@@ -3990,6 +3995,33 @@ def test_a_preflight_boot_that_died_while_the_guard_stopped_something_else_is_no
     err = capsys.readouterr().err
     assert "memory guard" not in err
     assert "wrote nothing at all" in err
+
+
+def test_a_preflight_boot_waits_for_a_guard_record_that_lands_after_it_is_seen_exiting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The guard's after-kill hook runs only once the boot is gone, so its record can
+    # land after the pre-flight has already seen the boot exit.
+    ledger_path = tmp_path / "oom-runtime" / "events" / "shed.jsonl"
+    monkeypatch.setenv("OOM_PRIORITY_RUNTIME_DIR", str(tmp_path / "oom-runtime"))
+    spawner = _FakeSpawner(exited=True)
+
+    def record_the_shed_once(_seconds: float) -> None:
+        assert spawner.last is not None
+        if not ledger_path.exists():
+            _append_shed_record(ledger_path, spawner.last.pid)
+
+    failure = update_probes.preflight(
+        _WORKSPACE_ROOT,
+        _FakeHttp(lambda url: None),
+        spawner,
+        record_the_shed_once,
+        expend=list,
+    )
+
+    assert failure is not None
+    assert failure.shed is not None
+    assert failure.shed.resident_mib == 153
 
 
 def test_preflight_output_is_tailed_to_the_interesting_end() -> None:

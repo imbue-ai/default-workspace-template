@@ -85,6 +85,10 @@ _OOM_PRIORITY_RUNTIME_DIR_ENV = "OOM_PRIORITY_RUNTIME_DIR"
 _OOM_PRIORITY_RUNTIME_SUBDIR = Path("runtime") / "oom_priority"
 _SHED_RECORD_TYPE = "process_shed"
 _SHED_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+# The guard's after-kill hook appends its record only once the process is gone, so a boot seen
+# exiting can be read before its record lands.
+_SHED_RECORD_ATTEMPTS = 5
+_SHED_RECORD_INTERVAL_SECONDS = 1.0
 
 _PREFLIGHT_INTERVAL_SECONDS = 1.0
 
@@ -548,6 +552,23 @@ def find_memory_shed(ledger_path: Path, pid: int, since: datetime) -> MemoryShed
     return None
 
 
+def _await_memory_shed(
+    ledger_path: Path,
+    pid: int,
+    since: datetime,
+    sleeper: Callable[[float], None],
+    attempts: int,
+) -> MemoryShed | None:
+    """:func:`find_memory_shed`, read up to ``attempts`` times until the record appears."""
+    for index in range(attempts):
+        shed = find_memory_shed(ledger_path, pid, since)
+        if shed is not None:
+            return shed
+        if index < attempts - 1:
+            sleeper(_SHED_RECORD_INTERVAL_SECONDS)
+    return None
+
+
 def preflight(
     repo_root: Path,
     http: HttpClient,
@@ -681,11 +702,18 @@ def _preflight_boot(
                 should_stop=spawned.has_exited,
             ):
                 return None
+            is_exited = spawned.has_exited()
         finally:
             spawned.terminate()
         return PreflightFailure(
             output=tail(spawned.read_output(), _PREFLIGHT_OUTPUT_TAIL_LINES),
-            shed=find_memory_shed(shed_ledger, spawned.pid, spawned_at),
+            shed=_await_memory_shed(
+                shed_ledger,
+                spawned.pid,
+                spawned_at,
+                sleeper,
+                attempts=_SHED_RECORD_ATTEMPTS if is_exited else 1,
+            ),
         )
 
 
