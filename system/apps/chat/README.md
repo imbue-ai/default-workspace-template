@@ -28,7 +28,10 @@ observe`, its own supervised service) writes, and serves:
   (`POST /api/chats/awaiting`, held in memory until that send launches it).
   A chat leaves the list the moment its delete is confirmed and comes back if
   the delete is refused, and with no chats left the one awaiting its first send
-  is only asked for once no delete is on its way.
+  is only asked for once no delete is on its way. A refused delete or rename
+  says why in a notice over the list (the chat app's reason, or that the
+  workspace didn't answer, so whether it happened isn't known), with Try again
+  or Rename again; the list's notices wait while a chat's name is being typed.
   With nothing signed in, a chat awaiting its first send shows "Connect an AI
   provider to start chatting." and a "Choose a provider" button above its
   composer, which stays in view (holding any draft) but disabled, and opens the
