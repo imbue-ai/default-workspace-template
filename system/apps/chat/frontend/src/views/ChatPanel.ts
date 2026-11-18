@@ -93,7 +93,7 @@ import { renderHeldSends, renderProvisionalHeldSends } from "./HeldSendView";
 import { HandoffFailedNotice } from "./HandoffFailedNotice";
 import { renderHandoffTailNode } from "./handoff-node";
 import { SwitchDialog } from "./SwitchDialog";
-import { hasOpenHandoffRequest, isTailTurnSettled, liveCompactionOf } from "./turn-grouping";
+import { hasLandedLiveSwitch, hasOpenHandoffRequest, isTailTurnSettled, liveCompactionOf } from "./turn-grouping";
 import { closeRunningCompactionChips } from "./compaction-chips";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
@@ -114,6 +114,12 @@ const STARTING_STATUS = "Starting your chat…";
 const READY_STATUS = "Your chat is ready.";
 const EMPTY_CONVERSATION_STATUS_CLASS =
   "message-list-status pointer-events-none absolute inset-x-0 top-1/3 text-center text-sm text-secondary";
+// The failed-create page's buttons. The shared ask button draws a refused ask under itself as a block of its own
+// (`ask-agent-failure`), which is centred from here like the rest of the page.
+const FAILED_CREATE_BUTTONS_CLASS =
+  "flex flex-wrap items-center justify-center gap-2 " +
+  "[&_.ask-agent-failure]:flex [&_.ask-agent-failure]:flex-col [&_.ask-agent-failure]:items-center " +
+  "[&_.ask-agent-failure-message]:text-center";
 
 function getChatTerminalUrl(chatId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
@@ -151,14 +157,16 @@ function liveReplyDraft(chatId: string): AssistantMessageEvent | null {
 }
 
 /** The agent's output past the transcript: a switch the transcript does not show yet (draining, or restarting in
- *  place; once the summary request is on the stream the rows carry it), then the reply the agent is still writing,
+ *  place; once the summary request or the landed switch is on the stream the rows carry it), then the reply the agent is still writing,
  *  while the window reaches the live end and no step is live to show it in. Not a row of its own: a draft changes a
  *  few times a second, and a row would re-walk the whole held transcript on every change. `opensStretch`: the nodes
  *  start a stretch of their own rather than carry on the last row's. */
 function renderAgentLiveTail(chatId: string, opensStretch: boolean, isReplyDraftInStep: boolean): m.Vnode[] {
+  const events = getEventsForChat(chatId);
+  const handoff = getChatById(chatId)?.handoff ?? null;
   const handoffNode = renderHandoffTailNode(
     chatId,
-    hasOpenHandoffRequest(getEventsForChat(chatId), getChatById(chatId)?.handoff ?? null),
+    hasOpenHandoffRequest(events, handoff) || hasLandedLiveSwitch(events, handoff),
   );
   const draft = isReplyDraftInStep ? null : liveReplyDraft(chatId);
   return [
@@ -367,6 +375,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   // how the last one failed.
   let pageActionInFlight = false;
   let pageActionError: FailureLines | null = null;
+  // A failed create's "Ask an agent to fix this" waiting for its answer: the page's other ways out wait with it.
+  let askInFlight = false;
 
   async function fetchScreenCapture(chatId: string): Promise<void> {
     if (screenAttemptedChatId === chatId) {
@@ -437,6 +447,24 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         pageActionInFlight = false;
         m.redraw();
       });
+  }
+
+  /** What the failed-create page's "Ask an agent to fix this" asks ``targetChatId`` through
+   *  (``askConnectionToChat``), with the page told while the ask is pending. */
+  function pageAskConnection(targetChatId: string): ReturnType<typeof askConnectionToChat> {
+    const connection = askConnectionToChat(targetChatId);
+    return {
+      ...connection,
+      askAgent: async (text, options) => {
+        askInFlight = true;
+        try {
+          return await connection.askAgent(text, options);
+        } finally {
+          askInFlight = false;
+          m.redraw();
+        }
+      },
+    };
   }
 
   /** A failure line under a page's controls, with its details collapsed beneath it. */
@@ -615,7 +643,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         m("div", { class: "text-secondary" }, m(SeeDetails, { details: provisional.error })),
         renderFailureLines(launchError, "message-list-create-retry-failed"),
         renderFailureLines(pageActionError, "message-list-remove-failed"),
-        m("div", { class: "flex flex-wrap items-center justify-center gap-2" }, [
+        m("div", { class: FAILED_CREATE_BUTTONS_CLASS }, [
           hasAccount
             ? [
                 m(
@@ -624,6 +652,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                     variant: "primary",
                     extra: "message-list-create-retry",
                     readonly: launchInFlight,
+                    disabled: askInFlight,
                     onclick: () => void relaunch(chatId, provisional.account_id),
                   },
                   launchInFlight ? "Starting…" : "Try again",
@@ -633,6 +662,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                   {
                     extra: "message-list-switch-provider",
                     readonly: launchInFlight,
+                    disabled: askInFlight,
                     onclick: () => {
                       if (launchInFlight) return;
                       chooseProviderInPlaceOf(provisional.account_id, (accountId) => void launchOn(chatId, accountId));
@@ -650,24 +680,27 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 },
                 "Choose a provider",
               ),
-          chatToAskId === null
-            ? null
-            : m(AskAgentToFixButton, {
-                connection: askConnectionToChat(chatToAskId),
-                failure: {
-                  whatFailed: `The chat "${provisional.name}" couldn't be started`,
-                  details: joinDetailLines([provisional.error, launchError?.details ?? null]),
-                },
-              }),
           m(
             Button,
             {
               extra: "message-list-remove-chat",
               readonly: pageActionInFlight,
+              disabled: askInFlight,
               onclick: () => runPageAction(() => destroyChat(chatId), "This chat couldn't be removed"),
             },
             "Remove this chat",
           ),
+          // Last in the row: the button says under itself what a refused ask came to, which then ends the page
+          // rather than sitting between its buttons.
+          chatToAskId === null
+            ? null
+            : m(AskAgentToFixButton, {
+                connection: pageAskConnection(chatToAskId),
+                failure: {
+                  whatFailed: `The chat "${provisional.name}" couldn't be started`,
+                  details: joinDetailLines([provisional.error, launchError?.details ?? null]),
+                },
+              }),
         ]),
       ],
     );

@@ -76,9 +76,9 @@ function isUserAtWindow(entry: TaskbarEntry): boolean {
   return entry.isFocused && !entry.isMinimized && !entry.isDetached;
 }
 
-/** What an avatar entry's tooltip reads: the title, and a warning when the status may be out of date. */
-function avatarTooltip(title: string, status: AvatarStatus): string {
-  return status.is_stale ? `${title} (status may be out of date)` : title;
+/** What an avatar entry's tooltip reads: the name, and a warning when the status may be out of date. */
+function avatarTooltip(name: string, status: AvatarStatus): string {
+  return status.is_stale ? `${name} (status may be out of date)` : name;
 }
 
 /** The parts of a pinned entry's rendering its style decides, shared by the bar entry and the floating one. */
@@ -86,7 +86,7 @@ export interface EntryStyleParts {
   readonly isAvatar: boolean;
   /** ``data-mood`` and ``data-stale`` in the avatar style; nothing in the plain one. */
   readonly attrs: { readonly "data-mood": AvatarMood | undefined; readonly "data-stale": string | undefined };
-  /** The title, with the stale warning in the avatar style. */
+  /** The app's name, with the stale warning in the avatar style. */
   readonly tooltip: string;
   /** The avatar wearing the mood in the avatar style, else the app's icon at ``glyphSize``. */
   readonly image: m.Children;
@@ -99,13 +99,16 @@ export function entryStyleParts(
   imageClass: string,
 ): EntryStyleParts {
   const isAvatar = entry.look?.style === "avatar";
+  // The entry stands for the app, not for whichever page its window is on (the chat's window is titled after the
+  // chat it shows), so it is named after the app.
+  const name = entry.app?.display_name ?? entry.title;
   return {
     isAvatar,
     attrs: {
       "data-mood": isAvatar ? avatar.status.mood : undefined,
       "data-stale": isAvatar ? (avatar.status.is_stale ? "true" : "false") : undefined,
     },
-    tooltip: isAvatar ? avatarTooltip(entry.title, avatar.status) : entry.title,
+    tooltip: isAvatar ? avatarTooltip(name, avatar.status) : name,
     image: isAvatar
       ? m(AvatarImage, {
           design: avatar.design,

@@ -76,6 +76,9 @@ const mocks = vi.hoisted(() => {
     getComposerAttachments: vi.fn(() => [] as unknown[]),
     clearComposerAttachments: vi.fn(),
     uploadDescribedFileToComposer: vi.fn(),
+    uploadFilesToComposer: vi.fn(),
+    stagePastedText: vi.fn(),
+    unstagePastedText: vi.fn(async (_chatId: string, _localId: string): Promise<string | null> => ""),
     // Resolved at once by default: no upload in flight. A test of a send waiting on one swaps in a
     // deferred promise.
     waitForComposerUploads: vi.fn(async (_chatId: string) => {}),
@@ -196,8 +199,10 @@ vi.mock("../models/ComposerAttachments", () => ({
   hasReadyAttachments: () => false,
   removeComposerAttachment: vi.fn(),
   restoreComposerAttachments: vi.fn(),
+  stagePastedText: mocks.stagePastedText,
+  unstagePastedText: mocks.unstagePastedText,
   uploadDescribedFileToComposer: mocks.uploadDescribedFileToComposer,
-  uploadFilesToComposer: vi.fn(),
+  uploadFilesToComposer: mocks.uploadFilesToComposer,
   waitForComposerUploads: (chatId: string) => mocks.waitForComposerUploads(chatId),
 }));
 vi.mock("../models/attachments", () => ({
@@ -264,10 +269,11 @@ vi.mock("../models/HarnessCatalog", async () => {
 });
 vi.mock("../models/Chats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Chats")>()),
-  getChatById: () =>
-    mocks.isChatRegistered
+  getChatById: (chatId: string) =>
+    (mocks.chats as ChatSnapshot[]).find((chat) => chat.chat_id === chatId) ??
+    (mocks.isChatRegistered
       ? { title: "Chat 1", active_agent: mocks.agent, handoff: mocks.switching.handoff }
-      : undefined,
+      : undefined),
   getChats: () => mocks.chats,
   getMainChatId: () => mocks.mainChatId,
   getProvisionalChat: () => mocks.provisional,
@@ -324,12 +330,13 @@ vi.mock("@imbue/workspace-voice/src/downloadProbe", () => ({
 }));
 vi.mock("@imbue/workspace-voice/src/readyChime", () => ({ createReadyChime: () => mocks.readyChime }));
 
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
 import { isApplePlatform } from "@imbue/workspace-voice/src/support";
 import { EngineLoadError } from "@imbue/workspace-voice/src/workerClient";
 import { ChatNotStartedError } from "../models/Chats";
-import type { DiscardedChat, ProvisionalChat } from "../models/Chats";
+import type { ChatSnapshot, DiscardedChat, ProvisionalChat } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture } from "../models/chatSnapshotFixture";
 import { DICTATION_NOTE, hasDictatedSpeech, withDictationNote } from "../models/dictationNote";
 import { stubShellConnection } from "../shellConnectionFixture";
@@ -487,6 +494,20 @@ function findButton(node: unknown, label: string): AnyVnode | undefined {
 
 function findByTag(node: unknown, tag: string): AnyVnode | undefined {
   return flatten(node).find((vnode) => vnode.tag === tag);
+}
+
+/** The paragraphs of the notice in the tree, in order. */
+function noticeParagraphs(node: unknown): string[] {
+  return flatten(node)
+    .filter((vnode) => String(vnode.attrs?.className ?? "").includes("modal-message"))
+    .map((vnode) => renderedText(vnode).trim());
+}
+
+/** What each "See details" in the tree holds. */
+function detailsShown(node: unknown): string[] {
+  return flatten(node)
+    .filter((vnode) => vnode.tag === SeeDetails)
+    .map((vnode) => String(vnode.attrs?.details));
 }
 
 /** Find a vnode by an exact attribute value (e.g. a stable aria-label). */
@@ -661,6 +682,59 @@ describe("MessageInput send guard", () => {
   });
 });
 
+describe("MessageInput Enter during an input-method composition", () => {
+  beforeEach(() => {
+    mocks.sendMessage.mockClear();
+    mocks.agent.harness = "claude";
+    mocks.agent.activity_state = undefined;
+    localStorage.clear();
+  });
+
+  function typeDraft(component: m.Component<{ chatId: string | null }>, text: string): void {
+    const textarea = findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    (textarea?.attrs?.oninput as (event: unknown) => void)({ target: { value: text, style: {}, scrollHeight: 10 } });
+  }
+
+  function pressEnter(component: m.Component<{ chatId: string | null }>, init: Record<string, unknown>) {
+    const textarea = findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    const preventDefault = vi.fn();
+    (textarea?.attrs?.onkeydown as (event: unknown) => void)({
+      key: "Enter",
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false,
+      preventDefault,
+      ...init,
+    });
+    return preventDefault;
+  }
+
+  it("neither sends nor takes the keystroke from the input method", async () => {
+    const component = MessageInput();
+    typeDraft(component, "share the wo'r'k's'pa'ce");
+
+    const preventDefault = pressEnter(component, { isComposing: true });
+    await flushAsync();
+
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("sends the finished draft once, on the Enter that follows the composition", async () => {
+    const component = MessageInput();
+    typeDraft(component, "share the wo'r'k's'pa'ce");
+    pressEnter(component, { isComposing: true });
+    typeDraft(component, "share the workspace");
+
+    pressEnter(component, {});
+    await flushAsync();
+
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "share the workspace", expect.stringMatching(/^m-/));
+  });
+});
+
 describe("MessageInput placeholder", () => {
   beforeEach(() => {
     mocks.agent.activity_state = undefined;
@@ -780,6 +854,158 @@ describe("MessageInput attachment chips", () => {
     expect(findByTag(failed, "img")).toBeUndefined();
     expect(renderedText(failed)).toContain("Upload failed");
     expect(findByAttr(failed, "aria-label", "Remove attachment")).toBeDefined();
+  });
+});
+
+describe("MessageInput long paste", () => {
+  const LONG_PASTE = "a pasted line\n".repeat(400) + "the last line";
+  const PASTED_SUMMARY = "Pasted text, 401 lines";
+
+  function readyChip(localId: string, fileName: string, summary?: string) {
+    return {
+      localId,
+      fileName,
+      isImage: false,
+      status: "ready",
+      summary,
+      uploaded: { path: `/uploads/${localId}`, name: fileName, size: 9, isImage: false, url: `/f/${localId}` },
+    };
+  }
+
+  beforeEach(() => {
+    mocks.agent.activity_state = undefined;
+    mocks.stagePastedText.mockClear();
+    mocks.uploadFilesToComposer.mockClear();
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.getComposerAttachments.mockReturnValue([]);
+  });
+
+  function paste(component: m.Component<{ chatId: string | null }>, text: string, files: File[] = []) {
+    const textarea = findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    const preventDefault = vi.fn();
+    const items = files.map((file) => ({ kind: "file", getAsFile: () => file }));
+    (textarea?.attrs?.onpaste as (event: unknown) => void)({
+      preventDefault,
+      clipboardData: { items, getData: (type: string) => (type === "text/plain" ? text : "") },
+    });
+    return preventDefault;
+  }
+
+  it("stages a long paste as an attachment instead of putting it in the box", () => {
+    const preventDefault = paste(MessageInput(), LONG_PASTE);
+    expect(preventDefault).toHaveBeenCalled();
+    expect(mocks.stagePastedText).toHaveBeenCalledWith("agent-1", LONG_PASTE);
+  });
+
+  it("leaves a short paste to the box as typed text", () => {
+    const preventDefault = paste(MessageInput(), "a short note");
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(mocks.stagePastedText).not.toHaveBeenCalled();
+  });
+
+  it("attaches a pasted image as an image, not its text", () => {
+    const image = new File(["px"], "shot.png", { type: "image/png" });
+    paste(MessageInput(), LONG_PASTE, [image]);
+    expect(mocks.uploadFilesToComposer).toHaveBeenCalledWith("agent-1", [image]);
+    expect(mocks.stagePastedText).not.toHaveBeenCalled();
+  });
+
+  it("offers to put a pasted-text chip back as text, and only on such a chip", () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY),
+      readyChip("n1", "notes.txt"),
+      readyChip("f1", "pasted-text-2.txt"),
+    ]);
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(renderedText(tree)).toContain(PASTED_SUMMARY);
+    const putBackButtons = flatten(tree).filter((vnode) => vnode.attrs?.["aria-label"] === "Paste as text");
+    expect(putBackButtons).toHaveLength(1);
+  });
+
+  it("puts the text back into the box where the caret is", async () => {
+    mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);
+    mocks.unstagePastedText.mockResolvedValueOnce(LONG_PASTE);
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+    const oninput = findByTag(render(), "textarea")?.attrs?.oninput as (event: unknown) => void;
+    oninput({ target: { value: "Summarize this: ", style: {}, scrollHeight: 10 } });
+    (findByAttr(render(), "aria-label", "Paste as text")?.attrs?.onclick as () => void)();
+    await flushAsync();
+    expect(mocks.unstagePastedText).toHaveBeenCalledWith("agent-1", "p1");
+    expect(findByTag(render(), "textarea")?.attrs?.value).toBe(`Summarize this: ${LONG_PASTE}`);
+  });
+
+  it("puts the text back once when the button is clicked again while it is read back", async () => {
+    mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);
+    mocks.unstagePastedText.mockClear();
+    mocks.unstagePastedText.mockResolvedValue(LONG_PASTE);
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+    const putBack = findByAttr(render(), "aria-label", "Paste as text")?.attrs?.onclick as () => void;
+    putBack();
+    putBack();
+    await flushAsync();
+    expect(mocks.unstagePastedText).toHaveBeenCalledTimes(1);
+    expect(findByTag(render(), "textarea")?.attrs?.value).toBe(LONG_PASTE);
+    mocks.unstagePastedText.mockReset();
+  });
+
+  it("adds the text to its own chat's saved draft when the user moved to another chat meanwhile", async () => {
+    mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);
+    localStorage.setItem("message-text:agent-1", "Summarize this:");
+    let finishReading: (text: string) => void = () => undefined;
+    mocks.unstagePastedText.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          finishReading = resolve;
+        }),
+    );
+    const component = MessageInput();
+    const render = (chatId: string) => component.view!({ attrs: { chatId } } as never);
+    (findByAttr(render("agent-1"), "aria-label", "Paste as text")?.attrs?.onclick as () => void)();
+    mocks.getComposerAttachments.mockReturnValue([]);
+    render("agent-2");
+    finishReading(LONG_PASTE);
+    await flushAsync();
+    expect(localStorage.getItem("message-text:agent-1")).toBe(`Summarize this:\n\n${LONG_PASTE}`);
+    expect(findByTag(render("agent-2"), "textarea")?.attrs?.value).toBe("");
+  });
+
+  it("keeps the text when a hand-back is waiting for the chat the user moved away from", async () => {
+    mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);
+    let finishReading: (text: string) => void = () => undefined;
+    mocks.unstagePastedText.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          finishReading = resolve;
+        }),
+    );
+    const component = MessageInput();
+    const render = (chatId: string) => component.view!({ attrs: { chatId } } as never);
+    (findByAttr(render("agent-1"), "aria-label", "Paste as text")?.attrs?.onclick as () => void)();
+    mocks.getComposerAttachments.mockReturnValue([]);
+    render("agent-2");
+    prependToComposer("agent-1", "Handed back");
+    finishReading(LONG_PASTE);
+    await flushAsync();
+    expect(findByTag(render("agent-1"), "textarea")?.attrs?.value).toBe(`Handed back\n\n${LONG_PASTE}`);
+  });
+
+  it("says so, and keeps the attachment, when the text cannot be put back", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);
+    mocks.unstagePastedText.mockRejectedValueOnce(new Error("HTTP 404"));
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+    (findByAttr(render(), "aria-label", "Paste as text")?.attrs?.onclick as () => void)();
+    await flushAsync();
+    expect(renderedText(render())).toContain("Couldn't paste the text back");
+    expect(renderedText(render())).toContain("The attachment is still there, and will be sent as it is.");
+    expect(findByTag(render(), "textarea")?.attrs?.value).toBe("");
+    vi.mocked(console.warn).mockRestore();
   });
 });
 
@@ -2446,6 +2672,15 @@ describe("MessageInput switching harness", () => {
     const rendered = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
     expect(findByAttr(rendered, "aria-label", "Interrupt agent")).toBeUndefined();
     expect(findByAttr(rendered, "aria-label", "Cancel switch")).toBeUndefined();
+  });
+
+  it("offers Stop for the successor's turn once the handoff has landed, with the ordinary placeholder", () => {
+    mocks.agent.activity_state = "THINKING";
+    mocks.switching.handoff = handoffStateFixture({ phase: "switching", has_landed: true });
+    const rendered = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByAttr(rendered, "aria-label", "Interrupt agent")).toBeDefined();
+    expect(findByAttr(rendered, "aria-label", "Cancel switch")).toBeUndefined();
+    expect(findByTag(rendered, "textarea")?.attrs?.placeholder).toBe("Type to queue more messages...");
   });
 
   it("gives its draft up to a sibling that takes it, attachments and all, and comes back empty", async () => {
@@ -4645,15 +4880,29 @@ describe("MessageInput offers a way out of a chat whose agent cannot start", () 
       reportable: true,
       kind: "agent_start_failed",
     });
+  const UNREACHABLE_SENTENCE = "The agent isn't running and didn't start.";
+  const RESTART_SENTENCE = "Restart it to send your message.";
+  /** A send mngr refused because the chat's agent was down and would not start. */
+  const unreachable = (): Error =>
+    refusal(500, {
+      detail: "Agent 'Chat-1' is not running and could not be started",
+      user_facing_message: UNREACHABLE_SENTENCE,
+      kind: "agent_unreachable",
+    });
 
   beforeEach(() => {
     mocks.sendMessage.mockReset();
     mocks.sendMessage.mockResolvedValue("ok");
+    mocks.interruptAgent.mockReset();
+    mocks.interruptAgent.mockResolvedValue(undefined);
     mocks.openProviderChooser.mockReset();
     mocks.beginSwitchToAccountId.mockClear();
     mocks.openChatPage.mockClear();
     mocks.refuseSendToFailedChat.mockReset();
-    mocks.chats = [chatSnapshotFixture("chat-main"), chatSnapshotFixture("chat-other", { last_messaged_at: 900 })];
+    mocks.chats = [
+      chatSnapshotFixture("chat-main", { title: "Main chat" }),
+      chatSnapshotFixture("chat-other", { last_messaged_at: 900 }),
+    ];
     mocks.mainChatId = "chat-main";
     mocks.agent.account_id = "acct-1";
     mocks.agent.harness = "claude";
@@ -4718,6 +4967,16 @@ describe("MessageInput offers a way out of a chat whose agent cannot start", () 
     (button!.attrs!.onclick as () => void)();
   }
 
+  /** The notice's buttons in order: what each reads, and whether it is greyed out. */
+  function noticeButtons(tree: unknown): { label: string; isDisabled: boolean }[] {
+    return flatten(findByClass(tree, "modal-card"))
+      .filter((vnode) => vnode.tag === "button")
+      .map((vnode) => ({
+        label: renderedText(vnode).trim(),
+        isDisabled: vnode.attrs?.["aria-disabled"] === "true",
+      }));
+  }
+
   it("moves the chat off the account its agent would not start on, with the message still in the box", async () => {
     const render = await composerAfterRefusedSend(startFailed());
 
@@ -4768,6 +5027,37 @@ describe("MessageInput offers a way out of a chat whose agent cannot start", () 
     expect(renderedText(findByClass(tree, "notice-dismiss")).trim()).toBe("Cancel");
   });
 
+  it("offers an agent beside Restart for an agent that is down and would not start, on the notice as it was", async () => {
+    const tree = (await composerAfterRefusedSend(unreachable()))();
+
+    expect(noticeParagraphs(tree)).toEqual([UNREACHABLE_SENTENCE, RESTART_SENTENCE]);
+    expect(noticeButtons(tree)).toEqual([
+      { label: "Cancel", isDisabled: false },
+      { label: "Ask an agent to fix this", isDisabled: false },
+      { label: "Restart", isDisabled: false },
+    ]);
+  });
+
+  it("offers an agent on a sibling's notice for an agent that is down and would not start", async () => {
+    const component = MessageInput();
+    raiseFailureNotice("agent-1", {
+      title: "Couldn't send the queued messages",
+      describe: describeTapFailure,
+      error: unreachable(),
+      kind: "agent_unreachable",
+    });
+    const render = (): unknown => component.view!({ attrs: { chatId: "agent-1" } } as never);
+
+    expect(noticeButtons(render()).map((button) => button.label)).toEqual(["Cancel", "Ask an agent to fix this"]);
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+
+    const [askedChatId, task] = mocks.sendMessage.mock.calls[0] as unknown as [string, string];
+    expect(askedChatId).toBe("chat-main");
+    expect(task).toContain("The chat \"Chat 1\" couldn't take a message, because its agent couldn't be started.");
+    expect(task).toContain("Agent 'Chat-1' is not running and could not be started");
+  });
+
   it.each([
     [
       "its create failed for want of a sign-in, which an agent cannot make",
@@ -4799,45 +5089,62 @@ describe("MessageInput offers a way out of a chat whose agent cannot start", () 
     );
   });
 
-  it("asks the main chat to fix an agent that would not start, then closes the notice and shows that chat", async () => {
-    const render = await composerAfterRefusedSend(startFailed());
-    let accept: (status: string) => void = () => undefined;
-    mocks.sendMessage.mockImplementationOnce(() => new Promise<string>((resolve) => (accept = resolve)));
+  it.each([
+    [
+      "could not be started for the send",
+      startFailed,
+      "Retry",
+      "Could not start agent 'Chat-1' for a send: mngr start exited 1",
+    ],
+    ["was down and would not start", unreachable, "Restart", "Agent 'Chat-1' is not running and could not be started"],
+  ])(
+    "asks the main chat to fix an agent that %s, then closes the notice and shows that chat",
+    async (_case, refusedWith, otherButton, reason) => {
+      const render = await composerAfterRefusedSend(refusedWith());
+      let accept: (status: string) => void = () => undefined;
+      mocks.sendMessage.mockImplementationOnce(() => new Promise<string>((resolve) => (accept = resolve)));
 
-    press(render(), "Ask an agent to fix this");
+      press(render(), "Ask an agent to fix this");
 
-    const asking = render();
-    expect(findButton(asking, "Ask an agent to fix this")).toBeUndefined();
-    expect(findButton(asking, "Asking an agent\u2026")?.attrs?.["aria-disabled"]).toBe("true");
-    expect(findButton(asking, "Retry")?.attrs?.["aria-disabled"]).toBe("true");
-    const [askedChatId, task] = mocks.sendMessage.mock.calls[1] as unknown as [string, string];
-    expect(askedChatId).toBe("chat-main");
-    expect(task).toContain("The chat \"Chat 1\" couldn't take a message, because its agent couldn't be started.");
-    expect(task).toContain("Could not start agent 'Chat-1' for a send: mngr start exited 1");
-    expect(mocks.openChatPage).not.toHaveBeenCalled();
+      const asking = render();
+      expect(findButton(asking, "Ask an agent to fix this")).toBeUndefined();
+      expect(findButton(asking, "Asking an agent\u2026")?.attrs?.["aria-disabled"]).toBe("true");
+      expect(findButton(asking, otherButton)?.attrs?.["aria-disabled"]).toBe("true");
+      const [askedChatId, task] = mocks.sendMessage.mock.calls[1] as unknown as [string, string];
+      expect(askedChatId).toBe("chat-main");
+      expect(task).toContain("The chat \"Chat 1\" couldn't take a message, because its agent couldn't be started.");
+      expect(task).toContain(reason);
+      expect(mocks.openChatPage).not.toHaveBeenCalled();
 
-    accept("ok");
-    await flushAsync();
+      accept("ok");
+      await flushAsync();
 
-    expect(mocks.openChatPage).toHaveBeenCalledExactlyOnceWith("chat-main");
-    expect(findByClass(render(), "modal-message")).toBeUndefined();
-    expect(findByTag(render(), "textarea")?.attrs?.value).toBe("hello");
-  });
+      expect(mocks.openChatPage).toHaveBeenCalledExactlyOnceWith("chat-main");
+      expect(findByClass(render(), "modal-message")).toBeUndefined();
+      expect(findByTag(render(), "textarea")?.attrs?.value).toBe("hello");
+    },
+  );
 
-  it("asks the agent chat messaged last when the failing chat is the main chat", async () => {
-    mocks.chats = [
-      chatSnapshotFixture("agent-1", { last_messaged_at: 950 }),
-      chatSnapshotFixture("chat-older", { last_messaged_at: 100 }),
-      chatSnapshotFixture("chat-newer", { last_messaged_at: 500 }),
-    ];
-    mocks.mainChatId = "agent-1";
-    const render = await composerAfterRefusedSend(startFailed());
+  it.each([
+    ["could not be started for the send", startFailed],
+    ["was down and would not start", unreachable],
+  ])(
+    "asks the agent chat messaged last, never the failing chat, when the main chat's agent %s",
+    async (_case, refusedWith) => {
+      mocks.chats = [
+        chatSnapshotFixture("agent-1", { last_messaged_at: 950 }),
+        chatSnapshotFixture("chat-older", { last_messaged_at: 100 }),
+        chatSnapshotFixture("chat-newer", { last_messaged_at: 500 }),
+      ];
+      mocks.mainChatId = "agent-1";
+      const render = await composerAfterRefusedSend(refusedWith());
 
-    press(render(), "Ask an agent to fix this");
-    await flushAsync();
+      press(render(), "Ask an agent to fix this");
+      await flushAsync();
 
-    expect((mocks.sendMessage.mock.calls[1] as unknown as [string])[0]).toBe("chat-newer");
-  });
+      expect((mocks.sendMessage.mock.calls[1] as unknown as [string])[0]).toBe("chat-newer");
+    },
+  );
 
   it("offers no agent when the failing chat is the only agent chat", async () => {
     mocks.chats = [chatSnapshotFixture("agent-1"), chatSnapshotFixture("chat-lounge", { kind: "room" })];
@@ -4849,20 +5156,164 @@ describe("MessageInput offers a way out of a chat whose agent cannot start", () 
     expect(findButton(tree, "Switch provider")).toBeDefined();
   });
 
-  it("says in the notice why the ask could not be sent, and offers it again", async () => {
+  it("offers only Restart for an agent that is down when the failing chat is the only agent chat", async () => {
+    mocks.chats = [chatSnapshotFixture("agent-1"), chatSnapshotFixture("chat-lounge", { kind: "room" })];
+    mocks.mainChatId = "agent-1";
+
+    const tree = (await composerAfterRefusedSend(unreachable()))();
+
+    expect(noticeButtons(tree).map((button) => button.label)).toEqual(["Cancel", "Restart"]);
+  });
+
+  const ASK_REFUSED_SENTENCE =
+    'Couldn\'t ask "Main chat". The agent is waiting on something in its terminal. Answer it there and try again.';
+  const ASK_REFUSED_DETAILS =
+    'Asking "Main chat":\nHTTP 500\nA dialog (a permission prompt) is open in the agent\'s terminal. Clear it there.';
+  const askRefused = (): Error =>
+    refusal(500, {
+      detail: "A dialog (a permission prompt) is open in the agent's terminal. Clear it there.",
+      user_facing_message: "The agent is waiting on something in its terminal. Answer it there and try again.",
+      kind: "input_blocked",
+    });
+
+  it.each([
+    [
+      "an agent that would not start",
+      () => composerAfterRefusedSend(startFailed()),
+      [START_FAILED_SENTENCE],
+      "HTTP 500\nCould not start agent 'Chat-1' for a send: mngr start exited 1",
+    ],
+    [
+      "an agent that was down and would not start",
+      () => composerAfterRefusedSend(unreachable()),
+      [UNREACHABLE_SENTENCE, RESTART_SENTENCE],
+      "HTTP 500\nAgent 'Chat-1' is not running and could not be started",
+    ],
+    [
+      "a chat whose create failed",
+      () => composerAfterSendToFailedCreate(),
+      ["Your message wasn't delivered. Your text is back in the box, so nothing was lost."],
+      "mngr create exited with code 3",
+    ],
+  ])(
+    "says under the failure of %s that the chat it asked could not be asked, with one See details for both",
+    async (_case, composer, failureSentences, failureDetails) => {
+      const render = await composer();
+      mocks.sendMessage.mockRejectedValueOnce(askRefused());
+
+      press(render(), "Ask an agent to fix this");
+      await flushAsync();
+
+      const refused = render();
+      expect(noticeParagraphs(refused)).toEqual([...failureSentences, ASK_REFUSED_SENTENCE]);
+      expect(detailsShown(refused)).toEqual([`${failureDetails}\n\n${ASK_REFUSED_DETAILS}`]);
+      expect(findButton(refused, "Ask an agent to fix this")?.attrs?.["aria-disabled"]).toBeUndefined();
+      expect(mocks.openChatPage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("files the refused ask with the failure it was about", async () => {
+    const connection = stubShellConnection(true);
     const render = await composerAfterRefusedSend(startFailed());
+    mocks.sendMessage.mockRejectedValueOnce(askRefused());
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+
+    press(render(), "Report a bug");
+
+    expect(connection.reportBug).toHaveBeenCalledExactlyOnceWith({
+      message: `${START_FAILED_SENTENCE} ${ASK_REFUSED_SENTENCE}`,
+      details: "HTTP 500\nCould not start agent 'Chat-1' for a send: mngr start exited 1\n\n" + ASK_REFUSED_DETAILS,
+    });
+  });
+
+  it("offers a bug report once a refused ask's sentence asks for one, on a notice that had none", async () => {
+    stubShellConnection(true);
+    const render = await composerAfterSendToFailedCreate();
+    expect(findButton(render(), "Report a bug")).toBeUndefined();
     mocks.sendMessage.mockRejectedValueOnce(refusal(500, { detail: "mngr message exited 1" }));
 
     press(render(), "Ask an agent to fix this");
     await flushAsync();
 
-    const refused = render();
-    expect(renderedText(findByClass(refused, "ask-agent-failure-message")).trim()).toBe(
-      "The agent couldn't be asked. Try again. If this persists, report a bug.",
-    );
-    expect(renderedText(findByClass(refused, "ask-agent-failure"))).toContain("mngr message exited 1");
-    expect(renderedText(findByClass(refused, "modal-message"))).toContain(START_FAILED_SENTENCE);
-    expect(findButton(refused, "Ask an agent to fix this")?.attrs?.["aria-disabled"]).toBeUndefined();
-    expect(mocks.openChatPage).not.toHaveBeenCalled();
+    expect(noticeParagraphs(render())).toEqual([
+      "Your message wasn't delivered. Your text is back in the box, so nothing was lost.",
+      'Couldn\'t ask "Main chat". Try again. If this persists, report a bug.',
+    ]);
+    expect(findButton(render(), "Report a bug")).toBeDefined();
+  });
+
+  it("leaves no button of the notice to press while the ask is on its way, and gives them back once it is refused", async () => {
+    const connection = stubShellConnection(true);
+    const render = await composerAfterRefusedSend(startFailed());
+    let refuse: (error: unknown) => void = () => undefined;
+    mocks.sendMessage.mockImplementationOnce(() => new Promise<string>((_accept, reject) => (refuse = reject)));
+
+    press(render(), "Ask an agent to fix this");
+
+    expect(noticeButtons(render())).toEqual([
+      { label: "Cancel", isDisabled: true },
+      { label: "Retry", isDisabled: true },
+      { label: "Switch provider", isDisabled: true },
+      { label: "Asking an agent\u2026", isDisabled: true },
+      { label: "Report a bug", isDisabled: true },
+    ]);
+    press(render(), "Report a bug");
+    expect(connection.reportBug).not.toHaveBeenCalled();
+
+    refuse(askRefused());
+    await flushAsync();
+
+    expect(noticeButtons(render()).filter((button) => button.isDisabled)).toEqual([]);
+    press(render(), "Report a bug");
+    expect(connection.reportBug).toHaveBeenCalledOnce();
+  });
+
+  it("leaves no button of the notice to press while a retry is on its way", async () => {
+    stubShellConnection(true);
+    const render = await composerAfterRefusedSend(startFailed());
+    mocks.sendMessage.mockImplementationOnce(() => new Promise<string>(() => undefined));
+
+    press(render(), "Retry");
+
+    expect(noticeButtons(render())).toEqual([
+      { label: "Cancel", isDisabled: true },
+      { label: "Retrying\u2026", isDisabled: true },
+      { label: "Switch provider", isDisabled: true },
+      { label: "Ask an agent to fix this", isDisabled: true },
+      { label: "Report a bug", isDisabled: true },
+    ]);
+  });
+
+  it("drops what a refused ask said once Restart is pressed, whose own failure it would sit under", async () => {
+    const render = await composerAfterRefusedSend(unreachable());
+    mocks.sendMessage.mockRejectedValueOnce(askRefused());
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+    expect(noticeParagraphs(render())).toContain(ASK_REFUSED_SENTENCE);
+    mocks.interruptAgent.mockRejectedValueOnce(refusal(500, { detail: "mngr stop exited 1" }));
+
+    press(render(), "Restart");
+    await flushAsync();
+
+    expect(noticeParagraphs(render())).toEqual([
+      "This chat's agent could not be restarted, so your message was not resent. Try again. If this persists, " +
+        "report a bug.",
+    ]);
+    expect(detailsShown(render())).toEqual(["HTTP 500\nmngr stop exited 1"]);
+  });
+
+  it("asks again with the failure's own details, not what the refused ask said", async () => {
+    const render = await composerAfterRefusedSend(startFailed());
+    mocks.sendMessage.mockRejectedValueOnce(askRefused());
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+
+    const task = (mocks.sendMessage.mock.calls[2] as unknown as [string, string])[1];
+    expect(task).toContain("Could not start agent 'Chat-1' for a send: mngr start exited 1");
+    expect(task).not.toContain("A dialog (a permission prompt) is open");
   });
 });
