@@ -153,43 +153,45 @@ _UNRESPONSIVE_WAITING_PAGE = _render_page(
 
 
 class _GivenUpPage:
-    """What a page that stopped waiting for an address says: one heading, and a sentence for the workspace's owner
-    and another for anyone else."""
+    """What a page that stopped waiting for an address says: a heading and a sentence for the workspace's owner, and
+    another pair for anyone else."""
 
-    def __init__(self, heading: str, owner_sentence: str, visitor_sentence: str) -> None:
-        self.heading = heading
+    def __init__(self, owner_heading: str, owner_sentence: str, visitor_heading: str, visitor_sentence: str) -> None:
+        self.owner_heading = owner_heading
         self.owner_sentence = owner_sentence
+        self.visitor_heading = visitor_heading
         self.visitor_sentence = visitor_sentence
 
     def render(self, is_owner: bool, workspace_url: str | None) -> str:
         """The page; ``workspace_url`` adds a way to open the workspace itself beside "Try again"."""
+        heading = self.owner_heading if is_owner else self.visitor_heading
         sentence = self.owner_sentence if is_owner else self.visitor_sentence
         open_workspace = (
             f'<a class="button secondary" href="{html.escape(workspace_url)}">Open the workspace</a>'
             if workspace_url is not None
             else ""
         )
-        return _render_page(
-            self.heading,
-            f"<h1>{self.heading}</h1>\n<p>{sentence}</p>\n{_TRY_AGAIN_BUTTON}{open_workspace}",
-        )
+        return _render_page(heading, f"<h1>{heading}</h1>\n<p>{sentence}</p>\n{_TRY_AGAIN_BUTTON}{open_workspace}")
 
 
 _UNRESPONSIVE = _GivenUpPage(
-    heading="This page isn't responding",
+    owner_heading="This app isn't responding",
     owner_sentence="This app isn't responding right now. Try again in a moment.",
+    visitor_heading="This page isn't responding",
     visitor_sentence="This page isn't responding right now. Let the person who shared it know, then try again.",
 )
 
 _UNRESPONSIVE_NOT_RESTARTED = _GivenUpPage(
-    heading="This app isn't responding",
+    owner_heading="This app isn't responding",
     owner_sentence="This app isn't responding. You may need to restart it from the workspace.",
+    visitor_heading="This app isn't responding",
     visitor_sentence="This app isn't responding. The workspace owner may need to restart it.",
 )
 
 _STILL_NOT_AVAILABLE = _GivenUpPage(
-    heading="This page still isn't available",
+    owner_heading="This page still isn't available",
     owner_sentence="This page still isn't available. Try again in a moment.",
+    visitor_heading="This page still isn't available",
     visitor_sentence="This page still isn't available. Let the person who shared it know.",
 )
 
