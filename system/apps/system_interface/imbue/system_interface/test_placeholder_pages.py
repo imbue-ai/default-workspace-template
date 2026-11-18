@@ -132,6 +132,14 @@ def test_the_not_built_page_asks_an_agent_and_frames_the_main_chat_and_a_termina
 
         page.get_by_text("See details", exact=True).click()
         expect(page.locator("#repair-command")).to_be_visible()
+        # The button asked in the main chat; the command is another way in, and the page says which.
+        expect(
+            page.get_by_text(
+                "Run in a terminal, this starts a new chat with an agent and tells it what you are looking at, "
+                "for when an agent can't be asked from this page:",
+                exact=True,
+            )
+        ).to_be_visible()
         assert terminal_launches == []
         page.get_by_text("Open this workspace's terminal", exact=True).click()
         expect(page.locator("#terminal")).to_have_attribute(
