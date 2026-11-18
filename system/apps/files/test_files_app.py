@@ -744,6 +744,23 @@ def _point_at(page: Page, x_fraction: float, y_fraction: float) -> tuple[float, 
     return (box["x"] + box["width"] * x_fraction, box["y"] + box["height"] * y_fraction)
 
 
+def _wheel(page: Page, point: tuple[float, float], deltas_y: list[float], is_ctrl: bool) -> None:
+    """Send wheel events at `point`, held with Ctrl as a trackpad pinch reaches the page or plain as a scroll does, one
+    per animation frame as the browser hands wheel input on. Dispatched in the page, since Fortress (CI's browser) does
+    not hand Playwright's wheel input on as sent."""
+    page.evaluate(
+        """async ([x, y, deltas, ctrlKey]) => {
+            for (const deltaY of deltas) {
+                document.elementFromPoint(x, y).dispatchEvent(
+                    new WheelEvent('wheel', {clientX: x, clientY: y, deltaY, ctrlKey, bubbles: true, cancelable: true})
+                );
+                await new Promise((resolve) => requestAnimationFrame(resolve));
+            }
+        }""",
+        [point[0], point[1], deltas_y, is_ctrl],
+    )
+
+
 def test_a_pinch_zooms_an_image_around_the_pointer_and_a_double_click_fits_it_again(
     open_files_page: OpenFilesPage, files_root: Path
 ) -> None:
@@ -753,11 +770,8 @@ def test_a_pinch_zooms_an_image_around_the_pointer_and_a_double_click_fits_it_ag
 
     # A plain scroll leaves a fitted picture alone (read as a pinch, it would carry the zoom below past e); a trackpad
     # pinch reaches the page as many small Ctrl+wheel events.
-    page.mouse.wheel(0, -120)
-    page.keyboard.down("Control")
-    for _ in range(10):
-        page.mouse.wheel(0, -10)
-    page.keyboard.up("Control")
+    _wheel(page, pointer, [-120], is_ctrl=False)
+    _wheel(page, pointer, [-10] * 10, is_ctrl=True)
     _wait_for_stage_scale(page, math.e)
 
     zoomed = _image_box(page)
@@ -770,9 +784,7 @@ def test_a_pinch_zooms_an_image_around_the_pointer_and_a_double_click_fits_it_ag
     assert _image_box(page) == pytest.approx(fitted)
 
     # One notch of a mouse wheel with Ctrl held is a step, not a leap.
-    page.keyboard.down("Control")
-    page.mouse.wheel(0, -100)
-    page.keyboard.up("Control")
+    _wheel(page, pointer, [-100], is_ctrl=True)
     _wait_for_stage_transform(page, is_fitted=False)
     assert 1.1 < _image_box(page)["width"] / fitted["width"] < 1.5
 
