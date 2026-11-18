@@ -909,13 +909,15 @@ signed in to or picked depends on where it was pressed:
   in again".
 
 It is not offered where another provider would not help: a send nothing
-answered, a conversation too long for the model, a half-done delete.
+answered, a conversation too long for the model, a half-done delete, an agent
+that ran on its account until it went down (`agent_unreachable`).
 
 **Ask an agent to fix this.** When a chat cannot be created or its agent
 cannot be started, the cause may be the workspace itself (a full disk, no
 memory left), which a new chat would meet too. So the page of a chat whose
 create failed, and the composer's notice for a send to a chat whose agent
-would not start or whose create failed (`agent_start_failed`,
+would not start for the send, was down and would not come back, or whose
+create failed (`agent_start_failed`, `agent_unreachable`,
 `chat_not_started`), offer it only when another agent chat exists, and send
 the task there: to the main chat when it is an agent chat, else to the agent
 chat messaged most recently, and never to the failing chat (`chatToAskAbout`
@@ -924,10 +926,24 @@ an agent to fix this" sends (`askAgentToFix` in `workspace_ui`: what failed,
 the details, what to do), sent as a message through
 `POST /api/chats/<chat-id>/message` rather than through the shell, whose ask
 may create a chat for it. The button reads "Asking an agent…" until the send
-is answered. The page then shows the chat the task went to; a send that was
-refused says why where the button was pressed, with its details behind "See
-details". A failed chat that names no account offers neither button, since a
-sign-in is what it needs ("Choose a provider").
+is answered, and the page then shows the chat the task went to. A failed chat
+that names no account offers neither button, since a sign-in is what it needs
+("Choose a provider").
+
+A send that was refused leaves the user where they were. Its sentence is
+shown beside another chat's failure, so it leads with the chat that was asked
+(`Couldn't ask "<chat>".`, then the send route's own sentence), and its
+details are headed `Asking "<chat>":`. The composer's notice tells it as its
+last paragraph and keeps one "See details", holding the failure's details and
+then the ask's; its "Report a bug" files both, and is offered when either
+sentence asks for one. On the failed-create page the shared button
+(`AskAgentToFixButton` in `workspace_ui`) draws the refused ask under itself,
+with a "See details" of its own, so the button is the last in its row and the
+refused ask ends the page.
+
+While one of the notice's actions runs (the ask, a retry, a restart), every
+button on the notice is disabled, and a retry or a restart drops what an
+earlier ask came to.
 
 **A conversation too long for the model** (`api_error_kind:
 context_too_long`). The failed turn offers "Start a new chat", on the account
