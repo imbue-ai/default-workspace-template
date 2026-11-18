@@ -649,6 +649,45 @@ describe("narration and close-time ejection", () => {
     expect(stepItems(sections[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
   });
 
+  // The open-steps reminder asks the agent to re-start a step it means to keep working on, which it
+  // does before answering. That only says the step is still open: the answer stays the turn's reply,
+  // and the step joins the turn with the agent's next real work.
+  it("keeps the answer out of a carried-over step the agent re-starts before answering", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "what's the difference between RAM and disk?"),
+      tkMsg("t4", "tk start s1", "t4"),
+      result("t4", "t4", startOut("s1", "Check overall disk usage")),
+      assistantText("t5", "RAM is short-term memory; disk keeps files. Back to the cleanup.", "ans"),
+    ];
+    const answering = run(events, /* idle */ false);
+    expect(answering[1].live_step_id).toBeNull();
+
+    const idle = run(events, /* idle */ true);
+    expect(idle[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
+    expect(stepItems(idle[1].items)).toHaveLength(0);
+
+    const working = run(
+      [
+        ...events,
+        assistantText("t6", "Looking at the cache next.", "narr"),
+        workMsg("t7", "Bash", "w2"),
+        result("t7", "w2", "ok"),
+      ],
+      /* idle */ false,
+    );
+    const inlineIds = working[1].items.flatMap((item) =>
+      item.kind === "ungrouped" ? item.events.flatMap((part) => ("event_id" in part ? [part.event_id] : [])) : [],
+    );
+    expect(inlineIds).toContain("ans");
+    expect(working[1].live_step_id).toBe("s1");
+    expect(stepItems(working[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
+  });
+
   // Moving a step ends the carried-over step's claim on the turn without taking it up: the agent
   // closing it and answering leaves the answer as the turn's reply.
   it("leaves a carried-over step out of the turn once the agent moves a step", () => {
