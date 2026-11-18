@@ -1388,7 +1388,10 @@ def _running_wrapper(apps_file: Path, inner_service: str) -> Generator[str]:
         thread.join()
 
 
-def _wrapper_page_label(page: str) -> str:
+def _framed_label(url: str) -> str:
+    """The origin label the wrapper page at ``url`` frames."""
+    with urllib.request.urlopen(url) as response:
+        page = response.read().decode("utf-8")
     match = re.search(r'var previewLabel = "([^"]+)";', page)
     assert match is not None, page
     return match.group(1)
@@ -1411,18 +1414,16 @@ def test_wrapper_frames_the_inner_service_at_its_current_registered_label(
     first_label = _registered_label(apps_file, "inbox")
 
     with _running_wrapper(apps_file, "inbox") as url:
-        with urllib.request.urlopen(url) as response:
-            first_page = response.read().decode("utf-8")
+        first_framed_label = _framed_label(url)
         forward_port.remove(apps_file, "inbox")
         forward_port.register(apps_file, "inbox", "http://localhost:8301", is_icon_declined=True)
         second_label = _registered_label(apps_file, "inbox")
-        with urllib.request.urlopen(url) as response:
-            second_page = response.read().decode("utf-8")
+        second_framed_label = _framed_label(url)
 
     assert first_label != "inbox"
-    assert _wrapper_page_label(first_page) == first_label
+    assert first_framed_label == first_label
     assert second_label != first_label
-    assert _wrapper_page_label(second_page) == second_label
+    assert second_framed_label == second_label
 
 
 def test_wrapper_frames_a_service_whose_label_predates_the_hyphen_rule(tmp_path: Path) -> None:
@@ -1435,10 +1436,9 @@ def test_wrapper_frames_a_service_whose_label_predates_the_hyphen_rule(tmp_path:
     )
 
     with _running_wrapper(apps_file, "my_inbox") as url:
-        with urllib.request.urlopen(url) as response:
-            page = response.read().decode("utf-8")
+        framed_label = _framed_label(url)
 
-    assert _wrapper_page_label(page) == "my_inbox-a1b2c3d4"
+    assert framed_label == "my_inbox-a1b2c3d4"
 
 
 def _wrapper_error(url: str) -> tuple[int, str]:
