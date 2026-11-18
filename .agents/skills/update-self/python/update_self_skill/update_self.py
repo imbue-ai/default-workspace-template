@@ -1159,10 +1159,10 @@ def _cmd_run_status_resume_chats(args: argparse.Namespace) -> int:
     if not status.stopped_agents:
         print("Nothing to resume: this run's record names no paused chat or agent.")
         return 0
-    if all(entry.is_resume_done for entry in status.stopped_agents):
+    # An agent left stopped as idle goes through the resume, which names it for the results message.
+    if all(entry.is_restarted and entry.is_told for entry in status.stopped_agents):
         print(
-            "Nothing to resume: every paused chat is running again and has been told, or was "
-            "idle when paused and starts with its next message."
+            "Nothing to resume: every paused chat is running again and has been told."
         )
         return 0
 

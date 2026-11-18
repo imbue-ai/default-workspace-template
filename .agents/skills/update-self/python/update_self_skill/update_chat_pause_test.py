@@ -403,6 +403,23 @@ def test_a_chat_paused_for_memory_while_idle_is_left_stopped_and_told_nothing(
     assert _record(tmp_path).stopped_agents == []
 
 
+def test_a_resume_whose_only_pause_was_idle_still_names_the_chat_it_left_stopped(
+    tmp_path: Path, fake_agents: FakeAgents, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The results message names each chat left stopped from the resume's own lines."""
+    fake_agents.set_agents(_workspace_agents())
+    assert _main(tmp_path, "run-status", "start") == 0
+    assert _main(tmp_path, "run-status", "stop-chats", "--agent", "Plan-the-trip") == 0
+    fake_agents.clear_calls()
+    capsys.readouterr()
+
+    assert _main(tmp_path, "run-status", "resume-chats") == 0
+
+    assert "Left Plan-the-trip stopped" in capsys.readouterr().out
+    assert fake_agents.mngr_verbs() == []
+    assert fake_agents.notes() == {}
+
+
 def test_a_chat_named_for_memory_mid_turn_is_brought_back_like_any_busy_chat(
     tmp_path: Path, fake_agents: FakeAgents
 ) -> None:
