@@ -923,9 +923,17 @@ asks `POST /api/local-model-servers` (owner-only) which servers answer: with no
 body, Ollama, LM Studio and llama.cpp on their usual ports, on the workspace's
 own loopback and on the names Docker and Lima give the machine that runs the
 container; with a `base_url`, that server alone. A workspace on another machine
-than the model reaches no such server unless something carries the port to it.
-The sign-in submits `{endpoint: {base_url, model_id, context_window, api_key}}`
-to the flow. Before anything is kept the model is asked for one tool call, since
+than the model reaches no such server by itself, so when none answers the route
+asks the Imbue Studio app (`studio_model_servers.py`), through the latchkey
+gateway's `minds-api-proxy`, for the servers on the user's computer. The app
+answers only for a workspace the user has let reach their computer; a workspace
+that may not yet files the `local-model` permission request, the answer carries
+`studio_link: "AWAITING_APPROVAL"`, and the form looks again every two seconds
+(with `is_requesting_access: false`, which asks nobody) until the user has
+approved in the app. A server the app lists carries a `studio_port`. The sign-in
+submits `{endpoint: {base_url, model_id, context_window, api_key, studio_port}}`
+to the flow; with a `studio_port` the app is first asked to open its tunnel, and
+the account runs on the loopback address the tunnel answers on in the workspace. Before anything is kept the model is asked for one tool call, since
 a model that prints its tool calls as text runs nothing and still reports a
 finished turn, and Ollama is asked what context it loaded the model with, since
 it keeps its own (4,096 tokens unless configured) whatever pi is told; a context

@@ -742,10 +742,17 @@ describe("a local model", () => {
       },
     ],
   });
-  const OLLAMA = { base_url: "http://host.docker.internal:11434/v1", name: "Ollama", models: ["qwen2.5:7b"] };
+  const OLLAMA = {
+    base_url: "http://host.docker.internal:11434/v1",
+    name: "Ollama",
+    models: ["qwen2.5:7b"],
+    studio_port: null,
+  };
+  // The same server as Imbue Studio lists it for a workspace that is not on the user's computer.
+  const STUDIO_OLLAMA = { ...OLLAMA, base_url: "http://127.0.0.1:11434/v1", studio_port: 11434 };
 
-  function found(servers: unknown[]): unknown {
-    return { servers, default_context_window: 32768, min_context_window: 16384 };
+  function found(servers: unknown[], studioLink = "UNAVAILABLE"): unknown {
+    return { servers, studio_link: studioLink, default_context_window: 32768, min_context_window: 16384 };
   }
 
   async function settled(): Promise<void> {
@@ -805,7 +812,86 @@ describe("a local model", () => {
       model_id: "qwen2.5:7b",
       context_window: 32768,
       api_key: "",
+      studio_port: null,
     });
+  });
+
+  it("waits for the user's approval in Imbue Studio, then offers the models on their computer", async () => {
+    vi.useFakeTimers();
+    try {
+      findLocalModelServers.mockResolvedValueOnce(found([], "AWAITING_APPROVAL"));
+      findLocalModelServers.mockResolvedValueOnce(found([], "AWAITING_APPROVAL"));
+      findLocalModelServers.mockResolvedValueOnce(found([STUDIO_OLLAMA], "CONNECTED"));
+      const root = document.createElement("div");
+      const draw = (): void => m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+      draw();
+      (root.querySelector('[data-e2e="lane-local-model"]') as HTMLElement).click();
+      await vi.advanceTimersByTimeAsync(0);
+      draw();
+
+      expect(root.querySelector('[data-e2e="local-model-awaiting-approval"]')?.textContent).toContain(
+        "Approve it there",
+      );
+      expect(root.querySelector('[data-e2e="local-model-address"]')).toBeNull();
+      expect(findLocalModelServers).toHaveBeenCalledExactlyOnceWith(null, "");
+
+      // The checks that follow do not ask the user again.
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(findLocalModelServers).toHaveBeenLastCalledWith(null, "", false);
+      await vi.advanceTimersByTimeAsync(2000);
+      draw();
+
+      expect(findLocalModelServers).toHaveBeenCalledTimes(3);
+      expect(root.querySelector('[data-e2e="local-model-awaiting-approval"]')).toBeNull();
+      expect(root.textContent).toContain("qwen2.5:7b");
+      press(root, "connect-local-model");
+      expect(submitEndpoint).toHaveBeenCalledExactlyOnceWith({
+        base_url: "http://127.0.0.1:11434/v1",
+        model_id: "qwen2.5:7b",
+        context_window: 32768,
+        api_key: "",
+        studio_port: 11434,
+      });
+
+      // Approved: nothing is left checking.
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(findLocalModelServers).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks the user again on request while it waits for their approval", async () => {
+    findLocalModelServers.mockResolvedValue(found([], "AWAITING_APPROVAL"));
+
+    const { root } = await openForm();
+    press(root, "local-model-ask-again");
+    await settled();
+
+    expect(findLocalModelServers).toHaveBeenCalledTimes(2);
+    expect(findLocalModelServers).toHaveBeenLastCalledWith(null, "");
+    // Closing the form stops it checking.
+    m.render(root, null);
+  });
+
+  it("says so when Imbue Studio on the user's computer does not answer", async () => {
+    findLocalModelServers.mockResolvedValue(found([], "UNREACHABLE"));
+
+    const { root } = await openForm();
+
+    expect(root.querySelector('[data-e2e="local-model-none"]')?.textContent).toContain(
+      "Imbue Studio on your computer did not answer",
+    );
+  });
+
+  it("says to start a model server when the user's computer runs none", async () => {
+    findLocalModelServers.mockResolvedValue(found([], "CONNECTED"));
+
+    const { root } = await openForm();
+
+    expect(root.querySelector('[data-e2e="local-model-none"]')?.textContent).toContain(
+      "No model server is running on your computer",
+    );
   });
 
   it("asks for an address when no server answers, and looks at the one named", async () => {
@@ -829,6 +915,7 @@ describe("a local model", () => {
       model_id: "qwen2.5:7b",
       context_window: 32768,
       api_key: "sk-secret",
+      studio_port: null,
     });
   });
 

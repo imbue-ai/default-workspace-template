@@ -185,6 +185,34 @@ def test_failed_turn_classifies_a_provider_fault() -> None:
     assert event["is_auth_error"] is False
 
 
+def test_a_local_model_that_cannot_be_reached_says_what_to_check() -> None:
+    """pi's own words for a server that is not there are `Connection error.`, which names nothing the
+    user can act on; for a local model the server is theirs, so the message says where to look."""
+    message = {
+        "role": "assistant",
+        "content": [],
+        "stopReason": "error",
+        "errorMessage": "Connection error.",
+        "provider": "local-model",
+        "model": "qwen3:8b",
+    }
+    event = parse_record(_message_record("m", message))[0]
+    assert "model server on your computer did not answer" in event["text"]
+    assert "Imbue Studio is open" in event["text"]
+    assert event["is_auth_error"] is False
+
+
+def test_another_providers_connection_error_keeps_its_own_words() -> None:
+    message = {
+        "role": "assistant",
+        "content": [],
+        "stopReason": "error",
+        "errorMessage": "Connection error.",
+        "provider": "anthropic",
+    }
+    assert parse_record(_message_record("m", message))[0]["text"] == "Connection error."
+
+
 def test_a_reply_that_merely_quotes_an_error_is_not_one() -> None:
     """The gate is `stopReason`, not the presence of `errorMessage`.
 

@@ -7,3 +7,7 @@
 - While a message the agent already has is still waiting on the model's first reply, the status row under it now reads "Waiting for <model>…" in place of "Sending to <harness>…". A model hosted on your own computer can take over a minute to read a new chat's instructions, and pi records nothing of that turn until the reply.
 
 - A local model that reasons before it answers is signed in as a reasoning model: a chat shows its thinking folded away above the reply, as for any other provider, and offers its thinking levels. For Ollama the "off" level stops the reasoning.
+
+- A workspace that does not run on your computer can use a model server there too. When the Local model form finds no server it can call directly, it asks the Imbue Studio app, which shows one approval dialog for the workspace, lists the model servers on your computer once you allow it, and connects the workspace to the one you pick. The form waits on that dialog and carries on by itself when you approve; it says so when Imbue Studio does not answer, or when your computer runs no model server.
+
+- A chat on a local model whose server cannot be reached now says what to check (the computer is awake, Imbue Studio is open, the model server is running) in place of pi's "Connection error."

@@ -105,6 +105,11 @@ class LocalModelServer(FrozenModel):
     base_url: str = Field(description="The server's OpenAI-compatible root, ending in its version path")
     name: str = Field(description="What the server is, as shown: the product on a known port, else its address")
     models: tuple[str, ...] = Field(description="The ids of the models the server lists")
+    studio_port: int | None = Field(
+        default=None,
+        description="The server's port on the user's own computer, for a server this workspace reaches only "
+        "through the Imbue Studio app; base_url is then its address there, not one this workspace can call",
+    )
 
 
 def normalize_base_url(raw: str) -> str:
