@@ -74,6 +74,8 @@ import {
   whenChatRegistered,
 } from "../models/Chats";
 import { COMPACTING_STATE, isWorkingActivityState } from "../models/activityState";
+import { browserWakeLockHost, createScreenWakeLock } from "../models/screenWakeLock";
+import type { ScreenWakeLock } from "../models/screenWakeLock";
 import { isChatConnecting } from "./ConnectingIndicator";
 import { isAgentProcessDead } from "./agentLiveness";
 import { apiUrl, getBasePath } from "@imbue/workspace-ui/src/base-path";
@@ -89,8 +91,10 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";
 import { keydownMatchesChords } from "@imbue/workspace-ui/src/keybindings";
+import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { createDictation } from "@imbue/workspace-voice/src/dictation";
 import type { Dictation, DictationProblem, DictationState } from "@imbue/workspace-voice/src/dictation";
+import type { DeviceClass } from "@imbue/workspace-voice/src/engines";
 import { appendFinal, clearTentative, openSpan, renderSpan, setTentative } from "@imbue/workspace-voice/src/liveSpan";
 import type { LiveSpan } from "@imbue/workspace-voice/src/liveSpan";
 import {
@@ -434,6 +438,12 @@ function isDictationOffered(): boolean {
   return isDictationSupported(describeHost());
 }
 
+/** The kind of device this page is on, which picks the engine it dictates with (the spec's D9): touch where a
+ *  finger is the primary pointer. A page with no window to ask has no pointer, and is a desktop. */
+function pageDeviceClass(): DeviceClass {
+  return typeof matchMedia === "function" && matchMedia(TOUCH_MEDIA_QUERY).matches ? "touch" : "desktop";
+}
+
 function isAppleKeyboard(): boolean {
   return typeof navigator !== "undefined" && isApplePlatform(navigator);
 }
@@ -618,6 +628,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   let dictationProblem: DictationProblem | null = null;
   // The stretch of the box the dictation owns, from the caret it started at; null while none runs.
   let dictationSpan: LiveSpan | null = null;
+  // Keeps a phone's screen awake while a dictation runs: a locked screen hides the page and stops the words.
+  let screenWakeLock: ScreenWakeLock | null = null;
   // Fills the mic's capsule, handed over by the button while its glyph is in the document.
   let setMeterLevel: ((level: number) => void) | null = null;
   // Send or Enter came while dictating: the words are finished first, then the box is sent (spec D8).
@@ -653,8 +665,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     if (dictation !== null) return dictation;
     // The page's own URL roots the runtime's files; a document-less test has none.
     const pageUrl = typeof location === "undefined" ? "" : location.href;
-    dictation = createDictation(pageDictationOptions(localStorage, getBasePath(), pageUrl), {
+    const wakeLock = createScreenWakeLock(browserWakeLockHost());
+    screenWakeLock = wakeLock;
+    dictation = createDictation(pageDictationOptions(localStorage, getBasePath(), pageUrl, pageDeviceClass()), {
       onStateChange: (state) => {
+        // Held through loading, starting and listening, and let go once idle.
+        wakeLock.setWanted(state !== "idle");
         dictationState = state;
         if (state !== "loading") {
           dictationProgress = null;
@@ -722,6 +738,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   function disposeDictation(): void {
     dictation?.dispose();
     dictation = null;
+    // Disposal reaches idle without a state change of its own.
+    screenWakeLock?.setWanted(false);
+    screenWakeLock = null;
     dictationState = "idle";
     dictationProgress = null;
     dictationProblem = null;

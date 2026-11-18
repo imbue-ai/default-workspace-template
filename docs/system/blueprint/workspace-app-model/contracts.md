@@ -35,7 +35,7 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 | `instances` | bool | no | `false` | `true` exposes the instances API. |
 | `instances_url` | string | no | the app URL | `http://127.0.0.1:<port>` or `http://localhost:<port>`; where the shell reaches the instances API. Only allowed with `instances = true`. |
 | `critical` | bool | no | `false` | No Quit verb; never stopped or parked by the shell; snapshot-and-rollback target in the apply. |
-| `uses_microphone` | bool | no | `false` | Whether the app's pages listen to the microphone; the shell delegates it to the frames of an app that declares it, and to no other (the desktop interface's contracts section 2). |
+| `uses_microphone` | bool | no | `false` | Whether the app's pages listen to the microphone; the shell delegates it, and the screen wake lock dictation holds on a phone, to the frames of an app that declares it, and to no other (the desktop interface's contracts section 2). |
 | `priority` | string | no | `"user"` | A key of `SERVICE_BANDS` in `oom_priority.bands`, or `user`. |
 | `program` | string | no | `name` | The supervisord program that runs the app. |
 | `internal` | bool | no | `false` | Hidden from every open surface. |
@@ -70,7 +70,7 @@ Built-in manifests:
 | `system-monitor` | false | `system-monitor` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 50` | none; the shell synthesizes `open` at `/` | `SYSTEM_MONITOR_PORT = "{port:main}"` and `SYSTEM_MONITOR_HOST = "{host}"`, no copies (it stores nothing) |
 | `routines` | false | `routines` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 45` and a `[[message_handlers]]` `type = "minds:show-routine", show = "/{routine_id}"` | none; the shell synthesizes `open` at `/` | `routines-app` (the program's name, the default, is the routines library's command line) over `ROUTINES_APP_PORT = "{port:main}"`, `ROUTINES_APP_HOST = "{host}"` and `ROUTINES_APP_PREVIEW = "1"` (read-only over the live state: it refuses every change with `403`), no copies (it stores nothing) |
 
-The chat, terminal, Screen, Getting Started, and System Monitor declare `system = true`; Routines does not.
+The chat, terminal, Screen, Getting Started, System Monitor, Files, and Routines declare `system = true`: each is part of every workspace rather than an app built on it, so the share panel lists it under System and the desktop app's home screen does not count it among the workspace's own apps.
 
 Every built-in except the shell and the terminal's pty points `icon` at an `icon.svg` beside its manifest; those two are `internal` and have none.
 

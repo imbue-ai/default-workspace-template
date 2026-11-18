@@ -31,7 +31,7 @@ Parsed by `app_manifest` with `extra = "forbid"`.
 | `icon` | string | unless `internal` | | `.svg` beside the manifest. |
 | `critical` | bool | no | `false` | No Quit verb; never stopped or parked by the shell; snapshot-and-rollback target in the apply. |
 | `stop_when_no_windows` | bool | no | `false` | Whether the shell may stop the app's program once no window on any desktop shows it, a minute after the last one closes (`docs/system/specs/stop-when-no-windows.md`); `critical = true` forces it `false`, and a manifest declaring both fails to load. |
-| `uses_microphone` | bool | no | `false` | Whether the app's pages listen to the microphone (the chat's composer dictates). The shell adds `microphone` to the `allow` attribute of the frames of an app that declares it, and of no other; the Imbue Studio chrome already delegates the microphone to the workspace's frame, and a browser asks the person once per origin. |
+| `uses_microphone` | bool | no | `false` | Whether the app's pages listen to the microphone (the chat's composer dictates). The shell adds `microphone` and `screen-wake-lock` (dictation keeps a phone's screen awake while it listens) to the `allow` attribute of the frames of an app that declares it, and of no other; the Imbue Studio chrome already delegates the microphone to the workspace's frame, and a browser asks the person once per origin. |
 | `priority` | string | no | `"user"` | A memory band name or `user`. |
 | `program` | string | no | `name` | The supervisord program. |
 | `internal` | bool | no | `false` | Hidden from every open surface. |
@@ -62,7 +62,7 @@ Built-in manifests:
 | `screen` | false | false | `screen` | 30 | `{launch = "screen", mode = "focus"}`, `{launch = "browser", mode = "focus"}` | `screen` ("Screen", `/`, no params); `browser` ("Browser", POST `/launch/browser`, params `url` optional) |
 | `system-monitor` | false | true | `system-monitor` | 50 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open System Monitor", `/`) |
 
-The chat, terminal, Screen, Getting Started, and System Monitor manifests declare `system = true`; Routines does not.
+The chat, terminal, Screen, Getting Started, System Monitor, Files, and Routines manifests declare `system = true` (each is part of every workspace rather than an app built on it; the workspace app model's contracts say what follows from the flag).
 The Screen (`docs/system/specs/screen/spec.md`) is the workspace's one streamed Linux desktop; the browser is its `browser` launch path, and the browser app that used to hold a row here is gone.
 The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "independent"` (the default mode, `bar`, keeps the avatar in the tray) and `[[message_handlers]] type = "minds:focus-chat", path = "/api/focus-chat"`.
 The files manifest declares `[[message_handlers]] type = "open:file", show = "{path}?view", showing = ["{path}", "{path}/", "{path}/?view"]`, and the Screen's `[[message_handlers]] type = "open:url", path = "/api/open-url"`.
