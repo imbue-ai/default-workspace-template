@@ -4,7 +4,6 @@ offered only while the shell's handshake says Imbue Studio opens a bug report.""
 
 import contextlib
 import shutil
-import socket
 from collections.abc import Generator
 from pathlib import Path
 from typing import Final
@@ -57,12 +56,6 @@ _REFUSE_ASK: Final[str] = """(failure) => {
 }"""
 
 
-def _free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
 @contextlib.contextmanager
 def _framed_not_built_page(tmp_path: Path, browser: Browser, can_report_bug: bool) -> Generator[Page, None, None]:
     """Getting Started with no bundle, framed by a stand-in shell on another origin, once the shell refused its ask."""
@@ -73,21 +66,19 @@ def _framed_not_built_page(tmp_path: Path, browser: Browser, can_report_bug: boo
         cache_path=tmp_path / "catalog.json",
         fetcher=FakeTemplateCatalogFetcher(),
     )
-    app_port = _free_port()
-    shell = Flask(__name__)
-    shell_page = (
-        "<!doctype html><html><body><script>window.posted = [];"
-        "window.addEventListener('message', (event) => window.posted.push(event.data));</script>"
-        f"<iframe id='page' src='http://127.0.0.1:{app_port}/'></iframe></body></html>"
-    )
-    shell.add_url_rule("/", "shell", lambda: shell_page)
-    shell_port = _free_port()
-    with (
-        serve_in_background("127.0.0.1", app_port, build_pages_app(tmp_path / "static", store, contract_path)),
-        serve_in_background("127.0.0.1", shell_port, shell),
-        contextlib.closing(browser.new_context()) as context,
-    ):
-        page = context.new_page()
+    with contextlib.ExitStack() as stack:
+        app_server = stack.enter_context(
+            serve_in_background("127.0.0.1", 0, build_pages_app(tmp_path / "static", store, contract_path))
+        )
+        shell = Flask(__name__)
+        shell_page = (
+            "<!doctype html><html><body><script>window.posted = [];"
+            "window.addEventListener('message', (event) => window.posted.push(event.data));</script>"
+            f"<iframe id='page' src='http://127.0.0.1:{app_server.socket.getsockname()[1]}/'></iframe></body></html>"
+        )
+        shell.add_url_rule("/", "shell", lambda: shell_page)
+        shell_port = stack.enter_context(serve_in_background("127.0.0.1", 0, shell)).socket.getsockname()[1]
+        page = stack.enter_context(contextlib.closing(browser.new_context())).new_page()
         page.goto(f"http://localhost:{shell_port}/")
         page.evaluate(_REFUSE_ASK, _FAILURE)
         ask = page.frame_locator("#page").locator("#ask-agent")
