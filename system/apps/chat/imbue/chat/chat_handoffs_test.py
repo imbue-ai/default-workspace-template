@@ -1315,8 +1315,8 @@ _INPUT_NOT_DRAWN = SendFailedError("Claude is waiting on something in its termin
 
 
 def test_a_held_send_refused_while_the_input_is_blocked_is_tried_again_until_it_lands() -> None:
-    """A new chat's first message refused while Claude was still drawing its input box reaches the agent once the
-    box is up, instead of being dropped with nothing on the page to say so."""
+    """A new chat's first message refused while Claude is still drawing its input box reaches the agent once the
+    box is up."""
     deliver = _ScriptedDelivery(_INPUT_NOT_DRAWN, _INPUT_NOT_DRAWN, SendOutcome.OK)
     run = _deliver_held(deliver)
     assert run.is_delivered
@@ -1326,7 +1326,7 @@ def test_a_held_send_refused_while_the_input_is_blocked_is_tried_again_until_it_
 
 
 def test_a_held_send_that_stays_blocked_gives_up_and_is_reported_with_the_harness_words() -> None:
-    """The page that sent it is told why, so the message goes back to its composer rather than vanishing."""
+    """The page that sent it is told why, so it can hand the message back to its composer."""
     deliver = _ScriptedDelivery(_INPUT_NOT_DRAWN)
     run = _deliver_held(deliver)
     assert not run.is_delivered

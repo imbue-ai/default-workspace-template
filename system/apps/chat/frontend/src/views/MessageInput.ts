@@ -326,9 +326,7 @@ function rememberHeldSend(chatId: string, messageId: string, draft: TakenCompose
   heldSendDrafts.set(messageId, { chatId, draft });
 }
 
-// A held send that never reached its agent goes back where a refused send goes: its bubble down, its words back in
-// the composer, and the chat's failure notice saying why. Only the page that sent it holds the draft, so only that
-// page answers.
+// Only the page that sent a held send holds its draft, so only that page answers.
 addHeldSendFailedListener((chatId, messageId, detail, kind) => {
   const held = heldSendDrafts.get(messageId);
   if (held === undefined || held.chatId !== chatId) {

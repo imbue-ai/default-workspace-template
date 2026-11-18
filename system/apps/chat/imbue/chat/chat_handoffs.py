@@ -98,8 +98,8 @@ _SUMMARY_TIMEOUT_SECONDS: Final[float] = 300.0
 # The waits before each new try at a held send refused for a reason that can pass. Each try that finds the input
 # blocked already waits mngr's own readiness window first, so these add up to a few minutes in all.
 _HELD_SEND_RETRY_DELAYS_SECONDS: Final[tuple[float, ...]] = (5.0, 10.0, 20.0, 30.0)
-# The refusals that type nothing and can clear without the user: Claude still drawing its input box reads to mngr as
-# a blocked input, and mngr's not-ready and state-unknown refusals are worth waiting out.
+# The refusals that type nothing and can clear without the user. Claude still drawing its input box reads to mngr as
+# a blocked input.
 _PASSING_HELD_SEND_REFUSAL_KINDS: Final[frozenset[str]] = frozenset(
     (str(SendFailureKind.INPUT_BLOCKED), str(SendFailureKind.NOT_READY), str(SendFailureKind.STATE_UNKNOWN))
 )
