@@ -21,8 +21,8 @@ _SECTION_HEADING_PREFIX = "## "
 _LABELLED_HEADING_PREFIX = "## ["
 _UNRELEASED_LABEL = "Unreleased"
 
-# Entry files sit one level under a ``changelog/`` directory at any depth; ``top`` anchors the
-# pathspecs at the repository root whatever directory git runs in.
+# Entry files sit one level under a ``changelog/`` directory at any depth, outside the vendored
+# snapshots; ``top`` anchors both pathspecs at the repository root whatever directory git runs in.
 _ENTRY_PATHSPECS = (":(top,glob)**/changelog/*", ":(top,exclude)system/vendor")
 
 
@@ -50,7 +50,7 @@ class WhatsNew(NamedTuple):
 
 
 def parse_changelog_sections(text: str) -> list[ChangelogSection]:
-    """The ``## [<label>]`` sections of ``text``, top to bottom, each running to the next ``## `` line."""
+    """The ``## [<label>]`` sections of ``text`` in order, each ending at the next ``## `` line."""
     lines = text.split("\n")
     heading_indexes = [
         index
@@ -214,6 +214,9 @@ def _read_entries(entries: EntriesAtRef, repo_root: Path) -> dict[str, str]:
         input=request.encode("utf-8"),
         capture_output=True,
     )
+    # A batch that was cut short answers for fewer objects than were asked for.
+    if batch.returncode != 0:
+        return {}
     # One answer per requested object, in order: ``<sha> <type> <size>``, the content and a
     # newline, or a single line such as ``<object> missing``.
     text_by_path: dict[str, str] = {}

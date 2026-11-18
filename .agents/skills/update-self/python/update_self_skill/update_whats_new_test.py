@@ -9,10 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from update_self_skill import update_self
+from update_self_skill import update_self, update_whats_new
 from update_self_skill.update_whats_new import (
     CHANGELOG_PATH,
     ChangelogSection,
+    EntriesAtRef,
     list_whats_new,
     parse_changelog_sections,
     release_labels,
@@ -66,14 +67,16 @@ def _commit_and_tag(repo: Path, tag: str, files: dict[str, str | None]) -> None:
 def _init_switched_template(tmp_path: Path) -> Path:
     """A template whose releases cross the switch to release sections.
 
-    ``old`` and ``minds-v1`` hold entry files only. ``switch`` replaces them with a
-    ``CHANGELOG.md`` that has a section for ``minds-v1``; ``minds-v2`` and ``minds-v3`` each
-    add their own section, and ``minds-v3`` also has one entry file not consolidated yet.
+    ``old`` holds entry files only, and ``rooted`` adds a ``CHANGELOG.md`` with no release
+    section. ``minds-v1`` is the last release that keeps its changes as entry files:
+    ``switch`` replaces them with a section for it. ``minds-v2`` and ``minds-v3`` each add
+    their own section, and ``minds-v3`` also has one entry file not consolidated yet.
     """
     repo = tmp_path / "template"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
     _commit_and_tag(repo, "old", {"system/changelog/first.md": "First change.\n"})
+    _commit_and_tag(repo, "rooted", {CHANGELOG_PATH: _changelog()})
     _commit_and_tag(
         repo,
         "minds-v1",
@@ -178,12 +181,13 @@ def test_unreleased_is_listed_only_when_it_holds_something(
     assert select_unseen_sections(without_content, base_labels, "minds-v1") == []
 
 
-def test_refs_without_a_changelog_list_only_the_entries_added_between_them(
-    tmp_path: Path,
+@pytest.mark.parametrize("base", ["old", "rooted"])
+def test_refs_without_a_release_section_list_only_the_entries_added_between_them(
+    tmp_path: Path, base: str
 ) -> None:
     repo = _init_switched_template(tmp_path)
 
-    assert list_whats_new("old", "minds-v1", repo, None, None) == {
+    assert list_whats_new(base, "minds-v1", repo, None, None) == {
         "sections": [],
         "added": _ENTRIES_ADDED_BY_V1,
         "added_before_consolidation": None,
@@ -221,6 +225,20 @@ def test_refs_without_a_changelog_list_only_the_entries_added_between_them(
                 "unlisted": [],
             },
             id="older-than-the-switch-to-the-second-release-after-it",
+        ),
+        pytest.param(
+            "rooted",
+            "minds-v2",
+            {
+                "sections": ["minds-v2"],
+                "added": [],
+                "added_before_consolidation": {
+                    "ref": "minds-v1",
+                    "paths": _ENTRIES_ADDED_BY_V1,
+                },
+                "unlisted": [],
+            },
+            id="has-the-changelog-but-no-release-section",
         ),
         pytest.param(
             "minds-v1",
@@ -378,6 +396,13 @@ def test_out_leaves_out_an_entry_that_cannot_be_read_and_names_it(
         "# Changelog entries the update adds, as they are at minds-v1\n\n"
         "## system/apps/chat/changelog/second.md\n\nSecond change.\n"
     )
+
+
+def test_a_batch_read_that_does_not_finish_reads_no_entry(tmp_path: Path) -> None:
+    entries = EntriesAtRef("minds-v1", ["system/changelog/first.md"])
+
+    # Outside a repository git exits non-zero before answering for any object.
+    assert update_whats_new._read_entries(entries, tmp_path) == {}
 
 
 def test_the_command_prints_the_listing_and_writes_out(
