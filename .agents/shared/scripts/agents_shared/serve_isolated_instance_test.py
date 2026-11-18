@@ -1438,6 +1438,15 @@ def test_wrapper_refuses_to_frame_a_service_with_no_registered_label(
     assert excinfo.value.code == 503
 
 
+def test_wrapper_answers_503_when_the_registry_cannot_be_read(tmp_path: Path) -> None:
+    with _running_wrapper(tmp_path / "missing.toml", "inbox") as url:
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(url)
+
+    assert excinfo.value.code == 503
+    assert "could not be read" in excinfo.value.read().decode("utf-8")
+
+
 def test_a_mock_wrapper_page_says_it_is_a_mock_and_shows_the_note_escaped() -> None:
     page = wrapper_mod.build_wrapper_html(
         "inbox",

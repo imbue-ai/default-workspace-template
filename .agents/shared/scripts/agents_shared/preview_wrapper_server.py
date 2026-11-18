@@ -34,6 +34,7 @@ by hand:
 import argparse
 import html
 import json
+import re
 import tomllib
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -73,8 +74,13 @@ BANNER_COPY_BY_KIND: dict[FrameKind, BannerCopy] = {
 }
 
 
+# A single DNS hostname label; the registry is a file other programs write, and
+# the label is written into the page's script.
+_ORIGIN_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", re.IGNORECASE)
+
+
 def registered_origin_label(apps_file: Path, service_name: str) -> str | None:
-    """The origin label ``service_name`` is registered under in ``apps_file``; None when it has none.
+    """The origin label ``service_name`` is registered under in ``apps_file``; None when it has no valid one.
 
     Read on every request rather than once at startup: a service removed and
     registered again while its frame is up is given a fresh label.
@@ -84,7 +90,9 @@ def registered_origin_label(apps_file: Path, service_name: str) -> str | None:
     for app in registry.get("apps", []):
         if isinstance(app, dict) and app.get("name") == service_name:
             label = app.get("label")
-            return label if isinstance(label, str) and label else None
+            if isinstance(label, str) and _ORIGIN_LABEL_PATTERN.match(label):
+                return label
+            return None
     return None
 
 
@@ -231,7 +239,15 @@ def make_handler(
         # the browser directly from the inner service's own origin and never
         # reaches this server.
         def do_GET(self) -> None:
-            inner_label = registered_origin_label(apps_file, inner_service)
+            try:
+                inner_label = registered_origin_label(apps_file, inner_service)
+            except (OSError, tomllib.TOMLDecodeError) as exc:
+                self._send(
+                    503,
+                    "text/plain; charset=utf-8",
+                    f"The app registry {apps_file} could not be read: {exc}\n",
+                )
+                return
             if inner_label is None:
                 self._send(
                     503,
