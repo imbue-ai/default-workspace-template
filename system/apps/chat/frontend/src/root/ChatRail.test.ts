@@ -534,6 +534,23 @@ describe("ChatRail refused rename", () => {
       `The workspace didn't answer, so it isn't known whether "${first.title}" was renamed to "New name".`,
     );
   });
+
+  it("names a room as a room when its rename or delete is refused", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const lounge = chatRowFixture("room-0123456789abcdef", { kind: "room", title: "Lounge" });
+    mount([lounge, first]);
+    verbs.renameChat.mockRejectedValueOnce(new HttpError(409, "the name is taken"));
+
+    renameInPlace(lounge.chatId, "Hall");
+    await vi.waitFor(() => expect(noticeText()).not.toBeNull());
+    expect(noticeText()).toContain("Couldn't rename the room");
+    dismissNotice();
+
+    verbs.destroyChat.mockRejectedValueOnce(new HttpError(500, "mngr failed"));
+    deleteFromMenu(chatRailAttrsFixture({ rows: [lounge, first] }), lounge);
+    await vi.waitFor(() => expect(noticeText()).not.toBeNull());
+    expect(noticeText()).toContain("Couldn't delete the room");
+  });
 });
 
 describe("ChatRail rooms", () => {
