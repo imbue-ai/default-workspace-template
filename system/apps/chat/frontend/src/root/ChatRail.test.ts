@@ -21,7 +21,7 @@ import m from "mithril";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { setParticipantsForTesting } from "../models/Participants";
 import { ChatRail, endRenameOfUnlisted, rowMenuRows } from "./ChatRail";
-import type { RowMenuContext } from "./ChatRail";
+import type { ChatRailAttrs, RowMenuContext } from "./ChatRail";
 import { chatRailAttrsFixture } from "./chatRailAttrsFixture";
 import { chatRowFixture } from "./chatRowFixture";
 import { hasPendingDelete, settlePendingDeletes, withoutPendingDeletes } from "./pendingDeletes";
@@ -43,12 +43,17 @@ afterEach(() => {
 });
 
 /** Mount the list over ``rows``, or over what ``rows`` answers at each draw for a test whose list changes. */
-function mount(rows: readonly ChatRow[] | (() => readonly ChatRow[])): HTMLElement {
+function mount(
+  rows: readonly ChatRow[] | (() => readonly ChatRow[]),
+  overrides: Partial<ChatRailAttrs> = {},
+): HTMLElement {
   const rowsNow = typeof rows === "function" ? rows : () => rows;
   const mounted = document.createElement("div");
   document.body.appendChild(mounted);
   root = mounted;
-  m.mount(mounted, { view: () => [m(ChatRail, chatRailAttrsFixture({ rows: rowsNow() })), m(RootNoticeView)] });
+  m.mount(mounted, {
+    view: () => [m(ChatRail, chatRailAttrsFixture({ ...overrides, rows: rowsNow() })), m(RootNoticeView)],
+  });
   return mounted;
 }
 
@@ -483,6 +488,33 @@ describe("ChatRail refused rename", () => {
     m.redraw.sync();
     expect(root!.querySelector(".chat-rail-rename-input")).toBeNull();
     expect(noticeText()).toContain(`"${second.title}" was not renamed to "Also taken".`);
+  });
+
+  it("shows the chat on a phone before Rename again opens its field, since only the header can draw it", async () => {
+    const onPick = vi.fn<(chatId: string | null) => void>();
+    mount([first, second], { isInDrawer: true, selectedChatId: second.chatId, onPick });
+    verbs.renameChat.mockRejectedValueOnce(new HttpError(409, "the name is taken"));
+
+    renameInPlace(first.chatId, "Taken");
+    await vi.waitFor(() => expect(noticeText()).not.toBeNull());
+    noticeButton("Rename again").click();
+
+    expect(onPick).toHaveBeenCalledWith(first.chatId);
+  });
+
+  it("leaves the chat on screen when Rename again's chat is already shown", async () => {
+    const onPick = vi.fn<(chatId: string | null) => void>();
+    mount([first, second], { isInDrawer: true, selectedChatId: first.chatId, onPick });
+    verbs.renameChat.mockRejectedValueOnce(new HttpError(409, "the name is taken"));
+
+    renameInPlace(first.chatId, "Taken");
+    await vi.waitFor(() => expect(noticeText()).not.toBeNull());
+    onPick.mockClear();
+    noticeButton("Rename again").click();
+    m.redraw.sync();
+
+    expect(onPick).not.toHaveBeenCalled();
+    expect(root!.querySelector<HTMLInputElement>(".chat-rail-rename-input")?.value).toBe("Taken");
   });
 
   it("says it is not known whether the chat was renamed when nothing answered", async () => {

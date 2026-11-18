@@ -167,9 +167,14 @@ function refuseRename(row: ChatRow, title: string, error: unknown): void {
     }),
     retry: {
       label: "Rename again",
-      // A chat gone from the list has no field to draw, and its rename would hold every notice after this one.
+      // A chat gone from the list has no field to draw, and its rename would hold every notice after this one. On a
+      // phone only the header draws a field once the drawer is closed, and only for the chat on screen, so the chat
+      // is shown first.
       run: () => {
-        if (latestMenuContext?.rows.some((listed) => listed.chatId === row.chatId) === true) beginRename(row, title);
+        const context = latestMenuContext;
+        if (context === null || !context.rows.some((listed) => listed.chatId === row.chatId)) return;
+        if (context.isInDrawer && context.selectedChatId !== row.chatId) context.onPick(row.chatId);
+        beginRename(row, title);
       },
     },
   });
@@ -190,8 +195,12 @@ function makeMainFromMenu(row: ChatRow): void {
   });
 }
 
-/** What a row's menu needs of the root: the rows, the one shown, how to show another, and word of a refused delete. */
-export type RowMenuContext = Pick<ChatRailAttrs, "rows" | "selectedChatId" | "onPick" | "onDeleteRefused">;
+/** What a row's menu needs of the root: the rows, the one shown, how to show another, word of a refused delete, and
+ *  whether the root draws its phone layout. */
+export type RowMenuContext = Pick<
+  ChatRailAttrs,
+  "rows" | "selectedChatId" | "onPick" | "onDeleteRefused" | "isInDrawer"
+>;
 
 /** What a reference to an element of the list needs of the root, as its right-click menu does. */
 export type RowReferenceContext = Pick<
