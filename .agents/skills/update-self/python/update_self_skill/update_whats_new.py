@@ -159,14 +159,14 @@ def _read_changelog(ref: str, repo_root: Path) -> tuple[str, str | None]:
 def _added_entries(
     base: str, ref: str, repo_root: Path
 ) -> subprocess.CompletedProcess[bytes]:
+    """The entry files ``ref`` adds since it and ``base`` diverged."""
     return _git(
         [
             "diff",
             "--name-only",
             "--diff-filter=A",
             "--no-renames",
-            base,
-            ref,
+            f"{base}...{ref}",
             "--",
             *_ENTRY_PATHSPECS,
         ],

@@ -285,6 +285,28 @@ def test_an_update_across_the_switch_lists_unseen_sections_and_the_entries_of_sk
     )
 
 
+def test_a_base_past_the_last_entry_tag_reads_no_entry_it_already_has(
+    tmp_path: Path,
+) -> None:
+    repo = _init_switched_template(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "dev", _LAST_ENTRY_TAG)
+    _commit_and_tag(
+        repo,
+        "dev-after-v1",
+        {
+            ".agents/changelog/third.md": None,
+            ".agents/changelog/third-renamed.md": "Third change.\n",
+        },
+    )
+
+    assert list_whats_new("dev-after-v1", "minds-v2", repo, None, _LAST_ENTRY_TAG) == {
+        "sections": ["minds-v2"],
+        "added": [],
+        "added_before_consolidation": {"ref": _LAST_ENTRY_TAG, "paths": []},
+        "unlisted": [],
+    }
+
+
 def test_out_holds_the_sections_then_each_entry_as_it_is_at_the_ref_that_has_it(
     tmp_path: Path,
 ) -> None:
