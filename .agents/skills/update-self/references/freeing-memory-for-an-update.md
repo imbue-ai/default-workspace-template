@@ -21,7 +21,7 @@ that came from it: the gate will be shed again and the round is wasted.
 
 The same line says how much of that free memory is left before the guard starts stopping
 processes, which it does at a share of the total, not at zero: 1 GiB free on a 6.4 GiB
-workspace was about 400 MiB of room. That room is what a heavy step can use, so judge by it.
+workspace is about 400 MiB of room. That room is what a heavy step can use, so judge by it.
 
 The command lists the idle chats and workers, the apps the workspace may stop with how many windows
 show each, and the browsers no window shows, each with its memory: the anonymous memory of its
