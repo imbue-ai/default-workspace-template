@@ -18,8 +18,9 @@ bucket's in ``system/changelog/``); a PR that touches a project must add
 ``<project_dir>/changelog/<branch>.md`` (slashes in the branch name replaced
 with dashes).
 
-A PR from a changelog consolidation branch
-(``mngr/changelog-consolidation-<timestamp>``), which moves the entries into the
+A PR from a changelog consolidation branch, one whose name starts with
+``mngr/changelog-consolidation`` (e.g. the nightly's
+``mngr/changelog-consolidation-<timestamp>``), which moves the entries into the
 root ``CHANGELOG.md`` and ``UNABRIDGED_CHANGELOG.md``, owes no entry.
 
 Run it from the repo root::
