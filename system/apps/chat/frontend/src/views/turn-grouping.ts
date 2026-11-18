@@ -33,7 +33,9 @@
  * re-renders at the top of the new turn, while the prior turn's node freezes at
  * its last-known state. It belongs to the earlier request, so the new turn's
  * prose does not join it until the agent works while it is open or moves a
- * step (re-starting that same step is no move), and a turn that never works in it or closes it does not draw it at all;
+ * step (re-starting that same step is no move). The agent's first prose in a
+ * turn the user started, before it moves a step, is its answer: it stays a
+ * reply even if the agent worked first and works on after it. A turn that never works in it or closes it does not draw it at all;
  * the same holds for a step carried over a switch to another agent, whose
  * successor starts on the message the user switched with. A turn the agent did
  * nothing in (two boundaries back to back) keeps no copy either, so the step is
@@ -494,6 +496,10 @@ interface SectionBuilder {
    *  (they still show, frozen, in the turn they came from): all of them in a turn the user started,
    *  and after a chip those the turn before it never took up. */
   untaken_carryover_ids: Set<string>;
+  /** In a turn the user started, true until the agent's first prose or its first step move: that
+   *  prose is its answer to them, so it stays a reply even when the agent looked something up
+   *  first and keeps working after it. */
+  awaiting_answer: boolean;
   /** The handoff node open in this section: every assistant message from the summary request
    *  on belongs to it, until the switch closes it. */
   open_handoff: HandoffNode | null;
@@ -510,6 +516,7 @@ function newSection(user_event: UserMessageEvent | null, key: string, is_after_s
     current_step_id: null,
     dormant_step_id: null,
     untaken_carryover_ids: new Set(),
+    awaiting_answer: false,
     open_handoff: null,
   };
 }
@@ -667,8 +674,13 @@ export function buildSections(
     const previous = current;
     carryover = previous === null ? [] : openStepsAtEnd(previous);
     current = ensureSection(user_event, key, isAfterSwitch);
-    if (isNewRequest) setCarryoverDormant(current);
-    else continueCarryover(previous, current);
+    if (isNewRequest) {
+      setCarryoverDormant(current);
+      current.awaiting_answer = true;
+    } else {
+      continueCarryover(previous, current);
+      current.awaiting_answer = previous?.awaiting_answer ?? false;
+    }
   };
 
   // The node a switch just closed, until the successor's first turn-making event: the handoff
@@ -836,6 +848,7 @@ export function buildSections(
         applyTransition(current, t);
         if (t.status === "in_progress") lastOpened = t.id;
       }
+      if (stepTransitions.length > 0) current.awaiting_answer = false;
       // Whitespace-only text draws nothing, so it counts as no text.
       if (parsed.render !== null && (parsed.render.text.trim() || parsed.render.tool_calls.length > 0)) {
         if (hasPermissionRequest(parsed.render, toolResults)) {
@@ -845,6 +858,9 @@ export function buildSections(
           // responds keeps grouping under it.
           supersedeOlderSecretRequests(parsed.render, toolResults, pendingSecretRequestByFile, resolutionsByRequestId);
           current.entries.push({ kind: "permission", event: parsed.render });
+        } else if (current.awaiting_answer && isProse(parsed.render)) {
+          routeMessage(current, parsed.render, null);
+          current.awaiting_answer = false;
         } else {
           routeMessage(current, parsed.render, lastOpened ?? stepBefore);
         }
@@ -1215,6 +1231,6 @@ function finalizeSection(
     items,
     trailing_reply,
     trailing_status,
-    live_step_id: section.open_handoff === null ? frontierId : null,
+    live_step_id: section.open_handoff === null && !section.awaiting_answer ? frontierId : null,
   };
 }
