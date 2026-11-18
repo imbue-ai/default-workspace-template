@@ -1,0 +1,1 @@
+`.claude/settings.json` gains three hook entries (`UserPromptSubmit`, `Stop`, `PostToolUse`) that run `system/apps/ai_usage/hooks/report_chat_activity.sh`, so a Claude chat tells the AI Usage Limits app when it starts a turn, uses a tool and finishes. The script posts one small request to the app in the background and exits at once, and does nothing when the app is not running.

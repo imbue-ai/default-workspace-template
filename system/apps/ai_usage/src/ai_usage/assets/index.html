@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Usage Limits</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>AI Usage Limits</h1>
+    <div class="header-right">
+      <span class="checked" id="checked">Loading...</span>
+      <button id="check-now" type="button">Check now</button>
+    </div>
+  </header>
+
+  <section class="overview" id="overview" hidden></section>
+  <div id="sources"></div>
+  <section class="tool" id="untracked" hidden>
+    <div class="tool-head"><div class="tool-name">Other chats</div></div>
+    <p class="hint" id="untracked-text"></p>
+  </section>
+</main>
+<script type="module" src="/assets/app.js"></script>
+__SHELL_PAGE_SCRIPT__
+</body>
+</html>

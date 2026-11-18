@@ -1,0 +1,1 @@
+New supervisord program `ai-usage` (`system/supervisord.conf.d/ai-usage.conf`) for the AI Usage Limits app (`system/apps/ai_usage`): syncs the app's own venv from its lock, registers its manifest on port 8080 via `forward_port.py`, and runs it in the `user` memory band.
