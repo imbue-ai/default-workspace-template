@@ -410,9 +410,7 @@ def select_pause_targets(
             if by_name[name].is_live
         ]
     else:
-        chosen = [
-            agent for agent in candidates if _is_busy(agent, runners_by_chat)
-        ]
+        chosen = [agent for agent in candidates if _is_busy(agent, runners_by_chat)]
     return [
         PauseTarget(
             agent=agent,

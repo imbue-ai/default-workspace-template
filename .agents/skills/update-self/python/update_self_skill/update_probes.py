@@ -493,7 +493,11 @@ class PreflightFailure:
         """A clause naming the cause for the failure's headline, or '' when only the output says it."""
         if self.shed is None:
             return ""
-        held = f" (it held {self.shed.resident_mib} MiB)" if self.shed.resident_mib is not None else ""
+        held = (
+            f" (it held {self.shed.resident_mib} MiB)"
+            if self.shed.resident_mib is not None
+            else ""
+        )
         return (
             f": the memory guard stopped it for lack of memory at {self.shed.at:%H:%M:%S} UTC{held}, "
             "so free memory before a retry"
@@ -502,7 +506,9 @@ class PreflightFailure:
 
 def shed_ledger_path(repo_root: Path) -> Path:
     override = os.environ.get(_OOM_PRIORITY_RUNTIME_DIR_ENV, "")
-    runtime_dir = Path(override) if override else repo_root / _OOM_PRIORITY_RUNTIME_SUBDIR
+    runtime_dir = (
+        Path(override) if override else repo_root / _OOM_PRIORITY_RUNTIME_SUBDIR
+    )
     return runtime_dir / "events" / "shed.jsonl"
 
 
@@ -518,16 +524,27 @@ def find_memory_shed(ledger_path: Path, pid: int, since: datetime) -> MemoryShed
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if not isinstance(record, dict) or record.get("type") != _SHED_RECORD_TYPE or record.get("pid") != pid:
+        if (
+            not isinstance(record, dict)
+            or record.get("type") != _SHED_RECORD_TYPE
+            or record.get("pid") != pid
+        ):
             continue
         try:
-            at = datetime.strptime(str(record.get("timestamp")), _SHED_TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
+            at = datetime.strptime(
+                str(record.get("timestamp")), _SHED_TIMESTAMP_FORMAT
+            ).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
         if at < since:
             continue
         resident_kib = record.get("vm_rss_kib")
-        return MemoryShed(at=at, resident_mib=resident_kib // 1024 if isinstance(resident_kib, int) else None)
+        return MemoryShed(
+            at=at,
+            resident_mib=resident_kib // 1024
+            if isinstance(resident_kib, int)
+            else None,
+        )
     return None
 
 
@@ -651,7 +668,9 @@ def _preflight_boot(
             # Not booting and failing is the same verdict as failing to boot,
             # and reaching this with the console script missing is exactly what
             # a venv sync that half-succeeded leaves behind.
-            return PreflightFailure(output=f"{what} could not be launched ({type(exc).__name__}: {exc})")
+            return PreflightFailure(
+                output=f"{what} could not be launched ({type(exc).__name__}: {exc})"
+            )
         try:
             if wait_healthy(
                 http,

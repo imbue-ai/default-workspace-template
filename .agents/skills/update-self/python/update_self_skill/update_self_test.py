@@ -3957,7 +3957,12 @@ def test_a_preflight_boot_the_memory_guard_stopped_is_named_as_a_memory_failure(
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
     spawner = _shed_boot_spawner(tmp_path, monkeypatch, shed_pid_offset=0)
 
-    code = _apply(runner, _FakeHttp(lambda url: 200 if _is_live(url) else None), spawner, apply_repo)
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
 
     assert code == 2
     err = capsys.readouterr().err
@@ -3974,7 +3979,12 @@ def test_a_preflight_boot_that_died_while_the_guard_stopped_something_else_is_no
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
     spawner = _shed_boot_spawner(tmp_path, monkeypatch, shed_pid_offset=1)
 
-    code = _apply(runner, _FakeHttp(lambda url: 200 if _is_live(url) else None), spawner, apply_repo)
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
 
     assert code == 2
     err = capsys.readouterr().err

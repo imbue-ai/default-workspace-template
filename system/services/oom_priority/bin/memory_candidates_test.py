@@ -980,7 +980,10 @@ def test_free_memory_without_a_readable_guard_threshold_says_only_the_free_memor
 
 
 def test_the_guard_threshold_is_read_off_the_workspaces_own_earlyoom_program() -> None:
-    assert memory_candidates.read_shed_percent(memory_candidates.EARLYOOM_PROGRAM_CONF) is not None
+    assert (
+        memory_candidates.read_shed_percent(memory_candidates.EARLYOOM_PROGRAM_CONF)
+        is not None
+    )
 
 
 def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:

@@ -923,11 +923,7 @@ def _cmd_run_status_start(args: argparse.Namespace) -> int:
     # nothing else could ever resume them.
     earlier = read_run_status(repo_root)
     still_paused = (
-        [
-            entry
-            for entry in earlier.stopped_agents
-            if not entry.is_resume_done
-        ]
+        [entry for entry in earlier.stopped_agents if not entry.is_resume_done]
         if earlier is not None
         else []
     )

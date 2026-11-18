@@ -1011,7 +1011,6 @@ def render_free_memory(free: FreeMemory | None) -> str:
     return f"Free memory: {_mib(free.free_kib)} ({free.field} from {free.source}{total}){room}"
 
 
-
 def render_table(report: Report) -> str:
     lines: list[str] = [render_free_memory(report.free_memory)]
 
