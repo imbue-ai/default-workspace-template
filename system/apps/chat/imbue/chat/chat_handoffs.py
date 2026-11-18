@@ -68,6 +68,7 @@ from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentRestartError
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import AgentStopError
+from imbue.chat.models import CreateFailureKind
 from imbue.chat.models import HandoffFailedStep
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
@@ -108,6 +109,11 @@ _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
 _CREATE_TIMEOUT_SECONDS: Final[float] = 300.0
 # How much of a failed create's output the failed phase carries.
 _CREATION_OUTPUT_TAIL_LINES: Final[int] = 20
+
+# What ``system/scripts/codex_update_plugin.sh`` prints when it refuses to install (its test pins the same text).
+# mngr runs it while creating a Codex agent and wraps its stderr into the create's error, so the marker reaches the
+# create's output while the script's exit code does not.
+_CODEX_PLUGIN_INSTALL_REFUSED_MARKER: Final[str] = "codex-plugin-install-refused"
 
 _SUMMARIES_DIRNAME: Final[str] = "summaries"
 
@@ -337,6 +343,14 @@ def failure_notice(error: str | None, output_tail: str) -> str:
     """What a failed create's page says: the reason, then the last lines mngr printed."""
     reason = error or "mngr create failed"
     return f"{reason}\n{output_tail}" if output_tail else reason
+
+
+@pure
+def create_failure_kind(harness: HarnessType, output_tail: str) -> CreateFailureKind | None:
+    """The known failure a create on ``harness`` that printed ``output_tail`` hit; None for any other."""
+    if harness is HarnessType.CODEX and _CODEX_PLUGIN_INSTALL_REFUSED_MARKER in output_tail:
+        return CreateFailureKind.CODEX_PLUGIN_INSTALL_REFUSED
+    return None
 
 
 @pure

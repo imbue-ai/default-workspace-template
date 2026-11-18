@@ -41,6 +41,7 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.config import Config
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import CreateFailureKind
 from imbue.chat.models import HeldSendSnapshot
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatAsShown
@@ -114,11 +115,12 @@ class _WithholdProtoCreatedBroadcaster(WebSocketBroadcaster):
         success: bool,
         error: str | None,
         held_sends: Sequence[HeldSendSnapshot] | None = None,
+        failure_kind: CreateFailureKind | None = None,
     ) -> None:
         while type(self)._withheld:
             type(self)._withheld.pop(0)()
         WebSocketBroadcaster.broadcast_provisional_chat_completed(
-            self, chat_id=chat_id, success=success, error=error, held_sends=held_sends
+            self, chat_id=chat_id, success=success, error=error, held_sends=held_sends, failure_kind=failure_kind
         )
 
 

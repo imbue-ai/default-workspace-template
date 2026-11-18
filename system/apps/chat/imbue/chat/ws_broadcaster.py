@@ -8,6 +8,7 @@ from loguru import logger as _loguru_logger
 from pydantic import PrivateAttr
 
 from imbue.chat.models import ChatSnapshot
+from imbue.chat.models import CreateFailureKind
 from imbue.chat.models import HeldSendSnapshot
 from imbue.chat.models import ProvisionalChatAsShown
 from imbue.chat.primitives import ChatId
@@ -38,10 +39,15 @@ def provisional_chat_created_message(provisional: ProvisionalChatAsShown) -> dic
 
 
 def provisional_chat_completed_message(
-    chat_id: ChatId, success: bool, error: str | None, held_sends: Sequence[HeldSendSnapshot] | None = None
+    chat_id: ChatId,
+    success: bool,
+    error: str | None,
+    held_sends: Sequence[HeldSendSnapshot] | None = None,
+    failure_kind: CreateFailureKind | None = None,
 ) -> dict[str, Any]:
     """The ``provisional_chat_completed`` message: the chat is an agent, failed, or was discarded. A discard carries
-    the messages the chat held, dropped with it, so the pages that sent them put them back."""
+    the messages the chat held, dropped with it, so the pages that sent them put them back; a failure of a known kind
+    carries its kind, which the page words."""
     message: dict[str, Any] = {
         "type": "provisional_chat_completed",
         "chat_id": chat_id,
@@ -50,6 +56,8 @@ def provisional_chat_completed_message(
     }
     if held_sends is not None:
         message["held_sends"] = [held.model_dump(mode="json") for held in held_sends]
+    if failure_kind is not None:
+        message["failure_kind"] = failure_kind.value
     return message
 
 
@@ -176,9 +184,10 @@ class WebSocketBroadcaster(MutableModel):
         success: bool,
         error: str | None,
         held_sends: Sequence[HeldSendSnapshot] | None = None,
+        failure_kind: CreateFailureKind | None = None,
     ) -> None:
         """Broadcast a provisional_chat_completed event: the chat is an agent, failed, or was discarded."""
-        self.broadcast(provisional_chat_completed_message(chat_id, success, error, held_sends))
+        self.broadcast(provisional_chat_completed_message(chat_id, success, error, held_sends, failure_kind))
 
     def shutdown(self) -> None:
         """Signal all clients to disconnect by sending None sentinel."""
