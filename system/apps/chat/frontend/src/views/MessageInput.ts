@@ -320,6 +320,10 @@ export function raiseNewChatFailure(chatId: string, error: unknown, retry: () =>
   });
 }
 
+// The chats a new chat is being started in place of, so a second press of a button that stays on screen does not
+// start another.
+const newChatStartsInFlight = new Set<string>();
+
 /** Open a new chat beside ``chatId``, on the account a new chat would start on, in place of a chat the app no longer
  *  has; with nothing signed in, the provider chooser. A failure is told on ``chatId``'s composer. */
 export function startNewChatInPlaceOf(chatId: string): void {
@@ -328,8 +332,12 @@ export function startNewChatInPlaceOf(chatId: string): void {
     openProviderChooser();
     return;
   }
+  if (newChatStartsInFlight.has(chatId)) return;
+  newChatStartsInFlight.add(chatId);
   const startNewChat = (): Promise<void> => startChatOnAccount(account.id);
-  startNewChat().catch((error: unknown) => raiseNewChatFailure(chatId, error, startNewChat));
+  startNewChat()
+    .catch((error: unknown) => raiseNewChatFailure(chatId, error, startNewChat))
+    .finally(() => newChatStartsInFlight.delete(chatId));
 }
 
 // Chats whose draft was taken out of the composer by a sibling view (the switch dialog's "Start a

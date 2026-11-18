@@ -1187,6 +1187,25 @@ describe("the ways out under a failed turn", () => {
       expect(transcript.sendMessage).not.toHaveBeenCalled();
     });
 
+    it("starts one new chat however often Start a new chat is pressed while it is on its way", async () => {
+      switching.selectedAccount = { id: ANTHROPIC_ID };
+      let finishCreate: () => void = () => undefined;
+      vi.mocked(startChatOnAccount).mockImplementationOnce(
+        () => new Promise<void>((resolve) => (finishCreate = resolve)),
+      );
+
+      findRemedy(render(tooLong()), "Start a new chat")!.attrs.onclick();
+      findRemedy(render(tooLong()), "Start a new chat")!.attrs.onclick();
+
+      expect(startChatOnAccount).toHaveBeenCalledOnce();
+      finishCreate();
+      await flushAsync();
+
+      findRemedy(render(tooLong()), "Start a new chat")!.attrs.onclick();
+      await flushAsync();
+      expect(startChatOnAccount).toHaveBeenCalledTimes(2);
+    });
+
     it("sends /compact to the chat, once, however often Compact is pressed while it is on its way", async () => {
       let accept: (status: string) => void = () => undefined;
       transcript.sendMessage.mockImplementationOnce(() => new Promise<string>((resolve) => (accept = resolve)));
