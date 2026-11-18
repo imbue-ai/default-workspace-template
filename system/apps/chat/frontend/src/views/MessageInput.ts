@@ -181,6 +181,10 @@ function withoutNulCharacters(draft: string): string {
   return draft.split("\0").join("");
 }
 
+// A chat on a local model whose server does not answer: nothing was sent, and nothing about the
+// agent needs fixing, so the notice carries the server's own account of what to check.
+const MODEL_SERVER_UNREACHABLE_SEND_FAILURE_KIND = "model_server_unreachable";
+
 function sendFailureKind(sendError: unknown): unknown {
   return (sendError as { response?: { kind?: unknown } | null } | null)?.response?.kind;
 }
@@ -1537,7 +1541,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // rather than the failure notice, since retrying at once cannot change it.
           const detail = describeRequestError(err);
           const isDeclined = DECLINED_COMPACT_SEND_FAILURE_KINDS.has(sendFailureKind(err));
-          if (!isDeclined) {
+          const isModelServerUnreachable = sendFailureKind(err) === MODEL_SERVER_UNREACHABLE_SEND_FAILURE_KIND;
+          if (!isDeclined && !isModelServerUnreachable) {
             console.error(`Failed to send message to chat ${chatId}: ${detail}`);
           }
           dropOutgoing(chatId, outgoingId);
@@ -1553,6 +1558,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           if (currentChatId === chatId) {
             if (isDeclined) {
               declinedSend = { title: "/compact wasn't sent", body: detail };
+            } else if (isModelServerUnreachable) {
+              declinedSend = { title: "Your model server didn't answer", body: detail };
             } else {
               actionFailureTitle = "Couldn't send your message";
               actionFailureDetail = detail;

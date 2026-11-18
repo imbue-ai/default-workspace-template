@@ -341,28 +341,37 @@ export async function submitEndpoint(endpoint: EndpointSubmission): Promise<void
   await advance({ endpoint });
 }
 
+/** Whether a look for the user's computer asks them to let the workspace reach it: unless this
+ *  page already has and they have yet to answer, whatever was asked before, or not at all. */
+export type StudioAccessAsk = "once" | "again" | "never";
+
+// Whether this page has asked the user to let the workspace reach their computer and not yet seen
+// them agree. Each ask is a new dialog in Imbue Studio, so reopening the form must not raise one.
+let isStudioAccessAsked = false;
+
 /**
  * The model servers a local-model sign-in can pick from: with no address, the ones on the user's
  * own computer; with one, that server alone (rejecting when it does not answer).
  *
  * A workspace that may not reach the user's computer yet asks them for it through Imbue Studio,
- * unless `isRequestingAccess` is false: a look that only checks whether they have said yes.
+ * as `access` says.
  */
-export function findLocalModelServers(
+export async function findLocalModelServers(
   baseUrl: string | null = null,
   apiKey = "",
-  isRequestingAccess = true,
+  access: StudioAccessAsk = "once",
 ): Promise<LocalModelServers> {
-  return m.request<LocalModelServers>({
+  const isAsking = access === "again" || (access === "once" && !isStudioAccessAsked);
+  const found = await m.request<LocalModelServers>({
     method: "POST",
     url: apiUrl("/api/local-model-servers"),
-    body:
-      baseUrl !== null
-        ? { base_url: baseUrl, api_key: apiKey }
-        : isRequestingAccess
-          ? {}
-          : { is_requesting_access: false },
+    body: baseUrl !== null ? { base_url: baseUrl, api_key: apiKey } : isAsking ? {} : { is_requesting_access: false },
   });
+  if (baseUrl === null) {
+    if (found.studio_link === "AWAITING_APPROVAL") isStudioAccessAsked = isStudioAccessAsked || isAsking;
+    else if (found.studio_link === "CONNECTED") isStudioAccessAsked = false;
+  }
+  return found;
 }
 
 async function advance(body: Record<string, unknown>): Promise<void> {

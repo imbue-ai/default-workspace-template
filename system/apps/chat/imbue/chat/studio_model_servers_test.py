@@ -54,25 +54,24 @@ def test_a_computer_running_no_model_server_is_connected_with_nothing_to_offer()
     assert (found.link, found.servers) == (StudioLink.CONNECTED, ())
 
 
-@pytest.mark.parametrize("filing_status", [201, 409])
-def test_a_workspace_without_the_permission_asks_for_it_under_one_id(filing_status: int) -> None:
-    """The id is the workspace's own, so asking again while the user has yet to answer files nothing new (409)."""
+def test_a_workspace_without_the_permission_asks_for_it() -> None:
+    """The request names no id of its own: a workspace's gateway assigns one, and refuses a body that carries one."""
     filed: list[dict[str, object]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/permission-requests":
             filed.append(json.loads(request.content))
-            return httpx.Response(filing_status, json={})
+            return httpx.Response(201, json={})
         return httpx.Response(403, json={"error": "not permitted"})
 
     found = find_studio_model_servers(_client(handler), _GATEWAY, _AGENT_ID, True)
 
     assert (found.link, found.servers) == (StudioLink.AWAITING_APPROVAL, ())
     (request,) = filed
+    assert set(request) == {"agent_id", "type", "payload", "rationale"}
     assert request["agent_id"] == _AGENT_ID
     assert request["type"] == "local-model"
     assert request["payload"] == {}
-    assert request["request_id"] == f"local-model-{_AGENT_ID}"
     assert request["rationale"]
 
 

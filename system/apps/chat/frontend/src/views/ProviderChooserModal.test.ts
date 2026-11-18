@@ -837,7 +837,7 @@ describe("a local model", () => {
 
       // The checks that follow do not ask the user again.
       await vi.advanceTimersByTimeAsync(2000);
-      expect(findLocalModelServers).toHaveBeenLastCalledWith(null, "", false);
+      expect(findLocalModelServers).toHaveBeenLastCalledWith(null, "", "never");
       await vi.advanceTimersByTimeAsync(2000);
       draw();
 
@@ -869,7 +869,7 @@ describe("a local model", () => {
     await settled();
 
     expect(findLocalModelServers).toHaveBeenCalledTimes(2);
-    expect(findLocalModelServers).toHaveBeenLastCalledWith(null, "");
+    expect(findLocalModelServers).toHaveBeenLastCalledWith(null, "", "again");
     // Closing the form stops it checking.
     m.render(root, null);
   });

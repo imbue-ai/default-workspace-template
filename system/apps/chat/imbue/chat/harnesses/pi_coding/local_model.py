@@ -54,6 +54,15 @@ _SERVER_NAME_BY_PORT: Final = dict(_KNOWN_SERVERS)
 _OLLAMA_REASONING_OFF_EFFORT: Final = "none"
 
 _PROBE_TIMEOUT_SECONDS: Final = 2.0
+# How long a chat's send waits to hear that its model server is there at all. A server on the
+# user's computer answers through a tunnel, so this allows for a round trip to their home.
+_REACHABILITY_TIMEOUT_SECONDS: Final = 5.0
+
+UNREACHABLE_MESSAGE: Final = (
+    "The model server on your computer did not answer. Check that the computer is awake, that "
+    "Imbue Studio is open on it, and that the model server (for example Ollama) is running. "
+    "Then send your message again."
+)
 # A model that is not loaded yet is read off disk before it answers.
 _TOOL_CALL_TIMEOUT_SECONDS: Final = 180.0
 
@@ -293,6 +302,34 @@ def verify_model(
         is_reasoning=is_reasoning,
         reasoning_off_effort=_OLLAMA_REASONING_OFF_EFFORT if is_reasoning else None,
     )
+
+
+def read_server_base_url(account_dir: Path) -> str | None:
+    """The address of the model server a local-model account runs on; None for any other account."""
+    try:
+        config = json.loads((account_dir / MODELS_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    providers = config.get("providers") if isinstance(config, dict) else None
+    provider = providers.get(LOCAL_MODEL_PROVIDER_ID) if isinstance(providers, dict) else None
+    base_url = provider.get("baseUrl") if isinstance(provider, dict) else None
+    return base_url if isinstance(base_url, str) and base_url else None
+
+
+def is_server_answering(client: httpx.Client, base_url: str) -> bool:
+    """Whether anything answers HTTP at ``base_url`` right now.
+
+    Any answer counts, a refusal for want of a key included: the question is whether a request
+    would reach a server, not whether the server would take it. A server on the user's computer
+    is reached through a tunnel that can outlive the computer's attention (it is asleep, or the
+    model server was stopped), and a request sent into that waits out the harness's own timeout.
+    """
+    try:
+        client.get(f"{base_url}/models", timeout=_REACHABILITY_TIMEOUT_SECONDS)
+    except httpx.HTTPError as e:
+        logger.debug("The model server at {} did not answer: {}", base_url, e)
+        return False
+    return True
 
 
 def verify_local_model(base_url: str, api_key: str, model_id: str, context_window: int) -> LocalModelProfile:

@@ -8,8 +8,9 @@ as this workspace's own agent; the model traffic itself goes through the tunnel,
 
 Reaching the computer is a permission the user grants once per workspace. A workspace without it
 is refused (403), and :func:`find_studio_model_servers` then files the ``local-model`` permission
-request, which the app shows the user as its approval dialog. The request carries an id of this
-workspace's choosing, so filing it again while it is still waiting changes nothing.
+request, which the app shows the user as its approval dialog. Nothing here can tell whether a
+request filed earlier is still waiting on the user (a workspace's gateway gives each request an
+id of its own and does not list them back), so the caller decides when to ask again.
 """
 
 from enum import auto
@@ -91,7 +92,6 @@ def _request_access(client: httpx.Client, gateway: GatewayAccess, agent_id: str)
                 "type": _PERMISSION_REQUEST_TYPE,
                 "payload": {},
                 "rationale": _PERMISSION_RATIONALE,
-                "request_id": f"{_PERMISSION_REQUEST_TYPE}-{agent_id}",
             },
             headers=gateway.headers(),
             timeout=_SERVERS_TIMEOUT_SECONDS,
@@ -99,8 +99,7 @@ def _request_access(client: httpx.Client, gateway: GatewayAccess, agent_id: str)
     except httpx.HTTPError as e:
         logger.debug("Could not ask Imbue Studio for the model server permission: {}", e)
         return StudioLink.UNREACHABLE
-    # 409: the request filed earlier is still waiting on the user.
-    if response.is_success or response.status_code == 409:
+    if response.is_success:
         return StudioLink.AWAITING_APPROVAL
     logger.debug(
         "The gateway answered {} to the model server permission request: {}", response.status_code, response.text[:200]

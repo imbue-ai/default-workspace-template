@@ -70,6 +70,7 @@ from imbue.chat import mentions_endpoints
 from imbue.chat import secret_requests_endpoints
 from imbue.chat.account_labels import account_id_of
 from imbue.chat.accounts import AccountError
+from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import account_exists
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
@@ -142,6 +143,9 @@ from imbue.chat.harnesses.model import InvalidModelPickError
 from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import validate_model_pick
+from imbue.chat.harnesses.pi_coding.local_model import UNREACHABLE_MESSAGE
+from imbue.chat.harnesses.pi_coding.local_model import is_server_answering
+from imbue.chat.harnesses.pi_coding.local_model import read_server_base_url
 from imbue.chat.harnesses.registry import ComposerCompactHandling
 from imbue.chat.harnesses.registry import HARNESS_SPECS
 from imbue.chat.harnesses.registry import build_resolver
@@ -867,6 +871,10 @@ def _consider_naming_chat(state: ChatAppState, chat_id: ChatId, message: str) ->
 # list has not caught up with the sign-out sends and meets this.
 ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND: Final[str] = "account_signed_out"
 
+# The send-failure kind of a chat on a local model whose server does not answer: the send would
+# only wait on it, so it is turned away with what to check.
+MODEL_SERVER_UNREACHABLE_SEND_FAILURE_KIND: Final[str] = "model_server_unreachable"
+
 # The kind of a create refused because nothing is signed in: the caller opens the chat awaiting its first send, whose
 # page asks for a provider, rather than showing the refusal. A create naming a signed-out account answers
 # ``ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND``, like a send to a chat on one.
@@ -887,6 +895,17 @@ def _is_account_signed_out(agent_info: AgentInfo) -> bool:
     except AccountError as e:
         logger.warning("Could not check whether account {} is still signed in: {}", account_id, e)
         return False
+
+
+def _is_local_model_server_unreachable(state: ChatAppState, agent_info: AgentInfo) -> bool:
+    """Whether the agent runs on a local model whose server does not answer right now."""
+    if agent_info.harness is not HarnessType.PI_CODING:
+        return False
+    account_id = account_id_of(agent_info.harness, agent_info.labels)
+    if account_id is None:
+        return False
+    base_url = read_server_base_url(account_dir(account_id))
+    return base_url is not None and not is_server_answering(state.http_client, base_url)
 
 
 def _send_to_chat(
@@ -921,6 +940,13 @@ def _send_to_chat(
             detail = "You signed out of the account this chat runs on. Choose a provider to continue it on."
             return _SendRefused(
                 answer=SendFailureResponse(detail=detail, kind=ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND), status=409
+            )
+        if _is_local_model_server_unreachable(state, agent_info):
+            return _SendRefused(
+                answer=SendFailureResponse(
+                    detail=UNREACHABLE_MESSAGE, kind=MODEL_SERVER_UNREACHABLE_SEND_FAILURE_KIND
+                ),
+                status=409,
             )
         try:
             # A seeded chat whose agent was launched as the user signed in has its conversation to deliver

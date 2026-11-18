@@ -19,9 +19,11 @@ from imbue.chat.harnesses.pi_coding.local_model import MIN_CONTEXT_WINDOW
 from imbue.chat.harnesses.pi_coding.local_model import check_tool_call
 from imbue.chat.harnesses.pi_coding.local_model import describe_server
 from imbue.chat.harnesses.pi_coding.local_model import discover_servers
+from imbue.chat.harnesses.pi_coding.local_model import is_server_answering
 from imbue.chat.harnesses.pi_coding.local_model import list_models
 from imbue.chat.harnesses.pi_coding.local_model import normalize_base_url
 from imbue.chat.harnesses.pi_coding.local_model import read_loaded_context_window
+from imbue.chat.harnesses.pi_coding.local_model import read_server_base_url
 from imbue.chat.harnesses.pi_coding.local_model import verify_model
 from imbue.chat.harnesses.pi_coding.local_model import write_models_file
 
@@ -336,3 +338,54 @@ def test_a_reasoning_model_with_no_known_off_switch_names_none(tmp_path: Path) -
     assert model["reasoning"] is True
     assert model["compat"] == {"supportsDeveloperRole": False}
     assert "thinkingLevelMap" not in model
+
+
+def test_a_local_model_accounts_server_address_is_read_back_from_its_models_file(tmp_path: Path) -> None:
+    write_models_file(
+        tmp_path, "http://127.0.0.1:11435/v1", "qwen3:8b", LocalModelProfile(context_window=65_536, is_reasoning=False)
+    )
+
+    assert read_server_base_url(tmp_path) == "http://127.0.0.1:11435/v1"
+
+
+def test_an_account_that_is_not_a_local_model_names_no_server(tmp_path: Path) -> None:
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "models.json").write_text(json.dumps({"providers": {"elsewhere": {"baseUrl": "http://x/v1"}}}))
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    (broken / "models.json").write_text("{not json")
+
+    assert read_server_base_url(empty) is None
+    assert read_server_base_url(other) is None
+    assert read_server_base_url(broken) is None
+
+
+@pytest.mark.parametrize("status", [200, 401, 500])
+def test_a_server_that_answers_anything_is_answering(status: int) -> None:
+    """A refusal for want of a key is still a server a request would reach."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(status, json={})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    assert is_server_answering(client, "http://127.0.0.1:11435/v1") is True
+    assert seen == ["http://127.0.0.1:11435/v1/models"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [httpx.ConnectError("refused"), httpx.ReadTimeout("timed out"), httpx.RemoteProtocolError("dropped")],
+)
+def test_a_server_that_refuses_hangs_or_drops_the_connection_is_not_answering(error: httpx.HTTPError) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise error
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    assert is_server_answering(client, "http://127.0.0.1:11435/v1") is False

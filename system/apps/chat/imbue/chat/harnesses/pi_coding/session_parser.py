@@ -35,6 +35,7 @@ from imbue.chat.harnesses.error_patterns import is_provider_fault
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import stamp_user_message_display
 from imbue.chat.harnesses.pi_coding.local_model import LOCAL_MODEL_PROVIDER_ID
+from imbue.chat.harnesses.pi_coding.local_model import UNREACHABLE_MESSAGE
 from imbue.chat.harnesses.pi_coding.tool_labels import shell_command
 from imbue.chat.harnesses.pi_coding.tool_labels import tool_labels
 from imbue.chat.harnesses.tool_output import classify_tool_call_display
@@ -55,11 +56,6 @@ _UNKNOWN_MODEL = "unknown"
 # What pi records, after its own retries, when a request never reached the model server or got
 # no answer from it. Measured against a refused port and against one that hangs up.
 _UNREACHABLE_ERRORS = frozenset({"Connection error.", "Request timed out."})
-_LOCAL_MODEL_UNREACHABLE = (
-    "The model server on your computer did not answer. Check that the computer is awake, that "
-    "Imbue Studio is open on it, and that the model server (for example Ollama) is running. "
-    "Then send your message again."
-)
 
 
 def _text_from_content(content: Any) -> str:
@@ -162,7 +158,7 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
         message.get("provider") == LOCAL_MODEL_PROVIDER_ID and error_text.strip() in _UNREACHABLE_ERRORS
     )
     text = _text_from_content(message.get("content")) or (
-        _LOCAL_MODEL_UNREACHABLE if is_local_model_unreachable else error_text
+        UNREACHABLE_MESSAGE if is_local_model_unreachable else error_text
     )
     api_error_kind = classify_api_error(error_text)
     event: dict[str, Any] = {

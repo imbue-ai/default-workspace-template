@@ -210,8 +210,13 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
    *
    * While the user has yet to let the workspace reach their computer, the look repeats quietly
    * (`isApprovalCheck`): it changes nothing on screen until they have, and does not ask them again.
+   * `isAskingAgain` raises the request for that once more, for a user who dismissed the first.
    */
-  async function lookForServers(address: string | null, isApprovalCheck = false): Promise<void> {
+  async function lookForServers(
+    address: string | null,
+    isApprovalCheck = false,
+    isAskingAgain = false,
+  ): Promise<void> {
     stopApprovalCheck();
     // The form was left for another way in while this check was due.
     if (isApprovalCheck && mode !== "endpoint") return;
@@ -224,8 +229,10 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     }
     try {
       const found = isApprovalCheck
-        ? await findLocalModelServers(null, "", false)
-        : await findLocalModelServers(address, serverKey.trim());
+        ? await findLocalModelServers(null, "", "never")
+        : isAskingAgain
+          ? await findLocalModelServers(null, "", "again")
+          : await findLocalModelServers(address, serverKey.trim());
       if (look !== serverLook) return;
       studioLink = found.studio_link;
       minContextWindow = found.min_context_window;
@@ -947,7 +954,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                     type: "button",
                     class: css.HINT_ACTION,
                     "data-e2e": "local-model-ask-again",
-                    onclick: () => void lookForServers(null),
+                    onclick: () => void lookForServers(null, false, true),
                   },
                   "Ask again",
                 ),
