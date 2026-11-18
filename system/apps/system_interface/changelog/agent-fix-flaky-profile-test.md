@@ -1,0 +1,1 @@
+The profile test for stale entries after sharing stops no longer fails at random: it holds the background refresh until its assertions are done, so the refresh's wall-clock timestamp cannot make the entry fresh under them.
