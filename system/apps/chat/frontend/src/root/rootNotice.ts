@@ -1,7 +1,8 @@
 /**
  * The chat root's notice: a failure of something done from the chat list, told in a dialog over the list rather
  * than a browser alert. A fixed line saying what did not happen, the chat app's reason under it, and a button to
- * try again where trying again can help. Notices raised while one is up wait their turn behind it.
+ * try again where trying again can help. Notices raised while one is up wait their turn behind it, and none shows
+ * while held.
  */
 
 import m from "mithril";
@@ -26,6 +27,7 @@ interface QueuedNotice {
 
 let queue: readonly QueuedNotice[] = [];
 let nextId = 1;
+let isHeld = false;
 
 export function raiseRootNotice(notice: RootNotice): void {
   queue = [...queue, { id: nextId, notice }];
@@ -33,9 +35,14 @@ export function raiseRootNotice(notice: RootNotice): void {
   m.redraw();
 }
 
+/** Keep notices off screen while ``held``; they show, in order, once released. */
+export function holdRootNotices(held: boolean): void {
+  isHeld = held;
+}
+
 /** Whether a notice is up, so what lies under it leaves Escape to it. */
 export function isRootNoticeUp(): boolean {
-  return queue.length > 0;
+  return !isHeld && queue.length > 0;
 }
 
 function closeRootNotice(): void {
@@ -57,7 +64,7 @@ export function RootNoticeView(): m.Component {
   return {
     view() {
       const queued = queue[0];
-      if (queued === undefined) return null;
+      if (isHeld || queued === undefined) return null;
       const { notice } = queued;
       const retry = notice.retry;
       // In a keyed list, so the next notice in the queue mounts afresh and takes the focus.

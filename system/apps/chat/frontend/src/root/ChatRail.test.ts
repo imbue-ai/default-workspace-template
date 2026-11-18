@@ -387,6 +387,58 @@ describe("ChatRail refused rename", () => {
     expect(noticeText()).toContain("the chat is moving to another agent");
   });
 
+  it("holds a refused delete's notice while a chat's name is being typed, so the half-typed name is not saved", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    mount([first, second]);
+    verbs.renameChat.mockClear();
+    verbs.destroyChat.mockRejectedValueOnce(new HttpError(500, "mngr failed"));
+
+    const field = renameInPlace(second.chatId, "Half typ", null);
+    const deleteRow = rowMenuRows(chatRailAttrsFixture({ rows: [first, second] }), first).find(
+      (menuRow) => menuRow.kind === "action" && menuRow.key === "delete",
+    );
+    if (deleteRow?.kind !== "action") throw new Error("no Delete chat row");
+    deleteRow.onSelect();
+    await vi.waitFor(() => expect(withoutPendingDeletes([first, second])).toEqual([first, second]));
+    m.redraw.sync();
+
+    expect(isRootNoticeUp()).toBe(false);
+    expect(root!.querySelector(".chat-rail-rename-input")).toBe(field);
+    expect(verbs.renameChat).not.toHaveBeenCalled();
+
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    m.redraw.sync();
+    expect(noticeText()).toContain(`"${first.title}" was not deleted.`);
+  });
+
+  it("keeps the next notice back while Rename again's field is open", async () => {
+    mount([first, second]);
+    const refusals: ((error: unknown) => void)[] = [];
+    const heldRename = (): Promise<undefined> =>
+      new Promise<undefined>((_resolve, reject) => {
+        refusals.push(reject);
+      });
+    verbs.renameChat.mockReturnValueOnce(heldRename()).mockReturnValueOnce(heldRename());
+
+    renameInPlace(first.chatId, "Taken");
+    renameInPlace(second.chatId, "Also taken");
+    refusals.forEach((refuse) => refuse(new HttpError(409, "the name is taken")));
+    await vi.waitFor(() => expect(noticeText()).not.toBeNull());
+    m.redraw.sync();
+    verbs.renameChat.mockClear();
+
+    noticeButton("Rename again").click();
+    m.redraw.sync();
+    const field = root!.querySelector<HTMLInputElement>(`[data-chat-id="${first.chatId}"] .chat-rail-rename-input`);
+    expect(field?.value).toBe("Taken");
+    expect(isRootNoticeUp()).toBe(false);
+    expect(verbs.renameChat).not.toHaveBeenCalled();
+
+    field!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    m.redraw.sync();
+    expect(noticeText()).toContain(`"${second.title}" was not renamed to "Also taken".`);
+  });
+
   it("says it is not known whether the chat was renamed when nothing answered", async () => {
     mount([first, second]);
     verbs.renameChat.mockRejectedValueOnce(new TypeError("Failed to fetch"));

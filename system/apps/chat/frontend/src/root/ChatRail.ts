@@ -31,7 +31,7 @@ import { kebabGlyph, peopleGlyph, plusGlyph } from "../glyphs";
 import { isUnread } from "./chatUnread";
 import { dropPendingDelete, showPendingDelete } from "./pendingDeletes";
 import { acceptPendingRename, dropPendingRename, showPendingRename } from "./pendingRenames";
-import { failureBody, raiseRootNotice, type RootNotice } from "./rootNotice";
+import { failureBody, holdRootNotices, raiseRootNotice } from "./rootNotice";
 import { destroyChat, makeMainChat, renameChat, startChat, stopChat } from "./verbs";
 import { foldOwnerKey, getParticipant, participantName } from "../models/Participants";
 import { participantPicture } from "../views/participant-picture";
@@ -91,9 +91,6 @@ interface RenameState {
 }
 
 let rename: RenameState | null = null;
-// Rename refusals that came while a field was open. A notice would take the focus from the field, and its blur
-// would save whatever is half typed there, so they wait until the field closes.
-let heldRenameRefusals: RootNotice[] = [];
 // The root's state as the list or header last drew it, for a delete tried again from a notice: by then the chat on
 // screen may be another than the one shown when the delete was chosen.
 let latestMenuContext: RowMenuContext | null = null;
@@ -122,15 +119,16 @@ const railMenu = createMenu({
   },
 });
 
+// Notices wait while a name field is open: a notice would take the focus from the field, and its blur would save
+// whatever is half typed there.
 function beginRename(row: ChatRow, draft: string = row.title): void {
   rename = { chatId: row.chatId, draft };
+  holdRootNotices(true);
 }
 
 function endRename(): void {
   rename = null;
-  const held = heldRenameRefusals;
-  heldRenameRefusals = [];
-  held.forEach(raiseRootNotice);
+  holdRootNotices(false);
 }
 
 /** Whether ``chatId`` is being renamed. */
@@ -155,20 +153,14 @@ function commitRename(row: ChatRow): void {
 
 function refuseRename(row: ChatRow, title: string, error: unknown): void {
   dropPendingRename(row.chatId, title);
-  const notice: RootNotice = {
+  raiseRootNotice({
     title: "Couldn't rename the chat",
     body: failureBody(error, {
       refused: `"${row.title}" was not renamed to "${title}".`,
       unanswered: `The workspace didn't answer, so it isn't known whether "${row.title}" was renamed to "${title}".`,
     }),
     retry: { label: "Rename again", run: () => beginRename(row, title) },
-  };
-  if (rename === null) {
-    raiseRootNotice(notice);
-  } else {
-    heldRenameRefusals.push(notice);
-  }
-  m.redraw();
+  });
 }
 
 function setRunningFromMenu(row: ChatRow, isRunning: boolean): void {

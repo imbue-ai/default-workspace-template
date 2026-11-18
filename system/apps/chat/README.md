@@ -640,9 +640,9 @@ name shown meanwhile does not replace it, and a refusal brings the old name back
 A refused rename or delete from the list says why in the chat root's notice
 (`root/rootNotice.ts`, a dialog over the list): a fixed line saying what did not
 happen with the chat app's reason under it, or that whether it happened is not
-known when nothing answered, plus Rename again or Try again. A rename refusal
-that comes while another chat's name is being typed waits until that field
-closes, since the dialog would take its focus and save the half-typed name.
+known when nothing answered, plus Rename again or Try again. A notice that comes
+while a chat's name is being typed waits until that field closes, since the
+dialog would take its focus and save the half-typed name.
 
 ## Compaction
 
