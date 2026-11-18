@@ -8451,13 +8451,13 @@ def test_an_apply_stops_the_runs_worker_before_it_merges_or_boots_anything(
     assert spawner.spawns, "the backend change should have been pre-flighted"
 
 
-@pytest.mark.parametrize("is_worker_recorded", [False, True])
+@pytest.mark.parametrize("has_run_record", [False, True])
 def test_an_apply_with_no_worker_on_record_stops_nothing(
-    apply_repo: Path, monkeypatch, is_worker_recorded: bool
+    apply_repo: Path, monkeypatch, has_run_record: bool
 ) -> None:
     # Without a run record (an apply run by hand) or with a run that never delegated, or whose
     # verdict already cleared the worker, there is nobody to stop.
-    if is_worker_recorded:
+    if has_run_record:
         monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
         root = ["--repo-root", str(apply_repo)]
         assert update_self.main(["run-status", "start", *root]) == 0
