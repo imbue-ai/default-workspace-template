@@ -90,6 +90,7 @@ from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.api_models import HarnessCatalogEntry
 from imbue.chat.api_models import HarnessCatalogsResponse
 from imbue.chat.attachments import delete_upload
+from imbue.chat.attachments import get_chat_uploads_directory
 from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
 from imbue.chat.attachments import store_uploaded_file
@@ -104,6 +105,7 @@ from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_handoffs import is_genuine_user_turn
 from imbue.chat.chat_intakes import APP_CHAT_LABEL
+from imbue.chat.chat_intakes import app_ask_message
 from imbue.chat.chat_intakes import app_chat_hint
 from imbue.chat.chat_intakes import app_chat_prefill
 from imbue.chat.chat_intakes import app_chat_title
@@ -300,6 +302,17 @@ def _converging_response(handoff: HandoffState) -> Response:
     return model_response(ConvergingResponse(detail=detail, phase=handoff.phase), 409)
 
 
+def _wait_for_landed_switch(chat_id: str) -> None:
+    """Hold a request to a chat whose handoff has landed until the deliveries to its successor are done.
+
+    The successor is already the chat's agent then, so the page offers it the ordinary verbs; the wait keeps
+    one of them (an interrupt restarts the agent) from racing a delivery the switch still owes it.
+    """
+    parsed = parse_chat_ref(chat_id)
+    if parsed is not None:
+        get_state().agent_manager.wait_for_landed_switch(parsed, LANDED_SWITCH_WAIT_TIMEOUT_SECONDS)
+
+
 def _refuse_while_converging(chat_id: str) -> Response | None:
     """The 409 every verb but destroy and message answers while the chat converges (spec 4.4), or None."""
     parsed = parse_chat_ref(chat_id)
@@ -310,6 +323,10 @@ def _refuse_while_converging(chat_id: str) -> Response | None:
         return None
     return _converging_response(handoff)
 
+
+# How long a request to a chat whose handoff has landed waits for the deliveries to its successor. Each delivery
+# is a send the successor confirms within seconds; past this the request is refused as converging.
+LANDED_SWITCH_WAIT_TIMEOUT_SECONDS: Final[float] = 60.0
 
 # Default number of events for tail-first loading
 _DEFAULT_TAIL_COUNT = 50
@@ -1516,26 +1533,12 @@ def _upload_attachment() -> Response:
     sends to the agent. Returns the stored path and size so the composer can show
     a preview and reference the file.
     """
-    file_storage = request.files.get("file")
-    if file_storage is None or not file_storage.filename:
-        return error_response("No file provided in the 'file' field", 400)
-
-    uploads_directory = get_uploads_directory()
-    try:
-        stored_path = store_uploaded_file(uploads_directory, file_storage.filename, file_storage)
-    except AttachmentError as e:
-        return error_response(str(e), 500)
-
-    size_bytes = stored_path.stat().st_size
-    return model_response(AttachmentUploadResponse(path=str(stored_path), size=size_bytes), 201)
+    return _store_upload(get_uploads_directory())
 
 
 def _serve_attachment(relative_path: str) -> Response:
     """Serve a stored attachment for inline preview, confined to data/uploads/."""
-    resolved_path = resolve_upload_path(get_uploads_directory(), relative_path)
-    if resolved_path is None:
-        return error_response(f"Attachment '{relative_path}' not found", 404)
-    return send_file(resolved_path)
+    return _serve_upload(get_uploads_directory(), relative_path)
 
 
 def _delete_attachment(relative_path: str) -> Response:
@@ -1546,6 +1549,55 @@ def _delete_attachment(relative_path: str) -> Response:
     """
     delete_upload(get_uploads_directory(), relative_path)
     return model_response(OkResponse())
+
+
+def _chat_uploads_directory(chat_id: str) -> Path:
+    return get_chat_uploads_directory(get_state().agent_manager.chat_files_root, ChatId(chat_id)).absolute()
+
+
+def _upload_chat_attachment(chat_id: str) -> Response:
+    """Store a file that belongs to one chat (a long paste) in the chat's own folder, which its destroy removes.
+
+    Accepted for any well-formed chat id, a chat awaiting its first send included, as the
+    presence route is: the composer stages a paste before that chat's agent exists.
+    """
+    if not AGENT_ID_PATTERN.fullmatch(chat_id):
+        return _chat_not_found_response(chat_id)
+    return _store_upload(_chat_uploads_directory(chat_id))
+
+
+def _serve_chat_attachment(chat_id: str, relative_path: str) -> Response:
+    """Serve one of a chat's own uploads, confined to its folder's uploads directory."""
+    if not AGENT_ID_PATTERN.fullmatch(chat_id):
+        return _chat_not_found_response(chat_id)
+    return _serve_upload(_chat_uploads_directory(chat_id), relative_path)
+
+
+def _delete_chat_attachment(chat_id: str, relative_path: str) -> Response:
+    """Delete one of a chat's own uploads when the user removes it before sending; idempotent like the plain delete."""
+    if not AGENT_ID_PATTERN.fullmatch(chat_id):
+        return _chat_not_found_response(chat_id)
+    delete_upload(_chat_uploads_directory(chat_id), relative_path)
+    return model_response(OkResponse())
+
+
+def _store_upload(uploads_directory: Path) -> Response:
+    file_storage = request.files.get("file")
+    if file_storage is None or not file_storage.filename:
+        return error_response("No file provided in the 'file' field", 400)
+    try:
+        stored_path = store_uploaded_file(uploads_directory, file_storage.filename, file_storage)
+    except AttachmentError as e:
+        return error_response(str(e), 500)
+    size_bytes = stored_path.stat().st_size
+    return model_response(AttachmentUploadResponse(path=str(stored_path), size=size_bytes), 201)
+
+
+def _serve_upload(uploads_directory: Path, relative_path: str) -> Response:
+    resolved_path = resolve_upload_path(uploads_directory, relative_path)
+    if resolved_path is None:
+        return error_response(f"Attachment '{relative_path}' not found", 404)
+    return send_file(resolved_path)
 
 
 def _interrupt_agent_endpoint(chat_id: str) -> Response:
@@ -1572,6 +1624,7 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
         return _chat_not_found_response(chat_id)
+    _wait_for_landed_switch(chat_id)
     converging = _refuse_while_converging(chat_id)
     if converging is not None:
         return converging
@@ -2392,6 +2445,17 @@ def _app_ask_chat_or_refusal(state: ChatAppState, intake: IntakeRequest) -> _Res
     return _ResolvedIntakeChat(chat_id=created.chat_id, is_sent_with_create=True)
 
 
+def _intake_naming_its_app(intake: IntakeRequest) -> IntakeRequest:
+    """An ``app_ask`` with its text led by the sentence that names the app (``app_ask_message``): the page's text does
+    not say which app it is about, and the chat that takes it may be the main chat, where nothing else does. An ask
+    with no text stays one, there being nothing to send, and every other intake is as it arrived."""
+    if intake.target is not IntakeTarget.APP_ASK or not intake.message:
+        return intake
+    return intake.model_copy_update(
+        to_update(intake.field_ref().message, app_ask_message(intake.app_display_name, intake.message))
+    )
+
+
 def _resolve_intake_chat(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
     """The chat an intake's target names (spec 3.5), or the 404 for an explicit chat the app does not list.
 
@@ -2517,7 +2581,8 @@ def _intake_chat() -> Response:
     agent_manager = state.agent_manager
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
-    intake = parse_request_body(IntakeRequest)
+    # Named before the chat is resolved: resolving an ask may create its chat with the text as the first message.
+    intake = _intake_naming_its_app(parse_request_body(IntakeRequest))
     resolved = _resolve_intake_chat(state, intake)
     if isinstance(resolved, Response):
         return resolved
@@ -3210,6 +3275,11 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("POST", "/api/uploads"): RouteModels(response_model=AttachmentUploadResponse, success_status=201),
     ("GET", "/api/uploads/{relative_path}"): SchemalessRoute(reason="The stored attachment itself"),
     ("DELETE", "/api/uploads/{relative_path}"): RouteModels(response_model=OkResponse),
+    ("POST", "/api/chats/{chat_id}/uploads"): RouteModels(
+        response_model=AttachmentUploadResponse, success_status=201
+    ),
+    ("GET", "/api/chats/{chat_id}/uploads/{relative_path}"): SchemalessRoute(reason="The stored attachment itself"),
+    ("DELETE", "/api/chats/{chat_id}/uploads/{relative_path}"): RouteModels(response_model=OkResponse),
     ("GET", "/api/settings"): RouteModels(response_model=ChatSettingsResponse),
     ("PUT", "/api/settings"): RouteModels(request_model=ChatSettings, response_model=ChatSettingsResponse),
     ("POST", "/api/chats/{chat_id}/destroy"): RouteModels(response_model=DestroyAgentResponse),
@@ -3412,6 +3482,16 @@ def create_application(state: ChatAppState) -> Flask:
         view_func=_delete_attachment,
         methods=["DELETE"],
         endpoint="_delete_attachment",
+    )
+    application.add_url_rule("/api/chats/<chat_id>/uploads", view_func=_upload_chat_attachment, methods=["POST"])
+    application.add_url_rule(
+        "/api/chats/<chat_id>/uploads/<path:relative_path>", view_func=_serve_chat_attachment, methods=["GET"]
+    )
+    application.add_url_rule(
+        "/api/chats/<chat_id>/uploads/<path:relative_path>",
+        view_func=_delete_chat_attachment,
+        methods=["DELETE"],
+        endpoint="_delete_chat_attachment",
     )
     for suffix, view_func, methods in _PER_CHAT_ROUTES:
         _add_chat_route(application, suffix, view_func, methods)

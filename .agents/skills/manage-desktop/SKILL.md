@@ -35,7 +35,7 @@ files.
 | **client** | One browser (its windows share it). Each client has one active desktop and its own placements of every desktop. |
 | **launch path** | A way an app declares for opening a new page of itself, with optional parameters. A GET launch path is the page itself with the parameters as its query (`files` declares `new` at `/home/user/workspace/` with a `path` parameter); a POST launch path is posted the parameters by the shell and answers the page to open (`terminal` declares `new` at `/new`; `screen` declares `browser` at `/launch/browser`; `chat` declares `new`, `send`, and `draft` at `/api/chats/intake`). An app that declares none offers `open` at `/`. |
 | **shortcut** | An icon on a desktop's backdrop that runs one app's launch path, in `focus` mode (raise the app's most recent window, opening one only when it has none) or `new` mode (always open one). |
-| **popped-out window** | A window the user dragged out of the desktop into its own Imbue Studio window (or opened there from the window menu). The desktop keeps a dashed placeholder, its *ghost*, where the window was; the user can hide the ghost. Per client, like a placement. |
+| **popped-out window** | A window the user dragged out of the desktop into its own Imbue Studio window (or opened there from the window menu). The desktop draws nothing where the window was; its taskbar entry stays, marked as popped out. Per client, like a placement. |
 
 **Shared vs per client.** Desktops, their windows, their shortcuts, and their
 wallpaper are shared: an `open` or a `close` is seen by everyone. Placements
@@ -86,7 +86,7 @@ desktop do not do it quietly.
 
 **Spotting one.** `desktops` and `list` give every client a `popped_out` list:
 each entry is `{window_id, desktop_id, is_ghost_hidden}` (`is_ghost_hidden`:
-the user hid the placeholder the desktop keeps for it). It is judged per
+the placement is also minimized, which changes nothing on screen). It is judged per
 client: another client may have the same window on its desktop.
 
 **What each op does with one** (for the target client, while it is connected;
@@ -96,7 +96,7 @@ op applies to it as usual):
 | Op | On a popped-out window |
 |---|---|
 | `minimize`, `restore`, `maximize`, `place` | Refused, changing nothing (not even the `--desktop` switch), with exit code `4`. With `--force` the window comes back onto its own desktop (`minimize` puts it there minimized) and its own window closes; the client's desktop window stays on the desktop it shows. |
-| `focus`, and an `open` that finds the window at the path | Raise its own window; it stays popped out, a hidden placeholder stays hidden, and the client stays on its desktop. |
+| `focus`, and an `open` that finds the window at the path | Raise its own window; it stays popped out, and the client stays on its desktop. |
 | `open --beside <it>` (bare `--beside` too, when your chat is the one popped out) | The new window opens where a plain `open` puts it, not paired, and the summary says why. `--force` brings the partner back and pairs the two. |
 | `show` | Raises its own window (and may point it at the path), as it always has. |
 | `refresh`, `navigate`, `close`, `load`, shortcuts, the wallpaper | Never refused. `refresh` reloads its page; `navigate` moves its page; `close` closes the window for everyone, its own window included. |
@@ -109,9 +109,9 @@ window ...)`.
 **When an op is refused**: pass `--force` only when the user asked for exactly
 that change to that window ("put the terminal on the left half" while it is
 popped out). Otherwise leave it, and tell the user the window is in its own
-window and how to bring it back if they want to: drag it back over the Imbue
-Studio window, use the button in its bar, or choose "Bring back to desktop" on
-its placeholder or its taskbar entry.
+window and how to bring it back if they want to: close its own window (the
+close control in its bar), or choose "Bring back to desktop" on its taskbar
+entry.
 
 **A client with only pop-outs open.** When the user closed the main Imbue
 Studio window and kept a popped-out one, the client is still connected: ops
