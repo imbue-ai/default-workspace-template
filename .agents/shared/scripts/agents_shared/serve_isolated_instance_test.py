@@ -516,7 +516,9 @@ def test_up_preview_boots_wrapper_registers_both_and_reports_tab(
     wrapper_argv = spawner.detached_spawns[1]
     assert wrapper_argv[1] == str(Path(wrapper_mod.__file__).resolve())
     assert _wrapper_arg(wrapper_argv, "--inner-service") == "demo-app"
-    assert _wrapper_arg(wrapper_argv, "--apps-file") == str(forward_port.apps_file(tmp_path))
+    assert _wrapper_arg(wrapper_argv, "--apps-file") == str(
+        forward_port.apps_file(tmp_path)
+    )
     assert "my change" in wrapper_argv
     # Registered both the inner app and the user-facing wrapper.
     assert [entry.service_name for entry in registry.registered] == [
@@ -1346,7 +1348,9 @@ def test_wrapper_page_derives_the_inner_origin_from_location_host() -> None:
     # so the page must derive the inner iframe's origin from ``location.host``
     # in JavaScript rather than bake in any static URL. The old path-prefix
     # scheme (``/service/<name>/``) no longer exists.
-    html = wrapper_mod.build_wrapper_html(inner_label="demo-app-a1b2c3d4", title="my change")
+    html = wrapper_mod.build_wrapper_html(
+        inner_label="demo-app-a1b2c3d4", title="my change"
+    )
 
     assert '"demo-app-a1b2c3d4"' in html
     assert "location.host" in html
@@ -1367,7 +1371,9 @@ def test_wrapper_page_opens_the_inner_service_at_the_given_path() -> None:
 
 
 def test_wrapper_page_escapes_the_title() -> None:
-    html = wrapper_mod.build_wrapper_html(inner_label="svc-a1b2c3d4", title='<b>x</b> & "y"')
+    html = wrapper_mod.build_wrapper_html(
+        inner_label="svc-a1b2c3d4", title='<b>x</b> & "y"'
+    )
     assert "<b>x</b>" not in html
     assert "&lt;b&gt;x&lt;/b&gt;" in html
 
@@ -1375,7 +1381,10 @@ def test_wrapper_page_escapes_the_title() -> None:
 @contextlib.contextmanager
 def _running_wrapper(apps_file: Path, inner_service: str) -> Generator[str]:
     handler = wrapper_mod.make_handler(
-        apps_file=apps_file, inner_service=inner_service, title="Inbox", kind=FrameKind.MOCK
+        apps_file=apps_file,
+        inner_service=inner_service,
+        title="Inbox",
+        kind=FrameKind.MOCK,
     )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1410,13 +1419,17 @@ def test_wrapper_frames_the_inner_service_at_its_current_registered_label(
     # its bare name, so the frame must point at the label -- and at the one the
     # registry holds now: a service removed and registered again gets a new one.
     apps_file = tmp_path / "apps.toml"
-    forward_port.register(apps_file, "inbox", "http://localhost:8301", is_icon_declined=True)
+    forward_port.register(
+        apps_file, "inbox", "http://localhost:8301", is_icon_declined=True
+    )
     first_label = _registered_label(apps_file, "inbox")
 
     with _running_wrapper(apps_file, "inbox") as url:
         first_framed_label = _framed_label(url)
         forward_port.remove(apps_file, "inbox")
-        forward_port.register(apps_file, "inbox", "http://localhost:8301", is_icon_declined=True)
+        forward_port.register(
+            apps_file, "inbox", "http://localhost:8301", is_icon_declined=True
+        )
         second_label = _registered_label(apps_file, "inbox")
         second_framed_label = _framed_label(url)
 
@@ -1426,12 +1439,20 @@ def test_wrapper_frames_the_inner_service_at_its_current_registered_label(
     assert second_framed_label == second_label
 
 
-def test_wrapper_frames_a_service_whose_label_predates_the_hyphen_rule(tmp_path: Path) -> None:
+def test_wrapper_frames_a_service_whose_label_predates_the_hyphen_rule(
+    tmp_path: Path,
+) -> None:
     # A label is never re-minted, so one minted while names' underscores were kept still has its underscore.
     apps_file = tmp_path / "apps.toml"
     apps_file.write_text(
         forward_port.dump_registry(
-            [{"name": "my_inbox", "url": "http://localhost:8301", "label": "my_inbox-a1b2c3d4"}]
+            [
+                {
+                    "name": "my_inbox",
+                    "url": "http://localhost:8301",
+                    "label": "my_inbox-a1b2c3d4",
+                }
+            ]
         )
     )
 
@@ -1456,8 +1477,20 @@ _SCRIPT_BREAKING_LABEL = "</script><script>alert(1)</script>"
     "rows",
     [
         [{"name": "other", "url": "http://localhost:8301", "label": "other-a1b2c3d4"}],
-        [{"name": "inbox", "url": "http://localhost:8301", "label": _SCRIPT_BREAKING_LABEL}],
-        [{"name": "inbox", "url": "http://localhost:8301", "label": "inbox-a1b2c3d4\n"}],
+        [
+            {
+                "name": "inbox",
+                "url": "http://localhost:8301",
+                "label": _SCRIPT_BREAKING_LABEL,
+            }
+        ],
+        [
+            {
+                "name": "inbox",
+                "url": "http://localhost:8301",
+                "label": "inbox-a1b2c3d4\n",
+            }
+        ],
     ],
     ids=["unregistered", "label-not-a-hostname-label", "label-with-trailing-newline"],
 )
@@ -1624,7 +1657,9 @@ def test_frame_boots_only_a_mock_wrapper_and_registers_only_the_frame(
     [wrapper_argv] = spawner.detached_spawns
     assert wrapper_argv[1] == str(Path(wrapper_mod.__file__).resolve())
     assert _wrapper_arg(wrapper_argv, "--inner-service") == "inbox"
-    assert _wrapper_arg(wrapper_argv, "--apps-file") == str(forward_port.apps_file(tmp_path))
+    assert _wrapper_arg(wrapper_argv, "--apps-file") == str(
+        forward_port.apps_file(tmp_path)
+    )
     assert _wrapper_arg(wrapper_argv, "--kind") == "mock"
     assert (
         _wrapper_arg(wrapper_argv, "--note")
