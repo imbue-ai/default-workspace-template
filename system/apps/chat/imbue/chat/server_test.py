@@ -6889,6 +6889,58 @@ def test_a_secondary_chat_app_takes_a_notification_and_raises_no_bubble(tmp_path
     assert _fake_shell_of(app).bubbles == []
 
 
+def test_an_apps_note_is_kept_for_its_chat_and_goes_out_on_the_chats_stream(tmp_path: Path) -> None:
+    """Another app (AI Usage Limits) puts a one-line note into a chat: the chat's stream carries it at once as an
+    ``app_note`` frame, the chat's notes list reads it back, and it never becomes a message to the agent."""
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+    client = app.test_client()
+    state = state_of(app)
+    stream = state.event_queues.register(_MAIN_ID)
+    try:
+        posted = client.post(
+            f"/api/chats/{_MAIN_ID}/app-notes",
+            json={"source": "AI Usage Limits", "text": "Claude usage 2% (Current session)"},
+        )
+        frame = stream.get(timeout=5.0)
+    finally:
+        state.event_queues.unregister(_MAIN_ID, stream)
+
+    assert posted.status_code == 200
+    note = posted.get_json()
+    assert (note["source"], note["text"]) == ("AI Usage Limits", "Claude usage 2% (Current session)")
+    assert frame == {"type": "app_note", **note}
+    listed = client.get(f"/api/chats/{_MAIN_ID}/app-notes").get_json()["notes"]
+    assert listed == [note]
+    assert client.get(f"/api/chats/{_LOUNGE_ID}/app-notes").get_json() == {"notes": []}
+    assert messenger.sent == []
+
+
+def test_an_apps_note_is_taken_only_from_loopback_for_a_chat_there_is_with_something_to_say(tmp_path: Path) -> None:
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+    unknown_chat = "agent-00000000000000000000000000000099"
+    body = {"source": "AI Usage Limits", "text": "Claude usage 2%"}
+
+    remote = client.post(f"/api/chats/{_MAIN_ID}/app-notes", json=body, environ_base={"REMOTE_ADDR": "10.0.0.7"})
+    unknown = client.post(f"/api/chats/{unknown_chat}/app-notes", json=body)
+    not_an_id = client.post("/api/chats/not-an-agent/app-notes", json=body)
+    empty = client.post(f"/api/chats/{_MAIN_ID}/app-notes", json={"source": "AI Usage Limits", "text": ""})
+    too_long = client.post(f"/api/chats/{_MAIN_ID}/app-notes", json={"source": "AI Usage Limits", "text": "x" * 301})
+    no_source = client.post(f"/api/chats/{_MAIN_ID}/app-notes", json={"text": "Claude usage 2%"})
+
+    assert [response.status_code for response in (remote, unknown, not_an_id, empty, too_long, no_source)] == [
+        403,
+        404,
+        404,
+        400,
+        400,
+        400,
+    ]
+    assert client.get(f"/api/chats/{_MAIN_ID}/app-notes").get_json() == {"notes": []}
+    assert client.get("/api/chats/not-an-agent/app-notes").status_code == 404
+
+
 def test_every_chat_list_push_tells_the_shell_what_each_chat_is_doing(tmp_path: Path) -> None:
     app = _peopled_app(tmp_path, RecordingMngrMessenger())
     shell = _fake_shell_of(app)

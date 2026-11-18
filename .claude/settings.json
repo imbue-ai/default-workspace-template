@@ -79,6 +79,10 @@
           {
             "type": "command",
             "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_resource_notice.sh"
+          },
+          {
+            "type": "command",
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/apps/ai_usage/hooks/report_chat_activity.sh prompt"
           }
         ]
       }
@@ -97,6 +101,20 @@
           {
             "type": "command",
             "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_background_task_hooks.py stop || true"
+          },
+          {
+            "type": "command",
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/apps/ai_usage/hooks/report_chat_activity.sh stop"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/apps/ai_usage/hooks/report_chat_activity.sh tool"
           }
         ]
       }

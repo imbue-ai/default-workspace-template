@@ -19,6 +19,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import agent_tmux_session_name
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.app_notes import AppNoteStore
 from imbue.chat.authors import AUTHOR_FIELD
 from imbue.chat.authors import AUTHOR_NAME_FIELD
 from imbue.chat.authors import AuthorStore
@@ -111,6 +112,8 @@ class ChatAppState(MutableModel):
     # The workspace-wide chat settings the settings routes read and write; the manager reads
     # the same store at create. In memory unless the composition root points it at the file.
     chat_settings: ChatSettingsStore = Field(default_factory=lambda: ChatSettingsStore(path=None))
+    # The lines other apps put into chats (``app_notes.py``); in memory unless the composition root points it at disk.
+    app_notes: AppNoteStore = Field(default_factory=lambda: AppNoteStore(root=None))
     # The intakes held for the chat root to apply (``chat_intakes.py``): drafts, choices, and first messages
     # that need an account; in memory, so a restart drops them.
     pending_intakes: PendingIntakeStore = Field(default_factory=PendingIntakeStore)

@@ -1,0 +1,56 @@
+[project]
+name = "ai-usage"
+version = "0.1.0"
+description = "Shows how much of your AI tool usage limits (for each AI the chats here run on) you have used and when each limit resets."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "app-schema",
+    "flask>=3.0",
+    "flask-sock>=0.7",
+    "imbue-common",
+    "loguru>=0.7",
+    "pydantic>=2.0",
+    "werkzeug>=3.0",
+]
+
+[project.scripts]
+ai-usage = "ai_usage.runner:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_usage"]
+
+[dependency-groups]
+dev = [
+    # The app's tests run from its own venv, which its sync gives the dev group: pytest
+    # and what the ratchets check with.
+    "imbue-common[testing]",
+    # What runner_test.py asserts the API document with.
+    "app-schema[testing]",
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.87",
+]
+
+# Makes this directory the tests' own pytest root, so they run against this app's venv
+# rather than the workspace's root configuration.
+[tool.pytest.ini_options]
+testpaths = ["."]
+
+# Supply-chain cooldown, the workspace root's two-week window: a registry release is
+# adopted once it has been public this long, so a compromised release can be noticed
+# and yanked before a relock pulls it in.
+[tool.uv]
+exclude-newer = "14 days"
+
+# The workspace's shared code, live and editable. app-schema's own workspace sources
+# apply in this lock, so imbue-common comes from the root's mngr pin; a source for it
+# here as well would be a second URL for one package, which uv refuses to lock.
+[tool.uv.sources]
+app-schema = { path = "../../libs/app_schema", editable = true }
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]

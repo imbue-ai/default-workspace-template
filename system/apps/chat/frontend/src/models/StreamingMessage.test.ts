@@ -13,6 +13,7 @@ vi.mock("mithril", () => ({
 import { catchUpLiveTail, loadSnapshotWithStream } from "./StreamingMessage";
 import { getConversationLoadState, getEventsForChat, getLastEventId, type TranscriptEvent } from "./Response";
 import { shownReplyDraft } from "./ReplyDrafts";
+import { getAppNotes } from "./AppNotes";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -238,5 +239,39 @@ describe("catchUpLiveTail", () => {
 
     expect(eventIdsOf(chatId)).toEqual(["turn-1"]);
     expect(mockRequest).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("other apps' notes on the stream", () => {
+  it("reads the chat's notes when its stream opens and on every reopen, and holds a note frame beside the transcript", async () => {
+    const chatId = `agent-${agentCounter++}`;
+    const note = {
+      note_id: "n1",
+      timestamp: "2026-01-01T00:00:01Z",
+      source: "AI Usage Limits",
+      text: "Claude usage 2%",
+    };
+    const fetchMock = vi.fn(
+      async (_url: string) => ({ ok: true, status: 200, json: async () => ({ notes: [] }) }) as Response,
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const notesReads = (): number =>
+      fetchMock.mock.calls.filter(([url]) => String(url).endsWith(`/api/chats/${chatId}/app-notes`)).length;
+    try {
+      mockRequest.mockResolvedValueOnce({ events: [makeEvent("turn-1", "hi")], offset: 0, total: 1 });
+      await loadSnapshotWithStream(chatId);
+      // Read at once, before the stream says it is open.
+      expect(notesReads()).toBe(1);
+
+      latestSource().onopen?.();
+      expect(notesReads()).toBe(2);
+
+      latestSource().onmessage?.({ data: JSON.stringify({ type: "app_note", ...note }) });
+      expect(getAppNotes(chatId)).toEqual([note]);
+      // A note is not a transcript event.
+      expect(eventIdsOf(chatId)).toEqual(["turn-1"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

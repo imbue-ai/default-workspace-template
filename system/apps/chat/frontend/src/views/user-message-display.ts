@@ -184,12 +184,12 @@ export const NOTICE_ROW_SPACING_CLASS = "mb-2";
 /** A one-line notice of the agent's: a tick, the lead, and the summary. The lead carries
  *  the weight because it is what the eye is scanning for down a long transcript; the summary is
  *  ordinary prose beside it. The tick is a stop on the stretch's line. */
-export function renderNotice(label: string, body: string): m.Vnode {
+export function renderNotice(label: string, body: string, iconName: "check" | "info" = "check"): m.Vnode {
   return m("div", { class: "message-notice flex items-start gap-1.5 text-(length:--font-size-helper)" }, [
     m(
       "span",
       { class: "mt-px shrink-0 text-accent", ...railNodeAttrs("point") },
-      m.trust(icon("check", { size: 13, strokeWidth: 2.5 })),
+      m.trust(icon(iconName, { size: 13, strokeWidth: 2.5 })),
     ),
     m("span", { class: "min-w-0 text-secondary" }, [
       m("span", { class: "font-medium text-primary" }, `${label}:`),

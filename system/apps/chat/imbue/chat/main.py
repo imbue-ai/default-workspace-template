@@ -20,6 +20,8 @@ from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import reconcile
 from imbue.chat.accounts import regenerate_create_defaults
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.app_notes import APP_NOTES_DIRNAME
+from imbue.chat.app_notes import AppNoteStore
 from imbue.chat.authors import AuthorStore
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
@@ -182,6 +184,7 @@ def build_production_state(
         agent_manager=agent_manager,
         is_secondary=is_secondary,
         chat_settings=chat_settings,
+        app_notes=AppNoteStore(root=data_dir / APP_NOTES_DIRNAME),
         event_queues=event_queues,
         chat_namer=None
         if is_secondary
