@@ -1,0 +1,1 @@
+`keybindings.ts` exports `isHandledByInputMethod(event)`, which says whether an input method is handling a keydown (a composition is open), by the keydown's `isComposing` flag. A text field calls it before acting on Enter, Escape, Tab or the arrows, and leaves the key alone when it is true.
