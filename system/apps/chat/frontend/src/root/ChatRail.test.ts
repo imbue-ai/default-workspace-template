@@ -84,6 +84,25 @@ function dismissNotice(): void {
   m.redraw.sync();
 }
 
+function deleteFromMenu(context: RowMenuContext, row: ChatRow): void {
+  const deleteRow = rowMenuRows(context, row).find((menuRow) => menuRow.kind === "action" && menuRow.key === "delete");
+  if (deleteRow?.kind !== "action") throw new Error("no Delete chat row");
+  deleteRow.onSelect();
+}
+
+/** Hold the next ``count`` renames unanswered; the refusers returned refuse them, in order. */
+function holdRenames(count: number): ((error: unknown) => void)[] {
+  const refusals: ((error: unknown) => void)[] = [];
+  for (let index = 0; index < count; index += 1) {
+    verbs.renameChat.mockReturnValueOnce(
+      new Promise<undefined>((_resolve, reject) => {
+        refusals.push(reject);
+      }),
+    );
+  }
+  return refusals;
+}
+
 function dotClassOf(chatId: string): string {
   const dot = root?.querySelector(`[data-chat-id="${chatId}"] .chat-rail-dot`);
   if (dot === null || dot === undefined) throw new Error(`no status mark for ${chatId}`);
@@ -252,14 +271,6 @@ describe("ChatRail delete", () => {
   const first = chatRowFixture("agent-first");
   const second = chatRowFixture("agent-second");
 
-  function deleteFromMenu(context: RowMenuContext, row: ChatRow): void {
-    const deleteRow = rowMenuRows(context, row).find(
-      (menuRow) => menuRow.kind === "action" && menuRow.key === "delete",
-    );
-    if (deleteRow?.kind !== "action") throw new Error("no Delete chat row");
-    deleteRow.onSelect();
-  }
-
   it("takes a confirmed chat off the list before the chat app answers, and moves off it when it is on screen", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     verbs.destroyChat.mockReturnValueOnce(new Promise<undefined>(() => undefined));
@@ -421,11 +432,7 @@ describe("ChatRail refused rename", () => {
     verbs.destroyChat.mockRejectedValueOnce(new HttpError(500, "mngr failed"));
 
     const field = renameInPlace(second.chatId, "Half typ", null);
-    const deleteRow = rowMenuRows(chatRailAttrsFixture({ rows: [first, second] }), first).find(
-      (menuRow) => menuRow.kind === "action" && menuRow.key === "delete",
-    );
-    if (deleteRow?.kind !== "action") throw new Error("no Delete chat row");
-    deleteRow.onSelect();
+    deleteFromMenu(chatRailAttrsFixture({ rows: [first, second] }), first);
     await vi.waitFor(() => expect(withoutPendingDeletes([first, second])).toEqual([first, second]));
     m.redraw.sync();
 
@@ -444,11 +451,7 @@ describe("ChatRail refused rename", () => {
     verbs.destroyChat.mockRejectedValueOnce(new HttpError(500, "mngr failed"));
 
     renameInPlace(second.chatId, "Half typ", null);
-    const deleteRow = rowMenuRows(chatRailAttrsFixture({ rows: [first, second] }), first).find(
-      (menuRow) => menuRow.kind === "action" && menuRow.key === "delete",
-    );
-    if (deleteRow?.kind !== "action") throw new Error("no Delete chat row");
-    deleteRow.onSelect();
+    deleteFromMenu(chatRailAttrsFixture({ rows: [first, second] }), first);
     await vi.waitFor(() => expect(withoutPendingDeletes([first, second])).toEqual([first, second]));
     expect(isRootNoticeUp()).toBe(false);
 
@@ -459,12 +462,7 @@ describe("ChatRail refused rename", () => {
 
   it("keeps the next notice back while Rename again's field is open", async () => {
     mount([first, second]);
-    const refusals: ((error: unknown) => void)[] = [];
-    const heldRename = (): Promise<undefined> =>
-      new Promise<undefined>((_resolve, reject) => {
-        refusals.push(reject);
-      });
-    verbs.renameChat.mockReturnValueOnce(heldRename()).mockReturnValueOnce(heldRename());
+    const refusals = holdRenames(2);
 
     renameInPlace(first.chatId, "Taken");
     renameInPlace(second.chatId, "Also taken");
@@ -488,12 +486,7 @@ describe("ChatRail refused rename", () => {
   it("closes the notice without holding the next one when Rename again's chat has left the list", async () => {
     let rows: readonly ChatRow[] = [first, second];
     mount(() => rows);
-    const refusals: ((error: unknown) => void)[] = [];
-    const heldRename = (): Promise<undefined> =>
-      new Promise<undefined>((_resolve, reject) => {
-        refusals.push(reject);
-      });
-    verbs.renameChat.mockReturnValueOnce(heldRename()).mockReturnValueOnce(heldRename());
+    const refusals = holdRenames(2);
 
     renameInPlace(first.chatId, "Taken");
     renameInPlace(second.chatId, "Also taken");
