@@ -107,7 +107,8 @@ observe`, its own supervised service) writes, and serves:
   the provisional-chat events (`provisional_chat_created`,
   `provisional_chat_completed`; a discard's carries the messages the chat held,
   dropped with it, and is replayed for 15 minutes to a page that connects later,
-  so the page that sent them puts them back in the box), and `accounts_updated`
+  so the page that sent them puts them back in the box; a failed create's
+  carries its `failure_kind` when it is one the page words itself), and `accounts_updated`
   whenever the account index changes, whichever process wrote it.
 - `POST /api/focus-chat`: what the shell posts for the Imbue Studio app's `minds:focus-chat` (the user opened a
   chat's notification), since the manifest registers the type under `[[message_handlers]]`. It takes the
@@ -969,6 +970,20 @@ sentence asks for one. On the failed-create page the shared button
 (`AskAgentToFixButton` in `workspace_ui`) draws the refused ask under itself,
 with a "See details" of its own, so the button is the last in its row and the
 refused ask ends the page.
+
+**The failed-create page.** Its sentence is picked by the failure's kind
+(`failure_kind` on the provisional chat, `CreateFailureKind` in `models.py`),
+which the chat app reads from what `mngr create` printed (`create_failure_kind`
+in `chat_handoffs.py`). A Codex create whose plugin installer
+(`system/scripts/codex_update_plugin.sh`) refused prints the installer's
+`codex-plugin-install-refused` marker, and its page reads "This chat's agent
+couldn't be set up."; any other failure reads "The agent for this chat
+couldn't be started." Every failed create offers "Report a bug" (where the
+shell opens one), beside its other buttons and before the ask, filing the
+page's sentence and what mngr printed, and a refused ask's sentence and
+details with them; the refused ask then has no "Report a bug" of its own. A
+switch's failed create (`frontend/src/views/HandoffFailedNotice.ts`) names the
+harness it could not start and is not worded by kind.
 
 While one of the notice's actions runs (the ask, a retry, a restart), every
 button on the notice is disabled, and a retry or a restart drops what an

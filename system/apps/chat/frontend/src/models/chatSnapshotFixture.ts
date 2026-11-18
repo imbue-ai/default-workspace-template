@@ -92,6 +92,7 @@ export function provisionalChatFixture(chatId: string, overrides: Partial<Provis
     kind: "agent",
     phase: "creating",
     error: null,
+    failure_kind: null,
     is_seeded: false,
     held_sends: [],
     model_pick: null,

@@ -133,7 +133,7 @@ vi.mock("./OutgoingMessageView", async (importOriginal) => ({
 vi.mock("./fast-mode-limit", () => ({ maybeApplyFastModeLimit: () => undefined }));
 vi.mock("./FastModeNotice", () => ({ FastModeNotice: { view: () => null } }));
 
-import type { ChatSnapshot } from "../models/Chats";
+import type { ChatSnapshot, CreateFailureKind } from "../models/Chats";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { ChatPanel } from "./ChatPanel";
 import { AskAgentToFixButton } from "@imbue/workspace-ui/src/components/FailureButtons";
@@ -142,6 +142,8 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { MESSAGE_LIST_CLASS } from "./conversation-rows";
+import { framePageInShell, stubShellConnection } from "../shellConnectionFixture";
+import type { FramedPage } from "../shellConnectionFixture";
 
 type AnyVnode = { tag?: unknown; key?: unknown; attrs?: Record<string, unknown>; children?: unknown };
 
@@ -211,14 +213,15 @@ function seeded(phase: "awaiting_first_send" | "creating" | "failed", error: str
   };
 }
 
-/** A chat whose create failed on `accountId`, with `error` as the reason. */
-function failed(accountId: string, error: string): void {
+/** A chat whose create failed on `accountId`, with `error` as the reason and `failureKind` as its known kind. */
+function failed(accountId: string, error: string, failureKind: CreateFailureKind | null = null): void {
   mocks.proto = {
     chat_id: AGENT_ID,
     name: "Chat 1",
     account_id: accountId,
     phase: "failed",
     error,
+    failure_kind: failureKind,
     is_seeded: false,
     held_sends: [],
   };
@@ -674,6 +677,109 @@ describe("ChatPanel over a provisional chat", () => {
         ["Ask an agent to fix this", false],
       ]);
     });
+  });
+});
+
+describe("ChatPanel over a failed create, told by its kind and reported as a bug", () => {
+  // What mngr printed when the Codex plugin installer refused: its wrap of the installer's stderr, with the marker the
+  // backend matched to set the kind.
+  const CODEX_REFUSAL =
+    "mngr create exited with code 1\nExtra provision command failed: bash system/scripts/codex_update_plugin.sh\n" +
+    "stderr: error: codex-plugin-install-refused: MNGR_AGENT_STATE_DIR is required; refusing a shared-home install";
+  let shell: FramedPage;
+
+  beforeEach(() => {
+    mocks.chat = undefined;
+    mocks.chats = [];
+    mocks.mainChatId = null;
+    mocks.sendMessage.mockReset();
+    mocks.openChatPage.mockClear();
+    shell = framePageInShell(true);
+  });
+
+  afterEach(() => {
+    unmountViews();
+    shell.release();
+    // The page's connection outlives a release: leave one that offers no report, as the other tests expect.
+    stubShellConnection(false);
+  });
+
+  function mountPage(): HTMLElement {
+    const render = mountPanel();
+    return mountView(() => render() as m.Children);
+  }
+
+  it.each([
+    {
+      case: "a Codex create the plugin installer refused",
+      accountId: "acct-1",
+      kind: "codex_plugin_install_refused" as const,
+      error: CODEX_REFUSAL,
+      sentence: "This chat's agent couldn't be set up. Try again, or switch to another provider.",
+    },
+    {
+      case: "any other failed create",
+      accountId: "acct-1",
+      kind: null,
+      error: "mngr create exited with code 3\nno space left on device",
+      sentence: "The agent for this chat couldn't be started. Try again, or switch to another provider.",
+    },
+    {
+      case: "a failed chat that names no account",
+      accountId: "",
+      kind: null,
+      error: "No provider account is signed in for this workspace.",
+      sentence: "Sign in to a provider to start this chat.",
+    },
+  ])("says what failed for $case, and files it with what mngr printed from Report a bug", (example) => {
+    failed(example.accountId, example.error, example.kind);
+
+    const page = mountPage();
+
+    expect(page.querySelector(".message-list-create-failed-text")?.textContent).toBe(example.sentence);
+    page.querySelector<HTMLButtonElement>(".message-list-create-report-bug")!.click();
+    expect(shell.posted("shell:report-bug")).toEqual([
+      { type: "shell:report-bug", message: example.sentence, details: example.error },
+    ]);
+  });
+
+  it("offers no Report a bug where the shell said Imbue Studio cannot open one", () => {
+    shell.release();
+    shell = framePageInShell(false);
+    failed("acct-1", CODEX_REFUSAL, "codex_plugin_install_refused");
+
+    const page = mountPage();
+
+    expect(page.querySelector(".message-list-create-failed-text")).not.toBeNull();
+    expect(page.querySelector(".report-bug")).toBeNull();
+  });
+
+  it("files a refused ask with the create's failure from the page's one Report a bug", async () => {
+    mocks.chats = [chatSnapshotFixture("chat-main")];
+    mocks.mainChatId = "chat-main";
+    failed("acct-1", CODEX_REFUSAL, "codex_plugin_install_refused");
+    mocks.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("{}"), { code: 500, response: { detail: "mngr message exited 1" } }),
+    );
+    const page = mountPage();
+
+    page.querySelector<HTMLButtonElement>(".ask-agent-to-fix")!.click();
+    await flushAsync();
+    m.redraw.sync();
+
+    const refusal = page.querySelector(".ask-agent-failure-message")?.textContent ?? "";
+    expect(refusal).toContain("If this persists, report a bug.");
+    expect(page.querySelectorAll(".report-bug")).toHaveLength(1);
+    page.querySelector<HTMLButtonElement>(".message-list-create-report-bug")!.click();
+    expect(shell.posted("shell:report-bug")).toEqual([
+      {
+        type: "shell:report-bug",
+        message: "This chat's agent couldn't be set up. Try again, or switch to another provider.",
+        details:
+          `${CODEX_REFUSAL}\n\nAsking an agent to fix this failed too:\n${refusal}\n` +
+          page.querySelector(".ask-agent-failure .see-details-text")?.textContent,
+      },
+    ]);
   });
 });
 
