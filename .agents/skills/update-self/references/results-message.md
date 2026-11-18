@@ -12,8 +12,8 @@ survives being pasted into a bug report.
 ## The results message
 
 The `done` report is the lead's raw material -- a technical digest of
-changelog sections and entries, conflicts and resolutions, change classes,
-impact analysis and validation. **Do not forward it verbatim.** It stays under
+changelog sections, conflicts and resolutions, change classes, impact
+analysis and validation. **Do not forward it verbatim.** It stays under
 `data/.tasks/update-self/reports/` (offer to show it), and the results message
 is composed from it, delivered *after* the apply. It is the one thing the user
 reads about the whole pass: what changed, every decision made on their behalf,
@@ -26,10 +26,9 @@ Write it for a non-technical reader skimming top to bottom, in this order:
    I undid it; everything is safe".
 2. **What's new** -- always first after the headline, and *detailed*: carry
    the worker's digest in prose a lay reader parses (what each change does,
-   not file names), release by release where the digest says which release a
-   change shipped in. When the
-   worker reports changelog text it could not read, say the list may be
-   incomplete. Some readers want the specifics; the rest skim it.
+   not file names), release by release. When the worker reports a `note`,
+   say the list may be incomplete. Some readers want the specifics; the rest
+   skim it.
 3. **Conflicts** -- "none", or what needed reconciling. When the worker kept
    local code over the release's version, do not present that as settled: say
    what was kept, what the release's version would have changed, and offer
