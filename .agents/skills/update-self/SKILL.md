@@ -62,8 +62,9 @@ what this run needs, with no confirmation and no preflight script, you may:
 
 - stop other chats and background agents, idle or running, through `run-status
   stop-chats` (5b, and earlier with `--agent <name>` when memory runs short),
-  which records each so the end of the pass starts it again with a note. The
-  main chat is the exception: the chat app starts it again as soon as it stops,
+  which records each so the end of the pass starts it again with a note, except
+  one that was idle when paused for memory: it stays stopped, and its next
+  message starts it. The main chat is the exception: the chat app starts it again as soon as it stops,
   so `stop-chats --agent` refuses it, and 5b only interrupts it;
 - stop the browser and the user apps no window is showing, and on a **scheduled**
   run any user app at all, windows or not
@@ -796,7 +797,10 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 Leave `--landed` out after exit 2 or 3, and `--wip-commit` when nothing was
 saved. Each chat is started again and told what changed while it was paused,
 in a notice the user sees labelled "Workspace updated"; a background agent is
-named to its lead chat, since it does not pick its work back up by itself. It
+named to its lead chat, since it does not pick its work back up by itself. A
+chat or background agent that was idle when you paused it for memory is left
+stopped and told nothing: starting it would take the memory back, and the next
+message to it starts it. It
 is safe to re-run: a non-zero exit names what it could not start or tell, and
 the same command finishes the rest.
 

@@ -351,6 +351,49 @@ def test_stop_chats_pauses_a_named_agent_for_memory_and_refuses_one_it_may_not(
     assert [entry.id for entry in _record(tmp_path).stopped_agents] == ["agent-idle"]
 
 
+def test_a_chat_paused_for_memory_while_idle_is_left_stopped_and_told_nothing(
+    tmp_path: Path, fake_agents: FakeAgents, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Starting it would take back the memory its pause freed, and a note would start a turn in a
+    chat with nothing to carry on with; the user's next message starts it."""
+    fake_agents.set_agents(_workspace_agents())
+    assert _main(tmp_path, "run-status", "start") == 0
+    assert _main(tmp_path, "run-status", "stop-chats", "--agent", "Plan-the-trip") == 0
+    assert _main(tmp_path, "run-status", "stop-chats") == 0
+    fake_agents.clear_calls()
+    capsys.readouterr()
+
+    assert (
+        _main(tmp_path, "run-status", "resume-chats", "--landed", "minds-v0.9.0") == 0
+    )
+
+    assert fake_agents.states()["Plan-the-trip"] == "STOPPED"
+    assert ["start", "agent-idle"] not in fake_agents.mngr_verbs()
+    assert fake_agents.states()["Fix-the-login"] == "WAITING"
+    assert set(fake_agents.notes()) == {"agent-busy"}
+    assert "Left Plan-the-trip stopped" in capsys.readouterr().out
+
+    # Nothing is left for a later resume or the next run to bring back.
+    fake_agents.clear_calls()
+    assert _main(tmp_path, "run-status", "resume-chats") == 0
+    assert fake_agents.mngr_verbs() == []
+    assert _main(tmp_path, "run-status", "start", "--chat", f"{_LEAD}-2") == 0
+    assert _record(tmp_path).stopped_agents == []
+
+
+def test_a_chat_named_for_memory_mid_turn_is_brought_back_like_any_busy_chat(
+    tmp_path: Path, fake_agents: FakeAgents
+) -> None:
+    fake_agents.set_agents(_workspace_agents())
+    assert _main(tmp_path, "run-status", "start") == 0
+    assert _main(tmp_path, "run-status", "stop-chats", "--agent", "Fix-the-login") == 0
+
+    assert _main(tmp_path, "run-status", "resume-chats") == 0
+
+    assert fake_agents.states()["Fix-the-login"] == "WAITING"
+    assert set(fake_agents.notes()) == {"agent-busy"}
+
+
 def test_the_main_chat_is_interrupted_for_the_apply_and_never_paused_for_memory(
     tmp_path: Path, fake_agents: FakeAgents, capsys: pytest.CaptureFixture[str]
 ) -> None:
