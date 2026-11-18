@@ -75,7 +75,11 @@ function lastingToastBody(
 ): m.Children {
   const reportBug: ToastAction | null =
     toast.isReportable && onReportBug !== null
-      ? { label: REPORT_A_BUG_LABEL, run: () => onReportBug({ message: toast.message, details: toast.details }) }
+      ? {
+          label: REPORT_A_BUG_LABEL,
+          run: () => onReportBug({ message: toast.message, details: toast.details }),
+          keepsToast: true,
+        }
       : null;
   const actions = reportBug === null ? toast.actions : [...toast.actions, reportBug];
   return [
@@ -103,23 +107,25 @@ function lastingToastBody(
       : m(
           "div",
           { class: "toast-actions -mx-2 flex flex-wrap gap-1" },
-          actions.map((action) =>
-            m(
+          actions.map((action) => {
+            const isPending = action.pending?.isPending() === true;
+            return m(
               Button,
               {
                 variant: "ghost-inverse",
                 sm: true,
                 extra: action === reportBug ? "toast-action report-bug" : "toast-action",
+                disabled: isPending,
                 // A retry or a resolving button has done the note's job, and a retry that fails again leaves a new
-                // one; Report a bug hands the failure on and leaves it up for its other buttons.
+                // one; a button that hands the failure on leaves it up for its other buttons.
                 onclick: () => {
-                  if (action !== reportBug) onDismiss?.(toast.id);
+                  if (action.keepsToast !== true) onDismiss?.(toast.id);
                   action.run();
                 },
               },
-              action.label,
-            ),
-          ),
+              isPending ? action.pending?.label : action.label,
+            );
+          }),
         ),
   ];
 }
