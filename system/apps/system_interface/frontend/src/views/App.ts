@@ -703,7 +703,6 @@ export function App(): m.Component<AppAttrs> {
       isMaximized: placement.state === "MAXIMIZED" || placement.state === "FULLSCREEN",
       isDetached: placement.is_detached,
       show: () => current.showDetachedWindow(windowId),
-      showGhost: () => current.showWindowGhost(windowId),
       bringBack: () => void current.reattachWindow(windowId, null),
       restore: () => current.restoreWindow(windowId),
       minimize: () => current.minimizeWindow(windowId),
@@ -1528,9 +1527,6 @@ export function App(): m.Component<AppAttrs> {
                     overview: overviewTiling === null ? null : overviewAttrs(current, desktop, overviewTiling),
                     letterbox: letterboxAttrs(current, viewing),
                     onWindowControl: (windowId, control, event) => onWindowControl(current, windowId, control, event),
-                    onShowDetachedWindow: (windowId) => current.showDetachedWindow(windowId),
-                    onHideWindowGhost: (windowId) => current.minimizeWindow(windowId),
-                    onBringBackWindow: (windowId) => void current.reattachWindow(windowId, null),
                     onPagesHostCreated: (host) => startPagesLayer(current, host, vnode.attrs),
                   }),
               isLauncherOpen

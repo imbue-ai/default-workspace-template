@@ -8,6 +8,8 @@
 import { describeError } from "./download";
 
 export interface PinnedFileStore {
+  /** Whether anything is kept under ``url``; presence alone, which the load's own check follows. */
+  has(url: string): Promise<boolean>;
   /** The bytes kept under ``url``, or null for none. */
   read(url: string): Promise<ArrayBuffer | null>;
   /** Keep ``bytes`` under ``url`` for next time; a store that cannot keeps nothing and says so. */
@@ -33,6 +35,7 @@ export interface CacheStorageLike {
 
 /** A store that keeps nothing: every load downloads. */
 export const NO_FILE_STORE: PinnedFileStore = {
+  has: async () => false,
   read: async () => null,
   write: async () => undefined,
   prune: async () => undefined,
@@ -41,6 +44,14 @@ export const NO_FILE_STORE: PinnedFileStore = {
 export function cacheStorageFileStore(storage: CacheStorageLike): PinnedFileStore {
   const cache = (): Promise<CacheLike> => storage.open(PINNED_FILE_CACHE_NAME);
   return {
+    async has(url) {
+      try {
+        return (await (await cache()).match(url)) !== undefined;
+      } catch (error) {
+        console.warn(`The kept speech model files could not be read: ${describeError(error)}`);
+        return false;
+      }
+    },
     async read(url) {
       try {
         const hit = await (await cache()).match(url);

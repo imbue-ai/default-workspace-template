@@ -25,6 +25,8 @@ from imbue.system_interface.shell.resource_gauge import NOTIFY_RETRY_SECONDS
 from imbue.system_interface.shell.resource_gauge import NO_READINGS
 from imbue.system_interface.shell.resource_gauge import PUSH_HEARTBEAT_SECONDS
 from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_FILENAME
+from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_STATE_FILENAME
+from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_STATE_FILE_VERSION
 from imbue.system_interface.shell.resource_gauge import ResourceGaugeMonitor
 from imbue.system_interface.shell.resource_gauge import ResourceGaugeSettings
 from imbue.system_interface.shell.resource_gauge import ResourceGaugeSettingsStore
@@ -36,7 +38,6 @@ from imbue.system_interface.shell.resource_gauge import StoppedProgram
 from imbue.system_interface.shell.resource_gauge import describe_agent_notice
 from imbue.system_interface.shell.resource_gauge import describe_alert
 from imbue.system_interface.shell.resource_gauge import describe_notification
-from imbue.system_interface.shell.resource_gauge import describe_stops_notification
 from imbue.system_interface.shell.resource_gauge import estimate_seconds_to_full
 from imbue.system_interface.shell.resource_gauge import format_duration
 from imbue.system_interface.shell.resource_gauge import format_gigabytes
@@ -343,22 +344,34 @@ def test_the_disks_projection_comes_from_the_monitors_own_samples(tmp_path: Path
     assert disk is not None and disk.seconds_to_full == pytest.approx(38 * 60.0, rel=0.01)
 
 
-def test_programs_the_memory_guard_stops_are_reported_but_not_the_ledgers_history(tmp_path: Path) -> None:
+def test_programs_the_memory_guard_stops_are_listed_but_never_notified(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
-    harness.stops = [StoppedProgram(at="2026-11-12T10:00:00.000000Z", what="a background program")]
+    harness.now = 1_800_000_000.0
     harness.read(disk_free_gb=50.0)
-    assert harness.titles() == []
     harness.stops = [
-        *harness.stops,
-        StoppedProgram(at="2026-11-12T10:05:00.000000Z", what="the Report chat's agent"),
+        StoppedProgram(at="2027-01-15T07:00:00.000000Z", what="a background program"),
+        StoppedProgram(at="2027-01-15T07:30:00.000000Z", what="the Report chat's agent"),
     ]
     harness.read()
-    assert harness.notifier.sent == [("Stopped the Report chat's agent to free memory", GaugeResource.MEMORY)]
-    harness.read()
     harness.read(harness.build())
-    assert len(harness.titles()) == 1
-    title, _ = describe_stops_notification(harness.stops)
-    assert title == "Stopped 2 programs to free memory"
+    assert harness.notifier.sent == []
+    assert [stop.what for stop in harness.monitor.view().recent_stops] == [
+        "the Report chat's agent",
+        "a background program",
+    ]
+
+
+def test_a_state_file_from_before_stops_went_unnotified_still_reads(tmp_path: Path) -> None:
+    (tmp_path / RESOURCE_GAUGE_STATE_FILENAME).write_text(
+        json.dumps(
+            {
+                "version": RESOURCE_GAUGE_STATE_FILE_VERSION,
+                "notified": ["disk"],
+                "last_stop_timestamp": "2026-11-12T10:00:00.000000Z",
+            }
+        )
+    )
+    assert DeliveryStore(state_directory=tmp_path).read() == DeliveryRecord(notified=(GaugeResource.DISK,))
 
 
 def test_the_view_lists_the_last_days_stops_newest_first(tmp_path: Path) -> None:
@@ -434,7 +447,7 @@ def test_a_monitor_with_no_notifier_raises_warnings_and_tells_nobody(tmp_path: P
     harness.read(disk_free_gb=2.0)
     assert [alert.severity for alert in harness.monitor.view().alerts] == [AlertSeverity.WARNING]
     assert harness.titles() == []
-    assert DeliveryStore(state_directory=tmp_path).read() == DeliveryRecord(notified=(), last_stop_timestamp="")
+    assert DeliveryStore(state_directory=tmp_path).read() == DeliveryRecord()
 
 
 _NOTIFICATIONS_PATH = "/minds-api-proxy/api/v1/agents/agent-services/notifications"
