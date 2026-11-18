@@ -101,7 +101,7 @@ CHANGE_NOT_ANSWERED_SENTENCE: Final[str] = (
 )
 
 # What a page that could not start offers: a Try again that asks once more, an agent asked to look at it (shown once
-# a shell that frames the page has greeted it, since only a shell can start one; while the shell has not answered the
+# a shell that frames the page has greeted it, since only a shell can ask one; while the shell has not answered the
 # ask it reads "Asking an agent...", and a failed ask is told under it, its details at the top of the page's one "See
 # details"), and the log's command for whoever wants it. A handshake from a shell with another ``shellId`` means the
 # shell restarted, so an ask still out is settled as not answered (the same shell greets the page again for ordinary

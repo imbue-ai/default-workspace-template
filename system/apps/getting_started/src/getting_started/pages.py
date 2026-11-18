@@ -106,7 +106,7 @@ rebuild it</button></p>
         const showReport = () => {
           report.hidden = !(shown !== null && shown.isReportable && shell.canReportBug());
         };
-        // Only a shell can start a chat, so the ask button waits for one to greet the page.
+        // Only a shell can ask an agent, so the ask button waits for one to greet the page.
         const shell = connectToShell({
           onHandshake: () => {
             ask.hidden = false;

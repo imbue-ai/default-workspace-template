@@ -127,7 +127,7 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         )
         framed = page.frame_locator("#app")
         expect(framed.get_by_role("heading")).to_have_text("Docs couldn't start.")
-        # Only a shell can start an agent, so the button waits for its greeting.
+        # Only a shell can ask an agent, so the button waits for its greeting.
         ask = framed.locator("#ask-agent")
         expect(ask).to_have_text("Ask an agent to look at it")
         expect(ask).to_be_hidden()
