@@ -7,7 +7,6 @@ import {
   describeRefusal,
   postCancelPendingUrl,
   postSession,
-  postStart,
   postTakeControl,
 } from "./service_client";
 
@@ -16,7 +15,6 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 afterEach(() => {
-  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -42,7 +40,6 @@ describe("postSession", () => {
     expect(error).toBeInstanceOf(ServiceRequestError);
     expect((error as ServiceRequestError).status).toBe(502);
     expect((error as ServiceRequestError).detail).toBe("neko refused the login: bad password");
-    expect((error as ServiceRequestError).failure.details).toBe("HTTP 502\nneko refused the login: bad password");
   });
 
   it("answers the session when the service agrees", async () => {
@@ -52,34 +49,6 @@ describe("postSession", () => {
       vi.fn(() => Promise.resolve(jsonResponse(200, session))),
     );
     expect(await postSession()).toEqual(session);
-  });
-});
-
-describe("postStart", () => {
-  it("answers nothing once the service starts the stack", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(jsonResponse(200, { lifecycle: "starting" }))),
-    );
-    expect(await postStart()).toBeNull();
-  });
-
-  it("reads a refusal's reason, and a service that did not answer as no answer to a change", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(jsonResponse(409, { detail: "the stack is stopping" }))),
-    );
-    expect(await postStart()).toMatchObject({ cause: "reason", reason: "the stack is stopping", status: 409 });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))),
-    );
-    expect(await postStart()).toMatchObject({
-      cause: "not_answered",
-      requestKind: "change",
-      details: "Failed to fetch",
-    });
   });
 });
 

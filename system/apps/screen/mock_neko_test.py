@@ -1,5 +1,4 @@
 import threading
-from collections.abc import Callable
 from uuid import uuid4
 
 from pydantic import Field
@@ -37,9 +36,6 @@ class FakeNeko(NekoInterface):
     sessions: dict[str, NekoSessionRecord] = Field(default_factory=dict, description="Live sessions by id")
     calls: list[str] = Field(default_factory=list, description="Every call, in order")
     screenshot_bytes: bytes = Field(default=TINY_JPEG, description="What a screenshot answers")
-    on_next_health_check: Callable[[], None] | None = Field(
-        default=None, description="What happens elsewhere while the health route is next asked; run once"
-    )
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
@@ -51,10 +47,6 @@ class FakeNeko(NekoInterface):
             raise NekoError("no API token")
 
     def is_healthy(self) -> bool:
-        happening = self.on_next_health_check
-        if happening is not None:
-            self.on_next_health_check = None
-            happening()
         return self.is_up
 
     def login(self, username: str, password: str, is_owner: bool) -> NekoSession:

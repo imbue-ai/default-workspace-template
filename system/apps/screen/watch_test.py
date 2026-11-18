@@ -17,8 +17,6 @@ def test_a_member_exit_ends_the_rest_of_the_group() -> None:
     assert decision.stopped is not None
     assert decision.stopped.member == "screen-neko"
     assert decision.stopped.reason == "screen-neko exited unexpectedly"
-    # The pid lets the service tell a member the memory guard shed from one that crashed.
-    assert decision.stopped.pid == 123
     assert decision.members_to_stop == ("screen-session", "screen-pulse", "screen-xorg")
 
 
@@ -44,7 +42,7 @@ def test_end_group_stops_the_others_records_the_event_and_notifies(tmp_path: Pat
     decision = decide_group_end("PROCESS_STATE_EXITED", _payload("screen-xorg"))
     end_group(decision, supervisor, tmp_path, notified.append)
     assert supervisor.calls == [("stop", "screen-neko"), ("stop", "screen-session"), ("stop", "screen-pulse")]
-    assert notified == [ScreenStopped(member="screen-xorg", reason="screen-xorg exited unexpectedly", pid=123)]
+    assert notified == [ScreenStopped(member="screen-xorg", reason="screen-xorg exited unexpectedly")]
     lines = (tmp_path / EVENTS_RELATIVE_PATH).read_text().splitlines()
     assert len(lines) == 1
     event = json.loads(lines[0])

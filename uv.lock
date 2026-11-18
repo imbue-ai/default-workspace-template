@@ -4018,7 +4018,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "app-manifest", extra = ["testing"] },
     { name = "app-schema", extra = ["testing"] },
     { name = "coverage" },
     { name = "inline-snapshot" },
@@ -4055,7 +4054,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "app-manifest", extras = ["testing"], editable = "system/libs/app_manifest" },
     { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
     { name = "coverage" },
     { name = "inline-snapshot", specifier = ">=0.13" },

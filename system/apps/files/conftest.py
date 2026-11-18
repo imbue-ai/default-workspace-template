@@ -22,7 +22,6 @@ from app_schema.routes import model_response
 from files_app.connections import Connections as ConnectionsListing
 from files_app.server import create_app
 from files_app.serving import serve_in_background
-from files_app.testing import RefusingLocalFiles
 
 STATIC_DIRECTORY = Path(__file__).parent / "static"
 
@@ -58,23 +57,11 @@ def connections() -> Connections:
 
 
 @pytest.fixture
-def read_only_folders() -> set[str]:
-    """Folders of `files_root` (``/photos/``) that refuse to be written, as they would to anyone but root; empty
-    until a test adds one."""
-    return set()
-
-
-@pytest.fixture
-def files_origin(files_root: Path, connections: Connections, read_only_folders: set[str]) -> Iterator[str]:
+def files_origin(files_root: Path, connections: Connections) -> Iterator[str]:
     """The origin of the Files server over `files_root`."""
     if not (STATIC_DIRECTORY / "index.html").is_file():
         pytest.fail("Files is not built: run `npm run build` at system/ first")
-    app = create_app(
-        gateway=None,
-        static_directory=STATIC_DIRECTORY,
-        agent_id="agent-main",
-        local=RefusingLocalFiles(files_root, read_only_folders, set()),
-    )
+    app = create_app(gateway=None, static_directory=STATIC_DIRECTORY, agent_id="agent-main", root=files_root)
 
     def listed_connections() -> Response:
         # Through the route's model, as the real view answers: the route table refuses a hand-built JSON answer.

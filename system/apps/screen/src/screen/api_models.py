@@ -65,13 +65,7 @@ class StateDocument(FrozenModel):
 
     lifecycle: str = Field(description="``installing``, ``starting``, ``running`` or ``stopped``")
     install_reason: str | None = Field(description="What the env.d unit has not installed yet, while installing")
-    install_failure: str | None = Field(
-        description="How the env.d unit failed in this boot (its exit code and error output), while installing"
-    )
     stop_reason: str | None = Field(description="Why the stack ended, while stopped")
-    stop_cause: str | None = Field(
-        description="``requested``, ``start_failed``, ``crashed`` or ``out_of_memory``, while stopped; null if unrecorded"
-    )
     title: str = Field(description="The frontmost X window's title, or the app's name for an empty desktop")
     video_id: str = Field(description="The video profile every viewer selects")
     control: ControlDocument = Field(description="The lease")
@@ -225,7 +219,6 @@ class StoppedNotification(RequestModel):
 
     member: str = Field(default="", description="The program that left RUNNING")
     reason: str = Field(default="", description="How it left, in words")
-    pid: int | None = Field(default=None, description="The process that left, when supervisord named it")
 
 
 class LaunchBrowserRequest(RequestModel):

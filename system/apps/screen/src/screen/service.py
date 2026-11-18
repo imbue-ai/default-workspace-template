@@ -40,7 +40,6 @@ from screen.data_types import NekoSecrets
 from screen.data_types import NekoSession
 from screen.data_types import ScreenSize
 from screen.data_types import ScreenState
-from screen.data_types import StopCause
 from screen.data_types import XWindow
 from screen.desktop_files import save_dropped_file
 from screen.errors import DisplayModeError
@@ -54,7 +53,6 @@ from screen.interfaces import DisplayModesInterface
 from screen.interfaces import NekoInterface
 from screen.interfaces import ProcessLauncherInterface
 from screen.interfaces import WindowToolsInterface
-from screen.memory_shed import was_shed_recently
 from screen.neko_client import NekoEventSubscriber
 from screen.primitives import AgentId
 from screen.primitives import BROWSER_TITLE
@@ -89,11 +87,6 @@ _POLL_SECONDS: Final[float] = 0.2
 # How long a human verb waits for the lease to reach neko before answering, so that "controller: nobody" in its
 # answer means the next session's first input is a request neko grants, not a non-host's input it drops.
 _PROJECTION_WAIT_SECONDS: Final[float] = 5.0
-# How long a member that left waits for the memory guard's shed record before it is called a crash: the record
-# comes from a hook earlyoom spawns after polling (every 100 ms) for the process to be gone, and the watcher's notice
-# arrives under the watcher's own 5-second timeout.
-_SHED_RECORD_GRACE_SECONDS: Final[float] = 3.0
-_SHED_RECORD_POLL_SECONDS: Final[float] = 0.1
 
 DEFAULT_SCREENSHOT_QUALITY: Final[int] = 90
 
@@ -125,9 +118,7 @@ def state_document(state: ScreenState) -> dict[str, Any]:
     return {
         "lifecycle": state.lifecycle.value.lower(),
         "install_reason": state.install_reason,
-        "install_failure": state.install_failure,
         "stop_reason": state.stop_reason,
-        "stop_cause": state.stop_cause.value.lower() if state.stop_cause is not None else None,
         "title": state.title,
         "video_id": state.video_id,
         "control": control_document(state.control),
@@ -202,14 +193,6 @@ class ScreenService(MutableModel):
         default=True, frozen=True, description="Whether to watch the X clipboard (off where no display runs)"
     )
     clock: Callable[[], float] = Field(default=time.monotonic, frozen=True, description="The monotonic clock")
-    was_shed: Callable[[int], bool] = Field(
-        default=was_shed_recently,
-        frozen=True,
-        description="Whether the workspace's memory guard just shed a pid, for a member that left on its own",
-    )
-    sleep: Callable[[float], None] = Field(
-        default=time.sleep, frozen=True, description="Waits between reads of the memory guard's ledger"
-    )
 
     title: str = Field(default=DEFAULT_TITLE, description="The frontmost window's title")
     video_id: str = Field(default=VIDEO_ID_WATCH, description="The profile every viewer selects")
@@ -312,9 +295,7 @@ class ScreenService(MutableModel):
         return ScreenState(
             lifecycle=stack.lifecycle,
             install_reason=stack.install_reason,
-            install_failure=stack.install_failure,
             stop_reason=stack.stop_reason,
-            stop_cause=stack.stop_cause,
             title=self.title,
             video_id=self.video_id,
             control=self.control.view(),
@@ -390,43 +371,18 @@ class ScreenService(MutableModel):
     def ensure_started(self) -> Lifecycle:
         return self.stack.ensure_started()
 
-    def notify_stopped(self, member: str, reason: str, pid: int | None) -> bool:
+    def notify_stopped(self, member: str, reason: str) -> bool:
         """The watcher says a member left and the rest of the group was stopped; believed only when supervisord
-        agrees that the group is down, so a stray notification cannot declare a running stack stopped. A member whose
-        ``pid`` the memory guard just shed ended for lack of memory rather than of its own accord."""
+        agrees that the group is down, so a stray notification cannot declare a running stack stopped."""
         if self.stack.is_any_member_running():
             logger.warning("Ignored a stop notification for {} while the group still runs", member)
             return False
         if self.stack.lifecycle == Lifecycle.STOPPED:
             # The first member to go names the reason; the others leaving afterwards is the group ending as designed.
             return True
-        generation = self.stack.start_generation()
-        # A member that leaves before the stack reached RUNNING ended the start, not a running Screen.
-        is_running = self.stack.lifecycle == Lifecycle.RUNNING
-        if pid is not None and self._was_shed_by_now(pid):
-            cause = StopCause.OUT_OF_MEMORY
-        elif is_running:
-            cause = StopCause.CRASHED
-        else:
-            cause = StopCause.START_FAILED
-        # A Quit or a failed start recorded during the wait says how the group ended, and a start begun since is not
-        # this notice's to abort.
-        if self.stack.lifecycle == Lifecycle.STOPPED or self.stack.start_generation() != generation:
-            logger.info("Dropped the stop notification for {}: the stack moved on while it waited", member)
-            return True
-        logger.warning("The Screen stopped: {} ({}, {})", reason, member, cause.value.lower())
-        self.stack.mark_stopped(reason, cause)
+        logger.warning("The Screen stopped: {} ({})", reason, member)
+        self.stack.mark_stopped(reason)
         self.broadcaster.broadcast({"type": "stopped", "reason": reason, "member": member})
-        return True
-
-    def _was_shed_by_now(self, pid: int) -> bool:
-        """Whether the memory guard shed ``pid``, waiting a moment for its record: earlyoom writes it from a hook it
-        runs only once it has seen the process gone, which can be after supervisord's exit event reached us."""
-        deadline = self.clock() + _SHED_RECORD_GRACE_SECONDS
-        while not self.was_shed(pid):
-            if self.clock() >= deadline:
-                return False
-            self.sleep(_SHED_RECORD_POLL_SECONDS)
         return True
 
     # sessions (spec section 6.3)
