@@ -680,11 +680,7 @@ export class DesktopStore {
    */
   private toastFailure(whatFailed: string, error: unknown, { isLasting }: { readonly isLasting: boolean }): void {
     const told = failureSentence(describeRequestFailure(error), whatFailed);
-    if (!isLasting && !told.isReportable) {
-      this.toasts.show(told.message, { isLasting: false, details: told.details });
-      return;
-    }
-    this.toasts.show(told.message, { isLasting: true, details: told.details });
+    this.toasts.show(told.message, { isLasting: isLasting || told.isReportable, details: told.details });
   }
 
   /** Whether this window is viewing somebody else's desktop, in which case the change named by ``action`` is
