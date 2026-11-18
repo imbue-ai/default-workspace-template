@@ -26,6 +26,9 @@ observe`, its own supervised service) writes, and serves:
   (opened bare, or after the chat on screen is deleted) it shows the main chat
   (below), else the most recent chat, and with no chats one awaiting its first send
   (`POST /api/chats/awaiting`, held in memory until that send launches it).
+  A chat leaves the list the moment its delete is confirmed and comes back if
+  the delete is refused, and with no chats left the one awaiting its first send
+  is only asked for once no delete is on its way.
   With nothing signed in, a chat awaiting its first send shows "Connect an AI
   provider to start chatting." and a "Choose a provider" button above its
   composer, which stays in view (holding any draft) but disabled, and opens the
@@ -90,7 +93,8 @@ observe`, its own supervised service) writes, and serves:
   stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats/awaiting` (the chat an empty chat list opens on), `/api/chats`,
-  `/api/harnesses`, `/api/uploads`,
+  `/api/harnesses`, `/api/uploads` (and a chat's own uploads under
+  `/api/chats/<chat-id>/uploads`),
   `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/latchkey`, and
   `/api/secret-requests` (an agent's `request_secret.py` files a secret request;
   the transcript's secret card submits, declines, and re-reads it).
@@ -276,11 +280,11 @@ A handoff (`chat_handoffs.py`) is how a chat moves to another harness:
 `POST /api/chats/<chat-id>/handoff` with an `account_id` and the message typed
 for the new agent. The chat app stops the current agent's turn and hands its
 queue back (draining), asks the agent for a summary through the
-`handoff-summary` skill unless a fresh one exists (summarizing), then stops and
-archives it under `archived-<seq>-<name>-<id>` with one `mngr rename`, records
-its segment's length, and creates the successor under a pre-minted id with the
-chat's name, the account's binding and `chat_id`/`chat_seq` labels, carrying no
-message of its own (switching); the prompt filled in from
+`handoff-summary` skill unless a fresh one exists (summarizing), then archives
+it under `archived-<seq>-<name>-<id>` with one `mngr rename`, stops it while it
+creates the successor under a pre-minted id with the chat's name, the account's
+binding and `chat_id`/`chat_seq` labels, carrying no message of its own, and
+records the retiring segment's length once the stop is done (switching); the prompt filled in from
 `.agents/shared/references/continue-chat.md` follows through the send path. The
 prompt carries the summary in full when it is 64 KB or under
 (`INLINE_SUMMARY_MAX_BYTES`) and otherwise only its path, which the successor is
@@ -290,7 +294,12 @@ handoff where it stopped. While a chat converges it stays listed as
 `working` from the retiring agent; stop, start, rename, interrupt, the queue
 actions, and the model change answer 409; a send is held (202, `{"status":
 "held"}`) and delivered to the successor in order once it runs; destroy
-proceeds. `POST .../handoff/cancel` calls it off before switching begins and
+proceeds. Once a handoff has landed (the successor is the chat's last member and
+only the prompt and the held sends are left to deliver), the snapshot's `handoff`
+says so (`has_landed`), the chat is listed with the successor's own status, the
+page shows that agent's activity and its Stop, and an interrupt waits (up to
+`LANDED_SWITCH_WAIT_TIMEOUT_SECONDS`) for the deliveries to finish rather than
+answering 409, so its restart cannot race one. `POST .../handoff/cancel` calls it off before switching begins and
 returns the confirming message for the composer; a step that fails past the
 point of no return -- the create, the model pick, a delivery, or one mngr
 refuses -- leaves the chat in the `failed` phase with the reason and the step
@@ -350,12 +359,17 @@ the transcript (each carries the display decision its text would get in
 the transcript, so a held background-task report shows as its notice; the
 message the user switched with stands down once the `agent_switch` marker
 carrying it is on the transcript, where it renders as the successor's opening
-bubble), one handoff node in the transcript shows the switch's
-progress ("Handing off to Codex...", then "Handed off from Claude Code to Codex",
-expandable to the summary turn and the handoff prompt, with a rule under it
-once the switch has landed; a fresh start, which asked for no summary and sent
-no prompt, leaves no node once it has landed), the status row and the placeholder say
-what is happening, and for a handoff the Stop button is "Cancel switch" until
+bubble), one node in the transcript is the one place that shows the switch's
+progress: its phase while it runs ("Wrapping up with Claude Code...", "Claude
+Code is writing a summary...", "Starting Codex...", or "Restarting Claude Code
+on Anthropic 2..." for a rebind; "Starting Codex..." throughout for a fresh
+start), then "Handed off from Claude Code to Codex", expandable to the summary
+turn and the handoff prompt, with a rule under it once the switch has landed (a
+fresh start, which asked for no summary and sent no prompt, and a rebind leave
+no node once they have landed). The status row shows nothing until the
+switch lands, the placeholder says where a message typed
+meanwhile goes, the model chip names the target (the picked model, else the
+harness) until the switch lands, and for a handoff the Stop button is "Cancel switch" until
 the old agent is stopped; a failed start or a model pick the successor cannot
 take shows its reason over the composer with a retry (on any signed-in account
 after a handoff, on the same harness and lane after a rebind) and "Start a new
@@ -475,6 +489,21 @@ element context menu; a chat page drafts into its own composer, the root into
 the selected chat's (else through the shell), and a sub-agent view through the
 shell, its `shell:draft-text` relayed by the root.
 
+A long paste enters a composer as an attachment too (`models/pastedText.ts`):
+a paste of at least 4,000 characters or 80 lines is uploaded as a
+`pasted-text-<n>.txt` file instead of going into the box, so the draft stays
+short enough to read and edit and the agent opens the whole text from the file
+the sent message names, whatever its harness. The file is the chat's own
+content, so it goes to the chat's own folder
+(`data/.apps/chat/chats/<chat-id>/uploads/`, through
+`/api/chats/<chat-id>/uploads`) rather than the workspace's `data/uploads/`,
+and the chat's destroy removes it with the rest of the chat. Its chip
+says "Pasted text, N lines", and its "Paste as text" button puts the text back
+where the caret is (read from memory, or from the uploaded copy after a
+reload) and deletes the upload. A pasted image is still attached as an image,
+and a shorter paste stays text. The sent bubble names the paste by its file
+name, a link that opens it in Files.
+
 The create route is likewise how a chat is made from outside the chat page:
 `message_chat.py --create` posts to `/api/chats/create` (the Imbue Studio app's assist
 and update chats go through it, run inside the workspace by `mngr exec`). Beside
@@ -589,10 +618,15 @@ call to the new model instead of breaking it:
 The message goes to the model inside `<message>` tags, with the instruction
 repeated after it, and the system prompt says it is text to title: a small model
 handed a bare "what's 2+2?" answers "4" rather than naming the chat. The title
-names the subject in two to five words, short enough for the chat list to show
-whole. A leading label ("Title: ") is dropped from the answer, and an answer
-with a colon is refused: a "Short name: description" title's two halves restate
-each other ("Map app: build a simple map application").
+names the message's one main subject as tersely as it can while still saying
+what the chat is about, in fewer than 40 characters and preferably far fewer,
+and leaves out the details a long message lists (the tools, sources, places or
+steps it names). A leading label ("Title: ") is
+dropped from the answer, and an answer with a colon is refused: a "Short name:
+description" title's two halves restate each other ("Map app: build a simple map
+application"). A title longer than 40 characters is cut at a word and ends in
+"..." ("Information flow diagram for Obsidian..."), and the cut is logged as a
+warning.
 
 Names are ASCII. A chat's true name is the ASCII part of its name, so a name in
 another script would leave it a fragment ("React 待办应用" -> "React") or nothing,
@@ -970,30 +1004,97 @@ as shown, since a window for each is worse than missing one.
 The composer dictates (the workspace-voice-input spec in the mngr repository):
 a mic button left of Send, and Cmd+Shift+M (Ctrl+Shift+M off a Mac) anywhere in
 the chat page, turn speech into text on the user's own device. The speech model
-(Moonshine Base, the first engine) is downloaded by the page from Hugging Face at
-a pinned commit, checked against its size and SHA-256, kept in the browser's
-Cache Storage for the workspace's origin (one checked copy, which the browser
-evicts under storage pressure like any site's and which is checked again on
-every read), and run in a SharedWorker every chat page of the workspace shares
-for as long as any of them is open; the workspace stores and runs nothing for
-voice.
+(Moonshine Base on a desktop; Moonshine Tiny, lighter and a third of the
+download, on a phone or tablet, told by a finger being the primary pointer) is
+downloaded by the page from Hugging Face at a pinned commit, checked against its
+size and SHA-256, kept in the browser's Cache Storage for the workspace's origin
+(one checked copy, which the browser evicts under storage pressure like any
+site's and which is checked again on every read), and run in a SharedWorker
+every chat page of the workspace shares for as long as any of them is open; the
+workspace stores and runs nothing for voice. A phone or tablet also runs the
+model on WebAssembly's quantized weights even where it has WebGPU: the
+full-precision ones take three times the memory, more than a phone's browser
+gives a page. While a dictation runs or the model's load is shown, the page holds a screen wake lock
+(`frontend/src/models/screenWakeLock.ts`), so a phone's screen does not dim and
+lock mid-sentence while the person speaks without touching it; the lock is best
+effort, asked for again when the page comes back into view, and nothing is said
+when a browser refuses it. The root's inner frames, like the shell's, allow it
+beside the microphone.
 Silero VAD splits speech into utterances, and a bounded streaming window keeps
 every inference job short, so dictation has no length limit. The words land at
 the caret, fitted to the sentence around them; the unfinished tail is rewritten
 in place, and only final words reach the saved draft. The box is read-only while
 listening; Enter or Send finishes the words first and then sends; Escape drops
-the words that are not yet final. The mic carries every state (a ring while the
-model downloads, a spinner while starting and stopping, the neutral pressed tint
-with its capsule filling to the input level while listening), and a problem is
-told in a notice over the composer. The library is `system/libs/workspace_voice/`
-(its README has the pieces); `frontend/src/views/DictationButton.ts` draws the
-mic and the notice, and `MessageInput.ts` drives the dictation and writes its
-words. The page's policy admits the model's WebAssembly (`'wasm-unsafe-eval'`)
-and Hugging Face's hosts (see `create_application`), the manifest declares
-`uses_microphone`, and the root's inner frames allow the microphone. For a
-side-by-side evaluation, a browser's `localStorage` may name another registered
-engine under `workspace-voice:engine` and insist on a device (`webgpu` or
-`wasm`) under `workspace-voice:device`.
+the words that are not yet final.
+
+The speech model's load and dictation are two things. The model is the page's:
+one managed load, kept in step across the workspace's pages by the worker that
+holds the model. Dictation is the composer's, needs the model loaded, and loads
+nothing itself. The mic shows one of six states, named by its
+`data-dictation-state`:
+
+- `load-needed`: the model is not loaded. The glyph sits faint with a warning
+  badge on its corner, and the tooltip says what a press has to do before it
+  dictates: the one-time download with its size, when the page's own Cache
+  Storage does not hold the files of the variant this device runs, or the load
+  of files already here. A press means the whole of it: it asks for the model,
+  shows its load, and goes on to dictate when the load ends.
+- `loading`: the load is shown. The mic eases into a `Loading voice model` label
+  with the download's progress as a bar under it. The box around it is left as
+  it is: the text box stays live, so a press or a tap in it sets where the
+  dictated words will land.
+- `ready`: the model is loaded, and a press dictates at once.
+- `starting`, `listening`, `stopping`: a dictation is running (a spinner while
+  starting and stopping, the neutral pressed tint with its capsule filling to the
+  input level while listening). Two short bell tones say when the microphone is
+  open.
+
+A shown load can be dismissed: a press on the label, Escape, the mic's shortcut,
+text entered into the box, or the page going out of view. A press or a tap in
+the text box alone dismisses nothing, and neither does a press right behind the
+one that asked for the load, which is that press landing twice. Dismissing calls
+off the dictation the load was to go on to, but not the load: it runs on with
+the mic `load-needed`, and a press shows it again from where it has got to.
+After a dismissal made on the label, with the shortcut or with Escape, the text
+box takes the focus on a desktop; a touch device's focus stays where it is, so
+no keyboard comes up unasked. A load that ends while shown goes straight on to
+dictation, with no second press; one that fails is told in a notice over the
+composer, whose Retry asks again. A load that ends after a dismissal turns the
+mic `ready` with no sound and no notice, and starts nothing; one that fails
+then says nothing. A model loaded from another page of the workspace turns this page's mic
+`ready` as well. Until a page has found out the model's state as its composer
+mounts (five seconds at most), the mic is drawn `ready`, so a loaded model never
+flashes the badge.
+
+A problem with the microphone or with words that could not be transcribed is
+told in the same notice. The library is `system/libs/workspace_voice/` (its
+README has the pieces); `frontend/src/views/DictationButton.ts` draws the mic
+and the notice, and `MessageInput.ts` follows the page's speech model, drives
+the dictation, and writes its words. The page's policy admits the model's
+WebAssembly (`'wasm-unsafe-eval'`) and Hugging Face's hosts (see
+`create_application`), the manifest declares `uses_microphone`, and the root's
+inner frames allow the microphone. For a side-by-side evaluation, a browser's
+`localStorage` may name another registered engine under
+`workspace-voice:engine` and insist on a device (`webgpu` or `wasm`) under
+`workspace-voice:device`.
+
+Speech recognition mishears, so a message sent from a draft that dictation wrote
+into tells the model so: it ends with a dictation note, a short paragraph in a
+`<dictation-note>` tag pair set off from the words by a blank line (and ahead of
+the attachment block, which has to end the message). The composer keeps one mark
+per chat's draft, in `localStorage` under `message-dictated:<chat id>` beside
+the draft itself: set when final words land, kept through edits and partial
+deletes, and dropped once the box is emptied or the message is sent. A message
+put back in the composer (a failed send, a draft the switch dialog handed back)
+is marked again, and queued text returned to it comes back without its notes and
+marks the draft instead. A slash command or bash-mode input is sent without the
+note, since a harness reads one only as the whole message. The note is for the
+model alone: the agent receives it and the transcript keeps it, while every
+bubble that shows a person's message, the tray's notification bubbles, the
+notification the owner gets for a mention, and the chat-naming prompt take it
+out by its tags.
+`frontend/src/models/dictationNote.ts` holds the note and the marks, and
+`imbue/chat/dictation_note.py` the backend's half.
 
 ## Development
 

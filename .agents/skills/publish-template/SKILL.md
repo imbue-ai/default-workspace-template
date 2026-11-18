@@ -312,13 +312,13 @@ approval card from it -- so two missing means two calls, back to back:
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
-    -H 'Content-Type: application/json' \
+    -H 'Content-Type: application/json' -H 'X-Latchkey-Device: *' \
     -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "predefined", "payload": {"scope": "github-rest-api", "permissions": ["github-read-user", "github-write-all"]}, "rationale": "Publish this template as a new GitHub repo on your account."}'
 ```
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
-    -H 'Content-Type: application/json' \
+    -H 'Content-Type: application/json' -H 'X-Latchkey-Device: *' \
     -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "predefined", "payload": {"scope": "github-git", "permissions": ["github-git-write"]}, "rationale": "Push the published template'"'"'s git history to the new repo."}'
 ```
 
