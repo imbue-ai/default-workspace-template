@@ -79,8 +79,9 @@ HEALTH_INTERVAL_SECONDS = 1.0
 
 _PREFLIGHT_ATTEMPTS = 240
 
-# Where the memory guard (earlyoom) records each process it stops, resolved as
-# ``oom_priority.paths.shed_ledger_path`` resolves it: update-self is standard library only.
+# Where the memory guard (earlyoom) records each process it stops: the override and layout of
+# ``oom_priority.paths.shed_ledger_path``, with the repo root for its work dir, since update-self
+# is standard library only.
 _OOM_PRIORITY_RUNTIME_DIR_ENV = "OOM_PRIORITY_RUNTIME_DIR"
 _OOM_PRIORITY_RUNTIME_SUBDIR = Path("runtime") / "oom_priority"
 _SHED_RECORD_TYPE = "process_shed"
