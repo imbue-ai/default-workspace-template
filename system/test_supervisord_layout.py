@@ -224,8 +224,9 @@ def test_every_program_tolerates_settings_newer_than_its_mngr() -> None:
 
 
 # The programs that start the moment supervisord does: the shell and the chat app, what they need
-# to serve the desktop, the provider chooser and a sign-in, and the OOM machinery that has to be
-# running before anything else allocates. Every other built-in program is the second wave.
+# to serve the desktop, the provider chooser and a sign-in, share-gateway (relay visitors and the
+# owner's web access reach the shell through it), and the OOM machinery that has to be running
+# before anything else allocates. Every other built-in program is the second wave.
 _FIRST_WAVE_PROGRAMS: frozenset[str] = frozenset(
     {
         "system_interface",
@@ -233,6 +234,7 @@ _FIRST_WAVE_PROGRAMS: frozenset[str] = frozenset(
         "agent-observer",
         "owner-exec",
         "vm-exec-register",
+        "share-gateway",
         "earlyoom",
         "oom-tag-backstop",
         "publish_cgroup_meminfo",
