@@ -1,12 +1,17 @@
+import errno
 from pathlib import Path
 
 import pytest
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.system_interface.shell.errors import NOT_SAVED_SENTENCE
+from imbue.system_interface.shell.errors import OUT_OF_SPACE_SENTENCE
+from imbue.system_interface.shell.errors import RefusalKind
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.state_files import parse_versioned_document
 from imbue.system_interface.shell.state_files import read_json_object
+from imbue.system_interface.shell.state_files import state_write_error
 from imbue.system_interface.shell.state_files import write_json_atomic
 
 
@@ -30,9 +35,20 @@ def test_a_write_under_a_path_that_is_not_a_directory_raises_the_state_error(tmp
     directory), yet the caller still gets the wrapped error and the file is left as it was."""
     blocking_file = tmp_path / "not-a-directory"
     blocking_file.write_text("in the way")
-    with pytest.raises(ShellStateError, match="cannot write shell state file"):
+    with pytest.raises(ShellStateError, match="cannot write shell state file") as raised:
         write_json_atomic(blocking_file / "desktops.json", {"version": 1})
     assert blocking_file.read_text() == "in the way"
+    assert raised.value.user_facing_message == NOT_SAVED_SENTENCE and raised.value.kind is RefusalKind.NOT_SAVED
+
+
+@pytest.mark.parametrize("full", [errno.ENOSPC, errno.EDQUOT])
+def test_a_write_that_finds_the_disk_full_says_the_workspace_is_out_of_space(tmp_path: Path, full: int) -> None:
+    path = tmp_path / "desktops.json"
+    error = state_write_error(path, OSError(full, "No space left on device"))
+    assert error.user_facing_message == OUT_OF_SPACE_SENTENCE
+    assert error.kind is RefusalKind.OUT_OF_SPACE
+    # The path and the errno stay in the developer's reason, for the log and "See details".
+    assert str(error) == f"cannot write shell state file {path}: [Errno {full}] No space left on device"
 
 
 class _VersionedDocument(FrozenModel):

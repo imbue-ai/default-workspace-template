@@ -22,6 +22,8 @@ dependencies = [
 [dependency-groups]
 dev = [
     "app-schema[testing]",
+    "playwright>=1.40",
+    "pytest-playwright>=0.4",
     "pytest>=9.0",
     "pytest-cov>=7.0.0",
     "pytest-timeout>=2.3.0",

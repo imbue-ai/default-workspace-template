@@ -5,8 +5,9 @@ import m from "mithril";
 import { PARTS } from "@imbue/workspace-ui/src/themes/parts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThemeChrome } from "../model/themes";
+import { refusedWith } from "../testing/failures";
 import { appRecord, themeCatalog, themeRecord } from "../testing/records";
-import { ThemeGallery, galleryStateOf } from "./ThemeGallery";
+import { ThemeGallery, galleryFailureNotice, galleryStateOf } from "./ThemeGallery";
 
 beforeEach(() => {
   // jsdom has no matchMedia, which the workspace character asks about reduced motion.
@@ -125,5 +126,34 @@ describe("ThemeGallery", () => {
     } finally {
       document.documentElement.style.removeProperty("--term-background");
     }
+  });
+});
+
+describe("galleryFailureNotice", () => {
+  it("names what failed, keeps the reason behind See details, and offers Try again", () => {
+    const reload = vi.fn();
+    const failed = galleryFailureNotice(refusedWith(500, { detail: "themes directory unreadable" }), reload, true);
+    expect(failed).toMatchObject({
+      message: "The theme gallery couldn't load. Try again. If this persists, report a bug.",
+      details: "HTTP 500\nthemes directory unreadable",
+      isReportable: true,
+    });
+    expect(failed.actions.map((action) => action.label)).toEqual(["Try again"]);
+    failed.actions[0].run();
+    expect(reload).toHaveBeenCalledTimes(1);
+
+    const unanswered = galleryFailureNotice(new TypeError("Failed to fetch"), reload, true);
+    expect(unanswered.message).not.toContain("Failed to fetch");
+    expect(unanswered.actions.map((action) => action.label)).toEqual(["Try again"]);
+  });
+
+  it("asks for no bug report where none can be opened, keeping Try again", () => {
+    const failed = galleryFailureNotice(refusedWith(500, { detail: "themes directory unreadable" }), vi.fn(), false);
+    expect(failed).toMatchObject({
+      message: "The theme gallery couldn't load. Try again.",
+      details: "HTTP 500\nthemes directory unreadable",
+      isReportable: false,
+    });
+    expect(failed.actions.map((action) => action.label)).toEqual(["Try again"]);
   });
 });

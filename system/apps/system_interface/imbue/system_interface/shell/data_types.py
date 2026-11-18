@@ -43,6 +43,7 @@ from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.app_theming import theming_of
 from imbue.system_interface.shell.errors import InvalidShellValueError
+from imbue.system_interface.shell.errors import RefusalKind
 from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import PageId
 from imbue.system_interface.shell.primitives import ReportId
@@ -367,6 +368,10 @@ class LaunchOutcome(FrozenModel):
     window: Window = Field(description="The window opened, focused, or navigated, as the requesting client sees it")
     path: WindowPath = Field(description="The page path the launch resolved to")
     is_new: bool = Field(description="True when a window was opened for the page")
+    unsaved: RefusalKind | None = Field(
+        default=None,
+        description="Why the shell could not record where the window is (out_of_space or not_saved); None when it did",
+    )
 
 
 class WindowLocationReport(FrozenModel):

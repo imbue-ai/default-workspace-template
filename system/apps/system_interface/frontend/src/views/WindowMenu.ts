@@ -198,19 +198,21 @@ export function windowMenuRows(app: AppRecord | undefined, actions: WindowMenuAc
 /** What a phone's window menu offers (plan-phone-interface.md): no placement verbs, no pull-out, and no Close,
  *  since a window's row has its own X. */
 export interface PhoneWindowMenuActions {
-  readonly refresh: () => void;
+  /** Null when the window has no page to refresh: its app is no longer part of the workspace. */
+  readonly refresh: (() => void) | null;
   /** Null when there is no share surface: a critical app, or a page no chrome embeds. */
   readonly share: (() => void) | null;
   /** Null when the workspace cannot stop the app. */
   readonly quit: (() => void) | null;
 }
 
-/** The phone's window menu: Refresh, then Share and Quit where they apply. */
+/** The phone's window menu: Refresh, then Share and Quit, each where it applies. */
 export function phoneWindowMenuRows(app: AppRecord | undefined, actions: PhoneWindowMenuActions): MenuRow[] {
-  return [
-    { kind: "action", key: "refresh", label: "Refresh", icon: "refresh", onSelect: actions.refresh },
-    ...shareAndQuitRows(app, actions.share, actions.quit),
-  ];
+  const refresh: MenuRow[] =
+    actions.refresh === null
+      ? []
+      : [{ kind: "action", key: "refresh", label: "Refresh", icon: "refresh", onSelect: actions.refresh }];
+  return [...refresh, ...shareAndQuitRows(app, actions.share, actions.quit)];
 }
 
 /** The presentation verbs of a pinned entry's menu (pinned-taskbar-entries plan section 4.4). */

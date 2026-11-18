@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from app_manifest.content_security_policy import inline_source
 from app_manifest.testing import assert_document_policy_admits_page
 from app_schema.testing import CROSS_SITE_FETCH_HEADERS
 from app_schema.testing import assert_api_schema_describes_app
@@ -35,18 +36,22 @@ from imbue.system_interface.documents import THEME_GALLERY_ROUTE
 from imbue.system_interface.presence import PRESENCE_CONNECTED_WINDOW
 from imbue.system_interface.presence import utc_now
 from imbue.system_interface.profiles import ProfileResolver
+from imbue.system_interface.server import NOT_BUILT_LAUNCH_PATH
 from imbue.system_interface.server import THEME_GALLERY_FILENAME
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
+from imbue.system_interface.server import _NOT_BUILT_REPAIR_MESSAGE
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
+from imbue.system_interface.shell.launches import LaunchPostOutcome
 from imbue.system_interface.shell.testing import TEST_PAGE_ID
 from imbue.system_interface.shell.testing import client_report
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import identity_headers
+from imbue.system_interface.shell.testing import not_built_shell
 from imbue.system_interface.shell.tour import ONBOARDING_MEDIA_ORIGIN
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
@@ -466,7 +471,7 @@ def test_not_built_repair_message_quotes_the_heading_the_reader_is_looking_at() 
     quoted = re.search(r'"(.*?)[,.?!]?"', message)
     assert quoted is not None, f"the message no longer quotes anything: {message}"
 
-    heading = re.search(r"<h1>(.*?)</h1>", render_frontend_not_built_page(None), re.DOTALL)
+    heading = re.search(r"<h1>(.*?)</h1>", render_frontend_not_built_page(None, True, ""), re.DOTALL)
     assert heading is not None, "the page no longer carries a heading"
     assert quoted.group(1).lower().startswith(heading.group(1).strip().lower())
 
@@ -493,7 +498,7 @@ def test_not_built_repair_command_reaches_the_page_as_text_not_markup() -> None:
     the reader's clipboard.
     """
     with patch("imbue.system_interface.server._NOT_BUILT_REPAIR_COMMAND", 'mngr create --message "a & b <c>"'):
-        page = render_frontend_not_built_page(None)
+        page = render_frontend_not_built_page(None, True, "")
 
     assert 'mngr create --message "a &amp; b &lt;c&gt;"' in page
     assert "<c>" not in page
@@ -503,7 +508,7 @@ def test_not_built_repair_command_reaches_the_page_as_text_not_markup() -> None:
     # reader reads and copies, and it has to be the one the CLI check and the
     # shell split validated. The assertions above only show that escaping
     # happens; this is what says the real command survives it.
-    shown = _repair_line_shown_on(render_frontend_not_built_page(None))
+    shown = _repair_line_shown_on(render_frontend_not_built_page(None, True, ""))
     assert shown == _NOT_BUILT_REPAIR_COMMAND
 
 
@@ -538,6 +543,55 @@ def test_not_built_repair_line_splits_the_way_a_shell_splits_it() -> None:
         timeout=30,
     )
     assert printed_words.stdout.splitlines() == list(_NOT_BUILT_REPAIR_ARGV)
+
+
+def test_the_not_built_page_asks_an_agent_through_the_primary_text_action_and_opens_a_terminal_session(
+    tmp_path: Path,
+) -> None:
+    """The placeholder's "Ask an agent to fix this" sends the repair message through the launcher's primary text
+    action, the main chat rather than a new one, and answers where that chat's page is; its "See details" terminal is
+    a session of its own."""
+    app, posts = not_built_shell(
+        tmp_path,
+        [
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-1"}),
+            LaunchPostOutcome(status_code=500, body={"detail": "boom"}),
+        ],
+    )
+    client = app.test_client()
+    page = client.get("/")
+    assert page.headers[FRONTEND_BUILT_HEADER] == "false"
+    assert "var isAgentOffered = true;" in page.text
+
+    asked = client.post(NOT_BUILT_LAUNCH_PATH, json={"purpose": "repair_agent"})
+    assert asked.status_code == 200, asked.get_json()
+    assert asked.get_json() == {"label": "helper-y2", "path": "/?chat=agent-1", "display_name": "Helper"}
+    (post,) = posts
+    assert post.url == "http://localhost:7002/api/intake"
+    assert post.body == {"target": "main_chat", "message": _NOT_BUILT_REPAIR_MESSAGE}
+
+    # A launch that fails answers as the launch route does: the app's own words, and no sentence of the shell's, for
+    # the page to word.
+    failed = client.post(NOT_BUILT_LAUNCH_PATH, json={"purpose": "repair_agent"})
+    assert failed.status_code == 502
+    assert failed.get_json() == {"detail": "helper answered the launch with 500: boom"}
+
+    terminal = client.post(NOT_BUILT_LAUNCH_PATH, json={"purpose": "terminal"})
+    assert terminal.status_code == 200, terminal.get_json()
+    assert terminal.get_json() == {"label": "terminal-x1", "path": "/new", "display_name": "Terminal"}
+
+
+def test_the_not_built_page_offers_no_agent_without_an_app_to_ask_and_a_preview_asks_nothing(tmp_path: Path) -> None:
+    app, posts = not_built_shell(tmp_path / "bare", [], is_chat_registered=False)
+    client = app.test_client()
+    assert "var isAgentOffered = false;" in client.get("/").text
+    assert client.post(NOT_BUILT_LAUNCH_PATH, json={"purpose": "repair_agent"}).status_code == 404
+
+    preview, preview_posts = not_built_shell(tmp_path / "preview", [], is_preview=True)
+    refused = preview.test_client().post(NOT_BUILT_LAUNCH_PATH, json={"purpose": "repair_agent"})
+    assert refused.status_code == 403
+    assert refused.get_json()["user_facing_message"] == refused.get_json()["detail"]
+    assert posts == [] and preview_posts == []
 
 
 def test_assets_404_rather_than_falling_through_to_the_spa_shell(tmp_path: Path) -> None:
@@ -615,6 +669,33 @@ def test_http_errors_keep_their_status_codes(client: FlaskClient) -> None:
     """
     assert client.post("/api/definitely-not-a-route").status_code == 405
     assert client.put("/api/layout/broadcast").status_code == 405
+
+
+def test_a_page_that_fails_to_load_shows_a_sentence_and_a_try_again_and_a_call_keeps_its_json(
+    tmp_path: Path,
+) -> None:
+    """The workspace frame gets a page of ours, the exception behind "See details", rather than raw JSON; a caller
+    that reads JSON still gets the developer's reason."""
+    static_dir = tmp_path / "static"
+    # A shell document that exists but cannot be read.
+    (static_dir / "index.html").mkdir(parents=True)
+    state = build_test_state()
+    state.static_directory = static_dir
+    test_client = create_application(state).test_client()
+
+    page = test_client.get("/", headers={"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"})
+
+    assert page.status_code == 500 and page.mimetype == "text/html"
+    assert "This workspace couldn't load. Try again. If this persists, report a bug." in page.text
+    assert 'id="try-again">Try again</button>' in page.text
+    # Try again is bound from the page's own script, which its policy admits by hash; no inline handler would run.
+    script = page.text.split("<script>")[1].split("</script>")[0]
+    assert "location.reload()" in script
+    assert inline_source(script) in page.headers["Content-Security-Policy"]
+    details = page.text.split("<summary>See details</summary><pre>")[1].split("</pre>")[0]
+    assert details.startswith("Internal server error: [Errno ") and "index.html" in details
+    called = test_client.get("/", headers={"Accept": "*/*"})
+    assert called.status_code == 500 and called.get_json()["detail"].startswith("Internal server error: [Errno ")
 
 
 def test_an_unknown_api_path_is_a_json_404_not_the_app_shell(client: FlaskClient) -> None:
@@ -1162,7 +1243,7 @@ def test_not_built_page_coordinate_regex_matches_the_canonical_one() -> None:
     canonical = re.search(r"WORKSPACE_COORDINATE_LABEL = (/.+/i);", app_contract_ts.read_text())
     assert canonical is not None, f"the canonical regex is no longer declared in {app_contract_ts}"
 
-    page = render_frontend_not_built_page("terminal-x7k9q2w1")
+    page = render_frontend_not_built_page("terminal-x7k9q2w1", True, "")
     in_page = re.findall(r"(/\^\(\?:.+?/i)\.test\(", page)
     assert in_page == [canonical.group(1)], (
         f"the placeholder's coordinate regex has drifted from {app_contract_ts}: "

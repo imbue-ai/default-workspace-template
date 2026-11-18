@@ -6,11 +6,13 @@ the listener (so the app can bind), asks for the app to be woken, and is answere
 reloads itself until the app answers, so neither ``mngr forward`` nor the share gateway learns anything about
 starting apps: they see a backend that answers. It reads the request only far enough to answer sensibly, never
 proxies anything, and answers every method and path the same way. The page goes out under a
-``Content-Security-Policy`` admitting its inline stylesheet and nothing else, like the share gateway's own loading page.
+``Content-Security-Policy`` admitting its inline stylesheet and its own inline script and nothing else, like the share
+gateway's own loading page.
 """
 
 import errno
 import html
+import json
 import socket
 import threading
 from collections.abc import Callable
@@ -19,6 +21,7 @@ from typing import Final
 from typing import assert_never
 from urllib.parse import urlsplit
 
+from app_manifest.content_security_policy import inline_script_hashes
 from app_manifest.content_security_policy import inline_source
 from loguru import logger
 from pydantic import Field
@@ -38,17 +41,20 @@ _LOOPBACK_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "localhost", ":
 _REQUEST_READ_TIMEOUT_SECONDS: Final[float] = 2.0
 _REQUEST_READ_LIMIT_BYTES: Final[int] = 8192
 _LISTEN_BACKLOG: Final[int] = 8
-# A stopped app's page reloads every few seconds until the app answers; one that failed to start waits longer
-# between attempts, since each reload is a new request and so a new wake.
+# A stopped app's page reloads every few seconds until the app answers. A page saying it could not start does not
+# reload itself: each reload is a new request and so a new wake, which spends the app's wake budget, so it waits for
+# the person's Try again. Its answer still asks a client that retries on its own to wait longer between attempts.
 STARTING_REFRESH_SECONDS: Final[int] = 2
 FAILED_REFRESH_SECONDS: Final[int] = 15
 
 
 class ParkedPageKind(LowerCaseStrEnum):
-    """What the parker answers the request that woke the app with: that it is starting, or that it could not start."""
+    """What the parker answers the request that woke the app with: that it is starting, that it could not start, or
+    that it was not started again because its recent starts all failed (the wake budget is spent)."""
 
     STARTING = auto()
     FAILED = auto()
+    BUDGET_SPENT = auto()
 
 
 class ParkingTarget(FrozenModel):
@@ -70,27 +76,152 @@ def parking_target_of(url: str) -> ParkingTarget | None:
 
 _PAGE_STYLE: Final[str] = (
     "body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;\n"
-    "height:100vh;margin:0;color:#334155}div{text-align:center;max-width:32rem}code{font-size:0.9em}"
-)
-_PAGE_CONTENT_SECURITY_POLICY: Final[str] = (
-    f"default-src 'none'; style-src {inline_source(_PAGE_STYLE)}; base-uri 'none'; form-action 'none'"
+    "height:100vh;margin:0;color:#334155}div{text-align:center;max-width:32rem}code{font-size:0.9em}\n"
+    "button{font:inherit;padding:0.4rem 1rem;border:1px solid #cbd5e1;border-radius:6px;background:#fff;"
+    "color:inherit;\ncursor:pointer}button:hover{background:#f1f5f9}details{margin-top:1.5rem;font-size:0.85em;"
+    "color:#64748b}\nsummary{cursor:pointer}"
 )
 
 _PAGE_TEMPLATE: Final[str] = """<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="{refresh}">
+<html><head><meta charset="utf-8">{refresh}
 <title>{title}</title>
 <style>{style}</style></head>
-<body><div><h1>{heading}</h1><p>{detail}</p></div></body></html>
+<body><div><h1>{heading}</h1>{body}</div></body></html>
 """
+
+# The app contract's wire (system/libs/workspace_ui/src/app_contract.ts), which this page speaks without the
+# contract module: the parker answers every path with this page, so it cannot serve the module beside it.
+SHELL_HANDSHAKE_TYPE: Final[str] = "shell:handshake"
+SHELL_ASK_AGENT_TYPE: Final[str] = "shell:ask-agent"
+SHELL_ASK_AGENT_RESULT_TYPE: Final[str] = "shell:ask-agent-result"
+SHELL_REPORT_BUG_TYPE: Final[str] = "shell:report-bug"
+ASKING_AN_AGENT_LABEL: Final[str] = "Asking an agent\u2026"
+CHANGE_NOT_ANSWERED_SENTENCE: Final[str] = (
+    "The workspace didn't answer, so Imbue Studio can't tell whether this went through."
+)
+
+# What a page that could not start offers: a Try again that asks once more, an agent asked to look at it (shown once
+# a shell that frames the page has greeted it, since only a shell can ask one; while the shell has not answered the
+# ask it reads "Asking an agent...", and a failed ask is told under it, its details at the top of the page's one "See
+# details"), and the log's command for whoever wants it. A handshake from a shell with another ``shellId`` means the
+# shell restarted, so an ask still out is settled as not answered (the same shell greets the page again for ordinary
+# reasons); the old shell's answer, if it still comes, replaces that. A failed ask that asks for a bug report offers
+# "Report a bug" while the shell's latest handshake says it can open one.
+_FAILED_BODY_TEMPLATE: Final[str] = (
+    '{sentence}<p><button type="button" id="try-again">Try again</button> '
+    '<button type="button" id="ask-agent" hidden>Ask an agent to look at it</button></p>'
+    '<p id="ask-agent-failure" hidden></p>'
+    '<p><button type="button" id="ask-agent-report" hidden>Report a bug</button></p>'
+    "<details><summary>See details</summary>"
+    '<pre id="ask-agent-failure-details" hidden></pre>'
+    "<p>The program's log may say why: "
+    "<code>supervisorctl tail {program} stderr</code></p></details>"
+    "<script>(function () {"
+    'document.getElementById("try-again").addEventListener("click", function () { location.reload(); });'
+    'var ask = document.getElementById("ask-agent");'
+    'var failure = document.getElementById("ask-agent-failure");'
+    'var failureDetails = document.getElementById("ask-agent-failure-details");'
+    'var report = document.getElementById("ask-agent-report");'
+    "var shown = null;"
+    "var canReportBug = false;"
+    "var askLabel = ask.textContent;"
+    "var pendingId = null;"
+    "var unansweredId = null;"
+    "var shellId = null;"
+    "if (window.parent === window) return;"
+    "function showReport() {"
+    "report.hidden = !(canReportBug && shown !== null && shown.isReportable === true);"
+    "}"
+    "function show(told) {"
+    "shown = told;"
+    "showReport();"
+    "failure.hidden = told === null;"
+    "failureDetails.hidden = told === null || !told.details;"
+    "if (told === null) return;"
+    "failure.textContent = told.message;"
+    'failureDetails.textContent = told.details || "";'
+    "}"
+    "function settle(told) {"
+    "pendingId = null;"
+    "ask.disabled = false;"
+    "ask.textContent = askLabel;"
+    "show(told);"
+    "}"
+    'window.addEventListener("message", function (event) {'
+    "if (event.source !== window.parent || !event.data) return;"
+    "var data = event.data;"
+    "if (data.type === {handshake}) {"
+    "ask.hidden = false;"
+    "canReportBug = data.canReportBug === true;"
+    "showReport();"
+    'var greeter = typeof data.shellId === "string" ? data.shellId : "";'
+    "if (shellId !== null && greeter !== shellId && pendingId !== null) {"
+    "unansweredId = pendingId;"
+    "settle({ message: {not_answered}, details: null });"
+    "}"
+    "shellId = greeter;"
+    "} else if (data.type === {result} && data.requestId === pendingId) {"
+    "settle(data.isOpened ? null : data.failure);"
+    "} else if (data.type === {result} && data.requestId === unansweredId) {"
+    "unansweredId = null;"
+    "show(data.isOpened ? null : data.failure);"
+    "}"
+    "});"
+    'report.addEventListener("click", function () {'
+    "if (shown !== null) {"
+    'window.parent.postMessage({ type: {report_bug}, message: shown.message, details: shown.details || null }, "*");'
+    "}"
+    "});"
+    'ask.addEventListener("click", function () {'
+    "if (pendingId !== null) return;"
+    "unansweredId = null;"
+    "pendingId = Math.random().toString(16).slice(2) + Date.now().toString(16);"
+    "ask.disabled = true;"
+    "ask.textContent = {asking};"
+    "show(null);"
+    "window.parent.postMessage("
+    '{ type: {ask_agent}, text: {request}, requestId: pendingId, showsOutcome: true }, "*");'
+    "});"
+    "})();</script>"
+)
+
+
+@pure
+def _script_literal(value: str) -> str:
+    """``value`` as a JavaScript string literal that cannot close the script element it sits in."""
+    return json.dumps(value).replace("<", "\\u003c")
+
+
+@pure
+def could_not_start_request(display_name: str, program: str) -> str:
+    """What an agent asked to look at an app that could not start is told: the app, and where its log is."""
+    return (
+        f"{display_name} couldn't start in this workspace. Its program's log may say why "
+        f"(supervisorctl tail {program} stderr). Please find out why and get it running again."
+    )
+
+
+@pure
+def could_not_start_sentence(display_name: str) -> str:
+    return f"{display_name} couldn't start."
+
+
+@pure
+def start_budget_spent_sentence(display_name: str) -> str:
+    return (
+        f"{display_name} failed to start several times in the last few minutes, so it wasn't started again. "
+        "Try again in a few minutes."
+    )
 
 
 @pure
 def parked_refresh_seconds(kind: ParkedPageKind) -> int:
-    """How long a page of the kind waits before asking again: the page's meta refresh and the answer's Retry-After."""
+    """How long a client that retries on its own should wait before asking again: the answer's Retry-After, and the
+    starting page's own reload."""
     match kind:
         case ParkedPageKind.STARTING:
             return STARTING_REFRESH_SECONDS
-        case ParkedPageKind.FAILED:
+        case ParkedPageKind.FAILED | ParkedPageKind.BUDGET_SPENT:
             return FAILED_REFRESH_SECONDS
         case _ as unreachable:
             assert_never(unreachable)
@@ -98,30 +229,60 @@ def parked_refresh_seconds(kind: ParkedPageKind) -> int:
 
 @pure
 def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> str:
-    """The page the parker answers with: starting (reloading every few seconds) or could not start."""
+    """The page the parker answers with: starting (reloading every few seconds until the app answers), or could not
+    start (with a Try again, an agent to look at it, and the program's log behind "See details")."""
     name = html.escape(display_name)
+    failed_body = (
+        _FAILED_BODY_TEMPLATE.replace("{program}", html.escape(program))
+        .replace("{handshake}", _script_literal(SHELL_HANDSHAKE_TYPE))
+        .replace("{ask_agent}", _script_literal(SHELL_ASK_AGENT_TYPE))
+        .replace("{result}", _script_literal(SHELL_ASK_AGENT_RESULT_TYPE))
+        .replace("{report_bug}", _script_literal(SHELL_REPORT_BUG_TYPE))
+        .replace("{asking}", _script_literal(ASKING_AN_AGENT_LABEL))
+        .replace("{not_answered}", _script_literal(CHANGE_NOT_ANSWERED_SENTENCE))
+        .replace("{request}", _script_literal(could_not_start_request(display_name, program)))
+    )
     match kind:
         case ParkedPageKind.STARTING:
             return _PAGE_TEMPLATE.format(
                 style=_PAGE_STYLE,
-                refresh=parked_refresh_seconds(kind),
+                refresh=f'<meta http-equiv="refresh" content="{parked_refresh_seconds(kind)}">',
                 title=f"Starting {name}",
                 heading=f"Starting {name}&hellip;",
-                detail="The app was stopped while nothing showed it. This page opens it once it answers.",
+                body="<p>This opens on its own once it's ready.</p>",
             )
         case ParkedPageKind.FAILED:
             return _PAGE_TEMPLATE.format(
                 style=_PAGE_STYLE,
-                refresh=parked_refresh_seconds(kind),
-                title=f"{name} could not start",
-                heading=f"{name} could not start",
-                detail=(
-                    f"The app's program did not stay up. Its log says why: "
-                    f"<code>supervisorctl tail {html.escape(program)} stderr</code>. This page tries again in a while."
+                refresh="",
+                title=f"{name} couldn't start",
+                heading=html.escape(could_not_start_sentence(display_name), quote=False),
+                body=failed_body.replace("{sentence}", ""),
+            )
+        case ParkedPageKind.BUDGET_SPENT:
+            return _PAGE_TEMPLATE.format(
+                style=_PAGE_STYLE,
+                refresh="",
+                title=f"{name} couldn't start",
+                heading=html.escape(could_not_start_sentence(display_name), quote=False),
+                body=failed_body.replace(
+                    "{sentence}", f"<p>{html.escape(start_budget_spent_sentence(display_name), quote=False)}</p>"
                 ),
             )
         case _ as unreachable:
             assert_never(unreachable)
+
+
+@pure
+def _page_content_security_policy(page: str) -> str:
+    """The policy a parked page goes out under: its own stylesheet and its own inline script (the could-not-start
+    page's buttons), each admitted by hash, and nothing else."""
+    script_sources = inline_script_hashes(page)
+    script_directive = f"; script-src {' '.join(script_sources)}" if script_sources else ""
+    return (
+        f"default-src 'none'; style-src {inline_source(_PAGE_STYLE)}{script_directive}; base-uri 'none'; "
+        "form-action 'none'"
+    )
 
 
 @pure
@@ -134,7 +295,7 @@ def parked_response_bytes(kind: ParkedPageKind, page: str) -> bytes:
         f"Retry-After: {parked_refresh_seconds(kind)}\r\n"
         "Cache-Control: no-store\r\n"
         "Content-Type: text/html; charset=utf-8\r\n"
-        f"Content-Security-Policy: {_PAGE_CONTENT_SECURITY_POLICY}\r\n"
+        f"Content-Security-Policy: {_page_content_security_policy(page)}\r\n"
         f"Content-Length: {len(body)}\r\n"
         "Connection: close\r\n"
         "\r\n"

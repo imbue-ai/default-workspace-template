@@ -31,7 +31,10 @@ import {
   TILE_PART,
   partAttrs,
 } from "@imbue/workspace-ui/src/themes/parts";
+import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { avatarImageUrl } from "../model/api";
+import type { FailureNotice } from "../model/failures";
 import type { AppRecord } from "../model/records";
 import { chromeOf, resolveDesktopTheme, type ThemeCatalog, type ThemeRecord } from "../model/themes";
 import { IMBUE_CHARACTER_DESIGN_ID, ImbueCharacter } from "./character/ImbueCharacter";
@@ -65,6 +68,19 @@ export interface GalleryState {
    *  served. */
   readonly shown: ThemeRecord;
   readonly apps: readonly AppRecord[];
+}
+
+const GALLERY_NOT_LOADED = "The theme gallery couldn't load";
+
+/** Why the gallery could not load its themes or apps, with a Try again that loads the page again; a sentence that
+ *  would ask for a bug report asks only for the Try again where none can be opened (``canReportBug``). */
+export function galleryFailureNotice(error: unknown, reload: () => void, canReportBug: boolean): FailureNotice {
+  const told = failureSentence(describeRequestFailure(error), GALLERY_NOT_LOADED);
+  const actions = [{ label: "Try again", run: reload }];
+  if (told.isReportable && !canReportBug) {
+    return { message: `${GALLERY_NOT_LOADED}. Try again.`, details: told.details, isReportable: false, actions };
+  }
+  return { ...told, actions };
 }
 
 /** The gallery of the theme `requested` names, or null when the catalog has no such theme. */
@@ -111,6 +127,7 @@ function windowSpecimen(state: GalleryState, isFocused: boolean, title: string):
             app,
             state: "NORMAL",
             isFocused,
+            canRefresh: true,
             isMenuOpen: false,
             sizeMenuTrigger: {},
             onControl: () => undefined,
