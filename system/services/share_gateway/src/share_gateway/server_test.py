@@ -741,7 +741,8 @@ def test_loading_and_healthz_endpoints(tmp_path: Path) -> None:
     assert harness.client.get("/_auth/healthz").status_code == 200
     loading = harness.client.get("/_auth/loading")
     assert loading.status_code == 503
-    assert "refresh" in loading.get_data(as_text=True)
+    assert 'http-equiv="refresh"' in loading.get_data(as_text=True)
+    assert 'class="spinner"' in loading.get_data(as_text=True)
 
 
 def _inline_style_hash(html: str) -> str:
@@ -1068,8 +1069,10 @@ def test_an_app_that_stops_answering_is_waited_on_then_reported_as_not_respondin
 
     assert "isn't responding yet" in first
     assert 'http-equiv="refresh"' in first
+    assert 'class="spinner"' in first
     assert "Let the person who shared it know, then try again." in last
     assert 'http-equiv="refresh"' not in last
+    assert 'class="spinner"' not in last
     assert ">Try again</a>" in last
 
 

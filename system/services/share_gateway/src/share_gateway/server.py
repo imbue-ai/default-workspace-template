@@ -99,6 +99,9 @@ _PAGE_STYLE = (
     ".button{display:inline-block;margin-top:0.5rem;padding:0.5rem 1rem;border-radius:0.375rem;"
     "background:#334155;color:#fff;text-decoration:none;border:1px solid #334155;font:inherit;cursor:pointer}"
     ".button.secondary{background:#fff;color:#334155;margin-left:0.5rem}form{display:inline}"
+    ".spinner{display:block;width:1.5rem;height:1.5rem;margin:0 auto 1rem;border:3px solid #e2e8f0;"
+    "border-top-color:#334155;border-radius:50%;animation:spin 0.8s linear infinite}"
+    "@keyframes spin{to{transform:rotate(360deg)}}"
 )
 _PAGE_STYLE_HASH = base64.b64encode(hashlib.sha256(_PAGE_STYLE.encode("utf-8")).digest()).decode("ascii")
 
@@ -118,14 +121,15 @@ def page_content_security_policy(workspace_domain: str, broker_origin: str) -> s
 def _render_page(
     title: str, body_html: str, refresh_seconds: int | None = None, referrer_policy: str | None = None
 ) -> str:
-    """One of the gateway's own full-page answers: a heading and a few lines, centred. ``referrer_policy`` replaces
-    the one caddy's header gives the page."""
+    """One of the gateway's own full-page answers: a heading and a few lines, centred. A page that reloads itself
+    shows a spinner above them. ``referrer_policy`` replaces the one caddy's header gives the page."""
     refresh = f'<meta http-equiv="refresh" content="{refresh_seconds}">' if refresh_seconds is not None else ""
     referrer = f'<meta name="referrer" content="{referrer_policy}">' if referrer_policy is not None else ""
+    spinner = '<span class="spinner" aria-hidden="true"></span>' if refresh_seconds is not None else ""
     return (
         f'<!DOCTYPE html>\n<html><head><meta charset="utf-8">{refresh}{referrer}\n'
         f"<title>{html.escape(title)}</title>\n<style>{_PAGE_STYLE}</style></head>\n"
-        f"<body><div>{body_html}</div></body></html>\n"
+        f"<body><div>{spinner}{body_html}</div></body></html>\n"
     )
 
 

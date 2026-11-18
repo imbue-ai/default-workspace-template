@@ -34,6 +34,7 @@ three things running:
    registered service's local backend (from `data/.state/apps.toml`; the
    Caddyfile re-renders and hot-reloads when the registry changes), and
    unknown-but-plausible service origins to an auto-retrying loading page.
+   Every page of the gateway's that reloads itself shows a spinner.
    A registered service whose backend will not take the connection (crashed,
    stopped and not yet parked by the shell, or released by the shell and not
    yet bound by the app) gets a separate not-responding page instead: it
