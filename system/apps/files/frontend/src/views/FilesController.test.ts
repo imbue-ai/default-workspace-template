@@ -235,6 +235,37 @@ describe("a folder that cannot be listed", () => {
     expect(askAgent).toHaveBeenCalledTimes(1);
   });
 
+  it("drops a refused ask once the folder fails another way, and files only the failure on show", async () => {
+    const askAgent = vi.fn(async (_text: string, _options?: StartOptions): Promise<StartOutcome> => ({
+      isOpened: false,
+      failure: { message: "Chat couldn't open that.", details: null, isReportable: false },
+    }));
+    const connection = { ...framedConnection(), canReportBug: () => true, askAgent };
+    const listing = { status: 500, body: { detail: LISTING_REASON } };
+    const root = await openedOn(listing, connection);
+    await vi.waitFor(() => expect(root.querySelector(".files-empty .ask-agent-to-fix")).not.toBeNull());
+    root.querySelector<HTMLButtonElement>(".files-empty .ask-agent-to-fix")?.click();
+    await vi.waitFor(() => {
+      m.redraw.sync();
+      expect(root.querySelector(".files-empty .ask-agent-failure")).not.toBeNull();
+    });
+
+    const otherReason = "GET /home/: [Errno 116] Stale file handle";
+    listing.body = { detail: otherReason };
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => {
+      m.redraw.sync();
+      expect(root.querySelector(".files-empty .see-details pre")?.textContent).toBe(`HTTP 500\n${otherReason}`);
+    });
+
+    expect(root.querySelector(".files-empty .ask-agent-failure")).toBeNull();
+    root.querySelector<HTMLButtonElement>(".files-empty .report-bug")?.click();
+    expect(connection.reportBug).toHaveBeenCalledWith({
+      message: LISTING_FAILED,
+      details: `HTTP 500\n${otherReason}`,
+    });
+  });
+
   it("offers an agent for a column whose folder cannot be listed", async () => {
     // jsdom lays nothing out, so it scrolls nothing; the column view scrolls its last column into view.
     Element.prototype.scrollTo = vi.fn();
