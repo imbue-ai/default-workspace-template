@@ -293,9 +293,8 @@ def test_an_abandoned_chat_is_shed_before_a_worker() -> None:
 
 
 def test_a_chat_left_long_enough_reaches_the_aged_band() -> None:
-    # A chat nobody has touched for days is worth no more than a browser tab: it
-    # revives on its next message with its transcript intact, where a shed
-    # renderer takes the page someone was on.
+    # The point of the aged stage: a chat nobody has touched for days is worth no
+    # more than a browser tab.
     aged = bands.CHAT_STAGES["aged"]
     assert _aged(aged.idle_seconds) == aged.adj
     assert _aged(10 * aged.idle_seconds) == aged.adj

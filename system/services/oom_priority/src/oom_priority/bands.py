@@ -52,26 +52,20 @@ class ChatStage(NamedTuple):
 class ChatEngagement(NamedTuple):
     """What engagement takes off a chat's ``oom_score_adj``, and where that stops."""
 
-    # The chat has an open window in the workspace UI.
     open_bonus: int
-    # That window is currently visible.
     visible_bonus: int
-    # It is the most recently messaged chat.
     recency_max_bonus: int
-    # What each rank behind the most recently messaged chat gives up of that.
     recency_step: int
     # The most protected a chat gets, however engaged.
     floor: int
 
 
 class BrowserBand(NamedTuple):
-    """The range Chromium's processes are remapped into."""
+    """The range Chromium's processes are remapped into, and the top of the
+    gradation they assign themselves."""
 
-    # Where the least expendable process Chromium runs lands.
     floor: int
-    # Where a renderer lands.
     ceiling: int
-    # The top of the gradation Chromium assigns itself, which the remap reads.
     chromium_self_assigned_max: int
 
 
@@ -119,10 +113,9 @@ SCREEN_STACK: Final[int] = 850
 # below ``AGENT_SUBPROCESS``, so an agent's build/test/browser subprocess is shed
 # before a chat that has only gone stale.
 #
-# A chat left for days longer goes on to the aged stage, past the Screen's stack,
-# every agent's subprocesses and most of the browser. Shedding it still costs one
-# slow next message, where shedding a renderer takes the page someone was on and
-# shedding a subprocess takes work an agent in use is waiting for.
+# A chat left for days longer goes on to the aged stage. Shedding it still costs
+# one slow next message, where shedding a renderer takes the page someone was on
+# and shedding a subprocess takes work an agent in use is waiting for.
 #
 # Starting at the fresh stage rather than the floor means a chat that is never
 # re-tagged at all stays middling-expendable rather than pinned to the protected
@@ -130,11 +123,9 @@ SCREEN_STACK: Final[int] = 850
 CHAT_STAGES: Final[dict[str, ChatStage]] = {
     # Idle but fresh; also the chat launch band.
     "fresh": ChatStage(idle_seconds=1 * _HOUR, adj=560, freshness=1.0),
-    # Abandoned: shed before a worker, even with a visible tab, since a shed
-    # costs it nothing but a slow next message.
+    # Abandoned: shed before a worker, whatever its engagement.
     "stale": ChatStage(idle_seconds=24 * _HOUR, adj=800, freshness=0.0),
-    # Left for days: the highest ``oom_score_adj`` the kernel accepts, level with
-    # Chromium's renderers.
+    # Left for days: the highest ``oom_score_adj`` the kernel accepts.
     "aged": ChatStage(idle_seconds=5 * 24 * _HOUR, adj=1000, freshness=0.0),
 }
 
@@ -263,8 +254,7 @@ SERVICE_BANDS: Final[dict[str, int]] = {
 }
 
 # The shared-browser band: the absolute ceiling, one above AGENT_SUBPROCESS, so a
-# browser always outranks even an agent's build/test subprocess and is shed
-# first, level only with a chat at the aged stage.
+# browser always outranks even an agent's build/test subprocess.
 #
 # Only the processes that actually hold a browser's memory belong here. Nothing
 # is tagged into this band at spawn: Chromium's processes arrive by self-writing
