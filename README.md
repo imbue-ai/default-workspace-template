@@ -41,7 +41,8 @@ you'll want to make:
 A few housekeeping files live alongside them:
 
 - `README.md` - This file.
-- `CLAUDE.md` - The standing instructions your agent follows.
+- `AGENTS.md` - The standing instructions your agent follows. `CLAUDE.md`
+  loads it and adds a few Claude-only notes.
 - `pyproject.toml` and `uv.lock` - The Python project definition; the tooling
   requires them at the top level.
 
