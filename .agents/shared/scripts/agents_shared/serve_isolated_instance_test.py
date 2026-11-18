@@ -1477,8 +1477,15 @@ def test_wrapper_refuses_to_frame_a_service_with_no_valid_registered_label(
     assert body in capsys.readouterr().err
 
 
-def test_wrapper_answers_503_when_the_registry_cannot_be_read(tmp_path: Path) -> None:
-    with _running_wrapper(tmp_path / "missing.toml", "inbox") as url:
+@pytest.mark.parametrize("contents", [None, b"\xff\xfe"], ids=["missing", "not-utf-8"])
+def test_wrapper_answers_503_when_the_registry_cannot_be_read(
+    tmp_path: Path, contents: bytes | None
+) -> None:
+    apps_file = tmp_path / "apps.toml"
+    if contents is not None:
+        apps_file.write_bytes(contents)
+
+    with _running_wrapper(apps_file, "inbox") as url:
         status, body = _wrapper_error(url)
 
     assert status == 503

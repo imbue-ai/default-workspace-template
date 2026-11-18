@@ -243,7 +243,7 @@ def make_handler(
         def do_GET(self) -> None:
             try:
                 inner_label = registered_origin_label(apps_file, inner_service)
-            except (OSError, tomllib.TOMLDecodeError) as exc:
+            except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
                 self._refuse(f"The app registry {apps_file} could not be read: {exc}\n")
                 return
             if inner_label is None:
