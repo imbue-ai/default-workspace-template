@@ -3938,20 +3938,13 @@ class _ShedBootSpawner(_FakeSpawner):
         return spawned
 
 
-def _shed_boot_spawner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shed_pid_offset: int
-) -> _ShedBootSpawner:
-    monkeypatch.setenv("OOM_PRIORITY_RUNTIME_DIR", str(tmp_path / "oom-runtime"))
-    return _ShedBootSpawner(exited=True, shed_pid_offset=shed_pid_offset)
-
-
 def test_a_preflight_boot_the_memory_guard_stopped_is_named_as_a_memory_failure(
-    apply_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    apply_repo: Path, capsys
 ) -> None:
     # A boot the guard stops writes nothing, so without the guard's own record the lead
     # has only "wrote nothing at all" to judge the retry by.
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
-    spawner = _shed_boot_spawner(tmp_path, monkeypatch, shed_pid_offset=0)
+    spawner = _ShedBootSpawner(exited=True, shed_pid_offset=0)
 
     code = _apply(
         runner,
@@ -3970,10 +3963,10 @@ def test_a_preflight_boot_the_memory_guard_stopped_is_named_as_a_memory_failure(
 
 
 def test_a_preflight_boot_that_died_while_the_guard_stopped_something_else_is_not_blamed_on_memory(
-    apply_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    apply_repo: Path, capsys
 ) -> None:
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
-    spawner = _shed_boot_spawner(tmp_path, monkeypatch, shed_pid_offset=1)
+    spawner = _ShedBootSpawner(exited=True, shed_pid_offset=1)
 
     code = _apply(
         runner,
@@ -3988,13 +3981,12 @@ def test_a_preflight_boot_that_died_while_the_guard_stopped_something_else_is_no
     assert "wrote nothing at all" in err
 
 
-def test_a_preflight_boot_waits_for_a_guard_record_that_lands_after_it_is_seen_exiting(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_preflight_boot_waits_for_a_guard_record_that_lands_after_it_is_seen_exiting() -> (
+    None
+):
     # The guard's after-kill hook runs only once the boot is gone, so its record can
     # land after the pre-flight has already seen the boot exit.
-    ledger_path = tmp_path / "oom-runtime" / "events" / "shed.jsonl"
-    monkeypatch.setenv("OOM_PRIORITY_RUNTIME_DIR", str(tmp_path / "oom-runtime"))
+    ledger_path = update_probes.shed_ledger_path(_WORKSPACE_ROOT)
     spawner = _FakeSpawner(exited=True)
 
     def record_the_shed_once(_seconds: float) -> None:
