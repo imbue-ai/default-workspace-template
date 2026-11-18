@@ -81,11 +81,11 @@ List each, in plain terms:
   stop-chats` printed): that it was paused for the update and has carried on,
   and for a background agent, that its chat was told to pick it back up. One
   that was idle when paused to make room stays stopped (`run-status
-  resume-chats` printed `Left <name> stopped` for it): say so. One it printed
-  `Left <name> as it is` for was started again since and is running. Name any that
+  resume-chats` printed `Left <name> stopped` for it): say so. Name any that
   could not be started again. For either, say that sending it a message brings
-  it back. The main chat's line says it was interrupted instead: say its work
-  was stopped for the update and it was told what changed.
+  it back. One it printed `Left <name> as it is` for was started again since
+  and is running. The main chat's line says it was interrupted instead: say its
+  work was stopped for the update and it was told what changed.
 - **Each background command that was stopped** with a paused chat: that it was
   interrupted and its chat was told to run it again.
 - **Each cache, old worktree, or snapshot it pruned**, with what it held: a
