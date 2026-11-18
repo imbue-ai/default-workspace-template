@@ -1,0 +1,1 @@
+The chat list passes a chat page's "Ask an agent to fix this" (`shell:start-new-with-text`) and `shell:start-with-text` up to the desktop, and hands the page the desktop's answers to both, so a chat's failures can offer it.

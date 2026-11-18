@@ -1,0 +1,11 @@
+A failure can offer "Ask an agent to fix this", which starts a new chat with the failure as its task.
+
+- `askAgentToFix(connection, {whatFailed, details})` in the app contract starts a new chat whose first message says what failed, quotes the details as they are, and asks the agent to fix it and say what it changed, through the new `shell:start-new-with-text` (the connection's `startNewWithText(text)`), which runs the launcher's secondary text action (Chat's New Chat) rather than the primary one, which posts into the main chat. Plain-HTML pages use it from `/_static/app_contract.js`.
+
+- It answers a promise that settles on the shell's `shell:start-new-with-text-result` (the window opened, or the failure to show), or as not answered when a handshake from a shell that started again comes first (the handshake now carries the shell's `shellId`, the same across its re-sent greetings) or the page disconnects; a caller that shows the outcome itself passes `{showsOutcome: true, onLateAnswer?}`, so the shell toasts no failure of its own for it and an answer that still arrives goes to `onLateAnswer`; without it the shell toasts a failure.
+
+- `AskAgentToFixButton` renders nothing without a shell. It reads "Asking an agent…", disabled, until the start settles, then shows a failure under itself, with "Report a bug" for that failure when it asks for one, and takes a late answer in place of a not-answered one. A page with its own "Report a bug" passes `pageReportBug: {onFailureChange}`: the button then offers no second "Report a bug" under a refused ask, and the page's report files both failures through `withAskFailure` (the ask's sentence and details added under the page's details, labelled).
+
+- The connection's `startWithText(text, options?)` (`shell:start-with-text`, the main chat, which "Ask an agent to free up space" uses) now answers the same way, through `shell:start-with-text-result`, so its button can show it pending too.
+
+- A toast button marked `keepsToast` (one that hands the failure on, such as "Ask an agent to ...") leaves its toast up once pressed, after which the toast's other buttons still apply. An action may say it is `pending`: while its `isPending()` holds, its button is drawn disabled under its pending label ("Asking an agent…").
