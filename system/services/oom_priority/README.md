@@ -267,7 +267,7 @@ known at runtime. So the launch wrapper tags a chat at `CHAT_AGENT_BASE` (560),
 and the chat app's `ChatOomPrioritizer` moves it in both directions from
 there: down toward `CHAT_AGENT_FLOOR` (300) as the user engages with it, up
 toward `CHAT_AGENT_STALE_CEILING` (800) as it is left alone for a day, and on to
-the aged stage (1000) when it is left for five.
+the aged stage (1000) when it is left for days.
 
 Two forces, combined through a single **freshness** factor that decays with idle
 time (1.0 for the first hour, reaching 0.0 at 24 hours -- the schedule is the
