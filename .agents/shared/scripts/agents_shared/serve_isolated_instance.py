@@ -111,7 +111,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Callable, Mapping, NamedTuple, Sequence
+from typing import Callable, NamedTuple, Sequence
 
 from app_registration import forward_port
 from disk_headroom.space import read_disk_space
@@ -1457,12 +1457,6 @@ def _instance_tag(
     if chat is not None:
         tag["chat"] = chat
     return tag
-
-
-def caller_chat(environ: Mapping[str, str]) -> str | None:
-    """The chat of the agent running this: ``MINDS_CHAT_ID`` from the chat app that created it, else the agent's
-    own id; None outside an agent."""
-    return environ.get("MINDS_CHAT_ID") or environ.get("MNGR_AGENT_ID") or None
 
 
 def _keep_frame_record(

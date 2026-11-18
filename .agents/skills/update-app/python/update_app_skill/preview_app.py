@@ -51,7 +51,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
@@ -61,6 +60,7 @@ from pathlib import Path
 from agents_shared import serve_isolated_instance
 from app_manifest.errors import ManifestLoadError
 from app_registration import forward_port
+from workspace_layout.agent_identity import chat_id_from_environment
 
 from update_app_skill.errors import PreviewError
 
@@ -455,7 +455,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 instance_key=args.instance_key,
                 title=args.title,
                 is_private=args.private,
-                chat=serve_isolated_instance.caller_chat(os.environ),
+                chat=chat_id_from_environment(),
                 instances=Instances(),
             )
         if args.command == "revive":

@@ -47,7 +47,6 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -57,6 +56,7 @@ from agents_shared import serve_isolated_instance
 from agents_shared.preview_wrapper_server import FrameKind
 from app_manifest.errors import ManifestLoadError, RegistryReadError
 from app_registration import forward_port
+from workspace_layout.agent_identity import chat_id_from_environment
 from workspace_layout.cli import context_from_environment, run_layout_cli
 
 FRAME_SUFFIX = "-sketch"
@@ -476,7 +476,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repo_root,
                 inner_path=args.path,
                 surface="open" if args.open else "refresh" if args.refresh else None,
-                chat=serve_isolated_instance.caller_chat(os.environ),
+                chat=chat_id_from_environment(),
                 frames=Frames(),
                 layout=layout,
             )
@@ -484,7 +484,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return refresh(
                 args.app,
                 repo_root,
-                chat=serve_isolated_instance.caller_chat(os.environ),
+                chat=chat_id_from_environment(),
                 frames=Frames(),
                 layout=layout,
             )
