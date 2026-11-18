@@ -131,7 +131,7 @@ On the first accepted connection it:
 3. answers the accepted connection with the loading page (section 5.3) and `Connection: close`, and closes it.
 
 It reads the request only far enough to answer sensibly (the first line and headers, bounded), never proxies anything, and answers every method and path the same way.
-Connections left in the backlog when the listener closes are reset by the kernel; whoever sent them sees a connection error and retries (`mngr forward`'s loader polls every second; caddy's error handler serves its own loading page).
+Connections left in the backlog when the listener closes are reset by the kernel; whoever sent them sees a connection error and retries (`mngr forward`'s loader polls every second; caddy's error handler serves the gateway's not-responding page, which reloads for up to a minute, section 5.7).
 
 Two facts make the handoff safe.
 Every failure mode between "the app stopped" and "the app answers" lands on a loading page that retries: a refused connection lands on the proxy's, and a connection the parker accepted lands on the parker's.
@@ -139,11 +139,11 @@ And a bind that fails with address-in-use means something is listening on the ap
 
 ### 5.3 The loading page
 
-The parker answers `503 Service Unavailable` with `Retry-After` set to 2 seconds (15 for the failure page below), `Cache-Control: no-store`, and an HTML body that says the app is starting and carries `<meta http-equiv="refresh" content="2">`, so a window's frame reloads itself until the app answers.
+The parker answers `503 Service Unavailable` with `Retry-After` set to the page's own refresh (2 seconds; 15 for the failure page below), `Cache-Control: no-store`, and an HTML body that says the app is starting and carries `<meta http-equiv="refresh" content="2">`, so a window's frame reloads itself until the app answers.
 A fetch from a page gets the same 503 and retries on its own terms.
 Nothing here depends on the shell's liveness sweep: the page reloads into the app the moment the app binds.
 
-When the app fails to start (section 5.5), the page instead says "<display name> couldn't start." (and, when the wake budget refused the wake, that it failed to start several times in the last few minutes and to try again in a few minutes), with a Try again button that reloads, an "Ask an agent to look at it" button (shown once the shell that frames the page has greeted it, which it asks with `shell:ask-agent`, naming the app and its log, so the shell sends the ask to the chat about the app whose window frames the page; pressed, it reads "Asking an agent…" and takes no second press until the shell answers with `shell:ask-agent-result` for that request, or a restarted shell (a handshake with another `shellId`) greets the page, which reads as not answered until the old shell's answer still comes, and a failed ask is told under it with its details at the top of "See details", with a "Report a bug" that sends `shell:report-bug` with its sentence and details when the failure asks for a bug report and the shell's latest handshake says `canReportBug`), and `supervisorctl tail <program> stderr` behind a collapsed "See details". It does not refresh itself: each reload is a new request and so a new wake, which spends the budget, so the next wake attempt is the user's Try again.
+When the app fails to start (section 5.5), the page instead says the app could not start, names `supervisorctl tail <program> stderr` as where to look, and refreshes every 15 seconds; each refresh is a new request, so the next wake attempt is the user's reload.
 
 ### 5.4 The lifecycle manager
 
@@ -176,7 +176,7 @@ The budget is per shell process and resets with it.
 A GET launch path needs no special handling: the window's frame requests the page, the parker wakes the app, and the loading page reloads into it.
 A POST launch path is asked for its page by the shell itself (`shell/launches.py`), and a POST to the parker would be answered 503.
 So before posting a launch to a stoppable app that is not running, the shell wakes it and waits for the app's port to accept a connection (polled, up to 20 seconds; `startsecs` is supervisord's notion of "started" and says nothing about when the app binds), then posts.
-A wake that does not bring the app up fails the launch with a `502` whose `kind` says why, in the could-not-start page's words: `app_could_not_start` (supervisord could not start it, or it failed and was parked again), `app_start_budget_spent` (the wake budget refused it), or `app_still_starting` (it did not answer within the wait).
+An app that does not come up in time fails the launch with the existing `502`.
 
 ### 5.7 The share gateway
 
@@ -184,12 +184,13 @@ The rendered Caddyfile gains one site-level block:
 
 ```
 handle_errors 502 {
-    rewrite * /_auth/loading
+    rewrite * /_auth/unresponsive
     reverse_proxy 127.0.0.1:<gateway port>
 }
 ```
 
-A registered service whose backend refuses the connection (the moment between the app stopping and the parker binding, or between the parker releasing and the app binding) then shows the gateway's existing auto-refreshing loading page instead of a bare 502.
+A registered service whose backend refuses the connection (the moment between the app stopping and the parker binding, or between the parker releasing and the app binding) then shows the gateway's not-responding page instead of a bare 502.
+It is a path of its own, apart from the loading page for an origin caddy has no route for yet, because the gateway counts how long each address has gone unanswered, across every visitor: the page reloads every 3 seconds for the first minute, then stops on "This page isn't responding right now" with a Try again button (for an app the shell does not start on demand, "The workspace owner may need to restart it"), and the minute starts over after 30 seconds with no such request.
 The parker's own 503 is a backend answer, not a caddy error, and passes through as it does locally.
 The visitor's next request wakes the app through the parker exactly as the owner's does, so a shared app is stoppable too.
 
@@ -272,7 +273,7 @@ The shell still imports nothing from mngr and runs no `mngr` binary: the writer 
 - The shell, `state_test.py`: the close hint is not posted to a stopped app.
 - The shell, `launches_test.py` or `state_test.py`: a POST launch to a stopped stoppable app wakes it first.
 - The shell, `app_announcements_test.py`: the diff rules the watcher's tests pinned (every row on the first read, nothing on an unchanged read, only the changed row, a relabel, a row without a URL), now over `RegistryRow`s; `inventory_test.py`: the hook is called with the rows, and the mtime backstop re-reads.
-- The share gateway, `caddyfile_test.py`: the `handle_errors 502` block routes to the loading page.
+- The share gateway, `caddyfile_test.py`: the `handle_errors 502` block routes to the not-responding page.
 - The frontend: `WindowMenu.test.ts` (Quit for a stoppable app, running or not; nothing for a critical one), `Window.test.ts` (no placeholder for a stopped stoppable app; the placeholder without a button for an unmanaged one), `livePages.test.ts` (a stoppable app's page is neither held nor reloaded), `records.test.ts` (the parsed field).
 - `system/test_app_manifests.py`: the built-in table; `oom_priority`'s band tests without the watcher.
 - Manual, on a workspace: close the last File Viewer window, see `supervisorctl status files` go `STOPPED` about a minute later and `ss -ltnp` show the shell holding port 8300; open the File Viewer from the launcher, see the loading page turn into the viewer and `files` back to `RUNNING`; Quit the browser from its window menu and see its windows close and the program stop; share the workspace and open the stopped app from the share link.

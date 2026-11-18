@@ -34,6 +34,16 @@ three things running:
    registered service's local backend (from `data/.state/apps.toml`; the
    Caddyfile re-renders and hot-reloads when the registry changes), and
    unknown-but-plausible service origins to an auto-retrying loading page.
+   A registered service whose backend will not take the connection (crashed,
+   stopped and not yet parked by the shell, or released by the shell and not
+   yet bound by the app) gets a separate not-responding page instead: it
+   reloads every 3 seconds while the address has gone unanswered for less
+   than a minute, then stops and says the page is not responding, with a
+   "Try again" button. For an app the shell never starts on demand (a critical
+   app, a row inside a critical app's program, a row with no program, a
+   non-loopback address) it adds that the workspace owner may need to
+   restart it. The minute is counted per address across all visitors, and
+   starts over after 30 seconds with no such request.
    Every response it sends, a service's or its own, carries the browser
    hardening headers (`Strict-Transport-Security`, `X-Content-Type-Options:
    nosniff`, `Referrer-Policy: same-origin`, and a `frame-ancestors` policy
@@ -123,9 +133,30 @@ refusal, and logs every denial (never the token) to the service's stderr:
   telling the visitor the owner must fix the workspace's sharing settings.
   `/_auth/verify` answers the same way for a non-owner mid-session; the owner
   is never grant-checked, so they still get in.
-- A verified account with no grant is **"Not shared with you"** (403). So is
-  one whose only grants are per-service grants on internal apps (see
-  "Grants") or on apps not registered, since those admit it nowhere.
+- A verified account with no grant is **"Not shared with you"** (403: "This
+  page hasn't been shared with your account. Ask the person who shared it to
+  give you access, then reload this page."). So is one whose only grants are
+  per-service grants on internal apps (see "Grants") or on apps not
+  registered, since those admit it nowhere, and, on any later request, a
+  session with no grant for the app it is opening. The page has a Reload
+  button and a "Sign in with a different account" button, a form that POSTs
+  to `/_auth/switch-account` on the auth origin; that expires both session
+  cookies and sends the visitor through the broker without `confirmed=1`, so
+  the broker asks which account to continue as and offers a different one.
+  The route takes only a POST whose Origin is one of this workspace's, so no
+  link from another site can sign a visitor out (a GET is a 405; a POST from
+  anywhere else gets the page below and keeps the session). The page sets its
+  own `strict-origin` referrer policy: under the `same-origin` one caddy sends,
+  a browser posts the form from an app's origin with `Origin: null`.
+- A request from another site that the Origin policy refuses (a cross-site
+  form post, say) is **"This page can't be opened from another site"** (403:
+  "For your security, this workspace doesn't accept requests sent from other
+  websites. Open the page directly instead."), with an "Open this page" button
+  that loads the same address with a plain GET.
+- An address that is not one of this workspace's origins (an old or mistyped
+  link, an app whose registration was removed) is **"Nothing shared here"**
+  (403: "Nothing is shared at this address right now. Check the link with the
+  person who sent it."), before any session check.
 
 ## When the stack cannot come up
 
