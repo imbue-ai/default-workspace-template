@@ -1457,8 +1457,9 @@ _SCRIPT_BREAKING_LABEL = "</script><script>alert(1)</script>"
     [
         [{"name": "other", "url": "http://localhost:8301", "label": "other-a1b2c3d4"}],
         [{"name": "inbox", "url": "http://localhost:8301", "label": _SCRIPT_BREAKING_LABEL}],
+        [{"name": "inbox", "url": "http://localhost:8301", "label": "inbox-a1b2c3d4\n"}],
     ],
-    ids=["unregistered", "label-not-a-hostname-label"],
+    ids=["unregistered", "label-not-a-hostname-label", "label-with-trailing-newline"],
 )
 def test_wrapper_refuses_to_frame_a_service_with_no_valid_registered_label(
     tmp_path: Path, rows: list[dict[str, object]], capsys: pytest.CaptureFixture[str]

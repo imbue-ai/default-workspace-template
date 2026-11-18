@@ -78,7 +78,7 @@ BANNER_COPY_BY_KIND: dict[FrameKind, BannerCopy] = {
 # A single hostname label; the registry is a file other programs write, and the
 # label is written into the page's script. Underscores are admitted because a
 # label minted before ``forward_port`` turned them into hyphens keeps its own.
-_ORIGIN_LABEL_PATTERN = re.compile(r"^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$", re.IGNORECASE)
+_ORIGIN_LABEL_PATTERN = re.compile(r"[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?", re.IGNORECASE)
 
 
 def registered_origin_label(apps_file: Path, service_name: str) -> str | None:
@@ -92,7 +92,7 @@ def registered_origin_label(apps_file: Path, service_name: str) -> str | None:
     for app in registry.get("apps", []):
         if isinstance(app, dict) and app.get("name") == service_name:
             label = app.get("label")
-            if isinstance(label, str) and _ORIGIN_LABEL_PATTERN.match(label):
+            if isinstance(label, str) and _ORIGIN_LABEL_PATTERN.fullmatch(label):
                 return label
             return None
     return None
