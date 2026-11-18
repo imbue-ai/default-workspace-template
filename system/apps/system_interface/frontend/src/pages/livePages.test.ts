@@ -727,6 +727,7 @@ describe("the contract", () => {
         app: "docs",
         path: "/?doc=1",
         opensLocalFiles: false,
+        drawsContextMenus: false,
         isViewing: false,
       },
       // The theme the page wears follows every handshake (workspace-themes plan section 5.3).
@@ -747,6 +748,7 @@ describe("the contract", () => {
         app: "docs",
         path: "/?doc=1",
         opensLocalFiles: false,
+        drawsContextMenus: false,
         isViewing: false,
       },
       { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
@@ -788,6 +790,21 @@ describe("the contract", () => {
     const spy = spyOnFrame("win-1");
     load("win-1");
     expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, opensLocalFiles: true });
+  });
+
+  it("greets a page again when the chrome says it draws the context menus after the page was greeted", () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, drawsContextMenus: false });
+    spy.mockClear();
+    store.setDrawsContextMenus(true);
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0])).toContainEqual(
+      expect.objectContaining({ type: SHELL_HANDSHAKE, windowId: "win-1", drawsContextMenus: true }),
+    );
+    spy.mockClear();
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0].type)).not.toContain(SHELL_HANDSHAKE);
   });
 
   it("greets a page reloaded while hidden with its own desktop, not the active one", async () => {

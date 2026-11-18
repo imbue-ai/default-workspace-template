@@ -13,7 +13,6 @@
 
 import m from "mithril";
 import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
-import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import type { PixelPoint, PixelRect } from "../geometry/frames";
 import type { AppRecord, DesktopShortcut, GridCell } from "../model/records";
@@ -46,9 +45,9 @@ export interface ShortcutIconAttrs {
   readonly isSliding: boolean;
   /** A click runs the shortcut instead of selecting it (touch: a finger has no double tap worth asking for). */
   readonly isRunOnClick: boolean;
+  /** Selects the shortcut: a click, or a right-click, whose menu (the shell's element menu) is about it. */
   readonly onSelect: () => void;
   readonly onRun: () => void;
-  readonly onContextMenu: (x: number, y: number, target: Element) => void;
 }
 
 /** What a shortcut reads: its app's name, whatever its mode ("Terminal"), as the launcher tile reads the launch
@@ -159,7 +158,6 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
         isStopped,
         onSelect,
         onRun,
-        onContextMenu,
       } = vnode.attrs;
       const key = shortcutKey(shortcut.target.app, shortcut.target.launch);
       const label = shortcutLabel(shortcut, app);
@@ -197,10 +195,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
               onRun();
             }
           },
-          oncontextmenu: (event: MouseEvent) => {
-            event.preventDefault();
-            onContextMenu(event.clientX, event.clientY, targetElementOf(event));
-          },
+          oncontextmenu: onSelect,
         },
         // The box wraps the icon and the name, and starts at the cell's top: every icon then sits
         // on one line across the grid and every name starts on one, whatever wraps to a second

@@ -260,6 +260,11 @@ What gets generated:
   the script imports from its own origin at `/_static/app_contract.js` and
   `/_static/context_menu.js` (a module import is a fetch without cookies,
   which the forwarder refuses across origins); keep that route too.
+  An element's own right-click rows (Rename, Delete, a "Move to" submenu,
+  each with an icon if you like) go to the installer's `extraRows`, never
+  into a right-click menu the page draws itself: the element menu already
+  draws them in the workspace's look, beside the rows every app gets
+  (`.agents/shared/references/right-click-menus.md`).
   A reference names an element by what its markup carries -- its `id`, its
   `data-*` attributes, its classes, a selector -- so give a list
   row the `id` or a `data-*` attribute of the record it shows, and an

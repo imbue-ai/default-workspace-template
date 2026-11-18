@@ -94,6 +94,7 @@ describe("connectToShell", () => {
       app: "chat",
       path: "/?chat=agent-1",
       opensLocalFiles: false,
+      drawsContextMenus: false,
       isViewing: false,
     });
     expect(handlers.onShown).toHaveBeenCalledTimes(1);
@@ -122,6 +123,7 @@ describe("connectToShell", () => {
       app: "",
       path: "",
       opensLocalFiles: false,
+      drawsContextMenus: false,
       isViewing: false,
     });
   });
@@ -133,6 +135,15 @@ describe("connectToShell", () => {
     deliver({ ...HANDSHAKE, opensLocalFiles: true }, parent);
     deliver({ ...HANDSHAKE, opensLocalFiles: "yes" }, parent);
     expect(onHandshake.mock.calls.map((call) => call[0].opensLocalFiles)).toEqual([true, false]);
+  });
+
+  it("reads whether the desktop app draws the page's context menu, and anything but true as no", () => {
+    const parent = framed();
+    const onHandshake = vi.fn();
+    connection = connectToShell({ onHandshake });
+    deliver({ ...HANDSHAKE, drawsContextMenus: true }, parent);
+    deliver({ ...HANDSHAKE, drawsContextMenus: "yes" }, parent);
+    expect(onHandshake.mock.calls.map((call) => call[0].drawsContextMenus)).toEqual([true, false]);
   });
 
   it("reads whether the window is being viewed on somebody else's desktop, and anything but true as no", () => {

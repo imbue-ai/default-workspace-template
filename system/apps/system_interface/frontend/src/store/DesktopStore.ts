@@ -588,6 +588,8 @@ export class DesktopStore {
   private opensLocalFiles = false;
   /** Whether the embedder takes immersive-mode requests; off until it says so (an older chrome, a plain browser). */
   private canImmerse = false;
+  /** Whether the embedder draws a native menu for the right-clicks a page leaves alone; off until it says so. */
+  private drawsContextMenus = false;
   /** Immersive mode while the chrome says it is on; never persisted (the integration spec, S4). */
   private immersive: ImmersiveStatus | null = null;
   /** The window whose immersive request is out and unanswered, so the answer can be credited to it. */
@@ -715,6 +717,20 @@ export class DesktopStore {
    *  already greeted hear it as the shell's rebroadcast of that message. */
   setOpensLocalFiles(opensLocalFiles: boolean): void {
     this.opensLocalFiles = opensLocalFiles;
+  }
+
+  /** Whether the embedder draws a native menu for the right-clicks a page leaves alone (the element-reference-menu
+   *  plan, section 11), which the shell's own element menu and each page's handshake follow. */
+  getDrawsContextMenus(): boolean {
+    return this.drawsContextMenus;
+  }
+
+  /** The embedder said whether it draws a native right-click menu (``minds:embedder-capabilities``); the pages
+   *  already greeted are greeted again. */
+  setDrawsContextMenus(drawsContextMenus: boolean): void {
+    if (this.drawsContextMenus === drawsContextMenus) return;
+    this.drawsContextMenus = drawsContextMenus;
+    this.notifyListeners();
   }
 
   /** Whether the embedder can take the app window immersive for a window of this desktop. */

@@ -1,0 +1,1 @@
+The Screen app's right-click handlers, which forward the click to the remote desktop or stop a long press from opening the browser's menu, now say so in an `own-context-menu` marker, as the new right-click rule asks of any handler that keeps the right-click.
