@@ -1494,7 +1494,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             } else {
               await launchChat(chatId, choice.id, "", "agent");
               priorTurnIds = sentUserTurnIds(chatId);
-              dropOutgoingNoTurnWillRetire(chatId, outgoingId, await sendMessage(chatId, finalText, messageId));
+              const firstStatus = await sendMessage(chatId, finalText, messageId);
+              if (firstStatus === "held") rememberHeldSend(chatId, messageId, prepared);
+              dropOutgoingNoTurnWillRetire(chatId, outgoingId, firstStatus);
               refocusAfterSend();
               return;
             }
@@ -1522,14 +1524,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           refuseSendToFailedChat(chatId);
           priorTurnIds = sentUserTurnIds(chatId);
           const status = await sendMessage(chatId, finalText, messageId);
-          if (status === "held") {
-            rememberHeldSend(chatId, messageId, {
-              text: sentText,
-              finalText,
-              attachments: sentAttachments,
-              mayContainDictatedSpeech,
-            });
-          }
+          if (status === "held") rememberHeldSend(chatId, messageId, prepared);
           // The send resolved: the message is now real (committed, queued, or held for the
           // agent the chat is switching to), so its "Sending…" bubble is removed by the arriving
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).
