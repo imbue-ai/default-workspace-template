@@ -643,3 +643,39 @@ def test_the_command_survives_a_changelog_it_cannot_read(
     assert answer["sections"] == []
     assert answer["added"] == ["system/changelog/pending.md"]
     assert len(answer["unlisted"]) == 1
+
+
+def test_the_command_reads_a_base_before_the_switch_at_the_last_tag_with_entry_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    last_tag = LAST_TAG_WITH_ENTRY_FILES
+    assert last_tag is not None
+    repo = _init_switched_template(tmp_path)
+    _git(repo, "tag", last_tag, _LAST_ENTRY_TAG)
+    last_section = _V1_SECTION.replace(f"[{_LAST_ENTRY_TAG}]", f"[{last_tag}]")
+    _commit_and_tag(
+        repo, "target", {CHANGELOG_PATH: _changelog(_V2_SECTION, last_section)}
+    )
+
+    code = update_self.main(
+        [
+            "changelog-entries",
+            "--base",
+            "old",
+            "--target",
+            "target",
+            "--repo-root",
+            str(repo),
+        ]
+    )
+
+    assert code == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "sections": ["minds-v2"],
+        "added": ["system/changelog/pending.md"],
+        "added_before_consolidation": {
+            "ref": last_tag,
+            "paths": _ENTRIES_ADDED_BY_V1,
+        },
+        "unlisted": [],
+    }
