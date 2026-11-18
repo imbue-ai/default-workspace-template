@@ -743,6 +743,16 @@ run the fast-forward check once more, and on exit 1 catch the worker up as
 above. The chats stay paused through that round, which covers only those
 commits.
 
+Then **stop the worker**, keeping it: its `done` is in hand, and an apply that
+lands needs nothing more from it, but its idle session still holds memory the
+apply's boots and build may need. A retry or catch-up goes through the
+catch-up sender above, which starts it again with its branch and conversation
+intact. A stop that fails does not hold the apply back.
+
+```bash
+mngr stop update-self
+```
+
 Run the apply from the staged copy, in the **foreground**: its output (refusal
 and resume messages, any provisioner warning, the `apply phase timings:` line)
 is what you read before recording a verdict.

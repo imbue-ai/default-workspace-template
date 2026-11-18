@@ -1317,28 +1317,29 @@ def apply_update(
         # backend that cannot boot is then rejected while the live bundle
         # is still the one that was serving, instead of after ``static/``
         # has been rewritten and must be restored from its snapshot.
-        preflight_output = preflight(
+        preflight_failure = preflight(
             repo_root, http, spawner, sleeper, expend, venv=fresh_venv
         )
-        if preflight_output is not None:
+        if preflight_failure is not None:
             raise ApplyFailed(
-                "merged backend failed to boot in a pre-flight check; live "
-                "service not restarted",
-                detail=preflight_output or "(the pre-flight boot wrote nothing at all)",
+                f"merged backend failed to boot in a pre-flight check{preflight_failure.cause}; "
+                "live service not restarted",
+                detail=preflight_failure.output
+                or "(the pre-flight boot wrote nothing at all)",
                 detail_heading="pre-flight boot output",
             )
         # The chat is pre-flighted beside the shell, only where the merged tree runs it
         # as its own program: it is the process that imports mngr and the harness
         # plugins, so it is where a bad plugin table or a missing dependency fails.
         if has_chat_program(repo_root):
-            chat_preflight_output = preflight_chat(
+            chat_preflight_failure = preflight_chat(
                 repo_root, http, spawner, sleeper, expend, venv=fresh_venv
             )
-            if chat_preflight_output is not None:
+            if chat_preflight_failure is not None:
                 raise ApplyFailed(
-                    "merged chat app failed to boot in a pre-flight check; live "
-                    "service not restarted",
-                    detail=chat_preflight_output
+                    f"merged chat app failed to boot in a pre-flight check{chat_preflight_failure.cause}; "
+                    "live service not restarted",
+                    detail=chat_preflight_failure.output
                     or "(the pre-flight boot wrote nothing at all)",
                     detail_heading="chat pre-flight boot output",
                 )

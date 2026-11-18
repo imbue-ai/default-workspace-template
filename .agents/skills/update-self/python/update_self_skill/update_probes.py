@@ -12,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Sequence, TypeGuard
 
@@ -76,6 +78,13 @@ HEALTH_ATTEMPTS = 240
 HEALTH_INTERVAL_SECONDS = 1.0
 
 _PREFLIGHT_ATTEMPTS = 240
+
+# Where the memory guard (earlyoom) records each process it stops, resolved as
+# ``oom_priority.paths.shed_ledger_path`` resolves it: update-self is standard library only.
+_OOM_PRIORITY_RUNTIME_DIR_ENV = "OOM_PRIORITY_RUNTIME_DIR"
+_OOM_PRIORITY_RUNTIME_SUBDIR = Path("runtime") / "oom_priority"
+_SHED_RECORD_TYPE = "process_shed"
+_SHED_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 _PREFLIGHT_INTERVAL_SECONDS = 1.0
 
@@ -463,6 +472,65 @@ def _describe_health_non_answer(url: str, page: FetchedPage | None) -> str:
     )
 
 
+@dataclass(frozen=True)
+class MemoryShed:
+    """The memory guard's record of stopping a process."""
+
+    at: datetime
+    resident_mib: int | None
+
+
+@dataclass(frozen=True)
+class PreflightFailure:
+    """Why a pre-flight boot did not come up healthy."""
+
+    # The tail of what the boot wrote, or a line saying it could not be launched; '' when it wrote nothing.
+    output: str
+    shed: MemoryShed | None = None
+
+    @property
+    def cause(self) -> str:
+        """A clause naming the cause for the failure's headline, or '' when only the output says it."""
+        if self.shed is None:
+            return ""
+        held = f" (it held {self.shed.resident_mib} MiB)" if self.shed.resident_mib is not None else ""
+        return (
+            f": the memory guard stopped it for lack of memory at {self.shed.at:%H:%M:%S} UTC{held}, "
+            "so free memory before a retry"
+        )
+
+
+def shed_ledger_path(repo_root: Path) -> Path:
+    override = os.environ.get(_OOM_PRIORITY_RUNTIME_DIR_ENV, "")
+    runtime_dir = Path(override) if override else repo_root / _OOM_PRIORITY_RUNTIME_SUBDIR
+    return runtime_dir / "events" / "shed.jsonl"
+
+
+def find_memory_shed(ledger_path: Path, pid: int, since: datetime) -> MemoryShed | None:
+    """The guard's record of stopping ``pid`` at or after ``since``, or None; a pid it stopped
+    earlier belonged to some other process."""
+    try:
+        lines = ledger_path.read_text(errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict) or record.get("type") != _SHED_RECORD_TYPE or record.get("pid") != pid:
+            continue
+        try:
+            at = datetime.strptime(str(record.get("timestamp")), _SHED_TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if at < since:
+            continue
+        resident_kib = record.get("vm_rss_kib")
+        return MemoryShed(at=at, resident_mib=resident_kib // 1024 if isinstance(resident_kib, int) else None)
+    return None
+
+
 def preflight(
     repo_root: Path,
     http: HttpClient,
@@ -470,11 +538,12 @@ def preflight(
     sleeper: Callable[[float], None],
     expend: ExpendWrapper = as_expendable,
     venv: Path | None = None,
-) -> str | None:
+) -> PreflightFailure | None:
     """Boot the merged shell backend on a throwaway port and probe it, without
     touching the live service. Returns ``None`` iff it serves a healthy
     response; otherwise what went wrong -- the tail of what the throwaway boot
-    wrote, or, for a boot that could not be spawned at all, a line saying so.
+    wrote, or, for a boot that could not be spawned at all, a line saying so --
+    and whether the memory guard stopped it.
 
     It boots the entry point the shell's supervisord program execs, from the
     workspace venv or, when the apply synced the merged tree into a fresh target,
@@ -506,6 +575,7 @@ def preflight(
             spawner=spawner,
             sleeper=sleeper,
             expend=expend,
+            shed_ledger=shed_ledger_path(repo_root),
         )
 
 
@@ -516,7 +586,7 @@ def preflight_chat(
     sleeper: Callable[[float], None],
     expend: ExpendWrapper = as_expendable,
     venv: Path | None = None,
-) -> str | None:
+) -> PreflightFailure | None:
     """Boot the merged chat app on a throwaway port in its side-effect-free mode and
     probe it, the way :func:`preflight` boots the shell. The chat is the process that
     imports mngr and the harness plugins, so a missing plugin or dependency in the
@@ -538,6 +608,7 @@ def preflight_chat(
         spawner=spawner,
         sleeper=sleeper,
         expend=expend,
+        shed_ledger=shed_ledger_path(repo_root),
     )
 
 
@@ -557,7 +628,8 @@ def _preflight_boot(
     spawner: Spawner,
     sleeper: Callable[[float], None],
     expend: ExpendWrapper,
-) -> str | None:
+    shed_ledger: Path,
+) -> PreflightFailure | None:
     """Spawn a throwaway boot, wait for its health route, and always terminate it."""
     env = dict(os.environ)
     env.update(env_overrides)
@@ -567,6 +639,8 @@ def _preflight_boot(
     env.pop("MNGR_AGENT_ID", None)
     with tempfile.TemporaryDirectory() as scratch:
         output_path = Path(scratch) / "preflight-boot.log"
+        # Second precision, as the guard's records are compared at, so a stop in the spawn's own second counts.
+        spawned_at = datetime.now(timezone.utc).replace(microsecond=0)
         try:
             spawned = spawner.spawn(
                 expend(argv),
@@ -578,7 +652,7 @@ def _preflight_boot(
             # Not booting and failing is the same verdict as failing to boot,
             # and reaching this with the console script missing is exactly what
             # a venv sync that half-succeeded leaves behind.
-            return f"{what} could not be launched ({type(exc).__name__}: {exc})"
+            return PreflightFailure(output=f"{what} could not be launched ({type(exc).__name__}: {exc})")
         try:
             if wait_healthy(
                 http,
@@ -591,7 +665,10 @@ def _preflight_boot(
                 return None
         finally:
             spawned.terminate()
-        return tail(spawned.read_output(), _PREFLIGHT_OUTPUT_TAIL_LINES)
+        return PreflightFailure(
+            output=tail(spawned.read_output(), _PREFLIGHT_OUTPUT_TAIL_LINES),
+            shed=find_memory_shed(shed_ledger, spawned.pid, spawned_at),
+        )
 
 
 def probe_frontend(http: HttpClient, base_url: str) -> FrontendProbe:

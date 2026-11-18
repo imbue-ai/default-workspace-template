@@ -2193,6 +2193,7 @@ class _FakeSpawned:
     output: str = ""
     exited: bool = False
     terminated: bool = False
+    pid: int = 0
 
     def terminate(self) -> None:
         self.terminated = True
@@ -2231,7 +2232,9 @@ class _FakeSpawner(update_runtime.Spawner):
         is_exited = self.exited
         if self.exited_argv0 is not None:
             is_exited = unwrapped[0] == self.exited_argv0
-        self.last = _FakeSpawned(output=self.output, exited=is_exited)
+        self.last = _FakeSpawned(
+            output=self.output, exited=is_exited, pid=40000 + len(self.spawns)
+        )
         return self.last
 
 
@@ -3907,6 +3910,75 @@ def test_a_failed_preflight_that_produced_no_output_says_so(
     )
 
     assert "wrote nothing at all" in capsys.readouterr().err
+
+
+@dataclass
+class _ShedBootSpawner(_FakeSpawner):
+    """Every boot dies at once, and the memory guard's ledger records stopping the one with ``shed_pid_offset``."""
+
+    ledger_path: Path = Path()
+    shed_pid_offset: int = 0
+
+    def spawn(
+        self, argv: Sequence[str], cwd: str, env: dict, output_path: Path
+    ) -> _FakeSpawned:
+        spawned = super().spawn(argv, cwd, env, output_path)
+        self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000000Z", time.gmtime()),
+            "type": "process_shed",
+            "pid": spawned.pid + self.shed_pid_offset,
+            "comm": "system-interface",
+            "vm_rss_kib": 156744,
+        }
+        with self.ledger_path.open("a") as ledger:
+            ledger.write(json.dumps(record) + "\n")
+        return spawned
+
+
+def _shed_boot_spawner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shed_pid_offset: int
+) -> _ShedBootSpawner:
+    runtime_dir = tmp_path / "oom-runtime"
+    monkeypatch.setenv("OOM_PRIORITY_RUNTIME_DIR", str(runtime_dir))
+    return _ShedBootSpawner(
+        exited=True,
+        ledger_path=runtime_dir / "events" / "shed.jsonl",
+        shed_pid_offset=shed_pid_offset,
+    )
+
+
+def test_a_preflight_boot_the_memory_guard_stopped_is_named_as_a_memory_failure(
+    apply_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    # A boot the guard stops writes nothing, so without the guard's own record the lead
+    # has only "wrote nothing at all" to judge the retry by.
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    spawner = _shed_boot_spawner(tmp_path, monkeypatch, shed_pid_offset=0)
+
+    code = _apply(runner, _FakeHttp(lambda url: 200 if _is_live(url) else None), spawner, apply_repo)
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert (
+        "merged backend failed to boot in a pre-flight check: the memory guard stopped it for "
+        "lack of memory" in err
+    )
+    assert "(it held 153 MiB), so free memory before a retry" in err
+
+
+def test_a_preflight_boot_that_died_while_the_guard_stopped_something_else_is_not_blamed_on_memory(
+    apply_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    spawner = _shed_boot_spawner(tmp_path, monkeypatch, shed_pid_offset=1)
+
+    code = _apply(runner, _FakeHttp(lambda url: 200 if _is_live(url) else None), spawner, apply_repo)
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "memory guard" not in err
+    assert "wrote nothing at all" in err
 
 
 def test_preflight_output_is_tailed_to_the_interesting_end() -> None:
