@@ -102,7 +102,8 @@ For a user-created dependent, **research the version change online** -- the
 dependency's release notes for the exact old -> new delta (breaking changes,
 removed flags, new minimum runtimes); do not rely on memory. For a built-in
 dependent the verdict is fixed by provenance, so there is nothing to research:
-the merged changelog entries are the what's-new. In either case **report the
+the update's changelog text (Step 5's file in `update-self-worker.md`: the
+release sections, then the entries) is the what's-new. In either case **report the
 coupling** under Provisioning changes: which dependent, built-in or
 user-created, the version delta, what your research turned up, and what you
 could and could not validate.
