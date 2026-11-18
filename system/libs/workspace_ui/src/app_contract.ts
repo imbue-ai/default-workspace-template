@@ -234,11 +234,12 @@ export interface ShellConnection {
    *  machine). Settles as ``askAgent`` does. */
   startWithText(text: string, options?: StartOptions): Promise<StartOutcome>;
   /** Ask the shell to send ``text`` to an agent as a message about this page's app: to the chat about the app, shown
-   *  beside this page's window (the main chat when the machine has no such chat to offer). Settles on the shell's
-   *  answer; as not answered at once without a shell, when a handshake from a shell that started again comes first
-   *  (it forgot the request), and on ``disconnect``, after which no answer is heard, so a later call settles at once
-   *  too. The shell toasts a failure itself unless ``options`` say the page shows the outcome; an answer that
-   *  arrives after all for a request settled as not answered goes to their ``onLateAnswer``. */
+   *  beside this page's window, or through its launcher's primary text action (the main chat on a stock machine)
+   *  when the app is internal or no app takes an ask. Settles on the shell's answer; as not answered at once
+   *  without a shell, when a handshake from a shell that started again comes first (it forgot the request), and on
+   *  ``disconnect``, after which no answer is heard, so a later call settles at once too. The shell toasts a failure
+   *  itself unless ``options`` say the page shows the outcome; an answer that arrives after all for a request
+   *  settled as not answered goes to their ``onLateAnswer``. */
   askAgent(text: string, options?: StartOptions): Promise<StartOutcome>;
   /** Whether "Report a bug" would do anything: the shell's latest handshake said ``canReportBug``. */
   canReportBug(): boolean;
