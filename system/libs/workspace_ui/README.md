@@ -45,7 +45,12 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   server's own text go behind "See details" (`src/components/SeeDetails.ts`,
   which `NoticeDialog` draws from its `details`).
 - Toasts (`src/models/toasts.ts`, drawn by `src/components/toasts.ts`):
-  pressing a lasting toast's button dismisses it. A plain toast may carry
+  the caller of `ToastQueue.show` says which kind it shows. A plain note goes
+  after five seconds; a lasting one (`isLasting: true`) stays until
+  dismissed, with a close control, its details behind "See details" and its
+  buttons ("Try again", ...), at most three on screen, and pressing one of
+  its buttons dismisses it. A toast that says the same as one already up
+  (message and details) replaces it. A plain toast may carry
   details too: it then takes presses, shows "See details" and a close
   button, and stays once its details are opened (`ToastQueue.hold`, which
   `Toasts` calls through `onHold`).
