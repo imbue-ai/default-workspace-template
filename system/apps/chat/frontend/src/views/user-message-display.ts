@@ -16,6 +16,7 @@ import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import { MarkdownContent } from "../markdown";
 import { parseMessageAttachments } from "../models/attachments";
+import { withoutDictationNotes } from "../models/dictationNote";
 import {
   getOwner,
   getOwnParticipant,
@@ -227,12 +228,19 @@ export function renderNotice(
 }
 
 /** What a user bubble holds: the words as typed, then any attachments drawn as markdown (images
- *  inline, other files as links that open in Files). */
+ *  inline, other files as links that open in Files). The note a dictated message carries is for the
+ *  model, and is never drawn. */
 export function renderUserBubbleContent(content: string, requestedAt?: string): m.Children[] {
-  const { visibleText, attachmentBlock } = parseMessageAttachments(content);
+  // The note comes off before the attachments are split off: sent again from a block handed back to the
+  // composer, a message's note follows the attachment block its own text ends with, and that block is
+  // only read at the very end.
+  const withoutNotes = withoutDictationNotes(content);
+  const { visibleText, attachmentBlock } = parseMessageAttachments(withoutNotes.text);
+  // A send is trimmed whole, so words that ended in a line break keep it ahead of their note.
+  const words = withoutNotes.hadNote ? visibleText.trimEnd() : visibleText;
   const children: m.Children[] = [];
-  if (visibleText.length > 0) {
-    children.push(m("div", { class: "message-content whitespace-pre-wrap" }, visibleText));
+  if (words.length > 0) {
+    children.push(m("div", { class: "message-content whitespace-pre-wrap" }, words));
   }
   if (attachmentBlock !== null) {
     children.push(m(MarkdownContent, { content: attachmentBlock, requestedAt }));

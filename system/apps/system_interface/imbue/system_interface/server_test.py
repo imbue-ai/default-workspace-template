@@ -545,11 +545,11 @@ def test_not_built_repair_line_splits_the_way_a_shell_splits_it() -> None:
     assert printed_words.stdout.splitlines() == list(_NOT_BUILT_REPAIR_ARGV)
 
 
-def test_the_not_built_page_asks_a_new_agent_through_the_secondary_text_action_and_opens_a_terminal_session(
+def test_the_not_built_page_asks_an_agent_through_the_primary_text_action_and_opens_a_terminal_session(
     tmp_path: Path,
 ) -> None:
-    """The placeholder's "Ask an agent to fix this" sends the repair message through the launcher's secondary text
-    action, a new chat rather than the main one, and answers where that chat's page is; its "See details" terminal is
+    """The placeholder's "Ask an agent to fix this" sends the repair message through the launcher's primary text
+    action, the main chat rather than a new one, and answers where that chat's page is; its "See details" terminal is
     a session of its own."""
     app, posts = not_built_shell(
         tmp_path,
@@ -568,7 +568,7 @@ def test_the_not_built_page_asks_a_new_agent_through_the_secondary_text_action_a
     assert asked.get_json() == {"label": "helper-y2", "path": "/?chat=agent-1", "display_name": "Helper"}
     (post,) = posts
     assert post.url == "http://localhost:7002/api/intake"
-    assert post.body == {"target": "new_chat", "message": _NOT_BUILT_REPAIR_MESSAGE}
+    assert post.body == {"target": "main_chat", "message": _NOT_BUILT_REPAIR_MESSAGE}
 
     # A launch that fails answers as the launch route does: the app's own words, and no sentence of the shell's, for
     # the page to word.

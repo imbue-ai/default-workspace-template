@@ -63,21 +63,23 @@ def terminal_launch(entries: Sequence[AppInventoryEntry]) -> NotBuiltLaunch | No
 
 @pure
 def repair_agent_launch(entries: Sequence[AppInventoryEntry], message: str) -> NotBuiltLaunch | None:
-    """``message`` sent through the second launch path, in launcher order, that sends typed text (a ``text_param``;
-    a draft row is skipped, since the repair has to be sent), else the first; None when no app offers one. On a stock
-    workspace that is Chat's New Chat, the row the shell's "Ask an agent to ..." buttons use, so the repair starts a
-    chat of its own."""
+    """``message`` sent through the first launch path, in launcher order, that sends typed text (a ``text_param``;
+    a draft row is skipped, since the repair has to be sent); None when no app offers one. That is the launcher's
+    primary text action, the main chat on a stock workspace, where the desktop sends an ask that is about no app."""
     by_name = {candidate.row.name: candidate for candidate in entries}
-    text_rows = [
-        (row, launch_path)
-        for row in launcher_order([candidate.row for candidate in entries])
-        if not row.internal
-        for launch_path in effective_launch_paths(row)
-        if launch_path.text_param is not None
-    ]
-    if not text_rows:
+    primary_text_row = next(
+        (
+            (row, launch_path)
+            for row in launcher_order([candidate.row for candidate in entries])
+            if not row.internal
+            for launch_path in effective_launch_paths(row)
+            if launch_path.text_param is not None
+        ),
+        None,
+    )
+    if primary_text_row is None:
         return None
-    row, launch_path = text_rows[1] if len(text_rows) > 1 else text_rows[0]
+    row, launch_path = primary_text_row
     return NotBuiltLaunch(
         entry=by_name[row.name], launch_path=launch_path, params={str(launch_path.text_param): message}
     )

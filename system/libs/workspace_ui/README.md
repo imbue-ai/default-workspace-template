@@ -45,12 +45,14 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   server's own text go behind "See details" (`src/components/SeeDetails.ts`,
   which `NoticeDialog` draws from its `details`).
 - A failure's two buttons, both through the shell that frames the page
-  (`src/components/FailureButtons.ts`): `AskAgentToFixButton` starts a new
-  chat that asks an agent to fix the failure (`askAgentToFix` in
-  `src/app_contract.ts`, through `shell:start-new-with-text`, one task text
-  for every caller: what failed, the details verbatim, and what to do), and
-  renders nothing where no shell frames the page. `askAgentToFix` answers a
-  promise that settles on the shell's `shell:start-new-with-text-result`
+  (`src/components/FailureButtons.ts`): `AskAgentToFixButton` asks an agent
+  to fix the failure, in a message to the chat about the app the page belongs
+  to, which the shell opens beside the page's window (the main chat where
+  the workspace offers no chat about an app, or the page's app is internal;
+  `askAgentToFix` in `src/app_contract.ts`, through `shell:ask-agent`, one
+  task text for every caller: what failed, the details verbatim, and what to
+  do), and renders nothing where no shell frames the page. `askAgentToFix`
+  answers a promise that settles on the shell's `shell:ask-agent-result`
   (`{isOpened: true}`, or `{isOpened: false, failure}`; as not answered at
   once without a shell, on a handshake from a shell that started again (a
   different `shellId`), and on `disconnect()`; the button passes
@@ -59,7 +61,12 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   goes to `onLateAnswer`), and the button reads "Asking an
   agent…", disabled, until it settles, then shows a failure under itself,
   with "Report a bug" for that failure when it asks for one, and takes a late
-  answer in place of a not-answered one. The connection's `startWithText`,
+  answer in place of a not-answered one. A page that offers its own
+  "Report a bug" beside the button passes `pageReportBug: {onFailureChange}`:
+  the button then shows a refused ask's failure without a second "Report a
+  bug", and hands it to `onFailureChange`, so the page's one report files both
+  (`withAskFailure(pageFailure, askFailure)` adds the ask's sentence and
+  details under the page's details, labelled). The connection's `startWithText`,
   for a request that goes to the main chat (such as "Ask an agent to free up
   space"), answers the same way through `shell:start-with-text-result`. A
   call without `{showsOutcome: true}` leaves a failure to the shell's toast.
@@ -73,16 +80,21 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   handshake. The shell opens the report directly (`src/report-bug.ts`), with
   the sentence and details attached as the report's `errorDetails`, capped at
   the embed contract's `MAX_HELP_ERROR_DETAILS_LENGTH`.
-- Toasts (`src/models/toasts.ts`, drawn by `src/components/toasts.ts`): a
-  lasting toast says whether its message asks for a bug report
-  (`isReportable`), and `Toasts` draws "Report a bug" on it while the page
-  passes `onReportBug`, decided at each draw, so a toast shown before the page
-  learned it can open a bug report gains the button once it does. Pressing a
-  button dismisses its toast, except one marked `keepsToast` (a button that
-  hands the failure on, "Ask an agent to ...", and "Report a bug"), after
-  which the toast's other buttons still apply. An action with `pending`
-  (`{isPending, label}`) is drawn disabled under `label` while `isPending()`
-  holds, read at each draw. A plain toast may carry
+- Toasts (`src/models/toasts.ts`, drawn by `src/components/toasts.ts`):
+  the caller of `ToastQueue.show` says which kind it shows. A plain note goes
+  after five seconds; a lasting one (`isLasting: true`) stays until
+  dismissed, with a close control, its details behind "See details" and its
+  buttons ("Try again", ...), at most three on screen. A toast that says the
+  same as one already up (message and details) replaces it. A lasting toast
+  says whether its message asks for a bug report (`isReportable`), and
+  `Toasts` draws "Report a bug" on it while the page passes `onReportBug`,
+  decided at each draw, so a toast shown before the page learned it can open
+  a bug report gains the button once it does. Pressing a button dismisses
+  its toast, except one marked `keepsToast` (a button that hands the failure
+  on, "Ask an agent to ...", and "Report a bug"), after which the toast's
+  other buttons still apply. An action with `pending` (`{isPending, label}`)
+  is drawn disabled under `label` while `isPending()` holds, read at each
+  draw. A plain toast may carry
   details too: it then takes presses, shows "See details" and a close
   button, and stays once its details are opened (`ToastQueue.hold`, which
   `Toasts` calls through `onHold`).
@@ -100,9 +112,10 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   after its frame's `load`):
 
   ```js
-  import { connectToShell, askAgentToFix } from "/_static/app_contract.js";
+  import { connectToShell, askAgentToFix, withAskFailure } from "/_static/app_contract.js";
 
   const connection = connectToShell({ onHandshake: showFailureButtons });
+  let askFailure = null; // a refused ask, which the page's one Report a bug files too
   function showFailureButtons() {
     askButton.hidden = !connection.hasShell();
     reportButton.hidden = !connection.canReportBug();
@@ -117,9 +130,11 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
     );
     askButton.disabled = false;
     askButton.textContent = "Ask an agent to fix this";
-    if (!outcome.isOpened) showFailure(outcome.failure);
+    if (!outcome.isOpened) showFailure(outcome.failure); // its sentence and details, no Report a bug of its own
+    askFailure = outcome.isOpened ? null : outcome.failure;
   };
-  reportButton.onclick = () => connection.reportBug({ message: sentence, details: output });
+  reportButton.onclick = () =>
+    connection.reportBug(withAskFailure({ message: sentence, details: output }, askFailure));
   ```
 
   `src/element_reference.ts`, `src/context_menu_rows.ts`, and

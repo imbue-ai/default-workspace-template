@@ -39,6 +39,7 @@ function recordingStore(): PinnedFileStore & { pruned: [string, string[]][] } {
   const pruned: [string, string[]][] = [];
   return {
     pruned,
+    has: async () => false,
     read: async () => null,
     write: async () => undefined,
     prune: async (prefix, keep) => void pruned.push([prefix, [...keep].sort()]),
@@ -96,6 +97,24 @@ describe("the engine worker host", () => {
     expect(second.types()).toEqual(first.types());
   });
 
+  it("tells a port what it holds as the port connects, and tells no other port", async () => {
+    const host = createWorkerHost({
+      loadEngine: async () => fakeEngine(),
+      pickDevice: async () => "wasm",
+      download: instantDownload,
+      store: recordingStore(),
+    });
+    const first = new FakePort();
+    const handleFirst = host.connect(first);
+    expect(first.messages).toEqual([{ type: "hello", loaded: null }]);
+    await handleFirst({ type: "load", engineId: SPEC.id, preferredDevice: null, assetBase: ASSET_BASE });
+    first.messages.length = 0;
+    const later = new FakePort();
+    host.connect(later);
+    expect(later.messages).toEqual([{ type: "hello", loaded: { engineId: SPEC.id, device: "wasm" } }]);
+    expect(first.messages).toEqual([]);
+  });
+
   it("answers a later load of the loaded engine at once, without downloading again", async () => {
     const loadEngine = vi.fn<EngineLoader>(async () => fakeEngine());
     const download = vi.fn(instantDownload);
@@ -106,7 +125,10 @@ describe("the engine worker host", () => {
     const later = new FakePort();
     await host.connect(later)({ type: "load", engineId: SPEC.id, preferredDevice: null, assetBase: ASSET_BASE });
     expect(download).toHaveBeenCalledTimes(1);
-    expect(later.messages).toEqual([{ type: "ready", engineId: SPEC.id, device: "wasm" }]);
+    expect(later.messages).toEqual([
+      { type: "hello", loaded: { engineId: SPEC.id, device: "wasm" } },
+      { type: "ready", engineId: SPEC.id, device: "wasm" },
+    ]);
   });
 
   it("falls back to WebAssembly when the WebGPU variant does not load, and not when a download is bad", async () => {
@@ -131,6 +153,7 @@ describe("the engine worker host", () => {
     const other = new FakePort();
     await failing.connect(other)({ type: "load", engineId: SPEC.id, preferredDevice: null, assetBase: ASSET_BASE });
     expect(other.messages).toEqual([
+      { type: "hello", loaded: null },
       { type: "load-error", message: `${badFile.path} does not match its pinned SHA-256`, filePath: badFile.path },
     ]);
   });
@@ -146,6 +169,7 @@ describe("the engine worker host", () => {
     const port = new FakePort();
     await host.connect(port)({ type: "load", engineId: SPEC.id, preferredDevice: null, assetBase: ASSET_BASE });
     expect(port.messages).toEqual([
+      { type: "hello", loaded: null },
       {
         type: "load-error",
         message: "Moonshine Base has no webgpu variant; the device pick must offer one it has",
@@ -201,7 +225,10 @@ describe("the engine worker host", () => {
     const port = new FakePort();
     const handle = host.connect(port);
     await handle({ type: "transcribe", id: 1, audio: new Float32Array(16).buffer });
-    expect(port.messages).toEqual([{ type: "transcribe-error", id: 1, message: "The speech engine is not loaded" }]);
+    expect(port.messages).toEqual([
+      { type: "hello", loaded: null },
+      { type: "transcribe-error", id: 1, message: "The speech engine is not loaded" },
+    ]);
     await handle({ type: "load", engineId: SPEC.id, preferredDevice: null, assetBase: ASSET_BASE });
     port.messages.length = 0;
     await handle({ type: "transcribe", id: 2, audio: new Float32Array(16).buffer });

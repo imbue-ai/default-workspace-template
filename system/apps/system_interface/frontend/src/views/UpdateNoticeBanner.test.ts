@@ -13,7 +13,14 @@ import m from "mithril";
 import type { UpdateNoticeWire } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket } from "../testing/fakeShell";
-import { appRecord, desktopRecord, launchPathRecord, noticeWire, themeMetricsRecord } from "../testing/records";
+import {
+  appAskLaunchPathRecord,
+  appRecord,
+  desktopRecord,
+  launchPathRecord,
+  noticeWire,
+  themeMetricsRecord,
+} from "../testing/records";
 import { SYSTEM_SERVICES_RESTART_DETAILS, UpdateNoticeBanner, finishRollbackRequest } from "./UpdateNoticeBanner";
 
 const CLIENT = "client-1";
@@ -228,11 +235,16 @@ describe("UpdateNoticeBanner", () => {
     );
   });
 
-  it("offers to ask an agent to finish a rollback that left the restart to one, telling it how the rollback ended", async () => {
+  it("offers to ask an agent, in the main chat, to finish a rollback that left the restart to one, telling it how the rollback ended", async () => {
+    // The update is no app's, so the ask runs the primary text action whatever else the chat app declares.
     socket.deliver().onAppsUpdated([
       appRecord("chat", {
         display_name: "Chat",
-        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+        launch_paths: [
+          launchPathRecord({ id: "main", path: "/main", params: ["message"], text_param: "message" }),
+          launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" }),
+          appAskLaunchPathRecord(),
+        ],
       }),
     ]);
     const root = mountBanner();
@@ -259,7 +271,7 @@ describe("UpdateNoticeBanner", () => {
     await settled();
     expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual(
       [restored, failed].map(
-        (outcome) => `launch:home:chat:new:${JSON.stringify({ message: finishRollbackRequest(outcome) })}:new`,
+        (outcome) => `launch:home:chat:main:${JSON.stringify({ message: finishRollbackRequest(outcome) })}:new`,
       ),
     );
   });

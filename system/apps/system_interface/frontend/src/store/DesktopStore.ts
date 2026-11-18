@@ -29,8 +29,7 @@ import {
 import { StalePlacementsSaveError } from "../model/api";
 import { failureSentence, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
-import type { ReportedFailure, StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
-import type { TextAction } from "../reducers/launcherRows";
+import type { ReportedFailure, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { ASKING_AN_AGENT_LABEL } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { couldNotStartRequest, isRetryable, refusalKindOf, stoppedSentence } from "../model/failures";
@@ -39,6 +38,8 @@ import { refreshShellKeybindings } from "../model/keybindings";
 import {
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
+  appAskLaunchOf,
+  appAskParams,
   appChatLaunchOf,
   appChatParams,
   appShortcutsOf,
@@ -839,7 +840,7 @@ export class DesktopStore {
         return this.noticeOf(failureSentence(failure, whatFailed), tryAgain);
       case "app_stopped":
         if (app === undefined) break;
-        return { ...this.stoppedNotice(app), details: failure.details, untilRunning: app.name };
+        return { ...this.stoppedNotice(app, null), details: failure.details, untilRunning: app.name };
       case "app_could_not_start":
         if (app === undefined) break;
         return this.couldNotStartNotice(app, `${app.display_name} couldn't start.`, failure.details, tryAgain);
@@ -859,15 +860,23 @@ export class DesktopStore {
 
   /** What a full disk offers: an agent, in the main chat, asked to free up space; its toast stays up. */
   private freeSpaceAction(): ToastAction {
-    return this.askAgentAction("Ask an agent to free up space", FREE_SPACE_REQUEST, false);
+    return this.askAgentAction("Ask an agent to free up space", FREE_SPACE_REQUEST, () =>
+      this.startWithText(FREE_SPACE_REQUEST),
+    );
+  }
+
+  /** An "Ask an agent to ..." button about ``app``, for a window of it (``windowId``) or a toast (null): the ask
+   *  goes to the chat about the app, beside the window when there is one. */
+  private askAboutAppAction(label: string, request: string, app: AppRecord, windowId: string | null): ToastAction {
+    return this.askAgentAction(label, request, () => this.askAgentAbout(request, app, windowId));
   }
 
   /** An "Ask an agent to ..." button: it reads "Asking an agent…" and takes no press while its ask is out, and its
-   *  toast stays up. ``isNewChat`` asks in a new chat rather than the main one. */
-  private askAgentAction(label: string, request: string, isNewChat: boolean): ToastAction {
+   *  toast stays up. ``start`` sends the ask where it goes. */
+  private askAgentAction(label: string, request: string, start: () => Promise<StartOutcome>): ToastAction {
     return {
       label,
-      run: () => void this.askAgent(request, isNewChat),
+      run: () => void this.askOnce(request, start),
       keepsToast: true,
       pending: { isPending: () => this.isAskingAgent(request), label: ASKING_AN_AGENT_LABEL },
     };
@@ -878,15 +887,20 @@ export class DesktopStore {
     return this.agentAsks.has(request);
   }
 
-  /** Ask an agent ``request`` from one of the shell's own buttons, once at a time per request, in a new chat or the
-   *  main one; a failure is toasted here, since ``startNewWithText`` and ``startWithText`` leave that to their
-   *  caller. */
-  async askAgent(request: string, isNewChat: boolean): Promise<void> {
+  /** Ask an agent ``request`` from a button of the shell's own that is about no app (an update left unfinished):
+   *  in the main chat, as ``askAgent`` sends an ask with no window. */
+  async askAgentFromShell(request: string): Promise<void> {
+    return this.askOnce(request, () => this.askAgent(request, null));
+  }
+
+  /** Send ``request`` with ``start`` from one of the shell's own buttons, once at a time per request; a failure is
+   *  toasted here, since ``askAgent`` and ``startWithText`` leave that to their caller. */
+  private async askOnce(request: string, start: () => Promise<StartOutcome>): Promise<void> {
     if (this.agentAsks.has(request) || this.refuseWhileViewing("ask an agent")) return;
     this.agentAsks.add(request);
     this.notifyListeners();
     try {
-      const outcome = isNewChat ? await this.startNewWithText(request) : await this.startWithText(request);
+      const outcome = await start();
       if (!outcome.isOpened) this.toastNotice({ ...outcome.failure, actions: [] }, { isLasting: true });
     } finally {
       this.agentAsks.delete(request);
@@ -910,7 +924,7 @@ export class DesktopStore {
     }
     return this.noticeOf({ message: sentence, details, isReportable: false }, [
       ...actions,
-      this.askAgentAction("Ask an agent to look at it", couldNotStartRequest(app), true),
+      this.askAboutAppAction("Ask an agent to look at it", couldNotStartRequest(app), app, null),
     ]);
   }
 
@@ -1177,10 +1191,11 @@ export class DesktopStore {
     return gridDimensions(this.frameBackdrop(), this.metrics);
   }
 
-  /** What a window of ``app``, stopped and not started by the workspace on a request, says: that it isn't running,
-   *  and the next step the workspace has. That is an agent asked to start it, unless the app is the one agents are
-   *  asked through, which can only be reported. */
-  stoppedNotice(app: AppRecord): FailureNotice {
+  /** What a window of ``app`` (``windowId``; null for a toast about the app), stopped and not started by the
+   *  workspace on a request, says: that it isn't running, and the next step the workspace has. That is an agent
+   *  asked to start it, in the chat about the app, unless the app is the one agents are asked through, which can
+   *  only be reported. */
+  stoppedNotice(app: AppRecord, windowId: string | null): FailureNotice {
     const sentence = stoppedSentence(app);
     if (this.isAskedThrough(app)) {
       return this.noticeOf({
@@ -1190,21 +1205,14 @@ export class DesktopStore {
       });
     }
     const request = `${app.display_name} (${app.name}) isn't running in this workspace. Please start it again.`;
-    return this.plainNotice(sentence, [this.askAgentAction("Ask an agent to start it", request, true)]);
+    return this.plainNotice(sentence, [this.askAboutAppAction("Ask an agent to start it", request, app, windowId)]);
   }
 
-  /** Whether ``app`` is the one agents are asked through (the app of the row ``startNewWithText`` runs, Chat on a
-   *  stock workspace), or there is none, so no agent can be asked about it. */
+  /** Whether ``app`` is the one an ask about it would be sent through (the app of the launch ``askAgent`` runs for
+   *  it, Chat on a stock workspace), or there is none, so no agent can be asked about it. */
   private isAskedThrough(app: AppRecord): boolean {
-    const askedThrough = this.newTextRow()?.app.name ?? null;
-    return askedThrough === null || askedThrough === app.name;
-  }
-
-  /** The row a new chat is asked through: the secondary text action (Chat's New Chat on a stock machine), else the
-   *  primary one; undefined with no free-text row on the machine. */
-  private newTextRow(): AppLaunch | undefined {
-    const [primary, secondary] = freeTextRowsOf(openableApps(this.state));
-    return secondary ?? primary;
+    const through = this.askLaunchAbout(app) ?? freeTextRowsOf(openableApps(this.state))[0];
+    return through === undefined || through.app.name === app.name;
   }
 
   /** Whether this shell can stop and start the app: supervised, not critical, not inside a critical program, and
@@ -3108,42 +3116,79 @@ export class DesktopStore {
   }
 
   /** A page's ``shell:start-with-text`` (launcher plan section 3.7), and the shell's own "Ask an agent to free up
-   *  space": the primary text action runs with the text (the main chat on a stock machine). Settles as
-   *  ``startNewWithText`` does, toasting nothing. */
-  async startWithText(text: string): Promise<StartNewOutcome> {
-    return this.startTextRow(text, "primary");
-  }
-
-  /** A page's ``shell:start-new-with-text`` ("Ask an agent to fix this"): the secondary text action runs with the
-   *  text (Chat's New Chat on a stock machine), else the primary one. Settles once the window is on the desktop, or
-   *  with the failure for the caller to show where the press was: nothing is toasted. */
-  async startNewWithText(text: string): Promise<StartNewOutcome> {
-    return this.startTextRow(text, "secondary");
-  }
-
-  private async startTextRow(text: string, textAction: TextAction): Promise<StartNewOutcome> {
-    if (this.viewedDesktop() !== null) {
-      console.info("[si] refused to start a chat while viewing somebody else's desktop");
-      return {
-        isOpened: false,
-        failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
-      };
-    }
-    const row = textAction === "secondary" ? this.newTextRow() : freeTextRowsOf(openableApps(this.state))[0];
+   *  space": the primary text action runs with the text (the main chat on a stock machine). Settles once the window
+   *  is on the desktop, or with the failure for the caller to show where the press was: nothing is toasted. */
+  async startWithText(text: string): Promise<StartOutcome> {
+    const refusal = this.startRefusalWhileViewing();
+    if (refusal !== null) return refusal;
+    const [row] = freeTextRowsOf(openableApps(this.state));
     if (row === undefined) {
       return { isOpened: false, failure: { message: `${NO_TEXT_APP_REASON}.`, details: null, isReportable: false } };
     }
-    const whatFailed = `${row.app.display_name} couldn't open that`;
-    let failure: FailureNotice | null = null;
-    const isOpened = await this.runFreeText(
-      row.app.name,
-      row.launchPath.id,
-      text,
-      (notice) => {
-        failure = notice;
-      },
-      whatFailed,
+    return this.startOutcomeOf(row.app, (report, whatFailed) =>
+      this.runFreeText(row.app.name, row.launchPath.id, text, report, whatFailed),
     );
+  }
+
+  /** A page's ``shell:ask-agent`` ("Ask an agent to fix this"; ``windowId`` is the asking page's window, null for
+   *  an ask of the shell's own): the text is sent to the chat about that window's app, through the first launch
+   *  path of the machine that takes an ask's text, whose page is put on screen by the show rule and laid out beside
+   *  the window, as "Chat about this app" lays it out. With no such window, a window of an internal app, or no such
+   *  launch path, the primary text action runs with the text instead. Settles as ``startWithText`` does. */
+  async askAgent(text: string, windowId: string | null): Promise<StartOutcome> {
+    const asking = windowId === null ? null : findWindow(this.state, windowId);
+    const about = asking === null ? undefined : appByName(this.state, asking.window.app);
+    return this.askAgentAbout(text, about ?? null, asking?.window.id ?? null);
+  }
+
+  /** Send ``text`` to the chat about ``about``, as ``askAgent`` does for the app of a window: laid out beside
+   *  ``besideWindowId`` when the ask was pressed in a window, else wherever the show rule puts it. With no app, an
+   *  internal one, or no launch path that takes an ask's text, the primary text action runs with the text instead. */
+  private async askAgentAbout(
+    text: string,
+    about: AppRecord | null,
+    besideWindowId: string | null,
+  ): Promise<StartOutcome> {
+    const refusal = this.startRefusalWhileViewing();
+    if (refusal !== null) return refusal;
+    const launch = this.askLaunchAbout(about);
+    if (about === null || launch === null) return this.startWithText(text);
+    const params = appAskParams(launch.launchPath, about, text);
+    return this.startOutcomeOf(launch.app, async (report, whatFailed) => {
+      const target: LaunchTarget = besideWindowId === null ? { kind: "show" } : { kind: "show", besideWindowId };
+      const shown = await this.launchAt(launch.app.name, launch.launchPath.id, params, target, { whatFailed, report });
+      return shown !== null;
+    });
+  }
+
+  /** The launch an ask about ``about`` runs: the machine's first launch path that takes an ask's text, for an app
+   *  that is not internal; null where the ask runs the primary text action instead. */
+  private askLaunchAbout(about: AppRecord | null): AppLaunch | null {
+    return about === null || about.internal ? null : appAskLaunchOf(openableApps(this.state));
+  }
+
+  /** The refusal a start gets while this client views somebody else's desktop, for the caller to show; null on a
+   *  desktop of its own. Read before anything launches, since a refused launch toasts. */
+  private startRefusalWhileViewing(): StartOutcome | null {
+    if (this.viewedDesktop() === null) return null;
+    console.info("[si] refused to start a chat while viewing somebody else's desktop");
+    return {
+      isOpened: false,
+      failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
+    };
+  }
+
+  /** How ``launch`` went, as a start answers it: opened, or the failure the launch reported, else the fallback
+   *  that names ``app``, the app the launch ran. */
+  private async startOutcomeOf(
+    app: AppRecord,
+    launch: (report: FailureReport, whatFailed: string) => Promise<boolean>,
+  ): Promise<StartOutcome> {
+    const whatFailed = `${app.display_name} couldn't open that`;
+    let failure: FailureNotice | null = null;
+    const isOpened = await launch((notice) => {
+      failure = notice;
+    }, whatFailed);
     if (isOpened) return { isOpened: true };
     const told: FailureMessage = failure ?? {
       message: fallbackSentence(whatFailed),

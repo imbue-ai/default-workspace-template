@@ -22,7 +22,7 @@ from playwright.sync_api import Route
 from playwright.sync_api import expect
 
 from app_manifest.testing import SHELL_HANDSHAKE_COUNTER_SCRIPT
-from app_manifest.testing import answer_start_new_with_text
+from app_manifest.testing import answer_ask_agent
 from app_manifest.testing import resend_shell_handshake
 from app_manifest.testing import shell_messages
 from app_manifest.testing import shell_stand_in_page
@@ -128,7 +128,7 @@ def test_a_crash_offers_an_agent_and_a_bug_report_through_the_shell(desktop_cont
     viewer.locator("[data-screen-ask-agent]").click()
     viewer.locator("[data-screen-report-bug]").click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:report-bug')")
-    started = shell_messages(page, "shell:start-new-with-text")
+    started = shell_messages(page, "shell:ask-agent")
     assert len(started) == 1
     assert started[0]["showsOutcome"] is True
     assert "The Screen stopped unexpectedly." in str(started[0]["text"])
@@ -151,7 +151,7 @@ def test_an_ask_stays_pending_while_the_same_shell_greets_again_and_settles_when
     expect(ask).to_have_text("Asking an agent…")
     expect(ask).to_be_disabled()
 
-    answer_start_new_with_text(page, {"isOpened": True})
+    answer_ask_agent(page, {"isOpened": True})
     expect(ask).to_have_text("Ask an agent to fix this")
     expect(viewer.locator("[data-screen-ask-failure]")).to_be_hidden()
 

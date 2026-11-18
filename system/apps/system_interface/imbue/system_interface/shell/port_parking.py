@@ -92,23 +92,26 @@ _PAGE_TEMPLATE: Final[str] = """<!DOCTYPE html>
 # The app contract's wire (system/libs/workspace_ui/src/app_contract.ts), which this page speaks without the
 # contract module: the parker answers every path with this page, so it cannot serve the module beside it.
 SHELL_HANDSHAKE_TYPE: Final[str] = "shell:handshake"
-SHELL_START_NEW_WITH_TEXT_TYPE: Final[str] = "shell:start-new-with-text"
-SHELL_START_NEW_WITH_TEXT_RESULT_TYPE: Final[str] = "shell:start-new-with-text-result"
+SHELL_ASK_AGENT_TYPE: Final[str] = "shell:ask-agent"
+SHELL_ASK_AGENT_RESULT_TYPE: Final[str] = "shell:ask-agent-result"
+SHELL_REPORT_BUG_TYPE: Final[str] = "shell:report-bug"
 ASKING_AN_AGENT_LABEL: Final[str] = "Asking an agent\u2026"
 CHANGE_NOT_ANSWERED_SENTENCE: Final[str] = (
     "The workspace didn't answer, so Imbue Studio can't tell whether this went through."
 )
 
 # What a page that could not start offers: a Try again that asks once more, an agent asked to look at it (shown once
-# a shell that frames the page has greeted it, since only a shell can start one; while the shell has not answered the
+# a shell that frames the page has greeted it, since only a shell can ask one; while the shell has not answered the
 # ask it reads "Asking an agent...", and a failed ask is told under it, its details at the top of the page's one "See
 # details"), and the log's command for whoever wants it. A handshake from a shell with another ``shellId`` means the
 # shell restarted, so an ask still out is settled as not answered (the same shell greets the page again for ordinary
-# reasons); the old shell's answer, if it still comes, replaces that.
+# reasons); the old shell's answer, if it still comes, replaces that. A failed ask that asks for a bug report offers
+# "Report a bug" while the shell's latest handshake says it can open one.
 _FAILED_BODY_TEMPLATE: Final[str] = (
     '{sentence}<p><button type="button" id="try-again">Try again</button> '
     '<button type="button" id="ask-agent" hidden>Ask an agent to look at it</button></p>'
     '<p id="ask-agent-failure" hidden></p>'
+    '<p><button type="button" id="ask-agent-report" hidden>Report a bug</button></p>'
     "<details><summary>See details</summary>"
     '<pre id="ask-agent-failure-details" hidden></pre>'
     "<p>The program's log may say why: "
@@ -118,12 +121,20 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     'var ask = document.getElementById("ask-agent");'
     'var failure = document.getElementById("ask-agent-failure");'
     'var failureDetails = document.getElementById("ask-agent-failure-details");'
+    'var report = document.getElementById("ask-agent-report");'
+    "var shown = null;"
+    "var canReportBug = false;"
     "var askLabel = ask.textContent;"
     "var pendingId = null;"
     "var unansweredId = null;"
     "var shellId = null;"
     "if (window.parent === window) return;"
+    "function showReport() {"
+    "report.hidden = !(canReportBug && shown !== null && shown.isReportable === true);"
+    "}"
     "function show(told) {"
+    "shown = told;"
+    "showReport();"
     "failure.hidden = told === null;"
     "failureDetails.hidden = told === null || !told.details;"
     "if (told === null) return;"
@@ -141,6 +152,8 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     "var data = event.data;"
     "if (data.type === {handshake}) {"
     "ask.hidden = false;"
+    "canReportBug = data.canReportBug === true;"
+    "showReport();"
     'var greeter = typeof data.shellId === "string" ? data.shellId : "";'
     "if (shellId !== null && greeter !== shellId && pendingId !== null) {"
     "unansweredId = pendingId;"
@@ -154,16 +167,20 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     "show(data.isOpened ? null : data.failure);"
     "}"
     "});"
+    'report.addEventListener("click", function () {'
+    "if (shown !== null) {"
+    'window.parent.postMessage({ type: {report_bug}, message: shown.message, details: shown.details || null }, "*");'
+    "}"
+    "});"
     'ask.addEventListener("click", function () {'
     "if (pendingId !== null) return;"
     "unansweredId = null;"
     "pendingId = Math.random().toString(16).slice(2) + Date.now().toString(16);"
     "ask.disabled = true;"
     "ask.textContent = {asking};"
-    "failure.hidden = true;"
-    "failureDetails.hidden = true;"
+    "show(null);"
     "window.parent.postMessage("
-    '{ type: {start_new_with_text}, text: {request}, requestId: pendingId, showsOutcome: true }, "*");'
+    '{ type: {ask_agent}, text: {request}, requestId: pendingId, showsOutcome: true }, "*");'
     "});"
     "})();</script>"
 )
@@ -218,8 +235,9 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
     failed_body = (
         _FAILED_BODY_TEMPLATE.replace("{program}", html.escape(program))
         .replace("{handshake}", _script_literal(SHELL_HANDSHAKE_TYPE))
-        .replace("{start_new_with_text}", _script_literal(SHELL_START_NEW_WITH_TEXT_TYPE))
-        .replace("{result}", _script_literal(SHELL_START_NEW_WITH_TEXT_RESULT_TYPE))
+        .replace("{ask_agent}", _script_literal(SHELL_ASK_AGENT_TYPE))
+        .replace("{result}", _script_literal(SHELL_ASK_AGENT_RESULT_TYPE))
+        .replace("{report_bug}", _script_literal(SHELL_REPORT_BUG_TYPE))
         .replace("{asking}", _script_literal(ASKING_AN_AGENT_LABEL))
         .replace("{not_answered}", _script_literal(CHANGE_NOT_ANSWERED_SENTENCE))
         .replace("{request}", _script_literal(could_not_start_request(display_name, program)))

@@ -10,7 +10,6 @@ import { Button, buttonClass } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { createMenu, type Menu } from "@imbue/workspace-ui/src/components/menu";
-import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
@@ -26,6 +25,7 @@ import { formatSize } from "../models/format";
 import { matchesKeybinding } from "../models/keybindings";
 import { childPath, nameOf, parentOf } from "../models/paths";
 import { Dialogs } from "./dialogs";
+import { FailureActions } from "./FailureActions";
 import { FileIcon } from "./FileIcon";
 import { iconButton } from "./iconButton";
 
@@ -47,6 +47,7 @@ function loadFailureOf(error: unknown): FilesFailure {
       details: error.failure.details,
       isReportable: false,
       isOutOfSpace: false,
+      agentFix: null,
     };
   }
   return toldFailure(error, "This file couldn't be opened", "open");
@@ -225,21 +226,18 @@ function body(page: FilePageModel): m.Children {
 }
 
 /** A file whose text could not be loaded, in place of the editor: the sentence, what the server said behind "See
- *  details", Try again, and Report a bug where the sentence asks for one. */
+ *  details", Try again, and, where the sentence asks for a bug report, "Ask an agent to fix this" and Report a bug. */
 function loadFailureView(page: FilePageModel, failure: FilesFailure, centred: string): m.Children {
   return m("div.files-load-failure", { class: `${centred} flex-col gap-3 text-center` }, [
     m("div.files-load-failure-message", { class: "type-body text-danger" }, failure.message),
     m(SeeDetails, { details: failure.details }),
-    m("div", { class: "flex gap-2" }, [
-      m(Button, { sm: true, "data-action": "retry-load", onclick: () => void page.loadText() }, "Try again"),
-      failure.isReportable
-        ? m(ReportBugButton, {
-            connection: page.reporter,
-            failure: { message: failure.message, details: failure.details },
-            sm: true,
-          })
-        : null,
-    ]),
+    m(FailureActions, {
+      host: page.reporter,
+      failure,
+      path: page.options.path,
+      leading: m(Button, { sm: true, "data-action": "retry-load", onclick: () => void page.loadText() }, "Try again"),
+      isCentred: true,
+    }),
   ]);
 }
 

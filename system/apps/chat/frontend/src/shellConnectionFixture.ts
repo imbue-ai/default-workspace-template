@@ -58,7 +58,7 @@ export function stubShellConnection(canReportBug: boolean): ShellConnection {
     location: vi.fn(),
     openPath: vi.fn(),
     startWithText: vi.fn(),
-    startNewWithText: vi.fn(),
+    askAgent: vi.fn(),
     canReportBug: () => canReportBug,
     reportBug: vi.fn(),
     draftText: vi.fn(),

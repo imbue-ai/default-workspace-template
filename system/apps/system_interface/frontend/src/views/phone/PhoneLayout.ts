@@ -277,7 +277,11 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
                 ? m(
                     "div",
                     { class: "absolute inset-0" },
-                    windowPlaceholder("stopped-app", store.stoppedNotice(shownApp), store.reportBugAction()),
+                    windowPlaceholder(
+                      "stopped-app",
+                      store.stoppedNotice(shownApp, shownWindow.id),
+                      store.reportBugAction(),
+                    ),
                   )
                 : null,
               shownWindow !== null && shownApp === undefined && state.isAppsLoaded

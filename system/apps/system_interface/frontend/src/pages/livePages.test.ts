@@ -11,6 +11,8 @@
 import "../testing/dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  SHELL_ASK_AGENT,
+  SHELL_ASK_AGENT_RESULT,
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
   SHELL_DRAFT_TEXT,
@@ -26,8 +28,6 @@ import {
   SHELL_REPORT_BUG,
   SHELL_SHOWN,
   SHELL_THEME,
-  SHELL_START_NEW_WITH_TEXT,
-  SHELL_START_NEW_WITH_TEXT_RESULT,
   SHELL_START_WITH_TEXT,
   SHELL_START_WITH_TEXT_RESULT,
 } from "@imbue/workspace-ui/src/app_contract";
@@ -41,6 +41,7 @@ import { activeFocusedWindowId, activePlacements } from "../reducers/desktopStat
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import {
+  appAskLaunchPathRecord,
   appRecord,
   desktopRecord,
   launchPathRecord,
@@ -257,10 +258,13 @@ describe("creating and positioning", () => {
     expect(wrapper.style.pointerEvents).toBe("auto");
   });
 
-  it("hands the microphone to the frames of an app whose manifest listens, and to no other", () => {
-    expect(pageFrameAllow(appRecord("chat", { uses_microphone: true }))).toBe(`${PAGE_FRAME_ALLOW}; microphone`);
+  it("hands the microphone, and the screen wake lock dictation holds, to the frames of an app whose manifest listens, and to no other", () => {
+    expect(pageFrameAllow(appRecord("chat", { uses_microphone: true }))).toBe(
+      `${PAGE_FRAME_ALLOW}; microphone; screen-wake-lock`,
+    );
     expect(pageFrameAllow(appRecord("docs"))).toBe(PAGE_FRAME_ALLOW);
     expect(frameOf("win-1").getAttribute("allow")).not.toContain("microphone");
+    expect(frameOf("win-1").getAttribute("allow")).not.toContain("screen-wake-lock");
   });
 
   it("creates no page for a minimized window until it is restored", () => {
@@ -1279,59 +1283,61 @@ describe("the contract", () => {
     warn.mockRestore();
   });
 
-  it("runs a page's shell:start-new-with-text as the secondary text action, and answers the page once it opened", async () => {
+  /** The Docs app (``win-1`` is a window of it) beside a chat-like app that declares where an ask about an app
+   *  goes and where a typed text goes. */
+  function offerDocsAndAnAppThatTakesAsks(): void {
     offerApps(api, socket, [
-      appRecord("docs", {
-        url: "http://127.0.0.1:7001",
+      appRecord("docs", { url: "http://127.0.0.1:7001", display_name: "Docs" }),
+      appRecord("chat", {
+        url: "http://127.0.0.1:7003",
         launch_paths: [
           launchPathRecord({ id: "main", path: "/main", params: ["message"], text_param: "message" }),
-          launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" }),
+          appAskLaunchPathRecord(),
         ],
       }),
       notes,
     ]);
+    api.postLaunchAnswer = "/?chat=agent-docs";
+  }
+
+  it("runs a page's shell:ask-agent as an ask about its window's app, and answers the page once the chat is shown", async () => {
+    offerDocsAndAnAppThatTakesAsks();
     const spy = spyOnFrame("win-1");
-    messageFromPage("win-1", { type: SHELL_START_NEW_WITH_TEXT, text: "Fix this.", requestId: "req-1" });
+    messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this.", requestId: "req-1" });
     await settle();
-    expect(api.calls).toContain(`launch:home:docs:new:{"message":"Fix this."}:new`);
-    expect(api.calls.some((call) => call.startsWith("launch:home:docs:main:"))).toBe(false);
-    expect(spy).toHaveBeenCalledWith(
-      { type: SHELL_START_NEW_WITH_TEXT_RESULT, requestId: "req-1", isOpened: true },
-      "*",
-    );
+    expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([
+      'launch:home:chat:app-ask:{"app":"docs","app_display_name":"Docs","message":"Fix this."}:show:beside:win-1',
+    ]);
+    expect(spy).toHaveBeenCalledWith({ type: SHELL_ASK_AGENT_RESULT, requestId: "req-1", isOpened: true }, "*");
+    expect(store.toasts.current()).toEqual([]);
   });
 
-  it("answers a page that shows the outcome with the failure when the launch is refused, toasting nothing", async () => {
-    offerApps(api, socket, [
-      appRecord("docs", {
-        url: "http://127.0.0.1:7001",
-        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
-      }),
-      notes,
-    ]);
-    api.refusal = "docs refused the launch: no account is signed in";
+  it("answers a refused ask with the failure, and toasts it only for a page that does not show the outcome", async () => {
+    offerDocsAndAnAppThatTakesAsks();
+    api.refusal = "chat refused the launch: no account is signed in";
+    const failure = {
+      message: "Chat couldn't open that.",
+      details: "HTTP 400\nchat refused the launch: no account is signed in",
+      isReportable: false,
+    };
     const spy = spyOnFrame("win-1");
-    messageFromPage("win-1", {
-      type: SHELL_START_NEW_WITH_TEXT,
-      text: "Fix this.",
-      requestId: "req-2",
-      showsOutcome: true,
-    });
+    messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this.", requestId: "req-2", showsOutcome: true });
     await settle();
     expect(spy).toHaveBeenCalledWith(
-      {
-        type: SHELL_START_NEW_WITH_TEXT_RESULT,
-        requestId: "req-2",
-        isOpened: false,
-        failure: {
-          message: "Docs couldn't open that.",
-          details: "HTTP 400\ndocs refused the launch: no account is signed in",
-          isReportable: false,
-        },
-      },
+      { type: SHELL_ASK_AGENT_RESULT, requestId: "req-2", isOpened: false, failure },
       "*",
     );
     expect(store.toasts.current()).toEqual([]);
+
+    messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this.", requestId: "req-3" });
+    await settle();
+    expect(spy).toHaveBeenCalledWith(
+      { type: SHELL_ASK_AGENT_RESULT, requestId: "req-3", isOpened: false, failure },
+      "*",
+    );
+    expect(store.toasts.current()).toMatchObject([
+      { message: failure.message, details: failure.details, isLasting: true },
+    ]);
   });
 
   it("toasts a refused start itself when the page does not show the outcome, as for Routines' add field", async () => {
@@ -1369,15 +1375,15 @@ describe("the contract", () => {
     ]);
   });
 
-  it("answers a page's shell:start-new-with-text with the fallback failure when the launch throws", async () => {
+  it("answers a page's shell:ask-agent with the fallback failure when the launch throws", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    vi.spyOn(store, "startNewWithText").mockRejectedValue(new Error("layout state is gone"));
+    vi.spyOn(store, "askAgent").mockRejectedValue(new Error("layout state is gone"));
     const spy = spyOnFrame("win-1");
-    messageFromPage("win-1", { type: SHELL_START_NEW_WITH_TEXT, text: "Fix this.", requestId: "req-3" });
+    messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this.", requestId: "req-3" });
     await settle();
     expect(spy).toHaveBeenCalledWith(
       {
-        type: SHELL_START_NEW_WITH_TEXT_RESULT,
+        type: SHELL_ASK_AGENT_RESULT,
         requestId: "req-3",
         isOpened: false,
         failure: {
@@ -1399,9 +1405,9 @@ describe("the contract", () => {
     error.mockRestore();
   });
 
-  it("ignores a page's shell:start-new-with-text that carries no request id", async () => {
+  it("ignores a page's shell:ask-agent that carries no request id", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    messageFromPage("win-1", { type: SHELL_START_NEW_WITH_TEXT, text: "Fix this." });
+    messageFromPage("win-1", { type: SHELL_ASK_AGENT, text: "Fix this." });
     await settle();
     expect(api.calls.some((call) => call.startsWith("launch"))).toBe(false);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("carried no request id"));

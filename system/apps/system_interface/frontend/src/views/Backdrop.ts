@@ -246,7 +246,9 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                           sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
                           isShielded: window.id !== focusedWindowId || attrs.isOverlayOpen,
                           stopped:
-                            app !== undefined && isAppShownStopped(state, app) ? store.stoppedNotice(app) : null,
+                            app !== undefined && isAppShownStopped(state, app)
+                              ? store.stoppedNotice(app, window.id)
+                              : null,
                           onReportBug: store.reportBugAction(),
                           isAppGone: app === undefined && state.isAppsLoaded,
                           immersive: store.getCanImmerse()

@@ -112,6 +112,22 @@ params = [
 presets = {target = "app_chat"}
 app_params = {name = "app", display_name = "app_display_name"}
 
+# An ask from a page of an app (a failure's "Ask an agent to fix this"): the text is sent to the chat about the app,
+# found as "app-chat" above finds it and created with the text as its first message when there is none; where that
+# chat cannot take a message or cannot be created, the text goes where "main" above sends it. Never a launcher row.
+[[launch_paths]]
+id = "app-ask"
+label = "Ask about this app"
+path = "/api/chats/intake"
+method = "POST"
+params = [
+    {name = "app", label = "App", required = true},
+    {name = "app_display_name", label = "App name", required = true},
+    {name = "message", label = "Message to send", required = false},
+]
+presets = {target = "app_ask"}
+app_params = {name = "app", display_name = "app_display_name", text = "message"}
+
 # The keystrokes a person may re-bind in the Keyboard shortcuts dialog (the user-profile-state spec in the mngr
 # repository, section 10). Enter sends, and so does the Cmd/Ctrl pair other chat apps taught; Shift+Enter stays the
 # fixed line break, since a keystroke that matches no action falls through to the composer.

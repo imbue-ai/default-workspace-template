@@ -8,7 +8,6 @@
 import m from "mithril";
 
 import { Button } from "@imbue/workspace-ui/src/components/Button";
-import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { alertDotIcon, icon, type IconName } from "@imbue/workspace-ui/src/components/icons";
 import { createMenu, type Menu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
@@ -38,6 +37,7 @@ import type { SortKey, ViewMode } from "../models/preferences";
 import { folderPathOf, isWithin, segmentsOf } from "../models/paths";
 import { isFileDrag, sourcesFromDrop } from "../models/uploads";
 import { DROP_FOLDER_ATTR, ENTRY_DRAG_TYPE, FOLDER_SURFACE_ATTR } from "./entries";
+import { FailureActions } from "./FailureActions";
 import { menuRowsOf, type FilesController } from "./FilesController";
 import { cornerBadge, fileIconSvg } from "./FileIcon";
 import { ColumnView, IconView, ListView } from "./FolderViews";
@@ -470,19 +470,21 @@ function FolderBody(): m.Component<{ app: FilesController }> {
         empty = m("div", { class: "flex justify-center pt-16" }, m("div.spinner"));
       } else if (state.status === "error" && entries.length === 0) {
         const failure = state.error;
-        const report = failure?.isReportable
-          ? m(ReportBugButton, {
-              connection: app.failureHost,
-              failure: { message: failure.message, details: failure.details },
-              sm: true,
-            })
-          : null;
+        const retry = m(Button, { sm: true, onclick: () => void model.load(model.folder) }, "Try again");
         empty = message(
           failure?.message ?? "",
           "",
-          () => void model.load(model.folder),
           failure?.details ?? null,
-          report,
+          failure === null
+            ? m("div", { class: "mt-3" }, retry)
+            : m(FailureActions, {
+                host: app.failureHost,
+                failure,
+                path: model.folder,
+                leading: retry,
+                isCentred: true,
+                extra: "mt-3",
+              }),
         );
       } else if (!state.exists) {
         empty = message("This folder doesn't exist", "It may have been moved or deleted.");
@@ -520,21 +522,18 @@ export function syncBanner(notice: SyncNotice): m.Vnode {
   );
 }
 
-/** A message in place of the folder's entries; `report` is a failure's Report a bug, beside Try again. */
+/** A message in place of the folder's entries; `actions` are a failure's buttons, under what it says. */
 function message(
   title: string,
   detail: string,
-  retry?: () => void,
   seeDetails: string | null = null,
-  report: m.Children = null,
+  actions: m.Children = null,
 ): m.Vnode {
   return m("div.files-empty", { class: "flex flex-col items-center gap-1 px-6 pt-20 text-center" }, [
     m("div", { class: "type-label text-secondary" }, title),
     detail === "" ? null : m("div", { class: "max-w-[360px] type-helper text-faint" }, detail),
     m(SeeDetails, { details: seeDetails }),
-    retry === undefined
-      ? null
-      : m("div", { class: "mt-3 flex gap-2" }, [m(Button, { sm: true, onclick: retry }, "Try again"), report]),
+    actions,
   ]);
 }
 

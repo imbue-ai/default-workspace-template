@@ -19,7 +19,7 @@
  * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
  * this client's own stored path, which arrives with the layout), and the pages' own
  * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, ``shell:start-with-text``,
- * ``shell:start-new-with-text``, ``shell:message``, ``shell:open-link``, and ``shell:report-bug``. Messages cross
+ * ``shell:ask-agent``, ``shell:message``, ``shell:open-link``, and ``shell:report-bug``. Messages cross
  * through ``relay.ts``.
  *
  * The phone layout mounts differently (plan-phone-interface.md): under the ``shown`` policy only the shown
@@ -34,6 +34,8 @@
 
 import {
   INPUT_REPORT_INTERVAL_MS,
+  SHELL_ASK_AGENT,
+  SHELL_ASK_AGENT_RESULT,
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
   SHELL_DRAFT_TEXT,
@@ -50,13 +52,11 @@ import {
   SHELL_SHOWN,
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
-  SHELL_START_NEW_WITH_TEXT,
-  SHELL_START_NEW_WITH_TEXT_RESULT,
   SHELL_START_WITH_TEXT,
   SHELL_START_WITH_TEXT_RESULT,
   reportedFailureOf,
 } from "@imbue/workspace-ui/src/app_contract";
-import type { StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
+import type { StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { DEFAULT_WHAT_FAILED, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { viewportRect } from "../geometry/frames";
@@ -112,10 +112,11 @@ export const PAGE_FRAME_SANDBOX =
 // integration spec, section 5.5).
 export const PAGE_FRAME_ALLOW = "clipboard-read; clipboard-write; fullscreen";
 
-/** What ``app``'s frames may do: the grant every page gets, plus the microphone for an app whose manifest says its
- *  pages listen (the chat's dictation), which no other app's frame is handed. */
+/** What ``app``'s frames may do: the grant every page gets, plus, for an app whose manifest says its pages listen
+ *  (the chat's dictation), the microphone and the screen wake lock that keeps a phone awake while they do, which
+ *  no other app's frame is handed. */
 export function pageFrameAllow(app: AppRecord): string {
-  return app.uses_microphone ? `${PAGE_FRAME_ALLOW}; microphone` : PAGE_FRAME_ALLOW;
+  return app.uses_microphone ? `${PAGE_FRAME_ALLOW}; microphone; screen-wake-lock` : PAGE_FRAME_ALLOW;
 }
 // The page's bottom corners follow the chrome's rounding, which a fullscreen window has none of.
 const PAGE_CORNERS_CLASS = "rounded-b-(--desk-window-radius)";
@@ -258,9 +259,7 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_INPUT, (frame) => this.takeInput(frame));
     setChildFrameMessageHandler(SHELL_OPEN, (frame, payload) => this.takeOpen(frame, payload));
     setChildFrameMessageHandler(SHELL_START_WITH_TEXT, (frame, payload) => this.takeStartWithText(frame, payload));
-    setChildFrameMessageHandler(SHELL_START_NEW_WITH_TEXT, (frame, payload) =>
-      this.takeStartNewWithText(frame, payload),
-    );
+    setChildFrameMessageHandler(SHELL_ASK_AGENT, (frame, payload) => this.takeAskAgent(frame, payload));
     setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
     setChildFrameMessageHandler(SHELL_MESSAGE, (frame, payload) => this.takeMessage(frame, payload));
     setChildFrameMessageHandler(SHELL_OPEN_LINK, (frame, payload) => this.takeOpenLink(frame, payload));
@@ -1006,11 +1005,13 @@ export class LivePagesLayer implements PageDriver {
     );
   }
 
-  /** ``shell:start-new-with-text {text, requestId}`` from a page ("Ask an agent to fix this"): the launcher's
-   *  secondary text action runs with it, and the page is answered with ``shell:start-new-with-text-result``. */
-  private takeStartNewWithText(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
-    this.startAndAnswer(frame, payload, SHELL_START_NEW_WITH_TEXT, SHELL_START_NEW_WITH_TEXT_RESULT, (text) =>
-      this.store.startNewWithText(text),
+  /** ``shell:ask-agent {text, requestId}`` from a page ("Ask an agent to fix this"): the text is sent to the chat
+   *  about the app of the page's window, shown beside that window, and the page is answered with
+   *  ``shell:ask-agent-result``. */
+  private takeAskAgent(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    const windowId = this.pageOfFrame(frame)?.windowId ?? null;
+    this.startAndAnswer(frame, payload, SHELL_ASK_AGENT, SHELL_ASK_AGENT_RESULT, (text) =>
+      this.store.askAgent(text, windowId),
     );
   }
 
@@ -1022,7 +1023,7 @@ export class LivePagesLayer implements PageDriver {
     payload: Record<string, unknown>,
     type: string,
     resultType: string,
-    start: (text: string) => Promise<StartNewOutcome>,
+    start: (text: string) => Promise<StartOutcome>,
   ): void {
     const text = this.textFromPage(frame, payload, type);
     if (text === null) return;
@@ -1032,7 +1033,7 @@ export class LivePagesLayer implements PageDriver {
       return;
     }
     void start(text)
-      .catch((error: unknown): StartNewOutcome => {
+      .catch((error: unknown): StartOutcome => {
         console.error(`[si] ${type} failed`, error);
         return {
           isOpened: false,
