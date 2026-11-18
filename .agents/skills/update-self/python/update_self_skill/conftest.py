@@ -48,7 +48,9 @@ def _isolate_shed_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     A workspace agent's environment pins ``OOM_PRIORITY_RUNTIME_DIR`` to the workspace's own
     ledger, which a real shed of a pid a fake boot reports would turn into the test's verdict.
     """
-    monkeypatch.setenv("OOM_PRIORITY_RUNTIME_DIR", str(tmp_path / "oom-priority-runtime"))
+    monkeypatch.setenv(
+        "OOM_PRIORITY_RUNTIME_DIR", str(tmp_path / "oom-priority-runtime")
+    )
 
 
 @pytest.fixture
