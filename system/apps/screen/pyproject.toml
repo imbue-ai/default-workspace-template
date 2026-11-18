@@ -34,7 +34,6 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "app-manifest[testing]",
     "app-schema[testing]",
     "pytest>=9.0",
     "pytest-cov>=7.0.0",

@@ -25,16 +25,6 @@ class Lifecycle(UpperCaseStrEnum):
     STOPPED = auto()
 
 
-class StopCause(UpperCaseStrEnum):
-    """Why the stack ended, as the viewer words it: somebody stopped it (Quit, the service's own shutdown), its
-    start failed, a member left on its own, or the workspace's memory guard shed a member."""
-
-    REQUESTED = auto()
-    START_FAILED = auto()
-    CRASHED = auto()
-    OUT_OF_MEMORY = auto()
-
-
 class Controller(UpperCaseStrEnum):
     """Who drives the Screen: a human session, an agent holding the lease, or nobody."""
 
@@ -213,11 +203,7 @@ class ScreenState(FrozenModel):
 
     lifecycle: Lifecycle = Field(description="Where the stack is")
     install_reason: str | None = Field(description="What the env.d unit has not installed yet, while installing")
-    install_failure: str | None = Field(
-        description="How the env.d unit failed in this boot, while installing; None while it may still finish"
-    )
     stop_reason: str | None = Field(description="Why the stack ended, while stopped")
-    stop_cause: StopCause | None = Field(description="What kind of end that was, while stopped; None if unrecorded")
     title: str = Field(description="The frontmost X window's title, or the app's name for an empty desktop")
     video_id: str = Field(description="The video profile every viewer selects")
     control: ControlView = Field(description="The lease")
@@ -254,7 +240,6 @@ class ScreenStopped(FrozenModel):
 
     member: str = Field(description="The program that left RUNNING")
     reason: str = Field(description="How it left, in words")
-    pid: int | None = Field(default=None, description="The process that left, when supervisord named it")
 
 
 class NekoSessionRecord(FrozenModel):

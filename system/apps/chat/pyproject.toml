@@ -41,7 +41,6 @@ license = {text = "FCL-1.0-MIT"}
 
 [dependency-groups]
 dev = [
-    "app-manifest[testing]",
     "app-schema[testing]",
     "playwright>=1.40",
     "pytest-playwright>=0.4",

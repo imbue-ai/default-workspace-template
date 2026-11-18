@@ -1,21 +1,14 @@
-import base64
-import contextlib
 import gzip
-import os
-import signal
 import stat
 import subprocess
 from pathlib import Path
 
 import pytest
-from imbue.mngr.utils.polling import poll_until
 from inline_snapshot import snapshot
 from loguru import logger
 
 from terminal_app.data_types import TerminalPaths
 from terminal_app.dispatch import (
-    ENDED_MISSING_FOLDER,
-    ENDED_NOT_STARTED,
     build_session_command,
     build_ttyd_argv,
     install_dispatch_scripts,
@@ -28,8 +21,7 @@ from terminal_app.dispatch import (
     warn_if_oom_tag_script_is_missing,
 )
 from terminal_app.errors import UnsafeDispatchPathError
-from terminal_app.pty_page import PTY_PAGE_SCRIPT, TERMINAL_ENDED_OSC
-from terminal_app.testing import FakeTmux
+from terminal_app.pty_page import PTY_PAGE_SCRIPT
 
 _COMMANDS_DIR = Path("/home/user/workspace/data/.state/terminal/commands")
 _SESSIONS_DIR = Path("/home/user/workspace/data/.state/terminal/sessions")
@@ -84,15 +76,7 @@ exec tmux attach "${ATTACH_FLAGS[@]}" -t "$TARGET_SESSION":0
 def test_workdir_script_opens_a_shell_in_the_directory() -> None:
     assert render_workdir_script() == snapshot("""\
 #!/bin/bash
-report_end() {
-    printf '\\033]7790;%s;%s\\007' "$1" "$(printf '%s' "$2" | base64 | tr -d '\\n')"
-    printf '%s\\r\\n' "$3"
-    read -r || true
-    exit 1
-}
-
 cd "$1" 2>/dev/null && exec bash
-report_end missing-folder "$1" "The folder $1 does not exist."
 """)
 
 
@@ -119,12 +103,6 @@ def test_session_script_attaches_by_recorded_id_and_creates_a_tagged_shell() -> 
 # name exists and creates it otherwise, so the window comes back as a fresh
 # shell. A created session runs the login shell through the memory-shedding
 # tag, as the app's own creates do.
-#
-# A session the user ends goes back to ttyd, whose overlay offers to reconnect.
-# When tmux says anything on stderr or exits non-zero instead (it can report a
-# failure with status 0), the reason is told to the wrapper page: as the
-# terminal not starting when that happened in its first seconds, else as the
-# terminal having closed.
 set -euo pipefail
 SESSION_NAME="${1:-}"
 WORKDIR="${2:-}"
@@ -138,37 +116,6 @@ if [ -z "$SESSION_NAME" ]; then
     exec bash
 fi
 
-report_end() {
-    printf '\\033]7790;%s;%s\\007' "$1" "$(printf '%s' "$2" | base64 | tr -d '\\n')"
-    printf '%s\\r\\n' "$3"
-    read -r || true
-    exit 1
-}
-
-run_tmux() {
-    local started_at=$SECONDS
-    # Read back through descriptors opened before the file is removed, so nothing is left in /tmp when ttyd hangs
-    # the script up (every window close); tmux gets neither descriptor.
-    local error_file
-    error_file="$(mktemp)"
-    exec 3>"$error_file" 4<"$error_file"
-    rm -f "$error_file"
-    local status=0
-    tmux "$@" 2>&3 3>&- 4<&- || status=$?
-    exec 3>&-
-    local error
-    error="$(cat <&4)"
-    exec 4<&-
-    if [ "$status" -eq 0 ] && [ -z "$error" ]; then
-        exit 0
-    fi
-    error="${error:-tmux exited with status $status}"
-    if [ $((SECONDS - started_at)) -lt 5 ]; then
-        report_end not-started "$error" "This terminal couldn't start: $error"
-    fi
-    report_end ended "$error" "This terminal closed: $error"
-}
-
 # The id file holds the session id and its creation time: tmux reuses ids across servers, so
 # only a session created when the file says was the terminal's.
 SESSION_ID_FILE="/home/user/workspace/data/.state/terminal/sessions/$SESSION_NAME"
@@ -178,7 +125,7 @@ if [ -f "$SESSION_ID_FILE" ]; then
     if [ -n "$SESSION_ID" ] && [ -n "$SESSION_CREATED" ] && tmux has-session -t "$SESSION_ID" 2>/dev/null; then
         LIVE_CREATED="$(tmux display-message -p -t "$SESSION_ID" '#{session_created}' 2>/dev/null || true)"
         if [ "$LIVE_CREATED" = "$SESSION_CREATED" ]; then
-            run_tmux attach-session "${ATTACH_FLAGS[@]}" -t "$SESSION_ID"
+            exec tmux attach-session "${ATTACH_FLAGS[@]}" -t "$SESSION_ID"
         fi
     fi
 fi
@@ -194,90 +141,8 @@ if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
     WORKDIR_ARGS=(-c "$WORKDIR")
 fi
 
-run_tmux new-session -A -s "$SESSION_NAME" "${WORKDIR_ARGS[@]}" python3 /home/user/workspace/system/services/oom_priority/bin/oom_tag_service.py terminal-session bash -l
+exec tmux new-session -A -s "$SESSION_NAME" "${WORKDIR_ARGS[@]}" python3 /home/user/workspace/system/services/oom_priority/bin/oom_tag_service.py terminal-session bash -l
 """)
-
-
-def _ended_sequence(kind: str, detail: str) -> str:
-    return f"\x1b]{TERMINAL_ENDED_OSC};{kind};{base64.b64encode(detail.encode()).decode()}\x07"
-
-
-def _run_script(script_text: str, tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    script = tmp_path / "script.sh"
-    script.write_text(script_text)
-    return subprocess.run(
-        ["bash", str(script), *args], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30
-    )
-
-
-def test_a_session_tmux_will_not_start_tells_the_wrapper_why_and_holds_the_pane(
-    fake_tmux: FakeTmux, tmp_path: Path
-) -> None:
-    fake_tmux.refuse_creates()
-
-    ran = _run_script(render_session_script(tmp_path / "sessions", _OOM_TAG_SCRIPT), tmp_path, "terminal-1", str(tmp_path))
-
-    assert ran.returncode == 1
-    assert ran.stdout.startswith(_ended_sequence(ENDED_NOT_STARTED, "fake tmux: refusing to create sessions"))
-    assert "This terminal couldn't start: fake tmux: refusing to create sessions" in ran.stdout
-
-
-def test_a_session_that_ends_cleanly_goes_back_to_ttyd_with_nothing_to_tell(
-    fake_tmux: FakeTmux, tmp_path: Path
-) -> None:
-    ran = _run_script(render_session_script(tmp_path / "sessions", _OOM_TAG_SCRIPT), tmp_path, "terminal-1", str(tmp_path))
-
-    assert ran.returncode == 0
-    assert ran.stdout == ""
-    assert fake_tmux.session_names() == ["terminal-1"]
-
-
-def test_a_session_ttyd_hangs_up_leaves_no_file_behind(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    attached = tmp_path / "attached"
-    fake_tmux = bin_dir / "tmux"
-    fake_tmux.write_text(f'#!/bin/bash\ntouch "{attached}"\nexec sleep 30\n')
-    fake_tmux.chmod(0o755)
-    temp_dir = tmp_path / "tmp"
-    temp_dir.mkdir()
-    # Where the script's temporary files go, on every platform (macOS's mktemp does not always follow TMPDIR).
-    fake_mktemp = bin_dir / "mktemp"
-    fake_mktemp.write_text(f'#!/bin/bash\nfile="{temp_dir}/tmp.$$"\n: > "$file"\necho "$file"\n')
-    fake_mktemp.chmod(0o755)
-    script = tmp_path / "script.sh"
-    script.write_text(render_session_script(tmp_path / "sessions", _OOM_TAG_SCRIPT))
-    environment = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
-    session = subprocess.Popen(
-        ["bash", str(script), "terminal-1", str(tmp_path)],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=environment,
-        start_new_session=True,
-    )
-    try:
-        assert poll_until(attached.exists, timeout=10.0, poll_interval=0.01)
-
-        # What ttyd sends the dispatch script when the window's connection closes.
-        session.send_signal(signal.SIGHUP)
-        session.wait(timeout=10.0)
-
-        assert list(temp_dir.iterdir()) == []
-    finally:
-        # The fake tmux outlives the script it was hung up with, as a real one would without its pty.
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(session.pid, signal.SIGKILL)
-        session.wait(timeout=10.0)
-
-
-def test_a_workdir_that_is_not_there_tells_the_wrapper_the_folder_is_missing(tmp_path: Path) -> None:
-    missing = tmp_path / "gone"
-
-    ran = _run_script(render_workdir_script(), tmp_path, str(missing))
-
-    assert ran.returncode == 1
-    assert ran.stdout.startswith(_ended_sequence(ENDED_MISSING_FOLDER, str(missing)))
 
 
 def _tmux_on(socket_path: Path, arguments: list[str]) -> subprocess.CompletedProcess[str]:

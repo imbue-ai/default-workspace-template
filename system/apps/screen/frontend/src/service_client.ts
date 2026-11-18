@@ -1,54 +1,24 @@
 /** The service's own routes and its ``/api/ws`` event socket, with a reconnecting subscription. */
 
-import { readFailure } from "@imbue/workspace-ui/src/models/failure";
-import type { Failure, RequestKind } from "@imbue/workspace-ui/src/models/failure";
-import { readResponseFailure } from "@imbue/workspace-ui/src/models/http";
 import type { ConnectInfo, NekoSessionAnswer, ScreenSizeAnswer, ScreenStateDocument, ServiceEvent } from "./state";
 
 const RECONNECT_MS = 1500;
 
-/** A route of the service refused or failed a request; ``detail`` is what its JSON body said, else the status, and
- *  ``failure`` the whole answer as the workspace's failure reader reads it. */
+export async function fetchState(): Promise<ScreenStateDocument> {
+  const response = await fetch("/api/state");
+  if (!response.ok) throw new Error(`state answered ${response.status}`);
+  return (await response.json()) as ScreenStateDocument;
+}
+
+/** A route of the service refused or failed a request; ``detail`` is what its JSON body said, else the status. */
 export class ServiceRequestError extends Error {
   constructor(
     readonly status: number,
     readonly detail: string,
-    readonly failure: Failure,
   ) {
     super(`the Screen service answered ${status}: ${detail}`);
     this.name = "ServiceRequestError";
   }
-}
-
-/** A refused or failed answer as a ``ServiceRequestError``. */
-async function refusalError(response: Response, requestKind: RequestKind): Promise<ServiceRequestError> {
-  const { failure } = await readResponseFailure(response, requestKind);
-  const detail = failure.body?.detail;
-  return new ServiceRequestError(
-    response.status,
-    typeof detail === "string" && detail ? detail : `status ${response.status}`,
-    failure,
-  );
-}
-
-/** What went wrong with a request to the service: a refusal's answer, or nothing answering at all (a network error,
- *  the service down). */
-export function failureOf(error: unknown, requestKind: RequestKind): Failure {
-  if (error instanceof ServiceRequestError) return error.failure;
-  return readFailure({
-    status: 0,
-    body: null,
-    rawText: error instanceof Error ? error.message : String(error),
-    requestKind,
-  });
-}
-
-/** Throws a ServiceRequestError when the service answers with a failure, and whatever fetch throws when nothing
- *  answers. */
-export async function fetchState(): Promise<ScreenStateDocument> {
-  const response = await fetch("/api/state");
-  if (!response.ok) throw await refusalError(response, "read");
-  return (await response.json()) as ScreenStateDocument;
 }
 
 /** What a refused answer says about itself: its JSON ``detail``, else its status line. */
@@ -61,24 +31,15 @@ export async function describeRefusal(response: Response): Promise<string> {
   return response.statusText ? `${response.status} ${response.statusText}` : `status ${response.status}`;
 }
 
-/** Ask the service to start the stack (the overlay's Start); the failure when it refused or nothing answered. */
-export async function postStart(): Promise<Failure | null> {
-  try {
-    const response = await fetch("/api/start", { method: "POST" });
-    if (response.ok) return null;
-    const error = await refusalError(response, "change");
-    console.warn("[screen] start refused:", error.detail);
-    return error.failure;
-  } catch (error) {
-    console.warn("[screen] start failed:", error);
-    return failureOf(error, "change");
-  }
+export async function postStart(): Promise<void> {
+  const response = await fetch("/api/start", { method: "POST" });
+  if (!response.ok) console.warn("[screen] start refused:", await describeRefusal(response));
 }
 
 /** Throws a ServiceRequestError when the service refuses the login (the stack not running, neko refusing). */
 export async function postSession(): Promise<NekoSessionAnswer> {
   const response = await fetch("/api/session", { method: "POST" });
-  if (!response.ok) throw await refusalError(response, "change");
+  if (!response.ok) throw new ServiceRequestError(response.status, await describeRefusal(response));
   return (await response.json()) as NekoSessionAnswer;
 }
 
