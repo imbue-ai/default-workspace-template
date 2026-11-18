@@ -35,6 +35,7 @@ import argparse
 import html
 import json
 import re
+import sys
 import tomllib
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -242,17 +243,11 @@ def make_handler(
             try:
                 inner_label = registered_origin_label(apps_file, inner_service)
             except (OSError, tomllib.TOMLDecodeError) as exc:
-                self._send(
-                    503,
-                    "text/plain; charset=utf-8",
-                    f"The app registry {apps_file} could not be read: {exc}\n",
-                )
+                self._refuse(f"The app registry {apps_file} could not be read: {exc}\n")
                 return
             if inner_label is None:
-                self._send(
-                    503,
-                    "text/plain; charset=utf-8",
-                    f"The framed service {inner_service!r} has no valid origin label in {apps_file}.\n",
+                self._refuse(
+                    f"The framed service {inner_service!r} has no valid origin label in {apps_file}.\n"
                 )
                 return
             page_html = build_wrapper_html(
@@ -263,6 +258,11 @@ def make_handler(
                 note=note,
             )
             self._send(200, "text/html; charset=utf-8", page_html)
+
+        def _refuse(self, message: str) -> None:
+            # The detached server's stderr is its log file, where a broken frame is investigated.
+            sys.stderr.write(message)
+            self._send(503, "text/plain; charset=utf-8", message)
 
         def _send(self, status: int, content_type: str, body: str) -> None:
             encoded = body.encode("utf-8")

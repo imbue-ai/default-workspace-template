@@ -1445,7 +1445,7 @@ _SCRIPT_BREAKING_LABEL = "</script><script>alert(1)</script>"
     ids=["unregistered", "label-not-a-hostname-label"],
 )
 def test_wrapper_refuses_to_frame_a_service_with_no_valid_registered_label(
-    tmp_path: Path, rows: list[dict[str, object]]
+    tmp_path: Path, rows: list[dict[str, object]], capsys: pytest.CaptureFixture[str]
 ) -> None:
     apps_file = tmp_path / "apps.toml"
     apps_file.write_text(forward_port.dump_registry(rows))
@@ -1456,6 +1456,8 @@ def test_wrapper_refuses_to_frame_a_service_with_no_valid_registered_label(
     assert status == 503
     assert "has no valid origin label" in body
     assert _SCRIPT_BREAKING_LABEL not in body
+    # The refusal is in the wrapper's log too, not only in a window the agent cannot see.
+    assert body in capsys.readouterr().err
 
 
 def test_wrapper_answers_503_when_the_registry_cannot_be_read(tmp_path: Path) -> None:
