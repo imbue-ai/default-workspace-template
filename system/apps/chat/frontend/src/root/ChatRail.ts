@@ -131,6 +131,11 @@ function endRename(): void {
   holdRootNotices(false);
 }
 
+/** A chat list arrived: a chat that left it takes its name field with it, which would otherwise hold notices for good. */
+export function endRenameOfUnlisted(listed: ReadonlySet<string>): void {
+  if (rename !== null && !listed.has(rename.chatId)) endRename();
+}
+
 /** Whether ``chatId`` is being renamed. */
 export function isRenaming(chatId: string): boolean {
   return rename !== null && rename.chatId === chatId;

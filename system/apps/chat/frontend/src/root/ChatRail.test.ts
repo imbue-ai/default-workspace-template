@@ -20,7 +20,7 @@ vi.mock("./verbs", () => verbs);
 import m from "mithril";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { setParticipantsForTesting } from "../models/Participants";
-import { ChatRail, rowMenuRows } from "./ChatRail";
+import { ChatRail, endRenameOfUnlisted, rowMenuRows } from "./ChatRail";
 import type { RowMenuContext } from "./ChatRail";
 import { chatRailAttrsFixture } from "./chatRailAttrsFixture";
 import { chatRowFixture } from "./chatRowFixture";
@@ -407,6 +407,25 @@ describe("ChatRail refused rename", () => {
     expect(verbs.renameChat).not.toHaveBeenCalled();
 
     field.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    m.redraw.sync();
+    expect(noticeText()).toContain(`"${first.title}" was not deleted.`);
+  });
+
+  it("lets held notices show once the chat being renamed leaves the list", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    mount([first, second]);
+    verbs.destroyChat.mockRejectedValueOnce(new HttpError(500, "mngr failed"));
+
+    renameInPlace(second.chatId, "Half typ", null);
+    const deleteRow = rowMenuRows(chatRailAttrsFixture({ rows: [first, second] }), first).find(
+      (menuRow) => menuRow.kind === "action" && menuRow.key === "delete",
+    );
+    if (deleteRow?.kind !== "action") throw new Error("no Delete chat row");
+    deleteRow.onSelect();
+    await vi.waitFor(() => expect(withoutPendingDeletes([first, second])).toEqual([first, second]));
+    expect(isRootNoticeUp()).toBe(false);
+
+    endRenameOfUnlisted(new Set([first.chatId]));
     m.redraw.sync();
     expect(noticeText()).toContain(`"${first.title}" was not deleted.`);
   });

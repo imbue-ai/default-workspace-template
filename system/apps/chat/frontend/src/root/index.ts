@@ -59,7 +59,7 @@ import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { COMPACT_MEDIA_QUERY } from "../compactLayout";
 import { ChatDrawer } from "./ChatDrawer";
 import { ChatHeader } from "./ChatHeader";
-import { ChatRail } from "./ChatRail";
+import { ChatRail, endRenameOfUnlisted } from "./ChatRail";
 import type { ChatRailAttrs } from "./ChatRail";
 import { RootNoticeView, isRootNoticeUp } from "./rootNotice";
 import { SendPicker } from "./SendPicker";
@@ -361,6 +361,7 @@ function onChatsUpdated(): void {
     if (rows.some((row) => row.chatId === chatId && row.lastActiveMs !== null)) startedHere.delete(chatId);
   }
   const listed = new Set(rows.map((row) => row.chatId));
+  endRenameOfUnlisted(listed);
   // A chat opened here can be deleted while it still waits for a push to name it, and none will now.
   for (const chatId of settlePendingDeletes(listed)) awaitingListing.delete(chatId);
   for (const chatId of listed) awaitingListing.delete(chatId);
