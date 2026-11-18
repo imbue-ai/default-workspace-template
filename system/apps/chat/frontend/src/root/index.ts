@@ -20,7 +20,6 @@ import "../style.css";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
-import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
 import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
@@ -61,7 +60,7 @@ import { ChatDrawer } from "./ChatDrawer";
 import { ChatHeader } from "./ChatHeader";
 import { ChatRail, endRenameOfUnlisted } from "./ChatRail";
 import type { ChatRailAttrs } from "./ChatRail";
-import { RootNoticeView, isRootNoticeUp } from "./rootNotice";
+import { RootNoticeView, isRootNoticeUp, raiseRootNotice } from "./rootNotice";
 import { SendPicker } from "./SendPicker";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
 import { initRailWidth } from "./railWidth";
@@ -205,17 +204,12 @@ function openChatForEmptyList(): void {
     });
 }
 
-// Why the last click on New chat started nothing, shown as a notice until dismissed; null otherwise.
-let newChatRefusal: string | null = null;
-const newChatRefusalNotice = makeNoticeDialog();
-
 /** The New chat button: a chat on the account the chat app picks, or with nothing signed in the chat awaiting its
  *  first send, whose page asks for a provider. A create the chat app refuses says why rather than opening a chat. */
 async function openNewChat(): Promise<void> {
   const outcome = await startNewChat();
   if (outcome.kind === "refused") {
-    newChatRefusal = outcome.detail;
-    m.redraw();
+    raiseRootNotice({ title: "Couldn't start a new chat", body: [outcome.detail], retry: null });
     return;
   }
   if (outcome.kind === "created") startedHere.add(outcome.chatId);
@@ -445,16 +439,6 @@ const ChatRoot: m.Component = {
               },
             })
           : null,
-        newChatRefusal === null
-          ? null
-          : m(newChatRefusalNotice, {
-              title: "Couldn't start a new chat",
-              body: [newChatRefusal],
-              dismissLabel: "OK",
-              onDismiss: () => {
-                newChatRefusal = null;
-              },
-            }),
         m(RootNoticeView),
         pendingPick === null
           ? null

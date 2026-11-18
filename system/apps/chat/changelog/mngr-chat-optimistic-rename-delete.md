@@ -2,4 +2,4 @@ Deleting a chat now takes it off the list the moment you confirm, rather than cr
 
 Renaming a chat now updates the window's title at once, along with the list, rather than when the next chat list arrives. A chat still waiting for its first message or still starting shows its name in the window's title too, rather than "Chats".
 
-A refused rename now says why in the same dialog, with Rename again to reopen the name field on what you typed. Before, the reason was only a tooltip on a red-ringed field, and nothing at all was shown when another chat's name field was open; that refusal now shows once the other field closes. Any such dialog waits while a chat's name is being typed, so it never saves a half-typed name.
+A refused rename now says why in the same dialog, with Rename again to reopen the name field on what you typed. Before, the reason was only a tooltip on a red-ringed field, and nothing at all was shown when another chat's name field was open; that refusal now shows once the other field closes. Any such dialog waits while a chat's name is being typed, so it never saves a half-typed name; a refused New chat now waits the same way, in the same dialog.
