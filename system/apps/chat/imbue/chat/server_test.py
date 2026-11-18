@@ -1724,7 +1724,7 @@ class _ReleasingAsEachSendEndsAgentManager(AgentManager):
     @contextmanager
     def track_connecting_send(
         self, agent_id: str, message_id: str, text: str
-    ) -> Generator[Callable[[], None], None, None]:
+    ) -> Generator[Callable[[bool], None], None, None]:
         with super().track_connecting_send(agent_id, message_id, text) as mark_connecting:
             yield mark_connecting
         if self.release is not None:
