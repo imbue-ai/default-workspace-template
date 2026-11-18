@@ -16,10 +16,8 @@ const HANDSHAKE: ShellHandshake = {
   desktopId: "home",
   app: "chat",
   path: "/",
-  canReportBug: true,
   opensLocalFiles: false,
   isViewing: false,
-  shellId: "shell-1",
 };
 
 let container: HTMLElement;

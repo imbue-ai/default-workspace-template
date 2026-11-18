@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { notAnsweredSentence } from "@imbue/workspace-ui/src/models/failure";
 
 // Mithril is mocked: request is driven per-test, redraw is a no-op spy. This
 // keeps the store unit-testable without a DOM or a real network.
@@ -739,11 +738,11 @@ describe("snapshot load state", () => {
     return Object.assign(new Error(String(null)), { code: 503, response: null });
   }
 
-  it("records the no-answer sentence when a gateway status carries no detail", async () => {
+  it("records a message naming the status when the body carries no detail", async () => {
     const agent = freshChat();
     mockRequest.mockRejectedValueOnce(proxyUnavailableError());
     await expect(fetchEvents(agent)).rejects.toThrow();
-    expect(getConversationLoadState(agent)).toEqual({ phase: "error", error: notAnsweredSentence("read") });
+    expect(getConversationLoadState(agent)).toEqual({ phase: "error", error: "request failed (HTTP 503)" });
   });
 
   it("prefers the server's own detail when the body has one", async () => {

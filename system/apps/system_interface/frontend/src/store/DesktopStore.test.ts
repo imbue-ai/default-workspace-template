@@ -6,10 +6,6 @@ import { BUBBLE_LIFETIME_MS } from "../model/Bubbles";
 import { resetChatsActivityForTesting, workingOn } from "../model/ChatsActivity";
 import { currentResourceGauge, resetResourceGaugeForTesting } from "../model/resourceGauge";
 import { getRoster, resetRosterForTesting } from "../model/Roster";
-import { TOAST_DURATION_MS } from "@imbue/workspace-ui/src/models/toasts";
-import { notAnsweredSentence, readFailure } from "@imbue/workspace-ui/src/models/failure";
-import { HttpError } from "@imbue/workspace-ui/src/models/http";
-import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { activeFocusedWindowId, activePlacements, barEntries, isLayoutDirty } from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
@@ -107,10 +103,7 @@ function notices(): string[] {
 
 function makeStore(
   redraw: () => void = () => undefined,
-  extra: Pick<
-    StoreDependencies,
-    "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks" | "reportBug" | "immersive"
-  > = {},
+  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks" | "immersive"> = {},
 ): DesktopStore {
   const store = new DesktopStore({
     clientId: CLIENT,
@@ -315,7 +308,7 @@ describe("bootstrap", () => {
     api.refusal = "the shell is restarting";
     const store = makeStore();
     await store.start(NO_LINK);
-    expect(notices()).toEqual(["Could not read the desktops and apps."]);
+    expect(notices()).toEqual(["Could not read the desktops and apps: the shell is restarting"]);
     expect(store.getState().activeDesktopId).toBeNull();
     expect(store.getState().isAppsLoaded).toBe(false);
   });
@@ -660,13 +653,10 @@ describe("opening", () => {
     expect(store.getState().desktops[0].windows[0].path).toBe("/new?message=hi");
   });
 
-  it("shell:start-with-text runs the primary text action, and answers its failure without a toast", async () => {
+  it("shell:start-with-text runs the primary text action, and says so when there is none", async () => {
     const store = await startedStore();
-    expect(await store.startWithText("hello")).toEqual({
-      isOpened: false,
-      failure: { message: "No app in this workspace can start a chat.", details: null, isReportable: false },
-    });
-    expect(notices()).toEqual([]);
+    expect(await store.startWithText("hello")).toBe(false);
+    expect(last(notices())).toBe("No app in this workspace can start a chat");
     socket.deliver().onAppsUpdated([
       appRecord("docs", { launcher_rank: 20 }),
       appRecord("notes", {
@@ -677,54 +667,10 @@ describe("opening", () => {
         ],
       }),
     ]);
-    expect(await store.startWithText("hello")).toEqual({ isOpened: true });
+    expect(await store.startWithText("hello")).toBe(true);
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
       `launch:home:notes:new:{"message":"hello"}:new`,
     );
-  });
-
-  it("shell:start-new-with-text runs the secondary text action, else the primary, and answers once the window opened", async () => {
-    const store = await startedStore();
-    const notes = (launchIds: readonly string[]): ReturnType<typeof appRecord> =>
-      appRecord("notes", {
-        launch_paths: launchIds.map((id) =>
-          launchPathRecord({ id, path: `/${id}`, params: ["message"], text_param: "message" }),
-        ),
-      });
-    offerApps(api, socket, [notes(["main", "new", "send"])]);
-    expect(await store.startNewWithText("Fix this.")).toEqual({ isOpened: true });
-    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
-      `launch:home:notes:new:{"message":"Fix this."}:new`,
-    );
-    expect(store.getState().desktops[0].windows.some((window) => window.app === "notes")).toBe(true);
-    offerApps(api, socket, [notes(["main"])]);
-    expect(await store.startNewWithText("Fix this.")).toEqual({ isOpened: true });
-    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
-      `launch:home:notes:main:{"message":"Fix this."}:new`,
-    );
-  });
-
-  it("shell:start-new-with-text answers a failure for the page to show, and leaves no toast of its own", async () => {
-    const store = await startedStore();
-    expect(await store.startNewWithText("Fix this.")).toEqual({
-      isOpened: false,
-      failure: { message: "No app in this workspace can start a chat.", details: null, isReportable: false },
-    });
-    offerApps(api, socket, [
-      appRecord("notes", {
-        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
-      }),
-    ]);
-    api.refusal = "notes refused the launch: no account is signed in";
-    expect(await store.startNewWithText("Fix this.")).toEqual({
-      isOpened: false,
-      failure: {
-        message: "Notes couldn't open that.",
-        details: "HTTP 400\nnotes refused the launch: no account is signed in",
-        isReportable: false,
-      },
-    });
-    expect(notices()).toEqual([]);
   });
 
   it("shell:draft-text drafts through the first draft row when no pinned window takes one, and says so with none", async () => {
@@ -761,7 +707,10 @@ describe("opening", () => {
     expect(await store.openWindowAt("docs", "/x", "focus")).toBeNull();
     api.refusal = null;
     await store.runLaunch("gone", "new", "new");
-    expect(notices()).toEqual(["Could not open Docs.", "Cannot open: gone is not registered"]);
+    expect(notices()).toEqual([
+      "Could not open docs: No registered app named 'docs'",
+      "Cannot open: gone is not registered",
+    ]);
   });
 
   it("opens a page's shell:open on the posting window's app and desktop", async () => {
@@ -816,7 +765,6 @@ describe("windows", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
-      greetAll: () => undefined,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual([]);
@@ -835,7 +783,6 @@ describe("windows", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
-      greetAll: () => undefined,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual(["win-1"]);
@@ -852,7 +799,6 @@ describe("windows", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: (id) => id === "win-1",
-      greetAll: () => undefined,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual(["win-1"]);
@@ -899,7 +845,6 @@ describe("windows", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
-      greetAll: () => undefined,
     });
     socket.deliver().onLayoutOp({ op: "refresh", args: { window: "win-1" }, requester: "" });
     socket.deliver().onLayoutOp({ op: "refresh", args: { app: "docs" }, requester: "" });
@@ -916,7 +861,6 @@ describe("windows", () => {
       reloadApp: () => undefined,
       resendTheme: (app) => void resent.push(app),
       broadcastKeybindingsChanged: () => undefined,
-      greetAll: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
     });
@@ -936,152 +880,6 @@ describe("windows", () => {
     deliverDesktopNews("home", 2, null, "other");
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
-  });
-});
-
-describe("failure toasts", () => {
-  /** The error the REST helper throws for ``status`` answered with ``body`` to a change. */
-  function refusedWith(status: number, body: unknown, rawText: string | null = null): HttpError {
-    return new HttpError(readFailure({ status, body, rawText, requestKind: "change" }));
-  }
-
-  async function storeReportingBugs(
-    reportBug: (failure: ReportedFailure | null) => void,
-    isOpeningHelp: boolean,
-    redraw: () => void = () => undefined,
-  ): Promise<DesktopStore> {
-    const store = makeStore(redraw, { reportBug });
-    store.setCanReportBug(isOpeningHelp);
-    await store.start(NO_LINK);
-    return store;
-  }
-
-  it("words an app's refusal of a launch by its display name, with the app's reason behind See details", async () => {
-    const store = await startedStore();
-    api.refusal = refusedWith(400, { detail: "docs refused the launch: no account is signed in" });
-    await store.runLaunch("docs", "new", "new");
-
-    expect(store.toasts.current()).toMatchObject([
-      {
-        message: "Docs couldn't open that.",
-        details: "HTTP 400\ndocs refused the launch: no account is signed in",
-        actions: [],
-        isLasting: true,
-      },
-    ]);
-  });
-
-  it("words a launch the app could not answer as the fallback, whose Report a bug files the toast's failure", async () => {
-    const reportBug = vi.fn();
-    const store = await storeReportingBugs(reportBug, true);
-    api.refusal = refusedWith(502, { detail: "docs answered the launch with 500: boom" });
-    await store.runLaunch("docs", "new", "new");
-
-    const [toast] = store.toasts.current();
-    expect(toast).toMatchObject({
-      message: "Docs couldn't open that. Try again. If this persists, report a bug.",
-      details: "HTTP 502\ndocs answered the launch with 500: boom",
-      actions: [],
-      isLasting: true,
-      isReportable: true,
-    });
-    store.reportBugAction()?.({ message: toast.message, details: toast.details });
-    expect(reportBug).toHaveBeenCalledWith({
-      message: "Docs couldn't open that. Try again. If this persists, report a bug.",
-      details: "HTTP 502\ndocs answered the launch with 500: boom",
-    });
-  });
-
-  it("offers Report a bug on a toast already up once the embedder says it opens one, and redraws for it", async () => {
-    const reportBug = vi.fn();
-    const redraw = vi.fn();
-    const store = await storeReportingBugs(reportBug, false, redraw);
-    api.refusal = refusedWith(502, { detail: "docs answered the launch with 500: boom" });
-    await store.runLaunch("docs", "new", "new");
-    expect(store.toasts.current()[0].isReportable).toBe(true);
-    expect(store.reportBugAction()).toBeNull();
-
-    redraw.mockClear();
-    store.setCanReportBug(true);
-    expect(redraw).toHaveBeenCalled();
-    store.reportBugAction()?.({ message: "m", details: null });
-    expect(reportBug).toHaveBeenCalledWith({ message: "m", details: null });
-
-    store.setCanReportBug(false);
-    expect(store.reportBugAction()).toBeNull();
-  });
-
-  it("opens a page's bug report with its failure, or with none, only while the embedder opens one", async () => {
-    const reportBug = vi.fn();
-    const store = await storeReportingBugs(reportBug, false);
-    store.reportBugFromPage({ message: "Docs couldn't save.", details: "HTTP 500" });
-    expect(reportBug).not.toHaveBeenCalled();
-    store.setCanReportBug(true);
-    store.reportBugFromPage({ message: "Docs couldn't save.", details: "HTTP 500" });
-    store.reportBugFromPage(null);
-    expect(reportBug.mock.calls).toEqual([[{ message: "Docs couldn't save.", details: "HTTP 500" }], [null]]);
-  });
-
-  it("shows an app's own sentence as written, and offers Report a bug only when the app asks for one", async () => {
-    const store = await storeReportingBugs(vi.fn(), true);
-    api.refusal = refusedWith(502, {
-      detail: "docs answered the launch with 503: still loading",
-      user_facing_message: "Docs is still starting. Try again in a few seconds.",
-    });
-    await store.runLaunch("docs", "new", "new");
-    api.refusal = refusedWith(502, {
-      detail: "docs answered the launch with 500: index unreadable",
-      user_facing_message: "Docs couldn't read its notes. If this persists, report a bug.",
-      reportable: true,
-    });
-    await store.runLaunch("docs", "new", "new");
-
-    expect(store.toasts.current().map((toast) => [toast.message, toast.isReportable])).toEqual([
-      ["Docs is still starting. Try again in a few seconds.", false],
-      ["Docs couldn't read its notes. If this persists, report a bug.", true],
-    ]);
-  });
-
-  it("says only that the workspace didn't answer, never prefixed with what failed", async () => {
-    const store = await startedStore();
-    api.refusal = refusedWith(504, null, "Backend timed out");
-    await store.runLaunch("docs", "new", "new");
-    expect(store.toasts.current()[0]).toMatchObject({
-      message: notAnsweredSentence("change"),
-      details: "HTTP 504\nBackend timed out",
-      actions: [],
-    });
-  });
-
-  it("leaves a plain note where the control just pressed is the retry, its reason behind See details", async () => {
-    const store = await startedStore();
-    api.refusal = refusedWith(409, { detail: "Window win-1 is pinned and cannot be closed" });
-    await store.closeWindow("win-1");
-    expect(store.toasts.current()).toMatchObject([
-      {
-        message: "Could not close the window.",
-        details: "HTTP 409\nWindow win-1 is pinned and cannot be closed",
-        actions: [],
-        isLasting: false,
-      },
-    ]);
-    vi.advanceTimersByTime(TOAST_DURATION_MS);
-    expect(notices()).toEqual([]);
-  });
-
-  it("keeps a failure that asks for a bug report up with its details, wherever it happened", async () => {
-    const store = await storeReportingBugs(vi.fn(), true);
-    api.refusal = refusedWith(500, "<html>Internal Server Error</html>", "<html>Internal Server Error</html>");
-    await store.closeWindow("win-1");
-    vi.advanceTimersByTime(TOAST_DURATION_MS);
-    expect(store.toasts.current()).toMatchObject([
-      {
-        message: "Could not close the window. Try again. If this persists, report a bug.",
-        details: "HTTP 500\n<html>Internal Server Error</html>",
-        isLasting: true,
-        isReportable: true,
-      },
-    ]);
   });
 });
 
@@ -1477,7 +1275,7 @@ describe("gestures", () => {
     store.endShortcutDrag({ x: 130, y: 40 }, { x: 100, y: 0 });
     await settle();
     expect(cellsByApp(store)).toEqual({ docs: "0,0", notes: "1,0" });
-    expect(notices()).toEqual(["Could not move the shortcut."]);
+    expect(notices()).toEqual(["Could not move the shortcut: down"]);
   });
 });
 
@@ -1658,7 +1456,7 @@ describe("pinned entries", () => {
     expect(api.calls.length).toBe(callsBefore);
     api.refusal = "no such client";
     expect(await store.navigateOwnWindow("win-9", "/?doc=5")).toBe(false);
-    expect(notices()).toEqual(["Could not move the window."]);
+    expect(notices()).toEqual(["Could not move the window: no such client"]);
     expect(store.getDesktopsRevision()).toBe(desktopsBefore + 1);
     expect(store.takeOwnNavigation()).toBeNull();
   });
@@ -1701,7 +1499,7 @@ describe("pinned entries", () => {
     });
     api.refusal = "no such client";
     await store.setEntryMode("buddy", "floating");
-    expect(notices()).toEqual(["Could not change the entry."]);
+    expect(notices()).toEqual(["Could not change the entry: no such client"]);
     expect(store.getState().entries.buddy.mode).toBe("bar");
     // An app with no pinned window on the active desktop has nothing to write.
     api.refusal = null;
@@ -1727,7 +1525,7 @@ describe("pinned entries", () => {
     expect(store.getState().entries.buddy.mode).toBe("floating");
     socket.deliver().onClientEntriesChanged({ clientId: CLIENT, entries: { buddy: PLAIN_BAR } });
     await refused;
-    expect(notices()).toEqual(["Could not change the entry."]);
+    expect(notices()).toEqual(["Could not change the entry: no such client"]);
     expect(store.getState().entries).toEqual({ buddy: PLAIN_BAR });
   });
 
@@ -1800,7 +1598,7 @@ describe("the avatar", () => {
     // The window follows the broadcast, not the answer.
     expect(store.getState().avatar.design).toBe("gummy-seal");
     await store.selectAvatar("nobody");
-    expect(notices()).toEqual(["Could not change the avatar. Try again. If this persists, report a bug."]);
+    expect(notices()).toEqual(["Could not change the avatar: No design nobody"]);
   });
 
   it("keeps the initial design when the catalog cannot be read", async () => {
@@ -1919,7 +1717,7 @@ describe("desktops and shortcuts", () => {
     api.refusal = "critical";
     await store.quitApp("docs");
     expect(api.calls).toContain("quitApp:docs");
-    expect(notices()).toEqual(["Failed to quit docs."]);
+    expect(notices()).toEqual(["Failed to quit docs: critical"]);
   });
 });
 
@@ -1985,19 +1783,18 @@ describe("embedder messages", () => {
     expect(api.relayedMessages).toEqual([]);
   });
 
-  it("tells the user when a message did not reach every app, once for a refusal that says the same", async () => {
+  it("tells the user why, in the relay's words, when a message did not reach every app", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([HANDLING_APP]);
     api.refusal = "Nothing in this workspace handles 'open:url'";
 
     expect(await store.relayEmbedderMessage({ type: "open:url", url: "http://localhost:3000/" }, "chat")).toBe(false);
-    expect(await store.relayEmbedderMessage({ type: "open:url", url: "http://localhost:3001/" }, "chat")).toBe(false);
     api.refusal = "buddy did not take it: could not be reached";
     expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" }, null)).toBe(false);
 
-    expect(store.toasts.current().map((toast) => [toast.message, toast.details])).toEqual([
-      ["The workspace couldn't do that.", "HTTP 400\nNothing in this workspace handles 'open:url'"],
-      ["The workspace couldn't do that.", "HTTP 400\nbuddy did not take it: could not be reached"],
+    expect(notices()).toEqual([
+      "Nothing in this workspace handles 'open:url'",
+      "buddy did not take it: could not be reached",
     ]);
   });
 });
@@ -2110,23 +1907,6 @@ describe("links Imbue Studio hands over", () => {
     expect(api.calls.filter((call) => call.startsWith("openWindow:"))).toEqual([]);
   });
 
-  it("names the app by its display name when the shell's show refuses a link, the reason behind See details", async () => {
-    const store = await startedStore();
-    socket
-      .deliver()
-      .onAppsUpdated([
-        appRecord("docs"),
-        chatLikeAppRecord("chat", { label: "chat-ab12cd34", display_name: "Chats" }),
-      ]);
-    api.refusal = "No chat agent-1";
-
-    await store.openLink("http://chat-ab12cd34.localhost/?chat=agent-1", SHELL_HOST, "notes");
-
-    expect(store.toasts.current()).toMatchObject([
-      { message: "Could not open Chats.", details: "HTTP 400\nNo chat agent-1", actions: [], isLasting: false },
-    ]);
-  });
-
   it("focuses or opens a link to an app's pin page itself, or to its other pages, as any other page", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([appRecord("docs"), chatLikeAppRecord("chat", { label: "chat-ab12cd34" })]);
@@ -2201,13 +1981,13 @@ describe("links Imbue Studio hands over", () => {
     expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
   });
 
-  it("tells the user when a local URL could not open", async () => {
+  it("tells the user why a local URL could not open, in the relay's words", async () => {
     const store = await startedStore();
     api.refusal = "browser did not take it: Chromium is not installed";
 
     await store.openLink("http://localhost:3000/", SHELL_HOST, null);
 
-    expect(notices()).toEqual(["The workspace couldn't do that."]);
+    expect(notices()).toEqual(["browser did not take it: Chromium is not installed"]);
   });
 
   /** A started store whose links opened outside the workspace are recorded, by where they went. */
@@ -3147,7 +2927,7 @@ describe("the phone layout", () => {
     expect(api.desktops.flatMap((desktop) => desktop.windows).map((window) => window.id)).toEqual(["chat-1"]);
     api.refusal = "the shell is restarting";
     await store.runLaunch("docs", "new", "new");
-    expect(notices()).toEqual(["Docs couldn't open that."]);
+    expect(notices()).toEqual(["Could not open docs: the shell is restarting"]);
   });
 
   it("reads the shell again on coming back into sight, following a desktop deleted meanwhile", async () => {
@@ -3185,7 +2965,6 @@ describe("the phone layout", () => {
       broadcastKeybindingsChanged: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
-      greetAll: () => undefined,
     });
     socket.deliver().onConnected();
     socket.deliver().onConnected();
@@ -3730,8 +3509,7 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
     expect(await store.showChat("agent-1")).toBe(false);
     store.openBubble("user:user-bob-4471");
     await settle();
-    // The bubble's click repeats the chat's notice, which replaces the one already up rather than stacking.
-    expect(notices()).toEqual([NO_MENTION_APP_REASON, NO_CHAT_APP_REASON]);
+    expect(notices()).toEqual([NO_MENTION_APP_REASON, NO_CHAT_APP_REASON, NO_CHAT_APP_REASON]);
     // Nothing opened the chat, the click on its bubble included, so the mention of the viewer is still up.
     expect(store.getBubbles().map((bubble) => [bubble.speaker, bubble.isMention])).toEqual([
       ["user:user-bob-4471", true],
@@ -4206,20 +3984,6 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect(calls).toEqual([]);
     expect(api.calls.slice(callsBefore)).toEqual([]);
     expect(notices()).toEqual([STOP_VIEWING_FIRST_NOTICE]);
-  });
-
-  it("answers a page's Ask an agent while viewing with the refusal for the page to show, launching and toasting nothing", async () => {
-    api.apps = [chatLikeAppRecord("chat")];
-    const store = await viewerStore();
-    await store.switchDesktop("alice");
-    const callsBefore = api.calls.length;
-
-    expect(await store.startNewWithText("Fix this.")).toEqual({
-      isOpened: false,
-      failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
-    });
-    expect(api.calls.slice(callsBefore)).toEqual([]);
-    expect(notices()).toEqual([]);
   });
 
   it("refuses every change to a viewed desktop with one note, and reloads the owner's layout on every poll", async () => {

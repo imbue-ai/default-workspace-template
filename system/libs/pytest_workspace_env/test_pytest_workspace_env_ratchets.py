@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import pytest
 from imbue.imbue_common.ratchet_testing import standard_ratchet_checks as rc
 from imbue.imbue_common.ratchet_testing.ratchets import check_no_type_errors
 from inline_snapshot import snapshot
@@ -64,6 +63,5 @@ def test_prevent_dataclasses_import() -> None:
     rc.check_dataclasses_import(_DIR, snapshot(0))
 
 
-@pytest.mark.flaky
 def test_no_type_errors() -> None:
     check_no_type_errors(_DIR)

@@ -517,7 +517,7 @@ class AppLifecycleManager(MutableModel):
 
     def _park(self, entry: AppInventoryEntry, program: str, target: ParkingTarget) -> None:
         app = str(entry.row.name)
-        display_name = entry.display_name
+        display_name = str(entry.row.display_name) if entry.row.display_name is not None else app
         parked = ParkedPort(
             app=app,
             target=target,

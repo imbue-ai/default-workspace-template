@@ -930,10 +930,7 @@ async function loadSnapshot(chatId: string): Promise<TranscriptEvent[]> {
       if (requestError.code === 404) {
         notFoundChatIds.add(chatId);
       }
-      loadStateByChat.set(chatId, {
-        phase: "error",
-        error: describeRequestError(error, "read"),
-      });
+      loadStateByChat.set(chatId, { phase: "error", error: describeRequestError(error) });
     }
     throw error;
   }

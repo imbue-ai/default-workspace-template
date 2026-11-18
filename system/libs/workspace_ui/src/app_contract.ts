@@ -40,8 +40,7 @@
  * shell.
  */
 
-/** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in,
- *  and whether "Report a bug" can work here. */
+/** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in. */
 export const SHELL_HANDSHAKE = "shell:handshake";
 /** Shell to app: the window became visible in this client. */
 export const SHELL_SHOWN = "shell:shown";
@@ -70,20 +69,9 @@ export const SHELL_INPUT = "shell:input";
 export const SHELL_LOCATION = "shell:location";
 /** App to shell: open another page of this app beside this one. */
 export const SHELL_OPEN = "shell:open";
-/** App to shell: start something with a text (``{text, requestId}``; launcher-and-getting-started plan section 3.7):
- *  the shell runs its launcher's primary text action with it, so a page never names the app that takes it, and
- *  answers with ``shell:start-with-text-result``. */
+/** App to shell: start something with a text (launcher-and-getting-started plan section 3.7): the shell runs its
+ *  launcher's primary text action with it, so a page never names the app that takes it. */
 export const SHELL_START_WITH_TEXT = "shell:start-with-text";
-/** Shell to app: how a page's ``shell:start-with-text`` went, in ``shell:start-new-with-text-result``'s shape. */
-export const SHELL_START_WITH_TEXT_RESULT = "shell:start-with-text-result";
-/** App to shell: start something new with a text (``{text, requestId}``): the shell runs its launcher's secondary text
- *  action with it (a new chat on a stock machine, where the primary one sends to the main chat), else the primary one
- *  where there is no second, and answers with ``shell:start-new-with-text-result``. */
-export const SHELL_START_NEW_WITH_TEXT = "shell:start-new-with-text";
-/** Shell to app: how a page's ``shell:start-new-with-text`` went (``{requestId, isOpened: true}``, or
- *  ``{requestId, isOpened: false, failure: {message, details, isReportable}}``), once the window it opened is on
- *  the desktop or the launch failed. */
-export const SHELL_START_NEW_WITH_TEXT_RESULT = "shell:start-new-with-text-result";
 /** App to shell: draft a text into a chat, unsent (element-reference-menu plan section 5): the shell runs the
  *  pinned app's draft launch path with it, as its own "Design your own..." does, so a page never names the app. */
 export const SHELL_DRAFT_TEXT = "shell:draft-text";
@@ -96,10 +84,6 @@ export const SHELL_MESSAGE = "shell:message";
  *  ``<label>.localhost`` host or registered port it is, else the workspace's browser), the file in Files, an
  *  external link in the app registered for it or else outside the workspace, or says why it cannot. */
 export const SHELL_OPEN_LINK = "shell:open-link";
-/** App to shell: open Imbue Studio's bug report about a failure (``{message, details}``, a ``ReportedFailure``), as
- *  the shell's own "Report a bug" does. The shell acts on it only where its handshake said ``canReportBug``, since
- *  only the shell can reach the embedder that opens one. */
-export const SHELL_REPORT_BUG = "shell:report-bug";
 
 /** The bare host names of this machine (a ``*.localhost`` host is local too). */
 export const LOCAL_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -168,11 +152,11 @@ export function hasWorkspaceCoordinate(host: string): boolean {
 
 /**
  * What the shell says about the frame it created: the client, the window, its desktop, the app
- * the window belongs to, the path the window is at, whether the shell can open Imbue Studio's bug report, whether
- * the Imbue Studio chrome around the shell opens its settings for the files shared from the user's computer
- * (desktop-interface contracts.md section 7), whether the window is being viewed on somebody else's desktop, and
- * which load of the shell page sent it. The client id is required; a text field the shell does not send, a page reads as "", and a flag it does not
- * send, as false.
+ * the window belongs to, the path the window is at, whether the Imbue Studio chrome around the
+ * shell opens its settings for the files shared from the user's computer (desktop-interface
+ * contracts.md section 7), and whether the window is being viewed on somebody else's desktop. The
+ * client id is required; a text field the shell does not send, a page reads as "", and a flag it
+ * does not send, as false.
  */
 export interface ShellHandshake {
   clientId: string;
@@ -180,13 +164,10 @@ export interface ShellHandshake {
   desktopId: string;
   app: string;
   path: string;
-  canReportBug: boolean;
   opensLocalFiles: boolean;
   /** Whether the window is being looked at on somebody else's desktop (the multiplayer spec, section 8.3): the page
    *  is inert there, and one that attaches to something shared (a terminal's tmux session) attaches as a viewer. */
   isViewing: boolean;
-  /** The shell page's load, the same in every handshake it sends: a different one means the shell started again. */
-  shellId: string;
 }
 
 /**
@@ -228,20 +209,8 @@ export interface ShellConnection {
   location(path: string, title: string): void;
   /** Ask the shell to open a page of this app at a path beside this one. */
   openPath(path: string, ifPresent: OpenIfPresent): void;
-  /** Ask the shell to start something with ``text``: its launcher's primary text action (the main chat on a stock
-   *  machine). Settles as ``startNewWithText`` does. */
-  startWithText(text: string, options?: StartOptions): Promise<StartNewOutcome>;
-  /** Ask the shell to start something new with ``text``: its launcher's secondary text action (a new chat on a stock
-   *  machine). Settles on the shell's answer; as not answered at once without a shell, when a handshake from a shell
-   *  that started again comes first (it forgot the request), and on ``disconnect``, after which no answer is heard,
-   *  so a later call settles at once too. The shell toasts a failure itself unless ``options`` say the page shows the
-   *  outcome; an answer that arrives after all for a request settled as not answered goes to their
-   *  ``onLateAnswer``. */
-  startNewWithText(text: string, options?: StartOptions): Promise<StartNewOutcome>;
-  /** Whether "Report a bug" would do anything: the shell's latest handshake said ``canReportBug``. */
-  canReportBug(): boolean;
-  /** Ask the shell to open Imbue Studio's bug report about ``failure``, which the report carries. */
-  reportBug(failure: ReportedFailure): void;
+  /** Ask the shell to start something with ``text``: its launcher's primary text action (a new chat on a stock machine). */
+  startWithText(text: string): void;
   /** Ask the shell to draft ``text`` into a chat's composer, unsent (the chat on screen on a stock machine). */
   draftText(text: string): void;
   /** Send the shell a message for the apps registered for ``type``, with ``fields`` as its own fields. */
@@ -265,7 +234,7 @@ function optionalString(value: unknown): string {
 }
 
 function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
-  const { clientId, windowId, desktopId, app, path, canReportBug, opensLocalFiles, isViewing, shellId } = data;
+  const { clientId, windowId, desktopId, app, path, opensLocalFiles, isViewing } = data;
   if (typeof clientId !== "string" || clientId === "") return null;
   return {
     clientId,
@@ -273,10 +242,8 @@ function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
     desktopId: optionalString(desktopId),
     app: optionalString(app),
     path: optionalString(path),
-    canReportBug: canReportBug === true,
     opensLocalFiles: opensLocalFiles === true,
     isViewing: isViewing === true,
-    shellId: optionalString(shellId),
   };
 }
 
@@ -444,34 +411,6 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
   const boundWindow = window;
   const isFramed = boundWindow.parent !== boundWindow;
   let hasShell = false;
-  let canReportBug = false;
-  let isDisconnected = false;
-  let shellId: string | null = null;
-  interface PendingStart {
-    readonly settle: (outcome: StartNewOutcome) => void;
-    readonly onLateAnswer: ((outcome: StartNewOutcome) => void) | null;
-  }
-  const pendingStarts = new Map<string, PendingStart>();
-  const startsSettledAsNotAnswered = new Map<string, (outcome: StartNewOutcome) => void>();
-
-  function settlePendingStartsAsNotAnswered(): void {
-    const pending = Array.from(pendingStarts.entries());
-    pendingStarts.clear();
-    for (const [requestId, start] of pending) {
-      if (start.onLateAnswer !== null) startsSettledAsNotAnswered.set(requestId, start.onLateAnswer);
-      start.settle(START_NOT_ANSWERED);
-    }
-  }
-
-  function askToStart(type: string, text: string, options?: StartOptions): Promise<StartNewOutcome> {
-    if (!hasShell || isDisconnected) return Promise.resolve(START_NOT_ANSWERED);
-    const requestId = newRequestId();
-    const outcome = new Promise<StartNewOutcome>((settle) =>
-      pendingStarts.set(requestId, { settle, onLateAnswer: options?.onLateAnswer ?? null }),
-    );
-    send(type, options === undefined ? { text, requestId } : { text, requestId, showsOutcome: true });
-    return outcome;
-  }
 
   function onMessage(event: MessageEvent): void {
     if (!isFramed || event.source !== boundWindow.parent) return;
@@ -483,9 +422,6 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
         const handshake = readHandshake(message);
         if (handshake === null) return;
         hasShell = true;
-        canReportBug = handshake.canReportBug;
-        if (shellId !== null && handshake.shellId !== shellId) settlePendingStartsAsNotAnswered();
-        shellId = handshake.shellId;
         handlers.onHandshake?.(handshake);
         return;
       }
@@ -509,21 +445,6 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
       case SHELL_NAVIGATE: {
         const path = message.path;
         if (typeof path === "string") handlers.onNavigate?.(path);
-        return;
-      }
-      case SHELL_START_WITH_TEXT_RESULT:
-      case SHELL_START_NEW_WITH_TEXT_RESULT: {
-        const requestId = message.requestId;
-        if (typeof requestId !== "string") return;
-        const pending = pendingStarts.get(requestId);
-        if (pending !== undefined) {
-          pendingStarts.delete(requestId);
-          pending.settle(readStartNewOutcome(message));
-          return;
-        }
-        const onLateAnswer = startsSettledAsNotAnswered.get(requestId);
-        startsSettledAsNotAnswered.delete(requestId);
-        onLateAnswer?.(readStartNewOutcome(message));
         return;
       }
       default:
@@ -576,11 +497,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     focused: () => send(SHELL_FOCUSED, {}),
     location: (path: string, title: string) => send(SHELL_LOCATION, { path, title }),
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
-    startWithText: (text: string, options?: StartOptions) => askToStart(SHELL_START_WITH_TEXT, text, options),
-    startNewWithText: (text: string, options?: StartOptions) => askToStart(SHELL_START_NEW_WITH_TEXT, text, options),
-    canReportBug: () => canReportBug,
-    reportBug: (failure: ReportedFailure) =>
-      send(SHELL_REPORT_BUG, { message: failure.message, details: failure.details }),
+    startWithText: (text: string) => send(SHELL_START_WITH_TEXT, { text }),
     draftText: (text: string) => send(SHELL_DRAFT_TEXT, { text }),
     sendMessage: (type: string, fields: Readonly<Record<string, unknown>>) =>
       send(SHELL_MESSAGE, { message: { ...fields, type } }),
@@ -593,140 +510,6 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
         boundWindow.removeEventListener(type, onInput, { capture: true });
       }
       if (boundWindow.open === routedOpen) boundWindow.open = nativeOpen;
-      isDisconnected = true;
-      settlePendingStartsAsNotAnswered();
-      startsSettledAsNotAnswered.clear();
     },
   };
-}
-
-/** A failure an agent is asked to fix: ``whatFailed`` is a sentence stem saying what failed, as ``failureSentence``
- *  takes ("This window couldn't be closed"), and ``details`` what went wrong underneath it (a status, a server's
- *  text, command output), handed on verbatim; null when there is none. */
-export interface AgentFixRequest {
-  readonly whatFailed: string;
-  readonly details: string | null;
-}
-
-/** A Markdown fence for ``text`` that no run of backticks inside it can close. */
-function fenceFor(text: string): string {
-  const longestRun = Math.max(0, ...Array.from(text.matchAll(/`+/g), (run) => run[0].length));
-  return "`".repeat(Math.max(3, longestRun + 1));
-}
-
-/** The one task every "Ask an agent to fix this" button gives the agent: what failed, the details as they are, and
- *  what to do about it. */
-function agentFixTask({ whatFailed, details }: AgentFixRequest): string {
-  const stem = whatFailed.trim();
-  const parts = [/[.!?]$/.test(stem) ? stem : `${stem}.`];
-  if (details !== null && details.trim() !== "") {
-    const fence = fenceFor(details);
-    parts.push(`Details:\n${fence}\n${details}\n${fence}`);
-  }
-  parts.push("Find out why this failed and fix it. Then tell me what was wrong and what you changed.");
-  return parts.join("\n\n");
-}
-
-/** "Ask an agent to fix this": start a new chat whose first message asks an agent to fix ``failure``, through the
- *  shell's ``shell:start-new-with-text`` (a page passes its connection; the shell, which is not framed, its own
- *  ``startNewWithText``). A new chat, so the task does not land in the middle of a conversation about something
- *  else. Settles once the chat's window opened or the start failed. */
-export function askAgentToFix(
-  starter: Pick<ShellConnection, "startNewWithText">,
-  failure: AgentFixRequest,
-  options?: StartOptions,
-): Promise<StartNewOutcome> {
-  return starter.startNewWithText(agentFixTask(failure), options);
-}
-
-/** How a page that shows a start's outcome itself (a button that reads "Asking an agent…" and then shows the failure)
- *  asks for it: the shell then toasts nothing for it (``showsOutcome`` on the wire), and an answer that arrives after
- *  the request was settled as not answered goes to ``onLateAnswer``. A caller that passes none leaves a failure to
- *  the shell's toast. */
-export interface StartOptions {
-  readonly showsOutcome: true;
-  readonly onLateAnswer?: (outcome: StartNewOutcome) => void;
-}
-
-/** A failure as a surface shows it: its sentence, what goes behind "See details" (null when nothing), and whether the
- *  sentence asks for a bug report. */
-export interface ShownFailure {
-  readonly message: string;
-  readonly details: string | null;
-  readonly isReportable: boolean;
-}
-
-/** How a ``startWithText`` or ``startNewWithText`` went: the window opened, or the failure to show where the press
- *  was. */
-export type StartNewOutcome =
-  { readonly isOpened: true } | { readonly isOpened: false; readonly failure: ShownFailure };
-
-/** What a change nothing answered says, here since this module imports nothing (``models/failure.ts`` takes it from
- *  here). Never "nothing was changed": a gateway status can arrive after the request was carried out, and a
- *  connection that dropped after the request was sent looks the same as one that never opened. */
-export const CHANGE_NOT_ANSWERED_SENTENCE =
-  "The workspace didn't answer, so Imbue Studio can't tell whether this went through.";
-
-const START_NOT_ANSWERED: StartNewOutcome = {
-  isOpened: false,
-  failure: { message: CHANGE_NOT_ANSWERED_SENTENCE, details: null, isReportable: false },
-};
-
-/** A request id no other page under the same chat root is likely to pick: the root hands every answer to all of its
- *  inner pages. */
-function newRequestId(): string {
-  return Array.from(crypto.getRandomValues(new Uint32Array(4)), (part) => part.toString(16)).join("");
-}
-
-/** The outcome a ``shell:start-new-with-text-result`` carries; one that says it failed without a readable failure
- *  shows the not-answered sentence's caution rather than nothing. */
-function readStartNewOutcome(message: Readonly<Record<string, unknown>>): StartNewOutcome {
-  if (message.isOpened === true) return { isOpened: true };
-  const failure = message.failure;
-  if (failure === null || typeof failure !== "object") return START_NOT_ANSWERED;
-  const { message: sentence, details, isReportable } = failure as Record<string, unknown>;
-  if (typeof sentence !== "string" || sentence.trim() === "") return START_NOT_ANSWERED;
-  return {
-    isOpened: false,
-    failure: {
-      message: sentence,
-      details: typeof details === "string" ? details : null,
-      isReportable: isReportable === true,
-    },
-  };
-}
-
-/** The failure a "Report a bug" is about: the sentence the user saw, and what was behind its "See details" (null when
- *  nothing was). */
-export interface ReportedFailure {
-  readonly message: string;
-  readonly details: string | null;
-}
-
-/** The failure a page's ``shell:report-bug`` carries, or null when its payload holds none in that shape. */
-export function reportedFailureOf(payload: Readonly<Record<string, unknown>>): ReportedFailure | null {
-  const { message, details } = payload;
-  if (typeof message !== "string" || message.trim() === "") return null;
-  if (details !== null && details !== undefined && typeof details !== "string") return null;
-  return { message, details: details ?? null };
-}
-
-/** The failure a page's own "Report a bug" files when its "Ask an agent to fix this" was refused too: the page's
- *  failure, with the refused ask's sentence and details added under its details, labelled; the page's failure as it
- *  is while there is no refused ask. */
-export function withAskFailure(page: ReportedFailure, ask: ReportedFailure | null): ReportedFailure {
-  if (ask === null) return page;
-  const askText = ["Asking an agent to fix this failed too:", ask.message, ask.details]
-    .filter((line): line is string => line !== null && line.trim() !== "")
-    .join("\n");
-  return {
-    message: page.message,
-    details: page.details === null || page.details.trim() === "" ? askText : `${page.details}\n\n${askText}`,
-  };
-}
-
-/** The text a bug report carries for ``failure``: the sentence the user saw, then everything under it (the shape
- *  Imbue Studio's own reports carry). */
-export function bugReportText({ message, details }: ReportedFailure): string {
-  return details === null || details.trim() === "" ? message : `${message}\n\n${details}`;
 }

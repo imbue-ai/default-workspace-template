@@ -3,9 +3,8 @@
  * awaiting its first send, whose page asks for a provider before anything is created.
  */
 
-import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
-import { awaitingChatForEmptyList, createChat } from "../models/Chats";
+import { CreateChatRefusedError, awaitingChatForEmptyList, createChat } from "../models/Chats";
 import { getSelectedAccount, whenAccountsReadyToChoose } from "../models/Providers";
 
 // The kind of a create the chat app refused because nothing is signed in (the server's
@@ -28,7 +27,7 @@ export async function startNewChat(): Promise<NewChatOutcome> {
       const created = await createChat("");
       return { kind: "created", chatId: created.chatId };
     } catch (error) {
-      if (!(error instanceof HttpError) || error.failure.kind !== NO_PROVIDER_ACCOUNT_KIND) {
+      if (!(error instanceof CreateChatRefusedError) || error.kind !== NO_PROVIDER_ACCOUNT_KIND) {
         return { kind: "refused", detail: describeRequestError(error) };
       }
     }

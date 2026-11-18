@@ -37,9 +37,6 @@ describe("isForwardedToShell", () => {
     expect(isForwardedToShell({ type: "shell:open-link", url: "http://files-ab12cd34.host-0123.localhost/" })).toBe(
       true,
     );
-    expect(isForwardedToShell({ type: "shell:start-with-text", text: "Free up space." })).toBe(true);
-    expect(isForwardedToShell({ type: "shell:start-new-with-text", text: "Fix this." })).toBe(true);
-    expect(isForwardedToShell({ type: "shell:report-bug" })).toBe(true);
   });
 
   it("keeps everything else the page posts, and anything that is not a typed message, at the root", () => {
@@ -132,12 +129,6 @@ describe("passing the chrome's answers down", () => {
         resolutions: [{ requestId: "req-1", resolution: "granted" }],
       }),
     ).toBe(true);
-    expect(
-      isForwardedToInnerFrames({ type: "shell:start-new-with-text-result", requestId: "a1", isOpened: true }),
-    ).toBe(true);
-    expect(isForwardedToInnerFrames({ type: "shell:start-with-text-result", requestId: "a2", isOpened: true })).toBe(
-      true,
-    );
     expect(isForwardedToInnerFrames({ type: "minds:focus-chat", chatId: "agent-1" })).toBe(false);
     expect(isForwardedToInnerFrames(null)).toBe(false);
   });

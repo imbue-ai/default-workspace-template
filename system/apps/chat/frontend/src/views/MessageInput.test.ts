@@ -188,8 +188,7 @@ vi.mock("../models/attachments", () => ({
     paths.length === 0 ? text : `${text} + ${paths.join(" ")}`,
   formatFileSize: () => "0 B",
 }));
-vi.mock("@imbue/workspace-ui/src/models/request-error", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@imbue/workspace-ui/src/models/request-error")>()),
+vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({
   describeRequestError: (e: unknown) => String(e),
   describeRequestErrorKind: (e: unknown) =>
     typeof e === "object" && e !== null && "kind" in e ? (e as { kind: string }).kind : "unknown",
@@ -1395,23 +1394,10 @@ describe("MessageInput send failure notice", () => {
     }
   });
 
-  it("keeps the reason for a failure nothing classified behind See details, the only account of what went wrong", async () => {
-    mocks.sendMessage.mockRejectedValueOnce(
-      Object.assign(new Error("{}"), { code: 500, response: { detail: "the host hung up" } }),
-    );
+  it("keeps the reason for a failure nothing classified, the only account of what went wrong", async () => {
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "unknown", toString: () => "the host hung up" });
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
-    expect(renderedText(after)).toContain("Your message wasn't delivered.");
     expect(renderedText(after)).toContain("the host hung up");
-  });
-
-  it("says a refused send nothing classified was not delivered, keeping the chat app's words behind See details", async () => {
-    mocks.sendMessage.mockRejectedValueOnce(
-      Object.assign(new Error("{}"), { code: 409, response: { detail: "Agent 'a' is switching" } }),
-    );
-    const refused = renderedText(await typeAndSend(MessageInput(), "agent-1", "hello"));
-    expect(refused).toContain("Couldn't send your message");
-    expect(refused).toContain("Your message wasn't delivered.");
-    expect(refused).toContain("Retry");
   });
 
   it("keeps Retry for a blocked input, which a person can clear", async () => {
@@ -1553,18 +1539,6 @@ describe("MessageInput send failure notice", () => {
     expect(findByTag(landed, "textarea")?.attrs?.value).toBe("");
   });
 
-  it("treats a gateway's reasonless 503 as a send nothing answered, not one that was refused", async () => {
-    mocks.sendMessage.mockRejectedValueOnce(
-      Object.assign(new Error("Service Unavailable"), { code: 503, response: null }),
-    );
-    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
-    const text = renderedText(after);
-    expect(text).toContain("Couldn't confirm your message arrived");
-    expect(text).not.toContain("Couldn't send your message");
-    expect(findButton(after, "Send again")).toBeTruthy();
-    expect(findButton(after, "Retry")).toBeUndefined();
-  });
-
   it("still takes an unconfirmed message out of the composer when its turn lands after Cancel", async () => {
     mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
     const component = MessageInput();
@@ -1642,9 +1616,7 @@ describe("MessageInput send failure notice", () => {
   ])(
     "shows a /compact the server declined (%s) as a declined command, keeping the typed text",
     async (kind, detail) => {
-      mocks.sendMessage.mockRejectedValueOnce(
-        Object.assign(new Error("{}"), { code: 409, response: { detail, user_facing_message: detail, kind } }),
-      );
+      mocks.sendMessage.mockRejectedValueOnce({ response: { detail, kind }, toString: () => detail });
       const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
       const component = MessageInput();
 
@@ -1792,13 +1764,10 @@ describe("MessageInput send failure notice", () => {
     expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/), true);
   });
 
-  it("does not send when the restart itself fails, and shows none of the send's details under it", async () => {
-    mocks.sendMessage.mockRejectedValueOnce(
-      Object.assign(new Error("{}"), { code: 500, response: { detail: "the send's own reason" } }),
-    );
+  it("does not send when the restart itself fails, and shows the restart's error", async () => {
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "input_blocked", toString: () => "a dialog is open" });
     const component = MessageInput();
     const after = await typeAndSend(component, "agent-1", "hello");
-    expect(renderedText(after)).toContain("the send's own reason");
     mocks.sendMessage.mockClear();
     mocks.interruptAgent.mockRejectedValueOnce("restart refused");
 
@@ -1806,9 +1775,8 @@ describe("MessageInput send failure notice", () => {
     (restart!.attrs!.onclick as () => void)();
     await flushAsync();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
-    const shown = renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never));
-    expect(shown).toContain("restart refused");
-    expect(shown).not.toContain("the send's own reason");
+    const shown = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(renderedText(shown)).toContain("restart refused");
   });
 });
 
@@ -2433,12 +2401,10 @@ describe("MessageInput on a chat whose account was signed out", () => {
     mocks.loadAccounts.mockImplementationOnce(async () => {
       mocks.signedOutAccountIds.add("account-signed-out-5521");
     });
-    mocks.sendMessage.mockRejectedValueOnce(
-      Object.assign(new Error("{}"), {
-        code: 409,
-        response: { detail: "You signed out of the account this chat runs on.", kind: "account_signed_out" },
-      }),
-    );
+    mocks.sendMessage.mockRejectedValueOnce({
+      response: { kind: "account_signed_out" },
+      toString: () => "You signed out of the account this chat runs on.",
+    });
     const component = MessageInput();
 
     await typeAndSend(component, "agent-signed-out", "are you still there?");
@@ -2451,13 +2417,10 @@ describe("MessageInput on a chat whose account was signed out", () => {
 
   it("offers choosing a provider instead of Retry and Restart when a send is refused for a signed-out account", async () => {
     mocks.signedOutAccountIds.clear();
-    const detail = "You signed out of the account this chat runs on. Choose a provider to continue it on.";
-    mocks.sendMessage.mockRejectedValueOnce(
-      Object.assign(new Error("{}"), {
-        code: 409,
-        response: { detail, kind: "account_signed_out", user_facing_message: detail },
-      }),
-    );
+    mocks.sendMessage.mockRejectedValueOnce({
+      response: { kind: "account_signed_out" },
+      toString: () => "You signed out of the account this chat runs on. Choose a provider to continue it on.",
+    });
     const component = MessageInput();
 
     const after = await typeAndSend(component, "agent-signed-out", "are you still there?");
@@ -2465,10 +2428,6 @@ describe("MessageInput on a chat whose account was signed out", () => {
     const text = renderedText(after);
     expect(text).toContain("Couldn't send your message");
     expect(text).toContain("You signed out of the account this chat runs on.");
-    // See details holds the status alone: the chat app's reason only repeats its sentence.
-    expect(findByClass(after, "see-details")).toBeDefined();
-    expect(text).toContain("HTTP 409");
-    expect(text.split(detail)).toHaveLength(2);
     expect(text).not.toContain("Retry");
     expect(text).not.toContain("Restart");
     expect(text).not.toContain("open the agent's terminal");
@@ -2485,9 +2444,10 @@ describe("MessageInput on a chat whose account was signed out", () => {
 
   it("leaves the account list alone when a send fails for any other reason", async () => {
     mocks.signedOutAccountIds.clear();
-    mocks.sendMessage.mockRejectedValueOnce(
-      Object.assign(new Error("{}"), { code: 500, response: { detail: "a dialog is open", kind: "input_blocked" } }),
-    );
+    mocks.sendMessage.mockRejectedValueOnce({
+      response: { kind: "input_blocked" },
+      toString: () => "a dialog is open",
+    });
 
     await typeAndSend(MessageInput(), "agent-signed-out", "hello");
 

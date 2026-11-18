@@ -27,11 +27,6 @@ import {
   isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
-import { DEFAULT_WHAT_FAILED, failureSentence, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
-import type { FailureMessage } from "@imbue/workspace-ui/src/models/failure";
-import type { ReportedFailure, StartNewOutcome } from "@imbue/workspace-ui/src/app_contract";
-import type { TextAction } from "../reducers/launcherRows";
-import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { refreshShellKeybindings } from "../model/keybindings";
 import {
   NO_DRAFT_APP_REASON,
@@ -308,8 +303,6 @@ export interface PageDriver {
   requestClose(windowId: string): void;
   /** Whether the window's page declared it owns the close chord (``closeChord: true``). */
   ownsCloseChord(windowId: string): boolean;
-  /** Send every page that has loaded its handshake again, for a change it carries. */
-  greetAll(): void;
 }
 
 /** What the shell asks the embedding chrome for when a window is pulled out (the pull-out-window spec). */
@@ -422,9 +415,6 @@ const PLACEMENT_EDIT_EVENTS: ReadonlySet<DesktopEvent["type"]> = new Set([
   "window_reattached",
 ]);
 
-/** Where a launch's failure goes instead of a toast: the caller shows it where the press was. */
-type LaunchFailureSink = (failure: FailureMessage) => void;
-
 export interface StoreDependencies {
   readonly clientId: string;
   readonly api: DesktopApi;
@@ -439,9 +429,6 @@ export interface StoreDependencies {
   readonly popOut?: PopOutBridge;
   /** Where external links open when no app takes them; absent opens none. */
   readonly outsideLinks?: OutsideLinkOpener;
-  /** Open the bug report a failure's "Report a bug" asks for, with the failure attached (null: a page that sent
-   *  none); absent opens none. */
-  readonly reportBug?: (failure: ReportedFailure | null) => void;
   /** The immersive-mode conversation with the embedder; absent means no embedder. */
   readonly immersive?: ImmersiveBridge;
   /** The one window this shell shows edge to edge (a pulled-out window's own desktop window), else null. */
@@ -591,7 +578,6 @@ export class DesktopStore {
   private markAppsLoaded: () => void = () => undefined;
   private readonly popOut: PopOutBridge;
   private readonly outsideLinks: OutsideLinkOpener;
-  private readonly reportBug: (failure: ReportedFailure | null) => void;
   private readonly immersiveBridge: ImmersiveBridge;
   private readonly soloWindowId: string | null;
   /** Whether the embedder can pull a window out; off until it says so (an older chrome, a plain browser). */
@@ -600,8 +586,6 @@ export class DesktopStore {
   private outsideLinkCapabilities = NO_OUTSIDE_LINK_CAPABILITIES;
   /** Whether the embedder opens its settings for the files shared from the user's computer; off until it says so. */
   private opensLocalFiles = false;
-  /** Whether the embedder opens its bug report (its ``opensHelp``); off until it says so. */
-  private canReportBug = false;
   /** Whether the embedder takes immersive-mode requests; off until it says so (an older chrome, a plain browser). */
   private canImmerse = false;
   /** Immersive mode while the chrome says it is on; never persisted (the integration spec, S4). */
@@ -672,7 +656,6 @@ export class DesktopStore {
     this.metrics = deps.metrics;
     this.popOut = deps.popOut ?? NULL_POP_OUT_BRIDGE;
     this.outsideLinks = deps.outsideLinks ?? NULL_OUTSIDE_LINK_OPENER;
-    this.reportBug = deps.reportBug ?? (() => undefined);
     this.immersiveBridge = deps.immersive ?? NULL_IMMERSIVE_BRIDGE;
     this.soloWindowId = deps.soloWindowId ?? null;
     this.isSoloFirstLayoutPending = this.soloWindowId !== null;
@@ -685,36 +668,6 @@ export class DesktopStore {
   /** Tell the user about a refusal. */
   private toast(message: string): void {
     this.toasts.show(message);
-  }
-
-  /**
-   * Tell the user that what they asked for failed with ``error``, in ``failureSentence``'s words for ``whatFailed``
-   * (a sentence stem naming it), with the status and the server's own text behind "See details". A call site whose
-   * retry is the control just pressed asks for a plain note; any other, and any failure that asks for a bug report,
-   * shows one that stays, which for a failure that asks for one offers "Report a bug" wherever the embedder opens a bug
-   * report when the toast is drawn (``reportBugAction``).
-   */
-  private toastFailure(whatFailed: string, error: unknown, options: { readonly isLasting: boolean }): void {
-    this.showFailure(failureSentence(describeRequestFailure(error), whatFailed), options);
-  }
-
-  /** Toast a failed start of a page that does not show the outcome itself: lasting when there is more to it than the
-   *  sentence (a launch's reason, a bug report to ask for), a plain note otherwise (no app takes text, a refusal). */
-  showStartFailure(failure: FailureMessage): void {
-    this.showFailure(failure, { isLasting: failure.details !== null || failure.isReportable });
-  }
-
-  /** ``toastFailure`` for a failure already worded. */
-  private showFailure(told: FailureMessage, { isLasting }: { readonly isLasting: boolean }): void {
-    if (!isLasting && !told.isReportable) {
-      this.toasts.show(told.message, { isLasting: false, details: told.details });
-      return;
-    }
-    this.toasts.show(told.message, {
-      isLasting: true,
-      details: told.details,
-      isReportable: told.isReportable,
-    });
   }
 
   /** Whether this window is viewing somebody else's desktop, in which case the change named by ``action`` is
@@ -762,33 +715,6 @@ export class DesktopStore {
    *  already greeted hear it as the shell's rebroadcast of that message. */
   setOpensLocalFiles(opensLocalFiles: boolean): void {
     this.opensLocalFiles = opensLocalFiles;
-  }
-
-  /** Whether "Report a bug" can work: the embedder opens its bug report. The pages learn it from their handshake. */
-  getCanReportBug(): boolean {
-    return this.canReportBug;
-  }
-
-  /** The embedder said whether it opens its bug report (``opensHelp`` in ``minds:embedder-capabilities``). It says
-   *  so once, after the pages may have loaded, so a change is handed to every page in a fresh handshake. */
-  setCanReportBug(canReportBug: boolean): void {
-    if (this.canReportBug === canReportBug) return;
-    this.canReportBug = canReportBug;
-    this.pageDriver?.greetAll();
-    // The toasts already up decide their "Report a bug" as they draw.
-    this.notifyListeners();
-  }
-
-  /** What a reportable toast's "Report a bug" runs: the bug report about its failure, or null while the embedder
-   *  opens none. */
-  reportBugAction(): ((failure: ReportedFailure) => void) | null {
-    return this.canReportBug ? (failure) => this.reportBug(failure) : null;
-  }
-
-  /** A page's ``shell:report-bug``: the bug report about ``failure`` opens, where the embedder opens one; null opens
-   *  it with nothing attached. */
-  reportBugFromPage(failure: ReportedFailure | null): void {
-    if (this.canReportBug) this.reportBug(failure);
   }
 
   /** Whether the embedder can take the app window immersive for a window of this desktop. */
@@ -1309,8 +1235,7 @@ export class DesktopStore {
       inventory = await this.deps.api.fetchInventory();
     } catch (error) {
       console.warn("[si] could not read the inventory", error);
-      // Lasting: nothing on screen retries the read, and the desktop stays on "Loading..." after a plain note leaves.
-      this.toastFailure("Could not read the desktops and apps", error, { isLasting: true });
+      this.toast(`Could not read the desktops and apps: ${(error as Error).message}`);
       return;
     }
     // The apps before the desktops, so the first draw of a desktop's shortcuts already knows every app.
@@ -1768,14 +1693,7 @@ export class DesktopStore {
   async openAgentChat(): Promise<boolean> {
     if (this.refuseWhileViewing("show the agent's chat")) return false;
     const pinned = avatarPinnedEntryOf(this.state);
-    if (pinned === null) {
-      const [primary] = freeTextRowsOf(openableApps(this.state));
-      if (primary === undefined) {
-        this.toast(NO_TEXT_APP_REASON);
-        return false;
-      }
-      return this.runFreeText(primary.app.name, primary.launchPath.id, "");
-    }
+    if (pinned === null) return this.startWithText("");
     this.showWindow(pinned.window.id);
     return true;
   }
@@ -2032,7 +1950,7 @@ export class DesktopStore {
     try {
       relay = await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload, sender);
     } catch (error) {
-      this.toastFailure(DEFAULT_WHAT_FAILED, error, { isLasting: false });
+      this.toast((error as Error).message);
       return false;
     }
     if (relay.deliveries.some((delivery) => delivery.has_no_desktop_window)) {
@@ -2129,9 +2047,7 @@ export class DesktopStore {
     try {
       outcome = await this.deps.api.showPage(this.deps.clientId, { app, path, repoint });
     } catch (error) {
-      this.toastFailure(`Could not open ${appByName(this.state, app)?.display_name ?? app}`, error, {
-        isLasting: false,
-      });
+      this.toast(`Could not open ${app}: ${(error as Error).message}`);
       return;
     }
     if (outcome.hasNoDesktopWindow) this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);
@@ -2167,8 +2083,7 @@ export class DesktopStore {
     try {
       reported = await this.deps.api.reportWindowLocation(found.desktop.id, windowId, this.deps.clientId, path, title);
     } catch (error) {
-      // Lasting: the page moved its own window, so nothing the user pressed retries it.
-      this.toastFailure("Could not move the window", error, { isLasting: true });
+      this.toast(`Could not move the window: ${(error as Error).message}`);
       return false;
     }
     this.applyOwnNavigation(found, reported);
@@ -2210,7 +2125,7 @@ export class DesktopStore {
     try {
       await this.deps.api.selectAvatar(design);
     } catch (error) {
-      this.toastFailure("Could not change the avatar", error, { isLasting: false });
+      this.toast(`Could not change the avatar: ${(error as Error).message}`);
     }
   }
 
@@ -2228,7 +2143,7 @@ export class DesktopStore {
       if (this.entryPushes !== entryPushesBefore) return;
       this.dispatch({ type: "entries_updated", entries: record.entries });
     } catch (error) {
-      this.toastFailure("Could not change the entry", error, { isLasting: false });
+      this.toast(`Could not change the entry: ${(error as Error).message}`);
       if (this.entryPushes !== entryPushesBefore) return;
       const others = Object.fromEntries(Object.entries(this.state.entries).filter(([name]) => name !== app));
       this.dispatch({
@@ -2360,7 +2275,7 @@ export class DesktopStore {
       this.takeDesktop(created);
       await this.switchDesktop(created.id);
     } catch (error) {
-      this.toastFailure("Could not create the desktop", error, { isLasting: false });
+      this.toast(`Could not create the desktop: ${(error as Error).message}`);
     }
   }
 
@@ -2546,7 +2461,7 @@ export class DesktopStore {
       if (now !== null && findShortcut(now, app, launch) === shortcut) {
         this.takeDesktop({ ...now, shortcuts: now.shortcuts.filter((candidate) => candidate !== shortcut) });
       }
-      this.toastFailure("Could not add the shortcut", error, { isLasting: false });
+      this.toast(`Could not add the shortcut: ${(error as Error).message}`);
     }
   }
 
@@ -2555,7 +2470,7 @@ export class DesktopStore {
     try {
       this.takeDesktop(await this.deps.api.setDesktopShortcut(desktopId, shortcut));
     } catch (error) {
-      this.toastFailure("Could not change the shortcut", error, { isLasting: false });
+      this.toast(`Could not change the shortcut: ${(error as Error).message}`);
     }
   }
 
@@ -2596,7 +2511,7 @@ export class DesktopStore {
       this.takeDesktop(await this.deps.api.moveDesktopShortcut(desktop.id, app, launch, cell));
     } catch (error) {
       this.withShortcutCells(changes.map((entry) => ({ ...entry, cell: entry.storedCell })));
-      this.toastFailure("Could not move the shortcut", error, { isLasting: false });
+      this.toast(`Could not move the shortcut: ${(error as Error).message}`);
     }
   }
 
@@ -2631,7 +2546,7 @@ export class DesktopStore {
       if (this.desktopsRevision === revision && now !== null && findShortcut(now, app, launch) === undefined) {
         this.takeDesktop({ ...now, shortcuts: [...now.shortcuts, removed] });
       }
-      this.toastFailure("Could not remove the shortcut", error, { isLasting: false });
+      this.toast(`Could not remove the shortcut: ${(error as Error).message}`);
     }
   }
 
@@ -2697,27 +2612,16 @@ export class DesktopStore {
    *  pinned-first: when the app has a pinned window on the active desktop, the launch runs into this client's view
    *  of it (the page the launch answers is pure, so a linked window is safe too) and the window is restored and
    *  raised; otherwise the launch opens a new window. False when the text cannot go (a GET launch path over the
-   *  path bound) or the shell refused, each toasted or, given ``onFailure``, handed to it to show. */
-  async runFreeText(
-    appName: string,
-    launchId: string,
-    text: string,
-    onFailure: LaunchFailureSink | null = null,
-  ): Promise<boolean> {
+   *  path bound) or the shell refused, each told to the user. */
+  async runFreeText(appName: string, launchId: string, text: string): Promise<boolean> {
     const found = this.launchOf(appName, launchId);
     if (found === null) return false;
     const disabledReason = textRowDisabledReason(found.launchPath, text);
     if (disabledReason !== null) {
-      if (onFailure === null) this.toast(disabledReason);
-      else onFailure({ message: `${disabledReason}.`, details: null, isReportable: false });
+      this.toast(disabledReason);
       return false;
     }
-    return this.launchPinnedFirst(
-      found.app.name,
-      found.launchPath.id,
-      freeTextParams(found.launchPath, text),
-      onFailure,
-    );
+    return this.launchPinnedFirst(found.app.name, found.launchPath.id, freeTextParams(found.launchPath, text));
   }
 
   /** Run a launch path with ``params`` into the app's pinned window on the active desktop when there is one (the
@@ -2726,21 +2630,14 @@ export class DesktopStore {
     appName: string,
     launchId: string,
     params: Record<string, string>,
-    onFailure: LaunchFailureSink | null = null,
   ): Promise<boolean> {
     const pinned = pinnedWindowOf(this.state, appName);
     if (pinned !== null) {
-      const launched = await this.launchAt(
-        appName,
-        launchId,
-        params,
-        { kind: "window", windowId: pinned.id },
-        onFailure,
-      );
+      const launched = await this.launchAt(appName, launchId, params, { kind: "window", windowId: pinned.id });
       this.restoreWindow(pinned.id);
       return launched !== null;
     }
-    return (await this.launchAt(appName, launchId, params, { kind: "new" }, onFailure)) !== null;
+    return (await this.launchAt(appName, launchId, params, { kind: "new" })) !== null;
   }
 
   /** A page's ``shell:draft-text`` (element-reference-menu plan section 6): the text is drafted into the pinned
@@ -2755,46 +2652,15 @@ export class DesktopStore {
     return this.runFreeText(draftRow.app.name, draftRow.launchPath.id, text);
   }
 
-  /** A page's ``shell:start-with-text`` (launcher plan section 3.7), and the shell's own "Ask an agent to free up
-   *  space": the primary text action runs with the text (the main chat on a stock machine). Settles as
-   *  ``startNewWithText`` does, toasting nothing. */
-  async startWithText(text: string): Promise<StartNewOutcome> {
-    return this.startTextRow(text, "primary");
-  }
-
-  /** A page's ``shell:start-new-with-text`` ("Ask an agent to fix this"): the secondary text action runs with the
-   *  text (Chat's New Chat on a stock machine), else the primary one. Settles once the window is on the desktop, or
-   *  with the failure for the caller to show where the press was: nothing is toasted. */
-  async startNewWithText(text: string): Promise<StartNewOutcome> {
-    return this.startTextRow(text, "secondary");
-  }
-
-  private async startTextRow(text: string, textAction: TextAction): Promise<StartNewOutcome> {
-    if (this.viewedDesktop() !== null) {
-      console.info("[si] refused to start a chat while viewing somebody else's desktop");
-      return {
-        isOpened: false,
-        failure: { message: `${STOP_VIEWING_FIRST_NOTICE}.`, details: null, isReportable: false },
-      };
+  /** A page's ``shell:start-with-text`` (launcher plan section 3.7): the primary text action runs with the text;
+   *  with no free-text row on the machine the user is told. */
+  async startWithText(text: string): Promise<boolean> {
+    const [primary] = freeTextRowsOf(openableApps(this.state));
+    if (primary === undefined) {
+      this.toast(NO_TEXT_APP_REASON);
+      return false;
     }
-    const [primary, secondary] = freeTextRowsOf(openableApps(this.state));
-    const row = textAction === "secondary" ? (secondary ?? primary) : primary;
-    if (row === undefined) {
-      return { isOpened: false, failure: { message: `${NO_TEXT_APP_REASON}.`, details: null, isReportable: false } };
-    }
-    let failure: FailureMessage | null = null;
-    const isOpened = await this.runFreeText(row.app.name, row.launchPath.id, text, (told) => {
-      failure = told;
-    });
-    if (isOpened) return { isOpened: true };
-    return {
-      isOpened: false,
-      failure: failure ?? {
-        message: fallbackSentence(`${row.app.display_name} couldn't open that`),
-        details: null,
-        isReportable: true,
-      },
-    };
+    return this.runFreeText(primary.app.name, primary.launchPath.id, text);
   }
 
   /** The desktop an open goes to: the active one, or on a phone the first, where a window opened out of sight
@@ -2825,9 +2691,7 @@ export class DesktopStore {
         isMinimized,
       });
     } catch (error) {
-      this.toastFailure(`Could not open ${appByName(this.state, app)?.display_name ?? app}`, error, {
-        isLasting: false,
-      });
+      this.toast(`Could not open ${app}: ${(error as Error).message}`);
       return null;
     }
     this.takeOpened(desktopId, outcome.window, outcome.isNew, isMinimized);
@@ -2846,14 +2710,12 @@ export class DesktopStore {
    *  page (built for a GET launch path, asked of the app for a POST one) and opens a window there, points the
    *  named window at it, or shows it by the show rule. An opened, focused, or shown window is taken as an open
    *  is; a navigated one (the named window, or the pinned window a show pointed at the page) as this client's own
-   *  navigation, so the page follows. Answers the window's id, or null when the shell refused, told to the user in a
-   *  toast or, given ``onFailure``, handed to it to show. */
+   *  navigation, so the page follows. Answers the window's id, or null when the shell refused (told to the user). */
   async launchAt(
     app: string,
     launchId: string,
     params: Readonly<Record<string, string>>,
     target: LaunchTarget,
-    onFailure: LaunchFailureSink | null = null,
   ): Promise<string | null> {
     if (this.refuseWhileViewing(`open ${app}`)) return null;
     // A launch into a named window runs on that window's desktop, a show beside one on that window's; any other on
@@ -2879,14 +2741,7 @@ export class DesktopStore {
         isMinimized,
       });
     } catch (error) {
-      const told = failureSentence(
-        describeRequestFailure(error),
-        `${appByName(this.state, app)?.display_name ?? app} couldn't open that`,
-      );
-      // Lasting for every launch, a shortcut's included: one from a text row or a page's draft has already let go of
-      // the text it carried, so pressing again is no retry, and an app's own reason waits behind "See details".
-      if (onFailure === null) this.showFailure(told, { isLasting: true });
-      else onFailure(told);
+      this.toast(`Could not open ${app}: ${(error as Error).message}`);
       return null;
     }
     if (target.kind === "window") {
@@ -2923,7 +2778,7 @@ export class DesktopStore {
     try {
       await this.deps.api.closeWindow(found.desktop.id, windowId);
     } catch (error) {
-      this.toastFailure("Could not close the window", error, { isLasting: false });
+      this.toast(`Could not close the window: ${(error as Error).message}`);
       return;
     }
     this.dispatch({ type: "window_closed_here", desktopId: found.desktop.id, windowId });
@@ -3152,8 +3007,7 @@ export class DesktopStore {
     try {
       await this.deps.api.quitApp(appName);
     } catch (error) {
-      // Lasting: Quit closed the app's windows before the stop failed, so no window is left to Quit from again.
-      this.toastFailure(`Failed to quit ${appName}`, error, { isLasting: true });
+      this.toast(`Failed to quit ${appName}: ${(error as Error).message}`);
     }
   }
 

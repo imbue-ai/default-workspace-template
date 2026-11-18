@@ -893,12 +893,7 @@ describe("the auth-error note's switch link", () => {
 
     it("asks the user to check the agent before sending a resend mngr could not confirm again", async () => {
       transcript.events = [PROMPT, authErrorEvent()];
-      transcript.sendMessage.mockRejectedValueOnce(
-        Object.assign(new Error("{}"), {
-          code: 500,
-          response: { detail: "Timeout waiting for message submission evidence", kind: "submission_unconfirmed" },
-        }),
-      );
+      transcript.sendMessage.mockRejectedValueOnce({ response: { kind: "submission_unconfirmed" } });
       vi.spyOn(console, "error").mockImplementationOnce(() => {});
       const bubblesBefore = getOutgoingMessages("chat-1").length;
 

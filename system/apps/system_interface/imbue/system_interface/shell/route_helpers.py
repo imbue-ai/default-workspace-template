@@ -36,13 +36,9 @@ HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 IMAGE_CONTENT_SECURITY_POLICY: Final[str] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
 
 
-def detail_response(
-    message: str, status_code: int, user_facing_message: str | None = None, reportable: bool | None = None
-) -> ResponseReturnValue:
-    """A refusal or a failure as the ``ErrorResponse`` every route answers them with: ``detail`` is the developer's
-    reason, which every caller reads; ``user_facing_message``, when there is one, is the sentence the workspace's
-    frontends show a person in its place, and ``reportable`` whether that sentence asks for a bug report."""
-    return error_response(message, status_code, user_facing_message, reportable)
+def detail_response(message: str, status_code: int) -> ResponseReturnValue:
+    """A refusal or a failure as the ``ErrorResponse`` every route answers them with."""
+    return error_response(message, status_code)
 
 
 def request_identity() -> RequestIdentity:

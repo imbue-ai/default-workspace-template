@@ -5,6 +5,7 @@
  */
 
 import m from "mithril";
+import { postJson } from "@imbue/workspace-ui/src/models/http";
 import { apiUrl, wsUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatKind, getTerminalOriginLabel } from "../document-meta";
 import { deriveAppOrigin } from "@imbue/workspace-ui/src/origin";
@@ -12,8 +13,6 @@ import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice, ModelIdentity } from "./ModelSettings";
 import type { CompactionCause, UserMessageEvent } from "./Response";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
-import { fetchOrNotAnswered, postJson, readResponseFailure } from "@imbue/workspace-ui/src/models/http";
-import type { RequestKind } from "@imbue/workspace-ui/src/models/failure";
 import { loadAccounts } from "./Providers";
 
 /** The agent-level facts about a chat's active agent that the pages render (the backend's
@@ -600,6 +599,18 @@ export function buildAgentTerminalUrl(agentName: string | null, isViewing: boole
   return `${baseUrl}${separator}${dispatchArguments.map((value) => `arg=${encodeURIComponent(value)}`).join("&")}`;
 }
 
+/** A create the chat app refused, with its reason in words and, when the account is the reason, the refusal's kind:
+ *  ``no_provider_account`` when nothing is signed in, ``account_signed_out`` when the named account was removed. */
+export class CreateChatRefusedError extends Error {
+  readonly kind: string | null;
+
+  constructor(detail: string, kind: string | null) {
+    super(detail);
+    this.name = "CreateChatRefusedError";
+    this.kind = kind;
+  }
+}
+
 /** A freshly-created chat's identity: its id and its name pair. */
 export interface CreatedChat {
   chatId: string;
@@ -615,7 +626,7 @@ export interface CreatedChat {
  * ``projectId`` becomes the agent's ``project`` label and is empty for a chat started outside
  * any project; ``message`` is the chat's first message, sent once it runs (empty sends none).
  * Always an agent chat: a room starts from a chat awaiting its first send (``launchChat``).
- * Throws an ``HttpError`` on a refusal (its ``failure.kind`` says when the account is the reason) or no answer.
+ * Throws a ``CreateChatRefusedError`` with the server's detail on rejection.
  */
 export function createChat(
   projectId: string,
@@ -630,7 +641,9 @@ export function createChat(
 /** The chat a chat list with none to show opens on: one waiting for its first send, which launches it on the
  *  selected account. Nothing is created until then, and a list asking while another waits gets that one. */
 export async function awaitingChatForEmptyList(): Promise<string> {
-  const data = await postJson<{ chat_id: string }>(apiUrl("/api/chats/awaiting"), {});
+  const response = await fetch(apiUrl("/api/chats/awaiting"), { method: "POST" });
+  if (!response.ok) throw new Error(`The chat list could not open a new chat (${response.status})`);
+  const data = (await response.json()) as { chat_id: string };
   return data.chat_id;
 }
 
@@ -675,10 +688,16 @@ export function isLaunchInFlight(chatId: string): boolean {
 }
 
 async function postCreateChat(body: Record<string, string | ModelIdentity | null>): Promise<CreatedChat> {
-  const created = await postJson<{ chat_id?: string; name?: string; display_name?: string }>(
-    apiUrl("/api/chats/create"),
-    body,
-  );
+  const response = await fetch(apiUrl("/api/chats/create"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const data = (await response.json().catch(() => ({}))) as { detail?: string; kind?: string };
+    throw new CreateChatRefusedError(data.detail ?? `HTTP ${response.status}`, data.kind ?? null);
+  }
+  const created = (await response.json()) as { chat_id?: string; name?: string; display_name?: string };
   if (!created.chat_id) {
     throw new Error("Chat creation returned no chat id");
   }
@@ -715,22 +734,25 @@ export interface AppliedIntake {
 /** Thrown when a token names no held intake: it was applied, dismissed, or expired. */
 export class PendingIntakeGoneError extends Error {}
 
-async function readIntakeResponse<T>(response: Response, token: string, kind: RequestKind): Promise<T> {
+async function readIntakeResponse<T>(response: Response, token: string): Promise<T> {
   if (response.status === 404) throw new PendingIntakeGoneError(`no pending intake ${token}`);
-  if (!response.ok) throw await readResponseFailure(response, kind);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(data.detail ?? `HTTP ${response.status}`);
+  }
   return (await response.json()) as T;
 }
 
 /** The held intake a token names. Throws ``PendingIntakeGoneError`` when it is gone. */
 export async function fetchPendingIntake(token: string): Promise<PendingIntake> {
-  const response = await fetchOrNotAnswered(apiUrl(`/api/chats/intakes/${encodeURIComponent(token)}`), {}, "read");
+  const response = await fetch(apiUrl(`/api/chats/intakes/${encodeURIComponent(token)}`));
   const data = await readIntakeResponse<{
     message: string;
     is_draft: boolean;
     needs_pick: boolean;
     chat_id: string | null;
     hint?: string | null;
-  }>(response, token, "read");
+  }>(response, token);
   return {
     message: data.message,
     isDraft: data.is_draft,
@@ -743,21 +765,17 @@ export async function fetchPendingIntake(token: string): Promise<PendingIntake> 
 /** Apply a held intake, on ``chatId`` when it needed a pick; the token is consumed. Throws
  *  ``PendingIntakeGoneError`` when another apply got there first. */
 export async function applyPendingIntake(token: string, chatId: string | null = null): Promise<AppliedIntake> {
-  const response = await fetchOrNotAnswered(
-    apiUrl(`/api/chats/intakes/${encodeURIComponent(token)}/apply`),
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(chatId === null ? {} : { chat_id: chatId }),
-    },
-    "change",
-  );
+  const response = await fetch(apiUrl(`/api/chats/intakes/${encodeURIComponent(token)}/apply`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(chatId === null ? {} : { chat_id: chatId }),
+  });
   const data = await readIntakeResponse<{
     chat_id: string;
     composer_text: string | null;
     first_message: string | null;
     hint?: string | null;
-  }>(response, token, "change");
+  }>(response, token);
   return {
     chatId: data.chat_id,
     composerText: data.composer_text,
