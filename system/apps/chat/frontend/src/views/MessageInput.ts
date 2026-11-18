@@ -228,11 +228,12 @@ const KINDS_THAT_MAY_HAVE_ARRIVED: ReadonlySet<ComposerFailureKind> = new Set([
   "not_answered",
 ]);
 
-/** The running chat the notice of a refused send offers to ask, for a send whose chat has no agent it could start:
- *  what stopped it may be the workspace itself, which an agent that is already running can look into. A chat that
- *  was closed before it started has no failed create to look into. */
+/** The running chat the notice of a refused send offers to ask, for a send whose chat has no agent it could start
+ *  (one that would not start for the send, one that was down and would not come back, one whose create failed): what
+ *  stopped it may be the workspace itself, which an agent that is already running can look into. A chat that was
+ *  closed before it started has no failed create to look into. */
 function chatToAskAboutRefusedSend(kind: ComposerFailureKind, failingChatId: string): string | null {
-  if (kind === "agent_start_failed") return chatToAskAbout(failingChatId);
+  if (kind === "agent_start_failed" || kind === "agent_unreachable") return chatToAskAbout(failingChatId);
   if (kind !== "chat_not_started") return null;
   const provisional = getProvisionalChat(failingChatId);
   return provisional?.phase === "failed" ? chatToAskAboutFailedCreate(provisional) : null;
@@ -2142,11 +2143,19 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         const chat = name === "" ? "A chat" : `The chat "${name}"`;
         return {
           whatFailed:
-            actionFailureKind === "agent_start_failed"
-              ? `${chat} couldn't take a message, because its agent couldn't be started`
-              : `${chat} couldn't be started`,
+            actionFailureKind === "chat_not_started"
+              ? `${chat} couldn't be started`
+              : `${chat} couldn't take a message, because its agent couldn't be started`,
           details,
         };
+      }
+
+      /** Mark ``action`` as the one the notice is running. What an earlier ask came to was about the failure as it
+       *  stood, which the action may replace, so it is dropped. */
+      function beginNoticeAction(action: "retry" | "restart" | "ask"): void {
+        actionFailureInFlight = action;
+        actionFailureAskFailure = null;
+        m.redraw();
       }
 
       /** The notice's "Ask an agent to fix this": hand the failure to ``chatToAskId``'s agent, which closes the
@@ -2154,9 +2163,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       async function askRunningAgentToFix(chatToAskId: string, request: AgentFixRequest): Promise<void> {
         if (actionFailureInFlight !== null) return;
         const noticeAsked = actionFailure;
-        actionFailureInFlight = "ask";
-        actionFailureAskFailure = null;
-        m.redraw();
+        beginNoticeAction("ask");
         const outcome = await askAgentToFix(askConnectionToChat(chatToAskId), request);
         // The composer moved to another chat meanwhile, which closed the notice.
         if (actionFailure !== noticeAsked) return;
@@ -2221,8 +2228,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         if (recovery === null && launch === null && retryExternal === null) {
           return;
         }
-        actionFailureInFlight = "retry";
-        m.redraw();
+        beginNoticeAction("retry");
         if (recovery !== null) {
           await repeatFailedSend(recovery);
           return;
@@ -2308,8 +2314,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         if (recovery === null || actionFailureInFlight !== null) {
           return;
         }
-        actionFailureInFlight = "restart";
-        m.redraw();
+        beginNoticeAction("restart");
         // Rescue anything queued inside the harness first. The restart below SIGKILLs the agent,
         // which drops that queue -- and a feature whose rule is "never lose the message" must not
         // have a button that quietly loses other people's. Best-effort on purpose: the agent we
@@ -2453,8 +2458,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           isResendable && recovery !== null && !KINDS_RESTART_MUST_NOT_ANSWER.has(actionFailureKind);
         const failingChatId = recovery?.chatId ?? chatId;
         // An agent that would not start on this account may start on another; a chat that never became an agent
-        // has its own page for that. It waits for the chat list, which can land after the page: the move needs the
-        // chat.
+        // has its own page for that, and an agent that ran on this account until it went down is seldom kept down
+        // by it. It waits for the chat list, which can land after the page: the move needs the chat.
         const switchProviderChatId =
           actionFailureKind === "agent_start_failed" &&
           failingChatId !== null &&
