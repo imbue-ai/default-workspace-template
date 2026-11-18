@@ -1092,24 +1092,22 @@ def deliver_held_send(delivery: HeldSendDelivery, agent_info: AgentInfo, held: H
 
     A refusal or a miss is logged and reported rather than raised: the send was answered 202 when it
     was held, and one that cannot land must not stop the ones behind it. A refusal that typed nothing
-    and can pass (an agent still drawing its input box, a host too loaded to answer) is tried again
-    after each of ``_HELD_SEND_RETRY_DELAYS_SECONDS``, since nobody is at a composer to press Retry.
+    and can pass (an agent still drawing its input box, a harness not taking messages yet, a host too
+    loaded to answer) is tried again after each of ``_HELD_SEND_RETRY_DELAYS_SECONDS``, since nobody
+    is at a composer to press Retry.
     A send Stop took back, or one the agent took before a dialog blocked it, is not reported: the
     first is in the composer already and the second reached the agent.
     """
     for delay_seconds in _HELD_SEND_RETRY_DELAYS_SECONDS:
         answer = _try_held_send(delivery.deliver, agent_info, held)
-        if (
-            not (isinstance(answer, SendFailedError) and _is_held_send_refusal_passing(answer))
-            or delivery.is_stopping()
-        ):
+        if not _is_held_send_refusal_passing(answer) or delivery.is_stopping():
             break
         logger.info(
             "Chat {}: held send {} to agent {} was refused ({}); trying again in {}s",
             chat_id,
             held.message_id,
             agent_info.id,
-            answer.kind,
+            answer.kind if isinstance(answer, SendFailedError) else answer.value,
             delay_seconds,
         )
         delivery.sleep(delay_seconds)
@@ -1155,9 +1153,11 @@ def _try_held_send(
 
 
 @pure
-def _is_held_send_refusal_passing(error: SendFailedError) -> bool:
+def _is_held_send_refusal_passing(answer: SendOutcome | SendFailedError) -> bool:
     """Whether a held send was refused before anything was typed, for a reason that can clear on its own."""
-    return not error.is_delivered and error.kind in _PASSING_HELD_SEND_REFUSAL_KINDS
+    if isinstance(answer, SendFailedError):
+        return not answer.is_delivered and answer.kind in _PASSING_HELD_SEND_REFUSAL_KINDS
+    return answer is SendOutcome.NOT_READY
 
 
 # The environment a room's ``mngr create`` carries, which the workspace's create guard
