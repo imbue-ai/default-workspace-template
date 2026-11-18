@@ -500,8 +500,8 @@ def stop_runner(pid: int) -> None:
 def merge_stopped(existing: list[StoppedAgent], stopped: StoppedAgent) -> None:
     """Add ``stopped`` to the record, or reopen its entry when an earlier round already paused it.
 
-    The earlier round's interrupted commands ride along only until a resume has told the chat
-    about them.
+    The earlier round's interrupted commands, and its claim on a note, ride along only until a
+    resume has told the chat about them.
     """
     for index, entry in enumerate(existing):
         if entry.id == stopped.id:
@@ -510,6 +510,9 @@ def merge_stopped(existing: list[StoppedAgent], stopped: StoppedAgent) -> None:
                     dict.fromkeys(
                         [*entry.interrupted_tasks, *stopped.interrupted_tasks]
                     )
+                )
+                stopped.is_idle_when_paused = (
+                    stopped.is_idle_when_paused and entry.is_idle_when_paused
                 )
             existing[index] = stopped
             return

@@ -207,6 +207,28 @@ def test_a_second_pause_tells_a_chat_only_about_what_it_has_not_heard() -> None:
     ]
 
 
+def test_a_chat_still_owed_a_note_and_paused_again_while_idle_is_still_told(
+    tmp_path: Path, fake_agents: FakeAgents
+) -> None:
+    """Started again by a resume whose note never arrived, it sits idle; pausing it for memory
+    must not drop the note it is still owed."""
+    fake_agents.set_agents(
+        [chat("agent-lead", _LEAD, "RUNNING"), chat("agent-a", "Chat-A", "RUNNING")]
+    )
+    assert _main(tmp_path, "run-status", "start") == 0
+    assert _main(tmp_path, "run-status", "stop-chats") == 0
+    fake_agents.fail({"message": ["agent-a"]})
+    assert _main(tmp_path, "run-status", "resume-chats") != 0
+    fake_agents.fail({})
+    assert _main(tmp_path, "run-status", "stop-chats", "--agent", "Chat-A") == 0
+    fake_agents.clear_calls()
+
+    assert _main(tmp_path, "run-status", "resume-chats") == 0
+
+    assert fake_agents.states()["Chat-A"] == "WAITING"
+    assert set(fake_agents.notes()) == {"agent-a"}
+
+
 def test_a_paused_chat_deleted_before_the_resume_does_not_hold_it_open(
     tmp_path: Path, fake_agents: FakeAgents
 ) -> None:
