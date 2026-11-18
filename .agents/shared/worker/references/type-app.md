@@ -122,11 +122,13 @@ phone sizes and at the desktop size the user confirmed, as
 `browser` test in that phone context (393x852, `has_touch=True`,
 `is_mobile=True`; `page.tap` fails without touch) that asserts no sideways
 scroll and runs the app's main action by tapping it. The repo-root
-`conftest.py` does not reach a user-built app's suite and its dev group has
-no Playwright, so add `playwright` to that group (`uv add --dev playwright` in
-its directory), register the `browser` marker in its
-`[tool.pytest.ini_options]`, and launch Fortress by its path inside the test,
-as `AGENTS.md` says.
+`conftest.py` does not reach a user-built app's suite, so the scaffold gives the
+app's own dev group `playwright` and `pytest-timeout` and registers the `browser`
+and `frontend` marks in its `[tool.pytest.ini_options]`; launch Fortress by its
+path inside the test, as `AGENTS.md` says. An app scaffolded before that lacks
+them: check its `pyproject.toml`, and add what is missing in its directory
+(`uv add --dev playwright pytest-timeout`, which also syncs its venv) and the
+marks to its `[tool.pytest.ini_options]` before writing the test.
 
 ### When it is shared
 
