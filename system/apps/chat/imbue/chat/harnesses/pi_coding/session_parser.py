@@ -54,7 +54,7 @@ SOURCE = "pi-coding/common_transcript"
 _UNKNOWN_MODEL = "unknown"
 
 # What pi records, after its own retries, when a request never reached the model server or got
-# no answer from it. Measured against a refused port and against one that hangs up.
+# no answer from it.
 _UNREACHABLE_ERRORS = frozenset({"Connection error.", "Request timed out."})
 
 
