@@ -97,7 +97,9 @@ import { hasOpenHandoffRequest, isTailTurnSettled, liveCompactionOf } from "./tu
 import { closeRunningCompactionChips } from "./compaction-chips";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { AskAgentToFixButton, ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { askConnectionToChat, chatToAskAbout } from "./ask-running-agent";
+import { SWITCH_PROVIDER_LABEL, chooseProviderInPlaceOf } from "./provider-switch";
 import {
   joinDetailLines,
   plainFailureLines,
@@ -596,6 +598,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       return renderEmptyConversation("message-list-empty message-list-awaiting", renderOutgoingMessages(chatId));
     }
     const hasAccount = provisional.account_id !== "";
+    // With no account the way out is a sign-in, which an agent cannot make.
+    const chatToAskId = hasAccount ? chatToAskAbout(chatId) : null;
     return m(
       "div",
       { class: "message-list-create-failed flex flex-col items-center justify-center h-full gap-4 p-8" },
@@ -606,24 +610,38 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
           "p",
           { class: "message-list-create-failed-text text-secondary text-center" },
           hasAccount
-            ? "The agent for this chat couldn't be started. Try again, or start a new chat on a different provider."
+            ? "The agent for this chat couldn't be started. Try again, or switch to another provider."
             : "Sign in to a provider to start this chat.",
         ),
         m("div", { class: "text-secondary" }, m(SeeDetails, { details: provisional.error })),
         renderFailureLines(launchError, "message-list-create-retry-failed"),
         renderFailureLines(pageActionError, "message-list-remove-failed"),
-        m("div", { class: "flex items-center gap-2" }, [
+        m("div", { class: "flex flex-wrap items-center justify-center gap-2" }, [
           hasAccount
-            ? m(
-                Button,
-                {
-                  variant: "primary",
-                  extra: "message-list-create-retry",
-                  readonly: launchInFlight,
-                  onclick: () => void relaunch(chatId, provisional.account_id),
-                },
-                launchInFlight ? "Starting…" : "Try again",
-              )
+            ? [
+                m(
+                  Button,
+                  {
+                    variant: "primary",
+                    extra: "message-list-create-retry",
+                    readonly: launchInFlight,
+                    onclick: () => void relaunch(chatId, provisional.account_id),
+                  },
+                  launchInFlight ? "Starting…" : "Try again",
+                ),
+                m(
+                  Button,
+                  {
+                    extra: "message-list-switch-provider",
+                    readonly: launchInFlight,
+                    onclick: () => {
+                      if (launchInFlight) return;
+                      chooseProviderInPlaceOf(provisional.account_id, (accountId) => void launchOn(chatId, accountId));
+                    },
+                  },
+                  SWITCH_PROVIDER_LABEL,
+                ),
+              ]
             : m(
                 Button,
                 {
@@ -633,6 +651,15 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 },
                 "Choose a provider",
               ),
+          chatToAskId === null
+            ? null
+            : m(AskAgentToFixButton, {
+                connection: askConnectionToChat(chatToAskId),
+                failure: {
+                  whatFailed: `The chat "${provisional.name}" couldn't be started`,
+                  details: joinDetailLines([provisional.error, launchError?.details ?? null]),
+                },
+              }),
           m(
             Button,
             {

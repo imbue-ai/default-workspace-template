@@ -1,19 +1,28 @@
 import m from "mithril";
+import { askAgentToFix } from "@imbue/workspace-ui/src/app_contract";
+import type { AgentFixRequest, ShownFailure } from "@imbue/workspace-ui/src/app_contract";
+import { ASKING_AN_AGENT_LABEL, ASK_AGENT_TO_FIX_LABEL } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
-import type { NoticeAction } from "@imbue/workspace-ui/src/components/NoticeDialog";
+import type { NoticeAction, NoticeDialogAttrs } from "@imbue/workspace-ui/src/components/NoticeDialog";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import type { SendFailureKind } from "@imbue/workspace-ui/src/models/request-error";
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { startChatOnAccount } from "../shell";
 import { getShellConnection } from "../shellConnection";
+import { askConnectionToChat, chatToAskAbout } from "./ask-running-agent";
 import { reportBugActions } from "./failure-actions";
+import { SWITCH_PROVIDER_LABEL, chooseProviderToSwitchChat } from "./provider-switch";
 import {
+  DECLINED_COMPACT_TITLE,
   composerFailureKindOf,
+  declinedCompactSentence,
   describeCancelSwitchFailure,
   describeLaunchFailure,
   describeNewChatFailure,
   describeSendFailure,
   describeStopFailure,
   describeSwitchFailure,
+  isDeclinedCompact,
   isNothingToCancel,
 } from "./composer-failures";
 import type { ComposerFailureKind } from "./composer-failures";
@@ -214,16 +223,16 @@ const KINDS_RESTART_MUST_NOT_ANSWER: ReadonlySet<ComposerFailureKind> = new Set(
   "not_answered",
   "unrecognised",
 ]);
+// Kinds of refused send whose chat has no agent it could start. What stopped it may be the workspace itself, which an
+// agent that is already running can look into.
+const KINDS_A_RUNNING_AGENT_MAY_FIX: ReadonlySet<ComposerFailureKind> = new Set([
+  "agent_start_failed",
+  "chat_not_started",
+]);
 // Kinds of send that may have reached the agent: its turn arriving takes the copy back out of the composer.
 const KINDS_THAT_MAY_HAVE_ARRIVED: ReadonlySet<ComposerFailureKind> = new Set([
   "submission_unconfirmed",
   "not_answered",
-]);
-// The kinds of the server's refusal of a /compact it declines to run: before the agent has anything
-// to compact, and while it is busy or stopped.
-const DECLINED_COMPACT_SEND_FAILURE_KINDS: ReadonlySet<string | null> = new Set([
-  "nothing_to_compact",
-  "compact_unavailable",
 ]);
 
 // A NUL character cannot be typed into a terminal, so an agent that takes its input as keystrokes
@@ -787,7 +796,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   // The notice's own ways forward beyond Retry and Restart (Try again for a Stop, Start a new chat for a gone one).
   let actionFailureActions: NoticeAction[] = [];
   // Which recovery action is mid-flight, so the buttons disable rather than fire twice.
-  let actionFailureInFlight: "retry" | "restart" | null = null;
+  let actionFailureInFlight: "retry" | "restart" | "ask" | null = null;
+  // Why the notice's "Ask an agent to fix this" could not be sent, shown in the notice until it is asked again.
+  let actionFailureAskFailure: ShownFailure | null = null;
   // One notice instance each: the component closes over its own dismiss handler, so sharing one
   // between notices would let whichever rendered last answer the others' Escape.
   const actionFailureNotice = makeNoticeDialog();
@@ -1715,8 +1726,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // confirm, may have reached the agent anyway (KINDS_THAT_MAY_HAVE_ARRIVED). A /compact the server declined
           // to run gets the declined-command notice rather than the failure notice, since retrying
           // at once cannot change it.
-          const failure = describeRequestFailure(err);
-          const isDeclined = DECLINED_COMPACT_SEND_FAILURE_KINDS.has(failure.kind);
+          const isDeclined = isDeclinedCompact(err);
           if (!isDeclined) {
             console.error(`Failed to send message to chat ${chatId}: ${describeRequestError(err)}`);
           }
@@ -1733,8 +1743,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           if (currentChatId === chatId) {
             if (isDeclined) {
               declinedSend = {
-                title: "/compact wasn't sent",
-                body: failureSentence(failure).message,
+                title: DECLINED_COMPACT_TITLE,
+                body: declinedCompactSentence(err),
                 isSourceViewOffered: false,
               };
             } else {
@@ -2089,6 +2099,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         actionFailureRecovery = null;
         actionFailureLaunch = null;
         actionFailureInFlight = null;
+        actionFailureAskFailure = null;
         externalRetry = null;
         externalDescribe = null;
         externalAction = null;
@@ -2103,6 +2114,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       function noteSendFailure(error: unknown): void {
         actionFailureTitle = "Couldn't send your message";
         actionFailure = describeSendFailure(error);
+        actionFailureAskFailure = null;
         // The reason can change between attempts -- a blocked input can become an agent that is gone -- and the
         // buttons follow the kind, so it is read with the text every time.
         actionFailureKind = composerFailureKindOf(error);
@@ -2110,6 +2122,40 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         isActionFailureOnSignedOutAccount = actionFailureKind === "account_signed_out";
         actionFailureActions =
           actionFailureKind === "chat_gone" ? [{ label: "Start a new chat", run: startNewChatInsteadOfGoneOne }] : [];
+      }
+
+      /** What an agent is asked to fix when ``failingChatId`` has no agent it could start: the chat by the name
+       *  the user knows it by, and what the notice holds behind "See details". */
+      function failedStartFixRequest(failingChatId: string, details: string | null): AgentFixRequest {
+        const name = getChatById(failingChatId)?.title ?? getProvisionalChat(failingChatId)?.name ?? "";
+        const chat = name === "" ? "A chat" : `The chat "${name}"`;
+        return {
+          whatFailed:
+            actionFailureKind === "agent_start_failed"
+              ? `${chat} couldn't take a message, because its agent couldn't be started`
+              : `${chat} couldn't be started`,
+          details,
+        };
+      }
+
+      /** The notice's "Ask an agent to fix this": hand the failure to ``chatToAskId``'s agent, which closes the
+       *  notice and shows that chat. A refused ask says why in the notice, which stays as it was. */
+      async function askRunningAgentToFix(chatToAskId: string, request: AgentFixRequest): Promise<void> {
+        if (actionFailureInFlight !== null) return;
+        const noticeAsked = actionFailure;
+        actionFailureInFlight = "ask";
+        actionFailureAskFailure = null;
+        m.redraw();
+        const outcome = await askAgentToFix(askConnectionToChat(chatToAskId), request);
+        // The composer moved to another chat meanwhile, which closed the notice.
+        if (actionFailure !== noticeAsked) return;
+        if (outcome.isOpened) {
+          clearActionFailureNotice();
+        } else {
+          actionFailureInFlight = null;
+          actionFailureAskFailure = outcome.failure;
+        }
+        m.redraw();
       }
 
       /** A Try again that closes the notice and runs ``run``, which raises its own notice if it fails again. */
@@ -2394,6 +2440,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // being withheld for an agent that would not start, whose restart is the stronger way to bring it up.
         const isRestartOffered =
           isResendable && recovery !== null && !KINDS_RESTART_MUST_NOT_ANSWER.has(actionFailureKind);
+        const failingChatId = recovery?.chatId ?? chatId;
+        // An agent that would not start on this account may start on another; a chat that never became an agent
+        // has its own page for that.
+        const switchProviderChatId = actionFailureKind === "agent_start_failed" ? failingChatId : null;
+        const chatToAskId =
+          failingChatId !== null && KINDS_A_RUNNING_AGENT_MAY_FIX.has(actionFailureKind)
+            ? chatToAskAbout(failingChatId)
+            : null;
         // The agent itself refused, so its terminal shows why.
         const isTerminalUseful =
           onTurnOnSourceView !== undefined &&
@@ -2414,7 +2468,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                 isRestartOffered ? (SEND_FAILURE_RESTART_SENTENCES[actionFailureKind] ?? null) : null,
               ],
             };
-        return m(actionFailureNotice, {
+        const askFailure = actionFailureAskFailure;
+        const notice: NoticeDialogAttrs = {
           title: isUnconfirmed
             ? "Couldn't confirm your message arrived"
             : isNotAnswered
@@ -2423,7 +2478,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           body: shown.body,
           details: shown.details,
           dismissLabel:
-            isRepeatable || isRestartOffered || actionFailureActions.length > 0 || externalAction !== null
+            isRepeatable ||
+            isRestartOffered ||
+            actionFailureActions.length > 0 ||
+            externalAction !== null ||
+            switchProviderChatId !== null ||
+            chatToAskId !== null
               ? "Cancel"
               : "OK",
           isDismissable: actionFailureInFlight === null,
@@ -2441,6 +2501,33 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               : []),
             ...actionFailureActions,
             ...(externalAction === null ? [] : [externalAction]),
+            ...(switchProviderChatId !== null
+              ? [
+                  {
+                    label: SWITCH_PROVIDER_LABEL,
+                    tooltip: "Moves this chat to another provider. Your message stays in the box.",
+                    isSecondary: true,
+                    isDisabled: actionFailureInFlight !== null,
+                    run: () => {
+                      clearActionFailureNotice();
+                      m.redraw();
+                      chooseProviderToSwitchChat(switchProviderChatId);
+                    },
+                  },
+                ]
+              : []),
+            ...(failingChatId !== null && chatToAskId !== null
+              ? [
+                  {
+                    label: actionFailureInFlight === "ask" ? ASKING_AN_AGENT_LABEL : ASK_AGENT_TO_FIX_LABEL,
+                    tooltip: "Sends what failed to an agent that is already running, and shows its chat",
+                    isSecondary: true,
+                    isDisabled: actionFailureInFlight !== null,
+                    run: () =>
+                      void askRunningAgentToFix(chatToAskId, failedStartFixRequest(failingChatId, shown.details)),
+                  },
+                ]
+              : []),
             ...(isTerminalUseful
               ? [
                   {
@@ -2467,7 +2554,17 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   },
                 ]),
           ],
-        });
+        };
+        return m(
+          actionFailureNotice,
+          notice,
+          askFailure === null
+            ? null
+            : m("div", { class: "ask-agent-failure mb-4 text-secondary", role: "alert" }, [
+                m("p", { class: "ask-agent-failure-message" }, askFailure.message),
+                m(SeeDetails, { details: askFailure.details }),
+              ]),
+        );
       }
 
       /**

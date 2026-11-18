@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
 import type { AssistantMessageEvent } from "../models/Response";
@@ -22,6 +22,7 @@ import {
   takeChooserAccountId,
 } from "../models/Providers";
 import { startChatOnAccount } from "../shell";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 
 // Avoid importing the shell connection (chat/shell.ts, which pulls in the agents store) and
@@ -45,9 +46,17 @@ const switching = vi.hoisted(() => {
     // When each signed-in account last finished a sign-in; absent reads as never stamped.
     signedInAtById: new Map<string, string>(),
     areAccountsLoaded: true,
+    // The account a new chat would start on; none at rest.
+    selectedAccount: null as { id: string } | null,
+    // What a sibling of the composer handed its failure notice; the rest of the composer's module is real.
+    raiseFailureNotice: vi.fn(),
   };
 });
 vi.mock("./SwitchDialog", () => ({ beginSwitchToAccountId: switching.beginSwitchToAccountId }));
+vi.mock("./MessageInput", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./MessageInput")>()),
+  raiseFailureNotice: switching.raiseFailureNotice,
+}));
 vi.mock("../models/Providers", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Providers")>()),
   accountForAgent: (accountId?: string) =>
@@ -55,6 +64,7 @@ vi.mock("../models/Providers", async (importOriginal) => ({
       ? { id: accountId, signed_in_at: switching.signedInAtById.get(accountId) ?? null }
       : null,
   areAccountsLoaded: () => switching.areAccountsLoaded,
+  getSelectedAccount: () => switching.selectedAccount,
 }));
 vi.mock("../models/Chats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Chats")>()),
@@ -1044,5 +1054,221 @@ describe("the auth-error note's switch link", () => {
 
     expect(findButton(children, "switch to another provider")).toBeNull();
     expect(findButton(children, "Sign in again")).not.toBeNull();
+  });
+});
+
+describe("the ways out under a failed turn", () => {
+  const OPENAI_ID = "acct-openai";
+  const ANTHROPIC_ID = "acct-anthropic";
+  const TOO_LONG =
+    'API Error: 400 {"type":"error","error":{"message":"prompt is too long: 214332 tokens > 200000 maximum"}}';
+
+  interface FailureNotice {
+    title: string;
+    describe: (error: unknown) => { body: readonly (string | null)[]; details: string | null; isReportable: boolean };
+    error: unknown;
+    retry?: () => Promise<void>;
+  }
+
+  /** A refusal as mithril rejects with it: the parsed body, its status as ``code``, and the raw body as the message. */
+  function refusal(status: number, body: Record<string, unknown>): Error {
+    return Object.assign(new Error(JSON.stringify(body)), { code: status, response: body });
+  }
+
+  function findRemedy(node: unknown, label: string): { attrs: { onclick: () => void; disabled?: boolean } } | null {
+    const found = findVnode(node, (v) => v.tag === Button && allText(v).trim() === label);
+    return found === null ? null : (found as { attrs: { onclick: () => void; disabled?: boolean } });
+  }
+
+  function render(event: AssistantMessageEvent): unknown {
+    return renderAssistantMessageChildren(event, new Map(), "chat-1");
+  }
+
+  function raisedNotice(): FailureNotice {
+    expect(switching.raiseFailureNotice).toHaveBeenCalledOnce();
+    const [chatId, notice] = switching.raiseFailureNotice.mock.calls[0] as [string, FailureNotice];
+    expect(chatId).toBe("chat-1");
+    return notice;
+  }
+
+  async function flushAsync(): Promise<void> {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+  }
+
+  beforeEach(() => {
+    closeProviderChooser();
+    switching.beginSwitchToAccountId.mockClear();
+    switching.raiseFailureNotice.mockClear();
+    vi.mocked(startChatOnAccount).mockReset();
+    vi.mocked(startChatOnAccount).mockResolvedValue(undefined);
+    transcript.sendMessage.mockReset();
+    transcript.sendMessage.mockResolvedValue("ok");
+    switching.chat = chatSnapshotFixture("chat-1", { active_agent: { harness: "codex", account_id: OPENAI_ID } });
+    switching.signedInAccountIds = new Set([OPENAI_ID, ANTHROPIC_ID]);
+    switching.areAccountsLoaded = true;
+    switching.selectedAccount = null;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  describe("Switch provider", () => {
+    it.each([
+      ["a rate limit told as a status line", apiErrorEvent("API Error: 429 rate_limit_error", "rate_limit", false)],
+      [
+        "a usage limit in the provider's own words",
+        apiErrorEvent("You've hit your session limit \u00b7 resets 3pm", "rate_limit", false),
+      ],
+      ["a provider whose servers failed", apiErrorEvent("API Error: 529 Overloaded", "overloaded", true)],
+    ])("moves the chat off the failing account for %s", (_case, event) => {
+      findRemedy(render(event), "Switch provider")!.attrs.onclick();
+
+      expect(isPickingAccount()).toBe(true);
+      expect(getUnpickableAccount()).toEqual({ accountId: OPENAI_ID, reason: "failing" });
+
+      pickAccount(ANTHROPIC_ID);
+
+      expect(switching.beginSwitchToAccountId).toHaveBeenCalledExactlyOnceWith("chat-1", ANTHROPIC_ID);
+      expect(startChatOnAccount).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [
+        "a request the provider refused",
+        apiErrorEvent("API Error: 400 max_tokens: too large", "invalid_request", false),
+      ],
+      ["a failure nothing named", apiErrorEvent("API Error: Your computer went to sleep.", null, false, true)],
+      ["a conversation too long for the model", apiErrorEvent(TOO_LONG, "context_too_long", false)],
+      ["an ordinary reply", apiErrorEvent("Here's the fix.", null, false)],
+    ])("is not offered for %s, which another provider does not cure", (_case, event) => {
+      expect(findRemedy(render(event), "Switch provider")).toBeNull();
+    });
+
+    it("leaves a sign-in failure to its own note, which already offers the switch", () => {
+      const children = render({
+        ...apiErrorEvent("API Error: 429 You're out of extra usage", "rate_limit", false),
+        is_auth_error: true,
+      });
+
+      expect(findRemedy(children, "Switch provider")).toBeNull();
+      expect(allText(children)).toContain("switch to another provider");
+    });
+
+    it("waits for the chat, which the switch moves", () => {
+      switching.chat = undefined;
+
+      expect(
+        findRemedy(render(apiErrorEvent("API Error: 529 Overloaded", "overloaded", true)), "Switch provider"),
+      ).toBeNull();
+    });
+  });
+
+  describe("a conversation too long for the model", () => {
+    const tooLong = (): AssistantMessageEvent => apiErrorEvent(TOO_LONG, "context_too_long", false);
+
+    it("offers a new chat and a compaction, and neither for any other failure", () => {
+      const children = render(tooLong());
+      expect(findRemedy(children, "Start a new chat")).not.toBeNull();
+      expect(findRemedy(children, "Compact")).not.toBeNull();
+
+      const rateLimited = render(apiErrorEvent("API Error: 429 rate_limit_error", "rate_limit", false));
+      expect(findRemedy(rateLimited, "Start a new chat")).toBeNull();
+      expect(findRemedy(rateLimited, "Compact")).toBeNull();
+    });
+
+    it("starts a new chat on the account a new chat would start on", async () => {
+      switching.selectedAccount = { id: ANTHROPIC_ID };
+
+      findRemedy(render(tooLong()), "Start a new chat")!.attrs.onclick();
+      await flushAsync();
+
+      expect(startChatOnAccount).toHaveBeenCalledExactlyOnceWith(ANTHROPIC_ID);
+      expect(transcript.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it("sends /compact to the chat, once, however often Compact is pressed while it is on its way", async () => {
+      let accept: (status: string) => void = () => undefined;
+      transcript.sendMessage.mockImplementationOnce(() => new Promise<string>((resolve) => (accept = resolve)));
+
+      findRemedy(render(tooLong()), "Compact")!.attrs.onclick();
+      const sending = findRemedy(render(tooLong()), "Sending /compact\u2026");
+      expect(sending?.attrs.disabled).toBe(true);
+      sending!.attrs.onclick();
+
+      expect(transcript.sendMessage).toHaveBeenCalledExactlyOnceWith("chat-1", "/compact", expect.any(String));
+      accept("ok");
+      await flushAsync();
+
+      expect(findRemedy(render(tooLong()), "Compact")?.attrs.disabled).toBe(false);
+      expect(switching.raiseFailureNotice).not.toHaveBeenCalled();
+    });
+
+    it("says why a /compact the chat app declined was not sent, and keeps both ways out on screen", async () => {
+      const declined = refusal(409, {
+        detail: "Nothing to compact yet.",
+        user_facing_message: "Nothing to compact yet.",
+        kind: "nothing_to_compact",
+      });
+      transcript.sendMessage.mockRejectedValueOnce(declined);
+
+      findRemedy(render(tooLong()), "Compact")!.attrs.onclick();
+      await flushAsync();
+
+      const notice = raisedNotice();
+      expect(notice.title).toBe("/compact wasn't sent");
+      expect(notice.describe(notice.error).body).toEqual(["Nothing to compact yet."]);
+      expect(notice.retry).toBeUndefined();
+      const after = render(tooLong());
+      expect(findRemedy(after, "Start a new chat")).not.toBeNull();
+      expect(findRemedy(after, "Compact")?.attrs.disabled).toBe(false);
+    });
+
+    it("tells a /compact that failed, with a way to send it again", async () => {
+      transcript.sendMessage.mockRejectedValueOnce(refusal(500, { detail: "mngr message exited 1" }));
+
+      findRemedy(render(tooLong()), "Compact")!.attrs.onclick();
+      await flushAsync();
+
+      const notice = raisedNotice();
+      expect(notice.title).toBe("Couldn't compact this conversation");
+      expect(notice.describe(notice.error)).toMatchObject({
+        body: ["This conversation couldn't be compacted. Try again. If this persists, report a bug."],
+        isReportable: true,
+      });
+      expect(notice.describe(notice.error).details).toContain("mngr message exited 1");
+      expect(findRemedy(render(tooLong()), "Start a new chat")).not.toBeNull();
+
+      await notice.retry!();
+      expect(transcript.sendMessage).toHaveBeenCalledTimes(2);
+      expect(transcript.sendMessage).toHaveBeenLastCalledWith("chat-1", "/compact", expect.any(String));
+    });
+
+    it("offers no second send of a /compact nothing answered, which may be compacting already", async () => {
+      transcript.sendMessage.mockRejectedValueOnce(Object.assign(new Error("null"), { code: 0, response: null }));
+
+      findRemedy(render(tooLong()), "Compact")!.attrs.onclick();
+      await flushAsync();
+
+      const notice = raisedNotice();
+      expect(notice.describe(notice.error).body).toEqual([
+        "The workspace didn't answer, so Imbue Studio can't tell whether /compact was sent.",
+      ]);
+      expect(notice.retry).toBeUndefined();
+    });
+  });
+
+  it("offers none of them in a side conversation's view, where they would act on the chat it came from", () => {
+    vi.stubGlobal("document", {
+      querySelector: (selector: string) =>
+        selector.includes("system-interface-chat-session-id") ? { getAttribute: () => "session-1" } : null,
+    });
+
+    const tooLong = render(apiErrorEvent(TOO_LONG, "context_too_long", false));
+    const overloaded = render(apiErrorEvent("API Error: 529 Overloaded", "overloaded", true));
+
+    expect(findRemedy(tooLong, "Start a new chat")).toBeNull();
+    expect(findRemedy(tooLong, "Compact")).toBeNull();
+    expect(findRemedy(overloaded, "Switch provider")).toBeNull();
   });
 });
