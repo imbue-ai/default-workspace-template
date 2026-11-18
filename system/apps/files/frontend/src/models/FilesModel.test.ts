@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fileEntry, folderEntry, memoryStorage } from "../testing/records";
+import type { StartOutcome } from "@imbue/workspace-ui/src/app_contract";
+
+import { fileEntry, folderEntry, httpFailure, memoryStorage } from "../testing/records";
 import * as server from "./server";
 import type { Connections } from "./connections";
 import { FilesModel, compareEntries, type ConflictChoice, type FilesHost } from "./FilesModel";
@@ -34,11 +36,17 @@ interface Harness {
   host: FilesHost;
   locations: [string, string, number][];
   replaceAnswer: { value: ConflictChoice };
+  /** Whether the shell says Imbue Studio opens a bug report here. */
+  bugReport: { canReport: boolean };
+  /** Whether a shell frames the page. */
+  shell: { isFraming: boolean };
 }
 
 function harness(): Harness {
   const locations: [string, string, number][] = [];
   const replaceAnswer = { value: "replace" as ConflictChoice };
+  const bugReport = { canReport: false };
+  const shell = { isFraming: true };
   const host: FilesHost = {
     redraw: vi.fn(),
     redrawNow: vi.fn(),
@@ -48,9 +56,15 @@ function harness(): Harness {
     confirmDelete: vi.fn(async () => true),
     confirmReplace: vi.fn(async () => replaceAnswer.value),
     askNewName: vi.fn(async () => null),
+    hasShell: () => shell.isFraming,
+    startWithText: vi.fn(async (): Promise<StartOutcome> => ({ isOpened: true })),
+    askAgent: vi.fn(async (): Promise<StartOutcome> => ({ isOpened: true })),
+    canReportBug: () => bugReport.canReport,
+    reportBug: vi.fn(),
   };
-  const model = new FilesModel(host, HOME, { exists: true, entries: ENTRIES });
-  return { model, host, locations, replaceAnswer };
+  // A copy: a test that adds to the model's entries must not add to every later test's.
+  const model = new FilesModel(host, HOME, { exists: true, entries: [...ENTRIES] });
+  return { model, host, locations, replaceAnswer, bugReport, shell };
 }
 
 beforeEach(() => {
@@ -227,12 +241,14 @@ describe("deleting", () => {
   it("keeps what could not be deleted selected, and stays in a folder whose delete failed", async () => {
     const { model, locations } = harness();
     vi.mocked(server.deletePath).mockImplementation(async (path) => {
-      if (path !== "/home/b.txt") throw new Error(`Couldn't delete ${path}`);
+      if (path !== "/home/b.txt") throw httpFailure(500, null);
     });
     model.selection = ["/home/b.txt", "/home/a.png"];
     await model.deleteEntries(model.selection);
     expect(model.selection).toEqual(["/home/a.png"]);
-    expect(model.toasts.current().map((toast) => toast.message)).toEqual(["Couldn't delete /home/a.png"]);
+    expect(model.toasts.current().map((toast) => toast.message)).toEqual([
+      'Couldn\'t delete "a.png". Try again. If this persists, report a bug.',
+    ]);
 
     model.navigate("/home/zeta/");
     await model.deleteEntries(["/home/zeta/"]);
@@ -356,6 +372,41 @@ describe("reloadChangedShown", () => {
   });
 });
 
+describe("loading a folder", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("never shows a load that a newer one took over as failed", async () => {
+    const actual = await vi.importActual<typeof import("./server")>("./server");
+    vi.mocked(server.listFolder).mockImplementation(actual.listFolder);
+    const listings: ((listing: object) => void)[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url === "/__files/api/connections") return Promise.resolve(new Response('{"devices":[],"shares":[]}'));
+        // As fetch does: an aborted request rejects with an AbortError.
+        return new Promise<Response>((resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+          listings.push((listing) => resolve(new Response(JSON.stringify(listing))));
+        });
+      }),
+    );
+    const { model } = harness();
+
+    const first = model.load("/home/zeta/");
+    const second = model.load("/home/zeta/");
+    await first;
+    expect(model.folderState("/home/zeta/")).toMatchObject({ status: "loading", error: null });
+
+    listings[1]({
+      kind: "folder",
+      entries: [{ name: "c.txt", is_folder: false, is_symlink: false, size: 1, mtime: 1 }],
+    });
+    await second;
+    expect(model.folderState("/home/zeta/")).toMatchObject({ status: "ready", error: null });
+    expect(model.visibleEntries("/home/zeta/").map((entry) => entry.name)).toEqual(["c.txt"]);
+  });
+});
+
 describe("loadConnections", () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -390,5 +441,311 @@ describe("loadConnections", () => {
     expect(asked).toHaveLength(2);
     asked[1].answer(listed);
     await third;
+  });
+});
+
+describe("telling a failed change", () => {
+  const PERMISSION = "You don't have permission to change this.";
+  const PERMISSION_DETAIL = "MOVE /home/b.txt: [Errno 13] Permission denied: '/home/zeta/b.txt'";
+
+  it("says what failed, then the cause the server gave, as a note that goes with its details behind See details", async () => {
+    const { model } = harness();
+    const said = "Something with that name is already there.";
+    vi.mocked(server.movePath).mockRejectedValueOnce(
+      httpFailure(412, { detail: said, user_facing_message: said, kind: "already_exists" }),
+    );
+
+    await model.moveInto(["/home/b.txt"], "/home/zeta/");
+
+    const message = `Couldn't move "b.txt" into "zeta". ${said}`;
+    // The reader drops a reason that only repeats the sentence.
+    expect(model.toasts.current().map((toast) => [toast.message, toast.isLasting, toast.details])).toEqual([
+      [message, false, "HTTP 412"],
+    ]);
+  });
+
+  it("keeps a computer's refusal of a delete behind See details on the note: its status and its own text", async () => {
+    const { model } = harness();
+    vi.mocked(server.deletePath).mockRejectedValueOnce(
+      httpFailure(404, {
+        detail: "DELETE /Users/kim/b.txt: Not Found",
+        user_facing_message: "It's no longer there.",
+        kind: "not_found",
+      }),
+    );
+
+    await model.deleteEntries(["/home/b.txt"]);
+
+    expect(model.toasts.current().map((toast) => [toast.message, toast.isLasting, toast.details])).toEqual([
+      ["Couldn't delete \"b.txt\". It's no longer there.", false, "HTTP 404\nDELETE /Users/kim/b.txt: Not Found"],
+    ]);
+  });
+
+  it("says which folder refused a move that could not be written", async () => {
+    const { model } = harness();
+    const said = "The folder it would move into is read-only.";
+    vi.mocked(server.movePath).mockRejectedValueOnce(
+      httpFailure(403, { detail: PERMISSION_DETAIL, user_facing_message: said, kind: "destination_not_writable" }),
+    );
+
+    await model.moveInto(["/home/b.txt"], "/home/zeta/");
+
+    expect(model.toasts.current().map((toast) => toast.message)).toEqual([
+      'Couldn\'t move "b.txt" into "zeta". That folder is read-only.',
+    ]);
+  });
+
+  it("says the folder on show is read-only when something can't be created in it", async () => {
+    const { model } = harness();
+    vi.mocked(server.createFolder).mockRejectedValueOnce(
+      httpFailure(403, { detail: "MKCOL /home/untitled folder", user_facing_message: PERMISSION, kind: "read_only" }),
+    );
+
+    await model.createFolder();
+
+    expect(model.toasts.current().map((toast) => toast.message)).toEqual([
+      'Couldn\'t create "untitled folder". This folder is read-only.',
+    ]);
+  });
+
+  it("keeps an out-of-space refusal up and asks an agent in the main chat to free up space", async () => {
+    const { model, host } = harness();
+    const said = "This workspace is out of disk space.";
+    vi.mocked(server.createFolder).mockRejectedValueOnce(
+      httpFailure(507, { detail: "MKCOL: [Errno 28]", user_facing_message: said, kind: "out_of_space" }),
+    );
+
+    await model.createFolder();
+
+    const [toast] = model.toasts.current();
+    expect(toast.message).toBe(`Couldn't create "untitled folder". ${said}`);
+    expect(toast.isLasting).toBe(true);
+    expect(toast.actions.map((action) => action.label)).toEqual(["Ask an agent to free up space"]);
+    toast.actions[0].run();
+    expect(host.startWithText).toHaveBeenCalledWith(
+      expect.stringContaining("out of disk space"),
+      expect.objectContaining({ showsOutcome: true }),
+    );
+  });
+
+  it("reads Asking an agent… on the free-up-space button until the chat opens, and says why when it could not", async () => {
+    const { model, host } = harness();
+    const answers: ((outcome: StartOutcome) => void)[] = [];
+    const lateAnswers: ((outcome: StartOutcome) => void)[] = [];
+    vi.mocked(host.startWithText).mockImplementation((_text, options) => {
+      lateAnswers.push(options?.onLateAnswer ?? (() => undefined));
+      return new Promise((resolve) => answers.push(resolve));
+    });
+    vi.mocked(server.createFolder).mockRejectedValueOnce(
+      httpFailure(507, {
+        detail: "MKCOL",
+        user_facing_message: "This workspace is out of disk space.",
+        kind: "out_of_space",
+      }),
+    );
+    await model.createFolder();
+    const [freeUpSpace] = model.toasts.current()[0].actions;
+
+    freeUpSpace.run();
+    expect(freeUpSpace.pending?.isPending()).toBe(true);
+    expect(freeUpSpace.pending?.label).toBe("Asking an agent…");
+
+    answers[0]({
+      isOpened: false,
+      failure: { message: "The workspace didn't answer.", details: null, isReportable: false },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(freeUpSpace.pending?.isPending()).toBe(false);
+    expect(model.toasts.current().map((toast) => toast.message)).toContain("The workspace didn't answer.");
+
+    // The shell's real answer, after a restart settled the ask, replaces what was said.
+    lateAnswers[0]({ isOpened: true });
+    expect(model.toasts.current().map((toast) => toast.message)).not.toContain("The workspace didn't answer.");
+    expect(host.redraw).toHaveBeenCalled();
+  });
+
+  it("says why a folder couldn't be listed, with the details kept", async () => {
+    const { model } = harness();
+    vi.mocked(server.listFolder).mockRejectedValueOnce(
+      httpFailure(
+        403,
+        { detail: "GET /home/zeta/: [Errno 13]", user_facing_message: PERMISSION, kind: "permission_denied" },
+        "read",
+      ),
+    );
+
+    await model.load("/home/zeta/");
+
+    expect(model.folderState("/home/zeta/")?.error).toMatchObject({
+      message: "Couldn't open this folder. You don't have permission to open it.",
+      details: "HTTP 403\nGET /home/zeta/: [Errno 13]",
+    });
+  });
+
+  it("names a move the server could not carry out, and keeps it up with the details as a reportable note", async () => {
+    const { model } = harness();
+    vi.mocked(server.movePath).mockRejectedValueOnce(
+      httpFailure(500, { detail: "MOVE /home/b.txt: [Errno 5] Input/output error" }),
+    );
+
+    await model.moveInto(["/home/b.txt"], "/home/zeta/");
+
+    const [toast] = model.toasts.current();
+    expect(toast.message).toBe('Couldn\'t move "b.txt" into "zeta". Try again. If this persists, report a bug.');
+    expect(toast.isLasting).toBe(true);
+    expect(toast.isReportable).toBe(true);
+    expect(toast.details).toBe("HTTP 500\nMOVE /home/b.txt: [Errno 5] Input/output error");
+  });
+
+  it("offers to ask an agent to fix a change nothing explained, in the chat about Files, and keeps its toast up", async () => {
+    const { model, host } = harness();
+    vi.mocked(server.movePath).mockRejectedValueOnce(
+      httpFailure(500, { detail: "MOVE /home/b.txt: [Errno 5] Input/output error" }),
+    );
+    await model.moveInto(["/home/b.txt"], "/home/zeta/");
+    const [toast] = model.toasts.current();
+    expect(toast.actions.map((action) => [action.label, action.keepsToast])).toEqual([
+      ["Ask an agent to fix this", true],
+    ]);
+
+    toast.actions[0].run();
+
+    expect(host.startWithText).not.toHaveBeenCalled();
+    expect(host.askAgent).toHaveBeenCalledTimes(1);
+    const [task, options] = vi.mocked(host.askAgent).mock.calls[0];
+    expect(task).toContain('Couldn\'t move "b.txt" into "zeta".');
+    expect(task).toContain("HTTP 500\nMOVE /home/b.txt: [Errno 5] Input/output error");
+    expect(task).not.toContain("report a bug");
+    expect(options?.showsOutcome).toBe(true);
+  });
+
+  it("asks an agent once about several items one change failed on, naming each", async () => {
+    const { model, host } = harness();
+    vi.mocked(server.deletePath)
+      .mockRejectedValueOnce(httpFailure(500, { detail: "DELETE /home/b.txt: [Errno 5]" }))
+      .mockRejectedValueOnce(httpFailure(500, { detail: "DELETE /home/a.png: [Errno 5]" }));
+    await model.deleteEntries(["/home/b.txt", "/home/a.png"]);
+    const [toast] = model.toasts.current();
+    expect(toast.actions.map((action) => action.label)).toEqual(["Ask an agent to fix this"]);
+
+    toast.actions[0].run();
+
+    const [task] = vi.mocked(host.askAgent).mock.calls[0];
+    expect(task).toContain('Couldn\'t delete "b.txt". Couldn\'t delete "a.png".');
+    expect(task).toContain("DELETE /home/b.txt: [Errno 5]");
+    expect(task).toContain("DELETE /home/a.png: [Errno 5]");
+  });
+
+  it("reads Asking an agent… on the fix button until the chat opens, and says why when it could not", async () => {
+    const { model, host } = harness();
+    const answers: ((outcome: StartOutcome) => void)[] = [];
+    const lateAnswers: ((outcome: StartOutcome) => void)[] = [];
+    vi.mocked(host.askAgent).mockImplementation((_text, options) => {
+      lateAnswers.push(options?.onLateAnswer ?? (() => undefined));
+      return new Promise((resolve) => answers.push(resolve));
+    });
+    vi.mocked(server.movePath).mockRejectedValueOnce(httpFailure(500, { detail: "MOVE /home/b.txt: [Errno 5]" }));
+    await model.moveInto(["/home/b.txt"], "/home/zeta/");
+    const failed = model.toasts.current()[0];
+    const [fix] = failed.actions;
+
+    fix.run();
+    expect(fix.pending?.isPending()).toBe(true);
+    expect(fix.pending?.label).toBe("Asking an agent…");
+
+    answers[0]({
+      isOpened: false,
+      failure: { message: "Chat couldn't open that.", details: "HTTP 400", isReportable: true },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fix.pending?.isPending()).toBe(false);
+    const refused = model.toasts.current().find((toast) => toast.message === "Chat couldn't open that.");
+    // The refused ask asks for a bug report of its own, and offers no agent to fix the asking.
+    expect([refused?.details, refused?.isReportable, refused?.actions]).toEqual(["HTTP 400", true, []]);
+    expect(model.toasts.current()).toContain(failed);
+
+    // The shell's real answer, after a restart settled the ask, replaces what was said.
+    lateAnswers[0]({ isOpened: true });
+    expect(model.toasts.current().map((toast) => toast.message)).toEqual([failed.message]);
+  });
+
+  it("offers no agent for a change nothing explained on a page no shell frames", async () => {
+    const { model, shell } = harness();
+    shell.isFraming = false;
+    vi.mocked(server.movePath).mockRejectedValueOnce(httpFailure(500, { detail: "MOVE /home/b.txt: [Errno 5]" }));
+
+    await model.moveInto(["/home/b.txt"], "/home/zeta/");
+
+    const [toast] = model.toasts.current();
+    expect([toast.isReportable, toast.actions]).toEqual([true, []]);
+  });
+
+  it.each([
+    ["a read-only folder", 403, "read_only"],
+    ["a name already taken", 412, "already_exists"],
+    ["no permission", 403, "permission_denied"],
+    ["a full disk", 507, "out_of_space"],
+  ])("offers no agent to fix a refusal with a known cause: %s", async (_cause, status, kind) => {
+    const { model, host } = harness();
+    vi.mocked(server.movePath).mockRejectedValueOnce(
+      httpFailure(status, { detail: "MOVE /home/b.txt", user_facing_message: "The server said why.", kind }),
+    );
+
+    await model.moveInto(["/home/b.txt"], "/home/zeta/");
+
+    const labels = model.toasts.current().flatMap((toast) => toast.actions.map((action) => action.label));
+    expect(labels).not.toContain("Ask an agent to fix this");
+    for (const action of model.toasts.current().flatMap((toast) => toast.actions)) action.run();
+    expect(host.askAgent).not.toHaveBeenCalled();
+  });
+
+  it("says once that nothing answered a delete of several, never that nothing changed", async () => {
+    const { model } = harness();
+    vi.mocked(server.deletePath).mockRejectedValue(httpFailure(0, null));
+
+    await model.deleteEntries(["/home/b.txt", "/home/a.png"]);
+
+    expect(model.toasts.current().map((toast) => toast.message)).toEqual([
+      "The workspace didn't answer, so Imbue Studio can't tell whether this went through.",
+    ]);
+  });
+
+  it("says why a rename failed in the name field, naming the folder that refused it", async () => {
+    const { model } = harness();
+    vi.mocked(server.movePath).mockRejectedValueOnce(
+      httpFailure(403, {
+        detail: PERMISSION_DETAIL,
+        user_facing_message: PERMISSION,
+        kind: "destination_not_writable",
+      }),
+    );
+    model.startRename("/home/b.txt");
+    model.setRenameDraft("c.txt");
+
+    await model.commitRename();
+
+    expect(model.rename).toMatchObject({
+      path: "/home/b.txt",
+      error: 'Couldn\'t rename "b.txt" to "c.txt". The folder it\'s in is read-only.',
+      isSaving: false,
+    });
+  });
+
+  it("ends a rename that failed for no reason of the server's and keeps it up with Report a bug", async () => {
+    const { model } = harness();
+    vi.mocked(server.movePath).mockRejectedValueOnce(httpFailure(500, { detail: "MOVE /home/b.txt: [Errno 5]" }));
+    model.startRename("/home/b.txt");
+    model.setRenameDraft("c.txt");
+
+    await model.commitRename();
+
+    expect(model.rename).toBeNull();
+    const [toast] = model.toasts.current();
+    expect(toast.message).toBe('Couldn\'t rename "b.txt" to "c.txt". Try again. If this persists, report a bug.');
+    expect(toast.isLasting).toBe(true);
+    expect(toast.isReportable).toBe(true);
+    expect(toast.details).toBe("HTTP 500\nMOVE /home/b.txt: [Errno 5]");
   });
 });

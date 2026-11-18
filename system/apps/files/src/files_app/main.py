@@ -11,6 +11,7 @@ import click
 from app_manifest.primitives import AppUrl
 from app_manifest.registry import register_app
 from files_app.gateway import Gateway
+from files_app.local_files import LocalFiles
 from files_app.server import create_app
 from files_app.serving import serve_in_background
 from files_app.serving import wait_for_shutdown_signal
@@ -33,7 +34,7 @@ def run_files_app(
     app = create_app(
         gateway=Gateway.from_environment(),
         static_directory=static_directory,
-        root=root,
+        local=LocalFiles(root),
         agent_id=os.environ.get("MNGR_AGENT_ID", ""),
     )
     with serve_in_background(HOST, app_port, app):

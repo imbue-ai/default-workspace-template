@@ -80,10 +80,13 @@ export class Strip {
     this.takeButton.textContent = "Take control";
     this.takeButton.dataset.screenTakeControl = "true";
     this.takeButton.addEventListener("click", () => actions.onTakeControl());
+    // Shown once a state says who controls the Screen.
+    this.takeButton.hidden = true;
     this.returnButton.className = "screen-button";
     this.returnButton.textContent = "Give control back";
     this.returnButton.dataset.screenReturnControl = "true";
     this.returnButton.addEventListener("click", () => actions.onReturnControl());
+    this.returnButton.hidden = true;
     this.muteButton.className = "screen-button screen-button--mute";
     this.muteButton.dataset.screenMute = "true";
     this.muteButton.addEventListener("click", () => actions.onToggleAudio());
