@@ -33,6 +33,7 @@ import { classifyUserMessage, isHiddenUserMessage, isPersonsChipMessage } from "
 import type { UserMessageClass } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";
 import { renderToolBlock } from "./ToolCallBlock";
+import { MemoryChangeCard } from "./memory-change-card";
 import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 
 /** The user rail's shared recipes, owned here and composed by the queued and
@@ -237,6 +238,8 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent; prev
   let renderedIsContinued = false;
   return {
     onbeforeupdate(vnode) {
+      // A memory change's card holds its own state (loaded, expanded, undone), so it always redraws.
+      if (vnode.attrs.event.memory_change_id) return true;
       const author = authorOfTurn(vnode.attrs.event);
       return (
         vnode.attrs.event.event_id !== renderedEventId ||
@@ -265,6 +268,13 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent; prev
 
       if (cls.kind === UserMessageKind.SystemChip) {
         return renderSystemChip(cls.label ?? "System message", cls.body, `chip:${event.event_id}`);
+      }
+      if (cls.kind === UserMessageKind.Notice && event.memory_change_id) {
+        return m(MemoryChangeCard, {
+          key: event.memory_change_id,
+          changeId: event.memory_change_id,
+          summary: cls.body,
+        });
       }
       if (cls.kind === UserMessageKind.Notice) {
         return renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body);

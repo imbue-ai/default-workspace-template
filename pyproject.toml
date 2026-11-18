@@ -27,6 +27,9 @@ dependencies = [
     # The scripts that read the chat's background task markers reach this library through
     # sys.path; the tests of those scripts, run from the root venv, import it directly.
     "chat-background-tasks",
+    # Claude's memory change-log hook reaches this library through sys.path; its tests, run
+    # from the root venv, import it directly, and the chat app shows and undoes the changes.
+    "agent-memory",
     # Agents run `uv run --no-sync workspace-layout` from the repo root, so its console script
     # must survive a sync of the root closure.
     "workspace-layout",
@@ -133,6 +136,7 @@ override-dependencies = ["paramiko==5.0.1"]
 # scripts/ is the standard Agent Skills dir name, so the glob names a dir only this
 # layout uses. The shared skill scripts and system/scripts are a project each too.
 members = [
+    "system/libs/agent_memory",
     "system/libs/app_manifest",
     "system/libs/app_registration",
     "system/libs/app_schema",
@@ -180,6 +184,7 @@ mngr-cli-contract = { workspace = true }
 pytest-executable-tmp = { workspace = true }
 pytest-workspace-env = { workspace = true }
 tk-command-parsing = { workspace = true }
+agent-memory = { workspace = true }
 chat-background-tasks = { workspace = true }
 share-grants = { workspace = true }
 event-streams = { workspace = true }

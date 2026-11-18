@@ -127,6 +127,10 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   // traffic, framework injections). Read by the backend's own activity derivation;
   // carried on the wire for completeness.
   non_turn_tail?: boolean;
+  // notice only: the memory change Claude's change-log hook told the agent about, which the page
+  // opens into that change's card (memory-change-card.ts), and the tool call that made it.
+  memory_change_id?: string;
+  tool_call_id?: string;
   // status (a compaction) only: who started it -- the chat's idle sweep, the user's /compact, or
   // the harness itself. Null or absent when the chat app could not tell.
   compaction_cause?: CompactionCause | null;

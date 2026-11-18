@@ -33,6 +33,9 @@ README for details.
   `routines` command (see the manage-routines skill and the Routines app).
 - `bootstrap/` - First-boot setup; then launches supervisord, which supervises
   the apps and services.
+- `agent_memory/` - The agent's memory notes (`data/memories/`): reading and
+  writing them, and the record of every change an agent made to them, which the
+  chat shows as a card with Undo.
 - `chat_background_tasks/` - The marker files recording the background tasks
   each chat waits on, and their readers.
 - `disk_headroom/` - How much the workspace can still write to its disk: the

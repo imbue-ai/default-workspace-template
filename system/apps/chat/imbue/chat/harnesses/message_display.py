@@ -30,6 +30,7 @@ from enum import auto
 from typing import Any
 from typing import assert_never
 
+from agent_memory.changes import parse_agent_note
 from pydantic import Field
 
 from imbue.chat.authors import AUTHOR_NAME_FIELD
@@ -321,6 +322,18 @@ def _task_notification_summary(content: str) -> str:
     return _ZERO_EXIT_CODE_RE.sub("", match.group(1)).strip()
 
 
+def _match_memory_change(content: str) -> MessageDisplay | None:
+    """Claude's memory change-log hook telling the agent it changed memory (``agent_memory.changes``).
+
+    A NOTICE on the assistant rail -- the agent was told, the user did not say it -- whose
+    ``memory_change_id`` (stamped by the parser) the page opens into the change's card.
+    """
+    parsed = parse_agent_note(content)
+    if parsed is None:
+        return None
+    return MessageDisplay(display=DisplayKind.NOTICE, display_label="Memory changed", display_body=parsed[1])
+
+
 def _match_background_task_report(content: str) -> MessageDisplay | None:
     """A background command's result, delivered to the agent that started it; a NOTICE like
     the harness's own task notification, showing only the report's summary line."""
@@ -474,6 +487,7 @@ _DETECTORS = (
     _match_skill_expansion,
     _match_stop_hook,
     _match_task_notification,
+    _match_memory_change,
     _match_background_task_report,
     _match_workspace_update_note,
     _match_browser_fleet,

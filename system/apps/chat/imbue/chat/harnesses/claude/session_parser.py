@@ -15,6 +15,8 @@ from typing import Any
 from loguru import logger as _loguru_logger
 from pydantic import Field
 
+from agent_memory.changes import parse_agent_notes
+
 from imbue.chat.harnesses.claude.error_notice import ErrorNotice
 from imbue.chat.harnesses.claude.error_notice import classify_error_notice
 from imbue.chat.harnesses.claude.progress_updates import progress_update_text
@@ -276,6 +278,7 @@ def parse_lines(
             _parse_user_message(raw, uuid, timestamp, existing_event_ids, tool_name_by_call_id, new_events, session_id)
         elif event_type == "attachment":
             _parse_queued_command_attachment(raw, uuid, timestamp, existing_event_ids, new_events, session_id)
+            _parse_memory_change_attachment(raw, uuid, timestamp, existing_event_ids, new_events, session_id)
         # Skip: progress, file-history-snapshot, system, result, etc.
 
     new_events.sort(key=lambda x: x[0])
@@ -588,6 +591,59 @@ def _parse_user_message(
 
             existing_event_ids.add(event_id)
             new_events.append((timestamp, event))
+
+
+# The attachment Claude Code writes for a hook's additional context, keyed to its tool call.
+_HOOK_CONTEXT_ATTACHMENT_TYPE = "hook_additional_context"
+
+
+def _parse_memory_change_attachment(
+    raw: dict[str, Any],
+    uuid: str,
+    timestamp: str,
+    existing_event_ids: set[str],
+    new_events: list[tuple[str, dict[str, Any]]],
+    session_id: str | None = None,
+) -> None:
+    """Emit a NOTICE ``user_message`` for each change the memory change-log hook names to the agent.
+
+    The hook (``system/scripts/agent_memory_change_log.py``) tells the agent, after a tool call
+    that changed its memory, each change record (one per note) the call touched, one line each; Claude Code
+    writes that as a ``hook_additional_context`` attachment. The event carries the record's
+    id as ``memory_change_id`` and the tool call as ``tool_call_id``, so the page draws the
+    change's card (its changed lines and Undo) there. Every other hook's context is left alone.
+    It is never a turn awaiting a reply.
+    """
+    attachment = raw.get("attachment")
+    if not isinstance(attachment, dict) or attachment.get("type") != _HOOK_CONTEXT_ATTACHMENT_TYPE:
+        return
+    content = attachment.get("content")
+    text = "\n".join(c for c in content if isinstance(c, str)) if isinstance(content, list) else content
+    if not isinstance(text, str):
+        return
+    # One line per change record the tool call touched: each becomes its own notice, so each
+    # record's card sits at the last tool call that touched it.
+    for k, (change_id, _summary, line) in enumerate(parse_agent_notes(text)):
+        event_id = _make_event_id(uuid, "memory_change" if k == 0 else f"memory_change_{k}")
+        if event_id in existing_event_ids:
+            continue
+        event: dict[str, Any] = {
+            "timestamp": timestamp,
+            "type": "user_message",
+            "event_id": event_id,
+            "source": _SOURCE,
+            "role": "user",
+            "content": line,
+            "message_uuid": uuid,
+            "memory_change_id": change_id,
+            "tool_call_id": attachment.get("toolUseID") or "",
+        }
+        stamp_user_message_display(event, line)
+        event["non_turn_tail"] = True
+        if session_id is not None:
+            event["session_id"] = session_id
+        existing_event_ids.add(event_id)
+        new_events.append((timestamp, event))
 
 
 def _parse_queued_command_attachment(
