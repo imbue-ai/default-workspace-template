@@ -243,10 +243,12 @@ function deleteChat(attrs: RowMenuContext, row: ChatRow): void {
       }),
       retry: {
         label: "Try again",
-        // A chat gone from the list was deleted after all, and trying again would be refused for it.
+        // A chat gone from the list was deleted after all or is being deleted again, so there is nothing to retry.
+        // The row is taken as the list shows it now, so a second refusal names the chat as it is called now.
         run: () => {
           const context = latestMenuContext ?? attrs;
-          if (context.rows.some((listed) => listed.chatId === row.chatId)) deleteChat(context, row);
+          const listed = context.rows.find((candidate) => candidate.chatId === row.chatId);
+          if (listed !== undefined) deleteChat(context, listed);
         },
       },
     });

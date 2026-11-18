@@ -347,6 +347,23 @@ describe("ChatRail delete", () => {
     expect(verbs.destroyChat).toHaveBeenCalledTimes(1);
   });
 
+  it("names the chat as the list shows it now when Try again is refused too", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    let rows: readonly ChatRow[] = [first, second];
+    mount(() => rows);
+    verbs.destroyChat.mockRejectedValueOnce(new HttpError(500, "mngr failed"));
+
+    deleteFromMenu(chatRailAttrsFixture({ rows: [first, second] }), first);
+    await vi.waitFor(() => expect(noticeText()).not.toBeNull());
+    rows = [{ ...first, title: "Renamed since" }, second];
+    m.redraw.sync();
+
+    verbs.destroyChat.mockRejectedValueOnce(new HttpError(500, "mngr failed again"));
+    noticeButton("Try again").click();
+    await vi.waitFor(() => expect(noticeText()).toContain("mngr failed again"));
+    expect(noticeText()).toContain(`"Renamed since" was not deleted.`);
+  });
+
   it("says it is not known whether the chat was deleted when nothing answered", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     mount([first, second]);
