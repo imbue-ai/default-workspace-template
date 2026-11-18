@@ -330,9 +330,9 @@ def write_registry(path: Path, app_names: list[str]) -> Path:
 
 
 class LoopbackShell(MutableModel):
-    """A stand-in for the shell over loopback: its op route, its client-activity route, and whatever GET routes a
-    test gives answers for, recording every body posted to it. Used as a context manager, it serves inside the
-    ``with`` block and is closed on leaving it.
+    """A stand-in for the shell over loopback: its op route, its client-activity route, and whatever GET and other
+    POST routes a test gives answers for, recording every body posted to it. Used as a context manager, it serves
+    inside the ``with`` block and is closed on leaving it.
 
     Every op body is read as the shell reads one (``describe_op_body_problem``), so a caller that posts a body the
     shell would refuse is refused here too, with a 400 whose detail says why.
@@ -343,6 +343,10 @@ class LoopbackShell(MutableModel):
     get_answers: dict[str, tuple[int, Any]] = Field(
         default_factory=dict,
         description="What each GET route answers, as (status, body): a dict or list is JSON, a str sent as it is",
+    )
+    post_answers: dict[str, tuple[int, Any]] = Field(
+        default_factory=dict,
+        description="What each POST route besides the op and client-activity routes answers, as (status, body)",
     )
     op_answer: dict[str, Any] = Field(
         default_factory=lambda: desktop_answer(fake_desktop(), "c1", None),
@@ -417,6 +421,8 @@ class LoopbackShell(MutableModel):
                     self._respond(*shell.answer_op(body))
                 elif self.path == CLIENT_ACTIVITY_ROUTE:
                     self._respond(shell.activity_status, "" if shell.activity_status == 204 else {"detail": "refused"})
+                elif self.path in shell.post_answers:
+                    self._respond(*shell.post_answers[self.path])
                 else:
                     self._respond(404, {"detail": f"No such API route: {self.path}"})
 

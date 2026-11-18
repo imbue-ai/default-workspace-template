@@ -22,6 +22,9 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from workspace_layout.answers import DesktopsListing
+from workspace_layout.shell_url import DESKTOPS_ROUTE, ENV_SHELL_URL
+from workspace_layout.testing import LoopbackShell, fake_desktop, fake_window
 
 from update_app_skill import preview_app as mod
 
@@ -33,6 +36,9 @@ _LIFECYCLE_TIMEOUT_SECONDS = 180
 # in a workspace pytest's temp root is the small RAM-backed /tmp, so the live repo whose
 # data gets copied sits on disk, where a real workspace's copies land.
 _DISK_TEMP_ROOT = Path("/var/tmp")
+
+_PREVIEW_WINDOW = "win-0000000000000001"
+_PREVIEW_WINDOW_CLOSE_ROUTE = f"{DESKTOPS_ROUTE}/home/windows/{_PREVIEW_WINDOW}/close"
 
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 
@@ -105,6 +111,26 @@ def _registered_rows(registry: Path) -> dict[str, dict[str, object]]:
 
 
 @pytest.fixture
+def shell_showing_the_preview(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[LoopbackShell]:
+    """A shell with the preview's window open on a desktop."""
+    listing = DesktopsListing(
+        desktops=(
+            fake_desktop(
+                "home", [fake_window(_PREVIEW_WINDOW, "fixture-preview", "/")]
+            ),
+        )
+    )
+    with LoopbackShell(
+        get_answers={DESKTOPS_ROUTE: (200, listing.model_dump(mode="json"))},
+        post_answers={_PREVIEW_WINDOW_CLOSE_ROUTE: (204, "")},
+    ) as shell:
+        monkeypatch.setenv(ENV_SHELL_URL, shell.url)
+        yield shell
+
+
+@pytest.fixture
 def repo_root_on_disk() -> Iterator[Path]:
     with tempfile.TemporaryDirectory(
         prefix="preview-lifecycle-", dir=_DISK_TEMP_ROOT
@@ -114,7 +140,10 @@ def repo_root_on_disk() -> Iterator[Path]:
 
 @pytest.mark.timeout(_LIFECYCLE_TIMEOUT_SECONDS)
 def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tears_down(
-    tmp_path: Path, repo_root_on_disk: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    repo_root_on_disk: Path,
+    shell_showing_the_preview: LoopbackShell,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo_root = repo_root_on_disk
     live_data = repo_root / "data" / ".apps" / "fixture"
@@ -161,9 +190,16 @@ def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tear
         assert second["build"] == "second build"
         assert second["pid"] != first["pid"]
     finally:
-        down_code = mod.main(["down", "--app", "fixture", *repo_args])
+        refused_code = mod.main(["down", "--app", "fixture", *repo_args])
+        is_live_after_refusal = mod.live_preview_url(repo_root, "fixture") is not None
+        down_code = mod.main(
+            ["down", "--app", "fixture", "--close-windows", *repo_args]
+        )
 
+    assert refused_code == 1
+    assert is_live_after_refusal
     assert down_code == 0
+    assert shell_showing_the_preview.posted == [(_PREVIEW_WINDOW_CLOSE_ROUTE, {})]
     with pytest.raises(urllib.error.URLError):
         _get(url)
     assert (

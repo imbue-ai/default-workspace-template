@@ -68,6 +68,26 @@ specifics, but the shape below holds for all of them.
      conveys the idea and real wiring is costly -- but it may *not convince* when
      real rendering matters.
 
+   Put a hand-built page in front of the user with this, not a server and link
+   of your own:
+
+   ```bash
+   uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py up --name <slug> \
+       --cwd <the page's directory> --port main --service-name <slug>-page \
+       --preview-service-name <slug> --preview-title "<what it shows>" --inner-path /<page>.html \
+       --preview-kind mock -- python3 -m http.server {port:main} --bind {host}
+   uv run --no-sync workspace-layout open <slug>
+   ```
+
+   The server reads the page on every request, so after an edit only the window
+   needs reloading: `uv run --no-sync workspace-layout refresh --app <slug>`.
+
+   Once it is retired, close its window and tear it down:
+
+   ```bash
+   uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py down --name <slug> --close-windows
+   ```
+
    Keep this phase **throwaway either way: no commits on the served branch and no
    production state** (nothing production-grade: no production scripts, data
    layers, or tests; the scaffold a specialization sets up to serve the prototype

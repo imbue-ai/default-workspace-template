@@ -85,6 +85,7 @@ dependencies = [
     { name = "app-registration" },
     { name = "disk-headroom" },
     { name = "pyyaml" },
+    { name = "workspace-layout" },
     { name = "workspace-scripts" },
 ]
 
@@ -93,6 +94,7 @@ requires-dist = [
     { name = "app-registration", editable = "system/libs/app_registration" },
     { name = "disk-headroom", editable = "system/libs/disk_headroom" },
     { name = "pyyaml", specifier = ">=6" },
+    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
     { name = "workspace-scripts", editable = "system/scripts" },
 ]
 
