@@ -818,9 +818,9 @@ bundle, it still works when nothing else does.
 
 The placeholder is the workspace's general recovery surface, so it hands over
 an **agent** and a **terminal** rather than a repair. "Ask an agent to fix
-this" sends the agent the message the command below carries, through the
-workspace's secondary text action (Chat's New Chat on a stock workspace, so the
-repair gets a chat of its own), and frames the agent's chat on the page; until
+this" sends the message the command below carries through the workspace's
+primary text action (the main chat on a stock workspace: the failure is the
+shell's own, so the ask is about no app), and frames that chat on the page; until
 the launch answers it reads "Asking an agent…" and takes no second press, and a
 refused attempt is told under it. Behind
 "See details" are the command, for whoever would rather run it themselves,

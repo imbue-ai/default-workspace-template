@@ -32,7 +32,7 @@ pytestmark = [
 _COORDINATE: str = "host-abc123.localhost"
 
 
-def test_the_not_built_page_asks_an_agent_and_frames_its_chat_and_a_terminal_session(
+def test_the_not_built_page_asks_an_agent_and_frames_the_main_chat_and_a_terminal_session(
     tmp_path: Path, page: Page
 ) -> None:
     outcomes = [
@@ -91,13 +91,13 @@ def test_the_not_built_page_asks_an_agent_and_frames_its_chat_and_a_terminal_ses
         see_details.click()
 
         ask.click()
-        expect(page.locator("#agent-started")).to_have_text("An agent is on it. Its chat is below.")
+        expect(page.locator("#agent-started")).to_have_text("An agent is on it. Follow along below.")
         expect(page.locator("#agent-chat")).to_have_attribute(
             "src", f"http://helper-y2.{_COORDINATE}:{served.port}/?chat=agent-1"
         )
         expect(ask).to_be_hidden()
         expect(page.locator("#ask-agent-failure-reason")).to_be_hidden()
-        assert [post.body for post in posts] == [{"target": "new_chat", "message": _NOT_BUILT_REPAIR_MESSAGE}] * 2
+        assert [post.body for post in posts] == [{"target": "main_chat", "message": _NOT_BUILT_REPAIR_MESSAGE}] * 2
 
         page.get_by_text("See details", exact=True).click()
         expect(page.locator("#repair-command")).to_be_visible()

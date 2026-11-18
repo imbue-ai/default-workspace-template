@@ -165,8 +165,8 @@ _NOT_BUILT_POLL_SECONDS = 10
 #
 # Kept in sync with that builder by ``test_chat_system.py``, which also validates it
 # against the live CLI. The server never runs it: the page's "Ask an agent to fix
-# this" sends the same message through the workspace's secondary text action
-# instead (``_not_built_launch``), so an agent is created only if the reader
+# this" sends the same message through the workspace's primary text action
+# instead (``_not_built_launch``), so an agent is asked only if the reader
 # presses it.
 _NOT_BUILT_REPAIR_MNGR_COMMAND: Final[str] = (
     "mngr create --connect --template chat --label user_created=true "
@@ -274,7 +274,7 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
     <p id="ask-agent-failure-message" hidden></p>
     <p id="agent-started" hidden></p>
     <div id="agent-chat-slot" hidden>
-      <iframe id="agent-chat" title="The repair agent's chat"></iframe>
+      <iframe id="agent-chat" title="The chat the agent was asked in"></iframe>
     </div>
   </div>
   <details id="repair-details">
@@ -412,7 +412,7 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
         askButton.hidden = true;
         var started = document.getElementById("agent-started");
         started.textContent = page
-          ? "An agent is on it. Its chat is below."
+          ? "An agent is on it. Follow along below."
           : "An agent is on it. Follow along in " + answer.display_name + ".";
         started.hidden = false;
         if (page) {
@@ -598,7 +598,7 @@ def _frontend_not_built_response(missing_page: Path) -> Response:
 
 def _not_built_launch() -> ResponseReturnValue:
     """``POST /api/not-built/launch``: run one of the placeholder's launches -- a terminal session, or the repair
-    agent asked through the secondary text action -- and answer where its page is: the app's origin label, the
+    agent asked through the primary text action -- and answer where its page is: the app's origin label, the
     path, and the app's display name. 404 when no app offers it; a launch's own failures answer as the launch
     route's do. A preview refuses, since either would act on the live workspace."""
     if get_state().is_preview:
