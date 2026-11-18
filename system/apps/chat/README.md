@@ -885,6 +885,60 @@ mngr config set --scope local plugins.autocompact.epsilon_offset_minutes 60
 Each request, toggle change, and status change writes an `autocompact: ...` line
 to the chat service log (`/var/log/supervisor/chat-stderr.log`).
 
+## Ways out of a failure
+
+Where a failure has a way out beyond trying again, the page offers it as a
+button beside the failure.
+
+**Switch provider.** For a failure the provider or the account is behind. It
+opens the provider chooser with the failing account listed but refused
+(`frontend/src/views/provider-switch.ts`), and what happens with the account
+signed in to or picked depends on where it was pressed:
+
+- On the page of a chat whose create failed, beside "Try again": the chat is
+  launched on that account.
+- On the composer's notice for a send whose agent could not be started
+  (`agent_start_failed`), and under a failed turn in the transcript that is a
+  rate or usage limit (`api_error_kind: rate_limit`) or a provider fault
+  (`is_provider_fault`): the chat is switched to that account, as a provider
+  row in the model menu switches it (a rebind or a handoff, above). The
+  message of a refused send stays in the composer. A turn that failed on the
+  chat's sign-in keeps its own note, which offers the same switch beside "Sign
+  in again".
+
+It is not offered where another provider would not help: a send nothing
+answered, a conversation too long for the model, a half-done delete.
+
+**Ask an agent to fix this.** When a chat cannot be created or its agent
+cannot be started, the cause may be the workspace itself (a full disk, no
+memory left), which a new chat would meet too. So the page of a chat whose
+create failed, and the composer's notice for a send to a chat whose agent
+would not start or whose create failed (`agent_start_failed`,
+`chat_not_started`), offer it only when another agent chat exists, and send
+the task there: to the main chat when it is an agent chat, else to the agent
+chat messaged most recently, and never to the failing chat (`chatToAskAbout`
+in `frontend/src/views/ask-running-agent.ts`). The task is the one every "Ask
+an agent to fix this" sends (`askAgentToFix` in `workspace_ui`: what failed,
+the details, what to do), sent as a message through
+`POST /api/chats/<chat-id>/message` rather than through the shell, whose ask
+may create a chat for it. The button reads "Asking an agent…" until the send
+is answered. The page then shows the chat the task went to; a send that was
+refused says why where the button was pressed, with its details behind "See
+details". A failed chat that names no account offers neither button, since a
+sign-in is what it needs ("Choose a provider").
+
+**A conversation too long for the model** (`api_error_kind:
+context_too_long`). The failed turn offers "Start a new chat", on the account
+a new chat would start on, and "Compact", which sends `/compact` to the chat
+as a typed one is sent (Compaction, above). A conversation over the limit may
+be too long to compact as well, so both buttons stay under the turn whatever
+comes of it: a `/compact` the chat app declines gets the "/compact wasn't
+sent" notice on the composer, and one that fails gets "Couldn't compact this
+conversation" there, with Try again unless nothing answered it.
+
+The buttons under a failed turn are left out of a subagent view: they act on
+the chat, and the turns a subagent view shows are not the chat's own.
+
 ## Provider accounts
 
 Accounts live under `~/.minds/accounts` (`accounts.py`): one folder per
