@@ -99,7 +99,7 @@ _SUMMARY_TIMEOUT_SECONDS: Final[float] = 300.0
 # blocked already waits mngr's own readiness window first, so these add up to a few minutes in all.
 _HELD_SEND_RETRY_DELAYS_SECONDS: Final[tuple[float, ...]] = (5.0, 10.0, 20.0, 30.0)
 # The refusals that type nothing and can clear without the user: Claude still drawing its input box reads to mngr as
-# a blocked input, and a harness not taking messages yet or a host too loaded to say are worth waiting out.
+# a blocked input, and mngr's not-ready and state-unknown refusals are worth waiting out.
 _PASSING_HELD_SEND_REFUSAL_KINDS: Final[frozenset[str]] = frozenset(
     (str(SendFailureKind.INPUT_BLOCKED), str(SendFailureKind.NOT_READY), str(SendFailureKind.STATE_UNKNOWN))
 )
@@ -1077,53 +1077,53 @@ def deliver_held_send(
     and can pass (an agent still drawing its input box, a host too loaded to answer) is tried again
     after each of ``_HELD_SEND_RETRY_DELAYS_SECONDS``, since nobody is at a composer to press Retry.
     """
-    retry_delays = iter(_HELD_SEND_RETRY_DELAYS_SECONDS)
-    while True:
-        try:
-            outcome = deliver(agent_info, held.text, held.message_id)
-        except SendFailedError as e:
-            delay_seconds = (
-                next(retry_delays, None) if _is_held_send_refusal_passing(e) and not is_stopping() else None
-            )
-            if delay_seconds is None:
-                logger.warning(
-                    "Handoff of chat {}: held send {} to agent {} was refused: {}",
-                    chat_id,
-                    held.message_id,
-                    agent_info.id,
-                    e.detail,
-                )
-                return False
-            logger.info(
-                "Chat {}: held send {} to agent {} was refused ({}); trying again in {}s",
-                chat_id,
-                held.message_id,
-                agent_info.id,
-                e.kind,
-                delay_seconds,
-            )
-            sleep(delay_seconds)
-            continue
-        if outcome is SendOutcome.NOT_READY and not is_stopping():
-            delay_seconds = next(retry_delays, None)
-            if delay_seconds is not None:
-                sleep(delay_seconds)
-                continue
-        if outcome is SendOutcome.WITHDRAWN:
-            logger.info(
-                "Chat {}: held send {} was taken back by Stop before it reached the agent", chat_id, held.message_id
-            )
-            return False
-        if not outcome.is_delivered:
-            logger.warning(
-                "Handoff of chat {}: held send {} to agent {} did not land ({})",
-                chat_id,
-                held.message_id,
-                agent_info.id,
-                outcome.value,
-            )
-            return False
-        return True
+    for delay_seconds in _HELD_SEND_RETRY_DELAYS_SECONDS:
+        answer = _try_held_send(deliver, agent_info, held)
+        if not (isinstance(answer, SendFailedError) and _is_held_send_refusal_passing(answer)) or is_stopping():
+            break
+        logger.info(
+            "Chat {}: held send {} to agent {} was refused ({}); trying again in {}s",
+            chat_id,
+            held.message_id,
+            agent_info.id,
+            answer.kind,
+            delay_seconds,
+        )
+        sleep(delay_seconds)
+    else:
+        answer = _try_held_send(deliver, agent_info, held)
+    if isinstance(answer, SendFailedError):
+        logger.warning(
+            "Handoff of chat {}: held send {} to agent {} was refused: {}",
+            chat_id,
+            held.message_id,
+            agent_info.id,
+            answer.detail,
+        )
+        return False
+    if answer is SendOutcome.WITHDRAWN:
+        logger.info("Chat {}: held send {} was taken back by Stop before it reached the agent", chat_id, held.message_id)
+        return False
+    if not answer.is_delivered:
+        logger.warning(
+            "Handoff of chat {}: held send {} to agent {} did not land ({})",
+            chat_id,
+            held.message_id,
+            agent_info.id,
+            answer.value,
+        )
+        return False
+    return True
+
+
+def _try_held_send(
+    deliver: Callable[[AgentInfo, str, str], SendOutcome], agent_info: AgentInfo, held: HeldSend
+) -> SendOutcome | SendFailedError:
+    """One try at a held send: how it resolved, or the refusal it raised."""
+    try:
+        return deliver(agent_info, held.text, held.message_id)
+    except SendFailedError as e:
+        return e
 
 
 @pure

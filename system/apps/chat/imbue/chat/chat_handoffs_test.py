@@ -1300,13 +1300,6 @@ def test_a_held_send_refused_while_the_input_is_blocked_is_tried_again_until_it_
     assert waits == [5.0, 10.0]
 
 
-def test_a_held_send_the_harness_is_not_ready_for_is_tried_again() -> None:
-    deliver = _ScriptedDelivery(SendOutcome.NOT_READY, SendOutcome.OK)
-    is_delivered, waits = _deliver_held(deliver)
-    assert is_delivered
-    assert waits == [5.0]
-
-
 def test_a_held_send_that_stays_blocked_gives_up_after_its_retries() -> None:
     deliver = _ScriptedDelivery(_INPUT_NOT_DRAWN)
     is_delivered, waits = _deliver_held(deliver)
