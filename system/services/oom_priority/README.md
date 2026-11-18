@@ -288,7 +288,7 @@ destroys in-flight work. So a chat nobody has touched in hours is genuinely wort
 less than the worker a live chat just spawned.
 
 Past that day a chat goes on climbing on idle time alone, from the stale band to
-the `aged` stage of `CHAT_STAGES`: the top of the scale at five days, level with
+the `aged` stage of `CHAT_STAGES`: the top of the scale at two days, level with
 Chromium's renderers. On the way it passes the Screen's stack, then an agent's
 subprocesses, then the rest of Chromium. It is the same argument taken further.
 A shed renderer takes the page an agent or the user was on, and a shed
@@ -296,6 +296,9 @@ subprocess takes work an agent in use is waiting for, while the chat still costs
 one slow message. The main chat climbs like any other. The chat app starts it
 again as soon as it is shed, and a process that has just started counts as
 fresh.
+
+A last stage, `dormant`, at five days is where older chats are placed. The
+kernel accepts no band above the aged stage's, so it holds them level with it.
 
 The exception is a chat that is **mid-turn** (a running lifecycle state): it is
 doing work right now that a shed would destroy rather than defer, so its

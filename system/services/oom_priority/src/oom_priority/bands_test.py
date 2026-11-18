@@ -231,7 +231,7 @@ def test_the_screen_stack_is_shed_after_every_agent_and_before_the_programs_on_i
     None
 ):
     # The desktop an agent or the user launched goes before a worker and a chat at its
-    # stale band (a chat left for days longer climbs past it), and after what runs on
+    # stale band (a chat left longer climbs past it), and after what runs on
     # it: an agent's subprocesses (the programs `screen run` starts and the sweep
     # raises) and Chromium above them.
     assert bands.CHAT_AGENT_STALE_CEILING < bands.SCREEN_STACK
@@ -273,7 +273,7 @@ def test_chat_score_always_within_the_chat_band() -> None:
                         assert (
                             bands.CHAT_AGENT_FLOOR
                             <= adj
-                            <= bands.CHAT_STAGES["aged"].adj
+                            <= list(bands.CHAT_STAGES.values())[-1].adj
                         )
                         # However engaged, a chat is shed before a user-created
                         # service.
@@ -297,7 +297,6 @@ def test_a_chat_left_long_enough_reaches_the_aged_band() -> None:
     # more than a browser tab.
     aged = bands.CHAT_STAGES["aged"]
     assert _aged(aged.idle_seconds) == aged.adj
-    assert _aged(10 * aged.idle_seconds) == aged.adj
     assert aged.adj >= bands.SHARED_BROWSER
     # On the way there it is past the stale band and still climbing, whatever its
     # engagement.
@@ -306,6 +305,17 @@ def test_a_chat_left_long_enough_reaches_the_aged_band() -> None:
     assert _aged(halfway, is_open=True, is_visible=True, recency_rank=0) == _aged(
         halfway
     )
+
+
+def test_older_chats_have_a_stage_of_their_own_past_the_aged_one() -> None:
+    # However long a chat is left it ends at the last stage, a row of its own so
+    # that older chats can be placed apart from ones that have only just aged.
+    aged = bands.CHAT_STAGES["aged"]
+    last = list(bands.CHAT_STAGES.values())[-1]
+    assert last.idle_seconds > aged.idle_seconds
+    assert last.adj >= aged.adj
+    assert _aged(last.idle_seconds) == last.adj
+    assert _aged(10 * last.idle_seconds) == last.adj
 
 
 def test_staleness_crosses_the_worker_band_within_a_few_hours() -> None:

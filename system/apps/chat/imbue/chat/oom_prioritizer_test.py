@@ -258,12 +258,13 @@ def test_idle_time_alone_re_tags_a_chat_with_no_new_reports() -> None:
     h.advance(18 * _HOUR)
     h.prioritizer.reapply()
     abandoned = h.latest_adj_by_pid()[10]
-    h.advance(bands.CHAT_STAGES["aged"].idle_seconds)
+    last_stage = list(bands.CHAT_STAGES.values())[-1]
+    h.advance(last_stage.idle_seconds)
     h.prioritizer.reapply()
     left_for_days = h.latest_adj_by_pid()[10]
     assert fresh < aged < abandoned < left_for_days
     assert abandoned == bands.CHAT_AGENT_STALE_CEILING
-    assert left_for_days == bands.CHAT_STAGES["aged"].adj
+    assert left_for_days == last_stage.adj
 
 
 def test_a_mid_turn_chat_does_not_age_out() -> None:

@@ -88,7 +88,7 @@ WORKER_AGENT: Final[int] = 600
 AGENT_SUBPROCESS: Final[int] = 900
 # The Screen's stack (Xorg, XFCE, PulseAudio, neko and the watcher that ends them
 # together): the desktop an agent or the user launched, so it is shed before a
-# worker or a chat at its stale band (a chat left for days longer climbs past
+# worker or a chat at its stale band (a chat left longer climbs past
 # it), and after the programs on it (an agent's subprocesses, and Chromium above
 # them), since ending the X server takes every program on the Screen with it
 # while ending one program may free enough. The Screen service that starts the
@@ -113,7 +113,7 @@ SCREEN_STACK: Final[int] = 850
 # below ``AGENT_SUBPROCESS``, so an agent's build/test/browser subprocess is shed
 # before a chat that has only gone stale.
 #
-# A chat left for days longer goes on to the aged stage. Shedding it still costs
+# A chat left longer goes on to the aged stage. Shedding it still costs
 # one slow next message, where shedding a renderer takes the page someone was on
 # and shedding a subprocess takes work an agent in use is waiting for.
 #
@@ -125,8 +125,11 @@ CHAT_STAGES: Final[dict[str, ChatStage]] = {
     "fresh": ChatStage(idle_seconds=1 * _HOUR, adj=560, freshness=1.0),
     # Abandoned: shed before a worker, whatever its engagement.
     "stale": ChatStage(idle_seconds=24 * _HOUR, adj=800, freshness=0.0),
-    # Left for days: the highest ``oom_score_adj`` the kernel accepts.
-    "aged": ChatStage(idle_seconds=5 * 24 * _HOUR, adj=1000, freshness=0.0),
+    # Left for two days: the highest ``oom_score_adj`` the kernel accepts.
+    "aged": ChatStage(idle_seconds=2 * 24 * _HOUR, adj=1000, freshness=0.0),
+    # Left for five: where older chats are placed, level with the aged stage
+    # because no band is higher.
+    "dormant": ChatStage(idle_seconds=5 * 24 * _HOUR, adj=1000, freshness=0.0),
 }
 
 # How much each engagement signal protects a *fresh* chat, subtracted from the

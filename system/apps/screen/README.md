@@ -205,7 +205,7 @@ installs the stack on the first boot after the update, the service answering
 ## Bands
 
 The stack's four programs and the watcher sit at `SCREEN_STACK` (850): above every worker
-and every stale chat (a chat left for days longer climbs past it),
+and every stale chat (a chat left longer climbs past it),
 since the desktop is something an agent or the user launched, and below the programs on it,
 since ending the X server takes all of them along. Programs started from the Screen itself
 (the XFCE menu, a terminal on it) inherit the
