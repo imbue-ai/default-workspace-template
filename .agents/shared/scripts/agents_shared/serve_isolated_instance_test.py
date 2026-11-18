@@ -1443,7 +1443,7 @@ def test_wrapper_refuses_to_frame_a_service_with_no_registered_label(
         status, body = _wrapper_error(url)
 
     assert status == 503
-    assert "has no origin label" in body
+    assert "has no valid origin label" in body
 
 
 def test_wrapper_answers_503_when_the_registry_cannot_be_read(tmp_path: Path) -> None:

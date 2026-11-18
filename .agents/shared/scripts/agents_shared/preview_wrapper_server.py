@@ -252,7 +252,7 @@ def make_handler(
                 self._send(
                     503,
                     "text/plain; charset=utf-8",
-                    f"The framed service {inner_service!r} has no origin label in {apps_file}.\n",
+                    f"The framed service {inner_service!r} has no valid origin label in {apps_file}.\n",
                 )
                 return
             page_html = build_wrapper_html(
