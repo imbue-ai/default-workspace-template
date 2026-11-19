@@ -790,6 +790,8 @@ def _deliver_message(
         # which would let the stopped-chat release drop the watcher of the chat it revived.
         if outcome.is_delivered and is_revived_by_send:
             agent_manager.note_agent_alive(agent_info.id)
+        if outcome.is_delivered:
+            agent_manager.clear_interrupted(agent_info.id)
     if outcome.is_delivered and compact_handling is ComposerCompactHandling.FORWARDED_TO_HARNESS:
         agent_manager.note_compaction_requested(agent_info.id, CompactionCause.MANUAL, requested_at)
     return outcome

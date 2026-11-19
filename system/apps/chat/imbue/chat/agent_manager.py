@@ -45,6 +45,7 @@ from imbue.chat.activity_state import EXITED_LIFECYCLE_STATE
 from imbue.chat.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.chat.activity_state import WAITING_LIFECYCLE_STATE
 from imbue.chat.activity_state import is_lifecycle_dead
+from imbue.chat.activity_state import is_turn_cut_off
 from imbue.chat.activity_state import is_working_activity_state
 from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
@@ -755,12 +756,15 @@ def chat_status_for_agent(
     is_permission_pending: bool,
     is_busy: bool,
     is_turn_closing: bool,
+    is_interrupted: bool,
 ) -> ChatStatus:
-    """The chat row's status rule: a dead lifecycle wins, then a pending permission, then a live turn, a compaction or
-    a turn still closing, then a busy chat (one a pending background task will wake).
+    """The chat row's status rule: an interrupted turn wins, then a dead lifecycle, then a pending permission, then a
+    live turn, a compaction or a turn still closing, then a busy chat (one a pending background task will wake).
 
     What counts as busy is :func:`resolve_is_busy`'s question.
     """
+    if is_interrupted:
+        return ChatStatus.INTERRUPTED
     if is_lifecycle_dead(lifecycle_state):
         return ChatStatus.STOPPED
     if is_permission_pending:
@@ -1195,6 +1199,7 @@ def chat_snapshot_for_active_agent(
     last_messaged_at: float | None,
     background_tasks: tuple[BackgroundTask, ...],
     compaction_cause: CompactionCause | None,
+    is_interrupted: bool,
 ) -> ChatSnapshot:
     """The snapshot of a chat from the agent it runs on.
 
@@ -1222,7 +1227,7 @@ def chat_snapshot_for_active_agent(
         status=_converging_status(transition.phase)
         if transition is not None and not _has_landed(chat.record)
         else chat_status_for_agent(
-            agent.state, agent.activity_state, is_permission_pending, is_busy, agent.is_turn_closing
+            agent.state, agent.activity_state, is_permission_pending, is_busy, agent.is_turn_closing, is_interrupted
         ),
         labels=agent.labels,
         agent_ids=chat.member_agent_ids,
@@ -1244,6 +1249,7 @@ def chat_snapshot_for_active_agent(
             is_resending_after_sign_in=is_resending_after_sign_in,
             is_busy=is_busy,
             background_tasks=tuple(background_task_snapshot(task) for task in background_tasks),
+            is_interrupted=is_interrupted,
         ),
         last_messaged_at=last_messaged_at,
     )
@@ -1630,6 +1636,10 @@ class AgentManager:
     _letting_go_counts_by_agent: dict[str, int]
     # How many such stops have begun for each agent, so a send in flight can tell that one began after it did.
     _stops_begun_by_agent: dict[str, int]
+    # The agents whose process died mid-turn (``is_turn_cut_off``), kept until a message is delivered to them, a turn
+    # runs again, or their process is restarted on purpose: the main chat's automatic wake revives the process
+    # without the turn, and the chat must still say it was cut off.
+    _interrupted_agent_ids: set[str]
     _resent_sends_by_chat: dict[ChatId, tuple[ResentSendSnapshot, ...]]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
@@ -1817,6 +1827,7 @@ class AgentManager:
         manager._lost_sends_being_resent = set()
         manager._letting_go_counts_by_agent = {}
         manager._stops_begun_by_agent = {}
+        manager._interrupted_agent_ids = set()
         manager._resent_sends_by_chat = {}
         manager._presence = PresenceTracker()
         manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
@@ -2276,6 +2287,11 @@ class AgentManager:
         record = self._record_naming_locked(agent_id)
         return ChatId(agent_id) if record is None else record.chat_id
 
+    def _is_chat_switching_locked(self, agent_id: str) -> bool:
+        """Whether the agent's chat is switching agents, whose own steps stop and start them."""
+        chat = self._resolve_chat_locked(self._chat_id_of_agent_locked(agent_id))
+        return chat is not None and chat.transition is not None
+
     def _is_recorded_member_locked(self, agent_id: str) -> bool:
         return self._record_naming_locked(agent_id) is not None
 
@@ -2357,6 +2373,10 @@ class AgentManager:
             compaction_cause_by_agent = {
                 agent.id: self._compaction_cause_by_agent.get(agent.id) for agent, _chat in listed
             }
+            interrupted_by_agent = {
+                agent.id: self._is_interrupted_locked(agent.id, connecting_by_agent[agent.id])
+                for agent, _chat in listed
+            }
         last_messaged = self._message_stamps.read()
         return [
             self._snapshot_as_shown(
@@ -2370,6 +2390,7 @@ class AgentManager:
                     last_messaged.get(chat.chat_id),
                     tasks_by_chat.get(chat.chat_id, ()),
                     compaction_cause_by_agent[agent.id],
+                    interrupted_by_agent[agent.id],
                 )
             )
             for agent, chat in listed
@@ -2393,6 +2414,7 @@ class AgentManager:
             is_resending = agent is not None and agent.id in self._pending_resends_after_sign_in_by_agent
             background_tasks = () if chat is None else self._background_tasks_by_chat.get(chat.chat_id, ())
             compaction_cause = None if agent is None else self._compaction_cause_by_agent.get(agent.id)
+            is_interrupted = agent is not None and self._is_interrupted_locked(agent.id, is_connecting)
         if chat is None or agent is None or is_primary_agent(agent):
             return None
         return chat_snapshot_for_active_agent(
@@ -2405,6 +2427,7 @@ class AgentManager:
             self._message_stamps.read().get(chat.chat_id),
             background_tasks,
             compaction_cause,
+            is_interrupted,
         )
 
     def get_active_agent_info(self, chat_id: ChatId) -> AgentInfo | None:
@@ -4163,6 +4186,18 @@ class AgentManager:
 
     def _is_connecting_locked(self, agent_id: str) -> bool:
         return bool(self._connecting_message_ids_by_agent.get(agent_id, set()) - self._withdrawn_message_ids)
+
+    def _is_interrupted_locked(self, agent_id: str, is_connecting: bool) -> bool:
+        """Whether the chat shows its agent's turn as cut off: a send waking the agent reads as Connecting instead."""
+        return agent_id in self._interrupted_agent_ids and not is_connecting
+
+    def clear_interrupted(self, agent_id: str) -> None:
+        """Forget that ``agent_id``'s turn was cut off: a message reached it, so it is working again."""
+        with self._lock:
+            if agent_id not in self._interrupted_agent_ids:
+                return
+            self._interrupted_agent_ids.discard(agent_id)
+        self._broadcast_chats_updated()
 
     def _set_send_connecting(self, agent_id: str, message_id: str, text: str) -> None:
         with self._lock:
@@ -6056,6 +6091,7 @@ class AgentManager:
             self._logged_stale_compacting_marker_by_agent.pop(agent_id, None)
             self._sweep_started_at_by_agent.pop(agent_id, None)
             self._compaction_finished_at_by_agent.pop(agent_id, None)
+            self._interrupted_agent_ids.discard(agent_id)
         # Reap the live backend outside the lock (codex's join blocks on its reader thread);
         # idempotent, and a re-track rebuilds it via ensure_live.
         if session is not None:
@@ -6900,6 +6936,19 @@ class AgentManager:
                 is_cause_changed = self._compaction_cause_by_agent.get(agent_id) is not compaction_cause
                 self._compaction_cause_by_agent[agent_id] = compaction_cause
                 self._compaction_cause_seen_at_by_agent[agent_id] = time.monotonic()
+            was_interrupted = agent_id in self._interrupted_agent_ids
+            if is_working_activity_state(new_state):
+                self._interrupted_agent_ids.discard(agent_id)
+            elif (
+                is_turn_cut_off(agent_state.state, is_active_marker_present, tracker.is_tail_mid_turn)
+                and not self._letting_go_counts_by_agent.get(agent_id, 0)
+                and not self._is_archived_member_locked(agent_id)
+                and not self._is_chat_switching_locked(agent_id)
+            ):
+                self._interrupted_agent_ids.add(agent_id)
+            else:
+                pass
+            is_interrupted_changed = was_interrupted != (agent_id in self._interrupted_agent_ids)
             old_state = self._activity_state_by_agent.get(agent_id)
             was_turn_closing = agent_state.is_turn_closing
             # The transcript can end a turn before the harness closes it: Claude writes its final message, then runs
@@ -6930,6 +6979,7 @@ class AgentManager:
                 and not has_idle_queue
                 and not is_cause_changed
                 and was_turn_closing == is_turn_closing
+                and not is_interrupted_changed
             ):
                 return
             self._activity_state_by_agent[agent_id] = new_state
@@ -7088,4 +7138,6 @@ class AgentManager:
             if tracker is None:
                 return
             tracker.reset()
+            # The restart was asked for, so the turn it cut short is not one the process lost.
+            self._interrupted_agent_ids.discard(agent_id)
         self._recompute_activity_state(agent_id, broadcast_on_change=True)

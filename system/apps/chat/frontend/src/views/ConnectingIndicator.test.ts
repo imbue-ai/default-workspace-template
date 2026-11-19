@@ -118,6 +118,22 @@ describe("Connecting, on the status row at the end of the transcript", () => {
     expect(connectingLabel(starting)).toBe("Connecting to Anthropic…");
   });
 
+  it("says 'Waking up…' for a send that found its agent stopped, until the wait ends", () => {
+    const chatId = uniqueChatId();
+    chats.set(chatId, chatSnapshotFixture(chatId, { active_agent: { is_connecting: true, state: "DONE" } }));
+    expect(connectingLabel(chatId)).toBe("Waking up…");
+
+    // The chat app reads the agent alive as soon as its start returns, while the send still waits on it.
+    chats.set(chatId, chatSnapshotFixture(chatId, { active_agent: { is_connecting: true, state: "WAITING" } }));
+    expect(connectingLabel(chatId)).toBe("Waking up…");
+
+    // The page redraws once the wait is over, and the next wait starts afresh.
+    chats.set(chatId, chatSnapshotFixture(chatId, { active_agent: { is_connecting: false, state: "WAITING" } }));
+    expect(isChatConnecting(chatId)).toBe(false);
+    chats.set(chatId, chatSnapshotFixture(chatId, { active_agent: { is_connecting: true, state: "WAITING" } }));
+    expect(connectingLabel(chatId)).toBe("Connecting…");
+  });
+
   it("reads a chat still being created that holds a message from another page as connecting", () => {
     const chatId = uniqueChatId();
     provisionalChats.set(

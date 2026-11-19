@@ -69,7 +69,8 @@ def _log_failed_post(described: str, future: Future[None]) -> None:
 
 @pure
 def activity_status_of(status: ChatStatus) -> ChatActivityStatus:
-    """A chat's status as the shell's wire enum spells it, one for one."""
+    """A chat's status as the shell's wire enum spells it: one for one, except that the tray shows an interrupted
+    chat as it shows a failed one."""
     match status:
         case ChatStatus.WORKING:
             return ChatActivityStatus.WORKING
@@ -81,7 +82,7 @@ def activity_status_of(status: ChatStatus) -> ChatActivityStatus:
             return ChatActivityStatus.ATTENTION
         case ChatStatus.STOPPED:
             return ChatActivityStatus.STOPPED
-        case ChatStatus.ERROR:
+        case ChatStatus.ERROR | ChatStatus.INTERRUPTED:
             return ChatActivityStatus.ERROR
         case _ as unreachable:
             assert_never(unreachable)

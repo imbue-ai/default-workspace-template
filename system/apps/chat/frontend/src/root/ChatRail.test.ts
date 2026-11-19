@@ -82,6 +82,16 @@ describe("ChatRail status marks", () => {
     expect(rail.querySelector('[data-chat-id="agent-stopped"]')?.className).toContain("opacity-50");
     expect(rail.querySelector('[data-chat-id="agent-idle"]')?.className).not.toContain("opacity-50");
   });
+
+  it("draws an interrupted chat in red, dot and title, and never dims it", () => {
+    const rail = mount([chatRowFixture("agent-cut-off", { status: "interrupted" })]);
+
+    const row = rail.querySelector('[data-chat-id="agent-cut-off"]')!;
+    expect(row.getAttribute("data-status")).toBe("interrupted");
+    expect(dotClassOf("agent-cut-off")).toContain("bg-danger");
+    expect(row.className).toContain("text-danger");
+    expect(row.className).not.toContain("opacity-50");
+  });
 });
 
 describe("ChatRail participant photos", () => {

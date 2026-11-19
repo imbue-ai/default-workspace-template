@@ -89,6 +89,7 @@ import { renderQueuedMessages } from "./QueuedMessageView";
 import { closedPendingRun, renderOutgoingMessages, type PendingBubbleRun } from "./OutgoingMessageView";
 import { renderHeldSends, renderProvisionalHeldSends } from "./HeldSendView";
 import { HandoffFailedNotice } from "./HandoffFailedNotice";
+import { InterruptedNotice } from "./InterruptedNotice";
 import { renderHandoffTailNode } from "./handoff-node";
 import { SwitchDialog } from "./SwitchDialog";
 import { hasLandedLiveSwitch, hasOpenHandoffRequest, isTailTurnSettled, liveCompactionOf } from "./turn-grouping";
@@ -1038,6 +1039,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 // failed, with a retry on any account (spec 5.10).
                 m(SwitchDialog, { chatId }),
                 m(HandoffFailedNotice, { chatId }),
+                m(InterruptedNotice, { chatId }),
                 m(MessageInput, {
                   chatId,
                   leading:

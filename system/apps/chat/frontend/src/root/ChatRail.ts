@@ -71,12 +71,13 @@ export interface ChatRailAttrs {
 /** The status each dot stands for: working is the accent and breathes; background (no turn, but a
  *  pending task will start one) is a dashed accent ring that turns slowly; done (a finished turn
  *  the user has not looked at, see ``chatUnread``) is a green check; attention is amber; idle
- *  is a hollow grey ring; error is red; stopped wears a pause mark. */
+ *  is a hollow grey ring; error and interrupted (the agent stopped mid-turn) are red; stopped wears a pause mark. */
 const DOT_CLASS_BY_STATUS: Readonly<Record<string, string>> = {
   working: "chat-rail-dot--pulse bg-accent",
   background: "chat-rail-dot--dashed",
   attention: "bg-warning",
   error: "bg-danger",
+  interrupted: "bg-danger",
 };
 
 function displayStatus(row: ChatRow): string {
@@ -461,9 +462,11 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
         // someone else said", per the design), so the rows' hover has to read lighter than it.
         status === "done"
           ? `chat-rail-row--done font-semibold text-success ${isSelected ? "bg-bubble-other" : "hover:bg-fill-faint"}`
-          : isSelected
-            ? "chat-rail-row--selected bg-bubble-other text-primary"
-            : "text-primary hover:bg-fill-faint",
+          : status === "interrupted"
+            ? `chat-rail-row--interrupted font-semibold text-danger ${isSelected ? "bg-bubble-other" : "hover:bg-fill-faint"}`
+            : isSelected
+              ? "chat-rail-row--selected bg-bubble-other text-primary"
+              : "text-primary hover:bg-fill-faint",
         row.status === "stopped" ? "chat-rail-row--stopped opacity-50" : "",
         row.isMain ? "chat-rail-row--main font-medium" : "",
       ].join(" "),
