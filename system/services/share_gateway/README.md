@@ -359,8 +359,10 @@ event envelope (`type` `gateway_request_count`, `source` `gateway_requests`):
   the stream is deduplicated by `event_id` downstream.
 
 Never a path, a query string, an address or a header. The auth label's
-`/_auth/*` and `/_agent/*` surfaces, `/_health` and the loading page are
-routed without the auth step and are not counted (the access log has them).
+`/_auth/*` and `/_agent/*` surfaces and `/_health` are routed without the
+auth step and are not counted (the access log has them). A request answered
+with the "Starting up..." or not-responding page is counted once, by the
+auth step it passed before caddy found no app to hand it to.
 A window keeps at most 256 distinct keys; every further key folds into one
 `overflow` record, so a flood bounds itself. The stream archives itself at
 32 MiB (`events.jsonl.<timestamp>.gz`, two kept), the `event_streams`
