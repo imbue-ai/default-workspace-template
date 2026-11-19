@@ -169,8 +169,8 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   <p id="ended-cause" hidden></p>
   <div class="actions">
     <button type="button" id="ended-retry" hidden>Try again</button>
-    <button type="button" id="ended-ask" hidden>Ask an agent to fix this</button>
     <button type="button" id="ended-new" hidden>Start a new terminal</button>
+    <button type="button" id="ended-ask" hidden>Ask an agent to fix this</button>
     <button type="button" id="ended-report" hidden>Report a bug</button>
   </div>
   <details id="ended-details" hidden><summary>See details</summary><pre id="ended-details-text"></pre></details>

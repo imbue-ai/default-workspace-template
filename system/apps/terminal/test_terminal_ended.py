@@ -223,7 +223,8 @@ def test_a_new_terminal_that_could_not_be_opened_offers_an_agent_before_report_a
         "A new terminal couldn't be opened. Try again. If this persists, report a bug."
     )
     buttons = ended.locator(".actions button:visible")
-    expect(buttons).to_have_text(["Ask an agent to fix this", "Start a new terminal", "Report a bug"])
+    # The surface's own way out leads, then the agent, then the report.
+    expect(buttons).to_have_text(["Start a new terminal", "Ask an agent to fix this", "Report a bug"])
     ended.get_by_role("button", name="Ask an agent to fix this").click()
     page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:ask-agent')")
     [asked] = shell_messages(page, "shell:ask-agent")
