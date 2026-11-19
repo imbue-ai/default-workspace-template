@@ -343,8 +343,9 @@ def _match_background_task_report(content: str) -> MessageDisplay | None:
 
 
 def _match_workspace_update_note(content: str) -> MessageDisplay | None:
-    """The note a chat paused for a workspace update gets when it resumes; a NOTICE showing only its
-    summary line, labelled by whether the update landed."""
+    """The note a chat paused for a workspace update gets when it resumes, or the ``not-landed`` one
+    bootstrap wakes an agent with after a boot-time rollback; a NOTICE showing only its summary
+    line, labelled by whether the update landed."""
     match = _WORKSPACE_UPDATE_NOTE_RE.match(content)
     if match is None:
         return None
