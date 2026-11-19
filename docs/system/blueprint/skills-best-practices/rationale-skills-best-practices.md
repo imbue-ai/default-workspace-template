@@ -5,8 +5,6 @@ The skill authoring guide (`docs/system/skill_authoring_guide.md`, vendored from
 This file records why each rule is what it is: the published source it rests on, or the decision that set it where no source did.
 Read it before changing a rule.
 
-Review threads are cited as `#<PR>` for default-workspace-template and `mngr-internal #2953` for the guide's own PR.
-
 ## Contents
 
 - Sources
@@ -93,7 +91,7 @@ The link-direction rule, the one-reader rule and the checks that enforce them ar
 
 | Rule | Rests on |
 |---|---|
-| SKILL.md body at most 500 lines | The published limit: Anthropic, Academy, agentskills.io, Claude Code skills, skill-creator. The validator already had it. Behind it, the observation that an agent reads a long file in portions and may stop early, so only a short file is read whole. That one has no published source; it was raised in review of #1108, where the point was that the limit is not only about compaction. |
+| SKILL.md body at most 500 lines | The published limit: Anthropic, Academy, agentskills.io, Claude Code skills, skill-creator. The validator already had it. Behind it, the observation that an agent reads a long file in portions and may stop early, so only a short file is read whole. That observation has no published source. It is why the limit would hold even on a harness that never compacts. |
 | SKILL.md at most 14,000 bytes | The observation that a compaction keeps only the start of a skill. Claude Code skills: it keeps "the first 5,000 tokens" of each invoked skill, 25,000 combined, and does not re-read the file. Claude Code compaction: of the files a session merely read or edited it re-reads up to five, most recently modified first, and one over 5,000 tokens comes back as a path only, so moving detail to a reference does not protect it. agentskills.io and skill-lint also say about 5,000 tokens. At the measured 2.82 bytes per token that is 14 KB, chosen over 20 KB and over no byte cap (2026-11-09). |
 
 The byte figure is measured: `count_tokens` over 111 markdown files gave 2.82 bytes per token with a 5% spread, so a 500-line skill here is about 10,000 tokens, twice the budget.
@@ -111,8 +109,8 @@ A reference has no size limit. That was decided against: the contents-list rule 
 | Standing instructions and the step list first | Claude Code skills: "put the most important instructions near the top of SKILL.md". |
 | Standing instructions are rules, not steps | Claude Code skills: the file is not re-read on later turns, "so write guidance that should apply throughout a task as standing instructions rather than one-time steps". |
 | A copyable step list | Anthropic and agentskills.io: numbered steps and a checklist for a multi-step flow. |
-| Each step names its reference | Review of the plan (2026-11-09): only the invoked SKILL.md is re-attached after a compaction, so detail moved to a reference is protected only if the step says what to re-read. |
-| The after-compaction rule lives in the instructions file | Review of #1111 and #1112 (2026-11-13): an instruction to re-read that sits in a reference is lost with the reference. Review of #1111 (2026-11-18): a per-skill line is redundant when the skill is short enough to survive. Claude Code reloads the instructions file after a compaction, so the rule is stated once there. That reload was confirmed for Claude Code only. |
+| Each step names its reference | Only the invoked SKILL.md is re-attached after a compaction, so detail moved to a reference is protected only if the step says what to re-read. |
+| The after-compaction rule lives in the instructions file | An instruction to re-read that sits in a reference is lost with the reference, so it cannot live there. A line in every SKILL.md spends each skill's 14 KB on the same sentence. Claude Code reloads the instructions file after a compaction whether or not it re-attaches the skill, so one statement there reaches every skill. That reload was confirmed for Claude Code only. |
 | One term per concept; one default with an escape hatch | Anthropic, agentskills.io. |
 
 ### Step lists and contents lists
@@ -121,11 +119,11 @@ A reference has no size limit. That was decided against: the contents-list rule 
 |---|---|
 | A contents list in a reference over 100 lines | Anthropic (skill-creator says 300). Anthropic does not practise it, and the first proposal was to leave it mostly alone; it was kept at 100 because an agent sent to one section of a long file has no other way to find it. |
 | A step list in a SKILL.md over 200 lines | No source. Nobody prescribes a contents list for SKILL.md, because in the published model SKILL.md is the contents list. This is the equivalent, set on 2026-11-05. |
-| `## Steps` numbered for a procedure, `## Contents` bulleted otherwise | Review of #1108, #1111 and #1112 (2026-11-13): a procedure's list should be called steps and be numbered. |
-| One entry per section, never two sections in one entry | Review of #1112: entries that combined sections were inconsistent and hard to follow. |
-| The step list is the whole procedure | Review of #1112: `crystallize-creation`'s list had the steps around the work and no step that did it. |
-| Below a step list every H2 is a step; a value the steps use is chosen in the step that first uses it | Review of #1112 (2026-11-18): naming the pass sat above the steps and read as a step. |
-| A heading names an action or a topic; text sent to the user goes in a fenced block | Review of #1108: a heading that was the opening line of a message to the user ("Hi, I'm a Caretaker for your workspace") read as a chapter title, not a step. |
+| `## Steps` numbered for a procedure, `## Contents` bulleted otherwise | A procedure's list is the checklist the agent works down in order, and a numbered entry lets it say and find where it is. A file that is not a procedure has no order to number. Calling both "Contents" hid which kind of file the agent was in. |
+| One entry per section, never two sections in one entry | An agent finds its place by matching an entry to a heading. An entry that covers two sections matches neither, and the validator, which checks entries against the H2 headings, cannot check it. |
+| The step list is the whole procedure | An agent that works from the list does only what the list names. `crystallize-creation`'s list had the steps around the work and no step that did it. |
+| Below a step list every H2 is a step; a value the steps use is chosen in the step that first uses it | So the list and the sections match one to one and nothing the agent must do sits outside the list. A section above the steps that told the agent to name the pass was work the list did not carry. |
+| A heading names an action or a topic; text sent to the user goes in a fenced block | An agent finds a section by its heading, so the heading has to say what the section is for. One heading was the opening line of a message to the user ("Hi, I'm a Caretaker for your workspace"), which says nothing about the step it headed and reads as prose to act on. |
 
 ### References
 
@@ -133,13 +131,13 @@ A reference has no size limit. That was decided against: the contents-list rule 
 |---|---|
 | A link is a path; a filename pattern links nothing | The harden worker reached its `op-*.md` and `type-*.md` files by a filename template the crawler could not see. Links are derived by crawling the prose, which cannot drift the way a declared list can; a declaration in frontmatter was considered and dropped (2026-11-05). |
 | Depth of two | The sources say one level (Anthropic, agentskills.io, skill-lint). Anthropic's own repository does not hold to it for a large domain and nothing enforces it there. With shared references staying, strict one level would mean every skill links every shared file it can reach. Two by shortest path was chosen as a criterion the tree could meet with no standing failures, and it makes a separate no-cycles rule unnecessary: a file linked from SKILL.md stays at depth one however many siblings link it. |
-| Links run from the specific to the general | Review of #1112 (2026-11-13): a shared reference pointing back at a file built on it produced awkward text and deep chains. An earlier wording let a shared file describe a more specific one without its path, and that was used to get past the depth check, so the rule now covers naming by description too. No published source. |
+| Links run from the specific to the general | The same layering as code: a general module does not import its callers. A shared reference that points back at a file built on it makes every reader of the general file a reader of the specific one, which is where the cycles and the eight-link chains came from. An earlier wording let a shared file describe a more specific one without its path, and that was used to get past the depth check, so the rule covers naming by description too. No published source. |
 | Reachability | The audit found three orphaned references; a check of a live workspace's transcripts found no agent had read one of them for guidance since mid-September. nyosegawa lists unlinked reference files as an anti-pattern, and skill-lint and `Swival/skillscheck` flag them. |
-| A skill's files have one reader | Set on 2026-11-16, when fixing cross-links one at a time kept recurring: what was needed was a principle for information two skills use. A file written for one skill's reader carries that skill's context ("SKILL.md's step 2 sent you here"), so moving it to shared forces it to be rewritten for any reader. No published source. |
-| A skill is named by name, without the path to its SKILL.md | Review of #1147 (2026-11-18). An agent finds a skill through the catalog. |
-| The condition is at the link, and the file does not repeat it | The sources say each link says when to read the file. Review of #1112: a reference should not state when it is read. |
-| Shared references stay shared; a large one splits into a core and per-path files in a directory named for the core | Shared references exist because inlined copies drift when one is changed and the rest forgotten (2026-11-05). Review of #1112: conditional reads belong in their own files, so the core is what every reader needs; subdirectories were preferred to a flat directory. |
-| A second reader has its own directory | Review of #1113 (2026-11-18). |
+| A skill's files have one reader | A file inside a skill is written for a reader who came through that skill's SKILL.md, and says so ("SKILL.md's step 2 sent you here"). A reader arriving from another skill lacks that context. Fixing such links one at a time kept recurring, so the rule is general: what two skills need moves to a shared reference, which forces it to be rewritten for any reader. No published source. |
+| A skill is named by name, without the path to its SKILL.md | An agent finds a skill by its name through the catalog, on every harness a workspace runs. A path beside the name adds nothing, counts as a link in the checks, and goes stale when a skill moves. |
+| The condition is at the link, and the file does not repeat it | The sources say each link says when to read the file. The decision to read is made at the link, so a condition at the top of the file reaches only a reader who has already decided. A file with several readers also cannot state one condition that is true for all of them. |
+| Shared references stay shared; a large one splits into a core and per-path files in a directory named for the core | Shared references exist because inlined copies drift when one is changed and the rest forgotten. Everything in a shared file is read by every skill that links it, so the core holds only what every reader needs and each conditional path gets a file read only by those who take it. A directory named for the core keeps the split files beside it instead of spread through a flat directory under prefixed names. |
+| A second reader has its own directory | So the files only the worker follows are told apart from the lead's by where they are. This is organization only; nothing depends on it functionally. |
 
 ### Descriptions
 
@@ -167,8 +165,8 @@ A second motive, raised on 2026-11-17 and deferred to a later pass: every tool c
 | Rule | Rests on |
 |---|---|
 | Version-bound text lives in one reference, out of the live path | Anthropic (an "old patterns" section) and agentskills.io (no time-sensitive information). |
-| One such reference for each reader | Review of #1113: the worker's items were split from the lead's. |
-| Each item opens with an observable test for whether it applies | Review of #1113 (2026-11-18): a rule an agent can check, not a version it has to infer. |
+| One such reference for each reader | The worker never reads the lead's file, so each reader's items are in the file that reader is sent to. |
+| Each item opens with an observable test for whether it applies | An agent cannot reliably tell which release a workspace came from, but it can see that a script is missing or a field is absent. A test it can run decides the matter where a version would have to be inferred. |
 | `CLEANUP:` markers | The repository's existing convention for rollout-bridging code. |
 
 Only `update-self` got this treatment. No version floor was set, because the shims that pay to remove are tied to a release that was not yet on the stable channel.
@@ -186,7 +184,7 @@ Only `update-self` got this treatment. No version floor was set, because the shi
 |---|---|
 | Exemptions, not warnings or counts | The end state had to be no standing warnings. A count in the test file was the first choice; in the 0.10.0 update, workspace agents had raised such counts in a built-in test file, so the record moved into each skill's own frontmatter (`metadata` is a string map in the spec and is not loaded into the catalog). |
 | A failing check is fixed by restructuring, never by an exemption; a new skill carries none | Same decision (2026-11-09). |
-| The reasons and who may write them are the validating repository's | Review of mngr-internal #2953: rules that only apply in this repository do not belong in mngr's guide. |
+| The reasons and who may write them are the validating repository's | The guide is mngr's, and mngr has no validator. Which reasons exist and which flow stamps them are facts about this repository only. |
 
 A flow never restructures a user's existing skills: splitting prose into references is judgment work, unlike the scripted Python migration, so the update stamps an exemption and moves on.
 
