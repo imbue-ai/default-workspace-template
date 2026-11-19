@@ -239,6 +239,21 @@ def test_auto_picked_port_avoids_a_port_held_by_a_dropin(tmp_path: Path) -> None
     assert scaffold_flask_lib._pick_port(root, None, _nothing_bound) == 8082
 
 
+def test_the_screen_video_server_port_is_never_picked(tmp_path: Path) -> None:
+    """8091 is the Screen's neko port, which no config scan or bind probe sees.
+
+    With 8080-8090 taken, the auto pick must skip 8091 and an explicit --port 8091
+    must be refused, or the new app takes the port and the Screen cannot start.
+    """
+    root = _make_workspace(
+        tmp_path / "workspace", {f"app{port}": port for port in range(8080, 8091)}
+    )
+
+    assert scaffold_flask_lib._pick_port(root, None, _nothing_bound) == 8092
+    with pytest.raises(SystemExit, match="8091 is already in use"):
+        scaffold_flask_lib._pick_port(root, 8091, _nothing_bound)
+
+
 def test_a_port_something_is_listening_on_is_skipped_and_refused(
     tmp_path: Path,
 ) -> None:

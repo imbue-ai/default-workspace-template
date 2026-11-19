@@ -22,6 +22,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from agents_shared.testing import add_linked_worktree
 
 from update_app_skill import preview_app as mod
 
@@ -104,6 +105,21 @@ def _registered_rows(registry: Path) -> dict[str, dict[str, object]]:
     }
 
 
+def _write_fixture_checkout(root: Path) -> Path:
+    """A checkout at ``root`` holding the fixture app; returns the app's directory."""
+    app_dir = root / "system" / "apps" / "fixture"
+    app_dir.mkdir(parents=True)
+    (app_dir / "app.toml").write_text(_MANIFEST)
+    (app_dir / "icon.svg").write_text(_ICON)
+    (app_dir / "serve.py").write_text(_SERVER)
+    (app_dir / "build.txt").write_text("first build")
+    # A real worktree is a checkout of the repo's locked project, which the preview syncs
+    # --frozen before running the app from its venv.
+    (root / "pyproject.toml").write_text(_WORKTREE_PYPROJECT)
+    subprocess.run(["uv", "lock", "--offline"], cwd=root, check=True)
+    return app_dir
+
+
 @pytest.fixture
 def repo_root_on_disk() -> Iterator[Path]:
     with tempfile.TemporaryDirectory(
@@ -124,16 +140,7 @@ def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tear
     monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
 
     worktree = tmp_path / "worktree"
-    app_dir = worktree / "system" / "apps" / "fixture"
-    app_dir.mkdir(parents=True)
-    (app_dir / "app.toml").write_text(_MANIFEST)
-    (app_dir / "icon.svg").write_text(_ICON)
-    (app_dir / "serve.py").write_text(_SERVER)
-    (app_dir / "build.txt").write_text("first build")
-    # A real worktree is a checkout of the repo's locked project, which the preview syncs
-    # --frozen before running the app from its venv.
-    (worktree / "pyproject.toml").write_text(_WORKTREE_PYPROJECT)
-    subprocess.run(["uv", "lock", "--offline"], cwd=worktree, check=True)
+    app_dir = _write_fixture_checkout(worktree)
 
     repo_args = ["--repo-root", str(repo_root)]
     assert (
@@ -152,7 +159,7 @@ def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tear
             "127.0.0.1", "localhost"
         )
         assert rows["fixture-preview-app"]["internal"] is True
-        assert rows["fixture-preview"]["display_name"] == "Fixture (worktree)"
+        assert rows["fixture-preview"]["display_name"] == "Fixture (preview)"
 
         (app_dir / "build.txt").write_text("second build")
         assert _get(url)["build"] == "first build"
@@ -172,3 +179,33 @@ def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tear
         .isdisjoint({"fixture-preview-app", "fixture-preview"})
     )
     assert mod.live_preview_url(repo_root, "fixture") is None
+
+
+@pytest.mark.timeout(_LIFECYCLE_TIMEOUT_SECONDS)
+def test_a_private_instance_booted_from_a_worktree_runs_over_the_live_data_and_registers_no_window(
+    tmp_path: Path, repo_root_on_disk: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live = repo_root_on_disk
+    _write_fixture_checkout(live)
+    worktree = live.parent / "worktree"
+    add_linked_worktree(live, worktree)
+    live_data = live / "data" / ".apps" / "fixture"
+    live_data.mkdir(parents=True)
+    (live_data / "greeting.txt").write_text("from the live data")
+    registry = tmp_path / "apps.toml"
+    monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
+
+    worktree_args = ["--worktree", str(worktree), "--repo-root", str(worktree)]
+    assert mod.main(["up", "--app", "fixture", *worktree_args]) == 1
+    assert mod.main(["up", "--app", "fixture", "--private", *worktree_args]) == 0
+    try:
+        url = mod.live_preview_url(worktree, "fixture")
+        assert url is not None
+        assert _get(url)["greeting"] == "from the live data"
+        assert not (live_data / "written-by-preview.txt").exists()
+        assert _registered_rows(registry) == {}
+    finally:
+        down_code = mod.main(["down", "--app", "fixture", "--repo-root", str(worktree)])
+
+    assert down_code == 0
+    assert mod.live_preview_url(worktree, "fixture") is None

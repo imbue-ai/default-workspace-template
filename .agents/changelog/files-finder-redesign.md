@@ -1,1 +1,0 @@
-The File Viewer is called Files in the skills that mention it, and the update process builds, snapshots, and verifies the Files bundle (`system/apps/files/static/`) alongside the other three frontends, including a worker's `--worker-bundle files=<path>`.

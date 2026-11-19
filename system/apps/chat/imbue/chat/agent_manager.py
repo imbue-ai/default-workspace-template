@@ -79,6 +79,7 @@ from imbue.chat.chat_handoffs import DEFAULT_PROMPT_TEMPLATE_PATH
 from imbue.chat.chat_handoffs import HandoffCancelledError
 from imbue.chat.chat_handoffs import HandoffDeps
 from imbue.chat.chat_handoffs import HandoffRunner
+from imbue.chat.chat_handoffs import HeldSendDelivery
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
 from imbue.chat.chat_handoffs import cancel_refused_detail
 from imbue.chat.chat_handoffs import converging_detail
@@ -1109,6 +1110,7 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
         error=transition.error,
         failed_step=transition.failed_step,
         is_fresh_start=isinstance(transition, ChatHandoffRecord) and transition.is_fresh_start,
+        has_landed=_has_landed(record),
     )
 
 
@@ -1120,6 +1122,15 @@ def _held_send_snapshot(message_id: str, delivered_text: str, is_delivered: bool
     return _with_display_decision(
         HeldSendSnapshot(message_id=message_id, text=words, is_delivered=is_delivered), classify_user_message(words)
     )
+
+
+@pure
+def _has_landed(record: ChatRecord | None) -> bool:
+    """Whether the chat's handoff has made its successor the chat's agent and only delivers to it now."""
+    handoff = None if record is None else record.handoff
+    if record is None or handoff is None or handoff.phase is not HandoffPhase.SWITCHING:
+        return False
+    return record.agents[-1].agent_id == handoff.next_agent_id
 
 
 @pure
@@ -1209,7 +1220,7 @@ def chat_snapshot_for_active_agent(
         name=handoff.chat_name if handoff is not None else agent.name,
         project=agent.labels.get("project"),
         status=_converging_status(transition.phase)
-        if transition is not None
+        if transition is not None and not _has_landed(chat.record)
         else chat_status_for_agent(
             agent.state, agent.activity_state, is_permission_pending, is_busy, agent.is_turn_closing
         ),
@@ -1397,6 +1408,8 @@ class AgentManager:
     _broadcaster: WebSocketBroadcaster
     _messenger: MngrMessenger
     _lock: threading.Lock
+    # Notified, under ``_lock``, whenever a chat record is written or dropped: what a wait on a chat's switch waits on.
+    _records_changed: threading.Condition
     # Held across an idle compaction toggle's file write and its ``mngr label``, so two quick
     # toggles cannot finish their relabels out of order and leave the label contradicting the file.
     _autocompact_toggle_lock: threading.Lock
@@ -1700,6 +1713,7 @@ class AgentManager:
         manager._broadcaster = broadcaster
         manager._messenger = messenger
         manager._lock = threading.Lock()
+        manager._records_changed = threading.Condition(manager._lock)
         manager._autocompact_toggle_lock = threading.Lock()
         manager._session_sweep_stop = threading.Event()
         manager._session_sweep_thread = None
@@ -1947,6 +1961,11 @@ class AgentManager:
         application state (``ChatAppState.broadcaster`` reads it here, so a manager
         a test injects brings its broadcaster with it)."""
         return self._broadcaster
+
+    @property
+    def chat_files_root(self) -> Path:
+        """The directory holding one folder per chat, which goes with the chat when it is destroyed."""
+        return self._chat_files_root
 
     def is_agent_list_known(self) -> bool:
         """Whether the agent list has been read from mngr at least once."""
@@ -2243,6 +2262,7 @@ class AgentManager:
         record_by_chat_id = self._chat_record_store.read_all()
         with self._lock:
             self._chat_record_by_id = record_by_chat_id
+            self._records_changed.notify_all()
         self._broadcast_chats_updated()
 
     def _record_naming_locked(self, agent_id: str) -> ChatRecord | None:
@@ -3009,6 +3029,18 @@ class AgentManager:
         with self._lock:
             return _transition_state_of(self._chat_record_by_id.get(chat_id))
 
+    def wait_for_landed_switch(self, chat_id: ChatId, timeout: float) -> bool:
+        """Wait out a handoff that has landed (its successor is the chat's agent and only the deliveries to it remain).
+
+        True once the chat is not converging. False when it still is: the handoff had not landed (no wait), had
+        not finished delivering at ``timeout``, or failed meanwhile; the caller then refuses the chat as converging.
+        """
+        with self._records_changed:
+            self._records_changed.wait_for(
+                lambda: not _has_landed(self._chat_record_by_id.get(chat_id)), timeout=timeout
+            )
+            return _transition_state_of(self._chat_record_by_id.get(chat_id)) is None
+
     def begin_switch(
         self,
         chat_id: ChatId,
@@ -3333,7 +3365,7 @@ class AgentManager:
             _loguru_logger.warning("Could not deliver {} held send(s) to agent {}", len(held_sends), agent_id)
             return
         for held in held_sends:
-            deliver_held_send(capabilities.deliver, agent_info, held, chat_id)
+            deliver_held_send(self._held_send_delivery(capabilities), agent_info, held, chat_id)
 
     def retry_handoff(self, chat_id: ChatId, account_id: str, kind: ChatKind = ChatKind.AGENT) -> HandoffPhase:
         """Run a failed switch's last step again on ``account_id``, or as a room (spec 5.10, and spec 6 for a rebind).
@@ -3587,6 +3619,7 @@ class AgentManager:
             get_agent_info=self.get_agent_info_by_id,
             resolve_account=resolve_account,
             deliver=capabilities.deliver,
+            report_undelivered=self._report_undelivered_held_send,
             apply_model=self.apply_model_pick,
             apply_launch_fast_mode=self.apply_launch_fast_mode,
             drain_to_composer=capabilities.drain_to_composer,
@@ -3618,6 +3651,7 @@ class AgentManager:
             resolve_account=resolve_account,
             account_dir=account_dir,
             deliver=capabilities.deliver,
+            report_undelivered=self._report_undelivered_held_send,
             apply_model=self.apply_model_pick,
             drain_to_composer=capabilities.drain_to_composer,
             stop_agent=self.stop_agent_process,
@@ -3640,6 +3674,18 @@ class AgentManager:
         if capabilities is None:
             raise HandoffError("This chat app cannot move a chat between agents or accounts: switches are not wired")
         return capabilities
+
+    def _held_send_delivery(self, capabilities: HandoffCapabilities) -> HeldSendDelivery:
+        return HeldSendDelivery(
+            deliver=capabilities.deliver,
+            sleep=self._pause,
+            is_stopping=self._shutdown_event.is_set,
+            report_undelivered=self._report_undelivered_held_send,
+        )
+
+    def _report_undelivered_held_send(self, chat_id: ChatId, message_id: str, detail: str, kind: str) -> None:
+        """Tell the pages a held send never reached its agent, so the one that sent it hands it back."""
+        self._broadcaster.broadcast_held_send_failed(chat_id, message_id, detail, kind)
 
     def _pause(self, seconds: float) -> None:
         """A wait paced by the shutdown event, so a stop interrupts a handoff's summary wait at once."""
@@ -3692,11 +3738,13 @@ class AgentManager:
         """Persist a record and make it the one the manager resolves by. Lock held."""
         self._chat_record_store.write(record)
         self._chat_record_by_id[record.chat_id] = record
+        self._records_changed.notify_all()
 
     def _delete_record_locked(self, chat_id: ChatId) -> None:
         """Drop a record from the store and from what the manager resolves by: the chat is its one agent again. Lock held."""
         self._chat_record_store.delete(chat_id)
         self._chat_record_by_id.pop(chat_id, None)
+        self._records_changed.notify_all()
 
     def _name_seeded_member_locked(
         self,
@@ -5528,7 +5576,7 @@ class AgentManager:
             self.apply_launch_fast_mode(chat_id, agent_info)
         if first_message is not None:
             is_delivered = deliver_held_send(
-                capabilities.deliver,
+                self._held_send_delivery(capabilities),
                 agent_info,
                 HeldSend(
                     message_id=first_message.message_id,
@@ -5541,7 +5589,7 @@ class AgentManager:
             if is_delivered and first_message.on_delivered is not None:
                 first_message.on_delivered(chat_id, first_message.message_id)
         for held in held_sends:
-            deliver_held_send(capabilities.deliver, agent_info, held, chat_id)
+            deliver_held_send(self._held_send_delivery(capabilities), agent_info, held, chat_id)
 
     def _mark_creation_failed_locked(self, chat_id: ChatId, error: str) -> None:
         """Keep the provisional chat, in the failed phase: its page shows the reason and can
