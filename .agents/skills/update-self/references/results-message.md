@@ -12,8 +12,8 @@ survives being pasted into a bug report.
 ## The results message
 
 The `done` report is the lead's raw material -- a technical digest of
-changelog entries, conflicts and resolutions, change classes, impact analysis
-and validation. **Do not forward it verbatim.** It stays under
+changelog sections, conflicts and resolutions, change classes, impact
+analysis and validation. **Do not forward it verbatim.** It stays under
 `data/.tasks/update-self/reports/` (offer to show it), and the results message
 is composed from it, delivered *after* the apply. It is the one thing the user
 reads about the whole pass: what changed, every decision made on their behalf,
@@ -26,7 +26,9 @@ Write it for a non-technical reader skimming top to bottom, in this order:
    I undid it; everything is safe".
 2. **What's new** -- always first after the headline, and *detailed*: carry
    the worker's digest in prose a lay reader parses (what each change does,
-   not file names). Some readers want the specifics; the rest skim it.
+   not file names), release by release. When the worker reports a `note`,
+   pass it on as written. Some readers want the specifics; the rest
+   skim it.
 3. **Conflicts** -- "none", or what needed reconciling. When the worker kept
    local code over the release's version, do not present that as settled: say
    what was kept, what the release's version would have changed, and offer
@@ -79,10 +81,13 @@ List each, in plain terms:
 
 - **Each chat and background agent it paused** (the lines `run-status
   stop-chats` printed): that it was paused for the update and has carried on,
-  and for a background agent, that its chat was told to pick it back up. Name
-  any that could not be started again, and that sending it a message brings it
-  back. The main chat's line says it was interrupted instead: say its work was
-  stopped for the update and it was told what changed.
+  and for a background agent, that its chat was told to pick it back up. One
+  that was idle when paused to make room stays stopped (`run-status
+  resume-chats` printed `Left <name> stopped` for it): say so. Name any that
+  could not be started again. For either, say that sending it a message brings
+  it back. One it printed `Left <name> as it is` for was started again since
+  and is running. The main chat's line says it was interrupted instead: say its
+  work was stopped for the update and it was told what changed.
 - **Each background command that was stopped** with a paused chat: that it was
   interrupted and its chat was told to run it again.
 - **Each cache, old worktree, or snapshot it pruned**, with what it held: a
@@ -102,6 +107,8 @@ List each, in plain terms:
 
 `run-status resume-chats` sends each chat the pass paused one note
 (`python/update_self_skill/update_resume_note.py` composes it), so you never write it by hand.
+One that was idle when paused for memory, chat or background agent, is left stopped and
+gets no note, nor is it named in its lead chat's note.
 The chat shows the user only its summary line, as a notice labelled "Workspace
 updated" (or "Workspace update not applied" when the update did not land),
 saying the chat was paused for the update and is carrying on. The rest is for

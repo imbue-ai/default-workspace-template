@@ -38,7 +38,9 @@ The shapes:
   Registered names become hostname labels, so they must be DNS-safe: lowercase
   letters/digits with single hyphens (e.g. ``preview-1``, not ``preview_1``),
   not ``localhost``, and not starting with ``host-`` or ``agent-``. ``down``
-  kills both servers and deregisters both services.
+  kills both servers and deregisters both services. A registration from a git
+  worktree is refused: it would land in the worktree's own registry, which the
+  workspace never reads.
 - **Frame only** (``frame``, called by ``build-app``'s ``mock_frame.py``). The
   same labeled frame around a service something else already runs -- a new app's
   live program while it is still a mock -- with a banner kind and note of its own.
@@ -69,8 +71,10 @@ instance is given (a bare ``ENVVAR`` is the ``main`` port, the one probed for
 health; ``sidecar=MYSVC_API_PORT`` adds a second), and ``--port <name>`` gives it
 one that no env var carries, reachable only by placeholder (what a manifest's
 ``[preview]`` table declares). ``--copy KEY=SOURCE`` copies
-a directory (repo-relative or absolute) into the instance's scratch space on disk
-before boot, so the instance can write to it freely, and ``down`` removes it. A
+a directory (absolute, or relative to the live checkout -- the user's, even when
+``--repo-root`` is a git worktree, which has no ``data/`` of its own) into the
+instance's scratch space on disk before boot, so the instance can write to it
+freely, and ``down`` removes it. A
 copy that would not leave the disk room to spare fails the boot before anything
 runs. The launch argv and every ``--env``
 value may carry ``{port:<name>}``, ``{copy:<key>}``, ``{scratch}`` (a fresh
@@ -85,8 +89,9 @@ Exit codes:
     1  Failure to boot (partial state torn down); or, for ``refresh``, there was
        no refreshable instance, the old server survived SIGKILL, or the
        rebooted server never became healthy; or, for ``down``, a recorded process
-       survived SIGKILL (its state dir is kept so it stays findable); or a bad
-       argument / unreadable state file.
+       survived SIGKILL (its state dir is kept so it stays findable); or, for
+       ``up --service-name``, ``--repo-root`` is a git worktree (refused before
+       anything boots); or a bad argument / unreadable state file.
 """
 
 from __future__ import annotations
@@ -712,6 +717,33 @@ def parse_copy_assignments(assignments: Sequence[str]) -> dict[str, str]:
     return parsed
 
 
+def main_checkout_of_linked_worktree(repo_root: Path) -> Path | None:
+    """The checkout the linked git worktree at ``repo_root`` was added from, or None when
+    ``repo_root`` is not a linked worktree.
+
+    The user's data, secrets, and app registry live only in that main checkout: a
+    worktree has its own ``data/``, which nothing in the workspace reads.
+    """
+    main_checkout = run_in_background.main_checkout(repo_root)
+    return None if main_checkout == repo_root else main_checkout
+
+
+def refuses_registering_from_a_worktree(
+    repo_root: Path, verb: str, alternative: str
+) -> bool:
+    """Whether ``repo_root`` is in a linked worktree, saying why a registration from it is refused."""
+    main_checkout = main_checkout_of_linked_worktree(repo_root)
+    if main_checkout is None:
+        return False
+    sys.stderr.write(
+        f"{verb}: {repo_root} is a git worktree of {main_checkout}, so a window registered "
+        f"from here would go into {forward_port.apps_file(repo_root)}, which the workspace "
+        f"never reads, and nobody could open it. Pass --repo-root {main_checkout} to "
+        f"show it to the user{alternative}.\n"
+    )
+    return True
+
+
 def _make_copies(
     repo_root: Path,
     state_dir: Path,
@@ -720,16 +752,19 @@ def _make_copies(
 ) -> dict[str, str]:
     """Copy each source directory into the instance's scratch space; return key -> copy path.
 
+    A relative source is the live checkout's, even when ``repo_root`` is a worktree:
+    an instance booted to exercise a worktree's code still runs over the user's data.
     A source that does not exist yet (an app that has never written its store) becomes
     an empty directory rather than an error: the instance creates what it needs there,
     exactly as the live app would on its first run. A copy that would not fit on the
     disk is refused before it is written.
     """
+    copy_root = run_in_background.main_checkout(repo_root)
     copy_by_key: dict[str, str] = {}
     for key, source in copy_sources.items():
         source_path = Path(source)
         if not source_path.is_absolute():
-            source_path = repo_root / source_path
+            source_path = copy_root / source_path
         destination = state_dir / COPIES_DIRNAME / key
         if source_path.is_dir():
             try:
@@ -1070,7 +1105,8 @@ def up(
     mode, recorded on the inner service's row so the workspace themes it as it
     would the app. ``project`` names a standalone project, relative to ``cwd``, that
     ``command`` boots from: its venv is linked before each boot and ``command`` runs
-    behind ``project_launcher``.
+    behind ``project_launcher``. A ``service_name`` from a ``repo_root`` that is a
+    linked git worktree is refused before anything boots.
 
     On any failure the partial state is torn down and 1 is returned. On success a
     state file records the servers + services so ``down`` can find them later.
@@ -1094,6 +1130,13 @@ def up(
         # The wrapper refuses such a path at once, and the health wait would
         # spend its whole budget on the dead wrapper before saying so.
         sys.stderr.write(f"up: --inner-path must start with '/', got {inner_path!r}.\n")
+        return 1
+    if service_name is not None and refuses_registering_from_a_worktree(
+        repo_root,
+        "up",
+        ", keeping --cwd on the code to run, or drop --service-name for an instance "
+        "only you reach on its loopback port",
+    ):
         return 1
     if not _link_project_venv(venv_linker, cwd, project, "up"):
         return 1
@@ -1380,14 +1423,16 @@ def frame(
     Returns 1 on failure. A failed boot is torn down, a re-frame's row deregistered
     with it; a failed re-frame keeps only its record (``read_frame``), so a later
     call can boot it again on a fresh port without being told the note. An inner
-    path without a leading ``/``, an unreadable state file, or a previous wrapper
-    that survives SIGKILL is refused before anything changes, leaving a previous
-    frame as it was.
+    path without a leading ``/``, a ``repo_root`` that is a linked git worktree, an
+    unreadable state file, or a previous wrapper that survives SIGKILL is refused
+    before anything changes, leaving a previous frame as it was.
     """
     if not inner_path.startswith("/"):
         sys.stderr.write(
             f"frame: the inner path must start with '/', got {inner_path!r}.\n"
         )
+        return 1
+    if refuses_registering_from_a_worktree(repo_root, "frame", ""):
         return 1
     state_path = _state_path(repo_root, name)
     previous_port: int | None = None
@@ -1762,7 +1807,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="append",
         default=[],
         metavar="KEY=SOURCE",
-        help="Copy a directory (repo-relative or absolute) into the instance's "
+        help="Copy a directory (absolute, or relative to the live checkout, even from "
+        "a git worktree) into the instance's "
         "scratch space on disk before boot (repeatable), refused if it would not fit; "
         "reachable as {copy:KEY} in --env values and the launch argv, and removed "
         "by 'down'. {scratch} names a fresh directory of the instance's own, and "
@@ -1779,7 +1825,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Register the instance as a service under this name (needed to "
         "surface it as a window; the name becomes a hostname label, so it must be "
         "DNS-safe: lowercase letters/digits and single hyphens, no underscores, "
-        "not starting with 'host-' or 'agent-'). Omit for a bare instance "
+        "not starting with 'host-' or 'agent-'). Refused from a git worktree, whose "
+        "registry the workspace never reads. Omit for a bare instance "
         "reached directly on its port.",
     )
     up_parser.add_argument(
