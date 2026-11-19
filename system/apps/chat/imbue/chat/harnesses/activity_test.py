@@ -278,6 +278,17 @@ def test_placeholder_harness_reports_an_empty_transcript(harness: HarnessType) -
     assert spec.special_kinds == frozenset()
 
 
+def test_a_room_transcript_never_ends_mid_turn() -> None:
+    """Every line of a room is a ``user_message`` and a room has no turns, so a room whose reader died is never a
+    turn cut off."""
+    tracker = build_tracker(HarnessType.ROOM)
+    tracker.observe([{"type": "user_message", "timestamp": "2026-01-01T00:00:00Z", "content": "hi"}])
+    assert tracker.is_tail_mid_turn is False
+    claude = build_tracker(HarnessType.CLAUDE)
+    claude.observe([{"type": "user_message", "timestamp": "2026-01-01T00:00:00Z", "content": "hi"}])
+    assert claude.is_tail_mid_turn is True
+
+
 @pytest.mark.parametrize(
     ("harness", "expected"),
     [

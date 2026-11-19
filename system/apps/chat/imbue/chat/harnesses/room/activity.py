@@ -8,3 +8,8 @@ class RoomActivityTracker(PlaceholderActivityTracker):
     by the chats it asked instead (``awaiting_chat_ids`` on its snapshot)."""
 
     marker_filename: ClassVar[str] = "room_process_started"
+
+    @property
+    def is_tail_mid_turn(self) -> bool:
+        """Never: a room has no turns, and every line of its transcript is a ``user_message``."""
+        return False
