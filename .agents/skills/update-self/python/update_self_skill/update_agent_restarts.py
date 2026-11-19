@@ -48,7 +48,7 @@ SELF_RESTART_LOG_NAME = "helper.log"
 # interrupt route's ``InterruptAgentRequest`` and 409 answers). A ``system/apps/chat`` server test
 # runs ``restart_idle_agents`` against the real app, so it fails when these drift from it.
 STOPPED_CHAT_STATUS = "stopped"
-# A chat whose agent died mid-turn; it runs again only when something is sent to it.
+# A chat whose agent died mid-turn and has not been resumed; a restart would drop its offer to resume.
 INTERRUPTED_CHAT_STATUS = "interrupted"
 ROOM_CHAT_KIND = "room"
 INTERRUPT_IF_IDLE_REQUEST: Mapping[str, object] = {"only_if_idle": True}
