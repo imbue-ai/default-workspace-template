@@ -1,6 +1,7 @@
 # Plan: bring the built-in skills in line with agent-skill best practices
 
 The fix plan for the audit in `report-skills-best-practices-audit.md` beside this file.
+`rationale-skills-best-practices.md`, also beside it, says where each rule in the guide comes from.
 The first release is given in file-level detail; later areas are outlined and get detailed when they start.
 
 ## Overview
