@@ -107,6 +107,10 @@ export function describeRequestErrorKind(error: unknown): SendFailureKind {
   if (error === null || typeof error !== "object") {
     return "unknown";
   }
-  const kind = (error as { response?: { kind?: unknown } | null }).response?.kind;
+  return sendFailureKindOf((error as { response?: { kind?: unknown } | null }).response?.kind);
+}
+
+/** A kind the chat app reported, read as a ``SendFailureKind``; anything unrecognised is "unknown". */
+export function sendFailureKindOf(kind: unknown): SendFailureKind {
   return typeof kind === "string" && KNOWN_SEND_FAILURE_KINDS.has(kind) ? (kind as SendFailureKind) : "unknown";
 }

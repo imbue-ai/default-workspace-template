@@ -30,7 +30,8 @@ The update did not land.
 stderr and the `apply phase timings:` line, then:
 
 - **A local resource cause** (a step shed for memory, a full disk, a step that
-  outlived its budget on a loaded workspace): lessen the load first, using
+  outlived its budget on a loaded workspace; a pre-flight boot the memory guard
+  stopped says so in the failure line itself): lessen the load first, using
   SKILL.md Step 1's licence (pause more chats with `run-status stop-chats
   --agent <name>`, stop the browser and windowless apps, prune caches,
   worktrees and old snapshots), then retry.

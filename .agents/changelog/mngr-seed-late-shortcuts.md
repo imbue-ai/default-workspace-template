@@ -1,1 +1,0 @@
-- `manage-desktop` says that an app registering after a desktop was made has its `default_shortcut` added to every desktop once, so an agent does not add the shortcut of an app it just built by hand, and knows a shortcut taken off after that stays off.

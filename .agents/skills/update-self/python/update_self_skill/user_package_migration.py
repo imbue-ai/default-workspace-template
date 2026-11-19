@@ -76,6 +76,7 @@ _COOLDOWN_COMMENT = (
     "# once it has been public this long, so a compromised one can be yanked first.\n"
 )
 _AGENT_FACING_SUFFIXES = (".md", ".toml", ".sh", ".conf", ".py")
+_CONSOLIDATED_CHANGELOGS = frozenset({"CHANGELOG.md", "UNABRIDGED_CHANGELOG.md"})
 _TABLE_HEADER = re.compile(r"^\s*\[")
 # What separates the steps of a program's `bash -c` script, as user_packages splits them.
 _SCRIPT_SEPARATOR = re.compile(r"(&&|\|\||;|\n)")
@@ -616,7 +617,10 @@ def _rewrite_callers(
             _AGENT_FACING_SUFFIXES
         ):
             continue
-        if "changelog" in path.parts or not path.is_file():
+        is_changelog = (
+            "changelog" in path.parts or relative_path in _CONSOLIDATED_CHANGELOGS
+        )
+        if is_changelog or not path.is_file():
             continue
         text = programs.get(path) or path.read_text(errors="replace")
         new = pattern.sub(

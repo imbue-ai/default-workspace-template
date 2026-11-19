@@ -163,6 +163,13 @@ class WebSocketBroadcaster(MutableModel):
             }
         )
 
+    def broadcast_held_send_failed(self, chat_id: ChatId, message_id: str, detail: str, kind: str) -> None:
+        """Broadcast a held_send_failed event: a message held while its agent came up never reached it, so the page
+        that sent it can hand it back to its composer."""
+        self.broadcast(
+            {"type": "held_send_failed", "chat_id": chat_id, "message_id": message_id, "detail": detail, "kind": kind}
+        )
+
     def shutdown(self) -> None:
         """Signal all clients to disconnect by sending None sentinel."""
         with self._lock:

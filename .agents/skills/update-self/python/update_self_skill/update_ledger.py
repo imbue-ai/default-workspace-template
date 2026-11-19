@@ -118,18 +118,23 @@ def origin_line(repo_root: Path, runner: Runner) -> str:
         runner, repo_root, ["log", "-1", "--format=%ad", "--date=short", creation]
     )
     short = git_out(runner, repo_root, ["rev-parse", "--short=7", creation])
+    version = release_of(repo_root, runner, creation)
+    note = (
+        f"created from {version}" if version else "created from the workspace template"
+    )
+    return _ledger_line(date, note, short)
+
+
+def release_of(repo_root: Path, runner: Runner, rev: str) -> str:
+    """The nearest ``minds-v*`` tag reachable from ``rev``, e.g. ``minds-v0.10.5``."""
     describe = runner.run(
-        ["git", "describe", "--tags", "--abbrev=0", "--match", "minds-v*", creation],
+        ["git", "describe", "--tags", "--abbrev=0", "--match", "minds-v*", rev],
         cwd=str(repo_root),
         capture_output=True,
         text=True,
         check=False,
     )
-    version = (getattr(describe, "stdout", "") or "").strip()
-    note = (
-        f"created from {version}" if version else "created from the workspace template"
-    )
-    return _ledger_line(date, note, short)
+    return (getattr(describe, "stdout", "") or "").strip()
 
 
 def write_version_history_entry(
