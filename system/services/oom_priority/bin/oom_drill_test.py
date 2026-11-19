@@ -12,6 +12,7 @@ from pathlib import Path
 
 import oom_drill
 from oom_drill import ProcessSample
+from oom_priority import bands
 
 # One oom_score_adj point is worth (MemTotal + SwapTotal) / 1000 KiB: 1000 KiB here.
 _TOTAL_KIB = 1_000_000
@@ -43,6 +44,25 @@ _WORKSPACE = [
     _sample(70, "python3", -1000, 600_000),  # the drill's hog
     _sample(80, "kworker", 0, None),  # no mm
 ]
+
+
+def test_the_default_bands_are_the_scores_the_shed_policy_assigns() -> None:
+    stages = list(bands.CHAT_STAGES.values())
+    # What Chromium writes for its GPU and utility processes, between its main process's 0 and a renderer's 300.
+    chromium_gpu_self_assigned = 200
+    policy_scores = {
+        stages[-1].adj,
+        bands.SHARED_BROWSER,
+        bands.shared_browser_oom_score_adj(chromium_gpu_self_assigned),
+        bands.SHARED_BROWSER_FLOOR,
+        bands.AGENT_SUBPROCESS,
+        bands.SCREEN_STACK,
+        bands.WORKER_AGENT,
+        stages[0].adj,
+        bands.USER_AGENT,
+    }
+
+    assert oom_drill.DEFAULT_BANDS == tuple(sorted(policy_scores, reverse=True))
 
 
 def test_prediction_follows_the_bands_and_skips_what_earlyoom_cannot_pick() -> None:

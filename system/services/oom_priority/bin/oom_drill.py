@@ -50,6 +50,12 @@ UNKILLABLE_ADJ: Final[int] = -1000
 PROTECTED_MAX_ADJ: Final[int] = 80
 # Agent subprocesses and Chromium.
 EXPENDABLE_MIN_ADJ: Final[int] = 900
+# One sleeper at each score the shed policy assigns, highest first: an aged chat,
+# Chromium's tabs, its GPU and utility processes, its main process, an agent's
+# commands, the Screen's stack, a worker agent, a fresh chat and a user agent.
+# Written out because the drill cannot import oom_priority.bands; its test holds
+# the two together.
+DEFAULT_BANDS: Final[tuple[int, ...]] = (1000, 960, 943, 910, 900, 850, 600, 560, 300)
 MEMINFO_FIELDS: Final[tuple[str, ...]] = (
     "MemTotal",
     "MemFree",
@@ -458,8 +464,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument(
         "--bands",
-        required=True,
-        help="Comma-separated oom_score_adj per sleeper, e.g. 1000,900,800,600,300",
+        default=",".join(str(band) for band in DEFAULT_BANDS),
+        help="Comma-separated oom_score_adj per sleeper (default: %(default)s, the shed policy's own scores)",
     )
     parser.add_argument(
         "--sleeper-percent",
