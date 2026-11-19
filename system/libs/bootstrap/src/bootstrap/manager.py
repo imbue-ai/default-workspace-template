@@ -779,9 +779,9 @@ def _recover_interrupted_update() -> BootRollback | None:
     but not the pre-apply state (exit ``UPDATE_RECOVER_EXIT_EMERGENCY``) is
     still reported, as incomplete: the marker is gone and the workspace is
     booting over that mismatch, which is precisely the state that wants a
-    person. Waking is the caller's
-    job and deliberately not done here: it starts a live agent, which must not
-    happen until the workspace venv has been converged.
+    person. Waking is the caller's job and deliberately not done here: it
+    starts a live agent, which must not happen until the workspace venv has
+    been converged.
 
     The apply's marker persisting across a boot means the container stopped (or
     died) between the merge landing and the apply finishing -- the half-applied

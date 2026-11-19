@@ -445,10 +445,9 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    partial rollback, finish the restore first, as `update-self`'s
    `apply-outcomes.md` ("A partial restore at boot") says, with
    `python3 .agents/skills/update-self/scripts/update_self.py finish-restore`.
-   Then check the
-   workspace is healthy, tear down as step 4 does after a failed apply, and
-   tell the user in a line or two how it checked out. A retry the user asks
-   for is a fresh pass off the current `HEAD`.
+   Then check the workspace is healthy, tear down as step 4 does after a
+   failed apply, and tell the user in a line or two how it checked out. A
+   retry the user asks for is a fresh pass off the current `HEAD`.
 
 3. **The notice is the user's.** After a successful apply, one banner across
    the top of the workspace names every app included in the rollback (each
