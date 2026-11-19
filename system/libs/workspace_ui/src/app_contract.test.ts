@@ -635,7 +635,10 @@ describe("askAgentToFix", () => {
     askAgentToFix(connection as ShellConnection, { whatFailed: "Docs couldn't open that", details });
 
     const text = askedText(parent);
-    expect(text.startsWith("Docs couldn't open that.\n\n")).toBe(true);
+    expect(text.startsWith("Imbue Studio showed the user this failure: Docs couldn't open that.\n\n")).toBe(true);
+    // Imbue Studio wrote it, so it never speaks as the user.
+    expect(text).toMatch(/tell the user what was wrong/);
+    expect(text).not.toMatch(/\b(me|my|I)\b/);
     // The details sit whole inside a fence the backticks among them cannot close.
     const fenced = text.match(/^(`{4,})\n([\s\S]*?)\n\1$/m);
     expect(fenced?.[2]).toBe(details);
@@ -645,7 +648,9 @@ describe("askAgentToFix", () => {
     const parent = shellFramed();
     askAgentToFix(connection as ShellConnection, { whatFailed: "This window couldn't be closed.", details: "  " });
     const text = askedText(parent);
-    expect(text.startsWith("This window couldn't be closed.\n\n")).toBe(true);
+    expect(text.startsWith("Imbue Studio showed the user this failure: This window couldn't be closed.\n\n")).toBe(
+      true,
+    );
     expect(text).not.toContain("`");
     expect(text).not.toContain("closed..");
   });

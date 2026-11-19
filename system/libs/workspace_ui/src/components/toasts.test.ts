@@ -10,8 +10,24 @@ import { mountView, unmountViews } from "../testing/mount";
 import { Toasts } from "./toasts";
 
 const TOASTS = [
-  { id: 1, message: "Could not move it", details: null, actions: [], isLasting: false, isReportable: false },
-  { id: 2, message: "Could not copy it", details: null, actions: [], isLasting: false, isReportable: false },
+  {
+    id: 1,
+    message: "Could not move it",
+    details: null,
+    actions: [],
+    isLasting: false,
+    isReportable: false,
+    isAgentOffered: false,
+  },
+  {
+    id: 2,
+    message: "Could not copy it",
+    details: null,
+    actions: [],
+    isLasting: false,
+    isReportable: false,
+    isAgentOffered: false,
+  },
 ];
 
 afterEach(() => {
@@ -21,6 +37,7 @@ afterEach(() => {
 function mountQueue(
   queue: ToastQueue,
   onReportBug: () => ((failure: ReportedFailure) => void) | null = () => null,
+  onAskAgent: () => ((failure: ReportedFailure) => Promise<unknown>) | null = () => null,
 ): HTMLElement {
   return mountView(() =>
     m(Toasts, {
@@ -28,6 +45,7 @@ function mountQueue(
       placementClass: "fixed",
       onDismiss: (id) => queue.dismiss(id),
       onReportBug: onReportBug(),
+      onAskAgent: onAskAgent(),
     }),
   );
 }
@@ -129,6 +147,73 @@ describe("Toasts", () => {
       { message: "This window couldn't be closed. Try again. If this persists, report a bug.", details: "HTTP 500" },
     ]);
     expect(queue.current()).toHaveLength(2);
+  });
+
+  it("offers an agent before Report a bug on a reportable note once the page can ask one, pending until the ask settles", async () => {
+    const queue = new ToastQueue(() => m.redraw.sync());
+    queue.show("This window couldn't be closed. Try again. If this persists, report a bug.", {
+      isLasting: true,
+      details: "HTTP 500",
+      isReportable: true,
+      actions: [{ label: "Try again", run: vi.fn() }],
+    });
+    queue.show("Docs couldn't open that.", { isLasting: true, details: "HTTP 400" });
+    const asked: ReportedFailure[] = [];
+    let settle: () => void = () => undefined;
+    let askAgent: ((failure: ReportedFailure) => Promise<unknown>) | null = null;
+    const root = mountQueue(
+      queue,
+      () => () => undefined,
+      () => askAgent,
+    );
+    expect(root.querySelector(".ask-agent-to-fix")).toBeNull();
+
+    askAgent = (failure) => {
+      asked.push(failure);
+      return new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+    };
+    m.redraw.sync();
+    const labels = (): (string | null)[] =>
+      Array.from(root.querySelectorAll<HTMLButtonElement>(".toast-action")).map((button) => button.textContent);
+    // Only the note that asks for a bug report offers an agent, after its own buttons and before the report.
+    expect(labels()).toEqual(["Try again", "Ask an agent to fix this", "Report a bug"]);
+
+    const ask = (): HTMLButtonElement => root.querySelector<HTMLButtonElement>(".ask-agent-to-fix")!;
+    ask().click();
+    m.redraw.sync();
+    expect(ask().textContent).toBe("Asking an agent…");
+    expect(ask().disabled).toBe(true);
+    expect(asked).toEqual([
+      { message: "This window couldn't be closed. Try again. If this persists, report a bug.", details: "HTTP 500" },
+    ]);
+    expect(queue.current()).toHaveLength(2);
+
+    settle();
+    await Promise.resolve();
+    await Promise.resolve();
+    m.redraw.sync();
+    expect(ask().textContent).toBe("Ask an agent to fix this");
+    expect(ask().disabled).toBe(false);
+  });
+
+  it("offers no agent on a reportable note that withholds one, where the ask would go through what failed", () => {
+    const queue = new ToastQueue(() => m.redraw.sync());
+    queue.show("Chat couldn't send that. Try again. If this persists, report a bug.", {
+      isLasting: true,
+      isReportable: true,
+      isAgentWithheld: true,
+    });
+    const root = mountQueue(
+      queue,
+      () => () => undefined,
+      () => () => Promise.resolve(),
+    );
+    const labels = Array.from(root.querySelectorAll<HTMLButtonElement>(".toast-action")).map(
+      (button) => button.textContent,
+    );
+    expect(labels).toEqual(["Report a bug"]);
   });
 
   it("gives a plain note with details a See details and a close control, and holds it up once they are opened", () => {

@@ -143,8 +143,13 @@ describe("the agent terminal's liveness gate", () => {
     expect(root.querySelector(".agent-terminal-stopped")).not.toBeNull();
     expect(root.querySelector(".agent-terminal-start-error")?.textContent).toBe(sentence);
     expect(root.querySelector(".see-details-text")?.textContent).toContain("no such agent");
-    (root.querySelector(".agent-terminal-report-bug") as HTMLElement).click();
+    (root.querySelector(".report-bug") as HTMLElement).click();
     expect(shell.posted("shell:report-bug")).toHaveLength(1);
+    // An agent is offered first, and is asked about the failure as the face words it.
+    (root.querySelector(".ask-agent-to-fix") as HTMLElement).click();
+    const [ask] = shell.posted("shell:ask-agent");
+    expect(String(ask?.text)).toMatch(new RegExp(`^Imbue Studio showed the user this failure: ${sentence}`));
+    expect(String(ask?.text)).toContain("no such agent");
     shell.release();
 
     // A retry from the button that fails again keeps reporting, not silently resetting.

@@ -1,6 +1,6 @@
 ---
 name: assist
-description: Diagnose and fix a problem the user is hitting in this workspace, and escalate built-in (non-user) issues to imbue. Invoked as `/assist <description>` by the Imbue Studio "get help -> have an agent help" flow (also usable directly when the user describes something broken).
+description: Diagnose and fix a problem the user is hitting in this workspace, and escalate built-in (non-user) issues to imbue. Invoked as `/assist <description>` by the Imbue Studio "get help -> have an agent help" flow and by the workspace's "Ask an agent ..." buttons on a failure (also usable directly when the user describes something broken).
 metadata:
   author: imbue
 ---
@@ -14,6 +14,7 @@ Work the steps below in order. Keep the user informed in plain language as you g
 ## 1. Understand the problem
 
 - Read the user's description carefully. If it is vague, state your assumptions and proceed; ask only if you truly cannot start.
+- A description that starts "Imbue Studio showed the user this failure" (or names the app it is about first) came from an "Ask an agent ..." button the user pressed on that failure, not from the user's own words: the failure's sentence and its details are your starting evidence, and the user is the person you confirm the diagnosis with.
 - **Reproduce or directly observe the failure before theorizing about it.** Actually trigger the thing the user reported and watch it happen -- measure the slow operation, hit the failing endpoint, reproduce the error. Gather evidence rather than guessing:
   - Service logs: `supervisorctl status` and `/var/log/supervisor/<name>-stdout.log` / `-stderr.log`.
   - The relevant app/service code and any error/traceback you can find.

@@ -463,9 +463,13 @@ made with that title and label on the default account when there is none (a
 window's "Chat about this app"; the intake is held with a `hint` the root puts
 on the composer); `app_ask`, an ask from a page of an app (a failure's "Ask an
 agent to fix this"), whose text does not say which app it is about, so the chat
-that takes it receives it led by "This is about the <app_display_name> app." and
-a blank line (`chat_intakes.py`'s `app_ask_message`; an ask with no text stays
-empty): that same chat about the `app` takes the text as a message
+that takes it receives it led by "/assist This is about the <app_display_name>
+app." and a blank line (`chat_intakes.py`'s `app_ask_message`: the assist
+command first, since a chat runs a command only at the start of its message, so
+the agent runs the workspace's assist flow, which also reports a fault in
+built-in code to Imbue; like any command, it reaches the agent without a
+visitor's `[from: <name>]` prefix, its sender recorded in the annotation alone;
+an ask with no text stays empty): that same chat about the `app` takes the text as a message
 when it is an agent chat, has it held for its page while its create is still
 running (the root sends it when the agent is up by the time it applies the
 intake, else leaves it in the chat's composer, unsent), and is
@@ -952,9 +956,14 @@ the task there: to the main chat when it is an agent chat, else to the agent
 chat messaged most recently, and never to the failing chat (`chatToAskAbout`
 in `frontend/src/views/ask-running-agent.ts`). The task is the one every "Ask
 an agent to fix this" sends (`askAgentToFix` in `workspace_ui`: what failed,
-the details, what to do), sent as a message through
+the details, what to do, written as Imbue Studio about the user), behind
+`/assist` (`assistRequest`), so the agent runs the workspace's assist flow as
+it does for an ask through the shell. It is sent as a message through
 `POST /api/chats/<chat-id>/message` rather than through the shell, whose ask
-may create a chat for it. The button reads "Asking an agent…" until the send
+may create a chat for it, so these failures never offer the shell's ask, which
+every other failure that asks for a bug report offers first: with no other
+agent chat they offer none, and a Try again on the failed-create page that
+fails again offers none beside the page's. The button reads "Asking an agent…" until the send
 is answered, and the page then shows the chat the task went to. A failed chat
 that names no account offers neither button, since a sign-in is what it needs
 ("Choose a provider").

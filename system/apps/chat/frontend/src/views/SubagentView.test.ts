@@ -74,8 +74,12 @@ describe("the side conversation view", () => {
       "This conversation couldn't be loaded. Try again. If this persists, report a bug.",
     );
     expect(root.querySelector(".see-details-text")?.textContent).toContain("Could not read the session file");
+    const buttons = Array.from(root.querySelectorAll(".message-list-error button")).map((b) => b.textContent);
+    expect(buttons).toEqual(["Try again", "Ask an agent to fix this", "Report a bug"]);
     (root.querySelector(".report-bug") as HTMLElement).click();
     expect(shell.posted("shell:report-bug")).toHaveLength(1);
+    (root.querySelector(".ask-agent-to-fix") as HTMLElement).click();
+    expect(String(shell.posted("shell:ask-agent")[0]?.text)).toContain("Could not read the session file");
     shell.release();
 
     (root.querySelector(".message-list-reload") as HTMLElement).click();

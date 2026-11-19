@@ -1,15 +1,14 @@
 import m from "mithril";
 import { askAgentToFix } from "@imbue/workspace-ui/src/app_contract";
-import type { AgentFixRequest, ShownFailure } from "@imbue/workspace-ui/src/app_contract";
-import { ASKING_AN_AGENT_LABEL, ASK_AGENT_TO_FIX_LABEL } from "@imbue/workspace-ui/src/components/FailureButtons";
+import type { AgentFixRequest, ShellConnection, ShownFailure } from "@imbue/workspace-ui/src/app_contract";
 import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import type { NoticeAction, NoticeDialogAttrs } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import type { SendFailureKind } from "@imbue/workspace-ui/src/models/request-error";
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { startChatOnAccount } from "../shell";
 import { getShellConnection } from "../shellConnection";
-import { askConnectionToChat, chatToAskAbout, chatToAskAboutFailedCreate, withRefusedAsk } from "./ask-running-agent";
-import { reportBugActions } from "./failure-actions";
+import { askConnectionToChat, chatToAskAbout, chatToAskAboutFailedCreate } from "./ask-running-agent";
+import { failureRemedyActions } from "./failure-actions";
 import { SWITCH_PROVIDER_LABEL, chooseProviderToSwitchChat } from "./provider-switch";
 import {
   DECLINED_COMPACT_TITLE,
@@ -25,7 +24,7 @@ import {
   isNothingToCancel,
 } from "./composer-failures";
 import type { ComposerFailureKind } from "./composer-failures";
-import { plainFailureLines } from "./failure-lines";
+import { plainFailureLines, plainFailureSentence, withRefusedAsk } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 import {
   clearComposerAttachments,
@@ -231,6 +230,13 @@ const KINDS_THAT_MAY_HAVE_ARRIVED: ReadonlySet<ComposerFailureKind> = new Set([
   "not_answered",
 ]);
 
+// The kinds of refused send whose chat has no agent it could start, which only a chat already running is asked about.
+const KINDS_ASKED_OF_A_RUNNING_CHAT: ReadonlySet<ComposerFailureKind> = new Set([
+  "agent_start_failed",
+  "agent_unreachable",
+  "chat_not_started",
+]);
+
 /** The running chat the notice of a refused send offers to ask, for a send whose chat has no agent it could start
  *  (one that would not start for the send, one that was down and would not come back, one whose create failed): what
  *  stopped it may be the workspace itself, which an agent that is already running can look into. A chat that was
@@ -241,6 +247,9 @@ function chatToAskAboutRefusedSend(kind: ComposerFailureKind, failingChatId: str
   const provisional = getProvisionalChat(failingChatId);
   return provisional?.phase === "failed" ? chatToAskAboutFailedCreate(provisional) : null;
 }
+// The server's kinds for a send refused while the chat app cannot read its agent list: an ask reaches its chat through
+// the same chat app, which refuses it on the same grounds, so no agent is offered.
+const SERVER_KINDS_AN_ASK_WOULD_MEET: ReadonlySet<string | null> = new Set(["chat_starting", "agent_list_unreadable"]);
 
 // A NUL character cannot be typed into a terminal, so an agent that takes its input as keystrokes
 // refuses the whole message over one. A textarea does not show NULs anyway (they arrive by pasting
@@ -2244,13 +2253,16 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         m.redraw();
       }
 
-      /** The notice's "Ask an agent to fix this": hand the failure to ``chatToAskId``'s agent, which closes the
-       *  notice and shows that chat. A refused ask says why in the notice, under the failure it was about. */
-      async function askRunningAgentToFix(chatToAskId: string, request: AgentFixRequest): Promise<void> {
+      /** The notice's "Ask an agent to fix this": hand the failure to an agent through ``asker``, which shows the
+       *  agent's chat; that closes the notice. A refused ask says why in the notice, under the failure it was about. */
+      async function askAgentAboutNotice(
+        asker: Pick<ShellConnection, "askAgent">,
+        request: AgentFixRequest,
+      ): Promise<void> {
         if (actionFailureInFlight !== null) return;
         const noticeAsked = actionFailure;
         beginNoticeAction("ask");
-        const outcome = await askAgentToFix(askConnectionToChat(chatToAskId), request);
+        const outcome = await askAgentToFix(asker, request, { showsOutcome: true });
         // The composer moved to another chat meanwhile, which closed the notice.
         if (actionFailure !== noticeAsked) return;
         if (outcome.isOpened) {
@@ -2574,8 +2586,38 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                 isRestartOffered ? (SEND_FAILURE_RESTART_SENTENCES[actionFailureKind] ?? null) : null,
               ],
             };
+        // An agent is offered first. A send whose chat has no agent it could start asks a chat that is already
+        // running (``chatToAskId``), and none when there is no such chat: a new chat, which an ask through the shell
+        // may make, would meet what stopped this one. Any other failure that asks for a bug report asks through the
+        // shell, unless the ask would meet what failed; it carries the failure as the server worded it, without the
+        // Restart line.
+        const shellConnection = getShellConnection();
+        const ask =
+          failingChatId !== null && chatToAskId !== null
+            ? {
+                isAsking: actionFailureInFlight === "ask",
+                run: () =>
+                  void askAgentAboutNotice(
+                    askConnectionToChat(chatToAskId),
+                    failedStartFixRequest(failingChatId, shown.details),
+                  ),
+              }
+            : !shown.isReportable ||
+                KINDS_ASKED_OF_A_RUNNING_CHAT.has(actionFailureKind) ||
+                SERVER_KINDS_AN_ASK_WOULD_MEET.has(actionFailureServerKind) ||
+                shellConnection === null ||
+                !shellConnection.hasShell()
+              ? null
+              : {
+                  isAsking: actionFailureInFlight === "ask",
+                  run: () =>
+                    void askAgentAboutNotice(shellConnection, {
+                      whatFailed: plainFailureSentence(failure),
+                      details: failure.details,
+                    }),
+                };
         // A refused ask is told as part of the notice, so the notice keeps one "See details" and its bug report
-        // files both. The ask itself is handed the failure alone.
+        // files both.
         const told = withRefusedAsk(shown, actionFailureAskFailure);
         // While one of the notice's actions runs, none of them can be pressed, whoever supplied it.
         const disabledWhileBusy = (action: NoticeAction): NoticeAction =>
@@ -2594,7 +2636,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             actionFailureActions.length > 0 ||
             externalAction !== null ||
             switchProviderChatId !== null ||
-            chatToAskId !== null
+            ask !== null
               ? "Cancel"
               : "OK",
           isDismissable: actionFailureInFlight === null,
@@ -2625,17 +2667,6 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   },
                 ]
               : []),
-            ...(failingChatId !== null && chatToAskId !== null
-              ? [
-                  {
-                    label: actionFailureInFlight === "ask" ? ASKING_AN_AGENT_LABEL : ASK_AGENT_TO_FIX_LABEL,
-                    tooltip: "Sends what failed to an agent that is already running, and shows its chat",
-                    isSecondary: true,
-                    run: () =>
-                      void askRunningAgentToFix(chatToAskId, failedStartFixRequest(failingChatId, shown.details)),
-                  },
-                ]
-              : []),
             ...(isTerminalUseful
               ? [
                   {
@@ -2649,7 +2680,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   },
                 ]
               : []),
-            ...reportBugActions(getShellConnection(), told),
+            ...failureRemedyActions(shellConnection, told, ask),
             ...(!isRestartOffered
               ? []
               : [

@@ -136,7 +136,7 @@ vi.mock("./FastModeNotice", () => ({ FastModeNotice: { view: () => null } }));
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { ChatPanel } from "./ChatPanel";
-import { AskAgentToFixButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { AskAgentToFixButton, FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
 import type { AskAgentToFixButtonAttrs } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
@@ -462,6 +462,12 @@ describe("ChatPanel over a provisional chat", () => {
       "This chat couldn't be started. Try again. If this persists, report a bug.",
     );
     expect(detailsShown(refused)).toContain("account acct-1 is on a lane this build does not have");
+    // The refused relaunch is the page's own failure again, so it gets no "Ask an agent" beside the page's.
+    expect(
+      flatten(refused)
+        .filter((vnode) => vnode.tag === FailureRemedies)
+        .map((vnode) => (vnode.attrs as { isAgentWithheld?: boolean }).isAgentWithheld),
+    ).toEqual([true]);
 
     mocks.proto = {
       chat_id: AGENT_ID,
@@ -537,9 +543,9 @@ describe("ChatPanel over a provisional chat", () => {
       expect(button.disabled).toBe(true);
       expect(mocks.sendMessage).toHaveBeenCalledExactlyOnceWith(
         "chat-main",
-        'The chat "Chat 1" couldn\'t be started.\n\n' +
+        '/assist Imbue Studio showed the user this failure: The chat "Chat 1" couldn\'t be started.\n\n' +
           "Details:\n```\nmngr create exited with code 1: no space left on device\n```\n\n" +
-          "Find out why this failed and fix it. Then tell me what was wrong and what you changed.",
+          "Find out why it failed and fix it, then tell the user what was wrong and what you changed.",
         "minted-id",
       );
       expect(mocks.openChatPage).not.toHaveBeenCalled();

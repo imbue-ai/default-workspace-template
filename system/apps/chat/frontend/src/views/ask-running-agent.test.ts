@@ -23,7 +23,8 @@ vi.mock("../shellConnection", () => ({ getShellConnection: () => mocks.shellConn
 import { askAgentToFix } from "@imbue/workspace-ui/src/app_contract";
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
-import { askConnectionToChat, chatToAskAbout, withRefusedAsk } from "./ask-running-agent";
+import { askConnectionToChat, chatToAskAbout } from "./ask-running-agent";
+import { withRefusedAsk } from "./failure-lines";
 
 /** A refusal as mithril rejects with it: the parsed body, its status as ``code``, and the raw body as the message. */
 function refusal(status: number, body: Record<string, unknown>): Error {
@@ -97,15 +98,15 @@ describe("an ask sent to a running chat", () => {
     mocks.shellConnection = null;
   });
 
-  it("sends the task to that chat as a message, then shows the chat", async () => {
+  it("sends the task to that chat as a message that runs the assist flow, written as Imbue Studio, then shows the chat", async () => {
     const outcome = await askAgentToFix(askConnectionToChat("chat-main"), FAILURE);
 
     expect(outcome).toEqual({ isOpened: true });
     expect(mocks.sendMessage).toHaveBeenCalledExactlyOnceWith(
       "chat-main",
-      'The chat "Chat 3" couldn\'t be started.\n\n' +
+      '/assist Imbue Studio showed the user this failure: The chat "Chat 3" couldn\'t be started.\n\n' +
         "Details:\n```\nmngr create exited with code 1\n```\n\n" +
-        "Find out why this failed and fix it. Then tell me what was wrong and what you changed.",
+        "Find out why it failed and fix it, then tell the user what was wrong and what you changed.",
       "minted-id",
     );
     expect(mocks.openChatPage).toHaveBeenCalledExactlyOnceWith("chat-main");

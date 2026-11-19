@@ -90,8 +90,10 @@ async function shoulderTapQueuedMessages(chatId: string): Promise<void> {
   }
 }
 
-// What "Nudge the agent" sends when the queued messages went through but the agent may not have noticed them.
-const NUDGE_MESSAGE = "Please look at the messages I just sent.";
+// What "Nudge the agent" sends when the queued messages went through but the agent may not have noticed them. Imbue
+// Studio writes it, so it speaks about the user rather than as them.
+const NUDGE_MESSAGE =
+  "Imbue Studio delivered the user's queued messages above, but you may not have seen them. Read them now.";
 
 /** The composer's notice for a refused tap, by what the refusal says happened to the queued messages. */
 function tapFailureNotice(chatId: string, error: unknown): Parameters<typeof raiseFailureNotice>[1] {
