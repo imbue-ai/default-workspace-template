@@ -43,6 +43,8 @@ A few housekeeping files live alongside them:
 - `README.md` - This file.
 - `AGENTS.md` - The standing instructions your agent follows. `CLAUDE.md`
   loads it and adds a few Claude-only notes.
+- `CHANGELOG.md` and `UNABRIDGED_CHANGELOG.md` - What each release of the
+  workspace changed, in summary and in full.
 - `pyproject.toml` and `uv.lock` - The Python project definition; the tooling
   requires them at the top level.
 
