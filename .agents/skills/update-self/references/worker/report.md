@@ -7,7 +7,7 @@ either of the two rule records under Validation.
 ## The sections
 
 - **Catch-up**, first, only on a `done` that answers a catch-up or a retry
-  (`worker-catch-up.md`).
+  (`worker/catch-up.md`).
 - **What's new**: a digest of the changelog entries.
 - **Conflicts**: each one and its resolution. For any side-pick, or claim
   that the kept side subsumes the other, list what the discarded side changed
@@ -51,7 +51,7 @@ either of the two rule records under Validation.
     build-time path nothing outside the image build provides. Say what the
     running workspace lacks, or still has, until a recreate.
 - **Provisioning changes** and **global-dependency bumps** (if any), per
-  `worker-provisioning-changes.md`: each classified live-applicable (naming
+  `worker/provisioning-changes.md`: each classified live-applicable (naming
   the in-branch mirror edits you made) or rebuild-only, with the version
   delta. A user-created dependent of a pin bump is "applied live, unverified
   in the worktree; the lead checks it after the apply", with what your

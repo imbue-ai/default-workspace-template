@@ -24,7 +24,7 @@ imports; a consumer the report names that the update broke):
 ## What each finding of the report asks of you
 
 The worker classified provisioning findings by
-`worker-provisioning-changes.md` (live-applicable or rebuild-only); read it
+`worker/provisioning-changes.md` (live-applicable or rebuild-only); read it
 when a finding's class or wording is unclear.
 
 - **`shared_runtime` live consumers.** The apply's restart has already put

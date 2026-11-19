@@ -87,8 +87,8 @@ block. Never drop the creation from the loop.
 
 A workspace-added skill has no footprint the update can reach at all, and
 stays a consumer for sections 2 and 3 to find. An app directory with no
-`app.toml` is read by hand (`older-workspaces.md`, "Apps from before the app
-model").
+`app.toml` is read by hand (`worker/older-workspaces.md`, "Apps from before the
+app model").
 
 ## 2. Retired names
 
@@ -207,7 +207,7 @@ an impacted skill gets validated per its own contract.
 **Provisioning files** (`system/scripts/setup_system.sh`, the installers it
 chains, `.mngr/**`) and **global-dependency bumps** always count as impacted
 even though nothing imports them. Work them per
-`worker-provisioning-changes.md` and report each there.
+`worker/provisioning-changes.md` and report each there.
 
 ## 5. Record what you found
 

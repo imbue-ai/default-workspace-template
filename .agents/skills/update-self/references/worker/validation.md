@@ -32,7 +32,8 @@ service in the workspace can start. Fix it before running anything else.
   (`system/test_user_packages_are_standalone.py` names it), or a failure here
   or in the suites below on the workspace's own skills, apps, services or
   docs that the update's changelog ties to a changed rule: convert or fix it
-  as `older-workspaces.md` ("Python from before the packaged layout") says.
+  as `worker/older-workspaces.md` ("Python from before the packaged layout")
+  says.
 
 ## Suites, lint, ratchets
 

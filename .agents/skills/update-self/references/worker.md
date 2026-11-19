@@ -61,7 +61,7 @@ is present, and keep the merge base for the later steps, which run in fresh
 shells after the merge has moved it:
 
 ```bash
-# Complete a shallow clone's history (references/older-workspaces.md).
+# Complete a shallow clone's history (references/worker/older-workspaces.md).
 if [ -f "$(git rev-parse --git-common-dir)/shallow" ]; then
     git fetch --unshallow upstream
 fi
@@ -94,7 +94,7 @@ for ROLLBACK in $ROLLBACKS; do git revert --no-edit "$ROLLBACK" || break; done
 ```
 
 The loop stops at the first revert that conflicts. Then, and to learn why the
-reverts are needed, read `references/worker-conflict-triage.md` ("A rollback
+reverts are needed, read `references/worker/conflict-triage.md` ("A rollback
 revert that conflicts"). The apply refuses a merge that leaves a rollback in
 place.
 
@@ -118,7 +118,7 @@ git diff --name-only --diff-filter=U
 ```
 
 - **A conflict listed**: triage each per
-  `references/worker-conflict-triage.md`. The first rule there that applies
+  `references/worker/conflict-triage.md`. The first rule there that applies
   wins.
 - **A lockfile (`uv.lock`, `package-lock.json`) that `classify-merge` shows
   changed on both sides**, even with no conflict reported: discard git's
@@ -161,7 +161,7 @@ upstream's testing never answers the local question of who depends on a
 file.
 
 **When `has_local_footprint` is true, run all of
-`references/worker-impact-analysis.md`.**
+`references/worker/impact-analysis.md`.**
 
 **When it is false**, the workspace's only divergence from the base is prose
 (the version history every apply rewrites, a `PURPOSE.md`), and there is no
@@ -186,11 +186,11 @@ built-in, restarted by the apply and tested upstream, so do only this:
    `data/.state/cron.d`, which git does not show (`ls
    "$LEAD_WORK_DIR/data/.state/cron.d"`; under the main worktree of this same
    repo when `LEAD_WORK_DIR` is unset), and grep the lines of any entry it
-   holds the same way; `references/older-workspaces.md` ("Cron entries from
+   holds the same way; `references/worker/older-workspaces.md` ("Cron entries from
    before routines") says why one may be there. A hit in either is a
    user-created consumer: run the analysis in full after all.
 3. Work the provisioning files and global-dependency bumps, which always
-   count as impacted, per `references/worker-provisioning-changes.md`.
+   count as impacted, per `references/worker/provisioning-changes.md`.
 4. Record the footprint evidence in your report: `has_local_footprint: false`
    plus the `local_only` paths.
 
@@ -236,7 +236,7 @@ git diff --cached --quiet || git commit -m "Record skill-check exemptions"
 ```
 
 When the environment gate's condition holds, run that gate before this block
-(`references/worker-validation.md`, "Environment gate"). The stamp records
+(`references/worker/validation.md`, "Environment gate"). The stamp records
 which skill checks each of the workspace's existing skills fails, as an
 exemption in that skill's frontmatter, and removes one that has gone stale;
 it changes nothing else. List its output lines under your report's
@@ -247,14 +247,22 @@ wrote, alone, under the exact subject `Record skill-check exemptions`. A
 commit of that subject holding only that is left out wherever a rule here
 reads your edits: it selects no suite and no boot in 4b, and it does not end
 the clean-pull skip in 4c. Never put anything else into it, and never reuse
-the subject. `references/worker-review-gates.md` has the test that tells it
+the subject. `references/worker/review-gates.md` has the test that tells it
 from an edit.
 
 On a clean pull with no local footprint and no edits of your own, every other
 condition is false and nothing else here runs. Otherwise read
-`references/worker-validation.md` and run each item whose condition holds.
+`references/worker/validation.md` and run each item whose condition holds.
 Its Playwright item drives the page per
 `data/.tasks/update-self/skill-at-target/.agents/shared/references/web-frontend-testing.md`.
+When a gate or a suite fails on the workspace's own Python over a rule the
+update changed, `references/worker/older-workspaces.md` ("Python from before
+the packaged layout") says what to do. The rules are in
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/running-python.md`
+and
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/spec-summary.md`,
+and the conversion guide is
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/python-packaging-migration.md`.
 
 ### 4c. Review gates
 
@@ -269,7 +277,7 @@ scoped to every file whose merged content differs from the target release.
 4b's suites are their test gate, so select tests again only over what you
 commit after it.
 
-`references/worker-review-gates.md` is the full rule: what counts as an edit
+`references/worker/review-gates.md` is the full rule: what counts as an edit
 of yours, the scope, and the keep-or-revert disposition for fix commits. Read
 it before deciding either way.
 
@@ -355,7 +363,8 @@ Take the frontmatter parse, the report frontmatter, and the body shapes from
 `data/.tasks/update-self/skill-at-target/.agents/shared/references/worker-reporting.md`
 (`<TASK_FILE>` -> `data/.tasks/update-self/task.md`). Deliver the report **by
 hand**, not with that reference's `report` subcommand: write the file and
-copy it into place yourself.
+copy it into place yourself (`references/worker/older-workspaces.md`,
+"Delivering the report by hand", says why).
 
 ```bash
 mkdir -p data/.tasks/update-self/reports
@@ -383,7 +392,7 @@ Valid `name:` values:
     why it failed, the before/after evidence (paths in your worktree), and
     the options. Only this one reaches the user.
 - **`done`** (`type: status`): merged, triaged and validated on
-  `mngr/update-self`. `references/worker-report.md` lists the sections its
+  `mngr/update-self`. `references/worker/report.md` lists the sections its
   body must carry; a report missing one is sent back.
 - **`stuck`** (`type: status`): you could not reach a clean, validated merge,
   or you hit the provisioning escape hatch. One sentence on what blocked you
@@ -395,11 +404,11 @@ Valid `name:` values:
 The apply lands your branch only by fast-forward, so anything another chat
 committed after you branched makes it refuse. The lead then replies asking
 you to catch up to its current `HEAD`. Your validated merge stands: follow
-`references/worker-catch-up.md` to bring the workspace's new commits into
+`references/worker/catch-up.md` to bring the workspace's new commits into
 your branch and validate only what they change.
 
 ## 8. Retry after the apply rolled back
 
 When the lead's apply of your branch rolls back, the lead deals with the
-cause and asks you to retry: `references/worker-catch-up.md` ("Retry after
+cause and asks you to retry: `references/worker/catch-up.md` ("Retry after
 the apply rolled back").

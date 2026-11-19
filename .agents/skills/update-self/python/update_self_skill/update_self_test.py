@@ -1784,7 +1784,7 @@ def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> No
         path.read_text(encoding="utf-8")
         for path in (
             _SKILL_DIR / "SKILL.md",
-            *sorted((_SKILL_DIR / "references").glob("*.md")),
+            *sorted((_SKILL_DIR / "references").rglob("*.md")),
         )
     ]
     # One template in the whole skill, and it is the one the launch step follows.
@@ -1865,7 +1865,7 @@ def test_skill_md_runs_its_scripts_from_the_staged_copy_below_step_3() -> None:
     # them is held to the same rule.
     prose = [below_step_3] + [
         path.read_text(encoding="utf-8")
-        for path in sorted((skill_dir / "references").glob("*.md"))
+        for path in sorted((skill_dir / "references").rglob("*.md"))
     ]
     invocations = [
         line
@@ -1897,8 +1897,8 @@ def test_prose_outside_the_skill_is_read_from_the_staged_copy_after_the_hand_off
     prose = {
         "SKILL.md": skill_md[skill_md.index("## 3. Dispatch the worker") :],
         **{
-            path.name: path.read_text(encoding="utf-8")
-            for path in sorted((_SKILL_DIR / "references").glob("*.md"))
+            path.relative_to(_SKILL_DIR).as_posix(): path.read_text(encoding="utf-8")
+            for path in sorted((_SKILL_DIR / "references").rglob("*.md"))
         },
     }
     staged_prefix = f"{update_self.STAGING_DIR_REL}/"
@@ -1972,7 +1972,7 @@ def test_every_update_self_invocation_in_the_prose_is_one_the_script_takes() -> 
     parser does not know fails exactly when a lead follows it. Every fenced ``update_self.py`` call in
     SKILL.md and the references is parsed as written, with an unset pin expanding to nothing."""
     skill_dir = _SKILL_DIR
-    prose = [skill_dir / "SKILL.md", *sorted((skill_dir / "references").glob("*.md"))]
+    prose = [skill_dir / "SKILL.md", *sorted((skill_dir / "references").rglob("*.md"))]
     parser = update_self.build_parser()
     parsed = 0
     for path in prose:
@@ -2235,7 +2235,7 @@ def _own_edits(repo: Path, merge: str) -> list[str]:
     commit, and the lines that close the group gathering the paths, run as written."""
     [recipe] = [
         block
-        for block in _FENCED_BLOCK.findall(_reference("worker-validation.md"))
+        for block in _FENCED_BLOCK.findall(_reference("worker/validation.md"))
         if "validate-paths.txt" in block
     ]
     group = recipe.replace("\\\n", " ").partition("; } |")[0].splitlines()
@@ -2258,7 +2258,7 @@ def test_the_skill_exemption_commit_is_not_read_as_an_edit_of_the_workers(
     update into the release with the checks runs the review gates over every such workspace. The
     prose says so by rule; this runs its own commands to hold it to that, and to hold that
     nothing else rides out under the same exception."""
-    guide = _reference("update-self-worker.md")
+    guide = _reference("worker.md")
     [stamp_block] = [
         block for block in _FENCED_BLOCK.findall(guide) if "--stamp" in block
     ]
@@ -2269,7 +2269,7 @@ def test_the_skill_exemption_commit_is_not_read_as_an_edit_of_the_workers(
     commit_the_stamp = "\n".join(stamp_lines[stamp_at + 1 :])
     [gate_block] = [
         block
-        for block in _FENCED_BLOCK.findall(_reference("worker-review-gates.md"))
+        for block in _FENCED_BLOCK.findall(_reference("worker/review-gates.md"))
         if "M=<merge-sha>" in block
     ]
 

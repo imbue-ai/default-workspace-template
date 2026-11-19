@@ -25,7 +25,7 @@ prefix, and your `update-self:` merge must stay on the branch's first-parent
 line, which merging the lead's commit into your branch (not the other way
 round) keeps.
 
-Resolve conflicts by `worker-conflict-triage.md`, with two differences:
+Resolve conflicts by `worker/conflict-triage.md`, with two differences:
 
 - The commits coming in are the workspace's own latest work, so where they
   and the update meet, keep both.
@@ -47,7 +47,7 @@ the workspace's commits as your edits.
 
 - **Impact**: when the commits coming in add or change user-created code,
   check it against what the update changed. Search it for the names the
-  update retires (`worker-impact-analysis.md`, section 2), and for a use of a
+  update retires (`worker/impact-analysis.md`, section 2), and for a use of a
   file the update changed: the dependents search and the interface coupling
   of that file's section 3 (its items 2 and 3). List each impacted creation
   in `data/.tasks/update-self/catchup-impacted.txt`, one stand-in file per
@@ -93,7 +93,7 @@ the workspace's commits as your edits.
 
 ## Report `done` again
 
-With the full body of `worker-report.md`, brought up to date, and a
+With the full body of `worker/report.md`, brought up to date, and a
 **Catch-up** section first: the commit you merged, the commits it brought in,
 each conflict and its resolution, and which of the items above ran, with
 their results.
