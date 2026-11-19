@@ -147,15 +147,17 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
             ? m("div", { class: "flex flex-col gap-1" }, [
                 m("p", { class: "handoff-retry-error text-sm text-danger" }, plainFailureSentence(retryError)),
                 m("div", { class: "text-secondary" }, m(SeeDetails, { details: retryError.details })),
-                m(
-                  "div",
-                  { class: "flex flex-wrap items-center gap-2" },
-                  m(FailureRemedies, {
-                    connection: getShellConnection(),
-                    failure: shownFailureOfLines(retryError),
-                    sm: true,
-                  }),
-                ),
+                retryError.isReportable
+                  ? m(
+                      "div",
+                      { class: "flex flex-wrap items-center gap-2" },
+                      m(FailureRemedies, {
+                        connection: getShellConnection(),
+                        failure: shownFailureOfLines(retryError),
+                        sm: true,
+                      }),
+                    )
+                  : null,
               ])
             : null,
         ],
