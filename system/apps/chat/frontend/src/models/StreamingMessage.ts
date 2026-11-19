@@ -223,10 +223,11 @@ const CATCH_UP_LIMIT = 200;
  * The stream is a low-latency hint and the transcript route the source of truth, and nothing
  * else notices an event the stream never carried (one written between the snapshot and the
  * stream registering, or one a stalled connection swallowed): it stays missing until the
- * page reloads. So once the snapshot and the open stream have both landed, whenever a turn ends,
- * and whenever the page is shown again, the page asks the route what follows its last event. Missing events at the end are appended in place;
- * one missing inside the window (the route places the window's end further along than the
- * page does) reloads the transcript with the stream, as a reconnect does.
+ * page reloads. So once the snapshot and the open stream have both landed, whenever a turn
+ * ends, and whenever the page is shown again, the page asks the route what follows its last
+ * event. Missing events at the end are appended in place; one missing inside the window (the
+ * route places the window's end further along than the page does) reloads the transcript with
+ * the stream, as a reconnect does.
  */
 export async function catchUpLiveTail(chatId: string): Promise<void> {
   const lastEventId = getLastEventId(chatId);
