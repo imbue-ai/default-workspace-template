@@ -81,10 +81,13 @@ List each, in plain terms:
 
 - **Each chat and background agent it paused** (the lines `run-status
   stop-chats` printed): that it was paused for the update and has carried on,
-  and for a background agent, that its chat was told to pick it back up. Name
-  any that could not be started again, and that sending it a message brings it
-  back. The main chat's line says it was interrupted instead: say its work was
-  stopped for the update and it was told what changed.
+  and for a background agent, that its chat was told to pick it back up. One
+  that was idle when paused to make room stays stopped (`run-status
+  resume-chats` printed `Left <name> stopped` for it): say so. Name any that
+  could not be started again. For either, say that sending it a message brings
+  it back. One it printed `Left <name> as it is` for was started again since
+  and is running. The main chat's line says it was interrupted instead: say its
+  work was stopped for the update and it was told what changed.
 - **Each background command that was stopped** with a paused chat: that it was
   interrupted and its chat was told to run it again.
 - **Each cache, old worktree, or snapshot it pruned**, with what it held: a
@@ -104,6 +107,8 @@ List each, in plain terms:
 
 `run-status resume-chats` sends each chat the pass paused one note
 (`python/update_self_skill/update_resume_note.py` composes it), so you never write it by hand.
+One that was idle when paused for memory, chat or background agent, is left stopped and
+gets no note, nor is it named in its lead chat's note.
 The chat shows the user only its summary line, as a notice labelled "Workspace
 updated" (or "Workspace update not applied" when the update did not land),
 saying the chat was paused for the update and is carrying on. The rest is for

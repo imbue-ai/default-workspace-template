@@ -79,6 +79,7 @@ from imbue.chat.chat_handoffs import DEFAULT_PROMPT_TEMPLATE_PATH
 from imbue.chat.chat_handoffs import HandoffCancelledError
 from imbue.chat.chat_handoffs import HandoffDeps
 from imbue.chat.chat_handoffs import HandoffRunner
+from imbue.chat.chat_handoffs import HeldSendDelivery
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
 from imbue.chat.chat_handoffs import cancel_refused_detail
 from imbue.chat.chat_handoffs import converging_detail
@@ -3364,7 +3365,7 @@ class AgentManager:
             _loguru_logger.warning("Could not deliver {} held send(s) to agent {}", len(held_sends), agent_id)
             return
         for held in held_sends:
-            deliver_held_send(capabilities.deliver, agent_info, held, chat_id)
+            deliver_held_send(self._held_send_delivery(capabilities), agent_info, held, chat_id)
 
     def retry_handoff(self, chat_id: ChatId, account_id: str, kind: ChatKind = ChatKind.AGENT) -> HandoffPhase:
         """Run a failed switch's last step again on ``account_id``, or as a room (spec 5.10, and spec 6 for a rebind).
@@ -3618,6 +3619,7 @@ class AgentManager:
             get_agent_info=self.get_agent_info_by_id,
             resolve_account=resolve_account,
             deliver=capabilities.deliver,
+            report_undelivered=self._report_undelivered_held_send,
             apply_model=self.apply_model_pick,
             apply_launch_fast_mode=self.apply_launch_fast_mode,
             drain_to_composer=capabilities.drain_to_composer,
@@ -3649,6 +3651,7 @@ class AgentManager:
             resolve_account=resolve_account,
             account_dir=account_dir,
             deliver=capabilities.deliver,
+            report_undelivered=self._report_undelivered_held_send,
             apply_model=self.apply_model_pick,
             drain_to_composer=capabilities.drain_to_composer,
             stop_agent=self.stop_agent_process,
@@ -3671,6 +3674,18 @@ class AgentManager:
         if capabilities is None:
             raise HandoffError("This chat app cannot move a chat between agents or accounts: switches are not wired")
         return capabilities
+
+    def _held_send_delivery(self, capabilities: HandoffCapabilities) -> HeldSendDelivery:
+        return HeldSendDelivery(
+            deliver=capabilities.deliver,
+            sleep=self._pause,
+            is_stopping=self._shutdown_event.is_set,
+            report_undelivered=self._report_undelivered_held_send,
+        )
+
+    def _report_undelivered_held_send(self, chat_id: ChatId, message_id: str, detail: str, kind: str) -> None:
+        """Tell the pages a held send never reached its agent, so the one that sent it hands it back."""
+        self._broadcaster.broadcast_held_send_failed(chat_id, message_id, detail, kind)
 
     def _pause(self, seconds: float) -> None:
         """A wait paced by the shutdown event, so a stop interrupts a handoff's summary wait at once."""
@@ -5561,7 +5576,7 @@ class AgentManager:
             self.apply_launch_fast_mode(chat_id, agent_info)
         if first_message is not None:
             is_delivered = deliver_held_send(
-                capabilities.deliver,
+                self._held_send_delivery(capabilities),
                 agent_info,
                 HeldSend(
                     message_id=first_message.message_id,
@@ -5574,7 +5589,7 @@ class AgentManager:
             if is_delivered and first_message.on_delivered is not None:
                 first_message.on_delivered(chat_id, first_message.message_id)
         for held in held_sends:
-            deliver_held_send(capabilities.deliver, agent_info, held, chat_id)
+            deliver_held_send(self._held_send_delivery(capabilities), agent_info, held, chat_id)
 
     def _mark_creation_failed_locked(self, chat_id: ChatId, error: str) -> None:
         """Keep the provisional chat, in the failed phase: its page shows the reason and can

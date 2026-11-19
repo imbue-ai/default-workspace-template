@@ -914,11 +914,7 @@ def _cmd_run_status_start(args: argparse.Namespace) -> int:
     # nothing else could ever resume them.
     earlier = read_run_status(repo_root)
     still_paused = (
-        [
-            entry
-            for entry in earlier.stopped_agents
-            if not (entry.is_restarted and entry.is_told)
-        ]
+        [entry for entry in earlier.stopped_agents if not entry.is_resume_done]
         if earlier is not None
         else []
     )
@@ -1154,6 +1150,7 @@ def _cmd_run_status_resume_chats(args: argparse.Namespace) -> int:
     if not status.stopped_agents:
         print("Nothing to resume: this run's record names no paused chat or agent.")
         return 0
+    # An agent left stopped as idle goes through the resume, which names it for the results message.
     if all(entry.is_restarted and entry.is_told for entry in status.stopped_agents):
         print(
             "Nothing to resume: every paused chat is running again and has been told."
@@ -1624,7 +1621,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="NAME",
         help="Pause this chat or background agent whatever it is doing (to free memory); "
-        "repeatable, and refused for the main chat. Without it, every busy one is paused.",
+        "repeatable, and refused for the main chat. One idle when paused stays stopped "
+        "through the resume. Without it, every busy one is paused.",
     )
     stop_chats_parser.add_argument(
         "--chat",
@@ -1635,7 +1633,7 @@ def build_parser() -> argparse.ArgumentParser:
     resume_chats_parser = run_status_sub.add_parser(
         "resume-chats",
         help="Start every agent stop-chats paused again and send each chat concerned the "
-        "resume note; safe to re-run.",
+        "resume note, leaving one that was idle when paused stopped; safe to re-run.",
         parents=[common],
     )
     resume_chats_parser.add_argument(
