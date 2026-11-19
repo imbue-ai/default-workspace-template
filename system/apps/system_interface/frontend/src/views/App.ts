@@ -1367,8 +1367,7 @@ export function App(): m.Component<AppAttrs> {
       // the dragged window is painted here too, hidden or shown as the store now has it. Its word can also end
       // the gesture, with no release for the pointer source to end it by, so the window it was dragging is
       // painted once more when the gesture is gone: shown again, its page's torn-out mark lifted.
-      const gesture = store?.getGesture() ?? null;
-      const movingWindowId = gesture !== null && gesture.kind === "move" ? gesture.windowId : null;
+      const movingWindowId = store?.movingWindowId() ?? null;
       const windowToPaint = movingWindowId ?? draggedWindowId;
       if (store !== null && windowToPaint !== null) paintWindow(store, windowToPaint);
       draggedWindowId = movingWindowId;

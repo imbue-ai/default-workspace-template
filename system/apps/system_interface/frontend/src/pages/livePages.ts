@@ -957,8 +957,7 @@ export class LivePagesLayer implements PageDriver {
    *  chrome has (``Window``): each move then slides the layer instead of repainting the page, and the repaints
    *  of a drag are what run the renderer out of GPU tile memory. */
   private updateLayerPromotion(page: LivePage): void {
-    const gesture = this.store.windowGesture();
-    const isMoving = !page.isHidden && gesture?.kind === "move" && gesture.windowId === page.windowId;
+    const isMoving = !page.isHidden && this.store.movingWindowId() === page.windowId;
     page.wrapper.style.willChange = isMoving ? "transform" : "";
   }
 

@@ -100,6 +100,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
       const isAppChatOffered = appChatLaunchOf(state.apps) !== null;
       const metrics = store.getMetrics();
       const gesture = store.getGesture();
+      const movingWindowId = store.movingWindowId();
       // The placement already carries the drag: the held shortcut sits in the cell under the pointer (its
       // lift translates it there from the cell it came from) and the shortcut that was there has stepped aside.
       const placed = store.placedShortcuts();
@@ -217,7 +218,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                           state: placement.state,
                           stackIndex: index,
                           isFocused: window.id === focusedWindowId,
-                          isMoving: gesture !== null && gesture.kind === "move" && gesture.windowId === window.id,
+                          isMoving: window.id === movingWindowId,
                           isTouch: state.modes.isTouch,
                           isMenuOpen: attrs.openMenuWindowId === window.id,
                           hasAppChat: isAppChatOffered && app !== undefined && !app.internal,
