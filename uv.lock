@@ -268,8 +268,15 @@ dependencies = [
     { name = "werkzeug" },
 ]
 
+[package.optional-dependencies]
+testing = [
+    { name = "playwright" },
+    { name = "pytest" },
+]
+
 [package.dev-dependencies]
 dev = [
+    { name = "app-manifest", extra = ["testing"] },
     { name = "ty" },
 ]
 
@@ -281,12 +288,18 @@ requires-dist = [
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=c4737c308cb9dc7fc6cb8207c1dcdee76bfccf75" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pathspec", specifier = ">=1.1" },
+    { name = "playwright", marker = "extra == 'testing'", specifier = ">=1.40" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "pytest", marker = "extra == 'testing'", specifier = ">=8.0" },
     { name = "werkzeug", specifier = ">=3.0" },
 ]
+provides-extras = ["testing"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ty", specifier = "==0.0.87" }]
+dev = [
+    { name = "app-manifest", extras = ["testing"], editable = "system/libs/app_manifest" },
+    { name = "ty", specifier = "==0.0.87" },
+]
 
 [[package]]
 name = "app-registration"
@@ -777,6 +790,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "app-manifest", extra = ["testing"] },
     { name = "app-schema", extra = ["testing"] },
     { name = "coverage" },
     { name = "inline-snapshot" },
@@ -829,6 +843,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "app-manifest", extras = ["testing"], editable = "system/libs/app_manifest" },
     { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
     { name = "coverage" },
     { name = "inline-snapshot", specifier = ">=0.13" },
@@ -1511,6 +1526,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "app-manifest", extra = ["testing"] },
     { name = "app-schema", extra = ["testing"] },
     { name = "coverage" },
     { name = "inline-snapshot" },
@@ -1538,6 +1554,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "app-manifest", extras = ["testing"], editable = "system/libs/app_manifest" },
     { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
     { name = "coverage" },
     { name = "inline-snapshot", specifier = ">=0.13" },
@@ -4286,6 +4303,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "app-manifest", extra = ["testing"] },
     { name = "app-schema", extra = ["testing"] },
     { name = "chat" },
     { name = "coverage" },
@@ -4331,6 +4349,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "app-manifest", extras = ["testing"], editable = "system/libs/app_manifest" },
     { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
     { name = "chat", editable = "system/apps/chat" },
     { name = "coverage" },
@@ -4429,6 +4448,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "app-manifest", extra = ["testing"] },
     { name = "app-schema", extra = ["testing"] },
     { name = "httpx" },
     { name = "imbue-mngr" },
@@ -4452,6 +4472,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "app-manifest", extras = ["testing"], editable = "system/libs/app_manifest" },
     { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=c4737c308cb9dc7fc6cb8207c1dcdee76bfccf75" },

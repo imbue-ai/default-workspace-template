@@ -1,0 +1,1 @@
+`uv.lock` records the `testing` extra of `app-manifest` (pytest and playwright, for its shell stand-in test helpers) and the test suites that now list it: chat, the shell, Getting Started and the terminal.
