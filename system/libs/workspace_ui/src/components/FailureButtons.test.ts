@@ -15,7 +15,7 @@ import {
 } from "../app_contract";
 import { withAskFailure } from "../app_contract";
 import type { ShellConnection, ShownFailure } from "../app_contract";
-import { AskAgentToFixButton, ReportBugButton } from "./FailureButtons";
+import { AskAgentToFixButton, FailureRemedies, ReportBugButton } from "./FailureButtons";
 
 const HANDSHAKE = { type: SHELL_HANDSHAKE, clientId: "client-1", windowId: "win-1", desktopId: "home", app: "docs" };
 const FAILURE = { whatFailed: "Docs couldn't open that", details: "HTTP 502\nboom" };
@@ -270,5 +270,55 @@ describe("Report a bug", () => {
 
     handshake(parent, { canReportBug: false });
     expect(render(view())).toBeNull();
+  });
+});
+
+describe("FailureRemedies", () => {
+  const REPORTABLE: ShownFailure = {
+    message: "Docs couldn't save. Try again. If this persists, report a bug.",
+    details: "HTTP 500",
+    isReportable: true,
+  };
+
+  function labels(): (string | null)[] {
+    return Array.from(root.querySelectorAll("button")).map((button) => button.textContent);
+  }
+
+  it("offers an agent, then Report a bug, for a failure that asks for a bug report", () => {
+    const { parent, live } = greetedPage({ canReportBug: true });
+    m.render(root, m(FailureRemedies, { connection: live, failure: REPORTABLE }));
+    expect(labels()).toEqual(["Ask an agent to fix this", "Report a bug"]);
+
+    root.querySelector<HTMLButtonElement>(".ask-agent-to-fix")!.click();
+    const [asked] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect(asked.type).toBe(SHELL_ASK_AGENT);
+    expect(asked.text).toContain(REPORTABLE.message);
+    expect(asked.text).toContain("HTTP 500");
+  });
+
+  it("offers nothing for a failure that asks for no bug report, and no agent where one is withheld", () => {
+    const { live } = greetedPage({ canReportBug: true });
+    m.render(root, m(FailureRemedies, { connection: live, failure: { ...REPORTABLE, isReportable: false } }));
+    expect(labels()).toEqual([]);
+
+    m.render(root, m(FailureRemedies, { connection: live, failure: REPORTABLE, isAgentWithheld: true }));
+    expect(labels()).toEqual(["Report a bug"]);
+  });
+
+  it("files a refused ask with the page's failure in its one Report a bug", async () => {
+    const { parent, live } = greetedPage({ canReportBug: true });
+    const view = (): m.Children => m(FailureRemedies, { connection: live, failure: REPORTABLE });
+    m.render(root, view());
+    root.querySelector<HTMLButtonElement>(".ask-agent-to-fix")!.click();
+    const refused = { message: "Chat couldn't open that.", details: "HTTP 500", isReportable: true };
+    await answerLastAsk(parent, { isOpened: false, failure: refused });
+    m.render(root, view());
+
+    expect(root.querySelectorAll(".report-bug")).toHaveLength(1);
+    root.querySelector<HTMLButtonElement>(".report-bug")!.click();
+    expect(parent.postMessage).toHaveBeenLastCalledWith(
+      { type: SHELL_REPORT_BUG, ...withAskFailure(REPORTABLE, refused) },
+      "*",
+    );
   });
 });
