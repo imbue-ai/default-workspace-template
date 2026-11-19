@@ -40,9 +40,11 @@ MODELS_FILENAME: Final = "models.json"
 PLACEHOLDER_API_KEY: Final = "local"
 
 DEFAULT_CONTEXT_WINDOW: Final = 65_536
-# The first request of a new chat measured 24,046 input tokens: the workspace's own instructions,
-# its skills and pi's tools, before a word of the user's. The floor leaves room for one reply.
-MIN_CONTEXT_WINDOW: Final = 32_768
+# The first request of a new chat measured 29,280 input tokens in a workspace set up as the
+# template sets one up: its instructions, the output-style rules, the skill list and pi's tools
+# (those of the sub-agent and web-access packages included), before a word of the user's. The
+# floor holds that and one full reply.
+MIN_CONTEXT_WINDOW: Final = 40_960
 _MAX_OUTPUT_TOKENS: Final = 8_192
 
 # Hosts a server on the user's own machine can answer on, as a workspace sees them: its own
@@ -296,7 +298,7 @@ def verify_model(
     if context_window < MIN_CONTEXT_WINDOW:
         raise LocalModelError(
             f"A chat here needs a context window of at least {MIN_CONTEXT_WINDOW:,} tokens"
-            " to hold the workspace's own instructions."
+            " to hold the workspace's own instructions and a reply."
         )
     is_reasoning = check_tool_call(client, base_url, api_key, model_id)
     loaded = read_loaded_context_window(client, base_url, model_id)
@@ -305,8 +307,9 @@ def verify_model(
     if loaded < MIN_CONTEXT_WINDOW:
         raise LocalModelError(
             f"The server loaded {model_id} with a context of {loaded:,} tokens, and a chat here needs at least"
-            f" {MIN_CONTEXT_WINDOW:,} to hold the workspace's own instructions. For Ollama, set"
+            f" {MIN_CONTEXT_WINDOW:,} to hold the workspace's own instructions and a reply. For Ollama, set"
             f" OLLAMA_CONTEXT_LENGTH to {MIN_CONTEXT_WINDOW} or more where it runs, restart it, and try again."
+            " A model whose own limit is lower cannot hold a chat here."
         )
     # Only Ollama reports a loaded context, and Ollama takes "none" to stop a model reasoning
     # (measured on 0.40: every other effort leaves it on).

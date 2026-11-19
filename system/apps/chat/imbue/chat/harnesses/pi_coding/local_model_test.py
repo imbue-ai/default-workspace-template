@@ -248,10 +248,10 @@ def test_a_server_that_reports_no_loaded_models_gives_no_context() -> None:
 
 def test_the_window_pi_is_told_is_never_more_than_the_server_loaded() -> None:
     """Ollama keeps its own context length whatever pi is told, and truncates what does not fit."""
-    client = _ollama(("qwen2.5:7b",), _STRUCTURED_CALL, 40_000)
+    client = _ollama(("qwen2.5:7b",), _STRUCTURED_CALL, 48_000)
 
     assert verify_model(client, _OLLAMA, "", "qwen2.5:7b", DEFAULT_CONTEXT_WINDOW) == LocalModelProfile(
-        context_window=40_000, is_reasoning=False
+        context_window=48_000, is_reasoning=False
     )
 
 
@@ -287,11 +287,19 @@ def test_a_reasoning_model_on_a_server_that_is_not_ollama_names_no_way_to_turn_i
 
 
 def test_ollama_s_default_context_is_refused_with_the_setting_that_fixes_it() -> None:
-    """4096 is what Ollama loads a model with unless told otherwise: a sixth of a new chat's first request."""
+    """4096 is what Ollama loads a model with unless told otherwise: a seventh of a new chat's first request."""
     client = _ollama(("qwen2.5:7b",), _STRUCTURED_CALL, 4096)
 
     with pytest.raises(LocalModelError, match="OLLAMA_CONTEXT_LENGTH"):
         verify_model(client, _OLLAMA, "", "qwen2.5:7b", DEFAULT_CONTEXT_WINDOW)
+
+
+def test_a_context_that_holds_the_instructions_but_no_reply_is_refused() -> None:
+    """32,768 is nine tenths full once a new chat's first request (29,280 tokens) is in it."""
+    client = _ollama(("qwen3:8b",), _CALL_AFTER_REASONING, 32_768)
+
+    with pytest.raises(LocalModelError, match="40,960"):
+        verify_model(client, _OLLAMA, "", "qwen3:8b", DEFAULT_CONTEXT_WINDOW)
 
 
 def test_a_window_too_small_to_hold_the_instructions_is_refused_before_the_server_is_asked() -> None:
