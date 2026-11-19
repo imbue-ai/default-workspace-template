@@ -214,3 +214,43 @@ def test_changelog_base_ref_overrides_the_reserved_github_variable(
     monkeypatch.setenv("CHANGELOG_BASE_REF", "stacked-base")
 
     assert gate.resolve_diff_base(repo) == "stacked-base"
+
+
+def test_a_consolidation_branch_owes_no_entry(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _init_repo(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "mngr/changelog-consolidation-2026-11-17")
+    (repo / "system/libs/alpha/new.py").write_text("print(1)\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "touch alpha with no entry")
+
+    assert gate.main(repo) == 0
+    assert "is exempt" in capsys.readouterr().out
+
+
+def test_only_a_consolidation_branch_is_exempt_by_name() -> None:
+    assert gate.is_exempt_branch("mngr/changelog-consolidation-catch-up")
+    assert not gate.is_exempt_branch("mngr/some-feature")
+    assert not gate.is_exempt_branch("fork/mngr/changelog-consolidation")
+
+
+def test_a_release_section_in_the_root_changelog_does_not_replace_the_entries(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _init_repo(tmp_path)
+    (repo / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "changelog")
+    _git(repo, "checkout", "-q", "-b", "release")
+    (repo / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## [Unreleased]\n\n## [minds-v1.1.0] - 2026-05-11\n"
+    )
+    (repo / "system/libs/alpha/new.py").write_text("print(1)\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "stamp a release and change a library")
+
+    assert gate.main(repo) == 1
+    err = capsys.readouterr().err
+    assert "system/changelog/release.md" in err
+    assert "system/libs/alpha/changelog/release.md" in err

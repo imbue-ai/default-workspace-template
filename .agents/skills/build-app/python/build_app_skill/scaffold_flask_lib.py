@@ -212,6 +212,9 @@ def _pick_port(
     ) | _apps_toml_ports(repo_root / "data" / ".state" / "apps.toml")
     # Reserve known internal ports that may not have supervisor entries
     in_use.add(8083)  # the Screen's CDP proxy
+    # neko, the Screen's video server: its port is only in a comment in its supervisord
+    # config, and its stack is usually stopped, so neither check above sees it.
+    in_use.add(8091)
     if requested is not None:
         if requested in in_use or is_port_bound(requested):
             sys.exit(

@@ -122,6 +122,15 @@ uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.p
   first and points the app's copied registry at it.
 - `--instance-key <key>` names the instance the window opens on, for an app
   whose `open_path` takes one (a chat opens on a conversation).
+- **Run `up` from the live checkout** (the repo root), naming the worktree
+  with `--worktree`. From inside a worktree it refuses, because the window
+  would be registered in the worktree's own registry, where the workspace
+  never looks.
+- **`--private`** is for an instance only you drive, with no window. It works
+  from anywhere, a worktree included, and like every preview it runs over
+  copies of the live data and the live secrets. A private instance boots the
+  app alone: it takes no `--with`, since a sibling is framed at the origin its
+  window registers, and a private instance registers none.
 
 For a contained change exercised against a data copy, the throwaway instance
 above, run from the live tree, is the cheaper shape, and it is the only shape

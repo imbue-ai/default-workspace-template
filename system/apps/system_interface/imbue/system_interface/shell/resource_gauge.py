@@ -10,15 +10,19 @@ can tell a gauge that stopped updating from one with nothing new to say).
 
 The disk warns on the space left, not the share used: 10% of a large disk is plenty and 10% of a small one is
 not. It also warns when the disk is on course to fill within minutes, whatever is left. Memory and CPU warn on a
-share in use; CPU is judged on its mean over the last two minutes, since a moment at full use is normal. A
+share in use. CPU warns by default, but only on sustained load: its mean over the last five minutes, judged
+once the sampler has a full five minutes, since a build or a test run at full use for a minute is normal. A
 warning clears only once its resource is comfortably back past its level, so a value hovering at the level does
 not raise it again and again.
 
-A raised warning reaches three places. The user gets one Imbue Studio notification per warning (retried until it
-is delivered, and remembered across a restart of the shell in ``resource_gauge_state.json``, so a restart does
-not send it again). The agents get a short notice file their prompt hook reads
-(``system/scripts/agent_resource_notice.sh``), so they stop adding to the problem. And a program the memory
-guard stopped (the shed ledger) is reported to the user, who would otherwise only see that something vanished.
+A raised warning reaches three places. The tray shows it: a disk or memory warning as a pill in words, a CPU
+warning as the CPU bar, drawn in the warning colour. The user gets one Imbue Studio notification per disk or memory
+warning (retried until it is delivered, and remembered across a restart of the shell in
+``resource_gauge_state.json``, so a restart does not send it again); a busy CPU sends none, since it is not a fault
+and usually clears by itself. The agents get a short notice file their prompt hook reads
+(``system/scripts/agent_resource_notice.sh``), so they stop adding to the problem. And the tray's card lists the
+programs the memory guard stopped (the shed ledger), so the user can see why something vanished. A stop sends no
+notification: freeing memory needs nothing from the user, and a prompt would invite them to start the program again.
 """
 
 import json
@@ -94,8 +98,11 @@ MAX_WARNING_PERCENT: Final[int] = 99
 WARNING_CLEAR_MARGIN_PERCENT: Final[float] = 5.0
 # How often the monitor takes a reading: the resource sampler's own interval.
 SAMPLE_INTERVAL_SECONDS: Final[float] = resource_sampler.SAMPLE_INTERVAL_SECONDS
-# The span the CPU warning averages over.
-CPU_WARNING_WINDOW_SECONDS: Final[float] = 120.0
+# The span the CPU warning averages over; the resource sampler keeps twice this.
+CPU_WARNING_WINDOW_SECONDS: Final[float] = 5 * 60.0
+# The window counts as full when its oldest sample is no later than this after its start.
+CPU_WINDOW_START_SLACK_SECONDS: Final[float] = 2 * SAMPLE_INTERVAL_SECONDS
+DEFAULT_CPU_WARNING_PERCENT: Final[int] = 90
 # A sampler reading older than this is no reading (the System Monitor's own rule): the sampler is down or the
 # machine was paused.
 CPU_READING_FRESH_SECONDS: Final[float] = 30.0
@@ -135,6 +142,10 @@ class GaugeResource(LowerCaseStrEnum):
     DISK = "disk"
 
 
+# The resources whose warning sends an Imbue Studio notification; a CPU warning shows only in the tray.
+NOTIFIED_RESOURCES: Final[frozenset[GaugeResource]] = frozenset({GaugeResource.DISK, GaugeResource.MEMORY})
+
+
 class AlertSeverity(LowerCaseStrEnum):
     WARNING = "warning"
     CRITICAL = "critical"
@@ -161,10 +172,10 @@ class ResourceGaugeSettings(FrozenModel):
         description="The share of memory in use that raises a warning; None for no memory warning",
     )
     cpu_warning_percent: int | None = Field(
-        default=None,
+        default=DEFAULT_CPU_WARNING_PERCENT,
         ge=MIN_WARNING_PERCENT,
         le=MAX_WARNING_PERCENT,
-        description="The share of the CPU in use, averaged over two minutes, that raises a warning; None for none",
+        description="The share of the CPU in use, averaged over five minutes, that raises a warning; None for none",
     )
 
 
@@ -206,17 +217,15 @@ class DeliveryRecord(FrozenModel):
     notified: tuple[GaugeResource, ...] = Field(
         default=(), description="The resources whose standing warning the user was notified of"
     )
-    last_stop_timestamp: str | None = Field(
-        default=None,
-        description="The shed ledger timestamp of the newest stopped program the user was told of; None before "
-        "the first reading, which takes the ledger as it stands as already known",
-    )
 
 
 class _DeliveryDocument(DeliveryRecord):
     """The whole of ``resource_gauge_state.json``."""
 
     version: int = Field(description="The file format version")
+    # CLEANUP: drop once every workspace has rewritten its state file without this field (the release after the
+    # one that stopped sending memory-guard stop notifications); until then it keeps an old file readable.
+    last_stop_timestamp: str | None = Field(default=None, description="Unused; written by earlier versions")
 
 
 class DeliveryStore(MutableModel):
@@ -233,7 +242,7 @@ class DeliveryStore(MutableModel):
         document = parse_versioned_document(raw, _DeliveryDocument, RESOURCE_GAUGE_STATE_FILE_VERSION, self._path())
         if document is None:
             return DeliveryRecord()
-        return DeliveryRecord.model_validate(document.model_dump(exclude={"version"}))
+        return DeliveryRecord.model_validate(document.model_dump(exclude={"version", "last_stop_timestamp"}))
 
     def write(self, record: DeliveryRecord) -> None:
         document = {"version": RESOURCE_GAUGE_STATE_FILE_VERSION, **record.model_dump(mode="json")}
@@ -268,8 +277,10 @@ class CpuReading(FrozenModel):
     """The resource sampler's latest CPU reading."""
 
     percent: float = Field(ge=0, description="The share of the cores in use at the latest reading, in percent")
-    recent_percent: float = Field(
-        ge=0, description="The mean share of the cores in use over the warning window, in percent"
+    recent_percent: float | None = Field(
+        ge=0,
+        description="The mean share of the cores in use over the warning window, in percent; None until the "
+        "sampler has samples for the whole window",
     )
     cores: int = Field(ge=1, description="How many cores the workspace can use")
 
@@ -395,7 +406,8 @@ def next_warnings(
     cpu_level = settings.cpu_warning_percent
     if cpu_level is not None:
         is_raised = GaugeResource.CPU in raised
-        if is_raised if readings.cpu is None else _is_share_warned(readings.cpu.recent_percent, cpu_level, is_raised):
+        recent_percent = readings.cpu.recent_percent if readings.cpu is not None else None
+        if is_raised if recent_percent is None else _is_share_warned(recent_percent, cpu_level, is_raised):
             result.add(GaugeResource.CPU)
     return frozenset(result)
 
@@ -449,8 +461,8 @@ def describe_alert(
                 resource=resource,
                 severity=AlertSeverity.WARNING,
                 headline="CPU is busy",
-                detail=f"{cpu.recent_percent:.0f}% in use over the last two minutes"
-                if cpu is not None
+                detail=f"{cpu.recent_percent:.0f}% in use over the last five minutes"
+                if cpu is not None and cpu.recent_percent is not None
                 else "No CPU reading right now",
             )
 
@@ -515,21 +527,6 @@ def stopped_programs_of(records: Sequence[Mapping[str, Any]]) -> tuple[StoppedPr
 
 
 @pure
-def describe_stops_notification(stops: Sequence[StoppedProgram]) -> tuple[str, str]:
-    """The notification for programs the memory guard just stopped."""
-    if len(stops) == 1:
-        what = stops[0].what
-        title = f"Stopped {what} to free memory"
-    else:
-        title = f"Stopped {len(stops)} programs to free memory"
-    return (
-        title,
-        "The workspace was running out of memory. A stopped chat starts again on its next message. Open System "
-        "Monitor to see what is using memory.",
-    )
-
-
-@pure
 def parse_cpu_reading(data: Any, now: float) -> CpuReading | None:
     """The CPU reading a resource sampler's recent file holds, or None when it is not a fresh version-1 reading."""
     if not isinstance(data, dict) or data.get("version") != resource_sampler.RECENT_FILE_VERSION:
@@ -543,18 +540,18 @@ def parse_cpu_reading(data: Any, now: float) -> CpuReading | None:
         return None
     cores = data.get("cores")
     window_start_ms = (now - CPU_WARNING_WINDOW_SECONDS) * 1000
-    recent = [
-        float(raw[1])
+    samples = [
+        (float(raw[0]), float(raw[1]))
         for raw in data.get("samples", [])
-        if isinstance(raw, list)
-        and len(raw) == 3
-        and all(isinstance(value, (int, float)) for value in raw)
-        and raw[0] >= window_start_ms
+        if isinstance(raw, list) and len(raw) == 3 and all(isinstance(value, (int, float)) for value in raw)
     ]
-    recent_usage = sum(recent) / len(recent) if recent else float(usage)
+    recent = [cpu_usage for at_ms, cpu_usage in samples if at_ms >= window_start_ms]
+    is_window_full = bool(recent) and min(at_ms for at_ms, _ in samples) <= (
+        window_start_ms + CPU_WINDOW_START_SLACK_SECONDS * 1000
+    )
     return CpuReading(
         percent=100.0 * max(float(usage), 0.0),
-        recent_percent=100.0 * max(recent_usage, 0.0),
+        recent_percent=100.0 * max(sum(recent) / len(recent), 0.0) if is_window_full else None,
         cores=int(cores) if isinstance(cores, (int, float)) and cores >= 1 else 1,
     )
 
@@ -623,7 +620,7 @@ def read_shed_ledger_stops() -> StopLedgerReader:
 
 
 class ResourceNotifierInterface(MutableModel, ABC):
-    """Where the user is told of a warning or a stopped program."""
+    """Where the user is told of a warning."""
 
     @abstractmethod
     def notify(self, title: str, message: str, view: GaugeResource) -> bool:
@@ -774,7 +771,7 @@ class ResourceGaugeMonitor(MutableModel):
             view = self._view_locked()
         self._push(view, is_forced=False)
         self._write_agent_notice(view.alerts)
-        self._tell_user(view, stops, now)
+        self._tell_user(view, now)
 
     def _current_settings(self) -> ResourceGaugeSettings:
         if self._settings is None:
@@ -853,18 +850,12 @@ class ResourceGaugeMonitor(MutableModel):
             # remembered for the life of this process.
             logger.warning("Could not record the resource notifications delivered: {}", e)
 
-    def _tell_user(self, view: ResourceGaugeView, stops: Sequence[StoppedProgram], now: float) -> None:
-        """Send what the user has not been told yet: each standing warning once, and each newly stopped program."""
+    def _tell_user(self, view: ResourceGaugeView, now: float) -> None:
+        """Send each standing warning the user has not been told of yet, once."""
         record = self._read_delivery()
         standing = {alert.resource for alert in view.alerts}
         notified = tuple(resource for resource in record.notified if resource in standing)
-        latest_stop = stops[-1].at if stops else None
-        # On the first reading in this workspace, what the ledger already holds is history, not news.
-        known_stop = (latest_stop or "") if record.last_stop_timestamp is None else record.last_stop_timestamp
-        record = record.model_copy_update(
-            to_update(record.field_ref().notified, notified),
-            to_update(record.field_ref().last_stop_timestamp, known_stop),
-        )
+        record = record.model_copy_update(to_update(record.field_ref().notified, notified))
         self._keep_delivery(record)
 
         notifier = self.notifier
@@ -872,7 +863,7 @@ class ResourceGaugeMonitor(MutableModel):
             return
         is_failed = False
         for alert in view.alerts:
-            if alert.resource in record.notified:
+            if alert.resource in record.notified or alert.resource not in NOTIFIED_RESOURCES:
                 continue
             title, message = describe_notification(alert)
             if notifier.notify(title, message, alert.resource):
@@ -880,15 +871,6 @@ class ResourceGaugeMonitor(MutableModel):
                     to_update(record.field_ref().notified, (*record.notified, alert.resource))
                 )
                 self._keep_delivery(record)
-            else:
-                is_failed = True
-        new_stops = [stop for stop in stops if stop.at > (record.last_stop_timestamp or "")]
-        if new_stops:
-            title, message = describe_stops_notification(new_stops)
-            if notifier.notify(title, message, GaugeResource.MEMORY):
-                self._keep_delivery(
-                    record.model_copy_update(to_update(record.field_ref().last_stop_timestamp, new_stops[-1].at))
-                )
             else:
                 is_failed = True
         if is_failed:

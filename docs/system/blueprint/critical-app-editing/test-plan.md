@@ -328,7 +328,7 @@ All from the repo root with `uv run python3`, `--worktree data/.tasks/critical-l
   the ports and wrapper are unchanged, and the live app is untouched. For the chat, a
   backend edit (a log line in `server.py`) is picked up by `refresh` alone.
 - **C12 Title.** `--title "custom"` shows in the wrapper banner; without it the banner
-  reads `<display name> (<worktree basename>)`.
+  reads `<display name> (preview)`.
 - **C13 Bad worktree.** `--worktree /tmp`: "is not a directory; is --worktree a workspace
   checkout?"; `--app nope`: "no app named 'nope'".
 

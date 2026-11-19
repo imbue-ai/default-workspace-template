@@ -1,1 +1,0 @@
-The mngr pin moves from the multiplayer branch's export to the public mirror of mngr main (`97b6345850`, the merge of the multiplayer refinements), so workspaces run the released mngr with the same changes.
