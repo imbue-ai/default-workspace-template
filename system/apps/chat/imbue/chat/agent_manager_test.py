@@ -34,8 +34,8 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
 from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
-from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.activity_state import CompactionCause
+from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import SendFailedError
@@ -8368,7 +8368,9 @@ def test_a_transcript_ending_mid_turn_marks_a_dead_process_interrupted_without_a
     assert _shown_status(agent_manager) is ChatStatus.INTERRUPTED
 
 
-def test_a_turn_an_earlier_process_abandoned_is_not_read_as_cut_off(agent_manager: AgentManager, tmp_path: Path) -> None:
+def test_a_turn_an_earlier_process_abandoned_is_not_read_as_cut_off(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
     state_dir = _turn_in_flight(agent_manager, tmp_path)
     (state_dir / "active").unlink()
     marker = state_dir / "claude_process_started"
