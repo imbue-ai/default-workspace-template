@@ -1,0 +1,3 @@
+- A workspace that does not run on your computer can use a model server there too. When the Local model form finds no server it can call directly, it asks the Imbue Studio app, which shows one approval dialog for the workspace, lists the model servers on your computer once you allow it, and connects the workspace to the one you pick. The form waits on that dialog and carries on by itself when you approve, asking once per page and again only on "Ask again"; it says so when Imbue Studio does not answer, or when your computer runs no model server.
+
+- The notice for a local model whose server does not answer now also says to check that Imbue Studio is open.

@@ -8,6 +8,7 @@ about the WIRE -- the key sets and the status codes -- which is the part nothing
 
 from __future__ import annotations
 
+import json
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -501,10 +502,16 @@ def test_a_named_model_server_answers_with_every_key_the_form_reads() -> None:
 
     assert response.status_code == 200
     body = response.get_json()
-    assert set(body) == {"servers", "default_context_window", "min_context_window"}
+    assert set(body) == {"servers", "studio_link", "default_context_window", "min_context_window"}
     assert body["servers"] == [
-        {"base_url": f"http://{_MODEL_SERVER_ADDRESS}/v1", "name": _MODEL_SERVER_ADDRESS, "models": ["qwen2.5:7b"]}
+        {
+            "base_url": f"http://{_MODEL_SERVER_ADDRESS}/v1",
+            "name": _MODEL_SERVER_ADDRESS,
+            "models": ["qwen2.5:7b"],
+            "studio_port": None,
+        }
     ]
+    assert body["studio_link"] == "UNAVAILABLE"
     assert body["min_context_window"] <= body["default_context_window"]
 
 
@@ -558,6 +565,159 @@ def test_a_local_model_sign_in_mints_an_account_and_lists_it(tmp_path: Path) -> 
         "Local model (Pi)",
         "endpoint",
     )
+
+
+# a model server on the user's computer, reached through the Imbue Studio app
+
+_STUDIO_AGENT_ID = "agent-0123456789abcdef0123456789abcdef"
+_STUDIO_ROUTES = f"/minds-api-proxy/api/v1/agents/{_STUDIO_AGENT_ID}/local-model"
+
+
+class _StudioStandIn:
+    """The network as a workspace away from the user's computer sees it: no model server answers
+    directly, and the latchkey gateway answers for the Imbue Studio app as ``answers`` says."""
+
+    def __init__(self, answers: dict[tuple[str, str], httpx.Response]) -> None:
+        self.answers = answers
+        self.requests: list[tuple[str, str, object]] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.url.host != "gateway.test":
+            raise httpx.ConnectError("connection refused", request=request)
+        body = json.loads(request.content) if request.content else None
+        self.requests.append((request.method, request.url.path, body))
+        return self.answers[(request.method, request.url.path)]
+
+    def client(self) -> httpx.Client:
+        return httpx.Client(transport=httpx.MockTransport(self))
+
+
+def _in_a_workspace_with_a_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LATCHKEY_GATEWAY", "http://gateway.test")
+    monkeypatch.setenv("LATCHKEY_GATEWAY_PASSWORD", "pw")
+    monkeypatch.setenv("MNGR_AGENT_ID", _STUDIO_AGENT_ID)
+
+
+def test_a_workspace_away_from_the_users_computer_asks_for_the_permission_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _in_a_workspace_with_a_gateway(monkeypatch)
+    studio = _StudioStandIn(
+        {
+            ("GET", f"{_STUDIO_ROUTES}/servers"): httpx.Response(403, json={}),
+            ("POST", "/permission-requests"): httpx.Response(201, json={}),
+        }
+    )
+    with _client_for(build_test_state(http_client=studio.client())) as client:
+        first = client.post("/api/local-model-servers", json={})
+        check = client.post("/api/local-model-servers", json={"is_requesting_access": False})
+
+    assert first.get_json()["studio_link"] == "AWAITING_APPROVAL"
+    assert first.get_json()["servers"] == []
+    assert check.get_json()["studio_link"] == "AWAITING_APPROVAL"
+    assert [(method, path) for method, path, _ in studio.requests] == [
+        ("GET", f"{_STUDIO_ROUTES}/servers"),
+        ("POST", "/permission-requests"),
+        ("GET", f"{_STUDIO_ROUTES}/servers"),
+    ]
+
+
+def test_the_servers_on_the_users_computer_are_offered_once_the_user_has_allowed_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _in_a_workspace_with_a_gateway(monkeypatch)
+    studio = _StudioStandIn(
+        {
+            ("GET", f"{_STUDIO_ROUTES}/servers"): httpx.Response(
+                200, json={"servers": [{"port": 11434, "name": "Ollama", "models": ["qwen3:8b"]}]}
+            )
+        }
+    )
+    with _client_for(build_test_state(http_client=studio.client())) as client:
+        body = client.post("/api/local-model-servers", json={}).get_json()
+
+    assert body["studio_link"] == "CONNECTED"
+    assert body["servers"] == [
+        {"base_url": "http://127.0.0.1:11434/v1", "name": "Ollama", "models": ["qwen3:8b"], "studio_port": 11434}
+    ]
+
+
+def test_a_local_model_sign_in_through_the_imbue_studio_app_runs_on_the_tunnels_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _in_a_workspace_with_a_gateway(monkeypatch)
+    studio = _StudioStandIn(
+        {("POST", f"{_STUDIO_ROUTES}/tunnel"): httpx.Response(200, json={"workspace_port": 11435})}
+    )
+    verified: list[str] = []
+
+    def verify(base_url: str, api_key: str, model_id: str, context_window: int) -> LocalModelProfile:
+        verified.append(base_url)
+        return LocalModelProfile(context_window=context_window, is_reasoning=False)
+
+    service = AuthFlowService.create(
+        home=None, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES, local_model_verifier=verify
+    )
+    with _client_for(build_test_state(auth_flows=service, http_client=studio.client())) as client:
+        flow_id = client.post("/api/accounts", json={"lane_id": "local-model", "method_id": "endpoint"}).get_json()[
+            "flow_id"
+        ]
+        submitted = client.post(
+            f"/api/accounts/flow/{flow_id}",
+            json={
+                "endpoint": {
+                    "base_url": "http://127.0.0.1:11434/v1",
+                    "model_id": "qwen3:8b",
+                    "context_window": 32768,
+                    "studio_port": 11434,
+                }
+            },
+        )
+
+    assert submitted.status_code == 200
+    assert submitted.get_json()["state"] == "ok"
+    assert studio.requests == [("POST", f"{_STUDIO_ROUTES}/tunnel", {"port": 11434})]
+    assert verified == ["http://127.0.0.1:11435/v1"]
+
+
+def test_a_tunnel_the_imbue_studio_app_will_not_open_is_a_400_with_the_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _in_a_workspace_with_a_gateway(monkeypatch)
+    studio = _StudioStandIn({("POST", f"{_STUDIO_ROUTES}/tunnel"): httpx.Response(403, json={})})
+    with _client_for(build_test_state(auth_flows=_signed_in_service(tmp_path), http_client=studio.client())) as client:
+        flow_id = client.post("/api/accounts", json={"lane_id": "local-model", "method_id": "endpoint"}).get_json()[
+            "flow_id"
+        ]
+        response = client.post(
+            f"/api/accounts/flow/{flow_id}",
+            json={"endpoint": {"base_url": "", "model_id": "qwen3:8b", "context_window": 32768, "studio_port": 11434}},
+        )
+
+    assert response.status_code == 400
+    assert "no longer allowed" in response.get_json()["detail"]
+
+
+def test_a_sign_in_that_is_not_waiting_on_a_model_server_asks_the_imbue_studio_app_for_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opening the tunnel repoints the one the workspace has, which a sign-in that is not there must not do."""
+    _in_a_workspace_with_a_gateway(monkeypatch)
+    studio = _StudioStandIn(
+        {("POST", f"{_STUDIO_ROUTES}/tunnel"): httpx.Response(200, json={"workspace_port": 11435})}
+    )
+    endpoint = {"endpoint": {"base_url": "", "model_id": "qwen3:8b", "context_window": 65536, "studio_port": 11434}}
+    with _client_for(build_test_state(auth_flows=_signed_in_service(tmp_path), http_client=studio.client())) as client:
+        to_no_flow = client.post("/api/accounts/flow/no-such-flow", json=endpoint)
+        key_flow_id = client.post("/api/accounts", json={"lane_id": "opencode-go", "method_id": "api_key"}).get_json()[
+            "flow_id"
+        ]
+        to_a_key_flow = client.post(f"/api/accounts/flow/{key_flow_id}", json=endpoint)
+
+    assert to_no_flow.status_code == 400
+    assert to_a_key_flow.status_code == 400
+    assert "model server" in to_a_key_flow.get_json()["detail"]
+    assert studio.requests == []
 
 
 def test_an_endpoint_with_no_model_is_refused_not_a_500(tmp_path: Path) -> None:

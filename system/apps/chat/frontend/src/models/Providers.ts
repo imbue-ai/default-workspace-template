@@ -87,10 +87,18 @@ export interface LocalModelServer {
   /** What the server is: the product on a known port ("Ollama"), else its address. */
   name: string;
   models: string[];
+  /** Set for a server on the user's own computer that Imbue Studio connects the workspace to:
+   *  its port there, handed back as it is when signing in. */
+  studio_port: number | null;
 }
+
+/** Where the workspace stands with Imbue Studio's view of the user's computer: not asked, answered,
+ *  waiting on the user's approval, or not answering. */
+export type StudioLink = "UNAVAILABLE" | "CONNECTED" | "AWAITING_APPROVAL" | "UNREACHABLE";
 
 export interface LocalModelServers {
   servers: LocalModelServer[];
+  studio_link: StudioLink;
   /** The context window the form starts on, and the smallest a chat can run with, in tokens. */
   default_context_window: number;
   min_context_window: number;
@@ -102,6 +110,7 @@ export interface EndpointSubmission {
   model_id: string;
   context_window: number;
   api_key: string;
+  studio_port: number | null;
 }
 
 interface FlowStart {
@@ -332,17 +341,37 @@ export async function submitEndpoint(endpoint: EndpointSubmission): Promise<void
   await advance({ endpoint });
 }
 
+/** Whether a look for the user's computer asks them to let the workspace reach it: unless this
+ *  page already has and they have yet to answer, whatever was asked before, or not at all. */
+export type StudioAccessAsk = "once" | "again" | "never";
+
+// Whether this page has asked the user to let the workspace reach their computer and not yet seen
+// them agree. Each ask is a new dialog in Imbue Studio, so reopening the form must not raise one.
+let isStudioAccessAsked = false;
+
 /**
- * The model servers a local-model sign-in can pick from: with no address, the ones answering on
- * the usual ports of the user's own machine; with one, that server alone (rejecting when it does
- * not answer).
+ * The model servers a local-model sign-in can pick from: with no address, the ones on the user's
+ * own computer; with one, that server alone (rejecting when it does not answer).
+ *
+ * A workspace that may not reach the user's computer yet asks them for it through Imbue Studio,
+ * as `access` says.
  */
-export function findLocalModelServers(baseUrl: string | null = null, apiKey = ""): Promise<LocalModelServers> {
-  return m.request<LocalModelServers>({
+export async function findLocalModelServers(
+  baseUrl: string | null = null,
+  apiKey = "",
+  access: StudioAccessAsk = "once",
+): Promise<LocalModelServers> {
+  const isAsking = access === "again" || (access === "once" && !isStudioAccessAsked);
+  const found = await m.request<LocalModelServers>({
     method: "POST",
     url: apiUrl("/api/local-model-servers"),
-    body: baseUrl === null ? {} : { base_url: baseUrl, api_key: apiKey },
+    body: baseUrl !== null ? { base_url: baseUrl, api_key: apiKey } : isAsking ? {} : { is_requesting_access: false },
   });
+  if (baseUrl === null) {
+    if (found.studio_link === "AWAITING_APPROVAL") isStudioAccessAsked = isStudioAccessAsked || isAsking;
+    else if (found.studio_link === "CONNECTED") isStudioAccessAsked = false;
+  }
+  return found;
 }
 
 async function advance(body: Record<string, unknown>): Promise<void> {

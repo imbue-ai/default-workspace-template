@@ -200,7 +200,7 @@ def test_a_local_model_that_cannot_be_reached_says_what_to_check() -> None:
     }
     event = parse_record(_message_record("m", message))[0]
     assert "model server on your computer did not answer" in event["text"]
-    assert "Check that the computer is awake" in event["text"]
+    assert "Imbue Studio is open" in event["text"]
     assert event["is_auth_error"] is False
 
 

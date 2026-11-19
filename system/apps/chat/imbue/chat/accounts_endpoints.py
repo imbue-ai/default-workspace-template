@@ -11,6 +11,7 @@ starts a flow and the polls that advance it.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Final
 
@@ -21,6 +22,7 @@ from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import Response
+from latchkey_access.gateway import GatewayAccess
 from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import StrictBool
@@ -54,6 +56,9 @@ from imbue.chat.identity import forbid_unless_owner
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.models import OkResponse
 from imbue.chat.state import get_state
+from imbue.chat.studio_model_servers import StudioLink
+from imbue.chat.studio_model_servers import find_studio_model_servers
+from imbue.chat.studio_model_servers import open_studio_tunnel
 from imbue.imbue_common.frozen_model import FrozenModel
 
 logger = _loguru_logger
@@ -144,6 +149,11 @@ class EndpointSubmission(FrozenModel):
     model_id: str = Field(description="The model to run on, as the server lists it")
     context_window: int = Field(default=DEFAULT_CONTEXT_WINDOW, description="The model's context window, in tokens")
     api_key: str = Field(default="", description="The server's key; '' for a server that asks for none")
+    studio_port: int | None = Field(
+        default=None,
+        description="Set for a server on the user's own computer that the Imbue Studio app connects this "
+        "workspace to: the server's port there, as a servers listing gave it. base_url is then ignored",
+    )
 
 
 class SubmitFlowRequest(FrozenModel):
@@ -160,12 +170,21 @@ class LocalModelServersRequest(FrozenModel):
 
     base_url: str | None = Field(default=None, description="One server to ask, in place of looking for any")
     api_key: str | None = Field(default=None, description="That server's key, when it asks for one")
+    is_requesting_access: bool = Field(
+        default=True,
+        description="Whether to ask the user, through the Imbue Studio app, to let this workspace reach their "
+        "computer when it may not yet; false for a look that only checks whether they have",
+    )
 
 
 class LocalModelServersResponse(FrozenModel):
     """Response from POST /api/local-model-servers."""
 
     servers: tuple[LocalModelServer, ...] = Field(description="The servers that answered, with their models")
+    studio_link: StudioLink = Field(
+        description="Where the workspace stands with the Imbue Studio app's view of the user's computer; "
+        "UNAVAILABLE when the app was not asked"
+    )
     default_context_window: int = Field(description="The context window the form starts on, in tokens")
     min_context_window: int = Field(description="The smallest context window a chat here can run with, in tokens")
 
@@ -356,7 +375,13 @@ def poll_flow(flow_id: str) -> Response:
 
 
 def submit_flow(flow_id: str) -> Response:
-    """Accept whatever the flow's shape asks the user for: a pasted code, a key, or a model server."""
+    """Accept whatever the flow's shape asks the user for: a pasted code, a key, or a model server.
+
+    A model server this workspace reaches only through the Imbue Studio app (`studio_port`) is
+    first connected to it by the app, and the sign-in runs on the address it then answers on here.
+    The app repoints the workspace's one connection to do that, so it is asked only for a flow
+    that is still waiting on a model server.
+    """
     submit_request = parse_request_body(SubmitFlowRequest)
     service = get_state().auth_flows
     try:
@@ -366,16 +391,23 @@ def submit_flow(flow_id: str) -> Response:
             status = service.submit_key(flow_id, submit_request.api_key.strip(), submit_request.key_provider or None)
         elif submit_request.endpoint is not None:
             endpoint = submit_request.endpoint
+            if endpoint.studio_port is None:
+                base_url = endpoint.base_url
+            else:
+                service.require_endpoint_flow(flow_id)
+                base_url = open_studio_tunnel(
+                    get_state().http_client, _studio_gateway(), _own_agent_id(), endpoint.studio_port
+                )
             status = service.submit_endpoint(
                 flow_id,
-                endpoint.base_url,
+                base_url,
                 endpoint.model_id.strip(),
                 endpoint.context_window,
                 endpoint.api_key.strip(),
             )
         else:
             return _error_response("expected a code, an api_key or an endpoint")
-    except (FlowError, ClaudeAuthError) as e:
+    except (FlowError, ClaudeAuthError, LocalModelError) as e:
         # ClaudeAuthError too: a paste that fails claude's strict env-block parse raises
         # CredentialPasteError, which is a sibling of FlowError rather than a subclass. Escaping
         # here made a typo'd key a 500, and threw away the one message that says WHICH key was
@@ -384,19 +416,38 @@ def submit_flow(flow_id: str) -> Response:
     return model_response(status)
 
 
-def find_local_model_servers() -> Response:
-    """The model servers a local-model sign-in can pick from: the ones answering on the usual ports of
-    the user's own machine, or the one server the request names.
+def _studio_gateway() -> GatewayAccess | None:
+    return GatewayAccess.from_environ(os.environ)
 
-    Owner-only: it makes this workspace fetch an address the caller chose.
+
+def _own_agent_id() -> str:
+    return os.environ.get("MNGR_AGENT_ID", "")
+
+
+def find_local_model_servers() -> Response:
+    """The model servers a local-model sign-in can pick from: the ones on the user's own computer, or
+    the one server the request names.
+
+    A server this workspace can call directly (the workspace runs on the user's computer) is
+    offered as it is. When none answers, the Imbue Studio app is asked for the servers on the
+    user's computer, which it connects the workspace to once the user has allowed that.
+
+    Owner-only: it makes this workspace fetch an address the caller chose, and asks the user for
+    a permission.
     """
     refusal = forbid_unless_owner()
     if refusal is not None:
         return refusal
     servers_request = parse_request_body(LocalModelServersRequest)
+    studio_link = StudioLink.UNAVAILABLE
     client = get_state().http_client
     if servers_request.base_url is None:
         servers = discover_servers(client)
+        if not servers:
+            studio = find_studio_model_servers(
+                client, _studio_gateway(), _own_agent_id(), servers_request.is_requesting_access
+            )
+            servers, studio_link = studio.servers, studio.link
     else:
         try:
             base_url = normalize_base_url(servers_request.base_url)
@@ -406,6 +457,7 @@ def find_local_model_servers() -> Response:
     return model_response(
         LocalModelServersResponse(
             servers=servers,
+            studio_link=studio_link,
             default_context_window=DEFAULT_CONTEXT_WINDOW,
             min_context_window=MIN_CONTEXT_WINDOW,
         )

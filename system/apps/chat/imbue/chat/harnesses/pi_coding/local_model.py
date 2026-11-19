@@ -56,12 +56,14 @@ _SERVER_NAME_BY_PORT: Final = dict(_KNOWN_SERVERS)
 _OLLAMA_REASONING_OFF_EFFORT: Final = "none"
 
 _PROBE_TIMEOUT_SECONDS: Final = 2.0
-# How long a chat's send waits to hear that its model server is there at all.
+# How long a chat's send waits to hear that its model server is there at all. A server on the
+# user's computer answers through a tunnel, so this allows for a round trip to their home.
 _REACHABILITY_TIMEOUT_SECONDS: Final = 5.0
 
 UNREACHABLE_MESSAGE: Final = (
-    "The model server on your computer did not answer. Check that the computer is awake and that "
-    "the model server (for example Ollama) is running. Then send your message again."
+    "The model server on your computer did not answer. Check that the computer is awake, that "
+    "Imbue Studio is open on it, and that the model server (for example Ollama) is running. "
+    "Then send your message again."
 )
 # A model that is not loaded yet is read off disk before it answers.
 _TOOL_CALL_TIMEOUT_SECONDS: Final = 180.0
@@ -114,6 +116,11 @@ class LocalModelServer(FrozenModel):
     base_url: str = Field(description="The server's OpenAI-compatible root, ending in its version path")
     name: str = Field(description="What the server is, as shown: the product on a known port, else its address")
     models: tuple[str, ...] = Field(description="The ids of the models the server lists")
+    studio_port: int | None = Field(
+        default=None,
+        description="The server's port on the user's own computer, for a server this workspace reaches only "
+        "through the Imbue Studio app; base_url is then its address there, not one this workspace can call",
+    )
 
 
 _NOT_AN_ADDRESS_MESSAGE: Final = "That is not a server address. Use the form http://host:port."
@@ -346,8 +353,9 @@ def is_server_answering(client: httpx.Client, base_url: str) -> bool:
     """Whether anything answers HTTP at ``base_url`` right now.
 
     Any answer counts, a refusal for want of a key included: the question is whether a request
-    would reach a server, not whether the server would take it. A request to a server that has
-    stopped answering otherwise waits out the harness's own timeout, which is minutes.
+    would reach a server, not whether the server would take it. A server on the user's computer
+    is reached through a tunnel that can outlive the computer's attention (it is asleep, or the
+    model server was stopped), and a request sent into that waits out the harness's own timeout.
     """
     try:
         client.get(f"{base_url}/models", timeout=_REACHABILITY_TIMEOUT_SECONDS)

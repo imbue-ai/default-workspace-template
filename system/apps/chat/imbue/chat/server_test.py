@@ -1571,7 +1571,7 @@ def _client_with_account_labeled_chat(
 def test_a_chat_on_a_local_model_whose_server_does_not_answer_is_told_what_to_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The send would only wait on the server: pi holds a request to one that has stopped answering for minutes."""
+    """The send would only wait on the server: a tunnel to a sleeping computer takes a request and never answers it."""
     agent_id = "agent-00000000000000000000000000000733"
     account_id, account_path = mint_account_dir()
     commit_account(account_id, "local-model", "Local model")
@@ -1600,7 +1600,7 @@ def test_a_chat_on_a_local_model_whose_server_does_not_answer_is_told_what_to_ch
 
     assert response.status_code == 409
     assert response.get_json()["kind"] == "model_server_unreachable"
-    assert "Check that the computer is awake" in response.get_json()["detail"]
+    assert "Imbue Studio is open" in response.get_json()["detail"]
     assert asked == ["http://127.0.0.1:11435/v1/models"]
     assert messenger.sent == []
 

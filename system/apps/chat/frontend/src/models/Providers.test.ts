@@ -293,3 +293,61 @@ describe("the provider chooser's hooks", () => {
     expect(onSignedIn).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("looking for the model servers on the user's computer", () => {
+  let providers: typeof import("./Providers");
+
+  function answer(studioLink: string): unknown {
+    return { servers: [], studio_link: studioLink, default_context_window: 65536, min_context_window: 32768 };
+  }
+
+  function lastBody(): unknown {
+    return mockRequest.mock.calls[mockRequest.mock.calls.length - 1][0].body;
+  }
+
+  beforeEach(async () => {
+    mockRequest.mockReset();
+    vi.resetModules();
+    providers = await import("./Providers");
+  });
+
+  it("asks the user once, however often the form is opened before they answer", async () => {
+    mockRequest.mockResolvedValue(answer("AWAITING_APPROVAL"));
+
+    await providers.findLocalModelServers();
+    expect(lastBody()).toEqual({});
+    await providers.findLocalModelServers();
+    expect(lastBody()).toEqual({ is_requesting_access: false });
+  });
+
+  it("asks again when told to, and never on a check", async () => {
+    mockRequest.mockResolvedValue(answer("AWAITING_APPROVAL"));
+
+    await providers.findLocalModelServers(null, "", "never");
+    expect(lastBody()).toEqual({ is_requesting_access: false });
+    await providers.findLocalModelServers();
+    expect(lastBody()).toEqual({});
+    await providers.findLocalModelServers(null, "", "again");
+    expect(lastBody()).toEqual({});
+  });
+
+  it("asks afresh once the user has agreed, in case they later take it away", async () => {
+    mockRequest.mockResolvedValueOnce(answer("AWAITING_APPROVAL"));
+    mockRequest.mockResolvedValueOnce(answer("CONNECTED"));
+    mockRequest.mockResolvedValueOnce(answer("AWAITING_APPROVAL"));
+
+    await providers.findLocalModelServers();
+    await providers.findLocalModelServers();
+    await providers.findLocalModelServers();
+
+    expect(lastBody()).toEqual({});
+  });
+
+  it("names the one server to ask without touching the user's computer", async () => {
+    mockRequest.mockResolvedValue(answer("UNAVAILABLE"));
+
+    await providers.findLocalModelServers("box.lan:9000", "sk-secret");
+
+    expect(lastBody()).toEqual({ base_url: "box.lan:9000", api_key: "sk-secret" });
+  });
+});

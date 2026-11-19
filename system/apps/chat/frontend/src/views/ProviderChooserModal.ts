@@ -47,7 +47,7 @@ import { renderMarkdown } from "../markdown";
 import { providerMark } from "./providerMarks";
 import { removeAccountDialog } from "./removeAccountDialog";
 import * as css from "./providerSignInStyles";
-import type { Lane, LaneMethod, LocalModelServer, UnpickableReason } from "../models/Providers";
+import type { Lane, LaneMethod, LocalModelServer, StudioLink, UnpickableReason } from "../models/Providers";
 import {
   abortFlow,
   areLanesLoaded,
@@ -75,6 +75,9 @@ import { requestProviderRelay } from "../models/providerRelay";
 export interface ProviderChooserModalAttrs {
   onDismiss: () => void;
 }
+
+/** How often the form checks whether the user has approved in Imbue Studio. */
+const APPROVAL_CHECK_INTERVAL_MS = 2000;
 
 type Mode = "chooser" | "relay" | "menu" | "steps" | "apiKey" | "endpoint";
 
@@ -147,6 +150,10 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let minContextWindow = 0;
   // Bumped by every look, so an answer that a newer look has overtaken stands down.
   let serverLook = 0;
+  // Where the last look for the user's computer left things with Imbue Studio.
+  let studioLink: StudioLink = "UNAVAILABLE";
+  // The next quiet look while the user has yet to approve in Imbue Studio.
+  let approvalCheck: ReturnType<typeof setTimeout> | null = null;
 
   function reset(): void {
     mode = "chooser";
@@ -174,7 +181,18 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     pickedModel = null;
     contextWindow = "";
     serverLook += 1;
+    studioLink = "UNAVAILABLE";
+    stopApprovalCheck();
     clearFlow();
+  }
+
+  function stopApprovalCheck(): void {
+    if (approvalCheck !== null) clearTimeout(approvalCheck);
+    approvalCheck = null;
+  }
+
+  function scheduleApprovalCheck(): void {
+    approvalCheck = setTimeout(() => void lookForServers(null, true), APPROVAL_CHECK_INTERVAL_MS);
   }
 
   function isPaste(candidate: LaneMethod): boolean {
@@ -191,19 +209,44 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     );
   }
 
-  /** Look for model servers: on the usual ports of the user's machine, or at the one address given. */
-  async function lookForServers(address: string | null): Promise<void> {
+  /**
+   * Look for model servers: on the user's computer, or at the one address given.
+   *
+   * While the user has yet to let the workspace reach their computer, the look repeats quietly
+   * (`isApprovalCheck`): it changes nothing on screen until they have, and does not ask them again.
+   * `isAskingAgain` raises the request for that once more, for a user who dismissed the first.
+   */
+  async function lookForServers(
+    address: string | null,
+    isApprovalCheck = false,
+    isAskingAgain = false,
+  ): Promise<void> {
+    stopApprovalCheck();
+    // The form was left for another way in while this check was due.
+    if (isApprovalCheck && mode !== "endpoint") return;
     serverLook += 1;
     const look = serverLook;
-    isLookingForServers = true;
-    serverError = null;
-    m.redraw();
+    if (!isApprovalCheck) {
+      isLookingForServers = true;
+      serverError = null;
+      m.redraw();
+    }
     try {
-      const found = await findLocalModelServers(address, serverKey.trim());
+      const found = isApprovalCheck
+        ? await findLocalModelServers(null, "", "never")
+        : isAskingAgain
+          ? await findLocalModelServers(null, "", "again")
+          : await findLocalModelServers(address, serverKey.trim());
       if (look !== serverLook) return;
-      servers = found.servers;
+      studioLink = found.studio_link;
       minContextWindow = found.min_context_window;
       if (contextWindow === "") contextWindow = String(found.default_context_window);
+      if (studioLink === "AWAITING_APPROVAL") {
+        if (servers === null) servers = [];
+        scheduleApprovalCheck();
+        return;
+      }
+      servers = found.servers;
       const choices = modelChoices();
       if (!choices.some((choice) => choice.key === pickedModel)) {
         pickedModel = choices.length === 1 ? choices[0].key : null;
@@ -218,9 +261,15 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       }
     } catch (e) {
       if (look !== serverLook) return;
+      if (isApprovalCheck) {
+        scheduleApprovalCheck();
+        return;
+      }
       if (servers === null) servers = [];
       isNamingServer = true;
       serverError = errorText(e);
+      // This look took the place of the wait on the user's approval, which it did not settle.
+      if (studioLink === "AWAITING_APPROVAL") scheduleApprovalCheck();
     } finally {
       if (look === serverLook) {
         isLookingForServers = false;
@@ -872,6 +921,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           model_id: picked.model,
           context_window: windowTokens,
           api_key: serverKey.trim(),
+          studio_port: picked.server.studio_port ?? null,
         }),
       );
     };
@@ -883,7 +933,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     return m("div", { "data-e2e": "local-model-form" }, [
       m("p", { class: css.LEAD }, method?.description ?? ""),
       stepLabel(null, "Model"),
-      // One of these three, never a hole: mithril refuses a fragment that mixes keyed and unkeyed.
+      // One of these, never a hole: mithril refuses a fragment that mixes keyed and unkeyed.
       servers === null || (isLookingForServers && choices.length === 0)
         ? m("p", { class: css.HINT, "data-e2e": "local-model-looking" }, "Looking for a model server...")
         : choices.length > 0
@@ -900,19 +950,39 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                 pickedModel = key;
               },
             })
-          : m("p", { class: css.HINT, "data-e2e": "local-model-none" }, [
-              "No model server answered on your computer. ",
-              m(
-                "button",
-                {
-                  type: "button",
-                  class: css.HINT_ACTION,
-                  "data-e2e": "local-model-look-again",
-                  onclick: () => void lookForServers(null),
-                },
-                "Look again",
-              ),
-            ]),
+          : studioLink === "AWAITING_APPROVAL"
+            ? m("p", { class: css.HINT, "data-e2e": "local-model-awaiting-approval" }, [
+                "Imbue Studio is asking whether this workspace may reach the model server on your computer. " +
+                  "Approve it there to continue. ",
+                m(
+                  "button",
+                  {
+                    type: "button",
+                    class: css.HINT_ACTION,
+                    "data-e2e": "local-model-ask-again",
+                    onclick: () => void lookForServers(null, false, true),
+                  },
+                  "Ask again",
+                ),
+              ])
+            : m("p", { class: css.HINT, "data-e2e": "local-model-none" }, [
+                studioLink === "UNREACHABLE"
+                  ? "Imbue Studio on your computer did not answer. Check that the computer is awake and " +
+                    "Studio is open. "
+                  : studioLink === "CONNECTED"
+                    ? "No model server is running on your computer. Start one (Ollama, LM Studio or llama.cpp). "
+                    : "No model server answered on your computer. ",
+                m(
+                  "button",
+                  {
+                    type: "button",
+                    class: css.HINT_ACTION,
+                    "data-e2e": "local-model-look-again",
+                    onclick: () => void lookForServers(null),
+                  },
+                  "Look again",
+                ),
+              ]),
       serverError !== null ? m("p", { class: errorClass, "data-e2e": "local-model-error" }, serverError) : null,
       isNamingServer
         ? m("div", { class: "mt-4" }, [
@@ -1121,6 +1191,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     onremove() {
       // A modal closed mid-flow must not leave a CLI waiting on a browser tab that is gone.
       abortFlow();
+      stopApprovalCheck();
     },
 
     view(vnode) {
