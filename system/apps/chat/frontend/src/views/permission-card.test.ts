@@ -152,6 +152,7 @@ const WORKSPACE_OUTPUT = `{"request_id":"ws-1","rationale":"export a backup of t
 
 // An accounts request (listing the device's signed-in accounts).
 const ACCOUNTS_OUTPUT = `{"request_id":"acct-1","rationale":"check which account is signed in","request_type":"accounts","payload":{}}`;
+const LOCAL_MODEL_OUTPUT = `{"request_id":"lm-1","rationale":"run the Daily Digest refresh on your computer","request_type":"local-model","payload":{}}`;
 
 // The backend caps tool output (`_MAX_OUTPUT_LENGTH` in session_parser.py) and
 // appends this marker. Mirrored here because the recovery scan's real trigger
@@ -453,6 +454,14 @@ describe("renderPermissionCard", () => {
       makeResult(FILE_SHARING_OUTPUT),
     );
     expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Local files");
+  });
+
+  it("titles a local-model request 'Local models on your computer'", () => {
+    const vnode = renderCardFor(
+      makeToolCall(PERMISSION_INPUT.length, "permission_request"),
+      makeResult(LOCAL_MODEL_OUTPUT),
+    );
+    expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Local models on your computer");
   });
 
   it("titles an accounts request 'Device accounts'", () => {

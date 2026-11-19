@@ -4,22 +4,28 @@ COPY THIS FILE into your service and adapt it -- it is a self-contained referenc
 snippet, not something to import from the skill's package. It needs nothing but
 the standard library.
 
-A workspace can be connected to a model the user hosts on their own computer
-(Ollama, LM Studio, llama.cpp): the "Local model" provider in the chat's provider
-chooser. That connection is an account under ``~/.minds/accounts/<id>/`` on the
-``local-model`` lane, and it holds everything a call needs:
+A workspace can run a completion on a model on the user's own computer. Where
+that model answers is read from one of two places, in this order:
 
-- ``models.json``: the server's OpenAI-compatible address (for a workspace that
-  is not on the user's computer, a loopback port the Imbue Studio app tunnels to
-  the server) and the models it offers a chat;
-- ``local_models.json``: which of those models has passed the tool-call check,
-  and which model each is a context size of;
-- ``auth.json``: the server's key, when it asks for one.
+- **The record the ``set-up-local-model`` skill writes**,
+  ``data/.state/local_model/endpoint.json`` in the workspace: the address the
+  model answers on from inside this workspace, the model to ask for, its window,
+  and what stops it reasoning. This is what a refresh runs on, and it depends on
+  no chat.
+- **A chat's Local model connection**, in a workspace whose user signed a chat
+  in to the "Local model" provider: an account under ``~/.minds/accounts/<id>/``
+  on the ``local-model`` lane. ``models.json`` holds the server's address and the
+  models it offers a chat, ``local_models.json`` which of them have passed the
+  chat's tool-call check, and ``auth.json`` the server's key when it asks for one.
 
-So code that should run on the local model reads the account, not an address of
-its own: the address differs per workspace, and changes when the user signs in
-again. ``read_local_model_endpoint`` does that read; ``local_model_completion``
-makes one completion with it.
+So code that should run on the local model names no address of its own: the
+address differs per workspace, and changes when the model is set up again.
+``read_local_model_endpoint`` does the read; ``local_model_completion`` makes one
+completion with it.
+
+With neither, the model has not been set up. Follow the ``set-up-local-model``
+skill, which asks the user for one approval in Imbue Studio; never send them to
+a chat's provider menu to make code work.
 
 Three things differ from calling a hosted model, and a caller has to plan for
 each:
@@ -27,22 +33,26 @@ each:
 - **The model may not be there.** It runs on the user's computer, so it answers
   only while that computer is awake, the model server is running, and (for a
   workspace elsewhere) Imbue Studio is open. A scheduled job will meet nights
-  when it does not. ``LocalModelUnreachableError`` is that case: skip the run
-  and say so, rather than failing loudly or falling back to a paid model the
-  user did not ask for.
+  when it does not. ``local_model_completion`` looks before it calls: when
+  nothing answers at the recorded address it asks Imbue Studio once to connect
+  the workspace to the computer again, and raises ``LocalModelUnreachableError``
+  when that does not bring the model back. Skip the run and say so, rather than
+  failing loudly or falling back to a paid model the user did not ask for.
 - **It answers one request at a time, slowly.** A local server queues what it
   is sent, so a thread pool buys nothing; send items one after another, and
   expect seconds to minutes each. The first request after a pause also waits
   for the model to load.
 - **Its window is small.** ``LocalModelEndpoint.context_window`` is the whole
-  budget for the prompt and the answer together, often 40,960 tokens. Send one
-  item per call, not a batch.
+  budget for the prompt and the answer together: 16,384 tokens as the setup
+  leaves it, 40,960 or more on a chat's connection. Send one item per call, not
+  a batch.
 
 There is no cost to measure: the model runs on the user's own hardware.
 """
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import socket
@@ -50,8 +60,12 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
+
+# The record lives with the workspace's machine state, at the workspace's fixed root.
+_ENDPOINT_FILE_ENV_VAR = "MINDS_LOCAL_MODEL_ENDPOINT_FILE"
+_DEFAULT_ENDPOINT_FILE = "/home/user/workspace/data/.state/local_model/endpoint.json"
 
 _LOCAL_MODEL_LANE = "local-model"
 # pi's id for the provider: the key of its entry in models.json and in auth.json.
@@ -64,6 +78,18 @@ _ACCOUNTS_ROOT_ENV_VAR = "MINDS_ACCOUNTS_ROOT"
 # answer on a laptop takes minutes.
 _DEFAULT_TIMEOUT_SECONDS = 600.0
 _DEFAULT_MAX_TOKENS = 1024
+# Room for a round trip to the user's home through the tunnel, and short beside the
+# call it comes before.
+_PROBE_TIMEOUT_SECONDS = 5.0
+# Opening the connection may have to reach into the workspace first.
+_RECONNECT_TIMEOUT_SECONDS = 45.0
+# The port Ollama listens on, on the user's computer: the server a record is of.
+_OLLAMA_PORT = 11434
+
+_SET_UP_INSTRUCTION = (
+    "Follow the set-up-local-model skill: it asks the user to allow it in Imbue Studio, which installs "
+    "what is missing on their computer, and records where the model answers."
+)
 
 
 class LocalModelError(RuntimeError):
@@ -71,7 +97,7 @@ class LocalModelError(RuntimeError):
 
 
 class LocalModelNotConnectedError(LocalModelError):
-    """The workspace has no local model connected, or not the one asked for."""
+    """The workspace has no local model set up, or not the one asked for."""
 
 
 class LocalModelUnreachableError(LocalModelError):
@@ -119,6 +145,41 @@ def _read_json(path: str) -> Any:
         return None
 
 
+def _other_model_instruction(model: str) -> str:
+    return (
+        f"To call {model} from code, set it up with the set-up-local-model skill (its `start --model {model}`, "
+        f"then `verify --model {model}`)."
+    )
+
+
+def _read_record() -> dict[str, Any] | None:
+    """What the set-up-local-model skill recorded, or None when it has recorded nothing to call."""
+    record = _read_json(
+        os.environ.get(_ENDPOINT_FILE_ENV_VAR) or _DEFAULT_ENDPOINT_FILE
+    )
+    if not isinstance(record, dict):
+        return None
+    is_callable = all(
+        isinstance(record.get(name), str) and record[name]
+        for name in ("base_url", "model")
+    )
+    return record if is_callable else None
+
+
+def _recorded_endpoint(record: Mapping[str, Any]) -> LocalModelEndpoint:
+    context_window = record.get("context_window")
+    reasoning_off_effort = record.get("reasoning_off_effort")
+    return LocalModelEndpoint(
+        base_url=str(record["base_url"]).rstrip("/"),
+        api_key="",
+        model=str(record["model"]),
+        context_window=context_window if isinstance(context_window, int) else 0,
+        reasoning_off_effort=reasoning_off_effort
+        if isinstance(reasoning_off_effort, str)
+        else None,
+    )
+
+
 def _local_model_account_dir() -> str:
     """The folder of the workspace's local-model account: the pinned default, else the most recently used, else the oldest."""
     root = _accounts_root()
@@ -131,8 +192,7 @@ def _local_model_account_dir() -> str:
     ]
     if not local:
         raise LocalModelNotConnectedError(
-            "No local model is connected to this workspace. Ask the user to choose the Local model provider in a "
-            "chat's provider menu first."
+            f"No local model is set up for this workspace. {_SET_UP_INSTRUCTION}"
         )
     by_id = {row.get("id"): row for row in local}
     chosen = (
@@ -172,17 +232,11 @@ def _candidate_models(
     ]
 
 
-def read_local_model_endpoint(model: str | None = None) -> LocalModelEndpoint:
-    """Where the workspace's local model answers.
+def _account_endpoint(model: str | None) -> LocalModelEndpoint:
+    """Where a chat's Local model connection answers: the model it was signed in on, or ``model``.
 
-    With no ``model``, the one the account was signed in on. With one, that model
-    by its id or by the model it is a context size of (``"qwen3:8b"`` finds the
-    account's ``qwen3:8b`` at whichever size has been used in a chat). Only a
-    model that has passed the chat's tool-call check is returned: one that has
+    Only a model that has passed the chat's tool-call check is returned: one that has
     not been used in a chat may not exist on the server yet.
-
-    Raises ``LocalModelNotConnectedError`` when the workspace has no local model
-    connected, or not that one.
     """
     account_dir = _local_model_account_dir()
     config = _read_json(os.path.join(account_dir, "models.json"))
@@ -191,7 +245,7 @@ def read_local_model_endpoint(model: str | None = None) -> LocalModelEndpoint:
     base_url = provider.get("baseUrl") if isinstance(provider, dict) else None
     if not isinstance(provider, dict) or not isinstance(base_url, str) or not base_url:
         raise LocalModelNotConnectedError(
-            "The workspace's local model connection names no server."
+            f"The workspace's local model connection names no server. {_SET_UP_INSTRUCTION}"
         )
     usable = [
         each
@@ -205,7 +259,7 @@ def read_local_model_endpoint(model: str | None = None) -> LocalModelEndpoint:
     ]
     if not wanted:
         raise LocalModelNotConnectedError(
-            "The workspace's local model connection has no model ready to use."
+            f"The workspace's local model connection has no model ready to use. {_SET_UP_INSTRUCTION}"
             if model is None
             else f"The workspace's local model connection has no {model} ready to use. It offers: "
             + (
@@ -214,7 +268,7 @@ def read_local_model_endpoint(model: str | None = None) -> LocalModelEndpoint:
                 )
                 or "nothing"
             )
-            + ". A model becomes ready once a chat has run on it."
+            + f". {_other_model_instruction(model)}"
         )
     chosen = wanted[0]
     auth = _read_json(os.path.join(account_dir, "auth.json"))
@@ -231,6 +285,125 @@ def read_local_model_endpoint(model: str | None = None) -> LocalModelEndpoint:
         if isinstance(reasoning_off_effort, str)
         else None,
     )
+
+
+def _resolve_endpoint(model: str | None) -> tuple[LocalModelEndpoint, bool]:
+    """The endpoint for ``model``, and whether it is the one the set-up-local-model skill recorded."""
+    record = _read_record()
+    if record is not None and model in (
+        None,
+        record["model"],
+        record.get("base_model"),
+    ):
+        return _recorded_endpoint(record), True
+    try:
+        return _account_endpoint(model), False
+    except LocalModelNotConnectedError as e:
+        if record is None or model is None:
+            raise
+        raise LocalModelNotConnectedError(
+            f"This workspace's local model is {record.get('base_model') or record['model']}, and {model} is "
+            f"not set up. {_other_model_instruction(model)}"
+        ) from e
+
+
+def read_local_model_endpoint(model: str | None = None) -> LocalModelEndpoint:
+    """Where the workspace's local model answers.
+
+    With no ``model``, the one the ``set-up-local-model`` skill recorded, else the
+    one a chat's Local model connection was signed in on. With one, that model by
+    its id or by the model it is a context size of (``"qwen3:8b"`` finds the
+    recorded ``qwen3:8b-ctx16384``), from the record when it holds it, else from a
+    chat's connection, where only a model a chat has run on is offered.
+
+    Raises ``LocalModelNotConnectedError`` when the workspace has no local model
+    set up, or not that one; the message says how to set one up.
+    """
+    return _resolve_endpoint(model)[0]
+
+
+def _why_unanswered(base_url: str) -> str | None:
+    """Why nothing answers HTTP at ``base_url`` right now; None when something does.
+
+    Any answer counts, a refusal included: the question is whether a request would
+    reach a server. A tunnel to a computer that is asleep takes a request and never
+    answers it, so a completion sent into one waits out its whole timeout.
+    """
+    try:
+        with urllib.request.urlopen(  # noqa: S310
+            f"{base_url}/models", timeout=_PROBE_TIMEOUT_SECONDS
+        ):
+            return None
+    except urllib.error.HTTPError:
+        return None
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+        return str(e)
+
+
+def _reconnected_base_url() -> str | None:
+    """Ask Imbue Studio to connect this workspace to the Ollama on the user's computer again.
+
+    Returns the address the model then answers on here, or None when the app cannot be
+    asked or will not. The app restores the connection by itself too, on a timer; asking
+    saves a run that lands in between. The call goes through the workspace's gateway as
+    the agent this process runs as, under the permission the setup was granted.
+    """
+    gateway = os.environ.get("LATCHKEY_GATEWAY", "")
+    password = os.environ.get("LATCHKEY_GATEWAY_PASSWORD", "")
+    agent_id = os.environ.get("MNGR_AGENT_ID", "")
+    if not gateway or not password or not agent_id:
+        return None
+    headers = {
+        "Content-Type": "application/json",
+        "X-Latchkey-Gateway-Password": password,
+    }
+    # A desktop-hosted gateway needs it as the per-agent authorization; another never sets it.
+    permissions = os.environ.get("LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE", "")
+    if permissions:
+        headers["X-Latchkey-Gateway-Permissions-Override"] = permissions
+    request = urllib.request.Request(
+        f"{gateway.rstrip('/')}/minds-api-proxy/api/v1/agents/{agent_id}/local-model/tunnel",
+        data=json.dumps({"port": _OLLAMA_PORT}).encode(),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(  # noqa: S310
+            request, timeout=_RECONNECT_TIMEOUT_SECONDS
+        ) as response:
+            payload = json.loads(response.read())
+    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError):
+        return None
+    workspace_port = (
+        payload.get("workspace_port") if isinstance(payload, dict) else None
+    )
+    if not isinstance(workspace_port, int):
+        return None
+    return f"http://127.0.0.1:{workspace_port}/v1"
+
+
+def _unreachable(base_url: str, reason: object) -> LocalModelUnreachableError:
+    return LocalModelUnreachableError(
+        f"The model server at {base_url} did not answer ({reason}). The user's computer may be asleep or "
+        "offline, the model server may not be installed or running, or Imbue Studio may be closed. An agent "
+        "working with the user runs the set-up-local-model skill's check command before telling them anything: "
+        "Imbue Studio can install and start the model server itself."
+    )
+
+
+def _answering_endpoint(
+    endpoint: LocalModelEndpoint, is_recorded: bool
+) -> LocalModelEndpoint:
+    """``endpoint`` at an address that answers now; raises ``LocalModelUnreachableError`` when none does."""
+    reason = _why_unanswered(endpoint.base_url)
+    if reason is None:
+        return endpoint
+    # Only for the recorded model, which is an Ollama's: a chat's connection may lead to another
+    # server, and this would point the workspace's one tunnel away from it.
+    reconnected = _reconnected_base_url() if is_recorded else None
+    if reconnected is not None and _why_unanswered(reconnected) is None:
+        return replace(endpoint, base_url=reconnected)
+    raise _unreachable(endpoint.base_url, reason)
 
 
 def _completion_body(
@@ -281,7 +454,7 @@ def local_model_completion(
     local model, ``LocalModelUnreachableError`` when its server does not answer,
     and ``LocalModelError`` for an answer that cannot be used.
     """
-    endpoint = read_local_model_endpoint(model)
+    endpoint = _answering_endpoint(*_resolve_endpoint(model))
     body = _completion_body(
         endpoint, prompt, system, max_tokens, is_reasoning_wanted, response_format
     )
@@ -304,10 +477,7 @@ def local_model_completion(
             f"The model server answered {e.code} for {endpoint.model}: {detail}"
         ) from e
     except (urllib.error.URLError, socket.timeout, ConnectionError) as e:
-        raise LocalModelUnreachableError(
-            f"The model server at {endpoint.base_url} did not answer ({e}). The user's computer may be asleep or "
-            "offline, the model server may not be running, or Imbue Studio may be closed."
-        ) from e
+        raise _unreachable(endpoint.base_url, e) from e
     except ValueError as e:
         raise LocalModelError(
             f"The model server at {endpoint.base_url} answered something that is not JSON."

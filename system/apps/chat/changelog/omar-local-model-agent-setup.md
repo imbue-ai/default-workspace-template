@@ -1,0 +1,1 @@
+- A permission request for local models now has a title on its card in the chat ("Local models on your computer"), where it had none and its receipt read only "Permission request". An agent can file this request itself with the new `set-up-local-model` skill.

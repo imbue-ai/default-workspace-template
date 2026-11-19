@@ -27,6 +27,11 @@ you to the rest of this skill. When it is genuinely unclear, do it in the
 workspace and say that is where you did it; the user will correct you if they
 meant their laptop, and nothing dangerous has happened.
 
+AI work is the one case where "locally" does mean their own hardware: "run the
+refresh locally", "use a local model", "without sending it to a provider" ask
+for a model on the user's computer. That is the `set-up-local-model` skill, not
+this one.
+
 ## 1. Prefer something else
 
 Most "run it on my computer" requests are really "I need the result", and the
@@ -40,6 +45,12 @@ result can usually be produced without running anything there:
   computer at all.
 - **A result you can compute here.** Produce it in the workspace and hand it
   over as a file or a page.
+- **An AI model on their computer.** "Run it locally", "use a local model",
+  "keep it on my own computer" for an app's or a routine's AI work is the
+  `set-up-local-model` skill. Imbue Studio installs the model runner (Ollama)
+  and downloads the model itself, after one approval. Never install either
+  through the route in sections 3 to 5, and never hand the user a script that
+  does.
 
 Say which of these you are taking, in the user's terms, and only move on when
 none of them can do the job.
