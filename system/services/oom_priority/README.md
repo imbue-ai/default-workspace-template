@@ -76,11 +76,14 @@ ever acting on a laptop with swap.
   the agent observer at 24, itself just above the shell) <
   user-created services (`USER_SERVICE`, 200) < user agent (300) < worker agent
   (600) < the Screen's stack (`SCREEN_STACK`, 850: the desktop an agent or the user
-  launched, so it goes before any agent and after the programs on it) < agent
-  subprocess (900) < Chromium's own processes (910-1000, renderers at the ceiling). Chat agents occupy a *dynamic* range that straddles the worker
-  band: `CHAT_AGENT_FLOOR` (300, a chat being engaged with right now) through
-  `CHAT_AGENT_BASE` (560, idle but recently used, and the launch band) up to
-  `CHAT_AGENT_STALE_CEILING` (800, untouched long enough to count as abandoned).
+  launched, so it goes before a worker or a fresh chat and after the programs on
+  it) < agent
+  subprocess (900) < Chromium's own processes (910-960, renderers at the ceiling). Chat agents occupy a *dynamic* range that straddles the worker
+  band and, for a chat left long enough, every band above it:
+  `CHAT_AGENT_FLOOR` (300, a chat being engaged with right now) through
+  `CHAT_AGENT_BASE` (560, idle but recently used, and the launch band)
+  up to the aged stage (1000, left long enough to count as abandoned, above
+  Chromium's renderers).
   The chat app's prioritizer moves a chat within that range from live
   engagement and elapsed idle time (see "Dynamic chat band" below).
   Bands are positive-only: a negative value (true "never kill")
@@ -127,7 +130,7 @@ without inspecting the process tree:
 | the four programs of the Screen's stack (`screen-xorg`, `screen-session`, `screen-pulse`, `screen-neko`) and its watcher | launch | `SCREEN_STACK` (850), by program name through `_NON_SERVICE_PROGRAM_BANDS` | `system/services/oom_priority/bin/oom_tag_service.py <program name>` (command prefix) |
 | a program started on the Screen by `screen run` | launch | agent subprocess (900) | the Screen service's launcher (`oom_tag_shell_prefix`) |
 | a program started from the Screen itself (the XFCE menu, a terminal on it) | the Screen service's sweep, every 10 s | agent subprocess (900) | the Screen service's band sweep (`screen.band_sweep`) -- see "The Chromium exception" below |
-| Chromium's own processes | the same sweep, with a burst after a launch or a new tab | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-1000), renderers at the ceiling | the Screen service's band sweep -- see "The Chromium exception" below |
+| Chromium's own processes | the same sweep, with a burst after a launch or a new tab | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-960), renderers at the ceiling | the Screen service's band sweep -- see "The Chromium exception" below |
 
 Each supervisord service tags itself the same way an agent's main process does:
 its `command` in `system/supervisord.conf.d/<name>.conf` runs `system/services/oom_priority/bin/oom_tag_service.py <key> <the
@@ -230,10 +233,11 @@ idempotent. The same sweep is what raises everything else started from the Scree
 `xfwm4`, `xfce4-panel`, `xfdesktop`, `xfsettingsd`, `xfconfd`, the D-Bus daemon)
 in the stack's band (`SCREEN_STACK`, 850); under pressure the order is Chromium's
 renderers, then the programs on the Screen, then the stack, then the agents (the
-Screen spec, section 9.4).
+Screen spec, section 9.4), with a chat left for hours climbing past each in turn
+(see "Dynamic chat band" below).
 
 The input range is Chrome's own gradation (0-300), **not** 0-1000. Scaling
-against 1000 would compress every Chromium process into 910-937, the bottom
+against 1000 would compress every Chromium process into 910-925, the bottom
 third of the band, and leave the top to whatever merely *inherited* a high value
 -- which is never a renderer, since a renderer always self-writes. That is
 exactly backwards: the renderers hold nearly all of a browser's memory and cost
@@ -261,25 +265,35 @@ expendable it should be depends on how engaged the user is with it, which is onl
 known at runtime. So the launch wrapper tags a chat at `CHAT_AGENT_BASE` (560),
 and the chat app's `ChatOomPrioritizer` moves it in both directions from
 there: down toward `CHAT_AGENT_FLOOR` (300) as the user engages with it, and up
-toward `CHAT_AGENT_STALE_CEILING` (800) as it is left alone.
+to the aged stage (1000) as it is left alone.
 
 Two forces, combined through a single **freshness** factor that decays with idle
-time (1.0 for the first hour, reaching 0.0 at 24 hours -- the ramp is a table in
-`bands`):
+time (1.0 for the first hour, reaching 0.0 at the aged stage, eight hours in --
+the schedule is the `CHAT_STAGES` table in `bands`):
 
 - **engagement** lowers the score: an open tab, a visible tab, and how recently
   the chat was messaged relative to its peers. Each bonus is scaled by freshness.
 - **staleness** raises it: `(1 - freshness)` of the distance from
-  `CHAT_AGENT_BASE` up to `CHAT_AGENT_STALE_CEILING`.
+  `CHAT_AGENT_BASE` up to the aged stage's band.
 
 Because the same factor scales both, engagement *delays* the climb but never
-blocks it: a chat with a visible tab that has not been touched in a day still
-ends at the ceiling. That is deliberate. Shedding an idle chat costs almost
+blocks it: a chat with a visible tab that has gone untouched for that long still
+ends at the top. That is deliberate. Shedding an idle chat costs almost
 nothing -- its transcript stays on disk and readable, and the next message
 transparently revives it (mngr restarts a `STOPPED`/`DONE` agent before
 delivering), so the only cost is a slower next message. Shedding a running worker
 destroys in-flight work. So a chat nobody has touched in hours is genuinely worth
 less than the worker a live chat just spawned.
+
+The climb does not stop at the worker band. On the way to the aged stage a chat
+passes the Screen's stack, then an agent's subprocesses, then all of Chromium,
+whose renderers stop short of the top of the scale so that of an aged chat and a
+tab holding the same memory the chat goes first. It is the same argument taken
+further. A shed renderer takes the page an agent or the user was on, and a shed
+subprocess takes work an agent in use is waiting for, while the chat still costs
+one slow message. The main chat climbs like any other. The chat app starts it
+again as soon as it is shed, and a process that has just started counts as
+fresh.
 
 The exception is a chat that is **mid-turn** (a running lifecycle state): it is
 doing work right now that a shed would destroy rather than defer, so its
@@ -320,6 +334,26 @@ never-messaged and start aging from its process-start time. An agent whose recor
 can't be classified as a chat at all still falls through to the worker band, not
 a protected one.
 
+## Changing the policy
+
+`bands` is laid out as its types, the tables that fill them in, and the functions
+that read the tables, so who is shed first changes by editing a table:
+
+| To change | Edit |
+|---|---|
+| a fixed band (a worker, an agent's subprocess, the Screen's stack) | its constant |
+| a service's place among the services | its `SERVICE_BANDS` row |
+| how long a chat stays fresh, when it counts as aged, and the band at each | its `CHAT_STAGES` row |
+| what an open tab, a visible tab, or a recent message is worth to a chat | `CHAT_ENGAGEMENT` |
+| where Chromium's processes land | `BROWSER` |
+
+How long a chat must be left before it counts as aged is the one idle time on
+the `aged` row. `chat_agent_oom_score_adj` takes the stage table as an argument,
+so a schedule can be tried without editing the module.
+
+When earlyoom acts is not in `bands`: its two thresholds are the `-m` argument in
+`system/supervisord.conf.d/earlyoom.conf`.
+
 ## Outputs
 
 - **Shed ledger** (`data/.state/oom_priority/events/shed.jsonl`): append-only,
@@ -356,9 +390,9 @@ python3 system/services/oom_priority/bin/memory_candidates.py --json   # the sam
 python3 system/services/oom_priority/bin/memory_candidates.py --free-memory   # only the free memory line
 ```
 
-`--free-memory` reads nothing but the meminfo files, so it is cheap enough to
-poll while memory is short, when the full report's `mngr list` and service
-calls would add to the pressure.
+`--free-memory` reads nothing but the meminfo files and earlyoom's program file
+(for its threshold), so it is cheap enough to poll while memory is short, when
+the full report's `mngr list` and service calls would add to the pressure.
 
 It lists:
 
@@ -371,6 +405,10 @@ It lists:
   charged, so it can read several gigabytes more free than the figure earlyoom
   acts on. A reader who takes `/proc/meminfo` for the guard's own figure
   concludes there is room and reruns a command the guard goes on shedding.
+  The line also gives the room left before the guard acts: the free memory
+  above the share of `MemTotal` that earlyoom's program line passes as `-m`
+  (`system/supervisord.conf.d/earlyoom.conf`), since the guard starts stopping
+  processes there, not at zero.
 - **Idle chats and workers**, from `mngr list --provider local`, rendered
   through a `--format` template (the columns are `MNGR_LIST_FIELDS`). This is
   how `system/scripts/collect_bug_report_diagnostics.py` lists agents too:

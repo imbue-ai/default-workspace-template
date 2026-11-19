@@ -1,1 +1,0 @@
-- The harness policy docs record P8 (a finished chat turn notifies the user) as a prose-only rule for every harness: the claude Stop hook that asked on every turn was removed because it surfaced in the chat as a chip plus a duplicated reply.

@@ -309,7 +309,7 @@ This is the one change outside the template, in the mngr repository's `apps/mind
 
 ## 12. Errors and edge cases
 
-- A right-click on the shell's shield over an unfocused window raises the window and opens no menu, as any press there does; the next right-click reaches the page.
+- A right-click on an unfocused window's content reaches its page on a non-touch client, which opens its own element menu, and the focus the press gave the page raises the window. On a touch client the shield over an unfocused window takes the press, raises the window, and opens no menu; the next press reaches the page.
 - A right-click while the shell's launcher or a menu is open lands on the shield or the sheet and closes them; no menu opens.
 - The clipboard API rejects (a page without focus, a denied permission): the row reports it and the menu closes.
 - `shell:draft-text` with no pinned draft target and no draft row: the notice of section 6, nothing else.

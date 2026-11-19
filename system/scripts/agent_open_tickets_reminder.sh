@@ -22,7 +22,7 @@ set -euo pipefail
 emit_as_codex=0
 [[ "${1:-}" == "--codex" ]] && emit_as_codex=1
 
-repo_root="${MNGR_AGENT_WORK_DIR:-$(pwd)}"
+repo_root="${MNGR_AGENT_WORK_DIR:-${CLAUDE_PROJECT_DIR:-$(pwd)}}"
 # Honor any externally-set TICKETS_DIR (the agent's env normally pins it
 # via .mngr/settings.toml -- e.g. /home/user/workspace/data/.tickets -- so the tk
 # tickets live under runtime/ with the rest of the synced state). Fall back to tk's

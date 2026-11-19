@@ -482,7 +482,7 @@ to open their Imbue Studio app and check again; for any other reason, follow
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
-    -H 'Content-Type: application/json' \
+    -H 'Content-Type: application/json' -H 'X-Latchkey-Device: *' \
     -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "predefined", "payload": {"scope": "github-git", "permissions": ["github-git-write"]}, "rationale": "Push the new version of your template to its repo."}'
 ```
 

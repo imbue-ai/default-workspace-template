@@ -57,13 +57,13 @@ python3 system/scripts/with_secrets.py data/.secrets/example.env -- uv run --no-
 The wrapper loads the file's variables into the child's environment and execs the
 command; the SDK reads `EXAMPLE_API_KEY` from `os.environ` like any other
 setting. The same prefix goes into a supervisord program's `bash -c` (the
-`build-app` skill's scaffold takes `--secrets-file`), a scheduled job's command,
-and an MCP server command. A guard refuses `cat`, `source`, `sed`, `python3 -c`,
-a redirect, or a `Read` of the file, because a value that lands in a tool call
-lands in the transcript. The guard catches the slips it can recognise; it cannot
-tell what the wrapped command does with its environment, so the rule is yours
-to keep: never run `env`, a debugger, or anything that prints its environment
-under the wrapper.
+`build-app` skill's scaffold takes `--secrets-file`) and a scheduled job's
+command. A guard refuses `cat`, `source`, `sed`, `python3 -c`, a redirect, or
+a `Read` of the file, because a value that lands in a tool call lands in the
+transcript. The guard catches the slips it can recognise; it cannot tell what
+the wrapped command does with its environment, so the rule is yours to keep:
+never run `env`, a debugger, or anything that prints its environment under the
+wrapper.
 
 ## The OAuth-app recipe
 

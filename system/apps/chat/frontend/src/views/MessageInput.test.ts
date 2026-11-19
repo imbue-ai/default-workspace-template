@@ -66,6 +66,8 @@ const mocks = vi.hoisted(() => {
     launchAwaitingChatAsRoom: vi.fn(async (_chatId: string) => {}),
     // What the composer registered to hear of a model pick the chat app refused.
     modelChoiceFailureListener: null as ((chatId: string, detail: string) => void) | null,
+    // What the composer registered to hear of a held send that never reached its agent.
+    heldSendFailedListener: null as ((chatId: string, messageId: string, detail: string, kind: string) => void) | null,
     // The account ids that read as signed out; empty at rest.
     signedOutAccountIds: new Set<string>(),
     loadAccounts: vi.fn(async () => {}),
@@ -75,6 +77,9 @@ const mocks = vi.hoisted(() => {
     getComposerAttachments: vi.fn(() => [] as unknown[]),
     clearComposerAttachments: vi.fn(),
     uploadDescribedFileToComposer: vi.fn(),
+    uploadFilesToComposer: vi.fn(),
+    stagePastedText: vi.fn(),
+    unstagePastedText: vi.fn(async (_chatId: string, _localId: string): Promise<string | null> => ""),
     // Resolved at once by default: no upload in flight. A test of a send waiting on one swaps in a
     // deferred promise.
     waitForComposerUploads: vi.fn(async (_chatId: string) => {}),
@@ -186,8 +191,10 @@ vi.mock("../models/ComposerAttachments", () => ({
   hasReadyAttachments: () => false,
   removeComposerAttachment: vi.fn(),
   restoreComposerAttachments: vi.fn(),
+  stagePastedText: mocks.stagePastedText,
+  unstagePastedText: mocks.unstagePastedText,
   uploadDescribedFileToComposer: mocks.uploadDescribedFileToComposer,
-  uploadFilesToComposer: vi.fn(),
+  uploadFilesToComposer: mocks.uploadFilesToComposer,
   waitForComposerUploads: (chatId: string) => mocks.waitForComposerUploads(chatId),
 }));
 vi.mock("../models/attachments", () => ({
@@ -200,6 +207,7 @@ vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({
   describeRequestErrorKind: (e: unknown) =>
     typeof e === "object" && e !== null && "kind" in e ? (e as { kind: string }).kind : "unknown",
   isUnansweredRequest: (e: unknown) => typeof e === "object" && e !== null && (e as { code?: unknown }).code === 0,
+  sendFailureKindOf: (kind: unknown) => (typeof kind === "string" ? kind : "unknown"),
 }));
 vi.mock("../models/ModelSettings", () => ({
   addModelChoiceFailureListener: (listener: (chatId: string, detail: string) => void) => {
@@ -262,6 +270,9 @@ vi.mock("../models/Chats", async (importOriginal) => ({
   getChatById: () =>
     mocks.isChatRegistered ? { active_agent: mocks.agent, handoff: mocks.switching.handoff } : undefined,
   getProvisionalChat: () => mocks.provisional,
+  addHeldSendFailedListener: (listener: (chatId: string, messageId: string, detail: string, kind: string) => void) => {
+    mocks.heldSendFailedListener = listener;
+  },
   isLaunchInFlight: () => mocks.isLaunchInFlight,
   isRoomChat: () => mocks.isRoom,
   launchChat: (chatId: string, accountId: string, message?: string, kind?: string) =>
@@ -603,6 +614,59 @@ describe("MessageInput send guard", () => {
   });
 });
 
+describe("MessageInput Enter during an input-method composition", () => {
+  beforeEach(() => {
+    mocks.sendMessage.mockClear();
+    mocks.agent.harness = "claude";
+    mocks.agent.activity_state = undefined;
+    localStorage.clear();
+  });
+
+  function typeDraft(component: m.Component<{ chatId: string | null }>, text: string): void {
+    const textarea = findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    (textarea?.attrs?.oninput as (event: unknown) => void)({ target: { value: text, style: {}, scrollHeight: 10 } });
+  }
+
+  function pressEnter(component: m.Component<{ chatId: string | null }>, init: Record<string, unknown>) {
+    const textarea = findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    const preventDefault = vi.fn();
+    (textarea?.attrs?.onkeydown as (event: unknown) => void)({
+      key: "Enter",
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false,
+      preventDefault,
+      ...init,
+    });
+    return preventDefault;
+  }
+
+  it("neither sends nor takes the keystroke from the input method", async () => {
+    const component = MessageInput();
+    typeDraft(component, "share the wo'r'k's'pa'ce");
+
+    const preventDefault = pressEnter(component, { isComposing: true });
+    await flushAsync();
+
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("sends the finished draft once, on the Enter that follows the composition", async () => {
+    const component = MessageInput();
+    typeDraft(component, "share the wo'r'k's'pa'ce");
+    pressEnter(component, { isComposing: true });
+    typeDraft(component, "share the workspace");
+
+    pressEnter(component, {});
+    await flushAsync();
+
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "share the workspace", expect.stringMatching(/^m-/));
+  });
+});
+
 describe("MessageInput placeholder", () => {
   beforeEach(() => {
     mocks.agent.activity_state = undefined;
@@ -722,6 +786,157 @@ describe("MessageInput attachment chips", () => {
     expect(findByTag(failed, "img")).toBeUndefined();
     expect(renderedText(failed)).toContain("Upload failed");
     expect(findByAttr(failed, "aria-label", "Remove attachment")).toBeDefined();
+  });
+});
+
+describe("MessageInput long paste", () => {
+  const LONG_PASTE = "a pasted line\n".repeat(400) + "the last line";
+  const PASTED_SUMMARY = "Pasted text, 401 lines";
+
+  function readyChip(localId: string, fileName: string, summary?: string) {
+    return {
+      localId,
+      fileName,
+      isImage: false,
+      status: "ready",
+      summary,
+      uploaded: { path: `/uploads/${localId}`, name: fileName, size: 9, isImage: false, url: `/f/${localId}` },
+    };
+  }
+
+  beforeEach(() => {
+    mocks.agent.activity_state = undefined;
+    mocks.stagePastedText.mockClear();
+    mocks.uploadFilesToComposer.mockClear();
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.getComposerAttachments.mockReturnValue([]);
+  });
+
+  function paste(component: m.Component<{ chatId: string | null }>, text: string, files: File[] = []) {
+    const textarea = findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    const preventDefault = vi.fn();
+    const items = files.map((file) => ({ kind: "file", getAsFile: () => file }));
+    (textarea?.attrs?.onpaste as (event: unknown) => void)({
+      preventDefault,
+      clipboardData: { items, getData: (type: string) => (type === "text/plain" ? text : "") },
+    });
+    return preventDefault;
+  }
+
+  it("stages a long paste as an attachment instead of putting it in the box", () => {
+    const preventDefault = paste(MessageInput(), LONG_PASTE);
+    expect(preventDefault).toHaveBeenCalled();
+    expect(mocks.stagePastedText).toHaveBeenCalledWith("agent-1", LONG_PASTE);
+  });
+
+  it("leaves a short paste to the box as typed text", () => {
+    const preventDefault = paste(MessageInput(), "a short note");
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(mocks.stagePastedText).not.toHaveBeenCalled();
+  });
+
+  it("attaches a pasted image as an image, not its text", () => {
+    const image = new File(["px"], "shot.png", { type: "image/png" });
+    paste(MessageInput(), LONG_PASTE, [image]);
+    expect(mocks.uploadFilesToComposer).toHaveBeenCalledWith("agent-1", [image]);
+    expect(mocks.stagePastedText).not.toHaveBeenCalled();
+  });
+
+  it("offers to put a pasted-text chip back as text, and only on such a chip", () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY),
+      readyChip("n1", "notes.txt"),
+      readyChip("f1", "pasted-text-2.txt"),
+    ]);
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(renderedText(tree)).toContain(PASTED_SUMMARY);
+    const putBackButtons = flatten(tree).filter((vnode) => vnode.attrs?.["aria-label"] === "Paste as text");
+    expect(putBackButtons).toHaveLength(1);
+  });
+
+  it("puts the text back into the box where the caret is", async () => {
+    mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);
+    mocks.unstagePastedText.mockResolvedValueOnce(LONG_PASTE);
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+    const oninput = findByTag(render(), "textarea")?.attrs?.oninput as (event: unknown) => void;
+    oninput({ target: { value: "Summarize this: ", style: {}, scrollHeight: 10 } });
+    (findByAttr(render(), "aria-label", "Paste as text")?.attrs?.onclick as () => void)();
+    await flushAsync();
+    expect(mocks.unstagePastedText).toHaveBeenCalledWith("agent-1", "p1");
+    expect(findByTag(render(), "textarea")?.attrs?.value).toBe(`Summarize this: ${LONG_PASTE}`);
+  });
+
+  it("puts the text back once when the button is clicked again while it is read back", async () => {
+    mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);
+    mocks.unstagePastedText.mockClear();
+    mocks.unstagePastedText.mockResolvedValue(LONG_PASTE);
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+    const putBack = findByAttr(render(), "aria-label", "Paste as text")?.attrs?.onclick as () => void;
+    putBack();
+    putBack();
+    await flushAsync();
+    expect(mocks.unstagePastedText).toHaveBeenCalledTimes(1);
+    expect(findByTag(render(), "textarea")?.attrs?.value).toBe(LONG_PASTE);
+    mocks.unstagePastedText.mockReset();
+  });
+
+  it("adds the text to its own chat's saved draft when the user moved to another chat meanwhile", async () => {
+    mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);
+    localStorage.setItem("message-text:agent-1", "Summarize this:");
+    let finishReading: (text: string) => void = () => undefined;
+    mocks.unstagePastedText.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          finishReading = resolve;
+        }),
+    );
+    const component = MessageInput();
+    const render = (chatId: string) => component.view!({ attrs: { chatId } } as never);
+    (findByAttr(render("agent-1"), "aria-label", "Paste as text")?.attrs?.onclick as () => void)();
+    mocks.getComposerAttachments.mockReturnValue([]);
+    render("agent-2");
+    finishReading(LONG_PASTE);
+    await flushAsync();
+    expect(localStorage.getItem("message-text:agent-1")).toBe(`Summarize this:\n\n${LONG_PASTE}`);
+    expect(findByTag(render("agent-2"), "textarea")?.attrs?.value).toBe("");
+  });
+
+  it("keeps the text when a hand-back is waiting for the chat the user moved away from", async () => {
+    mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);
+    let finishReading: (text: string) => void = () => undefined;
+    mocks.unstagePastedText.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          finishReading = resolve;
+        }),
+    );
+    const component = MessageInput();
+    const render = (chatId: string) => component.view!({ attrs: { chatId } } as never);
+    (findByAttr(render("agent-1"), "aria-label", "Paste as text")?.attrs?.onclick as () => void)();
+    mocks.getComposerAttachments.mockReturnValue([]);
+    render("agent-2");
+    prependToComposer("agent-1", "Handed back");
+    finishReading(LONG_PASTE);
+    await flushAsync();
+    expect(findByTag(render("agent-1"), "textarea")?.attrs?.value).toBe(`Handed back\n\n${LONG_PASTE}`);
+  });
+
+  it("says so, and keeps the attachment, when the text cannot be put back", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mocks.getComposerAttachments.mockReturnValue([readyChip("p1", "pasted-text-1.txt", PASTED_SUMMARY)]);
+    mocks.unstagePastedText.mockRejectedValueOnce(new Error("HTTP 404"));
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+    (findByAttr(render(), "aria-label", "Paste as text")?.attrs?.onclick as () => void)();
+    await flushAsync();
+    expect(renderedText(render())).toContain("Couldn't paste the text back");
+    expect(findByTag(render(), "textarea")?.attrs?.value).toBe("");
+    vi.mocked(console.warn).mockRestore();
   });
 });
 
@@ -1117,6 +1332,34 @@ describe("MessageInput send to a chat still being created", () => {
     expect(text).toContain("mngr create exited with code 3");
     expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
   });
+
+  it("hands a held send back to the composer with the reason when the chat app reports it never landed", async () => {
+    mocks.sendMessage.mockResolvedValueOnce("held");
+    const component = MessageInput();
+    await typeAndSend(component, "agent-1", "held hello");
+    const messageId = (mocks.sendMessage.mock.calls[0] as unknown as [string, string, string])[2];
+
+    mocks.heldSendFailedListener!("agent-1", messageId, "The agent didn't take the message.", "failed");
+
+    const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    const text = renderedText(after);
+    expect(text).toContain("Couldn't send your message");
+    expect(text).toContain("The agent didn't take the message.");
+    expect(localStorage.getItem("message-text:agent-1")).toContain("held hello");
+    expect(getOutgoingMessages("agent-1").map((outgoing) => outgoing.content)).not.toContain(
+      expect.stringContaining("held hello"),
+    );
+  });
+
+  it("ignores a report of a held send this page did not send", async () => {
+    const component = MessageInput();
+
+    mocks.heldSendFailedListener!("agent-1", "someone-elses-message", "refused", "input_blocked");
+
+    const text = renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never));
+    expect(text).not.toContain("Couldn't send your message");
+    expect(localStorage.getItem("message-text:agent-1")).toBeNull();
+  });
 });
 
 describe("MessageInput first send of a seeded chat", () => {
@@ -1270,6 +1513,20 @@ describe("MessageInput first send of a chat with no seed", () => {
     expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-1", "", "agent");
     expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
     expect(mocks.sendMessage.mock.calls[0]).toEqual(expect.arrayContaining(["agent-1", "Plan my week"]));
+  });
+
+  it("hands the first send back to the composer when the chat app reports it never reached the new agent", async () => {
+    mocks.sendMessage.mockResolvedValueOnce("held");
+    const component = MessageInput();
+    await typeAndSend(component, "agent-1", "Plan my month");
+    const messageId = (mocks.sendMessage.mock.calls[0] as unknown as [string, string, string])[2];
+
+    mocks.heldSendFailedListener!("agent-1", messageId, "The agent didn't take the message.", "not_ready");
+
+    expect(renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never))).toContain(
+      "Couldn't send your message",
+    );
+    expect(localStorage.getItem("message-text:agent-1")).toContain("Plan my month");
   });
 
   it("drops the bubble of a first send that Stop took back, which no turn will retire", async () => {
@@ -2067,6 +2324,15 @@ describe("MessageInput switching harness", () => {
     const rendered = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
     expect(findByAttr(rendered, "aria-label", "Interrupt agent")).toBeUndefined();
     expect(findByAttr(rendered, "aria-label", "Cancel switch")).toBeUndefined();
+  });
+
+  it("offers Stop for the successor's turn once the handoff has landed, with the ordinary placeholder", () => {
+    mocks.agent.activity_state = "THINKING";
+    mocks.switching.handoff = handoffStateFixture({ phase: "switching", has_landed: true });
+    const rendered = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByAttr(rendered, "aria-label", "Interrupt agent")).toBeDefined();
+    expect(findByAttr(rendered, "aria-label", "Cancel switch")).toBeUndefined();
+    expect(findByTag(rendered, "textarea")?.attrs?.placeholder).toBe("Type to queue more messages...");
   });
 
   it("gives its draft up to a sibling that takes it, attachments and all, and comes back empty", async () => {
