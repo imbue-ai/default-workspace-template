@@ -180,8 +180,10 @@ def test_the_file_loads_beside_the_committed_settings_and_resolves_the_create_de
     assert create["type"] == harness.value
     assert list(create["label"]) == expected[LABEL_KEY]
     if harness is HarnessType.CLAUDE:
-        assert list(create["env"]) == expected[ENV_KEY]
+        # After the committed file's own per-agent env, which the binding is added to.
+        assert list(create["env"])[-len(expected[ENV_KEY]) :] == expected[ENV_KEY]
     else:
         assert list(create["extra_provision_command"]) == expected[PROVISION_COMMAND_KEY]
     # The committed file's own create defaults are still there: the local layer only added to them.
     assert create["connect"] is False
+    assert "ENABLE_CLAUDEAI_MCP_SERVERS=false" in create["env"]
