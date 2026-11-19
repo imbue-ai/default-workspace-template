@@ -930,6 +930,7 @@ export class LivePagesLayer implements PageDriver {
     style.transform = `scale(${scale})`;
     style.zIndex = OVERVIEW_PAGE_Z_INDEX;
     style.pointerEvents = "none";
+    this.updateLayerPromotion(page);
     this.syncVisibility(page, true);
   }
 

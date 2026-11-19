@@ -2008,6 +2008,19 @@ describe("the overview (the multiplayer spec, section 8.2)", () => {
     ]);
   });
 
+  it("takes the moved window's compositor layer away when the move ends with the overview up", () => {
+    layer.reconcile();
+    store.beginWindowMove("win-1", { x: 300, y: 60 });
+    layer.reconcile();
+    expect(wrapperOf("win-1").style.willChange).toBe("transform");
+    renderTiles();
+    layer.setOverview({ scaleOf: () => 0.5 });
+    layer.reconcile();
+    store.endWindowMove({ x: 300, y: 60 });
+    layer.reconcile();
+    expect(wrapperOf("win-1").style.willChange).toBe("");
+  });
+
   it("hides a page whose tile scale is not positive rather than sizing it by a zero scale", () => {
     renderTiles();
     layer.setOverview({ scaleOf: (windowId) => (windowId === "win-1" ? 0 : 0.5) });
