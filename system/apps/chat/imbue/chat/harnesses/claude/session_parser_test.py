@@ -1328,7 +1328,7 @@ def _make_hook_context_line(uuid: str, timestamp: str, text: str, tool_use_id: s
 def test_the_memory_change_hook_note_becomes_a_notice_naming_its_change_and_tool_call() -> None:
     """The memory change-log hook's note to the agent is drawn as a "Memory changed" notice the page opens
     into the change's card, and is never a turn awaiting a reply or one the user took."""
-    note = format_agent_note({"id": "20261118T1-abc123", "summary": "added note 'tea' and its index line"})
+    note = format_agent_note("20261118T1-abc123", "added note 'tea' and its index line")
     [event] = parse_lines([_make_hook_context_line("uuid-h", "2026-01-01T00:00:00Z", note, "toolu_9")])
     assert event["type"] == "user_message"
     assert event["display"] == DisplayKind.NOTICE.value
@@ -1347,7 +1347,7 @@ def test_another_hook_s_context_is_not_drawn() -> None:
 def test_a_hook_note_naming_two_changes_becomes_two_notices_at_the_same_tool_call() -> None:
     """One tool call that touched two notes' changes (an index edit adding both lines) draws one card per change."""
     text = "\n".join(
-        format_agent_note({"id": change_id, "summary": summary})
+        format_agent_note(change_id, summary)
         for change_id, summary in (
             ("c-tea", 'added the note "Tea" and its index line'),
             ("c-coffee", 'added the note "Coffee" and its index line'),

@@ -15,55 +15,121 @@ and a note that changed underneath since is refused rather than overwritten.
 """
 
 import hashlib
+import itertools
+import logging
 import os
 import re
 import tempfile
 import threading
-from datetime import datetime
-from datetime import timezone
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from enum import StrEnum
 from pathlib import Path
-from typing import Any
-from typing import Literal
+from typing import Any, Final
 
 import yaml
 from imbue.imbue_common.frozen_model import FrozenModel
 from pydantic import Field
 
-INDEX_FILE_NAME = "MEMORY.md"
-# Files in the folder that are not notes.
-NON_NOTE_FILE_NAMES = frozenset({INDEX_FILE_NAME, "README.md"})
-NoteKind = Literal["user", "feedback", "project", "reference"]
-NOTE_KINDS: tuple[str, ...] = ("user", "feedback", "project", "reference")
-LOOSE_ID_PREFIX = "index-"
+from agent_memory.changes import (
+    INDEX_FILE_NAME,
+    NOTE_SUFFIX,
+    POINTER_LINE_START,
+    AgentMemoryError,
+    note_title,
+)
 
-_POINTER_LINE = re.compile(r"^\s*[-*]\s+\[(?P<title>[^\]]*)\]\((?P<file>[^)\s]+\.md)\)\s*(?:[—–-]+\s*(?P<hook>.*))?$")
-_LOOSE_LINE = re.compile(r"^\s*[-*]\s+(?P<text>\S.*)$")
-_FRONTMATTER = re.compile(r"\A---\s*\n(?P<yaml>.*?)\n---\s*(?:\n|\Z)", re.DOTALL)
-_WHY_MARKER = re.compile(r"^\*\*Why:\*\*[ \t]*", re.MULTILINE)
-_HOW_MARKER = re.compile(r"^\*\*How to apply:\*\*[ \t]*", re.MULTILINE)
-_LINK = re.compile(r"\[\[([^\]\n]+)\]\]")
-_SLUG_JUNK = re.compile(r"[^a-z0-9]+")
+logger = logging.getLogger(__name__)
+
+# Files in the folder that are not notes.
+NON_NOTE_FILE_NAMES: Final = frozenset({INDEX_FILE_NAME, "README.md"})
+LOOSE_ID_PREFIX: Final = "index-"
+
+
+class NoteKind(StrEnum):
+    """What a note is about, as its frontmatter's ``metadata.type`` names it."""
+
+    USER = "user"
+    FEEDBACK = "feedback"
+    PROJECT = "project"
+    REFERENCE = "reference"
+
+
+NOTE_KINDS: Final[tuple[str, ...]] = tuple(kind.value for kind in NoteKind)
+
+_POINTER_LINE: Final = re.compile(
+    POINTER_LINE_START.pattern + r"\s*(?:[—–-]+\s*(?P<hook>.*))?$"
+)
+_LOOSE_LINE: Final = re.compile(r"^\s*[-*]\s+(?P<text>\S.*)$")
+_HEADING_LINE: Final = re.compile(r"^(#{1,6})\s+(.*)$")
+_FRONTMATTER: Final = re.compile(r"\A---\s*\n(?P<yaml>.*?)\n---\s*(?:\n|\Z)", re.DOTALL)
+_WHY_MARKER: Final = re.compile(r"^\*\*Why:\*\*[ \t]*", re.MULTILINE)
+_HOW_MARKER: Final = re.compile(r"^\*\*How to apply:\*\*[ \t]*", re.MULTILINE)
+_LINK: Final = re.compile(r"\[\[([^\]\n]+)\]\]")
+_SLUG_JUNK: Final = re.compile(r"[^a-z0-9]+")
+# A version is this many hex digits of the text's SHA-256.
+_VERSION_LENGTH: Final = 16
+_MAX_SLUG_WORDS: Final = 8
+_DEFAULT_SLUG: Final = "note"
+# A note written straight into the index is titled by its text, cut to this length.
+_MAX_LOOSE_TITLE_LENGTH: Final = 60
+_ELLIPSIS: Final = "..."
+_PERMISSION_BITS: Final = 0o777
+_DEFAULT_NOTE_MODE: Final = 0o644
+# Wide enough that PyYAML never folds a frontmatter value onto a second line.
+_YAML_LINE_WIDTH: Final = 10_000
+_DEFAULT_KIND: Final = NoteKind.USER.value
 
 
 class Note(FrozenModel):
     """One remembered note, as the editor shows it."""
 
-    id: str = Field(description="Stable id: the note's name, or 'index-<hash>' for a note written straight into the index")
-    name: str = Field(description="The note's short link name (other notes link it as [[name]]); empty for an index-only note")
-    file_name: str = Field(description="The note's file in the memory folder; empty for an index-only note")
+    id: str = Field(
+        description="Stable id: the note's name, or 'index-<hash>' for a note written straight into the index"
+    )
+    name: str = Field(
+        description="The note's short link name (other notes link it as [[name]]); empty for an index-only note"
+    )
+    file_name: str = Field(
+        description="The note's file in the memory folder; empty for an index-only note"
+    )
     title: str = Field(description="The note's title, as the index lists it")
-    summary: str = Field(description="The one-line summary the agent reads to judge relevance")
-    kind: str = Field(description="One of user, feedback, project, reference (or whatever the file says)")
-    body: str = Field(description="What the agent should remember, without the Why and How to apply parts")
+    summary: str = Field(
+        description="The one-line summary the agent reads to judge relevance"
+    )
+    kind: str = Field(
+        description="One of user, feedback, project, reference (or whatever the file says)"
+    )
+    body: str = Field(
+        description="What the agent should remember, without the Why and How to apply parts"
+    )
     why: str = Field(description="Why the note holds (feedback and project notes)")
-    how: str = Field(description="How the agent should apply it (feedback and project notes)")
-    links: tuple[str, ...] = Field(description="Names of the notes this one links to with [[name]]")
-    raw: str = Field(description="The note exactly as saved: the file's text, or the index line")
-    version: str = Field(description="A hash of the saved text; changes name it so a note edited elsewhere is not overwritten")
-    is_index_only: bool = Field(description="Whether the note is a line in the index with no file of its own yet")
+    how: str = Field(
+        description="How the agent should apply it (feedback and project notes)"
+    )
+    links: tuple[str, ...] = Field(
+        description="Names of the notes this one links to with [[name]]"
+    )
+    raw: str = Field(
+        description="The note exactly as saved: the file's text, or the index line"
+    )
+    version: str = Field(
+        description="A hash of the saved text; changes name it so a note edited elsewhere is not overwritten"
+    )
+    is_index_only: bool = Field(
+        description="Whether the note is a line in the index with no file of its own yet"
+    )
 
 
-IndexEntryKind = Literal["heading", "note", "missing", "loose", "text"]
+class IndexEntryKind(StrEnum):
+    """What one line of the index is."""
+
+    HEADING = "heading"
+    NOTE = "note"
+    MISSING = "missing"
+    LOOSE = "loose"
+    TEXT = "text"
 
 
 class IndexEntry(FrozenModel):
@@ -73,19 +139,35 @@ class IndexEntry(FrozenModel):
         description="heading; note (points at a note file); missing (points at a file that does not exist); "
         "loose (a note written straight into the index); text (any other line)"
     )
-    text: str = Field(description="What the line shows: the heading, the note's title, or the line's text")
-    hook: str = Field(default="", description="The summary the index line gives after the title")
-    level: int = Field(default=0, description="A heading's level (1 for '#'); 0 otherwise")
-    note_id: str = Field(default="", description="The id of the note the line stands for; empty for headings, text and missing files")
-    file_name: str = Field(default="", description="The file the line points at; empty when it points at none")
+    text: str = Field(
+        description="What the line shows: the heading, the note's title, or the line's text"
+    )
+    hook: str = Field(
+        default="", description="The summary the index line gives after the title"
+    )
+    level: int = Field(
+        default=0, description="A heading's level (1 for '#'); 0 otherwise"
+    )
+    note_id: str = Field(
+        default="",
+        description="The id of the note the line stands for; empty for headings, text and missing files",
+    )
+    file_name: str = Field(
+        default="",
+        description="The file the line points at; empty when it points at none",
+    )
     line_number: int = Field(description="The line's number in the index, from 1")
 
 
 class IndexOutline(FrozenModel):
     """The index as the navigation mirrors it, plus the notes it leaves out."""
 
-    entries: tuple[IndexEntry, ...] = Field(description="The index's non-blank lines, in order")
-    unlisted_note_ids: tuple[str, ...] = Field(description="Notes with a file but no line in the index")
+    entries: tuple[IndexEntry, ...] = Field(
+        description="The index's non-blank lines, in order"
+    )
+    unlisted_note_ids: tuple[str, ...] = Field(
+        description="Notes with a file but no line in the index"
+    )
     raw: str = Field(description="The index exactly as saved")
     exists: bool = Field(description="Whether the index file exists")
 
@@ -101,65 +183,97 @@ class NoteDraft(FrozenModel):
     how: str = Field(default="", description="How the agent should apply it")
 
 
-class NoteNotFoundError(Exception):
+class NoteNotFoundError(AgentMemoryError, KeyError):
     """No note has that id."""
 
 
-class NoteChangedError(Exception):
+class NoteChangedError(AgentMemoryError, ValueError):
     """The note was changed elsewhere since the editor loaded it."""
 
 
-class InvalidNoteError(Exception):
+class InvalidNoteError(AgentMemoryError, ValueError):
     """The submitted note cannot be saved as it is."""
 
 
 def text_version(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()[:16]
+    return hashlib.sha256(text.encode()).hexdigest()[:_VERSION_LENGTH]
 
 
 def slugify(title: str) -> str:
     slug = _SLUG_JUNK.sub("-", title.lower()).strip("-")
-    return "-".join(slug.split("-")[:8]) or "note"
+    return "-".join(slug.split("-")[:_MAX_SLUG_WORDS]) or _DEFAULT_SLUG
 
 
-def humanize(name: str) -> str:
-    words = name.replace("_", "-").split("-")
-    text = " ".join(w for w in words if w)
-    return text[:1].upper() + text[1:]
+def _section_end(start: re.Match[str], other: re.Match[str] | None, text: str) -> int:
+    """Where the section opened by ``start`` ends: at ``other``'s marker when that comes after it."""
+    if other is not None and other.start() > start.start():
+        return other.start()
+    return len(text)
 
 
 def split_body(text: str) -> tuple[str, str, str]:
     """A note's text after the frontmatter as (body, why, how)."""
     why_match = _WHY_MARKER.search(text)
     how_match = _HOW_MARKER.search(text)
-    cut_points = [m.start() for m in (why_match, how_match) if m is not None]
+    cut_points = [
+        match.start() for match in (why_match, how_match) if match is not None
+    ]
     body_end = min(cut_points) if cut_points else len(text)
-    body = text[:body_end].strip()
-    why = ""
-    how = ""
-    if why_match is not None:
-        why_end = how_match.start() if how_match is not None and how_match.start() > why_match.start() else len(text)
-        why = text[why_match.end() : why_end].strip()
-    if how_match is not None:
-        how_end = why_match.start() if why_match is not None and why_match.start() > how_match.start() else len(text)
-        how = text[how_match.end() : how_end].strip()
-    return body, why, how
+    why = (
+        ""
+        if why_match is None
+        else text[why_match.end() : _section_end(why_match, how_match, text)].strip()
+    )
+    how = (
+        ""
+        if how_match is None
+        else text[how_match.end() : _section_end(how_match, why_match, text)].strip()
+    )
+    return text[:body_end].strip(), why, how
 
 
 def join_body(body: str, why: str, how: str) -> str:
     text = body.strip()
-    reasons = []
-    if why.strip():
-        reasons.append(f"**Why:** {why.strip()}")
-    if how.strip():
-        reasons.append(f"**How to apply:** {how.strip()}")
-    if reasons:
-        text = (text + "\n\n" if text else "") + "\n\n".join(reasons)
-    return text + "\n"
+    reasons = [
+        f"{label} {value.strip()}"
+        for label, value in (("**Why:**", why), ("**How to apply:**", how))
+        if value.strip()
+    ]
+    parts = [part for part in (text, "\n\n".join(reasons)) if part]
+    return "\n\n".join(parts) + "\n"
 
 
 def one_line(text: str) -> str:
     return " ".join(text.split())
+
+
+def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    """A note's frontmatter (empty when it has none, or none PyYAML can read) and the text after it."""
+    match = _FRONTMATTER.match(text)
+    if match is None:
+        return {}, text
+    try:
+        loaded = yaml.safe_load(match["yaml"])
+    except yaml.YAMLError as error:
+        logger.warning("A memory note's frontmatter is not valid YAML: %s", error)
+        return {}, text
+    if not isinstance(loaded, dict):
+        return {}, text
+    return loaded, text[match.end() :]
+
+
+def _readable_index_line(line: str) -> str:
+    pointer = _POINTER_LINE.match(line)
+    if pointer is not None:
+        hook = (pointer["hook"] or "").strip()
+        title = pointer["title"].strip()
+        return f"{title} — {hook}" if hook else title
+    if line.lstrip().startswith("#"):
+        return line.lstrip("#").strip()
+    loose = _LOOSE_LINE.match(line)
+    if loose is not None:
+        return loose["text"].strip()
+    return line
 
 
 def readable_text(file_name: str, text: str | None) -> str | None:
@@ -172,57 +286,212 @@ def readable_text(file_name: str, text: str | None) -> str | None:
     if text is None:
         return None
     if file_name == INDEX_FILE_NAME:
-        lines = []
-        for line in text.splitlines():
-            pointer = _POINTER_LINE.match(line)
-            loose = _LOOSE_LINE.match(line)
-            if pointer is not None:
-                hook = (pointer["hook"] or "").strip()
-                lines.append(f"{pointer['title'].strip()} — {hook}" if hook else pointer["title"].strip())
-            elif line.lstrip().startswith("#"):
-                lines.append(line.lstrip("#").strip())
-            elif loose is not None:
-                lines.append(loose["text"].strip())
-            else:
-                lines.append(line)
-        return "\n".join(lines).strip()
-    frontmatter, rest = NoteStore._parse_frontmatter(text)
+        return "\n".join(
+            _readable_index_line(line) for line in text.splitlines()
+        ).strip()
+    frontmatter, rest = _parse_frontmatter(text)
     body, why, how = split_body(rest)
-    parts = []
     description = one_line(str(frontmatter.get("description") or ""))
-    if description:
-        parts.append(f"Summary: {description}")
-    if body:
-        parts.append(body)
-    if why:
-        parts.append(f"Why: {why}")
-    if how:
-        parts.append(f"How to apply: {how}")
-    return "\n\n".join(parts)
+    parts = (
+        f"Summary: {description}" if description else "",
+        body,
+        f"Why: {why}" if why else "",
+        f"How to apply: {how}" if how else "",
+    )
+    return "\n\n".join(part for part in parts if part)
 
 
 def index_titles(index_text: str | None) -> dict[str, str]:
     """The title the index gives each note file it points at, by file name."""
-    titles: dict[str, str] = {}
+    title_by_file: dict[str, str] = {}
     for line in (index_text or "").splitlines():
         pointer = _POINTER_LINE.match(line)
         if pointer is not None:
-            titles[pointer["file"]] = pointer["title"].strip()
-    return titles
+            title_by_file[pointer["file"]] = pointer["title"].strip()
+    return title_by_file
+
+
+@contextmanager
+def _temp_file_beside(path: Path) -> Generator[tuple[int, Path]]:
+    """A new temp file in ``path``'s folder (its descriptor and path), removed if it is still there after."""
+    handle, temp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        yield handle, Path(temp_name)
+    finally:
+        Path(temp_name).unlink(missing_ok=True)
 
 
 def _write_atomically(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as handle:
-            handle.write(text)
-        # mkstemp makes the file owner-only; keep the mode the file had, or the folder's usual one.
-        os.chmod(tmp, path.stat().st_mode & 0o777 if path.exists() else 0o644)
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    # mkstemp makes the file owner-only; keep the mode the file had, or the folder's usual one.
+    mode = (
+        path.stat().st_mode & _PERMISSION_BITS if path.exists() else _DEFAULT_NOTE_MODE
+    )
+    with _temp_file_beside(path) as (handle, temp_path):
+        with os.fdopen(handle, "w") as temp_file:
+            temp_file.write(text)
+        os.chmod(temp_path, mode)
+        os.replace(temp_path, path)
+
+
+def _check_draft(draft: NoteDraft) -> None:
+    if not draft.title.strip():
+        raise InvalidNoteError("Give the note a title.")
+    if not draft.summary.strip():
+        raise InvalidNoteError("Add a one-line summary.")
+    if not (draft.body.strip() or draft.why.strip() or draft.how.strip()):
+        raise InvalidNoteError("Write what should be remembered.")
+
+
+def _pointer_line(title: str, file_name: str, summary: str) -> str:
+    return f"- [{one_line(title).replace(']', ')')}]({file_name}) — {one_line(summary)}"
+
+
+def _set_pointer(
+    lines: Sequence[str], file_name: str, pointer: str | None
+) -> list[str]:
+    """``lines`` with the pointer line for ``file_name`` replaced (or removed, for ``None``), appended if absent."""
+    updated: list[str] = []
+    is_found = False
+    for line in lines:
+        match = _POINTER_LINE.match(line)
+        if match and match["file"] == file_name:
+            if pointer is not None and not is_found:
+                updated.append(pointer)
+            is_found = True
+            continue
+        updated.append(line)
+    if not is_found and pointer is not None:
+        updated.append(pointer)
+    return updated
+
+
+def _without_first(lines: Sequence[str], removed_line: str) -> list[str]:
+    """``lines`` without the first one that reads ``removed_line``."""
+    if removed_line not in lines:
+        return list(lines)
+    position = list(lines).index(removed_line)
+    return [*lines[:position], *lines[position + 1 :]]
+
+
+def _modified_stamp() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def _file_text(
+    name: str, draft: NoteDraft, existing_frontmatter: Mapping[str, Any]
+) -> str:
+    """The note file for ``draft``, keeping the frontmatter's other keys (Claude's bookkeeping)."""
+    old_metadata = existing_frontmatter.get("metadata")
+    kept_metadata = dict(old_metadata) if isinstance(old_metadata, dict) else {}
+    stamp = {"modified": _modified_stamp()} if "modified" in kept_metadata else {}
+    metadata = {**kept_metadata, "type": NoteKind(draft.kind).value, **stamp}
+    kept = {key: value for key, value in existing_frontmatter.items() if key != "type"}
+    frontmatter = {
+        **kept,
+        "name": name,
+        "description": one_line(draft.summary),
+        "metadata": metadata,
+    }
+    header = yaml.safe_dump(
+        frontmatter, sort_keys=False, allow_unicode=True, width=_YAML_LINE_WIDTH
+    ).strip()
+    return f"---\n{header}\n---\n\n{join_body(draft.body, draft.why, draft.how)}"
+
+
+def _note_kind(frontmatter: Mapping[str, Any]) -> str:
+    metadata = frontmatter.get("metadata")
+    kind = str(metadata.get("type", "")) if isinstance(metadata, dict) else ""
+    return kind or str(frontmatter.get("type") or _DEFAULT_KIND)
+
+
+def _links(text: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(link.strip() for link in _LINK.findall(text)))
+
+
+def _loose_title(text: str) -> str:
+    if len(text) <= _MAX_LOOSE_TITLE_LENGTH:
+        return text
+    return text[: _MAX_LOOSE_TITLE_LENGTH - len(_ELLIPSIS)].rstrip() + _ELLIPSIS
+
+
+def _loose_note(line: str) -> Note | None:
+    """The note a line written straight into the index stands for, or None for any other line."""
+    if _POINTER_LINE.match(line):
+        return None
+    match = _LOOSE_LINE.match(line)
+    if match is None:
+        return None
+    text = match["text"].strip()
+    return Note(
+        id=LOOSE_ID_PREFIX + text_version(line),
+        name="",
+        file_name="",
+        title=_loose_title(text),
+        summary=one_line(text),
+        kind=_DEFAULT_KIND,
+        body=text,
+        why="",
+        how="",
+        links=_links(text),
+        raw=line,
+        version=text_version(line),
+        is_index_only=True,
+    )
+
+
+def _index_entry(
+    line: str,
+    number: int,
+    note_by_file: Mapping[str, Note],
+    loose_note_by_line: Mapping[str, Note],
+) -> IndexEntry:
+    """One non-blank index line resolved against the notes."""
+    stripped = line.strip()
+    heading = _HEADING_LINE.match(stripped)
+    pointer = _POINTER_LINE.match(line)
+    if heading:
+        return IndexEntry(
+            kind=IndexEntryKind.HEADING,
+            text=heading[2].strip(),
+            level=len(heading[1]),
+            line_number=number,
+        )
+    if pointer:
+        target = Path(pointer["file"]).name
+        note = note_by_file.get(target)
+        hook = (pointer["hook"] or "").strip()
+        if note is None:
+            return IndexEntry(
+                kind=IndexEntryKind.MISSING,
+                text=pointer["title"].strip() or target,
+                hook=hook,
+                file_name=target,
+                line_number=number,
+            )
+        return IndexEntry(
+            kind=IndexEntryKind.NOTE,
+            text=pointer["title"].strip() or note.title,
+            hook=hook,
+            note_id=note.id,
+            file_name=target,
+            line_number=number,
+        )
+    if line in loose_note_by_line:
+        note = loose_note_by_line[line]
+        return IndexEntry(
+            kind=IndexEntryKind.LOOSE,
+            text=note.title,
+            note_id=note.id,
+            line_number=number,
+        )
+    return IndexEntry(kind=IndexEntryKind.TEXT, text=stripped, line_number=number)
 
 
 class NoteStore:
@@ -246,121 +515,81 @@ class NoteStore:
     def _note_files(self) -> list[Path]:
         if not self.folder.is_dir():
             return []
-        return sorted(p for p in self.folder.glob("*.md") if p.is_file() and p.name not in NON_NOTE_FILE_NAMES)
+        return sorted(
+            path
+            for path in self.folder.glob(f"*{NOTE_SUFFIX}")
+            if path.is_file() and path.name not in NON_NOTE_FILE_NAMES
+        )
 
     def list_notes(self) -> list[Note]:
         lines = self._index_lines()
-        titles: dict[str, str] = {}
-        order: dict[str, int] = {}
+        title_by_file: dict[str, str] = {}
+        position_by_file: dict[str, int] = {}
         for position, line in enumerate(lines):
             match = _POINTER_LINE.match(line)
             if match:
-                titles.setdefault(match["file"], match["title"].strip())
-                order.setdefault(match["file"], position)
-        notes_with_position: list[tuple[int, Note]] = []
-        for path in self._note_files():
-            note = self._read_file_note(path, titles.get(path.name, ""))
-            notes_with_position.append((order.get(path.name, len(lines)), note))
-        for position, line in enumerate(lines):
-            loose = self._loose_note(line)
-            if loose is not None:
-                notes_with_position.append((position, loose))
-        return [note for _, note in sorted(notes_with_position, key=lambda pair: pair[0])]
+                title_by_file.setdefault(match["file"], match["title"].strip())
+                position_by_file.setdefault(match["file"], position)
+        file_notes = [
+            (
+                position_by_file.get(path.name, len(lines)),
+                self._read_file_note(path, title_by_file.get(path.name, "")),
+            )
+            for path in self._note_files()
+        ]
+        loose_notes = [
+            (position, loose)
+            for position, line in enumerate(lines)
+            if (loose := _loose_note(line)) is not None
+        ]
+        ordered = sorted([*file_notes, *loose_notes], key=lambda pair: pair[0])
+        return [note for _, note in ordered]
 
     def outline(self, notes: list[Note]) -> IndexOutline:
         """The index line by line, each line resolved against ``notes`` (as ``list_notes`` returned them)."""
         raw = self.index_path.read_text() if self.index_path.is_file() else ""
-        by_file = {note.file_name: note for note in notes if note.file_name}
-        loose_by_line = {note.raw: note for note in notes if note.is_index_only}
-        entries: list[IndexEntry] = []
-        listed: set[str] = set()
-        for number, line in enumerate(raw.splitlines(), start=1):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            heading = re.match(r"^(#{1,6})\s+(.*)$", stripped)
-            pointer = _POINTER_LINE.match(line)
-            if heading:
-                entries.append(IndexEntry(kind="heading", text=heading[2].strip(), level=len(heading[1]), line_number=number))
-            elif pointer:
-                target = Path(pointer["file"]).name
-                note = by_file.get(target)
-                hook = (pointer["hook"] or "").strip()
-                if note is not None:
-                    listed.add(note.id)
-                    entries.append(
-                        IndexEntry(kind="note", text=pointer["title"].strip() or note.title, hook=hook, note_id=note.id, file_name=target, line_number=number)
-                    )
-                else:
-                    entries.append(IndexEntry(kind="missing", text=pointer["title"].strip() or target, hook=hook, file_name=target, line_number=number))
-            elif line in loose_by_line:
-                note = loose_by_line[line]
-                entries.append(IndexEntry(kind="loose", text=note.title, note_id=note.id, line_number=number))
-            else:
-                entries.append(IndexEntry(kind="text", text=stripped, line_number=number))
-        unlisted = tuple(note.id for note in notes if not note.is_index_only and note.id not in listed)
-        return IndexOutline(entries=tuple(entries), unlisted_note_ids=unlisted, raw=raw, exists=self.index_path.is_file())
+        note_by_file = {note.file_name: note for note in notes if note.file_name}
+        loose_note_by_line = {note.raw: note for note in notes if note.is_index_only}
+        entries = tuple(
+            _index_entry(line, number, note_by_file, loose_note_by_line)
+            for number, line in enumerate(raw.splitlines(), start=1)
+            if line.strip()
+        )
+        listed = {
+            entry.note_id for entry in entries if entry.kind is IndexEntryKind.NOTE
+        }
+        unlisted = tuple(
+            note.id
+            for note in notes
+            if not note.is_index_only and note.id not in listed
+        )
+        return IndexOutline(
+            entries=entries,
+            unlisted_note_ids=unlisted,
+            raw=raw,
+            exists=self.index_path.is_file(),
+        )
 
     def _read_file_note(self, path: Path, index_title: str) -> Note:
         text = path.read_text()
-        frontmatter, rest = self._parse_frontmatter(text)
+        frontmatter, rest = _parse_frontmatter(text)
         name = str(frontmatter.get("name") or path.stem)
-        metadata = frontmatter.get("metadata")
-        kind = str(metadata.get("type", "")) if isinstance(metadata, dict) else ""
-        kind = kind or str(frontmatter.get("type") or "user")
         body, why, how = split_body(rest)
         return Note(
             id=path.stem,
             name=name,
             file_name=path.name,
-            title=index_title or humanize(name),
+            title=index_title or note_title(name),
             summary=one_line(str(frontmatter.get("description") or "")),
-            kind=kind,
+            kind=_note_kind(frontmatter),
             body=body,
             why=why,
             how=how,
-            links=tuple(dict.fromkeys(link.strip() for link in _LINK.findall(rest))),
+            links=_links(rest),
             raw=text,
             version=text_version(text),
             is_index_only=False,
         )
-
-    def _loose_note(self, line: str) -> Note | None:
-        if _POINTER_LINE.match(line):
-            return None
-        match = _LOOSE_LINE.match(line)
-        if match is None:
-            return None
-        text = match["text"].strip()
-        title = text if len(text) <= 60 else text[:57].rstrip() + "..."
-        return Note(
-            id=LOOSE_ID_PREFIX + text_version(line),
-            name="",
-            file_name="",
-            title=title,
-            summary=one_line(text),
-            kind="user",
-            body=text,
-            why="",
-            how="",
-            links=tuple(dict.fromkeys(link.strip() for link in _LINK.findall(text))),
-            raw=line,
-            version=text_version(line),
-            is_index_only=True,
-        )
-
-    @staticmethod
-    def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
-        match = _FRONTMATTER.match(text)
-        if match is None:
-            return {}, text
-        try:
-            loaded = yaml.safe_load(match["yaml"])
-        except yaml.YAMLError:
-            return {}, text
-        if not isinstance(loaded, dict):
-            return {}, text
-        return loaded, text[match.end() :]
 
     def _find(self, note_id: str) -> Note:
         for note in self.list_notes():
@@ -370,94 +599,71 @@ class NoteStore:
 
     # Writing
 
-    @staticmethod
-    def _check_draft(draft: NoteDraft) -> None:
-        if not draft.title.strip():
-            raise InvalidNoteError("Give the note a title.")
-        if not draft.summary.strip():
-            raise InvalidNoteError("Add a one-line summary.")
-        if not (draft.body.strip() or draft.why.strip() or draft.how.strip()):
-            raise InvalidNoteError("Write what should be remembered.")
-
     def _unused_name(self, title: str) -> str:
         base = slugify(title)
-        taken = {p.stem for p in self._note_files()}
-        name = base
-        suffix = 2
-        while name in taken or f"{name}.md" in NON_NOTE_FILE_NAMES:
-            name = f"{base}-{suffix}"
-            suffix += 1
-        return name
+        taken = {path.stem for path in self._note_files()}
+        candidates = (
+            base if suffix == 1 else f"{base}-{suffix}" for suffix in itertools.count(1)
+        )
+        return next(
+            name
+            for name in candidates
+            if name not in taken and f"{name}{NOTE_SUFFIX}" not in NON_NOTE_FILE_NAMES
+        )
 
-    def _file_text(self, name: str, draft: NoteDraft, existing_frontmatter: dict[str, Any]) -> str:
-        frontmatter = dict(existing_frontmatter)
-        frontmatter["name"] = name
-        frontmatter["description"] = one_line(draft.summary)
-        metadata = frontmatter.get("metadata")
-        metadata = dict(metadata) if isinstance(metadata, dict) else {}
-        metadata["type"] = draft.kind
-        if "modified" in metadata:
-            metadata["modified"] = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-        frontmatter["metadata"] = metadata
-        frontmatter.pop("type", None)
-        header = yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True, width=10_000).strip()
-        return f"---\n{header}\n---\n\n{join_body(draft.body, draft.why, draft.how)}"
-
-    @staticmethod
-    def _pointer_line(title: str, file_name: str, summary: str) -> str:
-        return f"- [{one_line(title).replace(']', ')')}]({file_name}) — {one_line(summary)}"
-
-    def _write_index(self, lines: list[str]) -> None:
+    def _write_index(self, lines: Sequence[str]) -> None:
         _write_atomically(self.index_path, "\n".join(lines).rstrip("\n") + "\n")
 
-    def _set_pointer(self, lines: list[str], file_name: str, pointer: str | None) -> list[str]:
-        """``lines`` with the pointer line for ``file_name`` replaced (or removed, for ``None``), appended if absent."""
-        updated: list[str] = []
-        found = False
-        for line in lines:
-            match = _POINTER_LINE.match(line)
-            if match and match["file"] == file_name:
-                if pointer is not None and not found:
-                    updated.append(pointer)
-                found = True
-                continue
-            updated.append(line)
-        if not found and pointer is not None:
-            updated.append(pointer)
-        return updated
+    def _write_new_note_file(self, draft: NoteDraft) -> str:
+        """Write ``draft`` as a new note under an unused name, and answer that name."""
+        name = self._unused_name(draft.title)
+        _write_atomically(
+            self.folder / f"{name}{NOTE_SUFFIX}", _file_text(name, draft, {})
+        )
+        return name
 
     def create(self, draft: NoteDraft) -> Note:
-        self._check_draft(draft)
+        _check_draft(draft)
         with self._lock:
-            name = self._unused_name(draft.title)
-            file_name = f"{name}.md"
-            _write_atomically(self.folder / file_name, self._file_text(name, draft, {}))
-            lines = self._set_pointer(self._index_lines(), file_name, self._pointer_line(draft.title, file_name, draft.summary))
-            self._write_index(lines)
+            name = self._write_new_note_file(draft)
+            file_name = f"{name}{NOTE_SUFFIX}"
+            pointer = _pointer_line(draft.title, file_name, draft.summary)
+            self._write_index(_set_pointer(self._index_lines(), file_name, pointer))
             return self._find(name)
 
     def update(self, note_id: str, version: str, draft: NoteDraft) -> Note:
-        self._check_draft(draft)
+        _check_draft(draft)
         with self._lock:
             note = self._find(note_id)
             if note.version != version:
                 raise NoteChangedError(note_id)
             lines = self._index_lines()
             if note.is_index_only:
-                name = self._unused_name(draft.title)
-                file_name = f"{name}.md"
-                _write_atomically(self.folder / file_name, self._file_text(name, draft, {}))
-                pointer = self._pointer_line(draft.title, file_name, draft.summary)
-                lines = [pointer if line == note.raw else line for line in lines]
-                self._write_index(lines)
+                name = self._write_new_note_file(draft)
+                pointer = _pointer_line(
+                    draft.title, f"{name}{NOTE_SUFFIX}", draft.summary
+                )
+                self._write_index(
+                    [pointer if line == note.raw else line for line in lines]
+                )
                 return self._find(name)
-            existing_frontmatter, _ = self._parse_frontmatter(note.raw)
-            _write_atomically(self.folder / note.file_name, self._file_text(note.name, draft, existing_frontmatter))
+            existing_frontmatter, _ = _parse_frontmatter(note.raw)
+            _write_atomically(
+                self.folder / note.file_name,
+                _file_text(note.name, draft, existing_frontmatter),
+            )
             # The index line is rewritten only when what it shows changed, so a hand-written line survives a body edit.
-            has_pointer = any((m := _POINTER_LINE.match(line)) and m["file"] == note.file_name for line in lines)
-            if not has_pointer or one_line(draft.title) != note.title or one_line(draft.summary) != note.summary:
-                lines = self._set_pointer(lines, note.file_name, self._pointer_line(draft.title, note.file_name, draft.summary))
-                self._write_index(lines)
+            has_pointer = any(
+                (match := _POINTER_LINE.match(line)) and match["file"] == note.file_name
+                for line in lines
+            )
+            is_shown_changed = (
+                one_line(draft.title) != note.title
+                or one_line(draft.summary) != note.summary
+            )
+            if not has_pointer or is_shown_changed:
+                pointer = _pointer_line(draft.title, note.file_name, draft.summary)
+                self._write_index(_set_pointer(lines, note.file_name, pointer))
             return self._find(note_id)
 
     def delete(self, note_id: str, version: str) -> None:
@@ -467,14 +673,7 @@ class NoteStore:
                 raise NoteChangedError(note_id)
             lines = self._index_lines()
             if note.is_index_only:
-                removed = False
-                kept = []
-                for line in lines:
-                    if not removed and line == note.raw:
-                        removed = True
-                        continue
-                    kept.append(line)
-                self._write_index(kept)
+                self._write_index(_without_first(lines, note.raw))
                 return
             (self.folder / note.file_name).unlink(missing_ok=True)
-            self._write_index(self._set_pointer(lines, note.file_name, None))
+            self._write_index(_set_pointer(lines, note.file_name, None))

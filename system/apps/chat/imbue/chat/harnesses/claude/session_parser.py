@@ -12,10 +12,9 @@ import re
 from enum import auto
 from typing import Any
 
+from agent_memory.changes import parse_agent_notes
 from loguru import logger as _loguru_logger
 from pydantic import Field
-
-from agent_memory.changes import parse_agent_notes
 
 from imbue.chat.harnesses.claude.error_notice import ErrorNotice
 from imbue.chat.harnesses.claude.error_notice import classify_error_notice
@@ -623,8 +622,8 @@ def _parse_memory_change_attachment(
         return
     # One line per change record the tool call touched: each becomes its own notice, so each
     # record's card sits at the last tool call that touched it.
-    for k, (change_id, _summary, line) in enumerate(parse_agent_notes(text)):
-        event_id = _make_event_id(uuid, "memory_change" if k == 0 else f"memory_change_{k}")
+    for position, note in enumerate(parse_agent_notes(text)):
+        event_id = _make_event_id(uuid, "memory_change" if position == 0 else f"memory_change_{position}")
         if event_id in existing_event_ids:
             continue
         event: dict[str, Any] = {
@@ -633,12 +632,12 @@ def _parse_memory_change_attachment(
             "event_id": event_id,
             "source": _SOURCE,
             "role": "user",
-            "content": line,
+            "content": note.line,
             "message_uuid": uuid,
-            "memory_change_id": change_id,
+            "memory_change_id": note.change_id,
             "tool_call_id": attachment.get("toolUseID") or "",
         }
-        stamp_user_message_display(event, line)
+        stamp_user_message_display(event, note.line)
         event["non_turn_tail"] = True
         if session_id is not None:
             event["session_id"] = session_id

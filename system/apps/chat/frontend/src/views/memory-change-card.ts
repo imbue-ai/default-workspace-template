@@ -4,9 +4,10 @@
  *
  * Claude's change-log hook (system/scripts/agent_memory_change_log.py) records each reply's
  * memory changes as one change and tells the agent about it; the backend draws that note
- * as a "Memory changed" notice carrying the change's id (`memory_change_id`). This card is
- * that notice opened up: it reads the change from `GET /api/memory-changes/:id` and undoes
- * it through `POST /api/memory-changes/:id/undo` (the agent_memory library does both).
+ * as a notice (labelled "Memory changed") carrying the change's id (`memory_change_id`). This
+ * card is that notice opened up: it reads the change from `GET /api/memory-changes/:id` and
+ * undoes it through `POST /api/memory-changes/:id/undo` (the agent_memory library does both);
+ * a 409 (a file changed again since) asks in the card whether to undo anyway.
  *
  * The seam: `MemoryChangeCard` is the live component (it fetches, holds the expanded and
  * busy state, and handles Undo), and `renderMemoryChangeCard` is the pure renderer the
@@ -17,6 +18,7 @@ import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { Button, buttonClass, buttonPartAttrs } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
+import { HttpError, requestJson } from "@imbue/workspace-ui/src/models/http";
 import { railNodeAttrs } from "./agent-rail";
 
 export interface ChangedMemoryFile {
@@ -49,36 +51,45 @@ export type DiffLineKind = "same" | "removed" | "added" | "fold";
 /** A line-by-line comparison of two texts. Unchanged lines more than one away from a
  *  change fold into a count, so a one-line edit to a long index shows as one line. */
 export function lineDiff(before: string | null, after: string | null): [DiffLineKind, string][] {
-  const a = before === null ? [] : before.split("\n");
-  const b = after === null ? [] : after.split("\n");
-  const table: number[][] = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
-  for (let i = a.length - 1; i >= 0; i--) {
-    for (let j = b.length - 1; j >= 0; j--) {
-      table[i][j] = a[i] === b[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+  const beforeLines = before === null ? [] : before.split("\n");
+  const afterLines = after === null ? [] : after.split("\n");
+  // commonLength[i][j]: the longest common subsequence of beforeLines[i:] and afterLines[j:].
+  const commonLength: number[][] = Array.from({ length: beforeLines.length + 1 }, () =>
+    new Array<number>(afterLines.length + 1).fill(0),
+  );
+  for (let i = beforeLines.length - 1; i >= 0; i--) {
+    for (let j = afterLines.length - 1; j >= 0; j--) {
+      commonLength[i][j] =
+        beforeLines[i] === afterLines[j]
+          ? commonLength[i + 1][j + 1] + 1
+          : Math.max(commonLength[i + 1][j], commonLength[i][j + 1]);
     }
   }
   const lines: [DiffLineKind, string][] = [];
   let i = 0;
   let j = 0;
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      lines.push(["same", a[i++]]);
+  while (i < beforeLines.length && j < afterLines.length) {
+    if (beforeLines[i] === afterLines[j]) {
+      lines.push(["same", beforeLines[i++]]);
       j++;
-    } else if (table[i + 1][j] >= table[i][j + 1]) lines.push(["removed", a[i++]]);
-    else lines.push(["added", b[j++]]);
+    } else if (commonLength[i + 1][j] >= commonLength[i][j + 1]) lines.push(["removed", beforeLines[i++]]);
+    else lines.push(["added", afterLines[j++]]);
   }
-  while (i < a.length) lines.push(["removed", a[i++]]);
-  while (j < b.length) lines.push(["added", b[j++]]);
-  const isNearChange = (k: number) => [k - 1, k, k + 1].some((x) => lines[x] !== undefined && lines[x][0] !== "same");
+  while (i < beforeLines.length) lines.push(["removed", beforeLines[i++]]);
+  while (j < afterLines.length) lines.push(["added", afterLines[j++]]);
+  const isNearChange = (position: number) =>
+    [position - 1, position, position + 1].some(
+      (neighbour) => lines[neighbour] !== undefined && lines[neighbour][0] !== "same",
+    );
   const shown: [DiffLineKind, string][] = [];
-  let folded = 0;
+  let foldedCount = 0;
   const flush = () => {
-    if (folded > 0) shown.push(["fold", `${folded} unchanged line${folded === 1 ? "" : "s"}`]);
-    folded = 0;
+    if (foldedCount > 0) shown.push(["fold", `${foldedCount} unchanged line${foldedCount === 1 ? "" : "s"}`]);
+    foldedCount = 0;
   };
-  lines.forEach((line, k) => {
-    if (line[0] === "same" && !isNearChange(k)) {
-      folded++;
+  lines.forEach((line, position) => {
+    if (line[0] === "same" && !isNearChange(position)) {
+      foldedCount++;
       return;
     }
     flush();
@@ -117,23 +128,61 @@ function renderFile(file: ChangedMemoryFile): m.Vnode {
 }
 
 export interface MemoryChangeCardState {
+  /** The notice's label from the backend ("Memory changed"), which opens the card's line. */
+  label: string;
   /** The summary the notice carried, shown before the change has loaded. */
   summary: string;
   change: MemoryChange | null;
   isExpanded: boolean;
   isBusy: boolean;
   error: string;
+  /** Why the last Undo was refused (a file changed again since), while the card asks whether to undo anyway. */
+  confirmDetail: string | null;
 }
 
 export interface MemoryChangeCardHandlers {
   onToggle(): void;
   onUndo(): void;
+  onUndoAnyway(): void;
+  onKeep(): void;
 }
 
-/** The card itself, from its state: the notice line with its two actions, then (expanded) each file's changed lines. */
+/** The ask after a refused Undo: why it was refused, then "Undo anyway" or "Keep it". */
+function renderConfirm(detail: string, state: MemoryChangeCardState, handlers: MemoryChangeCardHandlers): m.Vnode {
+  return m("div", { class: "memory-change-confirm flex flex-wrap items-center gap-x-2 gap-y-1 pl-5" }, [
+    m("span", { class: "text-secondary" }, detail),
+    m("span", { class: "flex gap-1" }, [
+      m(
+        Button,
+        {
+          variant: "secondary",
+          sm: true,
+          extra: "memory-change-undo-anyway",
+          disabled: state.isBusy,
+          onclick: () => handlers.onUndoAnyway(),
+        },
+        "Undo anyway",
+      ),
+      m(
+        Button,
+        {
+          variant: "ghost",
+          sm: true,
+          extra: "memory-change-keep",
+          disabled: state.isBusy,
+          onclick: () => handlers.onKeep(),
+        },
+        "Keep it",
+      ),
+    ]),
+  ]);
+}
+
+/** The card itself, from its state: the notice line with its actions, then (expanded) each file's changed lines. */
 export function renderMemoryChangeCard(state: MemoryChangeCardState, handlers: MemoryChangeCardHandlers): m.Vnode {
   const change = state.change;
   const isUndone = change !== null && change.undone_at !== null;
+  const isConfirming = state.confirmDetail !== null;
   const summary = change?.summary ?? state.summary;
   return m("div", { class: "memory-change-card flex flex-col gap-1.5 text-(length:--font-size-helper)" }, [
     m("div", { class: "flex flex-wrap items-center gap-x-2 gap-y-1" }, [
@@ -143,7 +192,7 @@ export function renderMemoryChangeCard(state: MemoryChangeCardState, handlers: M
         m.trust(icon(isUndone ? "refresh" : "check", { size: 13, strokeWidth: 2.5 })),
       ),
       m("span", { class: "min-w-0 text-secondary" }, [
-        m("span", { class: "font-medium text-primary" }, isUndone ? "Memory change undone:" : "Memory changed:"),
+        m("span", { class: "font-medium text-primary" }, isUndone ? "Memory change undone:" : `${state.label}:`),
         ` ${summary}`,
       ]),
       change === null
@@ -167,7 +216,7 @@ export function renderMemoryChangeCard(state: MemoryChangeCardState, handlers: M
                   "View details",
                 )
               : null,
-            isUndone
+            isUndone || isConfirming
               ? null
               : m(
                   Button,
@@ -182,6 +231,7 @@ export function renderMemoryChangeCard(state: MemoryChangeCardState, handlers: M
                 ),
           ]),
     ]),
+    state.confirmDetail !== null && !isUndone ? renderConfirm(state.confirmDetail, state, handlers) : null,
     state.error ? m("span", { class: "memory-change-error text-danger" }, state.error) : null,
     state.isExpanded && change !== null
       ? m("div", { class: "flex flex-col gap-2 pl-5" }, change.files.map(renderFile))
@@ -189,63 +239,44 @@ export function renderMemoryChangeCard(state: MemoryChangeCardState, handlers: M
   ]);
 }
 
-async function requestJson(
-  method: "GET" | "POST",
-  path: string,
-  body?: unknown,
-): Promise<{ status: number; data: unknown }> {
-  const response = await fetch(apiUrl(path), {
-    method,
-    headers: body === undefined ? {} : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  let data: unknown = null;
-  try {
-    data = await response.json();
-  } catch {
-    // A non-JSON body leaves the status to speak.
-  }
-  return { status: response.status, data };
+const UNREACHABLE_DETAIL = "The chat app could not be reached.";
+
+function changeUrl(changeId: string, suffix: string): string {
+  return apiUrl(`/api/memory-changes/${encodeURIComponent(changeId)}${suffix}`);
 }
 
-function detailOf(data: unknown, fallback: string): string {
-  const detail = (data as { detail?: unknown } | null)?.detail;
-  return typeof detail === "string" ? detail : fallback;
-}
-
-/** The live card for one change: loads it, and undoes it (asking first when a file was changed again since). */
-export function MemoryChangeCard(): m.Component<{ changeId: string; summary: string }> {
-  const state: MemoryChangeCardState = { summary: "", change: null, isExpanded: false, isBusy: false, error: "" };
+/** The live card for one change: loads it, and undoes it (asking in the card first when a file changed again since). */
+export function MemoryChangeCard(): m.Component<{ changeId: string; label: string; summary: string }> {
+  const state: MemoryChangeCardState = {
+    label: "",
+    summary: "",
+    change: null,
+    isExpanded: false,
+    isBusy: false,
+    error: "",
+    confirmDetail: null,
+  };
   let changeId = "";
 
   async function load(): Promise<void> {
     try {
-      const { status, data } = await requestJson("GET", `/api/memory-changes/${encodeURIComponent(changeId)}`);
-      if (status === 200) state.change = data as MemoryChange;
-      else state.error = detailOf(data, "Couldn't load this memory change.");
-    } catch {
-      state.error = "The chat app could not be reached.";
+      state.change = await requestJson<MemoryChange>("GET", changeUrl(changeId, ""));
+    } catch (error) {
+      state.error = error instanceof HttpError ? error.message : UNREACHABLE_DETAIL;
     }
     m.redraw();
   }
 
-  async function undo(force: boolean): Promise<void> {
+  async function undo(isForced: boolean): Promise<void> {
     state.isBusy = true;
     state.error = "";
+    m.redraw();
     try {
-      const { status, data } = await requestJson("POST", `/api/memory-changes/${encodeURIComponent(changeId)}/undo`, {
-        force,
-      });
-      if (status === 200) {
-        state.change = data as MemoryChange;
-      } else if (status === 409 && window.confirm(`${detailOf(data, "")} Undo anyway?`)) {
-        await undo(true);
-        return;
-      } else if (status !== 409) {
-        state.error = detailOf(data, `Undo failed (HTTP ${status}).`);
-      }
-    } catch {
-      state.error = "The chat app could not be reached.";
+      state.change = await requestJson<MemoryChange>("POST", changeUrl(changeId, "/undo"), { is_forced: isForced });
+      state.confirmDetail = null;
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 409) state.confirmDetail = error.message;
+      else state.error = error instanceof HttpError ? error.message : UNREACHABLE_DETAIL;
     }
     state.isBusy = false;
     m.redraw();
@@ -254,6 +285,7 @@ export function MemoryChangeCard(): m.Component<{ changeId: string; summary: str
   return {
     oninit(vnode) {
       changeId = vnode.attrs.changeId;
+      state.label = vnode.attrs.label;
       state.summary = vnode.attrs.summary;
       void load();
     },
@@ -263,6 +295,10 @@ export function MemoryChangeCard(): m.Component<{ changeId: string; summary: str
           state.isExpanded = !state.isExpanded;
         },
         onUndo: () => void undo(false),
+        onUndoAnyway: () => void undo(true),
+        onKeep: () => {
+          state.confirmDetail = null;
+        },
       });
     },
   };

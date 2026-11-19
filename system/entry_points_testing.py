@@ -70,6 +70,8 @@ BARE_SEARCH_PATHS = (
     REPO_ROOT / "system" / "services" / "oom_priority" / "src",
     REPO_ROOT / "system" / "libs" / "chat_background_tasks" / "src",
     REPO_ROOT / "system" / "libs" / "app_registration" / "src",
+    # Only its stdlib-only ``changes`` module is importable from bare code; ``notes`` needs the
+    # venv (pydantic, PyYAML), so no bare file may import it.
     REPO_ROOT / "system" / "libs" / "agent_memory" / "src",
 )
 
@@ -81,7 +83,6 @@ STANDALONE_BARE_SCRIPTS = (
     REPO_ROOT / "catalog" / "build_catalog_from_export.py",
     REPO_ROOT / "system" / "apps" / "datalib" / "launch_datalib_http.py",
     SYSTEM_SCRIPTS / "forward_port.py",
-    SYSTEM_SCRIPTS / "agent_memory_change_log.py",
 )
 
 # ``python -c`` source taking an entry's path: imports the entry the way running it would (its

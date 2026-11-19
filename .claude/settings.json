@@ -82,7 +82,7 @@
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/system/scripts/agent_memory_change_log.py sync"
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/system/scripts/agent_memory_change_log.py sync || true"
           }
         ]
       }
@@ -103,10 +103,11 @@
     ],
     "PostToolUse": [
       {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/system/scripts/agent_memory_change_log.py post"
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/system/scripts/agent_memory_change_log.py post || true"
           }
         ]
       }

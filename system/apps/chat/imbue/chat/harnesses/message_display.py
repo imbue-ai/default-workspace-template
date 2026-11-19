@@ -28,6 +28,7 @@ Order of decision (:func:`classify_user_message`):
 import re
 from enum import auto
 from typing import Any
+from typing import Final
 from typing import assert_never
 
 from agent_memory.changes import parse_agent_note
@@ -322,6 +323,10 @@ def _task_notification_summary(content: str) -> str:
     return _ZERO_EXIT_CODE_RE.sub("", match.group(1)).strip()
 
 
+# The label of the notice the chat draws as a memory change's card.
+MEMORY_CHANGE_NOTICE_LABEL: Final = "Memory changed"
+
+
 def _match_memory_change(content: str) -> MessageDisplay | None:
     """Claude's memory change-log hook telling the agent it changed memory (``agent_memory.changes``).
 
@@ -331,7 +336,9 @@ def _match_memory_change(content: str) -> MessageDisplay | None:
     parsed = parse_agent_note(content)
     if parsed is None:
         return None
-    return MessageDisplay(display=DisplayKind.NOTICE, display_label="Memory changed", display_body=parsed[1])
+    return MessageDisplay(
+        display=DisplayKind.NOTICE, display_label=MEMORY_CHANGE_NOTICE_LABEL, display_body=parsed.summary
+    )
 
 
 def _match_background_task_report(content: str) -> MessageDisplay | None:

@@ -1,5 +1,4 @@
-from agent_memory.notes import index_titles
-from agent_memory.notes import readable_text
+from agent_memory.notes import index_titles, readable_text
 
 NOTE = """---
 name: likes-tea
@@ -29,7 +28,10 @@ def test_a_note_reads_as_its_summary_and_text_without_the_bookkeeping() -> None:
 
 
 def test_the_index_reads_as_titles_and_summaries() -> None:
-    assert readable_text("MEMORY.md", INDEX) == "User Preferences\n\nLikes tea — user likes tea\nAlways add emoticons"
+    assert (
+        readable_text("MEMORY.md", INDEX)
+        == "User Preferences\n\nLikes tea — user likes tea\nAlways add emoticons"
+    )
 
 
 def test_a_missing_file_stays_missing() -> None:

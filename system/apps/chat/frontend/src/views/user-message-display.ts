@@ -178,6 +178,8 @@ function renderSystemChip(label: string, body: string, expansionKey: string): m.
 
 /** A notice's lead when the backend's decision names none. */
 const NOTICE_FALLBACK_LABEL = "Background task completed";
+// The backend labels every memory-change notice; this covers one recorded without a label.
+const MEMORY_CHANGE_FALLBACK_LABEL = "Memory changed";
 
 /** The space below a notice's row when it stands outside a stretch (a notice not yet on the transcript). */
 export const NOTICE_ROW_SPACING_CLASS = "mb-2";
@@ -273,6 +275,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent; prev
         return m(MemoryChangeCard, {
           key: event.memory_change_id,
           changeId: event.memory_change_id,
+          label: cls.label ?? MEMORY_CHANGE_FALLBACK_LABEL,
           summary: cls.body,
         });
       }

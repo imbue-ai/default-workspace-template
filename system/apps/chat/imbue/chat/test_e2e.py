@@ -29,6 +29,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from agent_memory.changes import ChangeLog
+from agent_memory.changes import MAX_CHANGE_RECORDS
+from agent_memory.changes import STALE_SESSION_SECONDS
+from agent_memory.changes import format_agent_note
 from playwright.sync_api import Dialog
 from playwright.sync_api import Frame
 from playwright.sync_api import FrameLocator
@@ -37,8 +41,6 @@ from playwright.sync_api import Page
 from playwright.sync_api import Route
 from playwright.sync_api import ViewportSize
 from playwright.sync_api import expect
-from agent_memory.changes import ChangeLog
-from agent_memory.changes import format_agent_note
 from workspace_layout.primitives import ParticipantKey
 
 from imbue.chat.accounts import SIGNED_IN_AT_FILENAME
@@ -3248,7 +3250,12 @@ def test_each_note_a_reply_changed_is_its_own_card_that_shows_its_lines_and_undo
     memory_dir.mkdir()
     monkeypatch.setenv("AGENT_MEMORY_DIR", str(memory_dir))
     monkeypatch.setenv("AGENT_MEMORY_CHANGES_DIR", str(tmp_path / "memory-changes"))
-    log = ChangeLog(changes_dir=tmp_path / "memory-changes", memory_dir=memory_dir)
+    log = ChangeLog(
+        changes_dir=tmp_path / "memory-changes",
+        memory_dir=memory_dir,
+        max_change_records=MAX_CHANGE_RECORDS,
+        stale_session_seconds=STALE_SESSION_SECONDS,
+    )
     index = memory_dir / "MEMORY.md"
     index.write_text("# Index\n")
     log.start_turn("s1")
@@ -3256,15 +3263,19 @@ def test_each_note_a_reply_changed_is_its_own_card_that_shows_its_lines_and_undo
     tea.write_text(
         "---\nname: likes-tea\ndescription: User likes tea\nmetadata:\n  type: user\n---\n\nThe user likes tea.\n"
     )
-    [tea_change] = log.record_tool_call("s1", "toolu_m1", {"file_path": str(tea)}, chat_id=FIXTURE_AGENT_ID)
+    [tea_change] = log.record_tool_call(
+        "s1", "toolu_m1", {"file_path": str(tea)}, chat_id=FIXTURE_AGENT_ID, agent_name=""
+    )
     cake = memory_dir / "likes-cake.md"
     cake.write_text("---\nname: likes-cake\ndescription: User likes cake\n---\n\nThe user likes cake.\n")
-    [cake_change] = log.record_tool_call("s1", "toolu_m2", {"file_path": str(cake)}, chat_id=FIXTURE_AGENT_ID)
+    [cake_change] = log.record_tool_call(
+        "s1", "toolu_m2", {"file_path": str(cake)}, chat_id=FIXTURE_AGENT_ID, agent_name=""
+    )
     index.write_text(
         "# Index\n- [Likes tea](likes-tea.md) — user likes tea\n- [Likes cake](likes-cake.md) — user likes cake\n"
     )
-    both = log.record_tool_call("s1", "toolu_m3", {"file_path": str(index)}, chat_id=FIXTURE_AGENT_ID)
-    assert sorted(c["id"] for c in both) == sorted([tea_change["id"], cake_change["id"]])
+    both = log.record_tool_call("s1", "toolu_m3", {"file_path": str(index)}, chat_id=FIXTURE_AGENT_ID, agent_name="")
+    assert sorted(change.id for change in both) == sorted([tea_change.id, cake_change.id])
 
     def write_call(uuid: str, ts: str, call_id: str, path: Path) -> dict[str, Any]:
         return _assistant_line(
@@ -3283,14 +3294,21 @@ def test_each_note_a_reply_changed_is_its_own_card_that_shows_its_lines_and_undo
         },
         write_call("uuid-mc-2", "2026-01-01T00:00:01Z", "toolu_m1", tea),
         _tool_result_line("uuid-mc-3", "2026-01-01T00:00:02Z", "toolu_m1", "File created"),
-        _hook_context_line("uuid-mc-4", "2026-01-01T00:00:02.5Z", format_agent_note(tea_change), "toolu_m1"),
+        _hook_context_line(
+            "uuid-mc-4", "2026-01-01T00:00:02.5Z", format_agent_note(tea_change.id, tea_change.summary), "toolu_m1"
+        ),
         write_call("uuid-mc-5", "2026-01-01T00:00:03Z", "toolu_m2", cake),
         _tool_result_line("uuid-mc-6", "2026-01-01T00:00:04Z", "toolu_m2", "File created"),
-        _hook_context_line("uuid-mc-7", "2026-01-01T00:00:04.5Z", format_agent_note(cake_change), "toolu_m2"),
+        _hook_context_line(
+            "uuid-mc-7", "2026-01-01T00:00:04.5Z", format_agent_note(cake_change.id, cake_change.summary), "toolu_m2"
+        ),
         write_call("uuid-mc-8", "2026-01-01T00:00:05Z", "toolu_m3", index),
         _tool_result_line("uuid-mc-9", "2026-01-01T00:00:06Z", "toolu_m3", "File edited"),
         _hook_context_line(
-            "uuid-mc-10", "2026-01-01T00:00:06.5Z", "\n".join(format_agent_note(c) for c in both), "toolu_m3"
+            "uuid-mc-10",
+            "2026-01-01T00:00:06.5Z",
+            "\n".join(format_agent_note(change.id, change.summary) for change in both),
+            "toolu_m3",
         ),
         _assistant_line(
             "uuid-mc-11", "2026-01-01T00:00:07Z", [{"type": "text", "text": "I'll remember both."}], "end_turn"
@@ -3319,36 +3337,22 @@ def test_each_note_a_reply_changed_is_its_own_card_that_shows_its_lines_and_undo
         for not_shown in ("name: likes-tea", "metadata", "type: user", "---", "Likes cake", "Index"):
             expect(tea_card).not_to_contain_text(not_shown)
 
-        # Its index line changed again since: Undo asks first, and a "no" leaves everything as it is.
+        # Its index line changed again since: Undo asks first in the card, and "Keep it" leaves everything as it is.
         index.write_text(
             "# Index\n- [Likes tea](likes-tea.md) — user loves tea\n- [Likes cake](likes-cake.md) — user likes cake\n"
         )
-        dialogs: list[str] = []
-        answers = iter([False, True])
-
-        def answer(dialog: Dialog) -> None:
-            dialogs.append(dialog.message)
-            if next(answers):
-                dialog.accept()
-            else:
-                dialog.dismiss()
-
-        page.on("dialog", answer)
         tea_card.locator(".memory-change-undo").click()
-        # The handler runs only while Playwright is pumping the page's events, so wait through the page.
-        for _ in range(100):
-            if dialogs:
-                break
-            page.wait_for_timeout(100)
-        assert len(dialogs) == 1, "the first Undo did not ask for confirmation"
-        assert "Changed again since: the index" in dialogs[0]
+        confirm = tea_card.locator(".memory-change-confirm")
+        expect(confirm).to_contain_text("Changed again since: the index", timeout=10000)
+        confirm.locator(".memory-change-keep").click()
+        expect(confirm).to_have_count(0)
         expect(tea_card.locator(".memory-change-undo")).to_be_enabled()
         assert tea.exists()
 
         tea_card.locator(".memory-change-undo").click()
+        tea_card.locator(".memory-change-undo-anyway").click()
         expect(tea_card).to_contain_text("Memory change undone:", timeout=10000)
         expect(tea_card.locator(".memory-change-undo")).to_have_count(0)
-        assert len(dialogs) == 2
         assert not tea.exists()
         assert cake.exists()
         assert index.read_text() == "# Index\n- [Likes cake](likes-cake.md) — user likes cake\n"
