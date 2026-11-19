@@ -215,8 +215,8 @@ def _reply_with_only_thinking(provider: str) -> dict[str, object]:
 
 
 def test_a_local_model_turn_that_ends_with_no_answer_and_no_action_says_so() -> None:
-    """A model server drops a call to a tool that does not exist and reports a normal finish, which
-    left the chat showing an empty reply."""
+    """A model server drops a call to a tool that does not exist and reports a normal finish, so
+    without the sentence the chat shows an empty reply."""
     event = parse_record(_message_record("m", _reply_with_only_thinking("local-model")))[0]
     assert event["text"].startswith("The model stopped without answering.")
     assert event["has_thinking"] is True
