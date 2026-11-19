@@ -1,1 +1,0 @@
-The desktop-interface blueprint docs (`concepts.md`, `contracts.md`) no longer describe the ghost a pulled-out window used to leave on the desktop: the desktop draws nothing for a detached placement, minimizing one changes nothing on screen, its taskbar entry always shows the window's own desktop window, and `is_ghost_hidden` only carries whether the placement is minimized.

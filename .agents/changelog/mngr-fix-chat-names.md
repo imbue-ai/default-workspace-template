@@ -1,1 +1,0 @@
-The agentic-browser-fleet skill's examples now show the daemon-minted `browser-<N>` names (`new` prints `browser-1`, shown as "Browser N" in the workspace UI) instead of the retired random english names.
