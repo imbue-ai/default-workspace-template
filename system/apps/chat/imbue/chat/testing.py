@@ -104,6 +104,7 @@ from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
 from imbue.chat.shell_client import build_chat_shell_client
 from imbue.chat.state import ChatAppState
+from imbue.chat.state import build_local_services_http_client
 from imbue.chat.tray_feed import TrayFeed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
@@ -1054,7 +1055,7 @@ def build_test_state(
         agent_manager=manager,
         event_queues=event_queues,
         claude_auth_service=claude_auth_service if claude_auth_service is not None else ClaudeAuthService(),
-        http_client=http_client if http_client is not None else httpx.Client(follow_redirects=False, timeout=30.0),
+        http_client=http_client if http_client is not None else build_local_services_http_client(None),
         latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
         is_secondary=is_secondary,
         shell=shell if shell is not None else DisconnectedShell(),

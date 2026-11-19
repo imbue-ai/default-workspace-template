@@ -1,5 +1,7 @@
 import threading
 from collections.abc import Callable
+from http.cookiejar import CookieJar
+from http.cookiejar import DefaultCookiePolicy
 from pathlib import Path
 from typing import Any
 
@@ -543,6 +545,20 @@ class ChatAppState(MutableModel):
             self.latchkey_http_client.close()
         except (httpx.HTTPError, RuntimeError) as e:
             logger.debug("Skipped closing latchkey http client during shutdown: {}", e)
+
+
+def build_local_services_http_client(transport: httpx.BaseTransport | None) -> httpx.Client:
+    """The app's one client for server-side calls to local services, on httpx's own transport unless one is given.
+
+    It keeps no cookie. Among what it asks are ports that may hold any web server, and a cookie one of
+    them set would go out with every later request to that host, whatever the port.
+    """
+    return httpx.Client(
+        transport=transport,
+        follow_redirects=False,
+        timeout=30.0,
+        cookies=CookieJar(policy=DefaultCookiePolicy(allowed_domains=())),
+    )
 
 
 def attach_state(app: Flask, state: ChatAppState) -> None:
