@@ -426,7 +426,8 @@ def build_gateway_app(
             return True
         try:
             grants = load_grants(grants_path)
-        except GrantsError:
+        except GrantsError as exc:
+            log(f"Not offering {identity.user_id} the workspace: the grants file is missing or malformed: {exc}")
             return False
         return grants.allows(identity.user_id, identity.email, None, build_grantable_service_names(registered_apps))
 
