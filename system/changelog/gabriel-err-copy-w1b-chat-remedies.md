@@ -1,0 +1,1 @@
+The shared frontend library's dialog keeps a dialog taller than the space it opens in reachable: it starts at the top and that space scrolls to the rest (see `system/libs/workspace_ui/changelog/gabriel-err-copy-w1b-chat-remedies.md`), for the chat app's failure notices with their details open (see `system/apps/chat/changelog/gabriel-err-copy-w1b-chat-remedies.md`).

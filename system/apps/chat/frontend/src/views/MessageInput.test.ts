@@ -99,6 +99,10 @@ const mocks = vi.hoisted(() => {
     discardListeners: [] as ((discarded: DiscardedChat) => void)[],
     launchChat: vi.fn(async (_chatId: string, _accountId: string, _message?: string, _kind?: string) => ({})),
     startChatOnAccount: vi.fn(async (_accountId: string) => {}),
+    openChatPage: vi.fn(),
+    // Every chat the list names, and which of them is the main chat: where an ask about a chat that cannot start goes.
+    chats: [] as unknown[],
+    mainChatId: null as string | null,
     chooseFastMode: vi.fn(),
     selectedAccount: null as { id: string } | null,
     // Whether this page has read the account list; until it has, no account reads as missing.
@@ -206,7 +210,7 @@ vi.mock("../models/attachments", () => ({
     paths.length === 0 ? text : `${text} + ${paths.join(" ")}`,
   formatFileSize: () => "0 B",
 }));
-vi.mock("../shell", () => ({ startChatOnAccount: mocks.startChatOnAccount }));
+vi.mock("../shell", () => ({ startChatOnAccount: mocks.startChatOnAccount, openChatPage: mocks.openChatPage }));
 vi.mock("../models/ModelSettings", () => ({
   addModelChoiceFailureListener: (listener: (chatId: string, error: unknown) => void) => {
     mocks.modelChoiceFailureListener = listener;
@@ -265,8 +269,13 @@ vi.mock("../models/HarnessCatalog", async () => {
 });
 vi.mock("../models/Chats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Chats")>()),
-  getChatById: () =>
-    mocks.isChatRegistered ? { active_agent: mocks.agent, handoff: mocks.switching.handoff } : undefined,
+  getChatById: (chatId: string) =>
+    (mocks.chats as ChatSnapshot[]).find((chat) => chat.chat_id === chatId) ??
+    (mocks.isChatRegistered
+      ? { title: "Chat 1", active_agent: mocks.agent, handoff: mocks.switching.handoff }
+      : undefined),
+  getChats: () => mocks.chats,
+  getMainChatId: () => mocks.mainChatId,
   getProvisionalChat: () => mocks.provisional,
   isLaunchInFlight: () => mocks.isLaunchInFlight,
   isRoomChat: () => mocks.isRoom,
@@ -321,14 +330,15 @@ vi.mock("@imbue/workspace-voice/src/downloadProbe", () => ({
 }));
 vi.mock("@imbue/workspace-voice/src/readyChime", () => ({ createReadyChime: () => mocks.readyChime }));
 
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
 import type { StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { isApplePlatform } from "@imbue/workspace-voice/src/support";
 import { EngineLoadError } from "@imbue/workspace-voice/src/workerClient";
 import { ChatNotStartedError } from "../models/Chats";
-import type { DiscardedChat, ProvisionalChat } from "../models/Chats";
-import { handoffStateFixture } from "../models/chatSnapshotFixture";
+import type { ChatSnapshot, DiscardedChat, ProvisionalChat } from "../models/Chats";
+import { chatSnapshotFixture, handoffStateFixture } from "../models/chatSnapshotFixture";
 import { DICTATION_NOTE, hasDictatedSpeech, withDictationNote } from "../models/dictationNote";
 import { stubShellConnection } from "../shellConnectionFixture";
 import { describeTapFailure } from "./composer-failures";
@@ -485,6 +495,20 @@ function findButton(node: unknown, label: string): AnyVnode | undefined {
 
 function findByTag(node: unknown, tag: string): AnyVnode | undefined {
   return flatten(node).find((vnode) => vnode.tag === tag);
+}
+
+/** The paragraphs of the notice in the tree, in order. */
+function noticeParagraphs(node: unknown): string[] {
+  return flatten(node)
+    .filter((vnode) => String(vnode.attrs?.className ?? "").includes("modal-message"))
+    .map((vnode) => renderedText(vnode).trim());
+}
+
+/** What each "See details" in the tree holds. */
+function detailsShown(node: unknown): string[] {
+  return flatten(node)
+    .filter((vnode) => vnode.tag === SeeDetails)
+    .map((vnode) => String(vnode.attrs?.details));
 }
 
 /** Find a vnode by an exact attribute value (e.g. a stable aria-label). */
@@ -4922,5 +4946,467 @@ describe("MessageInput first send whose launch fails", () => {
     expect(mocks.launchChat).toHaveBeenLastCalledWith("agent-1", "acct-1", "Let's build something", "agent");
     expect(mocks.sendMessage).not.toHaveBeenCalled();
     expect(localStorage.getItem("message-text:agent-1") ?? "").not.toContain("Let's build something");
+  });
+});
+
+describe("MessageInput offers a way out of a chat whose agent cannot start", () => {
+  const START_FAILED_SENTENCE = "This chat's agent couldn't be started. Try again. If this persists, report a bug.";
+  const startFailed = (): Error =>
+    refusal(500, {
+      detail: "Could not start agent 'Chat-1' for a send: mngr start exited 1",
+      user_facing_message: START_FAILED_SENTENCE,
+      reportable: true,
+      kind: "agent_start_failed",
+    });
+  const UNREACHABLE_SENTENCE = "The agent isn't running and didn't start.";
+  const RESTART_SENTENCE = "Restart it to send your message.";
+  /** A send mngr refused because the chat's agent was down and would not start. */
+  const unreachable = (): Error =>
+    refusal(500, {
+      detail: "Agent 'Chat-1' is not running and could not be started",
+      user_facing_message: UNREACHABLE_SENTENCE,
+      kind: "agent_unreachable",
+    });
+
+  beforeEach(() => {
+    mocks.sendMessage.mockReset();
+    mocks.sendMessage.mockResolvedValue("ok");
+    mocks.interruptAgent.mockReset();
+    mocks.interruptAgent.mockResolvedValue(undefined);
+    mocks.openProviderChooser.mockReset();
+    mocks.beginSwitchToAccountId.mockClear();
+    mocks.openChatPage.mockClear();
+    mocks.refuseSendToFailedChat.mockReset();
+    mocks.chats = [
+      chatSnapshotFixture("chat-main", { title: "Main chat" }),
+      chatSnapshotFixture("chat-other", { last_messaged_at: 900 }),
+    ];
+    mocks.mainChatId = "chat-main";
+    mocks.agent.account_id = "acct-1";
+    mocks.agent.harness = "claude";
+    mocks.agent.activity_state = undefined;
+    mocks.getComposerAttachments.mockReturnValue([]);
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.chats = [];
+    mocks.mainChatId = null;
+    mocks.agent.account_id = null;
+    mocks.isChatRegistered = true;
+    mocks.provisional = undefined;
+  });
+
+  /** A composer whose send to ``agent-1`` was just refused with ``error``. */
+  async function composerAfterRefusedSend(error: unknown): Promise<() => unknown> {
+    mocks.sendMessage.mockRejectedValueOnce(error);
+    const component = MessageInput();
+    await typeAndSend(component, "agent-1", "hello");
+    return () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+  }
+
+  /** A composer whose send to ``agent-1`` was refused with ``reason`` because the chat never became an agent:
+   *  ``failedCreate`` is the record of its failed create, absent for a chat that was closed before it started. */
+  async function composerAfterSendToChatNotStarted(
+    reason: string,
+    failedCreate: { account_id: string } | undefined,
+  ): Promise<() => unknown> {
+    mocks.isChatRegistered = false;
+    mocks.provisional =
+      failedCreate === undefined
+        ? undefined
+        : {
+            chat_id: "agent-1",
+            name: "Chat 7",
+            account_id: failedCreate.account_id,
+            kind: "agent",
+            phase: "failed",
+            error: reason,
+            is_seeded: false,
+            held_sends: [],
+            model_pick: null,
+          };
+    mocks.refuseSendToFailedChat.mockImplementationOnce(() => {
+      throw new ChatNotStartedError(reason);
+    });
+    const component = MessageInput();
+    await typeAndSend(component, "agent-1", "hello");
+    return () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+  }
+
+  /** A composer whose send to ``agent-1`` was refused because the chat's create had failed. */
+  function composerAfterSendToFailedCreate(): Promise<() => unknown> {
+    return composerAfterSendToChatNotStarted("mngr create exited with code 3", { account_id: "acct-1" });
+  }
+
+  function press(tree: unknown, label: string): void {
+    const button = findButton(tree, label);
+    expect(button, `"${label}" should be offered`).toBeDefined();
+    (button!.attrs!.onclick as () => void)();
+  }
+
+  /** The notice's buttons in order: what each reads, and whether it is greyed out. */
+  function noticeButtons(tree: unknown): { label: string; isDisabled: boolean }[] {
+    return flatten(findByClass(tree, "modal-card"))
+      .filter((vnode) => vnode.tag === "button")
+      .map((vnode) => ({
+        label: renderedText(vnode).trim(),
+        isDisabled: vnode.attrs?.["aria-disabled"] === "true",
+      }));
+  }
+
+  it("moves the chat off the account its agent would not start on, with the message still in the box", async () => {
+    const render = await composerAfterRefusedSend(startFailed());
+
+    press(render(), "Switch provider");
+
+    expect(findByClass(render(), "modal-message")).toBeUndefined();
+    expect(mocks.openProviderChooser).toHaveBeenCalledOnce();
+    const intent = mocks.openProviderChooser.mock.calls[0][0] as {
+      onSignedIn: (accountId: string) => void;
+      unpickable: unknown;
+    };
+    expect(intent.unpickable).toEqual({ accountId: "acct-1", reason: "failing" });
+    intent.onSignedIn("acct-2");
+    expect(mocks.beginSwitchToAccountId).toHaveBeenCalledExactlyOnceWith("agent-1", "acct-2");
+    expect(findByTag(render(), "textarea")?.attrs?.value).toBe("hello");
+  });
+
+  it("offers the switch only once the chat list names the chat, which the switch moves", async () => {
+    mocks.isChatRegistered = false;
+    const render = await composerAfterRefusedSend(startFailed());
+
+    expect(findButton(render(), "Switch provider")).toBeUndefined();
+    expect(findButton(render(), "Ask an agent to fix this")).toBeDefined();
+
+    mocks.isChatRegistered = true;
+
+    expect(findButton(render(), "Switch provider")).toBeDefined();
+  });
+
+  it.each([
+    ["nothing answered", () => noAnswer()],
+    ["the chat is gone", () => refusal(404, { detail: "no such chat", kind: "chat_gone" })],
+  ])("offers neither a switch nor an agent when %s", async (_case, error) => {
+    const tree = (await composerAfterRefusedSend(error()))();
+
+    expect(findByClass(tree, "modal-message")).toBeDefined();
+    expect(findButton(tree, "Switch provider")).toBeUndefined();
+    expect(findButton(tree, "Ask an agent to fix this")).toBeUndefined();
+  });
+
+  it.each([
+    ["the agent's input is blocked", () => refusal(500, { detail: "a dialog is open", kind: "input_blocked" })],
+    ["nothing classified the refusal", () => refusal(500, { detail: "the host hung up" })],
+  ])("offers no switch when %s, and asks an agent through the shell, not a running chat", async (_case, error) => {
+    const connection = stubShellConnection(true);
+    vi.mocked(connection.askAgent).mockResolvedValueOnce({ isOpened: true });
+    const render = await composerAfterRefusedSend(error());
+    mocks.sendMessage.mockClear();
+
+    expect(findButton(render(), "Switch provider")).toBeUndefined();
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+
+    expect(connection.askAgent).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("offers an agent, and no switch, for a send to a chat whose create failed", async () => {
+    const tree = (await composerAfterSendToFailedCreate())();
+
+    expect(findButton(tree, "Ask an agent to fix this")).toBeDefined();
+    expect(findButton(tree, "Switch provider")).toBeUndefined();
+    expect(renderedText(findByClass(tree, "notice-dismiss")).trim()).toBe("Cancel");
+  });
+
+  it("offers an agent beside Restart for an agent that is down and would not start, on the notice as it was", async () => {
+    const tree = (await composerAfterRefusedSend(unreachable()))();
+
+    expect(noticeParagraphs(tree)).toEqual([UNREACHABLE_SENTENCE, RESTART_SENTENCE]);
+    expect(noticeButtons(tree)).toEqual([
+      { label: "Cancel", isDisabled: false },
+      { label: "Ask an agent to fix this", isDisabled: false },
+      { label: "Restart", isDisabled: false },
+    ]);
+  });
+
+  it("offers an agent on a sibling's notice for an agent that is down and would not start", async () => {
+    const component = MessageInput();
+    raiseFailureNotice("agent-1", {
+      title: "Couldn't send the queued messages",
+      describe: describeTapFailure,
+      error: unreachable(),
+      kind: "agent_unreachable",
+    });
+    const render = (): unknown => component.view!({ attrs: { chatId: "agent-1" } } as never);
+
+    expect(noticeButtons(render()).map((button) => button.label)).toEqual(["Cancel", "Ask an agent to fix this"]);
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+
+    const [askedChatId, task] = mocks.sendMessage.mock.calls[0] as unknown as [string, string];
+    expect(askedChatId).toBe("chat-main");
+    expect(task).toContain("The chat \"Chat 1\" couldn't take a message, because its agent couldn't be started.");
+    expect(task).toContain("Agent 'Chat-1' is not running and could not be started");
+  });
+
+  it.each([
+    [
+      "its create failed for want of a sign-in, which an agent cannot make",
+      "No provider account is signed in for this workspace.",
+      { account_id: "" },
+    ],
+    ["it was closed before it started, so no create failed", "The chat was closed before it started", undefined],
+  ])("offers no agent for a send to a chat that never started when %s", async (_case, reason, failedCreate) => {
+    const tree = (await composerAfterSendToChatNotStarted(reason, failedCreate))();
+
+    expect(findByClass(tree, "modal-message")).toBeDefined();
+    expect(findButton(tree, "Ask an agent to fix this")).toBeUndefined();
+    expect(findButton(tree, "Switch provider")).toBeUndefined();
+    expect(renderedText(findByClass(tree, "notice-dismiss")).trim()).toBe("OK");
+  });
+
+  it("asks the main chat to fix a failed create, naming the chat and its reason", async () => {
+    const render = await composerAfterSendToFailedCreate();
+
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+
+    expect(mocks.sendMessage).toHaveBeenCalledExactlyOnceWith(
+      "chat-main",
+      '/assist Imbue Studio showed the user this failure: The chat "Chat 7" couldn\'t be started.\n\n' +
+        "Details:\n```\nmngr create exited with code 3\n```\n\n" +
+        "Find out why it failed and fix it, then tell the user what was wrong and what you changed.",
+      expect.any(String),
+    );
+  });
+
+  it.each([
+    [
+      "could not be started for the send",
+      startFailed,
+      "Retry",
+      "Could not start agent 'Chat-1' for a send: mngr start exited 1",
+    ],
+    ["was down and would not start", unreachable, "Restart", "Agent 'Chat-1' is not running and could not be started"],
+  ])(
+    "asks the main chat to fix an agent that %s, then closes the notice and shows that chat",
+    async (_case, refusedWith, otherButton, reason) => {
+      const render = await composerAfterRefusedSend(refusedWith());
+      let accept: (status: string) => void = () => undefined;
+      mocks.sendMessage.mockImplementationOnce(() => new Promise<string>((resolve) => (accept = resolve)));
+
+      press(render(), "Ask an agent to fix this");
+
+      const asking = render();
+      expect(findButton(asking, "Ask an agent to fix this")).toBeUndefined();
+      expect(findButton(asking, "Asking an agent\u2026")?.attrs?.["aria-disabled"]).toBe("true");
+      expect(findButton(asking, otherButton)?.attrs?.["aria-disabled"]).toBe("true");
+      const [askedChatId, task] = mocks.sendMessage.mock.calls[1] as unknown as [string, string];
+      expect(askedChatId).toBe("chat-main");
+      expect(task).toContain("The chat \"Chat 1\" couldn't take a message, because its agent couldn't be started.");
+      expect(task).toContain(reason);
+      expect(mocks.openChatPage).not.toHaveBeenCalled();
+
+      accept("ok");
+      await flushAsync();
+
+      expect(mocks.openChatPage).toHaveBeenCalledExactlyOnceWith("chat-main");
+      expect(findByClass(render(), "modal-message")).toBeUndefined();
+      expect(findByTag(render(), "textarea")?.attrs?.value).toBe("hello");
+    },
+  );
+
+  it.each([
+    ["could not be started for the send", startFailed],
+    ["was down and would not start", unreachable],
+  ])(
+    "asks the agent chat messaged last, never the failing chat, when the main chat's agent %s",
+    async (_case, refusedWith) => {
+      mocks.chats = [
+        chatSnapshotFixture("agent-1", { last_messaged_at: 950 }),
+        chatSnapshotFixture("chat-older", { last_messaged_at: 100 }),
+        chatSnapshotFixture("chat-newer", { last_messaged_at: 500 }),
+      ];
+      mocks.mainChatId = "agent-1";
+      const render = await composerAfterRefusedSend(refusedWith());
+
+      press(render(), "Ask an agent to fix this");
+      await flushAsync();
+
+      expect((mocks.sendMessage.mock.calls[1] as unknown as [string])[0]).toBe("chat-newer");
+    },
+  );
+
+  it("offers no agent when the failing chat is the only agent chat", async () => {
+    mocks.chats = [chatSnapshotFixture("agent-1"), chatSnapshotFixture("chat-lounge", { kind: "room" })];
+    mocks.mainChatId = "agent-1";
+
+    const tree = (await composerAfterRefusedSend(startFailed()))();
+
+    expect(findButton(tree, "Ask an agent to fix this")).toBeUndefined();
+    expect(findButton(tree, "Switch provider")).toBeDefined();
+  });
+
+  it("offers only Restart for an agent that is down when the failing chat is the only agent chat", async () => {
+    mocks.chats = [chatSnapshotFixture("agent-1"), chatSnapshotFixture("chat-lounge", { kind: "room" })];
+    mocks.mainChatId = "agent-1";
+
+    const tree = (await composerAfterRefusedSend(unreachable()))();
+
+    expect(noticeButtons(tree).map((button) => button.label)).toEqual(["Cancel", "Restart"]);
+  });
+
+  const ASK_REFUSED_SENTENCE =
+    'Couldn\'t ask "Main chat". The agent is waiting on something in its terminal. Answer it there and try again.';
+  const ASK_REFUSED_DETAILS =
+    'Asking "Main chat":\nHTTP 500\nA dialog (a permission prompt) is open in the agent\'s terminal. Clear it there.';
+  const askRefused = (): Error =>
+    refusal(500, {
+      detail: "A dialog (a permission prompt) is open in the agent's terminal. Clear it there.",
+      user_facing_message: "The agent is waiting on something in its terminal. Answer it there and try again.",
+      kind: "input_blocked",
+    });
+
+  it.each([
+    [
+      "an agent that would not start",
+      () => composerAfterRefusedSend(startFailed()),
+      [START_FAILED_SENTENCE],
+      "HTTP 500\nCould not start agent 'Chat-1' for a send: mngr start exited 1",
+    ],
+    [
+      "an agent that was down and would not start",
+      () => composerAfterRefusedSend(unreachable()),
+      [UNREACHABLE_SENTENCE, RESTART_SENTENCE],
+      "HTTP 500\nAgent 'Chat-1' is not running and could not be started",
+    ],
+    [
+      "a chat whose create failed",
+      () => composerAfterSendToFailedCreate(),
+      ["Your message wasn't delivered. Your text is back in the box, so nothing was lost."],
+      "mngr create exited with code 3",
+    ],
+  ])(
+    "says under the failure of %s that the chat it asked could not be asked, with one See details for both",
+    async (_case, composer, failureSentences, failureDetails) => {
+      const render = await composer();
+      mocks.sendMessage.mockRejectedValueOnce(askRefused());
+
+      press(render(), "Ask an agent to fix this");
+      await flushAsync();
+
+      const refused = render();
+      expect(noticeParagraphs(refused)).toEqual([...failureSentences, ASK_REFUSED_SENTENCE]);
+      expect(detailsShown(refused)).toEqual([`${failureDetails}\n\n${ASK_REFUSED_DETAILS}`]);
+      expect(findButton(refused, "Ask an agent to fix this")?.attrs?.["aria-disabled"]).toBeUndefined();
+      expect(mocks.openChatPage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("files the refused ask with the failure it was about", async () => {
+    const connection = stubShellConnection(true);
+    const render = await composerAfterRefusedSend(startFailed());
+    mocks.sendMessage.mockRejectedValueOnce(askRefused());
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+
+    press(render(), "Report a bug");
+
+    expect(connection.reportBug).toHaveBeenCalledExactlyOnceWith({
+      message: `${START_FAILED_SENTENCE} ${ASK_REFUSED_SENTENCE}`,
+      details: "HTTP 500\nCould not start agent 'Chat-1' for a send: mngr start exited 1\n\n" + ASK_REFUSED_DETAILS,
+    });
+  });
+
+  it("offers a bug report once a refused ask's sentence asks for one, on a notice that had none", async () => {
+    stubShellConnection(true);
+    const render = await composerAfterSendToFailedCreate();
+    expect(findButton(render(), "Report a bug")).toBeUndefined();
+    mocks.sendMessage.mockRejectedValueOnce(refusal(500, { detail: "mngr message exited 1" }));
+
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+
+    expect(noticeParagraphs(render())).toEqual([
+      "Your message wasn't delivered. Your text is back in the box, so nothing was lost.",
+      'Couldn\'t ask "Main chat". Try again. If this persists, report a bug.',
+    ]);
+    expect(findButton(render(), "Report a bug")).toBeDefined();
+  });
+
+  it("leaves no button of the notice to press while the ask is on its way, and gives them back once it is refused", async () => {
+    const connection = stubShellConnection(true);
+    const render = await composerAfterRefusedSend(startFailed());
+    let refuse: (error: unknown) => void = () => undefined;
+    mocks.sendMessage.mockImplementationOnce(() => new Promise<string>((_accept, reject) => (refuse = reject)));
+
+    press(render(), "Ask an agent to fix this");
+
+    expect(noticeButtons(render())).toEqual([
+      { label: "Cancel", isDisabled: true },
+      { label: "Retry", isDisabled: true },
+      { label: "Switch provider", isDisabled: true },
+      { label: "Asking an agent\u2026", isDisabled: true },
+      { label: "Report a bug", isDisabled: true },
+    ]);
+    press(render(), "Report a bug");
+    expect(connection.reportBug).not.toHaveBeenCalled();
+
+    refuse(askRefused());
+    await flushAsync();
+
+    expect(noticeButtons(render()).filter((button) => button.isDisabled)).toEqual([]);
+    press(render(), "Report a bug");
+    expect(connection.reportBug).toHaveBeenCalledOnce();
+  });
+
+  it("leaves no button of the notice to press while a retry is on its way", async () => {
+    stubShellConnection(true);
+    const render = await composerAfterRefusedSend(startFailed());
+    mocks.sendMessage.mockImplementationOnce(() => new Promise<string>(() => undefined));
+
+    press(render(), "Retry");
+
+    expect(noticeButtons(render())).toEqual([
+      { label: "Cancel", isDisabled: true },
+      { label: "Retrying\u2026", isDisabled: true },
+      { label: "Switch provider", isDisabled: true },
+      { label: "Ask an agent to fix this", isDisabled: true },
+      { label: "Report a bug", isDisabled: true },
+    ]);
+  });
+
+  it("drops what a refused ask said once Restart is pressed, whose own failure it would sit under", async () => {
+    const render = await composerAfterRefusedSend(unreachable());
+    mocks.sendMessage.mockRejectedValueOnce(askRefused());
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+    expect(noticeParagraphs(render())).toContain(ASK_REFUSED_SENTENCE);
+    mocks.interruptAgent.mockRejectedValueOnce(refusal(500, { detail: "mngr stop exited 1" }));
+
+    press(render(), "Restart");
+    await flushAsync();
+
+    expect(noticeParagraphs(render())).toEqual([
+      "This chat's agent could not be restarted, so your message was not resent. Try again. If this persists, " +
+        "report a bug.",
+    ]);
+    expect(detailsShown(render())).toEqual(["HTTP 500\nmngr stop exited 1"]);
+  });
+
+  it("asks again with the failure's own details, not what the refused ask said", async () => {
+    const render = await composerAfterRefusedSend(startFailed());
+    mocks.sendMessage.mockRejectedValueOnce(askRefused());
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+
+    press(render(), "Ask an agent to fix this");
+    await flushAsync();
+
+    const task = (mocks.sendMessage.mock.calls[2] as unknown as [string, string])[1];
+    expect(task).toContain("Could not start agent 'Chat-1' for a send: mngr start exited 1");
+    expect(task).not.toContain("A dialog (a permission prompt) is open");
   });
 });

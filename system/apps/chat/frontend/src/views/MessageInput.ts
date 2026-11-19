@@ -7,15 +7,20 @@ import type { SendFailureKind } from "@imbue/workspace-ui/src/models/request-err
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { startChatOnAccount } from "../shell";
 import { getShellConnection } from "../shellConnection";
+import { askConnectionToChat, chatToAskAbout, chatToAskAboutFailedCreate } from "./ask-running-agent";
 import { failureRemedyActions } from "./failure-actions";
+import { SWITCH_PROVIDER_LABEL, chooseProviderToSwitchChat } from "./provider-switch";
 import {
+  DECLINED_COMPACT_TITLE,
   composerFailureKindOf,
+  declinedCompactSentence,
   describeCancelSwitchFailure,
   describeLaunchFailure,
   describeNewChatFailure,
   describeSendFailure,
   describeStopFailure,
   describeSwitchFailure,
+  isDeclinedCompact,
   isNothingToCancel,
 } from "./composer-failures";
 import type { ComposerFailureKind } from "./composer-failures";
@@ -224,15 +229,27 @@ const KINDS_THAT_MAY_HAVE_ARRIVED: ReadonlySet<ComposerFailureKind> = new Set([
   "submission_unconfirmed",
   "not_answered",
 ]);
+
+// The kinds of refused send whose chat has no agent it could start, which only a chat already running is asked about.
+const KINDS_ASKED_OF_A_RUNNING_CHAT: ReadonlySet<ComposerFailureKind> = new Set([
+  "agent_start_failed",
+  "agent_unreachable",
+  "chat_not_started",
+]);
+
+/** The running chat the notice of a refused send offers to ask, for a send whose chat has no agent it could start
+ *  (one that would not start for the send, one that was down and would not come back, one whose create failed): what
+ *  stopped it may be the workspace itself, which an agent that is already running can look into. A chat that was
+ *  closed before it started has no failed create to look into. */
+function chatToAskAboutRefusedSend(kind: ComposerFailureKind, failingChatId: string): string | null {
+  if (kind === "agent_start_failed" || kind === "agent_unreachable") return chatToAskAbout(failingChatId);
+  if (kind !== "chat_not_started") return null;
+  const provisional = getProvisionalChat(failingChatId);
+  return provisional?.phase === "failed" ? chatToAskAboutFailedCreate(provisional) : null;
+}
 // The server's kinds for a send refused while the chat app cannot read its agent list: an ask reaches its chat through
 // the same chat app, which refuses it on the same grounds, so no agent is offered.
 const SERVER_KINDS_AN_ASK_WOULD_MEET: ReadonlySet<string | null> = new Set(["chat_starting", "agent_list_unreadable"]);
-// The kinds of the server's refusal of a /compact it declines to run: before the agent has anything
-// to compact, and while it is busy or stopped.
-const DECLINED_COMPACT_SEND_FAILURE_KINDS: ReadonlySet<string | null> = new Set([
-  "nothing_to_compact",
-  "compact_unavailable",
-]);
 
 // A NUL character cannot be typed into a terminal, so an agent that takes its input as keystrokes
 // refuses the whole message over one. A textarea does not show NULs anyway (they arrive by pasting
@@ -315,6 +332,10 @@ export function raiseNewChatFailure(chatId: string, error: unknown, retry: () =>
   });
 }
 
+// The chats a new chat is being started in place of, so a second press of a button that stays on screen does not
+// start another.
+const newChatStartsInFlight = new Set<string>();
+
 /** Open a new chat beside ``chatId``, on the account a new chat would start on, in place of a chat the app no longer
  *  has; with nothing signed in, the provider chooser. A failure is told on ``chatId``'s composer. */
 export function startNewChatInPlaceOf(chatId: string): void {
@@ -323,8 +344,12 @@ export function startNewChatInPlaceOf(chatId: string): void {
     openProviderChooser();
     return;
   }
+  if (newChatStartsInFlight.has(chatId)) return;
+  newChatStartsInFlight.add(chatId);
   const startNewChat = (): Promise<void> => startChatOnAccount(account.id);
-  startNewChat().catch((error: unknown) => raiseNewChatFailure(chatId, error, startNewChat));
+  startNewChat()
+    .catch((error: unknown) => raiseNewChatFailure(chatId, error, startNewChat))
+    .finally(() => newChatStartsInFlight.delete(chatId));
 }
 
 // Chats whose draft was taken out of the composer by a sibling view (the switch dialog's "Start a
@@ -1752,8 +1777,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // confirm, may have reached the agent anyway (KINDS_THAT_MAY_HAVE_ARRIVED). A /compact the server declined
           // to run gets the declined-command notice rather than the failure notice, since retrying
           // at once cannot change it.
-          const failure = describeRequestFailure(err);
-          const isDeclined = DECLINED_COMPACT_SEND_FAILURE_KINDS.has(failure.kind);
+          const isDeclined = isDeclinedCompact(err);
           if (!isDeclined) {
             console.error(`Failed to send message to chat ${chatId}: ${describeRequestError(err)}`);
           }
@@ -1770,8 +1794,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           if (currentChatId === chatId) {
             if (isDeclined) {
               declinedSend = {
-                title: "/compact wasn't sent",
-                body: failureSentence(failure).message,
+                title: DECLINED_COMPACT_TITLE,
+                body: declinedCompactSentence(err),
                 isSourceViewOffered: false,
               };
             } else {
@@ -2207,6 +2231,20 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           actionFailureKind === "chat_gone" ? [{ label: "Start a new chat", run: startNewChatInsteadOfGoneOne }] : [];
       }
 
+      /** What an agent is asked to fix when ``failingChatId`` has no agent it could start: the chat by the name
+       *  the user knows it by, and what the notice holds behind "See details". */
+      function failedStartFixRequest(failingChatId: string, details: string | null): AgentFixRequest {
+        const name = getChatById(failingChatId)?.title ?? getProvisionalChat(failingChatId)?.name ?? "";
+        const chat = name === "" ? "A chat" : `The chat "${name}"`;
+        return {
+          whatFailed:
+            actionFailureKind === "chat_not_started"
+              ? `${chat} couldn't be started`
+              : `${chat} couldn't take a message, because its agent couldn't be started`,
+          details,
+        };
+      }
+
       /** Mark ``action`` as the one the notice is running. What an earlier ask came to was about the failure as it
        *  stood, which the action may replace, so it is dropped. */
       function beginNoticeAction(action: "retry" | "restart" | "ask"): void {
@@ -2516,6 +2554,18 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // being withheld for an agent that would not start, whose restart is the stronger way to bring it up.
         const isRestartOffered =
           isResendable && recovery !== null && !KINDS_RESTART_MUST_NOT_ANSWER.has(actionFailureKind);
+        const failingChatId = recovery?.chatId ?? chatId;
+        // An agent that would not start on this account may start on another; a chat that never became an agent
+        // has its own page for that, and an agent that ran on this account until it went down is seldom kept down
+        // by it. It waits for the chat list, which can land after the page: the move needs the chat.
+        const switchProviderChatId =
+          actionFailureKind === "agent_start_failed" &&
+          failingChatId !== null &&
+          getChatById(failingChatId) !== undefined
+            ? failingChatId
+            : null;
+        const chatToAskId =
+          failingChatId === null ? null : chatToAskAboutRefusedSend(actionFailureKind, failingChatId);
         // The agent itself refused, so its terminal shows why.
         const isTerminalUseful =
           onTurnOnSourceView !== undefined &&
@@ -2536,23 +2586,36 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                 isRestartOffered ? (SEND_FAILURE_RESTART_SENTENCES[actionFailureKind] ?? null) : null,
               ],
             };
-        // A failure that asks for a bug report offers an agent first, through the shell, unless the ask would meet
-        // what failed. The ask carries the failure as the server worded it, without the Restart line.
+        // An agent is offered first. A send whose chat has no agent it could start asks a chat that is already
+        // running (``chatToAskId``), and none when there is no such chat: a new chat, which an ask through the shell
+        // may make, would meet what stopped this one. Any other failure that asks for a bug report asks through the
+        // shell, unless the ask would meet what failed; it carries the failure as the server worded it, without the
+        // Restart line.
         const shellConnection = getShellConnection();
         const ask =
-          !shown.isReportable ||
-          SERVER_KINDS_AN_ASK_WOULD_MEET.has(actionFailureServerKind) ||
-          shellConnection === null ||
-          !shellConnection.hasShell()
-            ? null
-            : {
+          failingChatId !== null && chatToAskId !== null
+            ? {
                 isAsking: actionFailureInFlight === "ask",
                 run: () =>
-                  void askAgentAboutNotice(shellConnection, {
-                    whatFailed: plainFailureSentence(failure),
-                    details: failure.details,
-                  }),
-              };
+                  void askAgentAboutNotice(
+                    askConnectionToChat(chatToAskId),
+                    failedStartFixRequest(failingChatId, shown.details),
+                  ),
+              }
+            : !shown.isReportable ||
+                KINDS_ASKED_OF_A_RUNNING_CHAT.has(actionFailureKind) ||
+                SERVER_KINDS_AN_ASK_WOULD_MEET.has(actionFailureServerKind) ||
+                shellConnection === null ||
+                !shellConnection.hasShell()
+              ? null
+              : {
+                  isAsking: actionFailureInFlight === "ask",
+                  run: () =>
+                    void askAgentAboutNotice(shellConnection, {
+                      whatFailed: plainFailureSentence(failure),
+                      details: failure.details,
+                    }),
+                };
         // A refused ask is told as part of the notice, so the notice keeps one "See details" and its bug report
         // files both.
         const told = withRefusedAsk(shown, actionFailureAskFailure);
@@ -2572,6 +2635,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             isRestartOffered ||
             actionFailureActions.length > 0 ||
             externalAction !== null ||
+            switchProviderChatId !== null ||
             ask !== null
               ? "Cancel"
               : "OK",
@@ -2589,6 +2653,20 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               : []),
             ...actionFailureActions,
             ...(externalAction === null ? [] : [externalAction]),
+            ...(switchProviderChatId !== null
+              ? [
+                  {
+                    label: SWITCH_PROVIDER_LABEL,
+                    tooltip: "Moves this chat to another provider. Your message stays in the box.",
+                    isSecondary: true,
+                    run: () => {
+                      clearActionFailureNotice();
+                      m.redraw();
+                      chooseProviderToSwitchChat(switchProviderChatId);
+                    },
+                  },
+                ]
+              : []),
             ...(isTerminalUseful
               ? [
                   {

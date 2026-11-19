@@ -17,15 +17,14 @@ export interface NoticeAsk {
   readonly run: () => void;
 }
 
-/** What a notice offers for the failure ``lines`` tell when they ask for a bug report: "Ask an agent to fix this"
- *  (``ask``; null where the notice withholds it, because the ask would go through what failed or nothing could carry
- *  it), then "Report a bug"; nothing for a failure that asks for no bug report, whose notice offers its own remedy. */
+/** What a notice offers for the failure ``lines`` tell: "Ask an agent to fix this" (``ask``; null where the notice
+ *  offers none: a failure that asks for no bug report and leaves a way out, or one whose ask would go through what
+ *  failed or that nothing could carry), then "Report a bug" when the failure asks for one. */
 export function failureRemedyActions(
   connection: Pick<ShellConnection, "canReportBug" | "reportBug"> | null,
   lines: FailureLines,
   ask: NoticeAsk | null,
 ): NoticeAction[] {
-  if (!lines.isReportable) return [];
   return [
     ...(ask === null
       ? []

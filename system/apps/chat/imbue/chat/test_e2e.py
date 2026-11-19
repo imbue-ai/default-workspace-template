@@ -2061,6 +2061,33 @@ def test_a_create_that_fails_keeps_the_window_with_the_reason_and_a_retry(
         expect(chat.locator(".message-list-create-failed")).to_have_count(0, timeout=15000)
 
 
+@pytest.mark.timeout(120, func_only=False)
+def test_a_create_that_fails_can_ask_an_agent_that_is_already_running_to_fix_it(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed create's "Ask an agent to fix this" sends what failed, with what mngr printed, to a chat whose
+    agent already exists, and the chat list then shows that chat; nothing goes to the chat that could not start."""
+    monkeypatch.setenv("FAKE_MNGR_CREATE_EXIT_CODE", "3")
+    messenger = RecordingMngrMessenger()
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+        chat = _start_new_chat(page, server)
+        failed = chat.locator(".message-list-create-failed")
+        # Outlasts the chat page's socket taking its time to connect, as the test above does.
+        expect(failed).to_contain_text("This chat could not be started", timeout=45000)
+        expect(failed.locator(".message-list-switch-provider")).to_be_visible()
+
+        failed.locator(".ask-agent-to-fix").click()
+
+        wait_for(lambda: len(messenger.sent) > 0, timeout=15.0, error_message="the ask never reached an agent")
+        ((asked_agent_id, task),) = messenger.sent
+        assert asked_agent_id == FIXTURE_AGENT_ID
+        assert task.startswith("/assist Imbue Studio showed the user this failure: ")
+        assert "couldn't be started." in task
+        assert "exited with code 3" in task
+        _wait_for_chat_window_path(server, lambda path: path == _FIXTURE_ROOT_PATH, "the chat that was asked")
+        expect(_chat(page).locator(".message-list").first).to_be_visible(timeout=15000)
+
+
 # switching a chat to another harness (the handoff, spec section 5)
 
 

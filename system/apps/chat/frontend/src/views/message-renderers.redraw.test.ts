@@ -14,10 +14,17 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const store = vi.hoisted(() => ({ chat: undefined as unknown }));
+const store = vi.hoisted(() => ({
+  chat: undefined as unknown,
+  sendMessage: vi.fn(async (_chatId: string, _text: string, _messageId: string): Promise<string> => "ok"),
+}));
 vi.mock("../models/Chats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Chats")>()),
   getChatById: () => store.chat,
+}));
+vi.mock("../models/Response", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Response")>()),
+  sendMessage: store.sendMessage,
 }));
 vi.mock("../shell", () => ({ openSubagentView: vi.fn(), startChatOnAccount: vi.fn() }));
 // A mounted tree instantiates its components, so this stand-in has to be a real one
@@ -62,9 +69,13 @@ async function settle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function buttonLabelled(label: string): HTMLButtonElement | null {
+  const buttons = [...document.querySelectorAll<HTMLButtonElement>("button")];
+  return buttons.find((b) => b.textContent?.trim() === label) ?? null;
+}
+
 function switchLink(): HTMLElement | null {
-  const buttons = [...document.querySelectorAll<HTMLElement>("button")];
-  return buttons.find((b) => b.textContent?.trim() === "switch to another provider") ?? null;
+  return buttonLabelled("switch to another provider");
 }
 
 beforeEach(() => {
@@ -109,6 +120,53 @@ describe("the auth-error note without a hand-cranked render", () => {
     await settle();
 
     expect(getUnpickableAccount()).toEqual({ accountId: "acct-other", reason: "failing" });
+  });
+});
+
+describe("the ways out under a failed turn without a hand-cranked render", () => {
+  /** Mount a failed turn as the transcript holds it: the same event and result map on every redraw, so only what
+   *  the memo watches beyond the event can repaint it. */
+  function mountFailedTurn(text: string, kind: string): void {
+    const event: AssistantMessageEvent = { ...authErrorEvent(), is_auth_error: false, text, api_error_kind: kind };
+    const toolResults = new Map<string, ToolResultEvent>();
+    m.mount(document.getElementById("root") as HTMLElement, {
+      view: () => m(StableAssistantMessage, { event, toolResults, chatId: "chat-1", isStretchHead: false }),
+    });
+  }
+
+  beforeEach(() => {
+    store.sendMessage.mockReset();
+    store.sendMessage.mockResolvedValue("ok");
+  });
+
+  it("offers Switch provider under a rate limit once the chat list lands", async () => {
+    mountFailedTurn("API Error: 429 rate_limit_error", "rate_limit");
+    expect(buttonLabelled("Switch provider")).toBeNull();
+
+    store.chat = chatSnapshotFixture("chat-1", { active_agent: { harness: "codex", account_id: ACCOUNT_ID } });
+    m.redraw();
+    await settle();
+
+    expect(buttonLabelled("Switch provider")).not.toBeNull();
+  });
+
+  it("shows a Compact press on its way, and the button back once the send is answered", async () => {
+    store.chat = chatSnapshotFixture("chat-1", { active_agent: { harness: "codex", account_id: ACCOUNT_ID } });
+    let accept: (status: string) => void = () => undefined;
+    store.sendMessage.mockImplementationOnce(() => new Promise<string>((resolve) => (accept = resolve)));
+    mountFailedTurn("prompt is too long: 214332 tokens > 200000 maximum", "context_too_long");
+
+    buttonLabelled("Compact")!.click();
+    await settle();
+
+    expect(buttonLabelled("Compact")).toBeNull();
+    expect(buttonLabelled("Sending /compact\u2026")?.disabled).toBe(true);
+    expect(store.sendMessage).toHaveBeenCalledExactlyOnceWith("chat-1", "/compact", expect.any(String));
+
+    accept("ok");
+    await settle();
+
+    expect(buttonLabelled("Compact")?.disabled).toBe(false);
   });
 });
 
