@@ -10,7 +10,7 @@
 
 - **No link into another skill's files.** The careful flow reads what the apply's exit codes mean, and what to do about an interrupted apply, from the shared `apply-exit-codes.md` in place of a pointer into `update-self`; `critical-app.md` keeps only what the flow adds for each. It says what the harden worker does in its own words. `code.md` states the `.nobackup` rule without sending the reader to the harden worker's contract. The scaffolder's closing line names the shared `verify.md`.
 
-- **After a compaction.** Each SKILL.md's standing instructions say what to re-read: the file, then the reference the current step names, which for a careful change is `critical-app.md`.
+- **After a compaction.** `AGENTS.md` carries the general rule, so `build-app` adds nothing to it, and `update-app`'s standing instructions say only that a careful change re-reads `critical-app.md` whole.
 
 - **Terms.** Both skills say "app" for what the user opens and "service" for a program with no window; `update-app`'s prototype is a "preview" throughout.
 

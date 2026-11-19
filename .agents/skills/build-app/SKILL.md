@@ -47,8 +47,6 @@ existing app, use the `update-app` skill.
   own window and origin.
 - **Ask in the user's terms**, who may not be technical: "should everyone see
   the same list?", never "do we need multi-tenancy?".
-- **After a compaction**, re-read this file, then the reference your current
-  step names.
 
 ## Other tasks
 

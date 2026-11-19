@@ -81,9 +81,8 @@ window keeps showing the old page until it is refreshed. The live change loop
 - **The harden pass comes after the user's feedback, in the background.** Never
   dispatch it in the turn you made the change, and never run the thorough
   tests or the review gates yourself.
-- **After a compaction**, re-read this file, then the reference your current
-  step names. When the change took the careful flow, that is
-  `references/critical-app.md`, whole.
+- **After a compaction** in the careful flow, re-read
+  `references/critical-app.md` whole before you go on.
 
 ## Steps
 
