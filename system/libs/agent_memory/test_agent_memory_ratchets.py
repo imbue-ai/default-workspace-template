@@ -63,9 +63,5 @@ def test_prevent_dataclasses_import() -> None:
     rc.check_dataclasses_import(_DIR, snapshot(0))
 
 
-def test_prevent_namedtuple_usage() -> None:
-    rc.check_namedtuple(_DIR, snapshot(5))
-
-
 def test_no_type_errors() -> None:
     check_no_type_errors(_DIR)

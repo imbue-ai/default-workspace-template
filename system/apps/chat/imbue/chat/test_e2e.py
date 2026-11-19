@@ -3331,7 +3331,7 @@ def test_each_note_a_reply_changed_is_its_own_card_that_shows_its_lines_and_undo
 
         tea_card.locator(".memory-change-toggle").click()
         expect(tea_card.locator(".memory-change-file")).to_have_count(2)
-        expect(tea_card.locator(".memory-change-line.diff-added")).to_have_text(
+        expect(tea_card.locator(".memory-change-line--added")).to_have_text(
             ["Likes tea — user likes tea", "Summary: User likes tea", "", "The user likes tea."]
         )
         for not_shown in ("name: likes-tea", "metadata", "type: user", "---", "Likes cake", "Index"):
