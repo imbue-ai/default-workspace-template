@@ -31,42 +31,19 @@ Standing instructions:
 - **After a compaction**, re-read the shared references below before you handle
   the worker's next report.
 
-## When to invoke (skill, standalone)
-
-Read `references/when-to-crystallize.md` if you haven't, for the full
-guidelines. Summary: invoke when (1) the just-finished work was a single
-cohesive unit, (2) a re-run with different inputs would follow a recognizably
-similar process, and (3) the task is likely to recur. Model-judgement steps in
-the middle of a flow do not disqualify it -- they are scripted as `[ai-script]`
-calls. **Default to asking the user**, not deciding silently; if you can name
-any plausible skill shape, propose it and let them decide.
-
-## Names
-
-Pick a short kebab-case slug `$NAME` for the creation (e.g. `migrate-config`).
-If the skill that invoked you handed you a slug (and a `source_artifacts_dir`),
-reuse it. `$CREATIONS`, where a shared reference uses it, is the one creation
-as the task file names it: `skill:$NAME`, `app:<app name>` or
-`service:<package>`. `.agents/shared/references/harden-lead.md` ("Names and
-paths") has every path that follows:
-
-- Worker and branch: `crystallize-$NAME` / `mngr/crystallize-$NAME`
-- Runtime dir and task file: `data/.tasks/harden/crystallize-$NAME/` and
-  `data/.tasks/harden/crystallize-$NAME/task.md`
-
 ## Steps
 
 How you got here decides where you start:
 
 | You were invoked | Creation | Start at |
 |---|---|---|
-| on your own, after a turn | a **skill** reconstructed from the transcript (the common case) | "When to invoke" above, then Step 1 |
+| on your own, after a turn | a **skill** reconstructed from the transcript (the common case) | Step 1 |
 | by the user ("crystallize this", `/crystallize-creation`) | the same | Step 2 |
 | by `build-app`, with `type=app` | an **app** `build-app` already built and the user confirmed live | Step 2 |
 | by `fetch-process-show`, with `type=skill` and a `source_artifacts_dir` of staged scripts and `sample.json` | a **skill** from a confirmed data sample | Step 2 |
 
 1. Confirm (skill, standalone only)
-2. Open a tracking ticket
+2. Name the creation and open a tracking ticket
 3. Write the task file
 4. Launch the worker
 5. Background-poll for worker reports. *Ends the turn each time the poll is
@@ -94,13 +71,24 @@ the prior turn) **or when `build-app` or `fetch-process-show` invoked this
 skill** after the user approved a sample or a working app. In those cases go
 straight to Step 2.
 
-Otherwise send a one-line pre-gate question to the user:
+Otherwise decide whether the work qualifies:
+`references/when-to-crystallize.md` has the guidelines, so read it if you have
+not. **Default to asking the user**, not deciding silently: if you can name any
+plausible skill shape, send a one-line pre-gate question and let them decide:
 
 > "I just did X and Y. Worth crystallizing into a reusable skill? (yes/no)"
 
 Wait for the reply. If no, stop.
 
-## Step 2: Open a tracking ticket
+## Step 2: Name the creation and open a tracking ticket
+
+Pick a short kebab-case slug `$NAME` for the creation (e.g. `migrate-config`).
+If the skill that invoked you handed you a slug (and a `source_artifacts_dir`),
+reuse it. `$CREATIONS`, where a shared reference uses it, is the one creation
+as the task file names it: `skill:$NAME`, `app:<app name>` or
+`service:<package>`. The worker (`crystallize-$NAME`), its branch and the
+runtime dir (`data/.tasks/harden/crystallize-$NAME/`) follow from the name:
+`.agents/shared/references/harden-lead.md` ("Names and paths") has them all.
 
 The ticket survives until the post-merge migration, so record its ID to disk:
 

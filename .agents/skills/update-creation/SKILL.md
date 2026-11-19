@@ -72,21 +72,9 @@ format), model-judgement extensions (an additional judgement step with a stable
 recipe, scripted as `[ai-script]`), and executor meta-work. One-off creative or
 exploratory work is NOT an update candidate.
 
-## Names
-
-`$CREATIONS` lists every creation the pass covers as `<type>:<name>`, and
-`$SLUG` names the pass: the creation's own name when there is one, otherwise a
-short kebab-case name for the change (`roadmap-sync`).
-`.agents/shared/references/harden-lead.md` ("Names and paths") has the format
-and every path that follows from them:
-
-- Worker and branch: `update-$SLUG` / `mngr/update-$SLUG`
-- Runtime dir and task file: `data/.tasks/harden/update-$SLUG/` and
-  `data/.tasks/harden/update-$SLUG/task.md`
-
 ## Steps
 
-1. Open a tracking ticket, after the single-flight check
+1. Name the pass and open a tracking ticket, after the single-flight check
 2. Capture the change and write the task file
 3. Launch the worker and poll. *Ends the turn each time the poll is armed.*
 4. Merge and go live, on `done`
@@ -101,9 +89,17 @@ needs:
 - `.agents/shared/references/lead-proxy.md`: polling, answering gates, acting
   on the worker's terminal status.
 
-## Step 1: Open a tracking ticket
+## Step 1: Name the pass and open a tracking ticket
 
-Run the single-flight check first, for every creation in `$CREATIONS`: the
+`$CREATIONS` lists every creation the pass covers as `<type>:<name>`, and
+`$SLUG` names the pass: the creation's own name when there is one, otherwise a
+short kebab-case name for the change (`roadmap-sync`). The worker
+(`update-$SLUG`), its branch and the runtime dir
+(`data/.tasks/harden/update-$SLUG/`) follow from the slug:
+`.agents/shared/references/harden-lead.md` ("Names and paths") has the format
+and all of them.
+
+Then run the single-flight check, for every creation in `$CREATIONS`: the
 command is in `.agents/shared/references/harden-contention.md` ("Before
 dispatch: one pass per creation (single-flight)"), and `harden-lead.md`
 ("Single-flight check") says what each outcome means for you. Dispatch only if

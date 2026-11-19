@@ -34,29 +34,16 @@ Standing instructions:
 - The failure was one-off and transient (network hiccup, rate limit).
 - You are unsure why it failed. Finish the user's request, gather evidence, then
   decide if heal applies.
-
-## Names, and a critical app
-
-`$CREATIONS` lists every creation the pass heals as `<type>:<name>`, and
-`$SLUG` names the pass: the creation's own name when there is one, otherwise a
-short kebab-case name for the failure (`roadmap-sync`).
-`.agents/shared/references/harden-lead.md` ("Names and paths") has the format
-and every path that follows from them:
-
-- Worker and branch: `heal-$SLUG` / `mngr/heal-$SLUG`
-- Runtime dir and task file: `data/.tasks/harden/heal-$SLUG/` and
-  `data/.tasks/harden/heal-$SLUG/task.md`
-
-A heal of a critical app (the shell, the chat, the terminal, or an app whose
-manifest says `critical = true`) is a live edit of the served tree at your own
-risk: there is no preview, no kept rollback point, and no notice behind it, so
-a wrong fix takes the user's surface down with nothing to undo it but your next
-edit. The safe path is the `update-app` skill's careful flow; take it whenever
-the fix can wait for a preview.
+- The creation is a critical app (the shell, the chat, the terminal, or an app
+  whose manifest says `critical = true`) and the fix can wait for a preview:
+  take the `update-app` skill's careful flow. A heal of one is a live edit of
+  the served tree at your own risk: there is no preview, no kept rollback
+  point, and no notice behind it, so a wrong fix takes the user's surface down
+  with nothing to undo it but your next edit.
 
 ## Steps
 
-1. Open a tracking ticket, after the single-flight check
+1. Name the pass and open a tracking ticket, after the single-flight check
 2. Write the task file
 3. Launch the worker and poll. *Ends the turn each time the poll is armed.*
 4. Merge and go live, on `done`
@@ -71,9 +58,17 @@ needs:
 - `.agents/shared/references/lead-proxy.md`: polling, answering gates, acting
   on the worker's terminal status.
 
-## Step 1: Open a tracking ticket
+## Step 1: Name the pass and open a tracking ticket
 
-Run the single-flight check first, for every creation in `$CREATIONS`: the
+`$CREATIONS` lists every creation the pass heals as `<type>:<name>`, and
+`$SLUG` names the pass: the creation's own name when there is one, otherwise a
+short kebab-case name for the failure (`roadmap-sync`). The worker
+(`heal-$SLUG`), its branch and the runtime dir
+(`data/.tasks/harden/heal-$SLUG/`) follow from the slug:
+`.agents/shared/references/harden-lead.md` ("Names and paths") has the format
+and all of them.
+
+Then run the single-flight check, for every creation in `$CREATIONS`: the
 command is in `.agents/shared/references/harden-contention.md` ("Before
 dispatch: one pass per creation (single-flight)"), and `harden-lead.md`
 ("Single-flight check") says what each outcome means for you. Dispatch only if
