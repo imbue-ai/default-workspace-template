@@ -41,10 +41,9 @@
  * the earlier work or a step move, so its work still groups under the steps but
  * its prose does not. A turn that never works in the carried-over step or closes
  * it does not draw it at all; the same holds for a step carried over a switch to
- * another agent, whose
- * successor starts on the message the user switched with. A turn the agent did
- * nothing in (two boundaries back to back) keeps no copy either, so the step is
- * drawn again at most once, under the later boundary.
+ * another agent, whose successor starts on the message the user switched with.
+ * A turn the agent did nothing in (two boundaries back to back) keeps no copy
+ * either, so the step is drawn again at most once, under the later boundary.
  *
  * A system chip or notice (Stop-hook feedback, a browser-fleet nudge, a finished
  * background task, a bash-mode command and its output) breaks the timeline the
