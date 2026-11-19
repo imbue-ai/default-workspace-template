@@ -46,21 +46,29 @@ def test_a_claude_account_binds_by_the_config_dir_variable(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize(
-    ("harness", "source", "agent_side"),
+    ("harness", "links"),
     (
-        (HarnessType.CODEX, "auth.json", "plugin/codex/home/auth.json"),
-        (HarnessType.PI_CODING, "auth.json", "plugin/pi_coding/auth.json"),
+        (HarnessType.CODEX, (("auth.json", "plugin/codex/home/auth.json"),)),
+        # pi reads a local model's provider from `models.json`, beside its credential.
+        (
+            HarnessType.PI_CODING,
+            (("auth.json", "plugin/pi_coding/auth.json"), ("models.json", "plugin/pi_coding/models.json")),
+        ),
         (
             HarnessType.ANTIGRAVITY,
-            ".gemini/antigravity-cli/antigravity-oauth-token",
-            "plugin/antigravity/home/.gemini/antigravity-cli/antigravity-oauth-token",
+            (
+                (
+                    ".gemini/antigravity-cli/antigravity-oauth-token",
+                    "plugin/antigravity/home/.gemini/antigravity-cli/antigravity-oauth-token",
+                ),
+            ),
         ),
     ),
 )
 def test_a_linked_harness_binds_by_a_credential_link_over_the_agents_state_dir(
-    tmp_path: Path, harness: HarnessType, source: str, agent_side: str
+    tmp_path: Path, harness: HarnessType, links: tuple[tuple[str, str], ...]
 ) -> None:
-    """The agent does not exist when the file is written, so the link's agent side is the shell variable
+    """The agent does not exist when the file is written, so each link's agent side is the shell variable
     mngr sources before running the command; only the account side is a concrete path."""
     account = tmp_path / "accounts" / "acct1"
     settings = managed_create_settings(_defaults(harness, tmp_path))
@@ -69,9 +77,10 @@ def test_a_linked_harness_binds_by_a_credential_link_over_the_agents_state_dir(
     assert settings[LABEL_KEY] == ["account=acct1"]
     assert ENV_KEY not in settings
     (command,) = settings[PROVISION_COMMAND_KEY]
-    parent = str(Path(agent_side).parent)
-    assert command == (
-        f'mkdir -p "$MNGR_AGENT_STATE_DIR"/{parent} && ln -sfn {account / source} "$MNGR_AGENT_STATE_DIR"/{agent_side}'
+    assert command == " && ".join(
+        f'mkdir -p "$MNGR_AGENT_STATE_DIR"/{Path(agent_side).parent}'
+        f' && ln -sfn {account / source} "$MNGR_AGENT_STATE_DIR"/{agent_side}'
+        for source, agent_side in links
     )
 
 

@@ -22,7 +22,7 @@ import type { ChatSnapshot, ProvisionalChat } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture, provisionalChatFixture } from "../models/chatSnapshotFixture";
 import { addOutgoing } from "../models/OutgoingMessages";
 import { ActivityIndicator } from "./ActivityIndicator";
-import { connectingLabel, isChatConnecting } from "./ConnectingIndicator";
+import { awaitingReplyLabel, connectingLabel, isChatConnecting } from "./ConnectingIndicator";
 
 const chats = new Map<string, ChatSnapshot>();
 const accounts = new Map<string, { provider: string }>([["acct-1", { provider: "Anthropic" }]]);
@@ -116,6 +116,22 @@ describe("Connecting, on the status row at the end of the transcript", () => {
     const starting = uniqueChatId();
     provisionalChats.set(starting, provisionalChatFixture(starting, { phase: "creating", held_sends: [] }));
     expect(connectingLabel(starting)).toBe("Connecting to Anthropic…");
+  });
+
+  it("names the model a reply is waiting on, once the agent has the message", () => {
+    const chatId = uniqueChatId();
+    chats.set(
+      chatId,
+      chatSnapshotFixture(chatId, {
+        active_agent: { model_choice: { matched: { label: "local-model/qwen3:8b" } } as never },
+      }),
+    );
+    expect(awaitingReplyLabel(chatId)).toBe("Waiting for local-model/qwen3:8b…");
+
+    const modelNotKnown = uniqueChatId();
+    chats.set(modelNotKnown, chatSnapshotFixture(modelNotKnown, { active_agent: { model_choice: null } }));
+    expect(awaitingReplyLabel(modelNotKnown)).toBe("Waiting for the model…");
+    expect(awaitingReplyLabel(uniqueChatId())).toBe("Waiting for the model…");
   });
 
   it("reads a chat still being created that holds a message from another page as connecting", () => {

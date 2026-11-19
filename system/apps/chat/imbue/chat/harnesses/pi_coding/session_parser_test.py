@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.pi_coding.session_parser import parse_record
 from imbue.chat.harnesses.pi_coding.session_parser import parse_record_detail
@@ -185,6 +187,83 @@ def test_failed_turn_classifies_a_provider_fault() -> None:
     assert event["is_auth_error"] is False
 
 
+def test_a_local_model_that_cannot_be_reached_says_what_to_check() -> None:
+    """pi's own words for a server that is not there are `Connection error.`, which names nothing the
+    user can act on; for a local model the server is theirs, so the message says where to look."""
+    message = {
+        "role": "assistant",
+        "content": [],
+        "stopReason": "error",
+        "errorMessage": "Connection error.",
+        "provider": "local-model",
+        "model": "qwen3:8b",
+    }
+    event = parse_record(_message_record("m", message))[0]
+    assert "model server on your computer did not answer" in event["text"]
+    assert "Check that the computer is awake" in event["text"]
+    assert event["is_auth_error"] is False
+
+
+def _reply_with_only_thinking(provider: str) -> dict[str, object]:
+    return {
+        "role": "assistant",
+        "content": [{"type": "thinking", "thinking": "I should use the build-app tool."}],
+        "stopReason": "stop",
+        "provider": provider,
+        "model": "qwen3:8b",
+    }
+
+
+def test_a_local_model_turn_that_ends_with_no_answer_and_no_action_says_so() -> None:
+    """A model server drops a call to a tool that does not exist and reports a normal finish, so
+    without the sentence the chat shows an empty reply."""
+    event = parse_record(_message_record("m", _reply_with_only_thinking("local-model")))[0]
+    assert event["text"].startswith("The model stopped without answering.")
+    assert event["has_thinking"] is True
+    assert event["is_api_error"] is False
+    assert event["is_auth_error"] is False
+
+
+@pytest.mark.parametrize("blank", ["\n\n", "   ", "\n \t"])
+def test_a_local_model_reply_of_only_whitespace_is_no_answer_either(blank: str) -> None:
+    """The page draws nothing for whitespace-only text, so such a reply shows as empty like one with no text."""
+    message = _reply_with_only_thinking("local-model")
+    message["content"] = [
+        {"type": "thinking", "thinking": "I should use the build-app tool."},
+        {"type": "text", "text": blank},
+    ]
+    event = parse_record(_message_record("m", message))[0]
+    assert event["text"].startswith("The model stopped without answering.")
+
+
+def test_a_local_model_turn_that_calls_a_tool_keeps_its_empty_text() -> None:
+    message = _reply_with_only_thinking("local-model")
+    message["stopReason"] = "toolUse"
+    message["content"] = [
+        {"type": "thinking", "thinking": "List the folders."},
+        {"type": "toolCall", "id": "toolu_1", "name": "bash", "arguments": {"command": "ls"}},
+    ]
+    event = parse_record(_message_record("m", message))[0]
+    assert event["text"] == ""
+    assert [call["tool_name"] for call in event["tool_calls"]] == ["bash"]
+
+
+def test_another_providers_empty_reply_is_left_empty() -> None:
+    event = parse_record(_message_record("m", _reply_with_only_thinking("anthropic")))[0]
+    assert event["text"] == ""
+
+
+def test_another_providers_connection_error_keeps_its_own_words() -> None:
+    message = {
+        "role": "assistant",
+        "content": [],
+        "stopReason": "error",
+        "errorMessage": "Connection error.",
+        "provider": "anthropic",
+    }
+    assert parse_record(_message_record("m", message))[0]["text"] == "Connection error."
+
+
 def test_a_reply_that_merely_quotes_an_error_is_not_one() -> None:
     """The gate is `stopReason`, not the presence of `errorMessage`.
 
@@ -253,4 +332,3 @@ def test_compaction_record_without_summary_or_blank_summary() -> None:
 def test_compaction_record_without_valid_id_is_skipped() -> None:
     assert parse_record({"type": "compaction", "timestamp": "t", "summary": "hi"}) == []
     assert parse_record({"type": "compaction", "id": "", "timestamp": "t", "summary": "hi"}) == []
-

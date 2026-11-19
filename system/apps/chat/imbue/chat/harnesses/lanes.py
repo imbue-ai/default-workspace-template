@@ -22,6 +22,7 @@ from enum import StrEnum
 from typing import Final
 
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.pi_coding.local_model import LOCAL_MODEL_PROVIDER_ID
 from imbue.chat.harnesses.pty_auth import DEFAULT_PTY_COLUMNS
 from imbue.imbue_common.frozen_model import FrozenModel
 
@@ -164,7 +165,21 @@ class AppServerMethod(FrozenModel):
     flow_deadline_s: float = 900.0
 
 
-SignInMethod = PtyMethod | PasteMethod | AppServerMethod
+class EndpointMethod(FrozenModel):
+    """A sign-in that names an OpenAI-compatible server and one of its models.
+
+    A file write like a paste, but what the user hands over is an address and a model rather
+    than a key, and the model is checked against the server before anything is kept.
+    """
+
+    id: str
+    label: str
+    description: str
+    # As on `PasteMethod`: the form is already on screen, so there is no round trip to wait out.
+    flow_deadline_s: float = 600.0
+
+
+SignInMethod = PtyMethod | PasteMethod | AppServerMethod | EndpointMethod
 
 
 class KeyProvider(FrozenModel):
@@ -188,7 +203,7 @@ class Lane(FrozenModel):
     harness: HarnessType
     # Primary first; the rest render under "Other ways to sign in".
     methods: tuple[SignInMethod, ...]
-    # Only the bring-your-own-key lane populates this.
+    # The pi providers a credential on this lane may be stored under; empty off pi.
     key_providers: tuple[KeyProvider, ...] = ()
 
 
@@ -517,6 +532,25 @@ LANE_API_KEY = Lane(
     key_providers=_PI_KEY_PROVIDERS,
 )
 
+# A model the user hosts themselves. It runs on pi like the key lanes, but pi has no built-in
+# provider for it: the sign-in writes one (`models.json`, see `pi_coding/local_model.py`) and
+# keeps the server's key, or a stand-in for a server that asks for none, under that provider's
+# id in `auth.json`.
+LANE_LOCAL_MODEL = Lane(
+    id="local-model",
+    provider_name="Local model",
+    subtitle="Run on a model you host yourself, with Ollama, LM Studio or llama.cpp.",
+    harness=HarnessType.PI_CODING,
+    methods=(
+        EndpointMethod(
+            id="endpoint",
+            label="Connect a model server",
+            description="Pick a model from a server running on your computer, or name another server.",
+        ),
+    ),
+    key_providers=(KeyProvider(provider_id=LOCAL_MODEL_PROVIDER_ID, display="Local model", env_var="", hint=""),),
+)
+
 
 # Display order in the provider chooser.
 LANES: Final[tuple[Lane, ...]] = (
@@ -526,6 +560,7 @@ LANES: Final[tuple[Lane, ...]] = (
     LANE_OPENCODE_GO,
     LANE_OPENROUTER,
     LANE_API_KEY,
+    LANE_LOCAL_MODEL,
 )
 
 _LANES_BY_ID: Final[dict[str, Lane]] = {lane.id: lane for lane in LANES}

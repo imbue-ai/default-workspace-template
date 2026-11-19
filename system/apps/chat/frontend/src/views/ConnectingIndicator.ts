@@ -26,6 +26,19 @@ export function isChatConnecting(chatId: string): boolean {
   );
 }
 
+/** The name of the model the chat runs on, or null while the chat does not know it. */
+function modelLabelOf(chatId: string): string | null {
+  const chat = getChatById(chatId);
+  return chat === undefined ? null : (effectiveChoice(chatId, chat.active_agent.model_choice)?.matched?.label ?? null);
+}
+
+/** What the status row says once the agent has a message and nothing of its turn has reached the transcript:
+ *  the model the reply is waiting on, as far as the chat knows it. */
+export function awaitingReplyLabel(chatId: string): string {
+  const model = modelLabelOf(chatId);
+  return model === null ? "Waiting for the model…" : `Waiting for ${model}…`;
+}
+
 /** What the status row says: the model and the provider the message is waiting for, as far as they are known. */
 export function connectingLabel(chatId: string): string {
   const chat = getChatById(chatId);
@@ -33,8 +46,7 @@ export function connectingLabel(chatId: string): string {
     chat === undefined
       ? accountForFirstSend(getProvisionalChat(chatId)?.account_id)
       : accountForAgent(chat.active_agent.account_id ?? undefined);
-  const model =
-    chat === undefined ? null : (effectiveChoice(chatId, chat.active_agent.model_choice)?.matched?.label ?? null);
+  const model = modelLabelOf(chatId);
   const provider = account?.provider ?? null;
   if (model !== null && provider !== null) return `Connecting to ${model} on ${provider}…`;
   const target = model ?? provider;

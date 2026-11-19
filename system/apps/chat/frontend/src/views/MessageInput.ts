@@ -49,7 +49,7 @@ import {
   addOutgoing,
   clearOutgoing,
   dropOutgoing,
-  dropOutgoingNoTurnWillRetire,
+  settleOutgoing,
   getOutgoingMessages,
 } from "../models/OutgoingMessages";
 import {
@@ -180,6 +180,10 @@ const DECLINED_COMPACT_SEND_FAILURE_KINDS: ReadonlySet<unknown> = new Set([
 function withoutNulCharacters(draft: string): string {
   return draft.split("\0").join("");
 }
+
+// A chat on a local model whose server does not answer: nothing was sent, and nothing about the
+// agent needs fixing, so the notice carries the server's own account of what to check.
+const MODEL_SERVER_UNREACHABLE_SEND_FAILURE_KIND = "model_server_unreachable";
 
 function sendFailureKind(sendError: unknown): unknown {
   return (sendError as { response?: { kind?: unknown } | null } | null)?.response?.kind;
@@ -1499,7 +1503,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             } else {
               await launchChat(chatId, choice.id, "", "agent");
               priorTurnIds = sentUserTurnIds(chatId);
-              dropOutgoingNoTurnWillRetire(chatId, outgoingId, await sendMessage(chatId, finalText, messageId));
+              settleOutgoing(chatId, outgoingId, await sendMessage(chatId, finalText, messageId));
               refocusAfterSend();
               return;
             }
@@ -1530,14 +1534,15 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // The send resolved: the message is now real (committed, queued, or held for the
           // agent the chat is switching to), so its "Sending…" bubble is removed by the arriving
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).
-          dropOutgoingNoTurnWillRetire(chatId, outgoingId, status);
+          settleOutgoing(chatId, outgoingId, status);
         } catch (err) {
           // The backend confirms delivery before resolving, so a rejection means the message was
           // NOT accepted. A /compact the server declined to run gets the declined-command notice
           // rather than the failure notice, since retrying at once cannot change it.
           const detail = describeRequestError(err);
           const isDeclined = DECLINED_COMPACT_SEND_FAILURE_KINDS.has(sendFailureKind(err));
-          if (!isDeclined) {
+          const isModelServerUnreachable = sendFailureKind(err) === MODEL_SERVER_UNREACHABLE_SEND_FAILURE_KIND;
+          if (!isDeclined && !isModelServerUnreachable) {
             console.error(`Failed to send message to chat ${chatId}: ${detail}`);
           }
           dropOutgoing(chatId, outgoingId);
@@ -1553,6 +1558,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           if (currentChatId === chatId) {
             if (isDeclined) {
               declinedSend = { title: "/compact wasn't sent", body: detail };
+            } else if (isModelServerUnreachable) {
+              declinedSend = { title: "Your model server didn't answer", body: detail };
             } else {
               actionFailureTitle = "Couldn't send your message";
               actionFailureDetail = detail;
@@ -1999,7 +2006,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           refuseSendToFailedChat(recovery.chatId);
           priorTurnIds = sentUserTurnIds(recovery.chatId);
           const status = await sendMessage(recovery.chatId, recovery.sentText, messageId, true);
-          dropOutgoingNoTurnWillRetire(recovery.chatId, outgoingId, status);
+          settleOutgoing(recovery.chatId, outgoingId, status);
           // Landed, so take the restored copy back out of the composer.
           clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);
           stopWatchingUnconfirmedTurn(recovery);

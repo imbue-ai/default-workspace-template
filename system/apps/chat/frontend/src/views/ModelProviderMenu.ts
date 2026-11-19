@@ -961,9 +961,15 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
     dynamic: boolean,
   ): m.Children {
     const offeredIds = searchable && offeredLoaded ? offeredModels : null;
-    const all = sourceOptions
+    const listed = sourceOptions
       .filter((option) => option.in_picker)
       .filter((option) => offeredIds === null || offeredIds.has(option.id));
+    // The model in use leads the list when no source option names it: an account that brings its
+    // own model (a local model server) runs one the catalog has never heard of, and a picker
+    // that omitted it would read as the chat having no model.
+    const isMatchedMissing =
+      matched !== null && matched.in_picker && !listed.some((option) => option.id === matched.id);
+    const all = isMatchedMissing && matched !== null ? [matched, ...listed] : listed;
     const query = modelQuery.trim().toLowerCase();
     const filtered = query === "" ? all : all.filter((option) => option.label.toLowerCase().includes(query));
     const visible = filtered.slice(0, MODEL_SEARCH_CAP);
