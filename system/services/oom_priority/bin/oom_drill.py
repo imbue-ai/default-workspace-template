@@ -359,7 +359,14 @@ def start_the_screen_watcher(supervisorctl: str = "supervisorctl") -> None:
 
 
 def _run_supervisorctl(supervisorctl: str, action: str, program: str) -> None:
-    subprocess.run([supervisorctl, action, program], capture_output=True, text=True)
+    finished = subprocess.run(
+        [supervisorctl, action, program], capture_output=True, text=True
+    )
+    if finished.returncode != 0:
+        raise SystemExit(
+            f"oom_drill: supervisorctl {action} {program} exited {finished.returncode}: "
+            f"{(finished.stdout + finished.stderr).strip()}"
+        )
 
 
 def set_own_adj(adj: int) -> None:

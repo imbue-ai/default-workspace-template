@@ -12,6 +12,7 @@ from collections import deque
 from pathlib import Path
 
 import oom_drill
+import pytest
 from oom_drill import ProcessSample
 from oom_priority import bands
 
@@ -98,6 +99,16 @@ def test_the_screen_is_stopped_desktop_first_and_its_watcher_started_again(
         "stop screen-watch",
         "start screen-watch",
     ]
+
+
+def test_a_screen_program_supervisord_does_not_know_stops_the_drill(
+    tmp_path: Path,
+) -> None:
+    # supervisorctl exits 1 for "ERROR (no such group)" and 0 for one already stopped.
+    stub, _calls = _write_stub_supervisorctl(tmp_path, exit_code=1)
+
+    with pytest.raises(SystemExit, match="screen-stack"):
+        oom_drill.stop_the_screen(str(stub))
 
 
 def test_prediction_follows_the_bands_and_skips_what_earlyoom_cannot_pick() -> None:
