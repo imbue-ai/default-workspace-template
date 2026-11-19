@@ -69,10 +69,12 @@ def _agent_route(gateway: GatewayAccess, agent_id: str, route: str) -> str:
 
 
 def _to_server(entry: Any) -> LocalModelServer | None:
-    if not isinstance(entry, dict):
-        return None
-    port, name, models = entry.get("port"), entry.get("name"), entry.get("models")
+    fields = entry if isinstance(entry, dict) else {}
+    port, name, models = fields.get("port"), fields.get("name"), fields.get("models")
     if not isinstance(port, int) or not isinstance(name, str) or not isinstance(models, list):
+        logger.warning(
+            "Skipped a model server Imbue Studio listed in a form this workspace cannot read: {}", repr(entry)[:200]
+        )
         return None
     return LocalModelServer(
         base_url=f"http://127.0.0.1:{port}/v1",
@@ -131,15 +133,22 @@ def find_studio_model_servers(
         return StudioModelServers(link=_request_access(client, gateway, agent_id))
     if response.status_code in _UNSUPPORTED_STATUSES:
         return StudioModelServers(link=StudioLink.UNAVAILABLE)
-    try:
-        payload = response.json() if response.is_success else None
-    except ValueError:
-        payload = None
-    entries = payload.get("servers") if isinstance(payload, dict) else None
-    if not isinstance(entries, list):
+    if not response.is_success:
         logger.debug("Imbue Studio answered {} to the model servers listing", response.status_code)
         return StudioModelServers(link=StudioLink.UNREACHABLE)
+    try:
+        payload = response.json()
+    except ValueError as e:
+        logger.warning("Imbue Studio's model servers listing is not JSON: {}", e)
+        return StudioModelServers(link=StudioLink.UNREACHABLE)
+    entries = payload.get("servers") if isinstance(payload, dict) else None
+    if not isinstance(entries, list):
+        logger.warning("Imbue Studio's model servers listing names no servers: {}", response.text[:200])
+        return StudioModelServers(link=StudioLink.UNREACHABLE)
     servers = tuple(server for server in map(_to_server, entries) if server is not None)
+    # A listing none of whose entries can be read is not a computer that runs no model server.
+    if entries and not servers:
+        return StudioModelServers(link=StudioLink.UNREACHABLE)
     return StudioModelServers(link=StudioLink.CONNECTED, servers=servers)
 
 
@@ -167,7 +176,8 @@ def open_studio_tunnel(client: httpx.Client, gateway: GatewayAccess | None, agen
         )
     try:
         payload = response.json() if response.is_success else None
-    except ValueError:
+    except ValueError as e:
+        logger.warning("Imbue Studio's answer to opening the model tunnel is not JSON: {}", e)
         payload = None
     workspace_port = payload.get("workspace_port") if isinstance(payload, dict) else None
     if not isinstance(workspace_port, int):

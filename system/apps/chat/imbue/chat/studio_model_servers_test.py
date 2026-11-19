@@ -120,6 +120,56 @@ def test_an_app_that_does_not_answer_is_unreachable(status: int) -> None:
     assert by_refusal.link is StudioLink.UNREACHABLE
 
 
+@pytest.mark.parametrize(
+    ("body", "logged"),
+    [
+        ("<html>not the app</html>", "is not JSON"),
+        ('{"detail": "ok"}', "names no servers"),
+        ('["Ollama"]', "names no servers"),
+    ],
+)
+def test_an_answer_that_is_not_a_listing_is_unreachable_and_logged(
+    body: str, logged: str, loguru_records: list[str]
+) -> None:
+    found = find_studio_model_servers(
+        _client(lambda _request: httpx.Response(200, text=body)), _GATEWAY, _AGENT_ID, True
+    )
+
+    assert (found.link, found.servers) == (StudioLink.UNREACHABLE, ())
+    assert len([record for record in loguru_records if record.startswith("WARNING") and logged in record]) == 1
+
+
+def test_a_server_listed_in_a_form_this_workspace_cannot_read_is_skipped_with_a_warning(
+    loguru_records: list[str],
+) -> None:
+    listing = {
+        "servers": [
+            {"port": "11434", "name": "Ollama", "models": ["qwen3:8b"]},
+            {"port": 1234, "name": "LM Studio", "models": ["qwen3:8b"]},
+        ]
+    }
+
+    found = find_studio_model_servers(
+        _client(lambda _request: httpx.Response(200, json=listing)), _GATEWAY, _AGENT_ID, True
+    )
+
+    assert found.link is StudioLink.CONNECTED
+    assert [server.name for server in found.servers] == ["LM Studio"]
+    skipped = [record for record in loguru_records if record.startswith("WARNING") and "Skipped" in record]
+    assert len(skipped) == 1
+    assert "'11434'" in skipped[0]
+
+
+def test_a_listing_with_no_readable_server_is_not_taken_for_a_computer_running_none() -> None:
+    listing = {"servers": [{"port": 11434, "name": "Ollama"}, "LM Studio"]}
+
+    found = find_studio_model_servers(
+        _client(lambda _request: httpx.Response(200, json=listing)), _GATEWAY, _AGENT_ID, True
+    )
+
+    assert (found.link, found.servers) == (StudioLink.UNREACHABLE, ())
+
+
 def test_the_permission_request_failing_to_reach_the_app_is_unreachable() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/permission-requests":
@@ -156,3 +206,12 @@ def test_a_tunnel_the_app_cannot_open_says_what_to_check() -> None:
         open_studio_tunnel(_client(lambda _request: httpx.Response(502, text="oops")), _GATEWAY, _AGENT_ID, 11434)
     with pytest.raises(LocalModelError, match="no connection to Imbue Studio"):
         open_studio_tunnel(_client(_unreachable), None, _AGENT_ID, 11434)
+
+
+def test_a_tunnel_answer_that_is_not_json_says_what_to_check_and_is_logged(loguru_records: list[str]) -> None:
+    with pytest.raises(LocalModelError, match="Studio is open"):
+        open_studio_tunnel(
+            _client(lambda _request: httpx.Response(200, text="<html>not the app</html>")), _GATEWAY, _AGENT_ID, 11434
+        )
+
+    assert len([record for record in loguru_records if record.startswith("WARNING") and "is not JSON" in record]) == 1
