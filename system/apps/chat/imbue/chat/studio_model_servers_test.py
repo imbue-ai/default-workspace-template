@@ -160,7 +160,9 @@ def test_a_server_listed_in_a_form_this_workspace_cannot_read_is_skipped_with_a_
     assert "'11434'" in skipped[0]
 
 
-def test_a_listing_with_no_readable_server_is_not_taken_for_a_computer_running_none() -> None:
+def test_a_listing_with_no_readable_server_is_not_taken_for_a_computer_running_none(
+    loguru_records: list[str],
+) -> None:
     listing = {"servers": [{"port": 11434, "name": "Ollama"}, "LM Studio"]}
 
     found = find_studio_model_servers(
@@ -168,6 +170,7 @@ def test_a_listing_with_no_readable_server_is_not_taken_for_a_computer_running_n
     )
 
     assert (found.link, found.servers) == (StudioLink.UNREACHABLE, ())
+    assert len([record for record in loguru_records if record.startswith("WARNING") and "Skipped" in record]) == 2
 
 
 def test_the_permission_request_failing_to_reach_the_app_is_unreachable() -> None:

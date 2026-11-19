@@ -138,12 +138,14 @@ def find_studio_model_servers(
         return StudioModelServers(link=StudioLink.UNREACHABLE)
     try:
         payload = response.json()
-    except ValueError as e:
-        logger.warning("Imbue Studio's model servers listing is not JSON: {}", e)
+    except ValueError:
+        logger.warning("Received a model servers listing from Imbue Studio that is not JSON: {}", response.text[:200])
         return StudioModelServers(link=StudioLink.UNREACHABLE)
     entries = payload.get("servers") if isinstance(payload, dict) else None
     if not isinstance(entries, list):
-        logger.warning("Imbue Studio's model servers listing names no servers: {}", response.text[:200])
+        logger.warning(
+            "Received a model servers listing from Imbue Studio that names no servers: {}", response.text[:200]
+        )
         return StudioModelServers(link=StudioLink.UNREACHABLE)
     servers = tuple(server for server in map(_to_server, entries) if server is not None)
     # A listing none of whose entries can be read is not a computer that runs no model server.
@@ -177,7 +179,7 @@ def open_studio_tunnel(client: httpx.Client, gateway: GatewayAccess | None, agen
     try:
         payload = response.json() if response.is_success else None
     except ValueError as e:
-        logger.warning("Imbue Studio's answer to opening the model tunnel is not JSON: {}", e)
+        logger.warning("Received an answer from Imbue Studio to opening the model tunnel that is not JSON: {}", e)
         payload = None
     workspace_port = payload.get("workspace_port") if isinstance(payload, dict) else None
     if not isinstance(workspace_port, int):
