@@ -1,8 +1,12 @@
 """The env files mngr sources into a claude agent's tmux session on every start: the host's, then the agent's.
 
 mngr writes each once (the host's when the host is created, the agent's at its create) and never
-rewrites either, so an edit here holds from the agent's next start on, and the agent's file wins
-over the host's for a variable both set.
+rewrites either, so an edit here holds from the agent's next start on.
+
+The host's file wins for a variable both set, although mngr sources the agent's last: the agent is
+launched from the interactive shell its pane ends in, and that shell's ``~/.bashrc`` sources the
+host's file again (``system/scripts/seed_home_skeleton.sh``). So only a variable the host's file
+leaves alone can be set per agent.
 """
 
 import os
@@ -25,15 +29,20 @@ def _read_env_file(env_path: Path) -> dict[str, str]:
     return parse_env_file(env_path.read_text())
 
 
-def read_agent_env_var(agent_state_dir: Path, key: str) -> str | None:
-    """What a variable is when the agent starts: the agent's own value, else the host's, else None."""
-    agent_env = _read_env_file(agent_state_dir / AGENT_ENV_FILENAME)
-    if key in agent_env:
-        return agent_env[key]
-    host_dir = agent_env.get(_HOST_DIR_ENV_VAR)
+def read_host_env_var(agent_state_dir: Path, key: str) -> str | None:
+    """What the host's env file sets a variable to, for every agent on it; None when it does not set it."""
+    host_dir = _read_env_file(agent_state_dir / AGENT_ENV_FILENAME).get(_HOST_DIR_ENV_VAR)
     if host_dir is None:
         return None
     return _read_env_file(Path(host_dir) / _HOST_ENV_FILENAME).get(key)
+
+
+def read_agent_env_var(agent_state_dir: Path, key: str) -> str | None:
+    """What a variable is when the agent starts: the host's value, else the agent's own, else None."""
+    host_value = read_host_env_var(agent_state_dir, key)
+    if host_value is not None:
+        return host_value
+    return _read_env_file(agent_state_dir / AGENT_ENV_FILENAME).get(key)
 
 
 def rewrite_agent_env_var(agent_state_dir: Path, key: str, value: str) -> None:

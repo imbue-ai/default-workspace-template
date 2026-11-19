@@ -2,8 +2,13 @@
 
 Claude Code fetches the connectors of the claude.ai account it is signed in to and loads each as
 an MCP server Anthropic hosts, unless ``ENABLE_CLAUDEAI_MCP_SERVERS`` says otherwise in its
-environment when it starts. The workspace sets that to ``false`` in the host's env file
-(``.mngr/settings.toml``), so an agent loads them only once its own env file says ``true``.
+environment when it starts. The workspace sets that to ``false`` in every agent's own env file
+(``env`` under ``[commands.create]`` in ``.mngr/settings.toml``), so an agent loads them only once
+that line says ``true``.
+
+A workspace created while the default was written to the host's env file instead keeps the
+connectors off for every agent: the host's line wins over an agent's (``agent_env.py``), so no
+agent's switch can turn them on there, and its switch counts as unreadable.
 
 The list is read from the endpoint Claude Code itself reads it from, with the access token a
 subscription sign-in (``claude auth login``) leaves in the account folder. An account signed in
@@ -18,6 +23,7 @@ from typing import Final
 import httpx
 
 from imbue.chat.harnesses.claude.agent_env import read_agent_env_var
+from imbue.chat.harnesses.claude.agent_env import read_host_env_var
 from imbue.chat.harnesses.claude.agent_env import rewrite_agent_env_var
 from imbue.chat.harnesses.cloud_connections import CloudConnections
 from imbue.chat.harnesses.cloud_connections import CloudConnectionsError
@@ -73,6 +79,10 @@ def _connector_names(page: Any) -> list[str]:
     ]
 
 
+def _is_disabling(value: str) -> bool:
+    return value.strip().lower() in _DISABLING_VALUES
+
+
 class ClaudeCloudConnections(CloudConnections):
     """The claude.ai connectors of the account, and the env line that makes one agent load them."""
 
@@ -114,10 +124,16 @@ class ClaudeCloudConnections(CloudConnections):
 
     def is_enabled(self, agent_state_dir: Path) -> bool:
         try:
+            host_value = read_host_env_var(agent_state_dir, CLAUDEAI_MCP_SERVERS_ENV_VAR)
             value = read_agent_env_var(agent_state_dir, CLAUDEAI_MCP_SERVERS_ENV_VAR)
         except OSError as e:
             raise CloudConnectionsError(f"the env files of the agent at {agent_state_dir} are unreadable: {e}") from e
-        return value is None or value.strip().lower() not in _DISABLING_VALUES
+        if host_value is not None and _is_disabling(host_value):
+            raise CloudConnectionsError(
+                f"the host of the agent at {agent_state_dir} turns the connectors off for all of its agents, "
+                "which no agent's own env file can override"
+            )
+        return value is None or not _is_disabling(value)
 
     def enable(self, agent_state_dir: Path) -> None:
         try:

@@ -1009,7 +1009,7 @@ as shown, since a window for each is worse than missing one.
 A Claude subscription or a ChatGPT account can have third-party services connected on the
 provider's own side (claude.ai connectors, ChatGPT apps), which claude and codex load as MCP
 servers the provider hosts. The workspace turns that off for every agent (`.mngr/settings.toml`:
-`ENABLE_CLAUDEAI_MCP_SERVERS=false` in the host's env file, `features.apps = false` in each codex
+`ENABLE_CLAUDEAI_MCP_SERVERS=false` in each agent's own env file, `features.apps = false` in each codex
 agent's config), because those connections reach a service without the latchkey gateway and the
 permissions granted there. A permission card can offer the way around
 (`cloud_connections.py`, `harnesses/cloud_connections.py`).
@@ -1032,6 +1032,12 @@ without a parenthesized transport ("Notion (MCP)" as "notion"), whatever the cas
 agent loads the connections is read off the agent itself each time (the `ENABLE_CLAUDEAI_MCP_SERVERS`
 line its env file or its host's leaves it with; `features.apps` in its `config.toml`), so nothing
 else records it.
+
+The claude line sits in the agent's own env file because a variable the host's env file sets
+cannot be overridden per agent: the interactive shell an agent is launched from sources the
+host's file again (`~/.bashrc`) after mngr has applied the agent's. A workspace created while the
+default was still written to the host's file therefore keeps the connectors off for every claude
+agent, and no offer is made there.
 
 The offer is one line under the card's button; opening it shows that it circumvents Imbue
 Studio's permission guarantees and a button that takes it,

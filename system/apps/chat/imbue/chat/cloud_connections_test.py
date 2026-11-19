@@ -54,12 +54,11 @@ def _account(home: Path, lane: str = "anthropic") -> accounts.Account:
 
 
 def _claude_agent(tmp_path: Path, account_id: str | None, is_enabled: bool = False) -> AgentInfo:
-    """A claude agent whose host turns the connectors off, as the workspace's does."""
+    """A claude agent whose own env file turns the connectors off, as the workspace writes it."""
     host_dir = tmp_path / "host"
     agent_state_dir = host_dir / "agents" / "agent-1"
     agent_state_dir.mkdir(parents=True)
-    (host_dir / "env").write_text("ENABLE_CLAUDEAI_MCP_SERVERS=false\n")
-    (agent_state_dir / "env").write_text(f"MNGR_HOST_DIR={host_dir}\n")
+    (agent_state_dir / "env").write_text(f"MNGR_HOST_DIR={host_dir}\nENABLE_CLAUDEAI_MCP_SERVERS=false\n")
     if is_enabled:
         ClaudeCloudConnections().enable(agent_state_dir)
     return AgentInfo(

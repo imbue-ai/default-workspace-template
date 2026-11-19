@@ -28,6 +28,24 @@ agent_ready_timeout = 45.0
 connect = false
 ensure_clean = false
 pass_env__extend = ["REMOTE_SERVICE_CONNECTOR_URL", "LATCHKEY_GATEWAY"]
+# Written to each agent's own env file, not the host's: a variable set in the
+# host's env file cannot be overridden per agent, because the interactive shell
+# an agent is launched from re-reads the host's file (~/.bashrc) after mngr has
+# applied the agent's.
+env__extend = [
+    # Disable claude.ai account MCP connector sync -- it's an OAuth side
+    # channel to third-party services that bypasses the latchkey gateway for
+    # the services latchkey DOES support. MCP itself is not disallowed: for a
+    # service latchkey has no builtin for, the connect-external-service skill
+    # connects that service's MCP server as a custom latchkey service, so its
+    # credential sits in the same store and is reachable from every harness,
+    # rather than through any one harness's own MCP config. Per agent so that
+    # the chat app can turn it on for one chat (a permission card's offer of
+    # the account's own cloud connections; system/apps/chat/README.md, "Cloud
+    # connections"). A workspace created while this was in host_env keeps it
+    # off for every agent.
+    "ENABLE_CLAUDEAI_MCP_SERVERS=false",
+]
 host_env__extend = [
     "IS_SANDBOX=1",
     "IS_AUTONOMOUS=1",
@@ -44,14 +62,6 @@ host_env__extend = [
     "DISABLE_AUTOUPDATER=1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
     "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1",
-    # Disable claude.ai account MCP connector sync -- it's an OAuth side
-    # channel to third-party services that bypasses the latchkey gateway for
-    # the services latchkey DOES support. MCP itself is not disallowed: for a
-    # service latchkey has no builtin for, the connect-external-service skill
-    # connects that service's MCP server as a custom latchkey service, so its
-    # credential sits in the same store and is reachable from every harness,
-    # rather than through any one harness's own MCP config.
-    "ENABLE_CLAUDEAI_MCP_SERVERS=false",
     # Tickets live inside runtime/ so they are covered by the opt-in GitHub
     # sync (github-sync skill) when the user enables it.
     # tk reads TICKETS_DIR if set; absolute path so it works from worktree

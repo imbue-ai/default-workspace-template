@@ -44,15 +44,14 @@ def _gateway(requests: list[httpx.Request], delete_status: int = 200) -> httpx.C
 
 
 def _claude_agent(tmp_path: Path, connected: tuple[str, ...]) -> AgentInfo:
-    """A claude agent whose host turns the connectors off, on an account with ``connected`` recorded."""
+    """A claude agent whose own env file turns the connectors off, on an account with ``connected`` recorded."""
     account_id, account_path = accounts.mint_account_dir()
     accounts.commit_account(account_id, "anthropic", "Anthropic")
     (account_path / CONNECTED_FILENAME).write_text(ConnectedConnectors(names=connected).model_dump_json())
     host_dir = tmp_path / "host"
     agent_state_dir = host_dir / "agents" / "agent-1"
     agent_state_dir.mkdir(parents=True)
-    (host_dir / "env").write_text("ENABLE_CLAUDEAI_MCP_SERVERS=false\n")
-    (agent_state_dir / "env").write_text(f"MNGR_HOST_DIR={host_dir}\n")
+    (agent_state_dir / "env").write_text(f"MNGR_HOST_DIR={host_dir}\nENABLE_CLAUDEAI_MCP_SERVERS=false\n")
     return AgentInfo(
         id="agent-1",
         name="chat-1",
