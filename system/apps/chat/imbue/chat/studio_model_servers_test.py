@@ -79,6 +79,17 @@ def test_what_the_app_says_of_a_servers_models_folds_a_models_sizes_into_it() ->
     assert "32,768" in (server.choices[1].unusable_reason or "")
 
 
+def test_a_description_from_a_newer_app_that_says_more_is_still_read() -> None:
+    described = {"id": "qwen3:8b", "base_id": "qwen3:8b", "max_context_window": 40_960, "size_bytes": 5_225_388_164}
+    entry = {"port": 11434, "name": "Ollama", "models": ["qwen3:8b"], "described_models": [described]}
+
+    found = find_studio_model_servers(
+        _client(lambda _request: httpx.Response(200, json={"servers": [entry]})), _GATEWAY, _AGENT_ID, True
+    )
+
+    assert found.servers[0].choices[0].context_windows == (40_960,)
+
+
 def test_a_description_this_workspace_cannot_read_leaves_the_models_as_listed() -> None:
     entry = {"port": 11434, "name": "Ollama", "models": ["qwen3:8b"], "described_models": [{"base_id": "qwen3:8b"}]}
 

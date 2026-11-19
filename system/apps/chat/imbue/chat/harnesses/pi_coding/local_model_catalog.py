@@ -25,6 +25,7 @@ from typing import Final
 
 import httpx
 from loguru import logger
+from pydantic import ConfigDict
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -52,6 +53,9 @@ class LocalModelCatalogError(Exception):
 
 class LocalModel(FrozenModel):
     """One model as its server lists it, with what the server says about it."""
+
+    # Also read from the Imbue Studio app's listing, which a newer app may say more in.
+    model_config = ConfigDict(extra="ignore")
 
     id: str = Field(description="The model's id on the server")
     base_id: str = Field(
