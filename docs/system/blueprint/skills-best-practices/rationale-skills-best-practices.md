@@ -94,11 +94,18 @@ The link-direction rule, the one-reader rule and the checks that enforce them ar
 | Rule | Rests on |
 |---|---|
 | SKILL.md body at most 500 lines | Anthropic, Academy, agentskills.io, Claude Code skills, skill-creator. The validator already had it. |
-| SKILL.md at most 14,000 bytes | Claude Code skills: after a compaction it keeps "the first 5,000 tokens" of each invoked skill, 25,000 combined, and does not re-read the file. agentskills.io and skill-lint also say about 5,000 tokens. The byte figure is measured: `count_tokens` over 111 markdown files gave 2.82 bytes per token with a 5% spread, so a 500-line skill here is about 10,000 tokens, twice the budget. 14 KB was chosen over 20 KB and over no byte cap (2026-11-09). The docs do not say which tokenizer the 5,000 is counted on; on the older one the budget is about 18.7 KB. |
-| Bytes, not words or lines | The same measurement: tokens per word spread 11.5% and tokens per line 17%. Words times 1.35 was low by 1.8 times for this prose. |
-| An agent reads a long file in portions | Review of #1108: the size limit is not only about compaction, it is also so an agent reads the whole file. The validator's failure text states that goal and leaves the compaction mechanism to the guide. |
-| A reference that was merely read may not come back | Claude Code compaction: it re-reads up to five files the session read or edited, most recently modified first, and one over 5,000 tokens comes back as a path only. |
-| No size limit on a reference | Decided against. The contents-list rule and the review category cover references. |
+| SKILL.md at most 14,000 bytes | 5,000 tokens, the budget in the first observation below, at the measured 2.82 bytes per token. agentskills.io and skill-lint also say about 5,000 tokens. 14 KB was chosen over 20 KB and over no byte cap (2026-11-09). |
+
+The guide gives two observations as the reason for both limits. They are not rules.
+
+- **A compaction keeps only the start of a skill.** Claude Code skills: after a compaction it keeps "the first 5,000 tokens" of each invoked skill, 25,000 combined, and does not re-read the file. Claude Code compaction: of the files a session merely read or edited it re-reads up to five, most recently modified first, and one over 5,000 tokens comes back as a path only, so a reference may not come back at all.
+- **An agent reads a long file in portions and may stop early.** Not from a published source. It was raised in review of #1108: the limit is not only about compaction, it is also so an agent reads the whole file. The validator's failure text states that goal and leaves the compaction mechanism to the guide.
+
+The byte figure is measured: `count_tokens` over 111 markdown files gave 2.82 bytes per token with a 5% spread, so a 500-line skill here is about 10,000 tokens, twice the budget.
+Bytes were chosen as the unit because they were the steadiest proxy: tokens per word spread 11.5% and tokens per line 17%, and words times 1.35 was low by 1.8 times for this prose.
+The docs do not say which tokenizer the 5,000 is counted on; on the older one the budget is about 18.7 KB.
+
+A reference has no size limit. That was decided against: the contents-list rule and the review category cover references.
 
 ### SKILL.md
 
@@ -147,7 +154,8 @@ The link-direction rule, the one-reader rule and the checks that enforce them ar
 | No first or second person | Anthropic. Neutral elsewhere. |
 | A skill only another agent's task invokes says so in one line | A worker's guide is a skill so that the worker invokes it, because an invoked skill is what a compaction preserves and a file merely read is not. Its description is one line so it costs the catalog little. `disable-model-invocation` was rejected: it would block the worker's own invocation, and it is not in the spec. |
 | 1 to 1,024 characters, no tighter cap | The specification. Anthropic ships 835 to 993 characters of trigger phrases, and the listing of all built-in descriptions fit its budget on a real workspace (Claude Code truncates an entry at 1,536 characters and budgets the listing at 1% of the context window). |
-| Every built-in description was brought to the shape | So the tree does not ship violations of the guide it ships. The rewrite added no trigger vocabulary, since triggering was not a problem, and so got no triggering check. |
+
+Every built-in description was brought to this shape, not only the flagged ones, so the tree does not ship violations of the guide it ships. The rewrite added no trigger vocabulary, since triggering was not a problem, and so got no triggering check.
 
 ### Scripts
 
@@ -182,8 +190,9 @@ Only `update-self` got this treatment. No version floor was set, because the shi
 |---|---|
 | Exemptions, not warnings or counts | The end state had to be no standing warnings. A count in the test file was the first choice; in the 0.10.0 update, workspace agents had raised such counts in a built-in test file, so the record moved into each skill's own frontmatter (`metadata` is a string map in the spec and is not loaded into the catalog). |
 | A failing check is fixed by restructuring, never by an exemption; a new skill carries none | Same decision (2026-11-09). |
-| A flow never restructures a user's existing skills | Splitting prose into references is judgment work, unlike the scripted Python migration, so the update stamps and moves on. |
 | The reasons and who may write them are the validating repository's | Review of mngr-internal #2953: rules that only apply in this repository do not belong in mngr's guide. |
+
+A flow never restructures a user's existing skills: splitting prose into references is judgment work, unlike the scripted Python migration, so the update stamps an exemption and moves on.
 
 ### Where the rules live
 
