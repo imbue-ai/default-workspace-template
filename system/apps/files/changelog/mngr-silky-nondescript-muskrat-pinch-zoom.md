@@ -1,0 +1,1 @@
+An image open in a Files window zooms: pinch on a trackpad or a touch screen (or Ctrl+scroll) to zoom around the pointer, and drag to move around while zoomed. The picture always covers its window and never moves past its own edges.
