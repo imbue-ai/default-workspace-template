@@ -6196,11 +6196,12 @@ class AgentManager:
     def _model_options_for(self, agent_state: AgentStateItem) -> tuple[ModelOption, ...]:
         """The option set an agent's live identity matches against (chip-match + switch-validation).
 
-        The session answers: the static harness catalog for file harnesses, the ONE reconciled
-        per-agent set for codex (seeded on connect, refreshed by each picker-open, falling back
-        to the persisted sidecar -- see ``CodexHarnessSession.switch_options``). Never holds
-        ``_lock`` while asking (a codex fallback reads the sidecar off disk), so callers must
-        not invoke it while holding the lock. No session yet falls back to the static catalog.
+        The session answers: the static harness catalog for file harnesses (to which pi adds the
+        models its account brings itself), the ONE reconciled per-agent set for codex (seeded on
+        connect, refreshed by each picker-open, falling back to the persisted sidecar -- see
+        ``CodexHarnessSession.switch_options``). Never holds ``_lock`` while asking (a codex
+        fallback reads the sidecar off disk), so callers must not invoke it while holding the
+        lock. No session yet falls back to the static catalog.
         """
         with self._lock:
             session = self._session_by_agent.get(agent_state.id)

@@ -1378,7 +1378,7 @@ def _get_harnesses_endpoint() -> Response:
 
 
 def _agent_switch_options(agent_manager: "AgentManager", agent_info: AgentInfo) -> tuple[ModelOption, ...]:
-    """The option set the switch endpoint validates against: per-agent for codex, static otherwise.
+    """The option set the switch endpoint validates against: per-agent for codex, the catalog otherwise.
 
     Codex has no static catalog, so its valid model/effort/fast set is per-agent -- the ONE reconciled
     set (:meth:`AgentManager.get_codex_model_options`) that the picker offered and the chip matches
@@ -1386,7 +1386,8 @@ def _agent_switch_options(agent_manager: "AgentManager", agent_info: AgentInfo) 
     sidecar while that in-memory set is empty (post-restart). Empty (no set and no sidecar) only until
     first populated -- a switch then fails validation, which is correct: nothing to switch to until a
     connect, a picker-open, or a persisted sidecar supplies the account's ``model/list``. Every other
-    harness validates against its static catalog options.
+    harness validates against its static catalog options, to which pi adds the models its agent's
+    account brings itself (a local model server).
     """
     return agent_manager.get_or_create_session(agent_info).switch_options()
 
