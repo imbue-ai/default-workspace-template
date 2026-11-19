@@ -1,5 +1,5 @@
 import m from "mithril";
-import { askAgentToFix } from "../app_contract";
+import { askAgentToFix, withAskFailure } from "../app_contract";
 import type { AgentFixRequest, ReportedFailure, ShellConnection, ShownFailure, StartOutcome } from "../app_contract";
 import { REPORT_A_BUG_LABEL } from "../models/failure";
 import { Button } from "./Button";
@@ -12,7 +12,7 @@ import { TEXT_HELPER_SIZE } from "./typography";
  * frames the page: "Ask an agent to fix this" sends the failure to an agent as its task, and "Report a bug" opens
  * Imbue Studio's bug report with the failure attached. Each renders nothing where it could not work, so a surface
  * draws both unconditionally; it reads the connection at render time, so the page redraws when a handshake arrives (as
- * every page does).
+ * every page does). ``FailureRemedies`` draws the pair a failure that asks for a bug report gets by default.
  */
 
 export const ASK_AGENT_TO_FIX_LABEL = "Ask an agent to fix this";
@@ -128,4 +128,45 @@ export const ReportBugButton: m.Component<ReportBugButtonAttrs> = {
       REPORT_A_BUG_LABEL,
     );
   },
+};
+
+export interface FailureRemediesAttrs extends FailureButtonOptions {
+  /** The page's connection; null before it connects. */
+  readonly connection: Pick<ShellConnection, "hasShell" | "askAgent" | "canReportBug" | "reportBug"> | null;
+  /** The failure on screen. */
+  readonly failure: ShownFailure;
+  /** Offer no agent: the ask would go through what failed (the chat app's own server not answering). */
+  readonly isAgentWithheld?: boolean;
+}
+
+/** What a failure that asks for a bug report offers by default: "Ask an agent to fix this", then "Report a bug", whose
+ *  report also carries a refused ask; nothing for a failure that asks for none, whose surface offers its own remedy. */
+export const FailureRemedies: m.ClosureComponent<FailureRemediesAttrs> = () => {
+  let askFailure: ShownFailure | null = null;
+  return {
+    view(vnode) {
+      const { connection, failure, isAgentWithheld, variant, sm, extra } = vnode.attrs;
+      if (!failure.isReportable) return null;
+      const options = { variant, sm, extra };
+      return [
+        isAgentWithheld === true
+          ? null
+          : m(AskAgentToFixButton, {
+              ...options,
+              connection,
+              failure: { whatFailed: failure.message, details: failure.details },
+              pageReportBug: {
+                onFailureChange: (next) => {
+                  askFailure = next;
+                },
+              },
+            }),
+        m(ReportBugButton, {
+          ...options,
+          connection,
+          failure: withAskFailure({ message: failure.message, details: failure.details }, askFailure),
+        }),
+      ];
+    },
+  };
 };
