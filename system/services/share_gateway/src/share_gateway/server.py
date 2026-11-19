@@ -302,8 +302,8 @@ class PendingLoginRegistry:
 class UnansweredAddressWaits:
     """How long each shared address has gone without its app answering, across every visitor.
 
-    Each request caddy hands the gateway because an app's backend would not take the connection
-    counts as one more moment of the same wait, unless the last one was long enough ago that the
+    Each request caddy hands the gateway because it could not reach the app (its route not loaded
+    yet, or its backend not taking the connection) counts as one more moment of the same wait, unless the last one was long enough ago that the
     app may have answered in between, which starts a new wait.
     """
 
