@@ -7629,6 +7629,15 @@ def test_finish_restore_leaves_a_record_without_an_unrestored_list_to_a_hand_rep
     assert "repair by hand" in capsys.readouterr().err
     assert copy.exists()
 
+    # A failed rollback of a kept point leaves this kind of record with the point still
+    # kept; no later apply is involved, so the refusal must not name one.
+    _keep_a_later_apply_rollback_point(apply_repo)
+    assert _finish_restore(apply_repo) == 1
+    err = capsys.readouterr().err
+    assert "keeps no readable list of unrestored copies" in err
+    assert "a later apply" not in err
+    assert copy.exists()
+
     update_apply_contract.emergency_path(apply_repo).write_text("not json {")
     assert _finish_restore(apply_repo) == 1
     assert copy.exists()

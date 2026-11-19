@@ -2446,20 +2446,15 @@ def finish_restore(repo_root: Path, *, now: Callable[[], float] = time.time) -> 
     but a boot-time partial restore), which is a repair by hand. Refused (1) too while an apply's
     marker exists, or a later apply's rollback point is kept: that apply took its copies at the
     same paths, so restoring from them would put its pre-apply state over the live tree, and
-    discarding them would take away its way back. The interrupted apply cleared any earlier
-    rollback point before it began, so one kept now is always a later apply's.
+    discarding them would take away its way back. That check follows the record's: the
+    interrupted apply cleared any earlier rollback point before it began, so once the record
+    is a boot-time partial restore's, a point kept now is always a later apply's (a failed
+    rollback of a kept point leaves no list, and is a repair by hand as above).
     """
     if marker_path(repo_root).exists():
         sys.stderr.write(
             "error: an apply is in flight (its marker exists); finish or `recover` it "
             "before putting back an earlier rollback's copies.\n"
-        )
-        return 1
-    if read_last_good(repo_root) is not None:
-        sys.stderr.write(
-            "error: a later apply kept its rollback point, and its copies are at the "
-            "paths the emergency record names, so putting them back would undo part of "
-            f"that apply; the copies are at {snapshots_root(repo_root)}: repair by hand.\n"
         )
         return 1
     record = read_emergency(repo_root)
@@ -2483,6 +2478,13 @@ def finish_restore(repo_root: Path, *, now: Callable[[], float] = time.time) -> 
     if not snapshots:
         sys.stderr.write("every recorded copy is already back; nothing to put back.\n")
         return 0
+    if read_last_good(repo_root) is not None:
+        sys.stderr.write(
+            "error: a later apply kept its rollback point, and its copies are at the "
+            "paths the emergency record names, so putting them back would undo part of "
+            f"that apply; the copies are at {snapshots_root(repo_root)}: repair by hand.\n"
+        )
+        return 1
     failed = set(restore_snapshots(snapshots))
     remaining = [s for s in snapshots if s.name in failed]
     write_emergency(
