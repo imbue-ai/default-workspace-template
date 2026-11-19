@@ -29,6 +29,7 @@ import {
 import { StalePlacementsSaveError } from "../model/api";
 import { failureSentence, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
+import { assistRequest } from "@imbue/workspace-ui/src/app_contract";
 import type { ReportedFailure, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { ASKING_AN_AGENT_LABEL } from "@imbue/workspace-ui/src/components/FailureButtons";
@@ -3134,7 +3135,8 @@ export class DesktopStore {
    *  an ask of the shell's own): the text is sent to the chat about that window's app, through the first launch
    *  path of the machine that takes an ask's text, whose page is put on screen by the show rule and laid out beside
    *  the window, as "Chat about this app" lays it out. With no such window, a window of an internal app, or no such
-   *  launch path, the primary text action runs with the text instead. Settles as ``startWithText`` does. */
+   *  launch path, the primary text action runs with the text instead, behind the assist command (the ask launch
+   *  path's chat puts it in front of its own lead-in). Settles as ``startWithText`` does. */
   async askAgent(text: string, windowId: string | null): Promise<StartOutcome> {
     const asking = windowId === null ? null : findWindow(this.state, windowId);
     const about = asking === null ? undefined : appByName(this.state, asking.window.app);
@@ -3152,7 +3154,7 @@ export class DesktopStore {
     const refusal = this.startRefusalWhileViewing();
     if (refusal !== null) return refusal;
     const launch = this.askLaunchAbout(about);
-    if (about === null || launch === null) return this.startWithText(text);
+    if (about === null || launch === null) return this.startWithText(assistRequest(text));
     const params = appAskParams(launch.launchPath, about, text);
     return this.startOutcomeOf(launch.app, async (report, whatFailed) => {
       const target: LaunchTarget = besideWindowId === null ? { kind: "show" } : { kind: "show", besideWindowId };

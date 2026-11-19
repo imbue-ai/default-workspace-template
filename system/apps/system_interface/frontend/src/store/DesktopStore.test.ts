@@ -775,10 +775,10 @@ describe("opening", () => {
     expect(notices()).toEqual([]);
   });
 
-  it("shell:ask-agent runs the primary text action with no window, from an internal app, or with no ask launch path", async () => {
+  it("shell:ask-agent runs the primary text action through the assist command with no window, from an internal app, or with no ask launch path", async () => {
     const store = await startedStore();
     offerAppsWithAnAskPath();
-    const primary = 'launch:home:chat:new:{"message":"Fix this."}:window:win-chat';
+    const primary = 'launch:home:chat:new:{"message":"/assist Fix this."}:window:win-chat';
 
     // The shell's own ask, an ask whose window closed meanwhile, and an ask from an app nothing is said about.
     for (const windowId of [null, "win-gone", "win-monitor"]) {

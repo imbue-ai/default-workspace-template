@@ -577,16 +577,18 @@ the text to the chat about the app as a message (making that chat with it when
 there is none, and sending it to the main chat when that chat cannot take it).
 With no such launch path, an internal app, or no window (an ask of the shell's
 own that is about no app), the ask runs the primary free-text row instead, as
-`shell:start-with-text` does. The shell's own "Ask an agent to ..." buttons
-follow the same rule (`askAgentAbout`): one about an app (a stopped app's "Ask
-an agent to start it", an app that couldn't start's "Ask an agent to look at
-it") goes to the chat about that app, beside the app's window when it is
-pressed in one and wherever the `show` target puts it when it is pressed in a
-toast; one about no app (the update notice's "Ask an agent to finish it") runs
-the primary free-text row. Where the app an ask would go through is the app the
-ask is about (the chat app, stopped or unable to start), no agent is offered,
-and the sentence asks for a bug report instead. The shell names no app in any of
-this.
+`shell:start-with-text` does, with the text behind `/assist ` (`assistRequest`),
+so the agent runs the workspace's assist flow either way (the chat app puts the
+command in front of its own lead-in on the other path). The shell's own "Ask an
+agent to ..." buttons follow the same rule (`askAgentAbout`): one about an app
+(a stopped app's "Ask an agent to start it", an app that couldn't start's "Ask
+an agent to look at it") goes to the chat about that app, beside the app's
+window when it is pressed in one and wherever the `show` target puts it when it
+is pressed in a toast; one about no app (the update notice's "Ask an agent to
+finish it") runs the primary free-text row. Where the app an ask would go
+through is the app the ask is about (the chat app, stopped or unable to start),
+no agent is offered, and the sentence asks for a bug report instead. The shell
+names no app in any of this.
 
 **The tray** (the multiplayer spec, section 6; `frontend/src/views/SystemTray.ts`
 and `views/tray/`) is where the people and the agent live: the share button (a
