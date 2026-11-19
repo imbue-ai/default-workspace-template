@@ -1,1 +1,0 @@
-Clicking a link to a file that is already open in a Files window reloads that window, so a file rewritten under the same name (an image an agent re-renders, say) shows its new content instead of the old one. A link to a folder that is already open still only raises its window, so an upload or selection in it is kept. The `open:file` handler declares `reload_when_raised = true`.
