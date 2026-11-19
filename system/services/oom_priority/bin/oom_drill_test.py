@@ -7,6 +7,7 @@ disposable workspace (``OOM_DRILL.md``).
 
 import json
 import re
+import stat
 from collections import deque
 from pathlib import Path
 
@@ -73,6 +74,30 @@ def test_built_in_services_are_protected_and_an_agents_commands_expendable() -> 
 
     assert oom_drill.PROTECTED_MAX_ADJ == max(builtin_service_bands)
     assert oom_drill.EXPENDABLE_MIN_ADJ == bands.AGENT_SUBPROCESS
+
+
+def _write_stub_supervisorctl(tmp_path: Path, exit_code: int = 0) -> tuple[Path, Path]:
+    """A supervisorctl that records each call's arguments, one line per call, and exits ``exit_code``."""
+    calls = tmp_path / "supervisorctl-calls"
+    stub = tmp_path / "supervisorctl"
+    stub.write_text(f'#!/bin/sh\necho "$*" >> {calls}\nexit {exit_code}\n')
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    return stub, calls
+
+
+def test_the_screen_is_stopped_desktop_first_and_its_watcher_started_again(
+    tmp_path: Path,
+) -> None:
+    stub, calls = _write_stub_supervisorctl(tmp_path)
+
+    oom_drill.stop_the_screen(str(stub))
+    oom_drill.start_the_screen_watcher(str(stub))
+
+    assert calls.read_text().splitlines() == [
+        "stop screen-stack:*",
+        "stop screen-watch",
+        "start screen-watch",
+    ]
 
 
 def test_prediction_follows_the_bands_and_skips_what_earlyoom_cannot_pick() -> None:

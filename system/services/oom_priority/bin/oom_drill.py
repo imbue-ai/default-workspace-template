@@ -57,6 +57,13 @@ EXPENDABLE_MIN_ADJ: Final[int] = 900
 # Written out because the drill cannot import oom_priority.bands; its test holds
 # the two together.
 DEFAULT_BANDS: Final[tuple[int, ...]] = (1000, 960, 943, 910, 900, 850, 600, 560, 300)
+# The Screen's desktop, which sits above most of DEFAULT_BANDS, and its
+# watcher. Shedding one member of the desktop makes the watcher stop the rest
+# within a fraction of a second, sooner than the drill's snapshots can see, so
+# the drill stops them first: the desktop before the watcher, which tells the
+# Screen service the desktop ended.
+SCREEN_DESKTOP_PROGRAMS: Final[str] = "screen-stack:*"
+SCREEN_WATCHER_PROGRAM: Final[str] = "screen-watch"
 MEMINFO_FIELDS: Final[tuple[str, ...]] = (
     "MemTotal",
     "MemFree",
@@ -338,6 +345,21 @@ def find_earlyoom() -> tuple[int, list[str]]:
         except OSError:
             continue
     raise SystemExit("oom_drill: earlyoom is not running")
+
+
+def stop_the_screen(supervisorctl: str = "supervisorctl") -> None:
+    """Stop the Screen's desktop, then its watcher."""
+    for program in (SCREEN_DESKTOP_PROGRAMS, SCREEN_WATCHER_PROGRAM):
+        _run_supervisorctl(supervisorctl, "stop", program)
+
+
+def start_the_screen_watcher(supervisorctl: str = "supervisorctl") -> None:
+    """Start the watcher again; the desktop starts when something next opens it."""
+    _run_supervisorctl(supervisorctl, "start", SCREEN_WATCHER_PROGRAM)
+
+
+def _run_supervisorctl(supervisorctl: str, action: str, program: str) -> None:
+    subprocess.run([supervisorctl, action, program], capture_output=True, text=True)
 
 
 def set_own_adj(adj: int) -> None:
