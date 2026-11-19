@@ -259,14 +259,15 @@ export function getFlow(): (FlowStart & { status: FlowStatus }) | null {
   return flow;
 }
 
-/**
- * Start a sign-in. Pass `accountId` to re-authenticate INTO an existing folder, which is
- * what lets every chat already bound to it recover rather than being orphaned.
- */
 /** Bumped by every `startFlow`, so a response that has been superseded can tell. */
 let startGeneration = 0;
 
-export async function startFlow(laneId: string, methodId: string, accountId?: string): Promise<void> {
+/**
+ * Start a sign-in. Pass `accountId` to re-authenticate INTO an existing folder, which is
+ * what lets every chat already bound to it recover rather than being orphaned. Whether the
+ * flow it started is the live one: false when a newer start overtook it.
+ */
+export async function startFlow(laneId: string, methodId: string, accountId?: string): Promise<boolean> {
   // Which start this is. The server is single-flight and displaces the older flow, so if two
   // POSTs resolve out of order the LATER response is the live one -- and without this the
   // earlier one lands last and leaves `flow` naming a session the server has already forgotten.
@@ -281,7 +282,7 @@ export async function startFlow(laneId: string, methodId: string, accountId?: st
     url: apiUrl("/api/accounts"),
     body: { lane_id: laneId, method_id: methodId, account_id: accountId ?? null },
   });
-  if (attempt !== startGeneration) return;
+  if (attempt !== startGeneration) return false;
   flow = { ...started, status: { state: "pending", detail: null, account_id: null } };
   // Stopped HERE rather than before the await: two overlapping sign-ins both reached the await
   // with nothing yet to stop, and both then started a poller. The first interval was left with
@@ -291,6 +292,7 @@ export async function startFlow(laneId: string, methodId: string, accountId?: st
   // A paste flow is waiting on the user, not on a terminal, so there is nothing to poll.
   if (started.shape !== "paste") startPolling();
   m.redraw();
+  return true;
 }
 
 export async function submitCode(code: string): Promise<void> {
