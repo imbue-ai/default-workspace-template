@@ -759,7 +759,7 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 # of `docker` (`--template docker --template docker_runsc`): it reuses the entire
 # docker template body and only switches the provider's container runtime to
 # `runsc`, shrinking the host kernel attack surface for untrusted agents. `runsc`
-# must be installed + registered with the local Docker daemon (see CLAUDE.md);
+# must be installed + registered with the local Docker daemon;
 # container creation fails with Docker's native "unknown runtime" error
 # otherwise -- which is why this is opt-in rather than the default. The
 # template-contributed provider-config setting reaches the provider at create
