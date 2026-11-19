@@ -735,10 +735,11 @@ def _wake_update_dri_agent(rollback: BootRollback) -> None:
     marker named and hand it the note (``rollback_note``), whose one summary
     line is all the chat shows the user. Failures are logged and swallowed: the
     rollback already restored the workspace, so the cost of a failed wake is
-    that nobody tells the user about it. There is no other channel on this path
-    -- the system interface's interrupted-update banner keys off the marker,
-    which a rollback has already cleared -- so the warning below is what a
-    human has to find in the boot log.
+    that nobody tells the user about it. After a complete rollback there is no
+    other channel -- the system interface's interrupted-update banner keys off
+    the marker, which the rollback has already cleared, and only an incomplete
+    one leaves the emergency record its emergency banner keys off -- so the
+    warning below is what a human has to find in the boot log.
     """
     agent_name = rollback.dri_agent
     for argv in (
