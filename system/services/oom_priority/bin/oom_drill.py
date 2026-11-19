@@ -20,6 +20,10 @@ status has no RssAnon line, the fork counts the sum of the Anonymous lines in
 a built-in service (adj <= 86) shed while something at adj >= 900 remained,
 stops the drill at once and frees the hog's memory.
 
+Before its sleepers start it stops the Screen's desktop and its watcher, and it
+starts the watcher again when it ends; the desktop starts when something next
+opens it.
+
 Stdlib-only and self-contained, so it can be sent into a workspace inside the
 command (``mngr exec`` does not pass its stdin through):
 ``mngr exec <agent> "echo $(base64 < oom_drill.py | tr -d '\\n') | base64 -d | python3 -"``.
@@ -526,49 +530,51 @@ def main() -> int:
     ledger_offset = file_size(args.ledger)
     log_offset = file_size(args.earlyoom_log)
 
+    stop_the_screen()
     sleepers: dict[int, tuple[subprocess.Popen[str], int]] = {}
-    for band in bands:
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                _SLEEPER_CODE,
-                str(band),
-                str(int(meminfo["MemTotal"] * args.sleeper_percent / 100)),
-            ],
+    hog: subprocess.Popen[str] | None = None
+    try:
+        for band in bands:
+            proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    _SLEEPER_CODE,
+                    str(band),
+                    str(int(meminfo["MemTotal"] * args.sleeper_percent / 100)),
+                ],
+                stdout=subprocess.PIPE,
+                text=True,
+            )
+            assert proc.stdout is not None
+            if proc.stdout.readline().strip() != "ready":
+                raise SystemExit(f"oom_drill: the band-{band} sleeper did not start")
+            sleepers[proc.pid] = (proc, band)
+        hog = subprocess.Popen(
+            [sys.executable, "-c", _HOG_CODE],
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True,
         )
-        assert proc.stdout is not None
-        if proc.stdout.readline().strip() != "ready":
-            raise SystemExit(f"oom_drill: the band-{band} sleeper did not start")
-        sleepers[proc.pid] = (proc, band)
-    hog = subprocess.Popen(
-        [sys.executable, "-c", _HOG_CODE],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        text=True,
-    )
-    assert hog.stdin is not None and hog.stdout is not None
-    if hog.stdout.readline().strip() != "ready":
-        raise SystemExit(
-            "oom_drill: the hog did not start (can this process set oom_score_adj -1000?)"
-        )
-    step_kib = int(meminfo["MemTotal"] * args.step_percent / 100)
-    excluded = {earlyoom_pid, os.getpid(), hog.pid}
-    kill_lines: dict[int, tuple[float, str]] = {}
+        assert hog.stdin is not None and hog.stdout is not None
+        if hog.stdout.readline().strip() != "ready":
+            raise SystemExit(
+                "oom_drill: the hog did not start (can this process set oom_score_adj -1000?)"
+            )
+        step_kib = int(meminfo["MemTotal"] * args.step_percent / 100)
+        excluded = {earlyoom_pid, os.getpid(), hog.pid}
+        kill_lines: dict[int, tuple[float, str]] = {}
 
-    kills: list[dict] = []
-    failure = ""
-    shed_sleepers: set[int] = set()
-    # A kill is judged against the last snapshot before its victim shrank,
-    # which may be a few snapshots back by the time its ledger line is read.
-    snapshots: deque[Snapshot] = deque(
-        [Snapshot(time.time(), snapshot_processes(PROC))], maxlen=30
-    )
-    deadline = time.monotonic() + args.timeout
-    every_sleeper_gone_at: float | None = None
-    try:
+        kills: list[dict] = []
+        failure = ""
+        shed_sleepers: set[int] = set()
+        # A kill is judged against the last snapshot before its victim shrank,
+        # which may be a few snapshots back by the time its ledger line is read.
+        snapshots: deque[Snapshot] = deque(
+            [Snapshot(time.time(), snapshot_processes(PROC))], maxlen=30
+        )
+        deadline = time.monotonic() + args.timeout
+        every_sleeper_gone_at: float | None = None
         while not failure and len(shed_sleepers) < len(sleepers):
             if time.monotonic() > deadline:
                 failure = f"timed out after {args.timeout:.0f}s with sleepers left"
@@ -626,9 +632,11 @@ def main() -> int:
                 snapshots.append(Snapshot(time.time(), snapshot_processes(PROC)))
             time.sleep(0.1)
     finally:
-        hog.kill()
+        if hog is not None:
+            hog.kill()
         for proc, _ in sleepers.values():
             proc.kill()
+        start_the_screen_watcher()
 
     sleeper_bands_in_shed_order = [
         kill["band"] for kill in kills if kill["band"] is not None

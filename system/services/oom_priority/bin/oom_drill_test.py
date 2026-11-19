@@ -15,7 +15,9 @@ import oom_drill
 import pytest
 from oom_drill import ProcessSample
 from oom_priority import bands
+from oom_priority.supervisord_testing import supervisord_commands
 
+_SUPERVISORD_CONF = Path(__file__).resolve().parents[3] / "supervisord.conf"
 # One oom_score_adj point is worth (MemTotal + SwapTotal) / 1000 KiB: 1000 KiB here.
 _TOTAL_KIB = 1_000_000
 _AVOID = re.compile(r"^(sshd|supervisord|earlyoom|tini)$|^tmux")
@@ -109,6 +111,15 @@ def test_a_screen_program_supervisord_does_not_know_stops_the_drill(
 
     with pytest.raises(SystemExit, match="screen-stack"):
         oom_drill.stop_the_screen(str(stub))
+
+
+def test_the_screen_programs_the_drill_stops_are_the_templates_own() -> None:
+    desktop_group = oom_drill.SCREEN_DESKTOP_PROGRAMS.removesuffix(":*")
+
+    assert desktop_group in supervisord_commands(_SUPERVISORD_CONF, ("group",))
+    assert oom_drill.SCREEN_WATCHER_PROGRAM in supervisord_commands(
+        _SUPERVISORD_CONF, ("eventlistener",)
+    )
 
 
 def test_prediction_follows_the_bands_and_skips_what_earlyoom_cannot_pick() -> None:
