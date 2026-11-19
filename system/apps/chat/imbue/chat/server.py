@@ -2997,9 +2997,11 @@ def _serve_asset(filename: str) -> Response:
         response = send_from_directory(assets_directory, filename)
     except NotFound:
         return Response(status=404)
-    # Every name under ``assets/`` is a hash of its content (vite's naming), so a page opened again uses its cached
-    # bundle without asking, sparing a chat's open a round trip before it can read its transcript.
-    response.headers["Cache-Control"] = IMMUTABLE_CACHE_CONTROL
+    # Vite names each file it emits directly under ``assets/`` by a hash of its content, so a page opened again uses
+    # its cached bundle without asking, sparing a chat's open a round trip before it can read its transcript. The
+    # voice runtime's files under ``assets/voice/`` keep fixed names, so they are revalidated as before.
+    if "/" not in filename:
+        response.headers["Cache-Control"] = IMMUTABLE_CACHE_CONTROL
     return response
 
 
