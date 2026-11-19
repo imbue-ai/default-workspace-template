@@ -1,6 +1,6 @@
 ---
 name: use-ai-integration
-description: Use when writing or reasoning about code that calls a model -- an AI-driven app or service, an AI integration, or a skill's scripted model step -- including when the user asks for that work to run on their local model (a model on their own computer, Ollama) instead of Claude. Covers the three Claude scenarios (one-shot completion, one-shot agentic task, full agent), the local-model completion, and the cost / credentialing model.
+description: Use when writing or reasoning about code that calls a model -- an AI-driven app or service, an AI integration, or a skill's scripted model step -- including when the user asks for that work to run on their local model (a model on their own computer, Ollama) instead of Claude. Covers the three Claude scenarios (one-shot completion, one-shot agentic task, full agent), the local-model completion (set up first with the set-up-local-model skill), and the cost / credentialing model.
 metadata:
   author: imbue
 ---
@@ -149,19 +149,28 @@ provider's own JSON / structured-output mode over parsing free text and retrying
 ## On the user's local model -- one-shot completion only
 
 Use this path when, and only when, **the user asks for it** ("do the refreshes
-with the local model", "use my Ollama for the summaries", "keep this off the
-API"). It runs a scenario 1 completion on a model the user hosts on their own
-computer, at no cost and with nothing leaving their machines. It is not a
-cheaper default: a local model is smaller and slower than Claude, so moving work
-onto it without being asked trades away quality the user did not offer.
+with the local model", "run it locally", "use my Ollama for the summaries",
+"keep this off the API"). It runs a scenario 1 completion on a model on the
+user's own computer, at no cost and with nothing leaving their machines. It is
+not a cheaper default: a local model is smaller and slower than Claude, so
+moving work onto it without being asked trades away quality the user did not
+offer.
 
-The workspace reaches that model through its **Local model** connection (the
-provider of that name in a chat's provider menu). Copy this skill's
-`python/use_ai_integration_skill/local_model.py` and call
-`local_model_completion`; it reads the connection's address, model and key from
-the account, so the code names none of them.
+**Set the model up first, with the `set-up-local-model` skill.** It asks the
+user for one approval in Imbue Studio, which installs what is missing on their
+computer; then it checks that the model answers from this workspace and records
+where, in `data/.state/local_model/endpoint.json`. No chat has to be signed in
+to anything, and you never send the user to a provider menu or a settings page
+for this. A background worker cannot ask for that approval, so the setup is done
+from the chat before the code that needs it is written.
+
+Then copy this skill's `python/use_ai_integration_skill/local_model.py` and call
+`local_model_completion`; it reads the model's address and name from that
+record, so the code names neither.
 
 ```python
+import sys
+
 from local_model import LocalModelUnreachableError, local_model_completion  # the file you copied in
 
 try:
@@ -170,35 +179,49 @@ try:
         system="You write short, plain news summaries. Answer with the summary only.",  # required
     )
 except LocalModelUnreachableError as e:
-    # The user's computer is asleep or offline. Not a bug: skip, and say so.
-    skip_this_run(reason=str(e))
+    # Not a bug in the refresh: skip, and say so in the user's words. The error's own
+    # text is written for an agent, so it goes to the log and not into what the user reads.
+    print(e, file=sys.stderr)
+    skip_this_run(reason="The model on your computer did not answer.")
 print(result.text, result.duration_seconds)
 ```
 
-Check that the connection exists before building on it. With none, this prints
-the instruction to pass on to the user rather than an endpoint:
+Check that the record is there before building on it. With none, this raises
+with the instruction to follow rather than printing an endpoint:
 
 ```bash
 uv run --no-sync python -c "from use_ai_integration_skill.local_model import read_local_model_endpoint; print(read_local_model_endpoint())"
 ```
+
+In a workspace with no record, the helper falls back to a chat's Local model
+connection (the provider of that name in a chat's provider menu), where the user
+signed one in.
 
 What is different from Claude, and what to build for:
 
 - **It is not always there.** The model answers only while the user's computer
   is awake, its model server is running and, for a workspace that is not on that
   computer, Imbue Studio is open. A scheduled refresh will run into nights when
-  it is not. Catch `LocalModelUnreachableError`, keep the data the app already
-  has, and record that the run was skipped and why (for a routine, in
-  `$ROUTINES_RUN_DIR/result.json`; in an app, beside the "last refreshed" time
-  it shows). Never fall back to Claude for a run the user asked to keep local.
+  it is not. The helper looks before it calls: when nothing answers at the
+  recorded address it asks Imbue Studio once to connect the workspace again, and
+  only then raises `LocalModelUnreachableError`. Catch it, keep the data the app
+  already has, and record that the run was skipped and why: a routine exits 0
+  with the reason as the `summary` in `$ROUTINES_RUN_DIR/result.json`, an app
+  shows it beside its "last refreshed" time. Never fall back to Claude, or any
+  other paid provider, for a run the user asked to keep local. That is for a
+  run nobody is watching: when the model does not answer while you are working
+  with the user, bring it back with `set-up-local-model` before you tell them
+  anything.
+- **A scheduled refresh is a routine that runs a command.** A routine that runs
+  a skill runs in a chat on the workspace's usual provider, not on this model.
 - **One call at a time.** A local server answers requests in turn, so a thread
   pool only queues them. Loop over the items, and expect seconds to minutes
   each; the first call after a pause also waits for the model to load. Size a
   refresh to that: a routine's default timeout is an hour.
 - **One item per call, short and explicit.** The window (`context_window` on the
-  endpoint, often 40,960 tokens) holds the prompt and the answer together. Send
-  one article, not twenty. Say exactly what to answer with; a small model
-  wanders where Claude would not.
+  endpoint, 16,384 tokens unless the setup was given another size) holds the
+  prompt and the answer together. Send one article, not twenty. Say exactly what
+  to answer with; a small model wanders where Claude would not.
 - **Ask for JSON when you need structure:**
   `response_format={"type": "json_object"}`, with the shape spelled out in
   `system`. Validate what comes back and skip an item that does not parse rather
@@ -213,8 +236,12 @@ What is different from Claude, and what to build for:
 - **Nothing to cost out.** Skip the cost measurement below; measure wall-clock
   on one real item instead, and tell the user how long a full run takes.
 
-A model other than the one the connection was signed in on is named by its
-Ollama name (`model="qwen3:8b"`), and has to have been used in a chat first.
+The record holds one model: the one the setup last verified. Leave `model` unset
+and the code follows it. To move the work to another model, set that one up (the
+`set-up-local-model` skill's `start --model`, then `verify --model`), and every
+caller moves with the record. Naming a model (`model="qwen3:8b"`) pins the code
+to it: once the record is of another model and no chat's connection offers the
+one named, the call is refused and says how to set it up.
 
 ## Scenario 2 -- one-shot agentic task
 

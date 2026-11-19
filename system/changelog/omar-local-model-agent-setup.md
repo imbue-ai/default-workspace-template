@@ -1,0 +1,1 @@
+`AGENTS.md` tells an agent to load the `set-up-local-model` skill when the user wants AI work to run on a model on their own computer, or when something in the workspace depends on such a model and finds it missing or not answering, and never to ask the user to install or start Ollama.

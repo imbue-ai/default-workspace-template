@@ -532,9 +532,15 @@ agentic task, or launch a full agent), follow the `use-ai-integration` skill: it
 picks the path (a keyed `litellm` call or the keyless `claude_p.py` helper),
 covers the `claude -p` environment fix and the cost model, and saves you from
 hand-rolling the call. It also covers running a completion on the user's local
-model (one hosted on their own computer), for when they ask for that -- "do the
-refreshes with the local model" -- and what a scheduled job has to do on the
-nights that model is not there.
+model (one on their own computer), for when they ask for that -- "do the
+refreshes with the local model", "run its refresh locally" -- and what a
+scheduled job has to do on the nights that model is not there.
+
+When the user asks for that, set the model up first with the
+`set-up-local-model` skill, from this chat and before you build what depends on
+it: it asks for the user's approval in Imbue Studio, which installs what the
+computer is missing, and a background worker has no chat to ask in. The
+download takes a while, so start it early and build the app beside it.
 
 ### Always surface the raw data and its source
 

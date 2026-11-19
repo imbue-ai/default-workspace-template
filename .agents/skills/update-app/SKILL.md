@@ -152,7 +152,9 @@ Make the change interactive and keep the user's view in sync as you go.
 Edit the service's code under `system/apps/<package>/` (or wherever the program's
 command points). If the change calls Claude,
 follow `use-ai-integration` -- the same rules as when the service was
-built. Anything the change creates for the app outside its own directory --
+built. If the app runs AI work on a model on the user's own computer and that
+model is missing or does not answer, follow `set-up-local-model` to bring it
+back; do not ask the user to install or start anything. Anything the change creates for the app outside its own directory --
 a skill that drives it, a script, a doc -- is registered in the app's `app.toml`
 under `[[references]]` with a `note` naming the surface it uses, so it travels
 with the app through hardening, testing, and publishing.
