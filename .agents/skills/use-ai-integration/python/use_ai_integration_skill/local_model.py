@@ -157,7 +157,8 @@ def _candidate_models(
             if isinstance(record, dict) and isinstance(record.get("id"), str)
         ]
     # An account signed in before local_models.json was kept names its one model in models.json alone.
-    models = provider.get("models") if isinstance(provider.get("models"), list) else []
+    listed = provider.get("models")
+    models: list[Any] = listed if isinstance(listed, list) else []
     return [
         {
             "id": model["id"],
@@ -323,15 +324,15 @@ def local_model_completion(
             f"{endpoint.model} answered with no text. A reasoning model can spend its whole max_tokens thinking: "
             "raise max_tokens, or leave is_reasoning_wanted off."
         )
-    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    usage = payload.get("usage")
+    prompt_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+    completion_tokens = (
+        usage.get("completion_tokens") if isinstance(usage, dict) else None
+    )
     return LocalModelResult(
         text=text,
         model=endpoint.model,
-        input_tokens=usage.get("prompt_tokens")
-        if isinstance(usage.get("prompt_tokens"), int)
-        else 0,
-        output_tokens=usage.get("completion_tokens")
-        if isinstance(usage.get("completion_tokens"), int)
-        else 0,
+        input_tokens=prompt_tokens if isinstance(prompt_tokens, int) else 0,
+        output_tokens=completion_tokens if isinstance(completion_tokens, int) else 0,
         duration_seconds=time.monotonic() - started_at,
     )
