@@ -1,0 +1,1 @@
+update-self's restart pass now leaves a chat whose agent stopped mid-turn (listed by the chat app as interrupted) alone, as it does a stopped chat, instead of reporting it as left running because it is working.
