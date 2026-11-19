@@ -19,11 +19,8 @@ let query = "";
 let draft = null;
 let original = null;
 let loadError = "";
-// The agent's recorded changes, for the "changes" view, and the one a link asked to see.
-let changes = [];
-// A link may name a change (?change=<id>) or a note (?note=<id>, as the chat's memory cards link it).
+// A link may name a note (?note=<id>, as the chat's memory cards link it).
 const params = new URLSearchParams(location.search);
-let focusChange = params.get("change");
 const linkedNote = params.get("note");
 
 const $ = (id) => document.getElementById(id);
@@ -58,7 +55,6 @@ async function load(keepSelection = true) {
   }
   renderFilters();
   if (keepSelection && view === "index") return showIndex();
-  if (keepSelection && view === "changes") return showChanges();
   const still = keepSelection && notes.find((n) => n.id === selected);
   const linked = !keepSelection && linkedNote && notes.find((n) => n.id === linkedNote);
   select(still ? still.id : linked ? linked.id : notes[0]?.id ?? null, true);
@@ -139,102 +135,6 @@ function renderList() {
   else if (narrowed && !rows) html += `<p class="empty-list">No notes match.</p>`;
   else if (!outline.exists) html += `<p class="empty-list">There is no index yet. Adding a note creates it.</p>`;
   $("note-list").innerHTML = html;
-}
-
-// A line-by-line comparison of two texts: each line marked kept, removed or added.
-function lineDiff(before, after) {
-  const a = (before ?? "").split("\n");
-  const b = (after ?? "").split("\n");
-  const table = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
-  for (let i = a.length - 1; i >= 0; i--)
-    for (let j = b.length - 1; j >= 0; j--)
-      table[i][j] = a[i] === b[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
-  const out = [];
-  let i = 0, j = 0;
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) { out.push(["same", a[i]]); i++; j++; }
-    else if (table[i + 1][j] >= table[i][j + 1]) out.push(["removed", a[i++]]);
-    else out.push(["added", b[j++]]);
-  }
-  while (i < a.length) out.push(["removed", a[i++]]);
-  while (j < b.length) out.push(["added", b[j++]]);
-  return out;
-}
-
-function fileChange(f) {
-  const what = f.before === null ? "Added" : f.after === null ? "Deleted" : "Changed";
-  const lines = f.before === null ? lineDiff("", f.after).filter(([k]) => k !== "removed")
-    : f.after === null ? lineDiff(f.before, "").filter(([k]) => k !== "added")
-    : lineDiff(f.before, f.after);
-  const marks = { same: " ", removed: "-", added: "+" };
-  // Unchanged lines more than one away from a change fold into a count, so the change itself shows.
-  const near = (i) => [i - 1, i, i + 1].some((x) => lines[x] && lines[x][0] !== "same");
-  let html = "";
-  let folded = 0;
-  lines.forEach(([k, l], i) => {
-    if (k === "same" && !near(i)) { folded++; return; }
-    if (folded) { html += `<span class="diff-fold">${folded} unchanged line${folded === 1 ? "" : "s"}</span>`; folded = 0; }
-    html += `<span class="diff-${k}">${marks[k]} ${esc(l) || " "}</span>`;
-  });
-  if (folded) html += `<span class="diff-fold">${folded} unchanged line${folded === 1 ? "" : "s"}</span>`;
-  const label = f.name !== "MEMORY.md" ? f.name : f.is_index_lines ? "its lines in the index (MEMORY.md)" : "the index (MEMORY.md)";
-  return `<div class="change-file"><span class="help">${what} ${esc(label)}</span><pre class="diff">${html}</pre></div>`;
-}
-
-function changeCard(c) {
-  const when = new Date(c.time).toLocaleString();
-  const state = c.undone_at
-    ? `<span class="help">Undone ${esc(new Date(c.undone_at).toLocaleString())}</span>`
-    : `<button data-undo="${esc(c.id)}">Undo</button>`;
-  return `<section class="change-card ${c.undone_at ? "undone" : ""}" id="change-${esc(c.id)}" aria-current="${c.id === focusChange}">
-    <div class="row"><h3>${esc(c.summary.charAt(0).toUpperCase() + c.summary.slice(1))}</h3>${state}</div>
-    <span class="help">${esc(when)}${c.agent_name ? ` in the chat "${esc(c.agent_name)}"` : ""}</span>
-    <span class="status error" id="undo-status-${esc(c.id)}"></span>
-    ${c.files.map(fileChange).join("")}
-  </section>`;
-}
-
-async function showChanges(force = true) {
-  if (!force && !confirmLeave()) return;
-  view = "changes";
-  draft = null;
-  original = null;
-  renderList();
-  $("show-changes").setAttribute("aria-pressed", "true");
-  try {
-    changes = (await api("GET", "/api/changes")).changes;
-  } catch (e) {
-    $("editor").innerHTML = `<p class="blank">Couldn't load the changes: ${esc(e.message)}</p>`;
-    return;
-  }
-  $("editor").innerHTML = `<div class="editor-inner raw-view">
-    <div class="editor-toolbar"><span class="help">Press Esc to go back to your notes.</span><button id="hide-changes">Back to your notes</button></div>
-    <div class="row"><h2>Recent changes by the agent</h2></div>
-    <span class="help">Every time the agent saves, edits or deletes something in your memory, it shows up here. Undo puts the files back as they were before that change.</span>
-    ${changes.length ? changes.map(changeCard).join("") : `<p class="blank">The agent hasn't changed your memory since this list started.</p>`}
-  </div>`;
-  if (focusChange) $(`change-${focusChange}`)?.scrollIntoView({ block: "center" });
-}
-
-function hideChanges() {
-  $("show-changes").setAttribute("aria-pressed", "false");
-  hideIndex();
-}
-
-async function undoChange(id, force = false) {
-  try {
-    await api("POST", `/api/changes/${encodeURIComponent(id)}/undo`, { is_forced: force });
-  } catch (e) {
-    if (e.status === 409 && window.confirm(`${e.message} Undo anyway?`)) return undoChange(id, true);
-    const status = $(`undo-status-${id}`);
-    if (status) status.textContent = e.status === 409 ? "Not undone." : e.message;
-    return;
-  }
-  const data = await api("GET", "/api/notes");
-  notes = data.notes;
-  outline = data.index;
-  focusChange = id;
-  showChanges();
 }
 
 const rawLabel = (n) => `Show raw ${n.is_index_only ? "index line" : "file"}`;
@@ -435,9 +335,6 @@ document.addEventListener("click", (e) => {
   else if (t.dataset.missingLine) showMissing(Number(t.dataset.missingLine));
   else if (t.id === "show-index") view === "index" ? hideIndex() : showIndex(false);
   else if (t.id === "hide-index") hideIndex();
-  else if (t.id === "show-changes") view === "changes" ? hideChanges() : showChanges(false);
-  else if (t.id === "hide-changes") hideChanges();
-  else if (t.dataset.undo) { t.disabled = true; undoChange(t.dataset.undo); }
   else if (t.dataset.tab) {
     readForm();
     tab = t.dataset.tab;
@@ -474,7 +371,6 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape" || document.querySelector(".modal-back")) return;
   if (view === "index") hideIndex();
-  else if (view === "changes") hideChanges();
   else if (view === "note" && tab === "raw") { tab = "edit"; renderEditor(); }
 });
 document.addEventListener("input", (e) => {
@@ -489,4 +385,4 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && !isDirty()) load(true);
 });
 
-load(false).then(() => { if (focusChange) showChanges(); });
+load(false);

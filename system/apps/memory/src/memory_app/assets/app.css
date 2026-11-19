@@ -171,26 +171,3 @@
     margin: 0;
   }
 }
-/* The agent's recorded changes to the notes, each with a line-by-line comparison and Undo. */
-@layer app {
-  .changes-link { width: 100%; justify-content: flex-start; font-size: var(--font-size-row); }
-  .changes-link[aria-pressed="true"] { background: var(--c-fill-active); }
-  .change-card {
-    border: 1px solid var(--c-border);
-    border-radius: var(--radius-lg);
-    padding: 12px 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .change-card[aria-current="true"] { border-color: var(--c-accent); }
-  .change-card.undone { opacity: .7; }
-  .change-card h3 { font-size: var(--font-size-body); margin: 0; flex: 1; }
-  .change-file { display: flex; flex-direction: column; gap: 4px; }
-  .raw-view pre.diff { font-size: var(--font-size-helper); padding: 8px 10px; }
-  .diff span { display: block; }
-  .diff-removed { background: var(--c-danger-bg); }
-  .diff-added { background: var(--c-success-bg); }
-  .diff-same { color: var(--c-text-secondary); }
-  .diff-fold { color: var(--c-text-faint); font-style: italic; }
-}
