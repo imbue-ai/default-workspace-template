@@ -7581,23 +7581,13 @@ def test_recover_no_restart_removes_the_bundle_a_pre_split_tree_does_not_serve(
     assert not _marker_exists(apply_repo)
 
 
-def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
-    apply_repo: Path, capsys
-) -> None:
-    """A copy that would not restore is kept, and the report says so.
-
-    Deleting it would destroy the only remaining way back -- a restore that
-    failed for anything but a missing copy leaves the copy sitting right there.
-    """
-    snapshots_root = (
-        apply_repo
-        / update_apply_contract.STATE_DIR_REL
-        / update_apply_contract.SNAPSHOTS_DIRNAME
-    )
-    copy = snapshots_root / "bundle"
+def _recover_over_an_unrestorable_bundle(apply_repo: Path) -> tuple[int, Path]:
+    """A boot-path ``recover`` whose one pre-apply copy cannot be put back: the
+    destination's own parent is a regular file (``blocked``). Returns its exit code and
+    the kept copy."""
+    copy = _snapshots_root(apply_repo) / "bundle"
     copy.mkdir(parents=True)
     (copy / "index.html").write_text("the pre-apply bundle")
-    # The restore cannot land: the destination's own parent is a regular file.
     (apply_repo / "blocked").write_text("not a directory")
     _plant_marker(
         apply_repo,
@@ -7610,8 +7600,28 @@ def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
         ],
     )
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    return _recover(runner, _FakeHttp(_all_healthy), apply_repo, no_restart=True), copy
 
-    code = _recover(runner, _FakeHttp(_all_healthy), apply_repo, no_restart=True)
+
+def _snapshots_root(apply_repo: Path) -> Path:
+    return (
+        apply_repo
+        / update_apply_contract.STATE_DIR_REL
+        / update_apply_contract.SNAPSHOTS_DIRNAME
+    )
+
+
+def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
+    apply_repo: Path, capsys
+) -> None:
+    """A copy that would not restore is kept, and the report says so.
+
+    Deleting it would destroy the only remaining way back -- a restore that
+    failed for anything but a missing copy leaves the copy sitting right there.
+    """
+    snapshots_root = _snapshots_root(apply_repo)
+
+    code, copy = _recover_over_an_unrestorable_bundle(apply_repo)
 
     # The boot path's emergency: nothing is running to probe, the marker is
     # gone, and the services are about to boot over a non-restored bundle --
@@ -7628,6 +7638,39 @@ def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
     assert record["dri_agent"] == "the-lead"
     assert "could not restore: bundle" in record["reason"]
     assert record["snapshots_dir"] == str(snapshots_root)
+    # The marker that said where the copy belongs is gone, so the record says it.
+    assert record["unrestored"] == [
+        {
+            "name": "bundle",
+            "source": str(apply_repo / "blocked" / "static"),
+            "copy": str(copy),
+        }
+    ]
+
+
+def test_finish_restore_puts_back_what_a_boot_rollback_could_not_once_the_cause_is_fixed(
+    apply_repo: Path, capsys
+) -> None:
+    code, copy = _recover_over_an_unrestorable_bundle(apply_repo)
+    assert code == 3
+    destination = apply_repo / "blocked" / "static"
+    finish_restore = ["finish-restore", "--repo-root", str(apply_repo)]
+
+    # The cause is still there: the copy stays, and so does its entry in the record.
+    assert update_self.main(finish_restore) == 3
+    assert (copy / "index.html").exists()
+    assert [entry["name"] for entry in _read_emergency(apply_repo)["unrestored"]] == ["bundle"]
+
+    (apply_repo / "blocked").unlink()
+    assert update_self.main(finish_restore) == 0
+
+    assert (destination / "index.html").read_text() == "the pre-apply bundle"
+    assert not _snapshots_root(apply_repo).exists()
+    # Health is the agent's to confirm, so the record stays, now naming nothing left.
+    record = _read_emergency(apply_repo)
+    assert record["unrestored"] == []
+    assert "could not restore: bundle" in record["reason"]
+    assert "restored: bundle" in capsys.readouterr().err
 
 
 def test_recover_reaches_the_same_end_state_as_the_in_process_rollback(

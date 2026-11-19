@@ -118,6 +118,25 @@ the repair was by hand: verify the workspace is actually healthy, then delete
 `emergency.json` and tell the user what happened. Leaving it in place means a
 workspace that is fine goes on telling its user it may be broken.
 
+### A partial restore at boot
+
+A boot-time rollback that put the tree back but not every pre-apply copy (a
+full disk, a permission fault) lists each copy it could not restore, with the
+path it belongs at, under `unrestored` in `emergency.json`. Fix what stopped
+the restore (its reason says what failed); ask the user before deleting
+anything of theirs to free space. Then put the copies back with the same
+restore `recover` attempted, which also relinks a tool environment's
+entrypoints:
+
+```bash
+python3 .agents/skills/update-self/scripts/update_self.py finish-restore
+```
+
+It exits 0 once every copy is back, and 3 naming the ones that still would
+not restore, which stay listed for another run. A copy that is gone has to be
+rebuilt instead. Then verify the workspace is healthy and delete
+`emergency.json`, as above.
+
 ## Exit 1 -- precondition; nothing changed
 
 A dirty tree; a refused fast-forward (`HEAD` moved under the pass); another
@@ -168,7 +187,42 @@ the workspace heals itself: bootstrap rolls a stale marker back at the next
 container start, and a recovery cron (`recover --if-stale`) does the same
 within minutes for a kill without a restart. Both leave the tree matching the
 pre-update revision with the worker branch intact; as above, that is a forward
-revert, so a retry goes back to the worker as after exit 2.
+revert, so a retry after the cron's rollback goes back to the worker as after
+exit 2. A restart's rollback is different (below).
+
+### After a restart rolled it back
+
+When bootstrap rolls an apply back at boot, it starts the agent that was
+driving it and sends it a note. The user sees only the note's summary line:
+on a full rollback, that the update stopped part-way when the workspace
+restarted, that the workspace was put back the way it was, and that they can
+ask to try it again; on a partial one (`rollback-incomplete`), that it
+couldn't be fully put back. The rest of the note is for you.
+
+**Never retry it on your own.** This is not exit 2: the update itself may be
+what restarted the workspace (the new version pushing memory past the
+container's limit, say), and from inside the workspace that cause is often
+invisible, so an unattended retry can loop. Exit 2's retry rules do not apply.
+Instead:
+
+1. On `rollback-incomplete`, finish the restore first (Exit 3, "A partial
+   restore at boot"), without waiting to be asked: it only puts back what
+   the workspace had.
+2. Check the workspace is healthy: `supervisorctl status` shows the programs
+   RUNNING, and the shell and the chat answer.
+3. Wind the pass down: bring back the chats the pass paused (`run-status
+   resume-chats`, without `--landed`, with `--wip-commit <sha>` when 5b's save
+   made a commit), release the leases, and record `run-status verdict
+   REFUSED --detail "The update stopped part-way when the workspace restarted
+   and was put back."` (`STUCK` when the workspace is still unhealthy). Stop
+   the worker rather than destroying it, as after any rollback.
+4. Tell the user in a line or two how the workspace checked out. The notice
+   already told them what happened and that they can ask to try again, so
+   don't repeat the offer.
+
+When the user asks to try again, run the update as a fresh pass from Step 1:
+it sets the stopped worker aside, and the new worker reverts the rollback as
+the worker reference says.
 
 One carve-out, exactly once per workspace: both unattended triggers live in the
 *running* container, not in the merge being applied. On the very first apply
@@ -260,8 +314,9 @@ reports the workspace by it. Choose it by what happened:
   shows the merge cannot land without breaking the running workspace.
 - `REFUSED`: the pass ran as it should and chose not to apply. Nothing is
   broken: there was no target it may take, the user declined or told you to
-  stop (`stopping-when-asked.md`), or the apply rolled back and your
-  best effort at a retry is spent.
+  stop (`stopping-when-asked.md`), the apply rolled back and your
+  best effort at a retry is spent, or a restart rolled the apply back
+  ("After a restart rolled it back").
 - `STUCK`: a fault stopped the pass and you could not recover from it. The
   worker reported `stuck` for any other reason, a dead worker did not come
   back through `.agents/skills/launch-task/references/dead-worker-recovery.md`,

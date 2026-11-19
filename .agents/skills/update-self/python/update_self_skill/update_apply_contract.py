@@ -13,6 +13,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Callable
 
@@ -790,7 +791,11 @@ def emergency_path(repo_root: Path) -> Path:
 
 
 def write_emergency(
-    repo_root: Path, reason: str, dri_agent: str, now: Callable[[], float]
+    repo_root: Path,
+    reason: str,
+    dri_agent: str,
+    now: Callable[[], float],
+    unrestored: Sequence[SnapshotRecord] = (),
 ) -> None:
     """Record that a rollback left the workspace unhealthy, atomically.
 
@@ -800,6 +805,10 @@ def write_emergency(
     ``recover`` carries the *recovering* agent rather than the one whose apply
     failed. The marker is the only other place that name lives and it comes
     down on this same path.
+
+    ``unrestored`` are the pre-apply copies a boot-time rollback could not put
+    back, each with the path it belongs at: the marker that named those paths
+    is gone, and ``finish-restore`` puts them back from this record.
 
     Best-effort: this runs on the way out of a failure that has already been
     written to stderr in full, so a filesystem that will not take the record
@@ -816,6 +825,10 @@ def write_emergency(
                     "recorded_at": now(),
                     "dri_agent": dri_agent,
                     "snapshots_dir": str(snapshots_root(repo_root)),
+                    "unrestored": [
+                        {"name": s.name, "source": s.source, "copy": s.copy}
+                        for s in unrestored
+                    ],
                 },
                 indent=2,
             )
@@ -825,6 +838,34 @@ def write_emergency(
         sys.stderr.write(
             f"warning: could not record the emergency at {path} ({exc}).\n"
         )
+
+
+def read_emergency(repo_root: Path) -> dict[str, object] | None:
+    """The emergency record as written, or ``None`` when there is none or it cannot be read."""
+    path = emergency_path(repo_root)
+    try:
+        raw = json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        sys.stderr.write(f"warning: could not read {path} ({exc}).\n")
+        return None
+    if not isinstance(raw, dict):
+        sys.stderr.write(f"warning: {path} is not a JSON object.\n")
+        return None
+    return raw
+
+
+def unrestored_snapshots(record: Mapping[str, object]) -> list[SnapshotRecord]:
+    """The copies an emergency record names as not put back; empty for a record that names none."""
+    entries = record.get("unrestored")
+    if not isinstance(entries, list):
+        return []
+    return [
+        SnapshotRecord(name=str(e["name"]), source=str(e["source"]), copy=str(e["copy"]))
+        for e in entries
+        if isinstance(e, dict) and {"name", "source", "copy"} <= e.keys()
+    ]
 
 
 def clear_emergency(repo_root: Path) -> None:

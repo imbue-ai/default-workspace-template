@@ -437,6 +437,17 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    Only the critical apps' health gates the apply. After a `0`, check that any
    ordinary app or service in the pass works, and fix what doesn't.
 
+   **If a restart interrupts the go-live**, the workspace rolls the change
+   back as it starts again and wakes you with a note. The user sees one line
+   saying the change was put back and that they can ask to try it again, or
+   that it couldn't be fully put back. Never re-apply on your own: the change
+   may be what restarted the workspace, and a retry could do it again. On a
+   partial rollback, finish the restore first, as `update-self`'s
+   `apply-outcomes.md` ("A partial restore at boot") says. Then check the
+   workspace is healthy, tear down as step 4 does after a failed apply, and
+   tell the user in a line or two how it checked out. A retry the user asks
+   for is a fresh pass off the current `HEAD`.
+
 3. **The notice is the user's.** After a successful apply, one banner across
    the top of the workspace names every app included in the rollback (each
    critical app the apply touched, and every other app in the pass): recently

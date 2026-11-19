@@ -51,14 +51,19 @@ BROWSER_FLEET_TAG = "agentic-browser-fleet"
 # ``<summary>`` line is for the user; ``message_display_test.py`` pins the two tags equal.
 BACKGROUND_TASK_REPORT_TAG = "background-task-report"
 
-# Cross-layer contract: the wrapper the update-self skill puts around the note it sends each chat
-# it paused for an update's apply (``.agents/skills/update-self/python/update_self_skill/update_resume_note.py``,
-# sent by ``run-status resume-chats``). The opening tag says whether the update landed, which
-# picks the notice's label; only the ``<summary>`` line is for the user. ``message_display_test.py``
-# pins the tag and both outcomes equal.
+# Cross-layer contract: the wrapper around the notes an apply's outcome reaches a chat in. The
+# update-self skill sends each chat it paused for an update's apply one
+# (``.agents/skills/update-self/python/update_self_skill/update_resume_note.py``, sent by
+# ``run-status resume-chats``), saying whether the update landed; bootstrap sends the agent whose
+# apply a restart interrupted one (``system/libs/bootstrap/src/bootstrap/rollback_note.py``),
+# saying whether the rollback at boot put everything back. The opening tag's outcome picks the
+# notice's label; only the ``<summary>`` line is for the user. ``message_display_test.py`` pins
+# the tag and every outcome equal to both writers' copies.
 WORKSPACE_UPDATE_NOTE_TAG = "workspace-update-note"
 WORKSPACE_UPDATE_OUTCOME_LANDED = "landed"
 WORKSPACE_UPDATE_OUTCOME_NOT_LANDED = "not-landed"
+WORKSPACE_UPDATE_OUTCOME_ROLLED_BACK = "rolled-back"
+WORKSPACE_UPDATE_OUTCOME_ROLLBACK_INCOMPLETE = "rollback-incomplete"
 
 # Cross-layer contract: the tag the chat app wraps a seeded chat's context in when it launches
 # that chat's first agent (``chat_seed.seed_context_message``). The agent reads the whole
@@ -79,14 +84,16 @@ _BROWSER_FLEET_RE = re.compile(rf"^\s*<{BROWSER_FLEET_TAG}>([\s\S]*)</{BROWSER_F
 _BACKGROUND_TASK_REPORT_RE = re.compile(
     rf"^\s*<{BACKGROUND_TASK_REPORT_TAG}>\s*<summary>([^\n]*?)</summary>[\s\S]*</{BACKGROUND_TASK_REPORT_TAG}>\s*$"
 )
-_WORKSPACE_UPDATE_NOTE_RE = re.compile(
-    rf'^\s*<{WORKSPACE_UPDATE_NOTE_TAG} outcome="({WORKSPACE_UPDATE_OUTCOME_LANDED}|{WORKSPACE_UPDATE_OUTCOME_NOT_LANDED})">'
-    rf"\s*<summary>([^\n]*?)</summary>[\s\S]*</{WORKSPACE_UPDATE_NOTE_TAG}>\s*$"
-)
 _WORKSPACE_UPDATE_LABELS = {
     WORKSPACE_UPDATE_OUTCOME_LANDED: "Workspace updated",
     WORKSPACE_UPDATE_OUTCOME_NOT_LANDED: "Workspace update not applied",
+    WORKSPACE_UPDATE_OUTCOME_ROLLED_BACK: "Workspace put back",
+    WORKSPACE_UPDATE_OUTCOME_ROLLBACK_INCOMPLETE: "Workspace needs repair",
 }
+_WORKSPACE_UPDATE_NOTE_RE = re.compile(
+    rf'^\s*<{WORKSPACE_UPDATE_NOTE_TAG} outcome="({"|".join(map(re.escape, _WORKSPACE_UPDATE_LABELS))})">'
+    rf"\s*<summary>([^\n]*?)</summary>[\s\S]*</{WORKSPACE_UPDATE_NOTE_TAG}>\s*$"
+)
 # One report in a text that newline-joins several messages (a queue handed back on Stop). A
 # report is a whole message, so its tags sit on lines of their own; its output is the command's
 # raw text and may carry the tag mid-line.
@@ -341,8 +348,8 @@ def _match_background_task_report(content: str) -> MessageDisplay | None:
 
 
 def _match_workspace_update_note(content: str) -> MessageDisplay | None:
-    """The note a chat paused for a workspace update gets when it resumes; a NOTICE showing only its
-    summary line, labelled by whether the update landed."""
+    """The note a chat gets about an apply's outcome -- resumed after a workspace update, or woken after a
+    restart rolled its apply back; a NOTICE showing only its summary line, labelled by the outcome."""
     match = _WORKSPACE_UPDATE_NOTE_RE.match(content)
     if match is None:
         return None

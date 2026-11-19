@@ -133,6 +133,13 @@ belong in tested code rather than agent prose:
     rolled back but the pre-apply state or health could not be put back
     (emergency recorded, marker cleared).
 
+``finish-restore``
+    Put back the pre-apply copies a boot-time ``recover`` could not, from the
+    list the emergency record keeps (the marker that named them is gone). Run
+    once what stopped the restore is fixed. Exit codes: 0 every copy is back,
+    or none is recorded / 3 some still would not restore. The record stays
+    until the workspace is confirmed healthy.
+
 Impact analysis -- which services and skills depend on a changed file -- is
 deliberately NOT scripted here: it requires open-ended exploration (imports,
 shelled-out scripts, API-surface coupling) that a deterministic helper would
@@ -188,6 +195,7 @@ from update_self_skill.update_apply import (
     UpdateRollbackHistory,
     apply_update,
     confirm_last,
+    finish_restore,
     pending_update_rollbacks,
     read_pass_scope,
     recover,
@@ -1185,6 +1193,10 @@ def _cmd_run_status_resume_chats(args: argparse.Namespace) -> int:
     return 1 if problems else 0
 
 
+def _cmd_finish_restore(args: argparse.Namespace) -> int:
+    return finish_restore(_repo_root(args).resolve())
+
+
 def _cmd_recover(args: argparse.Namespace) -> int:
     return recover(
         _repo_root(args).resolve(),
@@ -1499,6 +1511,14 @@ def build_parser() -> argparse.ArgumentParser:
         "health probes (services boot fresh from the restored state).",
     )
     recover_parser.set_defaults(func=_cmd_recover)
+
+    finish_restore_parser = sub.add_parser(
+        "finish-restore",
+        help="Put back the pre-apply copies a boot-time rollback could not, as the "
+        "emergency record names them, once what stopped the restore is fixed.",
+        parents=[common],
+    )
+    finish_restore_parser.set_defaults(func=_cmd_finish_restore)
 
     run_status_parser = sub.add_parser(
         "run-status",

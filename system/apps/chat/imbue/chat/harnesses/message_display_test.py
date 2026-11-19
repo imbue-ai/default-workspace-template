@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from bootstrap import rollback_note
 from update_self_skill import update_resume_note
 from workspace_bare_scripts import message_chat
 from workspace_bare_scripts import run_in_background
@@ -23,6 +24,8 @@ from imbue.chat.harnesses.message_display import SecretResolutionVerdict
 from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_NOTE_TAG
 from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_OUTCOME_LANDED
 from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_OUTCOME_NOT_LANDED
+from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_OUTCOME_ROLLBACK_INCOMPLETE
+from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_OUTCOME_ROLLED_BACK
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.message_display import format_secret_resolution_notice
 from imbue.chat.harnesses.message_display import is_non_turn_tail
@@ -406,6 +409,67 @@ def test_a_resumed_chats_workspace_update_note_is_a_notice_showing_only_its_summ
     assert (update_resume_note.OUTCOME_LANDED, update_resume_note.OUTCOME_NOT_LANDED) == (
         WORKSPACE_UPDATE_OUTCOME_LANDED,
         WORKSPACE_UPDATE_OUTCOME_NOT_LANDED,
+    )
+    decision = classify_user_message(note)
+    assert decision is not None
+    assert decision.display is DisplayKind.NOTICE
+    assert decision.display_label == label
+    assert decision.display_body == summary
+    assert is_non_turn_tail(note) is False
+
+
+@pytest.mark.parametrize(
+    ("release", "is_restore_complete", "label", "summary"),
+    [
+        (
+            "minds-v0.10.1",
+            True,
+            "Workspace put back",
+            "The update to this workspace stopped part-way when the workspace restarted, so the workspace has "
+            "been put back the way it was. You can ask to try it again.",
+        ),
+        (
+            "minds-v0.10.1",
+            False,
+            "Workspace needs repair",
+            "The update to this workspace stopped part-way when the workspace restarted, and the workspace "
+            "couldn't be fully put back, so some things may not work until it's repaired.",
+        ),
+        (
+            None,
+            True,
+            "Workspace put back",
+            "A change to this workspace's apps stopped part-way when the workspace restarted, so the workspace "
+            "has been put back the way it was. You can ask to try it again.",
+        ),
+        (
+            None,
+            False,
+            "Workspace needs repair",
+            "A change to this workspace's apps stopped part-way when the workspace restarted, and the workspace "
+            "couldn't be fully put back, so some things may not work until it's repaired.",
+        ),
+    ],
+)
+def test_the_note_a_boot_rollback_wakes_its_agent_with_is_a_notice_showing_only_its_summary(
+    release: str | None, is_restore_complete: bool, label: str, summary: str
+) -> None:
+    """Bootstrap wakes the agent whose apply a restart interrupted with a note it composes itself (it cannot
+    import this package), so its copy of the tag and outcomes is pinned here by classifying notes it composed:
+    the user sees one plain line, never the agent's instructions."""
+    note = rollback_note.compose_rollback_note(
+        rollback_note.BootRollback(
+            dri_agent="lead",
+            merge_ref="mngr/update-self",
+            release=release,
+            is_restore_complete=is_restore_complete,
+        )
+    )
+
+    assert rollback_note.WORKSPACE_UPDATE_NOTE_TAG == WORKSPACE_UPDATE_NOTE_TAG
+    assert (rollback_note.OUTCOME_ROLLED_BACK, rollback_note.OUTCOME_ROLLBACK_INCOMPLETE) == (
+        WORKSPACE_UPDATE_OUTCOME_ROLLED_BACK,
+        WORKSPACE_UPDATE_OUTCOME_ROLLBACK_INCOMPLETE,
     )
     decision = classify_user_message(note)
     assert decision is not None

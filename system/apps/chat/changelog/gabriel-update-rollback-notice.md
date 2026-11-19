@@ -1,0 +1,1 @@
+- The note an agent receives after a restart rolled its update back now shows as a one-line notice ("Workspace put back", or "Workspace needs repair" when the rollback could not restore everything) instead of a message bubble showing the agent's instructions as if the user had typed them.
