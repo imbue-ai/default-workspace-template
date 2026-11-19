@@ -8,7 +8,8 @@ either of the two rule records under Validation.
 
 - **Catch-up**, first, only on a `done` that answers a catch-up or a retry
   (`worker/catch-up.md`).
-- **What's new**: a digest of the changelog entries.
+- **What's new**: a digest of Step 5's file, release by release, and any
+  `note`.
 - **Conflicts**: each one and its resolution. For any side-pick, or claim
   that the kept side subsumes the other, list what the discarded side changed
   and where each change ended up, from the base-diff accounting of your

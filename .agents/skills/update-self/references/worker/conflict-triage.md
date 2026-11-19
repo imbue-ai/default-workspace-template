@@ -12,6 +12,14 @@ The first rule that applies wins:
   side-pick or hand-merge.** See "Lockfiles" below.
 - **Agent-owned files -> keep local** (`PURPOSE.md`, `data/`):
   `git checkout --ours -- <path> && git add <path>`.
+- **The template's changelog -> take the target's side**: `git checkout
+  --theirs -- <path> && git add <path>` for the root `CHANGELOG.md` and
+  `UNABRIDGED_CHANGELOG.md`, and `git rm <path>` for a `changelog/` entry file
+  the target deletes (its text has moved into those two files). When the
+  workspace's side holds text the target's lacks (its own lines in a root
+  file, or its edit to an entry file), first save the workspace's version to a
+  new path outside any `changelog/` folder (`git show :2:<path> > <new path>`)
+  and name the move in your report.
 - **Mixed files (`AGENTS.md`, `CLAUDE.md` and similar) -> merge by judgment.** Keep the
   agent-specific customizations, fold in the upstream additions.
   Side-picking one side of a code file outside the agent-owned rule is a last

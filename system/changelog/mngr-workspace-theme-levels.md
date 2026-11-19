@@ -1,1 +1,0 @@
-`forward_port.py` copies an app manifest's `[theming] mode` into its registry row as `theming_mode`, and takes `--theming-mode` for a registration with no manifest (a preview of the app), so the shell can tell an app that themes itself, a themeable one, and one that is not themeable yet apart.

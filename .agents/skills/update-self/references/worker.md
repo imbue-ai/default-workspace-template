@@ -352,10 +352,15 @@ fallback is a restart.
 eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 BASE=$(cat data/.tasks/update-self/base.txt)
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    changelog-entries --base "$BASE" --target "$TARGET_REF"
+    changelog-entries --base "$BASE" --target "$TARGET_REF" \
+    --out data/.tasks/update-self/whats-new.md
 ```
 
-Read the entries it lists and digest them for the report.
+`data/.tasks/update-self/whats-new.md` is what you digest: for each release
+newer than the workspace's (`release` in the printed JSON), newest first, its
+section of the target's root `CHANGELOG.md`, plus `[Unreleased]` when the target
+has unreleased changes. `sections` names each one. Repeat any `note` in your
+report. Read a long file in parts.
 
 ## 6. Report back
 

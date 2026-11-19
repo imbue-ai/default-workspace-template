@@ -1,1 +1,0 @@
-`forward_port.py` copies the manifest's new `uses_microphone` onto the registry row, and clears it from a row whose manifest no longer declares it, like every other manifest-owned key. The chat declares it, for its composer's dictation, so the shell hands the microphone to the chat's frames.

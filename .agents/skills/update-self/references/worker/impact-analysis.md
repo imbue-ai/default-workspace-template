@@ -109,7 +109,8 @@ BASE=$(cat data/.tasks/update-self/base.txt)
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
     retired-names --base "$BASE" --target "$TARGET_REF"
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    changelog-entries --base "$BASE" --target "$TARGET_REF"
+    changelog-entries --base "$BASE" --target "$TARGET_REF" \
+    --out data/.tasks/update-self/whats-new.md
 git diff --name-status --diff-filter=DR "$BASE" "$TARGET_REF"
 ```
 
@@ -121,10 +122,11 @@ git diff --name-status --diff-filter=DR "$BASE" "$TARGET_REF"
   are the directories under `.agents/skills/` that are gone, the renamed ones
   with their new names. Read by hand any manifest it lists under
   `unreadable_pyprojects`.
-- **The template's own changelog entries** between the two releases, which
-  `changelog-entries` lists. Read each one for what it says was removed,
-  renamed or replaced: a command, a flag, an environment variable, a port, a
-  route, a skill, a file. Note the replacement an entry states.
+- **The template's own changelog** for each release the update crosses, which
+  `changelog-entries` writes to `data/.tasks/update-self/whats-new.md`. Read
+  it for what it says was removed, renamed or replaced: a command, a flag, an
+  environment variable, a port, a route, a skill, a file. Note the
+  replacement a section states.
 - **mngr's changelog entries**, when the update moves the mngr pin
   (`pyproject.toml`, `[tool.uv.sources]`). That pin is the largest surface an
   update moves, and mngr's entries between the two commits announce removed
@@ -208,6 +210,12 @@ an impacted skill gets validated per its own contract.
 chains, `.mngr/**`) and **global-dependency bumps** always count as impacted
 even though nothing imports them. Work them per
 `worker/provisioning-changes.md` and report each there.
+
+**A user app on port 8090 or 8091 is moved.** Those are the Screen's service
+and neko ports, which older scaffolds could hand out, breaking the Screen. Move
+any workspace-added app on either to a free port in your branch (its program
+line's `--url` and its runner's `PORT` default), and name the move under
+**Impact analysis**.
 
 ## 5. Record what you found
 

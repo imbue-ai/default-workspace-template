@@ -120,9 +120,8 @@ Every call additionally carries `toolSummary` and `toolAction`.
 
 Two consequences worth noting elsewhere:
 
-- `Cwd` is **required per call**, so agy has no persistent shell cwd. Claude's "return to the
-  repo root" Stop hook has nothing to protect here -- see
-  `harnesses/core-contracts/tool-call-policies-state-of-things.md`.
+- `Cwd` is **required per call**, so agy has no persistent shell cwd for its hooks to inherit
+  -- see `harnesses/core-contracts/tool-call-policies-state-of-things.md`.
 - `WaitMsBeforeAsync` is **agent-supplied**, not fixed by the runtime (5000 in one store, 3000
   in the other), and `manage_task` exists to drive backgrounded shells.
 
