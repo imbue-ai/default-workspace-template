@@ -10,6 +10,7 @@ import { isHandoffPromptChip } from "./handoffPrompt";
 import { dropOutgoingByMessageId, noteBackendArrivals } from "./OutgoingMessages";
 import { ensureParticipantsKnowAuthors } from "./Participants";
 import { describeRequestError, isUnansweredRequest } from "@imbue/workspace-ui/src/models/request-error";
+import { takeRootTranscriptSnapshot } from "../embedApi";
 
 export interface SubagentMetadata {
   agent_type: string;
@@ -887,6 +888,31 @@ export async function whenTranscriptLoadSettles(chatId: string): Promise<boolean
   return true;
 }
 
+/** The chat's newest events, as a first load reads them. */
+export function requestTailEvents(chatId: string): Promise<EventsResponse> {
+  return m.request<EventsResponse>({
+    method: "GET",
+    url: apiUrl("/api/chats/:chatId/events"),
+    params: { chatId },
+    config: applyEventsRequestTimeout,
+  });
+}
+
+/** The read the chat root started as it created this page's frame when there is one, else this page's own. A failed
+ *  root read is asked again here, so its failure (a 404 latching not-found, say) is always this page's own. */
+async function readTailSnapshot(chatId: string): Promise<EventsResponse> {
+  const fromRoot = takeRootTranscriptSnapshot(chatId);
+  if (fromRoot !== null) {
+    try {
+      // Copied into this window, so nothing here holds objects of the root's (their prototypes are the root's).
+      return structuredClone(await fromRoot);
+    } catch (error) {
+      console.info(`The chat root's transcript read for chat ${chatId} failed; reading it again`, error);
+    }
+  }
+  return requestTailEvents(chatId);
+}
+
 async function loadSnapshot(chatId: string): Promise<TranscriptEvent[]> {
   notFoundChatIds.delete(chatId);
   // Moved on the attempt, not on its outcome: whoever is about to learn the
@@ -900,12 +926,7 @@ async function loadSnapshot(chatId: string): Promise<TranscriptEvent[]> {
   loadStateByChat.set(chatId, { phase: "loading", error: null });
 
   try {
-    const result = await m.request<EventsResponse>({
-      method: "GET",
-      url: apiUrl("/api/chats/:chatId/events"),
-      params: { chatId },
-      config: applyEventsRequestTimeout,
-    });
+    const result = await readTailSnapshot(chatId);
     // Fenced for the same reason the outcome writes below are, and it matters
     // more here: a superseded attempt can still *succeed*, just late, and
     // `placeWindow` replaces the window wholesale. Letting an older snapshot land
@@ -919,6 +940,8 @@ async function loadSnapshot(chatId: string): Promise<TranscriptEvent[]> {
     placeWindow(chatId, result);
     loadStateByChat.set(chatId, IDLE_LOAD_STATE);
     loadedChatIds.add(chatId);
+    // A read the root made resolves in the root's window, which redraws the root rather than this page.
+    m.redraw();
     return result.events;
   } catch (error) {
     // The not-found latch is fenced alongside the state because the panel acts on

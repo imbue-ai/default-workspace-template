@@ -1,3 +1,5 @@
+import type { EventsResponse } from "./models/Response";
+
 /**
  * What a chat page exposes on its window for the chat root that frames it.
  *
@@ -26,8 +28,27 @@ export interface ChatPageEmbedApi {
   focus(): void;
 }
 
+/** What the chat root exposes on its window for the chat pages it frames, which read it as they load. */
+export interface ChatRootEmbedApi {
+  /** The read of the chat's newest events the root started as it created the page's frame, handed over once (later
+   *  calls answer null), so the page's first load does not wait for its own request (``root/transcriptPrefetch.ts``). */
+  takeTranscriptSnapshot(chatId: string): Promise<EventsResponse> | null;
+}
+
 declare global {
   interface Window {
     chatPageEmbed?: ChatPageEmbedApi;
+    chatRootEmbed?: ChatRootEmbedApi;
+  }
+}
+
+/** The transcript read the chat root framing this page started for ``chatId``, or null: not framed by the root (a
+ *  direct visit, or a frame of the shell, whose window this origin cannot reach), or nothing started or left. */
+export function takeRootTranscriptSnapshot(chatId: string): Promise<EventsResponse> | null {
+  if (typeof window === "undefined" || window.parent === window) return null;
+  try {
+    return window.parent.chatRootEmbed?.takeTranscriptSnapshot(chatId) ?? null;
+  } catch {
+    return null;
   }
 }

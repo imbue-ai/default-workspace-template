@@ -24,6 +24,8 @@ import { addChatActivityListener, addChatsUpdatedListener } from "./Chats";
 import { applyReplyDraftFrame, clearReplyDraft, isReplyDraftFrame } from "./ReplyDrafts";
 
 const activeStreams = new Map<string, EventSource>();
+// The streams the server has registered (their `open` fired): from then on it delivers every new event.
+const openStreams = new Set<EventSource>();
 // Set so an error-triggered reconnect timeout can tell an intentional close
 // from a transient error.
 const explicitlyDisconnectedChats = new Set<string>();
@@ -75,6 +77,9 @@ export function connectToStream(chatId: string): void {
     console.info(`[si-sse] stream open for chat ${chatId}`);
     // A successful (re)connection resets this agent's backoff.
     getBackoff(chatId).reset();
+    openStreams.add(eventSource);
+    if (inFlightSnapshotBuffersByChat.has(chatId)) return;
+    void catchUpLiveTail(chatId);
   };
 
   eventSource.onmessage = (messageEvent: MessageEvent) => {
@@ -97,6 +102,7 @@ export function connectToStream(chatId: string): void {
   };
 
   eventSource.onerror = () => {
+    openStreams.delete(eventSource);
     if (activeStreams.get(chatId) === eventSource) {
       eventSource.close();
       activeStreams.delete(chatId);
@@ -163,6 +169,12 @@ export async function loadSnapshotWithStream(chatId: string): Promise<void> {
       appendEvents(chatId, buffer);
     }
   }
+  if (isStreamOpen(chatId)) void catchUpLiveTail(chatId);
+}
+
+function isStreamOpen(chatId: string): boolean {
+  const eventSource = activeStreams.get(chatId);
+  return eventSource !== undefined && openStreams.has(eventSource);
 }
 
 async function reconnectWithSnapshot(chatId: string): Promise<void> {
@@ -196,6 +208,7 @@ export function disconnectFromStream(chatId: string): void {
   const eventSource = activeStreams.get(chatId);
   if (eventSource !== undefined) {
     eventSource.close();
+    openStreams.delete(eventSource);
     activeStreams.delete(chatId);
   }
   clearReplyDraft(chatId);
@@ -210,8 +223,8 @@ const CATCH_UP_LIMIT = 200;
  * The stream is a low-latency hint and the transcript route the source of truth, and nothing
  * else notices an event the stream never carried (one written between the snapshot and the
  * stream registering, or one a stalled connection swallowed): it stays missing until the
- * page reloads. So whenever a turn ends, and whenever the page is shown again, the page asks
- * the route what follows its last event. Missing events at the end are appended in place;
+ * page reloads. So once the snapshot and the open stream have both landed, whenever a turn ends,
+ * and whenever the page is shown again, the page asks the route what follows its last event. Missing events at the end are appended in place;
  * one missing inside the window (the route places the window's end further along than the
  * page does) reloads the transcript with the stream, as a reconnect does.
  */

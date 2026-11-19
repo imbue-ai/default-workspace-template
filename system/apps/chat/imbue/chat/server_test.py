@@ -4570,7 +4570,7 @@ def test_stop_rejects_is_primary_agent(client: FlaskClient, app: Flask) -> None:
 
 
 def test_serves_the_built_bundle_from_its_static_assets(tmp_path: Path) -> None:
-    """The chat document links its hashed assets under ``/assets/``; the app serves them itself."""
+    """The chat document links its hashed assets under ``/assets/``; the app serves them itself, cached for good."""
     static = tmp_path / "static"
     (static / "assets").mkdir(parents=True)
     (static / "assets" / "chat-abc123.js").write_text("console.log('chat');")
@@ -4583,6 +4583,7 @@ def test_serves_the_built_bundle_from_its_static_assets(tmp_path: Path) -> None:
     served = client.get("/assets/chat-abc123.js")
     assert served.status_code == 200
     assert served.data == b"console.log('chat');"
+    assert served.headers["Cache-Control"] == "public, max-age=31536000, immutable"
     assert client.get("/assets/missing.js").status_code == 404
     assert client.get("/assets/../chat.html").status_code == 404
 

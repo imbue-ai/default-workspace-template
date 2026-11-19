@@ -6,13 +6,15 @@
  * the shell's handshake to the root through the relay, as it loads. A hidden frame is
  * told ``hidden`` and a shown one ``shown`` through the page's embed API (the two documents
  * share an origin), which is what the page keys its presence reports on, so a chat held here
- * but not on screen counts as open-but-hidden, like a minimized window's page.
+ * but not on screen counts as open-but-hidden, like a minimized window's page. Creating a frame
+ * starts the read of its chat's transcript beside the page's own load (``transcriptPrefetch.ts``).
  */
 
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { getBasePath } from "@imbue/workspace-ui/src/base-path";
 import type { ChatPageEmbedApi } from "../embedApi";
 import { handHandshakeDown } from "./relay";
+import type { TranscriptPrefetch } from "./transcriptPrefetch";
 
 export const MAX_HELD_FRAMES = 4;
 
@@ -37,7 +39,10 @@ export class InnerFramePool {
   private isRootShown = false;
   private isCompact = false;
 
-  constructor(private readonly container: HTMLElement) {}
+  constructor(
+    private readonly container: HTMLElement,
+    private readonly transcripts: TranscriptPrefetch,
+  ) {}
 
   /** Whether ``source`` is the window of one of this pool's frames. */
   isInnerWindow(source: MessageEventSource | null): boolean {
@@ -102,6 +107,7 @@ export class InnerFramePool {
     if (held === undefined) return;
     held.frame.remove();
     this.held.delete(chatId);
+    this.transcripts.drop(chatId);
     if (this.shownChatId === chatId) this.shownChatId = null;
   }
 
@@ -110,6 +116,7 @@ export class InnerFramePool {
   }
 
   private create(chatId: string): void {
+    this.transcripts.start(chatId);
     const frame = document.createElement("iframe");
     frame.src = `${getBasePath()}/${encodeURIComponent(chatId)}`;
     frame.title = "Chat";

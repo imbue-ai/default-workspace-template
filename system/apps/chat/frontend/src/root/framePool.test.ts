@@ -3,12 +3,14 @@
  * The chat root's inner frame pool: one frame per chat shown, the selected one visible and
  * the rest hidden, the frame shown longest ago destroyed past the bound (never the shown one),
  * and the pages handed the shell's handshake and driven through their embed API with their shown
- * and hidden states.
+ * and hidden states, and each new frame's transcript read started beside its page's load.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SHELL_HANDSHAKE, type ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import type { ChatPageEmbedApi } from "../embedApi";
+import type { EventsResponse } from "../models/Response";
 import { InnerFramePool, MAX_HELD_FRAMES } from "./framePool";
+import { TranscriptPrefetch } from "./transcriptPrefetch";
 
 const HANDSHAKE: ShellHandshake = {
   clientId: "client-1",
@@ -22,6 +24,8 @@ const HANDSHAKE: ShellHandshake = {
 
 let container: HTMLElement;
 let pool: InnerFramePool;
+let transcripts: TranscriptPrefetch;
+let readTranscript: ReturnType<typeof vi.fn<(chatId: string) => Promise<EventsResponse>>>;
 let now = 1_000;
 
 function frames(): HTMLIFrameElement[] {
@@ -69,7 +73,9 @@ beforeEach(() => {
   vi.spyOn(Date, "now").mockImplementation(() => (now += 1));
   container = document.createElement("div");
   document.body.appendChild(container);
-  pool = new InnerFramePool(container);
+  readTranscript = vi.fn((chatId: string) => Promise.resolve({ events: [], offset: 0, total: 0, chatId }));
+  transcripts = new TranscriptPrefetch(readTranscript, () => true);
+  pool = new InnerFramePool(container, transcripts);
 });
 
 afterEach(() => {
@@ -93,6 +99,22 @@ describe("InnerFramePool", () => {
 
     pool.show(null);
     expect(visibleChatIds()).toEqual([]);
+  });
+
+  it("starts reading a chat's transcript as it creates the chat's frame, and not again on switching back", () => {
+    pool.show("agent-a");
+    pool.show("agent-b");
+    pool.show("agent-a");
+
+    expect(readTranscript.mock.calls).toEqual([["agent-a"], ["agent-b"]]);
+    expect(transcripts.take("agent-a")).not.toBeNull();
+  });
+
+  it("forgets the transcript read of a frame destroyed before its page took it", () => {
+    pool.show("agent-a");
+    pool.destroy("agent-a");
+
+    expect(transcripts.take("agent-a")).toBeNull();
   });
 
   it("destroys the frame shown longest ago past the bound, never the shown one", () => {

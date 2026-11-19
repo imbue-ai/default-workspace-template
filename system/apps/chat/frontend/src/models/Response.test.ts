@@ -375,6 +375,61 @@ describe("dedup", () => {
   });
 });
 
+/** Stand this page in a frame of the chat root, whose ``takeTranscriptSnapshot`` answers ``take``. */
+function framedByRoot(take: (chatId: string) => Promise<unknown> | null): void {
+  const page: { parent?: unknown } = {};
+  page.parent = { chatRootEmbed: { takeTranscriptSnapshot: take } };
+  vi.stubGlobal("window", page);
+}
+
+// The chat root starts a page's first transcript read as it creates the page's frame (root/transcriptPrefetch.ts).
+describe("a first load inside the chat root", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("places the read the root started, without asking again, and redraws this page", async () => {
+    const agent = freshChat();
+    const take = vi.fn(() => Promise.resolve({ events: [makeEvent("x")], offset: 4, total: 5 }));
+    framedByRoot(take);
+    mockRequest.mockClear();
+    mockRedraw.mockClear();
+
+    await fetchEvents(agent);
+
+    expect(take).toHaveBeenCalledWith(agent);
+    expect(mockRequest).not.toHaveBeenCalled();
+    expect(ids(agent)).toEqual(["x"]);
+    expect(getFirstOffset(agent)).toBe(4);
+    expect(getTotalEventCount(agent)).toBe(5);
+    expect(mockRedraw).toHaveBeenCalled();
+  });
+
+  it("asks for itself when the root's read failed, so the outcome is its own", async () => {
+    const agent = freshChat();
+    framedByRoot(() => Promise.reject(new Error("offline")));
+    mockRequest.mockClear();
+    mockRequest.mockRejectedValueOnce({ code: 404, response: { detail: "Chat not found" } });
+
+    await expect(fetchEvents(agent)).rejects.toMatchObject({ code: 404 });
+
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+    expect(isConversationNotFound(agent)).toBe(true);
+  });
+
+  it("asks for itself when the root has no read for it", async () => {
+    const agent = freshChat();
+    framedByRoot(() => null);
+    mockRequest.mockClear();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("y")], offset: 0, total: 1 });
+
+    await fetchEvents(agent);
+
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+    expect(ids(agent)).toEqual(["y"]);
+  });
+});
+
 // The loaded window's position in the full transcript is tracked by offset (the
 // global index of its first event) + total. "More above" is offset > 0, "more
 // below" is offset + held < total -- the client derives both, replacing has_more.
