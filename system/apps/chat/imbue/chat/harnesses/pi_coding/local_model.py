@@ -121,6 +121,9 @@ class LocalModelServer(FrozenModel):
     )
 
 
+_NOT_AN_ADDRESS_MESSAGE: Final = "That is not a server address. Use the form http://host:port."
+
+
 def normalize_base_url(raw: str) -> str:
     """The OpenAI-compatible root for an address as typed: `localhost:1234` means `http://localhost:1234/v1`."""
     text = raw.strip()
@@ -128,11 +131,21 @@ def normalize_base_url(raw: str) -> str:
         raise LocalModelError("Enter the server's address.")
     if "://" not in text:
         text = f"http://{text}"
-    parts = urlsplit(text)
+    try:
+        parts = urlsplit(text)
+        # urlsplit takes a port that is not a number, or is out of range; reading it is what refuses it.
+        _ = parts.port
+    except ValueError as e:
+        raise LocalModelError(_NOT_AN_ADDRESS_MESSAGE) from e
     if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise LocalModelError("That is not a server address. Use the form http://host:port.")
+        raise LocalModelError(_NOT_AN_ADDRESS_MESSAGE)
     path = parts.path.rstrip("/") or "/v1"
-    return f"{parts.scheme}://{parts.netloc}{path}"
+    base_url = f"{parts.scheme}://{parts.netloc}{path}"
+    try:
+        httpx.URL(base_url)
+    except httpx.InvalidURL as e:
+        raise LocalModelError(_NOT_AN_ADDRESS_MESSAGE) from e
+    return base_url
 
 
 def _auth_headers(api_key: str) -> dict[str, str]:

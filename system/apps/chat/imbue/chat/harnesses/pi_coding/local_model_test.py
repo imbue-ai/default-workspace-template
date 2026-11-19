@@ -78,7 +78,20 @@ def test_an_address_is_read_the_way_a_person_types_it(typed: str, expected: str)
     assert normalize_base_url(typed) == expected
 
 
-@pytest.mark.parametrize("typed", ["", "   ", "ftp://host:21", "http://"])
+@pytest.mark.parametrize(
+    "typed",
+    [
+        "",
+        "   ",
+        "ftp://host:21",
+        "http://",
+        "localhost:abc",
+        "http://localhost:99999",
+        "http://localhost:-1",
+        "http://[::1",
+        "http://local\x00host:1234",
+    ],
+)
 def test_what_is_not_a_server_address_is_refused(typed: str) -> None:
     with pytest.raises(LocalModelError):
         normalize_base_url(typed)
