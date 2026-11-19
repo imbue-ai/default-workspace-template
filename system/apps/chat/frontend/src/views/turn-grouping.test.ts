@@ -804,7 +804,7 @@ describe("narration and close-time ejection", () => {
       ),
       ...sections[1].trailing_reply.map((e) => e.event_id),
     ];
-    expect(visibleIds).toEqual(expect.arrayContaining(["old", "ans"]));
+    expect(visibleIds).toEqual(["old", "ans"]);
     expect(stepItems(sections[1].items).flatMap((s) => s.events.map((e) => e.event_id))).not.toContain("ans");
   });
 
@@ -829,6 +829,10 @@ describe("narration and close-time ejection", () => {
     const sections = run(events, /* idle */ false);
     const afterNotice = sections[2];
     expect(afterNotice.user_event?.event_id).toBe("n1");
+    const inlineIds = afterNotice.items.flatMap((item) =>
+      item.kind === "ungrouped" ? item.events.flatMap((part) => ("event_id" in part ? [part.event_id] : [])) : [],
+    );
+    expect(inlineIds).toEqual(["ans"]);
     expect(stepItems(afterNotice.items).flatMap((s) => s.events.map((e) => e.event_id))).not.toContain("ans");
     expect(afterNotice.live_step_id).toBeNull();
   });
