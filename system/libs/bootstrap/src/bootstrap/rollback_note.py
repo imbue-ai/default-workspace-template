@@ -29,7 +29,8 @@ class BootRollback(NamedTuple):
     """An apply the previous container run left mid-motion, which this boot rolled back.
 
     ``release`` is the release an update-self apply was landing (the marker's ``target_ref``),
-    or ``None`` for any other apply: a critical app's change going live. ``is_restore_complete``
+    or ``None`` for any other apply: a critical app's change going live, or the revert the
+    update-self skill lands when the user asks to roll an update back. ``is_restore_complete``
     is False when the tree went back but a pre-apply copy could not be put back.
     """
 
@@ -68,7 +69,8 @@ def compose_rollback_note(rollback: BootRollback) -> str:
         what = f"the change {rollback.merge_ref}"
         guide = (
             "the update-app skill's references/critical-app.md, \"If a restart interrupts "
-            'the go-live"'
+            'the go-live" (or, for a revert the update-self skill was landing, its '
+            'references/apply-outcomes.md, "After a restart rolled it back")'
         )
     lines = [
         f"The workspace restarted while you were applying {what}, and the recovery at boot "
