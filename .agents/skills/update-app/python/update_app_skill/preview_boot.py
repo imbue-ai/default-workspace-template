@@ -20,22 +20,24 @@ from app_manifest.manifest import (
     AppManifest,
     load_manifest,
 )
-from app_manifest.registry_location import registry_path
 from app_registration import forward_port
 from workspace_bare_scripts import user_packages
 
+from update_app_skill.errors import PreviewError
 from update_app_skill.preview_app import (
     INNER_SERVICE_SUFFIX,
     Instances,
     InstanceSpec,
-    PreviewError,
+    PreviewWindow,
     _preview_state_path,
     _recorded_siblings,
     _reframe_previews_naming,
     _registry_copy_path,
     instance_name,
+    live_preview_is_surfaced,
     live_preview_url,
     live_preview_worktree,
+    live_registry_path,
     write_registry_copy,
 )
 
@@ -142,8 +144,8 @@ def _standalone_project(worktree: Path, manifest: AppManifest) -> str | None:
 def build_instance_spec(
     manifest: AppManifest,
     worktree: Path,
-    repo_root: Path,
-    title: str,
+    live_root: Path,
+    window: PreviewWindow | None,
     registry_copy: Path | None,
     inner_path: str,
 ) -> InstanceSpec:
@@ -156,7 +158,7 @@ def build_instance_spec(
     except serve_isolated_instance.InstanceError as exc:
         raise PreviewError(f"the [preview] table of {manifest.name!r}: {exc}") from exc
     command = list(preview.command) if preview.command else [str(manifest.program)]
-    launch = _under_declared_secrets(manifest, repo_root, [*command, *preview.args])
+    launch = _under_declared_secrets(manifest, live_root, [*command, *preview.args])
     project = _standalone_project(worktree, manifest)
     return InstanceSpec(
         name=instance_name(manifest.name),
@@ -172,13 +174,33 @@ def build_instance_spec(
         },
         copy_sources={str(key): source for key, source in preview.copies.items()},
         health_path=preview.health_path,
-        service_name=f"{manifest.name}{INNER_SERVICE_SUFFIX}",
-        preview_service_name=instance_name(manifest.name),
-        preview_title=title,
+        window=window,
         inner_path=inner_path,
         theming_mode=_declared_theming_mode(worktree, manifest),
         project=project,
     )
+
+
+def _live_root(
+    repo_root: Path, worktree: Path, *, is_private: bool, with_apps: Sequence[str]
+) -> Path:
+    """The live checkout a preview from ``repo_root`` runs over; raises PreviewError for a
+    preview that would register a window nobody could open."""
+    main_checkout = serve_isolated_instance.main_checkout_of_linked_worktree(repo_root)
+    if main_checkout is not None and not is_private:
+        raise PreviewError(
+            f"{repo_root} is a git worktree of {main_checkout}, so a preview booted from here "
+            "would register its window where the workspace never looks, and the user could "
+            f"not open it. To show it to the user, run from {main_checkout} with --worktree "
+            f"{worktree}; for an instance only you reach on its loopback port, pass --private."
+        )
+    if is_private and with_apps:
+        raise PreviewError(
+            "a preview frames each --with sibling at the origin its window registers, and a "
+            "private instance registers none. Drop --with to boot the app alone, or drop "
+            "--private to preview it with a window from the live checkout."
+        )
+    return main_checkout or repo_root
 
 
 def up(
@@ -189,10 +211,19 @@ def up(
     with_apps: Sequence[str] = (),
     instance_key: str | None = None,
     title: str | None = None,
+    is_private: bool = False,
     instances: Instances,
     dump_registry: Callable[[list[dict[str, object]]], str] | None = None,
 ) -> int:
-    """Boot the app's preview from ``worktree``, after the siblings named in ``with_apps``."""
+    """Boot the app's preview from ``worktree``, after the siblings named in ``with_apps``.
+
+    ``is_private`` boots it with no registrations, title, or instance key, for an agent
+    to reach on its loopback port. Raises PreviewError for a preview with a window from a
+    ``repo_root`` that is a linked git worktree, and for ``is_private`` with ``with_apps``.
+    """
+    live_root = _live_root(
+        repo_root, worktree, is_private=is_private, with_apps=with_apps
+    )
     other = live_preview_worktree(repo_root, app_name)
     if other is not None and not _is_same_worktree(other, worktree):
         sys.stderr.write(
@@ -200,6 +231,13 @@ def up(
             f"'{instance_name(app_name)}' app can only be one at a time, so booting this one would "
             "hijack it. Surface this to the user and coordinate with that pass -- or, if it is "
             f"abandoned, tear it down first with 'down --app {app_name}'.\n"
+        )
+        return 1
+    if is_private and live_preview_is_surfaced(repo_root, app_name):
+        sys.stderr.write(
+            f"preview: a preview of {app_name!r} with a window is already up, and a private "
+            "instance would replace it, closing the user's window on it. Drop --private to "
+            f"re-boot it with its window, or tear it down first with 'down --app {app_name}'.\n"
         )
         return 1
     manifest_path, manifest = find_manifest(worktree, app_name)
@@ -232,14 +270,30 @@ def up(
     registry_copy: Path | None = None
     if _uses_placeholder(manifest, REGISTRY_PLACEHOLDER):
         registry_copy = _registry_copy_path(repo_root, app_name)
-        write_registry_copy(registry_path(), registry_copy, preview_url_by_app, dump)
+        write_registry_copy(
+            live_registry_path(repo_root),
+            registry_copy,
+            preview_url_by_app,
+            dump,
+        )
+    # A private instance has no frame to open on a page, so it needs no instance key.
+    if is_private:
+        window = None
+        inner_path = "/"
+    else:
+        window = PreviewWindow(
+            service_name=f"{manifest.name}{INNER_SERVICE_SUFFIX}",
+            preview_service_name=instance_name(manifest.name),
+            title=title if title is not None else f"{manifest.display_name} (preview)",
+        )
+        inner_path = resolve_open_path(manifest, instance_key)
     spec = build_instance_spec(
         manifest,
         worktree,
-        repo_root,
-        title if title is not None else f"{manifest.display_name} ({worktree.name})",
+        live_root,
+        window,
         registry_copy,
-        resolve_open_path(manifest, instance_key),
+        inner_path,
     )
     # An earlier ``up --with`` of this preview may have booted siblings this call does not
     # name; they are still running, and ``down`` finds them only through this record.

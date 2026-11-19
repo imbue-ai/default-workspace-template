@@ -1,1 +1,0 @@
-Skills and shared references updated for per-service browser origins: build-app's public-url guidance, the preview/serve helper scripts, and update-system-interface's reveal script now speak service origin labels instead of /service/ path prefixes.

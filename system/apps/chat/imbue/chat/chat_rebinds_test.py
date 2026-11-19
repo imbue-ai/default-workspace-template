@@ -80,6 +80,8 @@ class _FakeWorkspace(MutableModel):
     # The steps that reach the agent, in order: the start, the pick, and each delivery.
     agent_steps: list[str] = Field(default_factory=list)
     clock: float = 0.0
+    # Each held send reported as never landing, as ``(chat_id, message_id, detail, kind)``.
+    undelivered: list[tuple[str, str, str, str]] = Field(default_factory=list)
     slept: list[float] = Field(default_factory=list)
     drain_block: str = ""
     is_delivery_refused: bool = False
@@ -174,6 +176,9 @@ class _FakeWorkspace(MutableModel):
 
     def monotonic(self) -> float:
         return self.clock
+
+    def report_undelivered(self, chat_id: ChatId, message_id: str, detail: str, kind: str) -> None:
+        self.undelivered.append((str(chat_id), message_id, detail, kind))
 
     def sleep(self, seconds: float) -> None:
         self.slept.append(seconds)
@@ -300,6 +305,7 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> RebindRunner:
         note_agent_alive=workspace.note_agent_alive,
         monotonic=workspace.monotonic,
         sleep=workspace.sleep,
+        report_undelivered=workspace.report_undelivered,
         model_pick_budget_seconds=5.0,
         model_pick_retry_interval_seconds=1.0,
     )
