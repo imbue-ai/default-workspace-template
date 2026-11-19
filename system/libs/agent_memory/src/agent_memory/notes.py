@@ -30,9 +30,10 @@ from typing import Any, Final
 import yaml
 from imbue.imbue_common.enums import LowerCaseStrEnum, UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from loguru import logger
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
 from agent_memory.changes import (
     INDEX_FILE_NAME,
@@ -559,12 +560,13 @@ def _index_entry(
     )
 
 
-class NoteStore:
+class NoteStore(MutableModel):
     """The memory folder: lists, saves, adds and deletes notes, keeping the index in step."""
 
-    def __init__(self, folder: Path) -> None:
-        self.folder = folder
-        self._lock = threading.Lock()
+    folder: Path = Field(
+        description="The memory folder the notes and the index live in"
+    )
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
     @property
     def index_path(self) -> Path:

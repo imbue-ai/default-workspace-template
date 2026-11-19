@@ -61,7 +61,7 @@ def test_the_index_names_each_note_s_title() -> None:
 
 
 def _store(tmp_path: Path) -> NoteStore:
-    return NoteStore(tmp_path / "memories")
+    return NoteStore(folder=tmp_path / "memories")
 
 
 def _draft(

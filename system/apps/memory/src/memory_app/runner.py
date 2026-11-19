@@ -229,7 +229,7 @@ def main() -> None:
     setup_logging()
     # The change log Claude's hook writes and the memory folder it watches; the notes are that same folder.
     changes = default_log(os.environ)
-    store = NoteStore(changes.memory_dir)
+    store = NoteStore(folder=changes.memory_dir)
     app = create_app(changes, store)
     logger.info("Serving the Memory app at http://{}:{}/ over {}", HOST, PORT, store.folder)
     run_simple(HOST, PORT, app, threaded=True, use_reloader=False, use_debugger=False)

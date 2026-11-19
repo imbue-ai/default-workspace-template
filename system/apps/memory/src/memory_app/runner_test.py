@@ -33,7 +33,7 @@ def changes(tmp_path: Path) -> ChangeLog:
 
 @pytest.fixture
 def client(changes: ChangeLog) -> FlaskClient:
-    return create_app(changes, NoteStore(changes.memory_dir)).test_client()
+    return create_app(changes, NoteStore(folder=changes.memory_dir)).test_client()
 
 
 def _agent_writes(changes: ChangeLog, name: str, text: str) -> None:
