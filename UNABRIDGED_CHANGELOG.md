@@ -4,6 +4,172 @@ Full, unedited changelog entries consolidated nightly from the individual files 
 
 For a concise summary, see [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-18
+
+### .agents
+
+The `datalib` skill now installs datalib v0.55.0. Search runs on datalib's own index, with qmd gone from the Node runtime, so the first-use download drops from about 195 MB to about 160 MB. The Claude source also downloads Cowork tasks, Baby Connect is a new source, and a person can mute a problem row they have already seen. Raw stores only gain columns and tables (each `problems` table, Claude's Cowork tables), so a reader of an existing store keeps working.
+
+Address user feedback and internal inconsistencies in Latchkey-related skills.
+
+The `manage-desktop` skill no longer describes a placeholder ("ghost") a popped-out window leaves on the desktop, since the desktop now draws nothing there. Its way-back advice is closing the popped-out window or "Bring back to desktop" on its taskbar entry; dragging it back over the Imbue Studio window no longer returns it. The `popped_out` entries keep their `is_ghost_hidden` field, which now only says the placement is also minimized.
+
+Update-self's what's new is the target's root `CHANGELOG.md` section for each release newer than the workspace's, plus `[Unreleased]` when it holds anything. A workspace older than every section is shown them all with a note that earlier releases are not summarized, a workspace whose release cannot be found is shown only the newest release, a target without `CHANGELOG.md` shows nothing, and one whose `CHANGELOG.md` has no release section shows no release; the results message says when any of these applied.
+
+The worker's merge triage takes the target's side for the root `CHANGELOG.md` and `UNABRIDGED_CHANGELOG.md` and for an entry file the target deletes, first saving the workspace's version to another path when it holds text the target's lacks. Converting a user package to a standalone project leaves the root changelogs as written.
+
+### system
+
+The chat-agent-split plan now describes a handoff's switching step in its new order: the retiring agent is renamed to its archival name first, then stopped while the successor is created, and its final event count is recorded once the stop is done. It also describes a landed switch: once the new agent is the chat's last member, the chat reads as that agent and an interrupt waits for the remaining deliveries instead of being refused.
+
+Removed the Claude Stop hook that refused to end a turn until the agent's shell was back at the repo root. Claude Code runs hooks in whatever folder the agent's shell is in. The hook was added to protect hooks that assumed the repo root, but answering it cost the agent a second reply: a `cd`, usually followed by "I'm back at the repo root." In the chat, that reply also broke the turn, so a step left open for the next turn was drawn a second time beneath the hook.
+
+Claude's hooks now name their scripts as `"${CLAUDE_PROJECT_DIR}"/...` instead of falling back to the current folder when `MNGR_AGENT_WORK_DIR` is unset. The scripts that read the repo root fall back to `CLAUDE_PROJECT_DIR` before the current folder. The session-start sync moves to the repo root first, since it also runs after a resume or a compaction. A test checks that every Claude hook command names its files from the project folder. Agents can still `cd` into a folder and keep working there across commands.
+
+The changelog entries of every release through minds-v0.10.5 moved into the root changelogs, and their entry files are gone. `UNABRIDGED_CHANGELOG.md` holds each entry's text under a `## [minds-v<version>] - <date>` section for the first release that carried it, and `CHANGELOG.md` has a summary section for each release from minds-v0.9.5 to minds-v0.10.5. Entries for changes after minds-v0.10.5 stay as files until they are consolidated.
+
+The desktop interface plan, its contracts and concepts notes, and the element reference menu plan state that on a non-touch client the pages of background windows take the pointer, and that the shell raises a window when the document's focus lands in its page, except for a focus the page takes in answer to a message the shell had just sent it; a page that reports its own focus (`shell:focused`) raises its window regardless. The shared `requestFrameFocus` answers a function that drops its pending posts, and takes an `isStillWanted` option that drops a post whose window no longer wants the focus and an `onPosted` option called after each post.
+
+AGENTS.md now says that a long paste the chat turned into an attachment is stored in that chat's own folder, so deleting the chat deletes it.
+
+The desktop-interface blueprint docs (`concepts.md`, `contracts.md`) no longer describe the ghost a pulled-out window used to leave on the desktop: the desktop draws nothing for a detached placement, minimizing one changes nothing on screen, its taskbar entry always shows the window's own desktop window, and `is_ghost_hidden` only carries whether the placement is minimized.
+
+`workspace_ui` gains `isHandledByInputMethod`, which the chat frontend's text fields use to leave the keystrokes of an input-method composition to the input method, so committing a composition no longer sends a message early (see the chat app's entry).
+
+The template has a root `CHANGELOG.md`, a summary that starts with an empty `## [Unreleased]` section and is laid out for one `## [minds-v<version>] - <date>` section per release, and a root `UNABRIDGED_CHANGELOG.md` holding the verbatim entries under the same release headings. The per-change entry files stay in their `changelog/` folders until they are consolidated into the two files.
+
+The changelog gate (`system/scripts/workspace_scripts/check_changelog_entries.py`) asks no entry of a branch whose name starts with `mngr/changelog-consolidation`.
+
+### system/apps/chat
+
+While a chat moves to another harness, the model chip names where it is going (the picked model, or the target's name when none was picked) on every page watching it, instead of showing the model the chat is leaving and then the new agent's settings one write at a time.
+
+Once a handoff's switch has landed on the transcript, the page no longer also shows a second "Handing off to…" spinner below it while the chat finishes delivering to the new agent.
+
+Switching a chat to another provider is quicker: the agent the chat leaves now stops while the new one is created, instead of first. On an idle workspace an empty chat's switch between two Pi accounts went from about 14.4 s to 10.8 s; the saving is however long the old agent takes to stop.
+
+Once a switch has landed on the new agent, the chat reads as that agent while the switch finishes handing it the messages it owes: the status line above the composer shows the agent's own activity instead of "Starting …", the chat list shows its real status, the composer has its usual placeholder, and Stop is offered for its turn. A Stop pressed then waits on the server for those messages to be delivered before it interrupts, so none is lost to the restart.
+
+A switch now says what it is doing in one place: its line in the conversation, which shows each phase ("Wrapping up with Claude Code…", "Claude Code is writing a summary…", "Starting Codex…", or "Restarting … on …" when only the account changes). The line above the message box no longer repeats it, and a chat with nothing to hand over, or one moving to another account, gets that conversation line too instead of a line by the composer.
+
+The harness contract notes state the rule for Claude hooks: a hook names its files from `${CLAUDE_PROJECT_DIR}` and never from the folder it runs in. A hook that wants to know where the agent's shell is reads the `cwd` field of its input. The notes also explain why the former repo-root Stop hook was removed.
+
+A Claude chat shows the progress updates Claude 5 models write between tool calls (a sentence or two on what the agent found and what it does next). The API returns each one as a thinking block marked as a progress update, so the chat dropped them, including the ones that carried the turn's actual reply or a decision the user was meant to see. They now read as the agent's prose at their place in the turn, in the progress view, the live reply draft and the chat feed. Reasoning blocks stay hidden.
+
+A very long paste into the chat composer becomes an attachment instead of filling the box.
+
+- A paste of at least 4,000 characters or 80 lines is uploaded as `pasted-text-1.txt` (numbered per message) and shows as a chip saying "Pasted text, N lines"; anything typed stays in the box. The agent is sent the typed words with a link to the file, so every harness reads the whole text.
+
+- The pasted file is stored in the chat's own folder, not the workspace's `data/uploads/`, so deleting the chat deletes it too.
+
+- The chip's "Paste as text" button puts the text back where the caret is and removes the attachment.
+
+- The sent message names the paste by its file name, a link that opens it in Files, rather than by its full path.
+
+The composer no longer sends on the Enter that commits an input-method composition. With a Chinese, Japanese or Korean IME, pressing Enter to commit a Latin word typed through it sent the draft with the uncommitted letters still in it (for example `wo'r'k's'pa'ce`); the box kept the text, so the next Enter sent the whole message again, and the receiver got a partial message and then the full one. Keystrokes that belong to a composition now go to the input method, and the composer sends only on an Enter outside one. The chat rename field, the account rename field and the send-to-chat picker get the same guard, so committing a composition no longer saves a half-typed name or picks a chat.
+
+### system/apps/system_interface
+
+The profile test for stale entries after sharing stops no longer fails at random: it holds the background refresh until its assertions are done, so the refresh's wall-clock timestamp cannot make the entry fresh under them.
+
+The floating avatar (and any pinned app's floating entry) is named after its app on hover, "Chat" for the chat, rather than after the page its window is on, which for the chat was the name of whichever chat was open.
+
+Hovering a window behind the focused one and scrolling now scrolls its page, with no click first. A click or press on a background window reaches its page and brings the window to the front in the same press, as in a native desktop application; before, a transparent cover took that first press and only raised the window. Keys typed after the press go to the window that came forward.
+
+The shell raises a window whenever the document's focus lands in its page, so this holds for every app, whether or not it speaks the shell contract. It reads where the focus is when its own window loses it and on a timer every 100 ms (a tick), so a press that moves the focus from one page to another raises the window within a tick. A focus that reaches a page after a message the shell just sent it (it is shown, or a terminal is asked to take the focus), and that the shell reads within two ticks of that message, is no press to the shell, which hands it back: a page that sends no focus report of its own for it, such as a terminal-like page focusing its nested frame after a reload, a desktop switch or an agent's refresh, stays behind the window you are in. A page that reports its own focus (`shell:focused`, sent by the first-party pages when their window gains focus) raises its window regardless. The focus requests the shell posts to a raised window are dropped once another window is focused, and none goes out while a press into another window's page is waiting to raise that window. A click that a page cancels, such as one in the chat while its own menu is open, does not move the focus, so that window comes forward on the next click. After the shell raises a window on seeing a focus landing it raises no other that way for three ticks, so pages that take the focus back whenever they lose it no longer flip the stack on every press.
+
+Touch screens keep the cover over background windows, so the first tap there still only raises the window, and every window is covered while a menu or the launcher is open, so the press that closes them never reaches a page.
+
+When the memory guard stops a program to free memory, Imbue Studio no longer gets a notification about it. Freeing memory needs nothing from the user (an update already in progress, for instance, carries on by itself), and a notification invited them to start the stopped program again. The tray's resource card still lists the programs stopped in the last day, and the low-disk, low-memory and busy-CPU warnings still notify as before.
+
+A window pulled out into its own Imbue Studio window no longer leaves a ghost on the desktop. Its place on the desktop stays empty while it is out; its taskbar entry stays, marked as pulled out, and offers "Show" and "Bring back to desktop" in its menu. Closing the window's own Imbue Studio window still brings it back where it was.
+
+- The ghost's "Show", "Hide" and "Bring back" buttons go with it, and so do the taskbar entry's "Hide placeholder" / "Show placeholder" rows. Clicking a pulled-out window's taskbar entry always shows its own window, even when its placement is also minimized (as one whose placeholder was hidden is).
+
+### system/libs/workspace_layout
+
+The `is_ghost_hidden` field of a client's `popped_out` entries is described as what it now carries, whether the pulled-out window's placement is also minimized, since the desktop no longer draws a ghost for a pulled-out window. The field keeps its name.
+
+### system/libs/workspace_ui
+
+`keybindings.ts` exports `isHandledByInputMethod(event)`, which says whether an input method is handling a keydown (a composition is open), by the keydown's `isComposing` flag. A text field calls it before acting on Enter, Escape, Tab or the arrows, and leaves the key alone when it is true.
+
+### system/services/oom_priority
+
+The revival-notice SessionStart hook finds the shed ledger from `CLAUDE_PROJECT_DIR` before the folder it runs in, and hands that location to its Python half. Claude Code runs hooks in whatever folder the agent last `cd`ed to, so a session resumed with its shell in a subfolder could miss the notice when neither `OOM_PRIORITY_RUNTIME_DIR` nor `MNGR_AGENT_WORK_DIR` was set.
+
+## 2026-11-17
+
+### system
+
+`system/libs/workspace_voice/` (a member of the npm workspace, filed here as it has no project of its own) gains `speechModel.ts`, one managed speech model load per engine for the page, built on `@tanstack/query-core` (a new dependency of the library, so `system/package-lock.json` changes with it) and kept in step across the workspace's pages by the engine worker, which now tells each page what it holds as the page connects. `Dictation` no longer loads the model (its `loading` state and `onProgress` are gone), a page can ask whether the model's files are already on this device (`probeEngineDownload`, over the device pick now in `devicePick.ts` and the store's new `has`), and there is a ready chime; see the library's own entry under `system/libs/workspace_voice/changelog/`. The chat's composer uses them for its redesigned mic (see the chat's entry), and the chat frontend declares `@tanstack/query-core` itself, which adds one line to `system/package-lock.json`.
+
+`THIRD_PARTY_NOTICES.md` names Moonshine Tiny beside Moonshine Base as a speech model the chat's dictation downloads: the one a phone or tablet runs (see the chat's and the voice library's own entries).
+
+The desktop interface's and the workspace app model's contracts say that `uses_microphone` now also hands an app's frames the screen wake lock, which the chat's dictation holds on a phone (see the chat's and the shell's own entries).
+
+The desktop-interface and workspace-app-model blueprint contracts, and the Routines spec (section 10.1), now list Files and Routines among the manifests that declare `system = true`, and say what follows from the flag: the share panel lists such an app under System, and the desktop app's home screen does not count it among the workspace's own apps.
+
+### system/apps/chat
+
+The composer's mic says when the speech model has to be loaded, and shows the load, in place of the 2 px progress ring users missed. The model's load and dictation are now two things, and the mic shows one of six states, named by its `data-dictation-state`: `load-needed` (the model is not loaded: the glyph sits faint with a warning badge on its corner, and the tooltip names what a press has to do first, `Dictate after a one-time 239 MB download (Cmd+Shift+M)` with the size this device would download, or `Dictate once the speech model has loaded (Cmd+Shift+M)` when the files are already on the device), `loading` (the load is shown: the mic eases into a `Loading voice model` label with the download's progress as a bar under it, and the box around it is left as it is, the text box live), `ready` (the model is loaded, and a press dictates at once, with no loading step on the way), and `starting`, `listening` and `stopping`. A press on a `load-needed` mic means the whole of it: the model is loaded, the load is shown, and dictation begins as soon as the load ends, with no second press. Two short bell tones say when the microphone is open.
+
+A shown load can be dismissed, which calls off the dictation it was to go on to and leaves the load running: a press on the label (a button, which takes the keyboard's focus from the fading mic), Escape, the mic's shortcut, text entered into the box, or the page going out of view. A press or a tap in the text box alone dismisses nothing: it only sets where the dictated words will land. A press right behind the one that asked for the load is taken for that press landing twice and dismisses nothing, and a held shortcut's repeats do nothing. After a dismissal made on the label, with the shortcut or with Escape, the text box takes the focus on a desktop. While a dismissed load runs on the mic reads `load-needed`, a press shows the label again at the load's progress, and the mic turns `ready` without a sound when the load ends; a failure after a dismissal is not told, while a failure of a shown load is told in the notice, whose Retry asks again and which comes down by itself once the model is loaded. The model is the page's and is kept in step across the workspace's pages: a model that another chat panel loaded turns this one's mic `ready` too. Until a page has found out the model's state as its composer mounts (five seconds at most) the mic is drawn `ready`, so a loaded model never flashes the badge. The screen wake lock a dictation holds is held while a load is shown as well. The chat frontend declares `@tanstack/query-core`, which the voice library already installs, as a dependency of its own.
+
+A message that may hold dictated words now tells the model so. Once dictation has written words into the composer, the message sent from that draft ends with a short note, in a `<dictation-note>` tag pair after the words, saying that parts of it were transcribed from speech and may be misheard, so the model reads a word that does not fit as the word or identifier it sounds like, without remarking on it, and asks only when two readings would lead to different actions. The note stays with a draft through edits and partial deletes, and goes once the box is emptied or the message is sent; a message that reads as a slash command or bash-mode input is sent without it. The note is for the model alone: the chat's bubbles (sent, sending, queued and held) show only the person's words, the tray's notification bubbles, the owner's mention notification and the automatic chat title leave it out, and a message that comes back to the composer (a failed send, queued messages returned by Stop or by a switch) comes back as its words alone, with the note added again when it is next sent.
+
+Dictation on a phone or tablet (a page whose primary pointer is a finger) runs Moonshine Tiny, the lighter speech model, in place of Moonshine Base: a third of the download and under half the time per utterance, so the words keep up with the speaker. A desktop keeps Moonshine Base. A browser's `workspace-voice:engine` override still picks any registered engine on either.
+
+On a phone or tablet the model also runs on WebAssembly's quantized weights even where the browser has WebGPU, so the page keeps a third of the memory the full-precision weights would take.
+
+Dictation keeps a phone's screen awake. A phone dims and locks after its idle timeout, speaking is not a touch, and a locked screen hides the page, which stopped dictation mid-sentence. The composer now holds a screen wake lock from the moment a dictation starts loading until it is idle again, asks for it again when the page comes back into view (the browser drops it while the page is hidden), and lets it go when the composer leaves. Best effort: a browser without the API, a frame without the grant, or a refusal such as low battery leaves the screen timing out as before, with nothing shown. The chat root's inner frames allow `screen-wake-lock` beside the microphone.
+
+### system/apps/files
+
+Files is declared a system app (`system = true` in its manifest): it is part of every workspace rather than an app built on it, so the share panel lists it under System and the desktop app's home screen does not count it among the workspace's own apps.
+
+### system/apps/routines
+
+Routines is declared a system app (`system = true` in its manifest): it is part of every workspace rather than an app built on it, so the share panel lists it under System and the desktop app's home screen does not count it among the workspace's own apps.
+
+### system/apps/system_interface
+
+The shell adds `screen-wake-lock` beside `microphone` to the frames of an app whose manifest declares `uses_microphone`, so the chat's dictation can keep a phone's screen awake while it listens. Frames of other apps are handed neither.
+
+### system/libs/workspace_voice
+
+`speechModel.ts` is the page's speech models: one managed load per engine, held in a TanStack Query cache (the new `@tanstack/query-core` dependency). `getSpeechModels()` is the page's one instance and `getVoiceQueryClient()` its query client. A surface observes an engine's load with a `QueryObserver` over `loadQueryOptions(options)` given `enabled: false`, asks for it with `request(options)` (one load runs however many ask, a load in flight is joined, and a loaded model is answered from the cache), reads the download's progress under `progressQueryKey(options)`, finds out what the workspace's worker already holds with `discover(options, isDownloaded)`, and transcribes on `engine(options)`. The engine worker is the authority, and is what keeps the workspace's pages in step: it now tells each port what it already holds as the port connects (a `hello` message); `EngineWorkerClient` gains `onMessage` (every message the worker sends the port, among them each step of a load another page asked for) and `onLost` (the worker taken for lost, which the page's own `dispose` is not); and the speech models mirror what the port hears into the cache, so a page learns a model came ready whichever page asked for it. A page also hears on a BroadcastChannel that another page asked for a model, and connects to hear the worker load it. `isEngineWorkerShared()` says whether the realm's worker is the one every page shares.
+
+`Dictation` no longer loads the speech model. Its `loading` state and its `onProgress` event are gone: `DictationState` is `idle`, `starting`, `listening` or `stopping`, and `start()` goes straight to `starting` and expects the model to be loaded, which a composer asks the page's speech models for first (`getSpeechModels().request(options)`). A dictation transcribes on the page's shared port to the engine worker (`getSpeechModels().engine(options)`) in place of a client of its own, so `dispose()` leaves that port open; `DictationDeps.connect` takes the dictation's options and is asked at every job, so a port connected after a loss is the one used. `describeSpeechModelLoadError(error)` turns what a failed request for the model rejected with into the `DictationProblem` a composer shows, and `isSpeechModelLoadProblem(problem)` tells such a problem from the microphone's and from held words.
+
+`probeEngineDownload` tells a page whether the speech model's files are already on this device: the device picked as the worker picks it (`pickDevice`, now in `devicePick.ts` with the navigator as a parameter) and every pinned file of that variant looked for in the page's own Cache Storage, with the size the download would be; `PinnedFileStore` gains `has(url)` for it. `createReadyChime` plays two short bell tones through the Web Audio API, woken from a user gesture and played when dictation starts listening.
+
+Moonshine Tiny joins the engine registry (`voice_models.json`), pinned at the onnx-community export's commit with every file's size and SHA-256, and the registry now names the engine each kind of device runs by default: Moonshine Base on a desktop, Moonshine Tiny on a touch device (a phone or tablet), each checked at load to be a registered engine offered there. `pageDictationOptions` takes the page's device class and picks that default; the browser's `localStorage` override still wins on every device. Tiny downloads 32 MB on WebAssembly (q8) and 113 MB on WebGPU (fp32), against Base's 67 MB and 251 MB, and transcribes an utterance in under half the time, which is what dictation from a phone's browser needed.
+
+A touch device also insists on the WebAssembly variant (the q8 weights) even where it has WebGPU, unless the browser's `workspace-voice:device` override names a device: the full-precision WebGPU weights take about three times the memory, which is more than a phone's browser gives a page before it kills it. A desktop still lets the worker pick.
+
+## 2026-11-16
+
+### .agents
+
+- The build-app skill's verify step says where the chat's test gate goes: to the background after the app is on screen, with the reply not waiting for it. It used to say the gate was not part of the chat turn at all, which disagreed with `AGENTS.md`.
+
+### system
+
+- `AGENTS.md` tells a chat to start its background test gate last, once the change is on the user's screen, and to reply without waiting for it: the gate's report wakes the agent, and what it finds is a follow-up fix. Chats were holding the reply for the gate, or ending the turn on "running final checks".
+
+- `AGENTS.md` states the rule the pipe guard enforces (no pipe of a command's output into `head` or `tail`, with the two ways around it), so an agent no longer learns it from a rejected tool call.
+
+- `AGENTS.md` tells an agent that is waiting on a command (a long pull of outside data, a sync, a build) to run it in the background and carry on with work that does not need its result, instead of ending the turn or running it in the foreground. Agents building an app over live data were sitting out each full pull.
+
+### system/apps/chat
+
+Automatic chat names stay short. The model that names a new chat is now told to name the message's one main subject as tersely as it can while still saying what the chat is about, in fewer than 40 characters and preferably far fewer, and to leave out the tools, sources and steps a long message lists, with that repeated at the end of the question. Before, a detailed first message could draw a title over 40 characters ("Information flow diagram for Obsidian and output apps"), which was thrown away, so the chat kept "Chat N" until the next message was sent. A title that still runs past 40 characters is now cut at a word and ends in "..." ("Information flow diagram for Obsidian..."), and the cut is logged as a warning.
+
+Deleting a chat now takes it off the list the moment you confirm, rather than crossing it out while the delete runs. If the chat was on screen you move to the next one straight away; if the delete is refused, the chat comes back and the reason is shown. Deleting the last chat clears the list at once, and the new empty chat opens once the delete has gone through.
+
+Renaming a chat now updates the window's title at once, along with the list, rather than when the next chat list arrives. A chat still waiting for its first message or still starting shows its name in the window's title too, rather than "Chats".
+
 ## [minds-v0.10.5] - 2026-11-17
 
 ### .agents
