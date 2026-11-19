@@ -138,9 +138,7 @@ distinctive moments (a key decision, a tool output that drove a step).
 after. Describe the contract; do not prescribe subcommands or surfaces.>
 
 ## What to do
-Invoke the `harden-worker` skill. On a harness that cannot invoke skills, read
-and follow `.agents/skills/harden-worker/SKILL.md` from your own checkout. It
-reads `operation` and `creations` from this frontmatter and follows the
+Invoke the `harden-worker` skill. It reads `operation` and `creations` from this frontmatter and follows the
 matching references. When you reach a gate or terminal status, push a report to the lead
 per its reporting protocol; the destination is `finish_report_path`.
 Whether to split this pass across sibling sub-workers is your own call, per the

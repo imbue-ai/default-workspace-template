@@ -19,7 +19,8 @@ judgment of what this pass needs, with no confirmation and no preflight script, 
 
 - stop other chats and background agents, idle or running, through `run-status stop-chats` (Step
   5b, and earlier with `--agent <name>` when memory runs short), which records each so the end of
-  the pass starts it again with a note. The main chat is the exception: the chat app starts it
+  the pass starts it again with a note, except one that was idle when paused for memory: it
+  stays stopped, and its next message starts it. The main chat is the exception: the chat app starts it
   again as soon as it stops, so `stop-chats --agent` refuses it, and Step 5b only interrupts it;
 - stop the browser and the user apps no window is showing, and on a **scheduled** pass any user
   app at all, windows or not (the candidates command below lists them; a browser stops through
@@ -53,6 +54,10 @@ Under a memory cap those two disagree, and the container's own `/proc/meminfo` i
 one -- it has read three times the real headroom on a capped workspace. `free -m` reads that
 optimistic file, so do not decide anything from it, and never tell the worker to rerun on a figure
 that came from it: the gate will be shed again and the round is wasted.
+
+The same line says how much of that free memory is left before the guard starts stopping
+processes, which it does at a share of the total, not at zero: 1 GiB free on a 6.4 GiB
+workspace is about 400 MiB of room. That room is what a heavy step can use, so judge by it.
 
 The command lists the idle chats and workers, the apps the workspace may stop with how many windows
 show each, and the browsers no window shows, each with its memory: the anonymous memory of its

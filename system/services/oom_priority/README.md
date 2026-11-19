@@ -356,9 +356,9 @@ python3 system/services/oom_priority/bin/memory_candidates.py --json   # the sam
 python3 system/services/oom_priority/bin/memory_candidates.py --free-memory   # only the free memory line
 ```
 
-`--free-memory` reads nothing but the meminfo files, so it is cheap enough to
-poll while memory is short, when the full report's `mngr list` and service
-calls would add to the pressure.
+`--free-memory` reads nothing but the meminfo files and earlyoom's program file
+(for its threshold), so it is cheap enough to poll while memory is short, when
+the full report's `mngr list` and service calls would add to the pressure.
 
 It lists:
 
@@ -371,6 +371,10 @@ It lists:
   charged, so it can read several gigabytes more free than the figure earlyoom
   acts on. A reader who takes `/proc/meminfo` for the guard's own figure
   concludes there is room and reruns a command the guard goes on shedding.
+  The line also gives the room left before the guard acts: the free memory
+  above the share of `MemTotal` that earlyoom's program line passes as `-m`
+  (`system/supervisord.conf.d/earlyoom.conf`), since the guard starts stopping
+  processes there, not at zero.
 - **Idle chats and workers**, from `mngr list --provider local`, rendered
   through a `--format` template (the columns are `MNGR_LIST_FIELDS`). This is
   how `system/scripts/collect_bug_report_diagnostics.py` lists agents too:

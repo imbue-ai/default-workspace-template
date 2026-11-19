@@ -24,10 +24,13 @@ from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_handoffs import HandoffCancelledError
 from imbue.chat.chat_handoffs import HandoffDeps
 from imbue.chat.chat_handoffs import HandoffRunner
+from imbue.chat.chat_handoffs import HeldSendDelivery
 from imbue.chat.chat_handoffs import INLINE_SUMMARY_MAX_BYTES
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
+from imbue.chat.chat_handoffs import UNDELIVERED_HELD_SEND_DETAIL
 from imbue.chat.chat_handoffs import archive_rename_command
 from imbue.chat.chat_handoffs import archived_agent_name
+from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import has_user_turn
 from imbue.chat.chat_handoffs import is_duplicate_id_refusal
 from imbue.chat.chat_handoffs import is_summary_fresh
@@ -48,6 +51,7 @@ from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReade
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.models import ActivityState
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import AgentStopError
 from imbue.chat.models import HandoffFailedStep
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
@@ -60,8 +64,10 @@ from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import write_summary_for_request
 from imbue.concurrency_group.event_utils import ShutdownEvent
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
+from imbue.mngr.utils.polling import wait_for
 
 _NOW = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
 _OPENAI_ACCOUNT = Account(id="acct-openai", lane="openai", seq=1, display="OpenAI")
@@ -114,6 +120,8 @@ class _FakeWorkspace(MutableModel):
     mngr_log: Path
     fail_dir: Path
     clock: float = 0.0
+    # Each held send reported as never landing, as ``(chat_id, message_id, detail, kind)``.
+    undelivered: list[tuple[str, str, str, str]] = Field(default_factory=list)
 
     def record(self) -> ChatRecord:
         record = self.store.read(self.chat_id)
@@ -243,6 +251,9 @@ class _FakeWorkspace(MutableModel):
     def monotonic(self) -> float:
         return self.clock
 
+    def report_undelivered(self, chat_id: ChatId, message_id: str, detail: str, kind: str) -> None:
+        self.undelivered.append((str(chat_id), message_id, detail, kind))
+
     def sleep(self, seconds: float) -> None:
         self.clock += seconds
 
@@ -364,6 +375,7 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> HandoffRunner:
         now=lambda: _NOW,
         monotonic=workspace.monotonic,
         sleep=workspace.sleep,
+        report_undelivered=workspace.report_undelivered,
         summary_poll_interval_seconds=1.0,
         summary_idle_grace_seconds=3.0,
         summary_timeout_seconds=20.0,
@@ -1036,6 +1048,73 @@ def test_a_fresh_start_asks_for_no_summary_and_hands_the_successor_the_message_a
     assert finished.agents[-1].is_fresh_start is True
 
 
+def _as_fresh_start(workspace: _FakeWorkspace) -> None:
+    """Make the workspace's handoff a fresh start: one off an agent that never received a user turn."""
+    workspace.update_record(
+        workspace.chat_id,
+        "h-1",
+        lambda current: current.model_copy_update(
+            to_update(
+                current.field_ref().handoff,
+                current.handoff.model_copy_update(to_update(current.handoff.field_ref().is_fresh_start, True))
+                if current.handoff is not None
+                else None,
+            )
+        ),
+    )
+
+
+def test_the_successor_is_created_while_the_retiring_agent_stops_and_measured_once_it_has(tmp_path: Path) -> None:
+    """The stop and the create overlap: a stop that returns only once the create has begun would time out if they
+    ran one after the other. The retiring agent is renamed first, since the successor takes the chat's name, and
+    its segment is measured only after the stop, once nothing more can be written to it."""
+    workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SWITCHING)
+    _as_fresh_start(workspace)
+    order: list[str] = []
+
+    def stop_once_the_create_has_begun(agent_info: AgentInfo) -> None:
+        wait_for(
+            lambda: any(line.startswith("create ") for line in workspace.argv_lines()),
+            timeout=5.0,
+            poll_interval=0.01,
+            error_message="the successor's create never began while the retiring agent was stopping",
+        )
+        order.append("stopped")
+        workspace.stop_agent(agent_info)
+
+    def measure(agent_info: AgentInfo) -> _EventsReader:
+        if agent_info.id == first:
+            order.append("measured")
+        return workspace.ensure_watcher(agent_info)
+
+    _runner(workspace, stop_agent=stop_once_the_create_has_begun, ensure_watcher=measure).run(workspace.chat_id, "h-1")
+
+    record = workspace.record()
+    assert record.handoff is None
+    assert [entry.agent_id for entry in record.agents] == [first, successor]
+    assert workspace.stopped == [first]
+    assert [line.split(" ")[0] for line in workspace.argv_lines()] == ["rename", "create"]
+    assert order == ["stopped", "measured"]
+    assert record.agents[0].final_event_count == 3
+
+
+def test_a_refused_stop_fails_the_switch_once_the_create_is_over(tmp_path: Path) -> None:
+    """The stop's refusal is not lost on its thread: it fails the switch, after the create it overlapped."""
+    workspace, first, _successor = _workspace(tmp_path, phase=HandoffPhase.SWITCHING)
+    _as_fresh_start(workspace)
+
+    def refuse(agent_info: AgentInfo) -> None:
+        raise AgentStopError(f"Failed to stop agent '{agent_info.name}': host gone")
+
+    _runner(workspace, stop_agent=refuse).run(workspace.chat_id, "h-1")
+
+    record = workspace.record()
+    assert record.handoff is not None and record.handoff.phase is HandoffPhase.FAILED
+    assert record.handoff.error is not None and "host gone" in record.handoff.error
+    assert [entry.agent_id for entry in record.agents] == [first]
+    assert record.agents[0].final_event_count is None
+
+
 def test_a_transcript_counts_as_having_a_user_turn_only_for_a_message_the_user_typed() -> None:
     """The fresh-start rule: the hidden ``/welcome`` and a system chip are not the user's turns."""
     welcome_only = [
@@ -1248,3 +1327,131 @@ def test_a_runner_for_a_handoff_that_is_gone_does_nothing(tmp_path: Path) -> Non
 
     assert workspace.delivered == [] and workspace.argv_lines() == []
     assert workspace.record().handoff is not None
+
+
+class _ScriptedDelivery:
+    """A deliver that answers each try with the next scripted step: a ``SendOutcome``, or a ``SendFailedError`` raised."""
+
+    def __init__(self, *steps: SendOutcome | SendFailedError) -> None:
+        self._steps = list(steps)
+        self.tries = 0
+
+    def __call__(self, agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        step = self._steps[min(self.tries, len(self._steps) - 1)]
+        self.tries += 1
+        if isinstance(step, SendFailedError):
+            raise step
+        return step
+
+
+class _HeldSendRun(FrozenModel):
+    """What one ``deliver_held_send`` run came to."""
+
+    is_delivered: bool
+    waits: list[float]
+    undelivered: list[tuple[str, str, str, str]]
+
+
+def _deliver_held(deliver: _ScriptedDelivery, is_stopping: bool = False) -> _HeldSendRun:
+    """Run ``deliver_held_send`` against ``deliver``."""
+    waits: list[float] = []
+    undelivered: list[tuple[str, str, str, str]] = []
+    agent_info = AgentInfo(
+        id="agent-new",
+        name="chat",
+        state="RUNNING",
+        agent_state_dir=Path("/nonexistent"),
+        claude_config_dir=Path("/nonexistent"),
+        labels={},
+        harness=HarnessType.CLAUDE,
+    )
+    held = HeldSend(
+        message_id="m-1", text="hello", origin=HeldSendOrigin.CLIENT, received_at=datetime.now(timezone.utc)
+    )
+    delivery = HeldSendDelivery(
+        deliver=deliver,
+        sleep=waits.append,
+        is_stopping=lambda: is_stopping,
+        report_undelivered=lambda chat_id, message_id, detail, kind: undelivered.append(
+            (str(chat_id), message_id, detail, kind)
+        ),
+    )
+    is_delivered = deliver_held_send(delivery, agent_info, held, ChatId("chat-1"))
+    return _HeldSendRun(is_delivered=is_delivered, waits=waits, undelivered=undelivered)
+
+
+_INPUT_NOT_DRAWN = SendFailedError("Claude is waiting on something in its terminal", kind="input_blocked")
+
+
+def test_a_held_send_refused_while_the_input_is_blocked_is_tried_again_until_it_lands() -> None:
+    """A new chat's first message refused while Claude is still drawing its input box reaches the agent once the
+    box is up."""
+    deliver = _ScriptedDelivery(_INPUT_NOT_DRAWN, _INPUT_NOT_DRAWN, SendOutcome.OK)
+    run = _deliver_held(deliver)
+    assert run.is_delivered
+    assert deliver.tries == 3
+    assert run.waits == [5.0, 10.0]
+    assert run.undelivered == []
+
+
+def test_a_held_send_that_stays_blocked_gives_up_and_is_reported_with_the_harness_words() -> None:
+    """The page that sent it is told why, so it can hand the message back to its composer."""
+    deliver = _ScriptedDelivery(_INPUT_NOT_DRAWN)
+    run = _deliver_held(deliver)
+    assert not run.is_delivered
+    assert run.waits == [5.0, 10.0, 20.0, 30.0]
+    assert deliver.tries == 5
+    assert run.undelivered == [("chat-1", "m-1", "Claude is waiting on something in its terminal", "input_blocked")]
+
+
+def test_a_held_send_that_did_not_land_is_reported() -> None:
+    deliver = _ScriptedDelivery(SendOutcome.FAILED)
+    run = _deliver_held(deliver)
+    assert not run.is_delivered
+    assert run.undelivered == [("chat-1", "m-1", UNDELIVERED_HELD_SEND_DETAIL, "failed")]
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        SendFailedError("the pane is gone", kind="agent_unreachable"),
+        SendFailedError("not confirmed", kind="submission_unconfirmed"),
+    ],
+    ids=["unreachable", "unconfirmed"],
+)
+def test_a_held_send_that_cannot_land_or_may_have_landed_is_reported_without_a_retry(
+    refusal: SendFailedError,
+) -> None:
+    """One with nothing to talk to cannot land, and one the agent may already hold would arrive twice."""
+    deliver = _ScriptedDelivery(refusal, SendOutcome.OK)
+    run = _deliver_held(deliver)
+    assert not run.is_delivered
+    assert deliver.tries == 1
+    assert run.waits == []
+    assert [kind for _chat, _message, _detail, kind in run.undelivered] == [refusal.kind]
+
+
+def test_a_held_send_the_agent_took_before_a_dialog_blocked_it_is_neither_retried_nor_reported() -> None:
+    """It reached the agent, so handing it back would have the user send it twice."""
+    deliver = _ScriptedDelivery(
+        SendFailedError("a dialog came up after it was taken", kind="input_blocked", is_delivered=True), SendOutcome.OK
+    )
+    run = _deliver_held(deliver)
+    assert not run.is_delivered
+    assert deliver.tries == 1
+    assert run.undelivered == []
+
+
+def test_a_held_send_stop_took_back_is_not_reported() -> None:
+    """Stop already put it in the composer."""
+    run = _deliver_held(_ScriptedDelivery(SendOutcome.WITHDRAWN))
+    assert not run.is_delivered
+    assert run.undelivered == []
+
+
+def test_a_held_send_is_not_tried_again_once_the_app_is_stopping() -> None:
+    deliver = _ScriptedDelivery(_INPUT_NOT_DRAWN, SendOutcome.OK)
+    run = _deliver_held(deliver, is_stopping=True)
+    assert not run.is_delivered
+    assert deliver.tries == 1
+    assert run.waits == []

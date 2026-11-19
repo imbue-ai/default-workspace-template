@@ -252,7 +252,7 @@ workspace's.
 
 Follow `references/launching-the-worker.md` top to bottom, through the
 launch, `run-status delegate` and the background poll. The worker follows
-`references/update-self-worker.md`. Once the poll is armed, **end your
+`references/worker.md`. Once the poll is armed, **end your
 turn**; its message wakes you with the worker's report.
 
 ## 4. Proxy the `question` gate
@@ -298,7 +298,7 @@ read `references/apply-outcomes.md` before doing anything else.
 After a landed apply, anything of the user's that is broken gets fixed, not
 reported: `references/after-the-apply.md`, which also says what each finding
 of the report asks of you. The worker classed provisioning findings by
-`references/worker-provisioning-changes.md`; read it when a class is unclear.
+`references/worker/provisioning-changes.md`; read it when a class is unclear.
 
 ### 5d. Escalate the built-in defects this pass found
 

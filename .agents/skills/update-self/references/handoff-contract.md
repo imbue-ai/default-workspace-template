@@ -129,6 +129,14 @@ other chats made during the pass do not. A tool that walks the first-parent
 line to list the workspace's own commits misses them; find them through the
 second parent of a catch-up merge instead.
 
+## What the what's-new listing assumes of each release
+
+`changelog-entries` runs from the target's copy against a base of any age and
+lists the target's section of each release newer than the base's nearest
+`minds-v*` tag. So every `minds-v*` tag's `CHANGELOG.md` holds its own section
+under an empty `[Unreleased]`: a release without one shows nothing for itself,
+and an `[Unreleased]` line left in a tag is shown again with the next release.
+
 ## Trust
 
 The handoff runs the target ref's `update_self.py` and follows its prose

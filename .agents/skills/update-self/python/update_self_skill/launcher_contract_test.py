@@ -26,7 +26,7 @@ _SKILL_DIR = Path(__file__).resolve().parents[2]
 # SKILL.md is the lead's checklist; the commands each step runs are in its references.
 _PROSE_FILES = (
     _SKILL_DIR / "SKILL.md",
-    *sorted((_SKILL_DIR / "references").glob("*.md")),
+    *sorted((_SKILL_DIR / "references").rglob("*.md")),
 )
 
 # The launcher's interface at minds-v0.3.17, per subcommand.

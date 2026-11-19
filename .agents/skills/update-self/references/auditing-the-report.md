@@ -3,7 +3,7 @@
 There is no approval gate: the audit, not the user, authorizes the apply. The
 worker's impact analysis, validation scope, review gates and agent-restart
 verdict are decided by rules (its guide's Steps 4a, 4b, 4c and 4d), and its
-report must show which branch of each rule applied, with the evidence. `worker-report.md` lists the
+report must show which branch of each rule applied, with the evidence. `worker/report.md` lists the
 sections a `done` body carries; you do not need the rest of the worker's
 guide to audit one.
 
@@ -35,7 +35,7 @@ must show which of the items of the worker guide's Step 7 ran over the commits
 it brought in, each with its evidence, and how each conflict there was
 resolved. The worker's earlier evidence for the rest of the pass still
 stands. The clean-pull skip's empty diff then runs to the branch's tip before
-its first catch-up merge, not to its tip (`worker-review-gates.md`).
+its first catch-up merge, not to its tip (`worker/review-gates.md`).
 
 ## A report with a gap
 

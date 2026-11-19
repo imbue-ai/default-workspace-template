@@ -88,9 +88,8 @@ open` / `refresh` / `list` against the served tree.
 The user built and confirmed the app on a desktop, as its owner, so two ways
 of reaching it went untried: from a phone, and by someone else. Once sharing
 is on, the app has its own public address (`build-app`'s "The shared (public)
-URL"), and the user can open it from their phone's browser
-(`.agents/skills/use-from-phone/SKILL.md`) or grant it to other people and to
-visiting agents. The crystallize pass runs these checks after its first
+URL"), and the user can open it from their phone's browser (the
+`use-from-phone` skill) or grant it to other people and to visiting agents. The crystallize pass runs these checks after its first
 milestone (`op-crystallize.md`, Stage 3). Each finding is either fixed and
 covered by a test, or named in your report; none is a reason to stop the pass.
 
@@ -240,9 +239,14 @@ What differs for you:
 - **Never drive `networkidle`** against a shell or chat instance in Playwright:
   both hold sockets open for as long as they run, so the wait never returns.
   Wait for the element you are about to read instead.
-- **Verify against your own instance.** Boot it with `preview_app.py`
+- **Verify against your own instance.** Boot it from your work_dir with
+  `preview_app.py`
   (`.agents/skills/update-app/python/update_app_skill/preview_app.py up --app <name> --worktree
-  <your work_dir>`) or the raw isolated-instance script; the live app and its
+  <your work_dir> --private`) or the raw isolated-instance script, and reach it
+  on its loopback port. `--private` registers no window (from a worktree the
+  script refuses without it, since a window registered there is one nobody can
+  open), and the instance still runs over copies of the user's live data. It
+  boots the app alone, taking no `--with` siblings. The live app and its
   windows are the user's.
 - The go-live is the lead's: the atomic update apply, after your `done`. You
   neither merge nor restart anything in the served tree.

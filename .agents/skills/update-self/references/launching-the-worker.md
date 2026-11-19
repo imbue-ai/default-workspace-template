@@ -1,10 +1,14 @@
 # Launching the worker (SKILL.md Step 3b)
 
 Follow this top to bottom once Step 3a has cleared the ceiling, built the
-bridge and staged the shared prose. It asks of the launcher only what every
-supported launcher has, and writes the task file's report address itself;
-`older-workspaces.md` ("The launcher is the workspace's own") says why, so do
-not swap a command here for a newer launcher subcommand.
+bridge and staged the shared prose. This is not the `launch-task` skill's
+flow: you follow the target release's prose, but you launch with the
+workspace's own launcher, which may be the oldest supported release's. So
+every command here is held to what that launcher has
+(`python/update_self_skill/launcher_contract_test.py` pins them), and the
+task file writes its report address itself. Do not swap a command for a
+newer launcher subcommand. `older-workspaces.md` ("The launcher is the
+workspace's own") has the detail.
 
 Do not open a window for your own chat while the pass runs: teardown opens it
 once the results are ready.
@@ -49,7 +53,7 @@ cat << 'BODY_EOF'
 
 ## What to do
 Follow the worker guide at
-`data/.tasks/update-self/skill-at-target/.agents/skills/update-self/references/update-self-worker.md`
+`data/.tasks/update-self/skill-at-target/.agents/skills/update-self/references/worker.md`
 end to end: trial-merge conflict triage, complete the merge (preserving the
 `update-self:` merge-commit subject), validate the merged set, generate the
 "what's new" report, and report `done`. After a compaction, re-read that

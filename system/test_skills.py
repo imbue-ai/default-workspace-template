@@ -7,13 +7,13 @@ listed in ``.agents/third-party-skills.toml`` is kept as it came and is not chec
 
 from __future__ import annotations
 
-from collections import deque
 from pathlib import Path
 
 from agents_shared.skill_checks import (
     GUIDE_PATH,
     SkillTree,
     outside_links_into_skills,
+    references_reached_outside,
     skill_dirs,
     unreached_shared_files,
 )
@@ -65,27 +65,8 @@ def test_every_reference_the_update_flow_reaches_is_one_it_stages() -> None:
     After its hand-off the flow reads the target release's copy of each file, and a staged
     file sends its reader on to others. One that ``stage-shared-prose`` does not stage would
     be read from the workspace's own tree, which may be older than the flow following it.
-    Another skill's SKILL.md is a skill to invoke, not prose the flow reads on from.
     """
-    tree = SkillTree(_REPO_ROOT)
-    skill = update_self.SKILL_DIR_REL
-    staged = tuple(f"{path}/" for path in (skill, *update_self.STAGED_PROSE_PATHS))
-    own = [name for name in tree.files_under(skill) if name.endswith(".md")]
-    reached = set(own)
-    queue = deque(own)
-    while queue:
-        for linked in tree.links(queue.popleft(), skill):
-            is_reference = (
-                linked.startswith(".agents/")
-                and linked.endswith(".md")
-                and not linked.endswith("/SKILL.md")
-            )
-            if is_reference and linked not in reached:
-                reached.add(linked)
-                if linked.startswith(staged):
-                    queue.append(linked)
-    # The files this guard exists for; without them it is vacuous.
-    assert ".agents/shared/references/lead-proxy.md" in reached
-    assert ".agents/shared/references/review-gates.md" in reached
-
-    assert sorted(name for name in reached if not name.startswith(staged)) == []
+    unstaged = references_reached_outside(
+        _REPO_ROOT / update_self.SKILL_DIR_REL, update_self.STAGED_PROSE_PATHS
+    )
+    assert unstaged == []

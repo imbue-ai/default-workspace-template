@@ -29,6 +29,7 @@ const agentState: {
 // Every launch choice made for a chat with no agent yet, as (chat id, account id, pick).
 const launchChoices: [string, string, unknown][] = [];
 vi.mock("../models/Chats", () => ({
+  addHeldSendFailedListener: () => undefined,
   getChatById: () => agentState.agent ?? undefined,
   getMainChatId: () => agentState.mainChatId,
   getProvisionalChat: () => agentState.provisional,
@@ -932,6 +933,19 @@ describe("the combo card", () => {
     });
     render();
     expect(ROOT().textContent).toContain("Opus");
+    expect(ROOT().textContent).not.toContain("next");
+  });
+
+  it("names a handoff's target harness, not the model the chat is leaving, when it picked no model", () => {
+    // Until the switch lands, the live choice is the retiring agent's model, then the successor's
+    // settings one write at a time (the model with no effort, then the effort).
+    agentState.agent = chatSnapshotFixture("a1", {
+      active_agent: { harness: "claude", account_id: "acct-1" },
+      handoff: handoffStateFixture({ phase: "switching", held_sends: [] }),
+    });
+    render();
+    expect(ROOT().textContent).toContain("Codex");
+    expect(ROOT().textContent).not.toContain("Opus");
     expect(ROOT().textContent).not.toContain("next");
   });
 

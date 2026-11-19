@@ -185,7 +185,11 @@ refusal at exit 1). This step takes them again right before the next apply.
 
 From the staged copy, in the **foreground**: its output (refusal and resume
 messages, any provisioner warning, the `apply phase timings:` line) is what
-you read before recording a verdict.
+you read before recording a verdict. The apply first stops the worker the run
+record names, keeping it: its `done` is in hand, and its idle session holds
+memory the apply's boots and build need. A retry or catch-up goes through
+"Messaging the worker" above, which starts it again with its branch and
+conversation intact.
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py apply \
@@ -230,5 +234,7 @@ apply (`apply-outcomes.md`, "Exit 1").
 Each chat is started again and told what changed while it was paused, in a
 notice the user sees labelled "Workspace updated". A background agent is
 named to its lead chat, since it does not pick its work back up by itself.
-The command is safe to re-run: a non-zero exit names what it could not start
+A chat or background agent that was idle when you paused it for memory is
+left stopped and told nothing: starting it would take the memory back, and
+the next message to it starts it. The command is safe to re-run: a non-zero exit names what it could not start
 or tell, and the same command finishes the rest.
