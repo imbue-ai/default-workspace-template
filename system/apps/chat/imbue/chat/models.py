@@ -649,6 +649,12 @@ class SendFailureResponse(ErrorResponse):
     kind: str = Field(description="The failure's kind: what trying again can and cannot help with")
 
 
+class RenameRefusalResponse(ErrorResponse):
+    """A rename the chat would not take, with its kind, so the list can keep the name field open for a taken name."""
+
+    kind: str = Field(description="The refusal's kind")
+
+
 class ConvergingResponse(ErrorResponse):
     """The 409 a verb answers while the chat converges on a new agent, with the handoff's phase."""
 

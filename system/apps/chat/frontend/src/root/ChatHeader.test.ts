@@ -13,7 +13,7 @@ const verbs = vi.hoisted(() => ({
   // A delete still under way: it never settles within the test.
   destroyChat: vi.fn((_chatId: string) => new Promise<undefined>(() => undefined)),
 }));
-vi.mock("./verbs", () => verbs);
+vi.mock("./verbs", async (importActual) => ({ ...(await importActual<typeof import("./verbs")>()), ...verbs }));
 
 import m from "mithril";
 import { ChatDrawer } from "./ChatDrawer";

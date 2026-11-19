@@ -4,7 +4,8 @@
  * dot (pending tasks or not, since the backend reports it working), and an idle one the hollow ring. And the
  * main chat: it leads in its own group, set off from the rest, and its row is marked. And the delete: a confirmed
  * chat leaves the list before the chat app answers, and comes back with the reason in a notice on a refusal. And a
- * refused rename: a notice says why, and waits while another chat's name is being typed.
+ * refused rename: a name another chat has keeps the field open with a line saying so, and any other refusal says why
+ * in a notice, which waits while another chat's name is being typed.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -15,7 +16,7 @@ const verbs = vi.hoisted(() => ({
   makeMainChat: vi.fn(async (_chatId: string) => undefined),
   destroyChat: vi.fn(async (_chatId: string) => undefined),
 }));
-vi.mock("./verbs", () => verbs);
+vi.mock("./verbs", async (importActual) => ({ ...(await importActual<typeof import("./verbs")>()), ...verbs }));
 
 import m from "mithril";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
@@ -26,6 +27,7 @@ import { chatRailAttrsFixture } from "./chatRailAttrsFixture";
 import { chatRowFixture } from "./chatRowFixture";
 import { hasPendingDelete, settlePendingDeletes, withoutPendingDeletes } from "./pendingDeletes";
 import { RootNoticeView, isRootNoticeUp } from "./rootNotice";
+import { NameTakenError } from "./verbs";
 import type { ChatRow } from "./rows";
 
 let root: HTMLElement | null = null;
@@ -399,7 +401,7 @@ describe("ChatRail refused rename", () => {
   it("says why in a notice, whose Rename again reopens the field on the name typed", async () => {
     mount([first, second]);
     verbs.renameChat.mockRejectedValueOnce(
-      new HttpError(409, "A chat named 'Taken' already exists; pick another name"),
+      new HttpError(409, "This chat is switching to Codex and is draining; wait for the switch to finish"),
     );
 
     renameInPlace(first.chatId, "Taken");
@@ -408,13 +410,86 @@ describe("ChatRail refused rename", () => {
     await vi.waitFor(() => expect(noticeText()).not.toBeNull());
     expect(noticeText()).toContain("Couldn't rename the chat");
     expect(noticeText()).toContain(`"${first.title}" was not renamed to "Taken".`);
-    expect(noticeText()).toContain("A chat named 'Taken' already exists; pick another name");
+    expect(noticeText()).toContain("This chat is switching to Codex and is draining; wait for the switch to finish");
 
     noticeButton("Rename again").click();
     m.redraw.sync();
     expect(isRootNoticeUp()).toBe(false);
     const field = root!.querySelector<HTMLInputElement>(`[data-chat-id="${first.chatId}"] .chat-rail-rename-input`);
     expect(field?.value).toBe("Taken");
+  });
+
+  function renameError(): string | null {
+    return root!.querySelector(".chat-rail-rename-error")?.textContent ?? null;
+  }
+
+  it("keeps the field open with a line under it when another chat in the list has the name, and sends nothing", () => {
+    mount([first, second]);
+    verbs.renameChat.mockClear();
+
+    const field = renameInPlace(first.chatId, ` ${second.title.toUpperCase()} `);
+
+    expect(root!.querySelector(".chat-rail-rename-input")).toBe(field);
+    expect(renameError()).toBe(`A chat named "${second.title.toUpperCase()}" already exists. Pick another name.`);
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(verbs.renameChat).not.toHaveBeenCalled();
+    expect(isRootNoticeUp()).toBe(false);
+
+    field.value = "Free name";
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    m.redraw.sync();
+    expect(renameError()).toBeNull();
+  });
+
+  it("puts the old name back without sending when the field is escaped or left on a name another chat has", () => {
+    mount([first, second]);
+    verbs.renameChat.mockClear();
+
+    const escaped = renameInPlace(first.chatId, second.title);
+    escaped.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    m.redraw.sync();
+    expect(root!.querySelector(".chat-rail-rename-input")).toBeNull();
+
+    const left = renameInPlace(first.chatId, second.title, null);
+    left.dispatchEvent(new FocusEvent("blur"));
+    m.redraw.sync();
+    expect(root!.querySelector(".chat-rail-rename-input")).toBeNull();
+    expect(verbs.renameChat).not.toHaveBeenCalled();
+    expect(isRootNoticeUp()).toBe(false);
+  });
+
+  it("reopens the field on the name typed with the line under it when the chat app says the name is taken", async () => {
+    mount([first, second]);
+    verbs.renameChat.mockRejectedValueOnce(
+      new NameTakenError(409, "A chat named 'Second-chat' already exists; pick another name"),
+    );
+
+    renameInPlace(first.chatId, "Second-chat");
+    expect(root!.querySelector(".chat-rail-rename-input")).toBeNull();
+
+    await vi.waitFor(() => expect(renameError()).not.toBeNull());
+    expect(renameError()).toBe('A chat named "Second-chat" already exists. Pick another name.');
+    expect(
+      root!.querySelector<HTMLInputElement>(`[data-chat-id="${first.chatId}"] .chat-rail-rename-input`)?.value,
+    ).toBe("Second-chat");
+    expect(isRootNoticeUp()).toBe(false);
+  });
+
+  it("says a taken name in a notice when another chat's name is being typed by the time the chat app answers", async () => {
+    mount([first, second]);
+    const [refuse] = holdRenames(1);
+
+    renameInPlace(first.chatId, "Second-chat");
+    const field = renameInPlace(second.chatId, "Half typ", null);
+    refuse(new NameTakenError(409, "A chat named 'Second-chat' already exists; pick another name"));
+    await Promise.resolve();
+    await Promise.resolve();
+    m.redraw.sync();
+    expect(root!.querySelector(".chat-rail-rename-input")).toBe(field);
+
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    m.redraw.sync();
+    expect(noticeText()).toContain("A chat named 'Second-chat' already exists; pick another name");
   });
 
   it("holds the notice while another chat's name is being typed, and shows it when that field closes", async () => {

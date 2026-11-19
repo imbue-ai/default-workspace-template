@@ -32,7 +32,7 @@ import { isUnread } from "./chatUnread";
 import { dropPendingDelete, showPendingDelete } from "./pendingDeletes";
 import { acceptPendingRename, dropPendingRename, showPendingRename } from "./pendingRenames";
 import { failureBody, holdRootNotices, raiseRootNotice } from "./rootNotice";
-import { destroyChat, makeMainChat, renameChat, startChat, stopChat } from "./verbs";
+import { NameTakenError, destroyChat, makeMainChat, renameChat, startChat, stopChat } from "./verbs";
 import { foldOwnerKey, getParticipant, participantName } from "../models/Participants";
 import { participantPicture } from "../views/participant-picture";
 import { isAgentStarted, isRoom, startsWithMainChat } from "./rows";
@@ -88,6 +88,8 @@ function displayStatus(row: ChatRow): string {
 interface RenameState {
   chatId: string;
   draft: string;
+  /** Why the name typed cannot be used, shown under the field until the name is edited; null otherwise. */
+  error: string | null;
 }
 
 let rename: RenameState | null = null;
@@ -121,8 +123,8 @@ const railMenu = createMenu({
 
 // Notices wait while a name field is open: a notice would take the focus from the field, and its blur would save
 // whatever is half typed there.
-function beginRename(row: ChatRow, draft: string = row.title): void {
-  rename = { chatId: row.chatId, draft };
+function beginRename(row: ChatRow, draft: string = row.title, error: string | null = null): void {
+  rename = { chatId: row.chatId, draft, error };
   holdRootNotices(true);
 }
 
@@ -141,42 +143,66 @@ export function isRenaming(chatId: string): boolean {
   return rename !== null && rename.chatId === chatId;
 }
 
-/** Keep the typed name: the field closes at once on the new name, and a refusal brings back the old name and says
- *  why in a notice, which can reopen the field on the name typed. */
-function commitRename(row: ChatRow): void {
+/** The sentence for a name another chat in the list already has, or null. Compared without case, a subset of the
+ *  chat app's own rule, which also catches names that differ only in punctuation and answers ``NameTakenError``. */
+function takenNameError(row: ChatRow, title: string): string | null {
+  const key = title.toLowerCase();
+  const rows = latestMenuContext?.rows ?? [];
+  const isTaken = rows.some((other) => other.chatId !== row.chatId && other.title.trim().toLowerCase() === key);
+  return isTaken ? takenNameSentence(title) : null;
+}
+
+function takenNameSentence(title: string): string {
+  return `A chat named "${title}" already exists. Pick another name.`;
+}
+
+/** Keep the typed name: the field closes at once on the new name, and a refusal brings back the old name. A name
+ *  another chat has keeps the field open with a line saying so (Enter) or puts the old name back (leaving the field);
+ *  any other refusal says why in a notice. */
+function commitRename(row: ChatRow, isLeaving: boolean): void {
   if (rename === null || rename.chatId !== row.chatId) return;
   const title = rename.draft.trim();
+  const takenError = title === "" || title === row.title ? null : takenNameError(row, title);
+  if (takenError !== null && !isLeaving) {
+    rename = { ...rename, error: takenError };
+    return;
+  }
   endRename();
-  if (title !== "" && title !== row.title) showPendingRename(row.chatId, title);
   m.redraw();
-  if (title === "" || title === row.title) return;
+  if (title === "" || title === row.title || takenError !== null) return;
+  showPendingRename(row.chatId, title);
   renameChat(row.chatId, title).then(
     () => acceptPendingRename(row.chatId, title),
     (error: unknown) => refuseRename(row, title, error),
   );
 }
 
+/** Reopen the field on ``title`` with ``error`` under it, for a chat still listed while no other name is being typed;
+ *  false when that cannot be done. On a phone only the header draws a field once the drawer is closed, and only for
+ *  the chat on screen, so the chat is shown first. */
+function reopenRename(row: ChatRow, title: string, error: string | null): boolean {
+  const context = latestMenuContext;
+  if (rename !== null || context === null || !context.rows.some((listed) => listed.chatId === row.chatId))
+    return false;
+  if (context.isInDrawer && context.selectedChatId !== row.chatId) context.onPick(row.chatId);
+  beginRename(row, title, error);
+  return true;
+}
+
 function refuseRename(row: ChatRow, title: string, error: unknown): void {
   dropPendingRename(row.chatId, title);
   console.warn(`[chat-root] could not rename chat ${row.chatId}`, error);
+  if (error instanceof NameTakenError && reopenRename(row, title, takenNameSentence(title))) {
+    m.redraw();
+    return;
+  }
   raiseRootNotice({
     title: isRoom(row) ? "Couldn't rename the room" : "Couldn't rename the chat",
     body: failureBody(error, {
       refused: `"${row.title}" was not renamed to "${title}".`,
       unanswered: `The workspace didn't answer, so it isn't known whether "${row.title}" was renamed to "${title}".`,
     }),
-    retry: {
-      label: "Rename again",
-      // A chat gone from the list has no field to draw, and its rename would hold every notice after this one. On a
-      // phone only the header draws a field once the drawer is closed, and only for the chat on screen, so the chat
-      // is shown first.
-      run: () => {
-        const context = latestMenuContext;
-        if (context === null || !context.rows.some((listed) => listed.chatId === row.chatId)) return;
-        if (context.isInDrawer && context.selectedChatId !== row.chatId) context.onPick(row.chatId);
-        beginRename(row, title);
-      },
-    },
+    retry: { label: "Rename again", run: () => void reopenRename(row, title, null) },
   });
 }
 
@@ -666,34 +692,46 @@ function rowKebab(row: ChatRow): m.Vnode {
 export function renameField(row: ChatRow): m.Vnode {
   const state = rename;
   if (state === null) throw new Error("renameField rendered with no rename in progress");
-  return m("input", {
-    class:
-      "chat-rail-rename-input min-w-0 flex-1 rounded bg-surface px-1 text-(length:--font-size-row) text-primary outline-none ring-1 ring-accent",
-    type: "text",
-    value: state.draft,
-    "aria-label": "Chat name",
-    maxlength: 256,
-    oncreate: ({ dom }: m.VnodeDOM) => {
-      const input = dom as HTMLInputElement;
-      input.focus();
-      input.select();
-    },
-    oninput: (event: InputEvent) => {
-      if (rename === null) return;
-      rename = { ...rename, draft: (event.target as HTMLInputElement).value };
-    },
-    onkeydown: (event: KeyboardEvent) => {
-      event.stopPropagation();
-      if (event.key === "Enter") {
-        event.preventDefault();
-        commitRename(row);
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        endRename();
-      }
-    },
-    onblur: () => commitRename(row),
-  });
+  return m("span", { class: "chat-rail-rename-field flex min-w-0 flex-1 flex-col gap-0.5" }, [
+    m("input", {
+      class: [
+        "chat-rail-rename-input min-w-0 rounded bg-surface px-1 text-(length:--font-size-row) text-primary outline-none ring-1",
+        state.error === null ? "ring-accent" : "ring-danger",
+      ].join(" "),
+      type: "text",
+      value: state.draft,
+      "aria-label": "Chat name",
+      "aria-invalid": state.error === null ? undefined : "true",
+      maxlength: 256,
+      oncreate: ({ dom }: m.VnodeDOM) => {
+        const input = dom as HTMLInputElement;
+        input.focus();
+        input.select();
+      },
+      oninput: (event: InputEvent) => {
+        if (rename === null) return;
+        rename = { ...rename, draft: (event.target as HTMLInputElement).value, error: null };
+      },
+      onkeydown: (event: KeyboardEvent) => {
+        event.stopPropagation();
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commitRename(row, false);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          endRename();
+        }
+      },
+      onblur: () => commitRename(row, true),
+    }),
+    state.error === null
+      ? null
+      : m(
+          "span",
+          { class: "chat-rail-rename-error px-1 text-(length:--font-size-helper) text-danger", role: "alert" },
+          state.error,
+        ),
+  ]);
 }
 
 function renameRow(row: ChatRow, isSelected: boolean, isTouch: boolean): m.Vnode {
