@@ -9,8 +9,9 @@ is not where worker bugs get fixed.
 ## What counts as a failure
 
 A worker that crashed (`STOPPED` with no `archived_at` label, or an empty one)
-is recovered first, per `dead-worker-recovery.md`. Its crash counts as a
-failure below only once that recovery has not brought it back.
+is recovered first, per
+`.agents/shared/references/lead-proxy/dead-worker-recovery.md`. Its crash
+counts as a failure below only once that recovery has not brought it back.
 
 - Worker state is `STOPPED` without reaching a normal completion.
 - Worker state is `DONE` but its final message says it gave up, could not
@@ -47,8 +48,9 @@ failure below only once that recovery has not brought it back.
    Its branch, worktree, and transcript remain for inspection; only the
    processes go, and the `archived_at` label the stop leaves marks it as
    stopped on purpose (so nobody restarts it as a crash). A stopped failure
-   is destroyed only when a later pass supersedes it or the user asks. When
-   the user overrides the failure, `create_worker.py reply` brings it back
+   is destroyed only when your skill says a later pass replaces it, or the
+   user asks. When the user overrides the failure, `create_worker.py reply`
+   brings it back
    (`.agents/shared/references/lead-proxy.md`, "Resuming after the user
    overrides a failure").
 4. **Update any outstanding tickets** (e.g. `tk` lifecycle tickets) with a
