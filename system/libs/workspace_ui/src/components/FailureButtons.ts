@@ -1,19 +1,114 @@
 import m from "mithril";
-import type { ReportedFailure, ShellConnection } from "../app_contract";
+import { askAgentToFix, withAskFailure } from "../app_contract";
+import type { AgentFixRequest, ReportedFailure, ShellConnection, ShownFailure, StartOutcome } from "../app_contract";
 import { REPORT_A_BUG_LABEL } from "../models/failure";
 import { Button } from "./Button";
 import type { ButtonOptions, ButtonVariant } from "./Button";
+import { SeeDetails } from "./SeeDetails";
+import { TEXT_HELPER_SIZE } from "./typography";
 
 /**
- * The button a failure in a framed app page offers beside its sentence, which goes through the shell that frames the
- * page: "Report a bug" opens Imbue Studio's bug report with the failure attached. It renders nothing where it could
- * not work, so a surface draws it unconditionally; it reads the connection at render time, so the page redraws when a
- * handshake arrives (as every page does).
+ * The two buttons a failure in a framed app page offers beside its sentence, both of which go through the shell that
+ * frames the page: "Ask an agent to fix this" sends the failure to an agent as its task, and "Report a bug" opens
+ * Imbue Studio's bug report with the failure attached. Each renders nothing where it could not work, so a surface
+ * draws both unconditionally; it reads the connection at render time, so the page redraws when a handshake arrives (as
+ * every page does). ``FailureRemedies`` draws the pair a failure that asks for a bug report gets by default.
  */
+
+export const ASK_AGENT_TO_FIX_LABEL = "Ask an agent to fix this";
+export const ASKING_AN_AGENT_LABEL = "Asking an agent…";
 
 interface FailureButtonOptions extends Pick<ButtonOptions, "sm" | "extra"> {
   readonly variant?: ButtonVariant;
 }
+
+export interface AskAgentToFixButtonAttrs extends FailureButtonOptions {
+  /** The page's connection; null before it connects. */
+  readonly connection: Pick<ShellConnection, "hasShell" | "askAgent" | "canReportBug" | "reportBug"> | null;
+  readonly failure: AgentFixRequest;
+  /** The page offers its own Report a bug beside this button: a refused ask then shows its sentence and details
+   *  without a Report a bug of its own, and is handed to ``onFailureChange`` (null once it is gone) so the page's one
+   *  report can carry it too (``withAskFailure``). */
+  readonly pageReportBug?: { readonly onFailureChange: (failure: ShownFailure | null) => void };
+}
+
+/** Nothing without a shell (a page opened on its own, a share visitor holding only this app): nothing can carry the
+ *  ask. Pressed, it reads "Asking an agent…" and stays disabled until the shell says the chat's window opened or the
+ *  ask failed; a failure is shown under it, with Report a bug when it asks for one (unless the page reports bugs
+ *  itself), and the button is back for another try. An answer that comes after the press was settled as not answered replaces what is shown. */
+export const AskAgentToFixButton: m.ClosureComponent<AskAgentToFixButtonAttrs> = () => {
+  let isAsking = false;
+  let failure: ShownFailure | null = null;
+  let latestAsk = 0;
+  let latestAttrs: AskAgentToFixButtonAttrs | null = null;
+
+  function setFailure(next: ShownFailure | null): void {
+    if (next === failure) return;
+    failure = next;
+    latestAttrs?.pageReportBug?.onFailureChange(next);
+  }
+
+  function show(outcome: StartOutcome): void {
+    setFailure(outcome.isOpened ? null : outcome.failure);
+    m.redraw();
+  }
+
+  async function ask(attrs: AskAgentToFixButtonAttrs): Promise<void> {
+    if (attrs.connection === null || isAsking) return;
+    latestAsk += 1;
+    const thisAsk = latestAsk;
+    isAsking = true;
+    setFailure(null);
+    const outcome = await askAgentToFix(attrs.connection, attrs.failure, {
+      showsOutcome: true,
+      onLateAnswer: (late) => {
+        if (thisAsk === latestAsk && !isAsking) show(late);
+      },
+    });
+    isAsking = false;
+    show(outcome);
+  }
+
+  return {
+    onremove() {
+      latestAsk += 1;
+      setFailure(null);
+      latestAttrs = null;
+    },
+    view(vnode) {
+      latestAttrs = vnode.attrs;
+      const { connection, variant, sm, extra, pageReportBug } = vnode.attrs;
+      if (connection === null || !connection.hasShell()) return null;
+      return [
+        m(
+          Button,
+          {
+            variant,
+            sm,
+            extra: `ask-agent-to-fix ${extra ?? ""}`.trim(),
+            disabled: isAsking,
+            onclick: () => void ask(vnode.attrs),
+          },
+          isAsking ? ASKING_AN_AGENT_LABEL : ASK_AGENT_TO_FIX_LABEL,
+        ),
+        failure === null
+          ? null
+          : m("div", { class: `ask-agent-failure ${TEXT_HELPER_SIZE} basis-full`, role: "alert" }, [
+              m("p", { class: "ask-agent-failure-message" }, failure.message),
+              m(SeeDetails, { details: failure.details }),
+              failure.isReportable && pageReportBug === undefined
+                ? m(ReportBugButton, {
+                    connection,
+                    failure: { message: failure.message, details: failure.details },
+                    sm: true,
+                    extra: "mt-1",
+                  })
+                : null,
+            ]),
+      ];
+    },
+  };
+};
 
 export interface ReportBugButtonAttrs extends FailureButtonOptions {
   /** The page's connection; null before it connects. */
@@ -33,4 +128,45 @@ export const ReportBugButton: m.Component<ReportBugButtonAttrs> = {
       REPORT_A_BUG_LABEL,
     );
   },
+};
+
+export interface FailureRemediesAttrs extends FailureButtonOptions {
+  /** The page's connection; null before it connects. */
+  readonly connection: Pick<ShellConnection, "hasShell" | "askAgent" | "canReportBug" | "reportBug"> | null;
+  /** The failure on screen. */
+  readonly failure: ShownFailure;
+  /** Offer no agent: the ask would go through what failed (the chat app's own server not answering). */
+  readonly isAgentWithheld?: boolean;
+}
+
+/** What a failure that asks for a bug report offers by default: "Ask an agent to fix this", then "Report a bug", whose
+ *  report also carries a refused ask; nothing for a failure that asks for none, whose surface offers its own remedy. */
+export const FailureRemedies: m.ClosureComponent<FailureRemediesAttrs> = () => {
+  let askFailure: ShownFailure | null = null;
+  return {
+    view(vnode) {
+      const { connection, failure, isAgentWithheld, variant, sm, extra } = vnode.attrs;
+      if (!failure.isReportable) return null;
+      const options = { variant, sm, extra };
+      return [
+        isAgentWithheld === true
+          ? null
+          : m(AskAgentToFixButton, {
+              ...options,
+              connection,
+              failure: { whatFailed: failure.message, details: failure.details },
+              pageReportBug: {
+                onFailureChange: (next) => {
+                  askFailure = next;
+                },
+              },
+            }),
+        m(ReportBugButton, {
+          ...options,
+          connection,
+          failure: withAskFailure({ message: failure.message, details: failure.details }, askFailure),
+        }),
+      ];
+    },
+  };
 };

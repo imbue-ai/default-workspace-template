@@ -12,6 +12,7 @@ import threading
 import time
 from collections.abc import Callable
 from collections.abc import Iterator
+from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -104,6 +105,7 @@ from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_handoffs import is_genuine_user_turn
 from imbue.chat.chat_intakes import APP_CHAT_LABEL
+from imbue.chat.chat_intakes import app_ask_message
 from imbue.chat.chat_intakes import app_chat_hint
 from imbue.chat.chat_intakes import app_chat_prefill
 from imbue.chat.chat_intakes import app_chat_title
@@ -2321,6 +2323,10 @@ class _ResolvedIntakeChat(FrozenModel):
 
     chat_id: ChatId | None = Field(description="The receiving chat; None for a pick or a create")
     needs_pick: bool = Field(default=False, description="Whether several chats qualify and the user chooses")
+    is_sent_with_create: bool = Field(
+        default=False,
+        description="Whether the chat was created for the text, as its first message: nothing is left to send or hold",
+    )
 
 
 def _agent_chat_snapshot(agent_manager: AgentManager, chat_id: ChatId) -> ChatSnapshot | None:
@@ -2347,30 +2353,38 @@ def _lounge_or_refusal(state: ChatAppState) -> _ResolvedIntakeChat | Response:
     return _ResolvedIntakeChat(chat_id=lounge_id)
 
 
-def _app_chat_or_refusal(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
+def _find_chat_about_app(agent_manager: AgentManager, app: str, title: str) -> ChatId | None:
     """The chat about an app (the multiplayer spec, section 9.2): the chat labelled ``app_chat`` with the app's
-    registered name (so a renamed app keeps its chat), else the one titled "<display name> Chat" by the rule the
-    create refuses a taken name by (``is_name_conflict``: canonical forms compared case-insensitively, so "docs chat"
-    is found rather than refused), of either kind or still being made; else one created with that title and label on
-    the default account (never auto-named, since the title is not a "Chat N"); with nothing signed in, a chat
-    awaiting its first send under them, whose page asks for a provider. The refusals are the create route's."""
+    registered name (so a renamed app keeps its chat), else the one titled ``title`` by the rule the create refuses a
+    taken name by (``is_name_conflict``: canonical forms compared case-insensitively, so "docs chat" is found rather
+    than refused), of either kind or still being made; None when there is none."""
+    snapshots = agent_manager.get_chat_snapshots()
+    provisional = agent_manager.get_provisional_chats()
+    for is_match in (
+        lambda chat_labels, chat_title: chat_labels.get(APP_CHAT_LABEL) == app,
+        lambda chat_labels, chat_title: is_name_conflict(title, (chat_title,)),
+    ):
+        for snapshot in snapshots:
+            if is_match(snapshot.labels, snapshot.title):
+                return snapshot.chat_id
+        for chat in provisional:
+            if is_match(chat.labels, chat.name):
+                return chat.chat_id
+    return None
+
+
+def _app_chat_or_refusal(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
+    """The chat about an app (``_find_chat_about_app``); else one created with its title and label on the default
+    account (never auto-named, since the title is not a "Chat N"); with nothing signed in, a chat awaiting its first
+    send under them, whose page asks for a provider. The refusals are the create route's."""
     if not intake.app or not intake.app_display_name:
         return error_response("A chat about an app names the app and its display name", 400)
     title = app_chat_title(intake.app_display_name)
     labels = {APP_CHAT_LABEL: intake.app}
     agent_manager = state.agent_manager
-    snapshots = agent_manager.get_chat_snapshots()
-    provisional = agent_manager.get_provisional_chats()
-    for is_match in (
-        lambda chat_labels, chat_title: chat_labels.get(APP_CHAT_LABEL) == intake.app,
-        lambda chat_labels, chat_title: is_name_conflict(title, (chat_title,)),
-    ):
-        for snapshot in snapshots:
-            if is_match(snapshot.labels, snapshot.title):
-                return _ResolvedIntakeChat(chat_id=snapshot.chat_id)
-        for chat in provisional:
-            if is_match(chat.labels, chat.name):
-                return _ResolvedIntakeChat(chat_id=chat.chat_id)
+    found = _find_chat_about_app(agent_manager, intake.app, title)
+    if found is not None:
+        return _ResolvedIntakeChat(chat_id=found)
     account = _resolve_intake_account(intake)
     if isinstance(account, Response):
         return account
@@ -2381,12 +2395,74 @@ def _app_chat_or_refusal(state: ChatAppState, intake: IntakeRequest) -> _Resolve
     return created if isinstance(created, Response) else _ResolvedIntakeChat(chat_id=created.chat_id)
 
 
+def _can_chat_take_an_ask(agent_manager: AgentManager, chat_id: ChatId) -> bool:
+    """Whether an ask goes to the chat: it is an agent chat, which takes the ask as a message, or one whose create is
+    running, for which the ask is held like any send to a chat that is not yet an agent (the root that applies it
+    sends it when the agent is up by then, else leaves it in that chat's composer). A room has no agent to do the
+    work, and a chat awaiting its first send or left by a failed create is launched by its own page, not by a
+    message from elsewhere."""
+    snapshot = _agent_chat_snapshot(agent_manager, chat_id)
+    if snapshot is not None:
+        return snapshot.kind is ChatKind.AGENT
+    provisional = agent_manager.get_provisional_chat(str(chat_id))
+    return (
+        provisional is not None
+        and provisional.kind is ChatKind.AGENT
+        and provisional.phase is ProvisionalChatPhase.CREATING
+    )
+
+
+def _app_ask_chat_or_refusal(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
+    """The chat an ask from a page of an app goes to: the chat about the app (``_find_chat_about_app``) when it can
+    take a message; with none, one created with the app chat's title and label on the default account, the ask its
+    first message (never auto-named). The ``main_chat`` rules apply wherever that cannot be: the chat about the app
+    cannot take a message, nothing is signed in, the text is a draft (a chat is created by its first message, which
+    a draft is not), or the create is refused."""
+    if not intake.app or not intake.app_display_name:
+        return error_response("An ask about an app names the app and its display name", 400)
+    agent_manager = state.agent_manager
+    title = app_chat_title(intake.app_display_name)
+    found = _find_chat_about_app(agent_manager, intake.app, title)
+    if found is not None:
+        # A chat about the app that cannot take a message is left as it is, with no second one made beside it.
+        if _can_chat_take_an_ask(agent_manager, found):
+            return _ResolvedIntakeChat(chat_id=found)
+        return _main_or_most_recent_intake_chat(agent_manager, agent_manager.get_chat_snapshots())
+    account = _resolve_intake_account(intake)
+    if isinstance(account, Response):
+        return account
+    if account is None or intake.is_draft:
+        return _main_or_most_recent_intake_chat(agent_manager, agent_manager.get_chat_snapshots())
+    created = _create_chat_with_intake_text(state, intake, account, name=title, labels={APP_CHAT_LABEL: intake.app})
+    if isinstance(created, Response):
+        logger.warning(
+            "Failed to create the chat about {} for an ask ({}); it follows the main chat's rules: {}",
+            intake.app,
+            created.status_code,
+            created.get_data(as_text=True),
+        )
+        return _main_or_most_recent_intake_chat(agent_manager, agent_manager.get_chat_snapshots())
+    return _ResolvedIntakeChat(chat_id=created.chat_id, is_sent_with_create=True)
+
+
+def _intake_naming_its_app(intake: IntakeRequest) -> IntakeRequest:
+    """An ``app_ask`` with its text led by the sentence that names the app (``app_ask_message``): the page's text does
+    not say which app it is about, and the chat that takes it may be the main chat, where nothing else does. An ask
+    with no text stays one, there being nothing to send, and every other intake is as it arrived."""
+    if intake.target is not IntakeTarget.APP_ASK or not intake.message:
+        return intake
+    return intake.model_copy_update(
+        to_update(intake.field_ref().message, app_ask_message(intake.app_display_name, intake.message))
+    )
+
+
 def _resolve_intake_chat(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
     """The chat an intake's target names (spec 3.5), or the 404 for an explicit chat the app does not list.
 
     ``new_chat`` answers no chat: the caller creates or mints one. ``current_chat``,
     ``main_chat`` and ``chat_selector`` fall back to that when nothing qualifies; ``lounge`` is the Lounge, made
-    when there is none, and ``app_chat`` the chat about the named app, made when there is none.
+    when there is none, ``app_chat`` the chat about the named app, made when there is none, and ``app_ask`` that
+    chat when it can take a message, else what ``main_chat`` answers.
     """
     agent_manager = state.agent_manager
     snapshots = agent_manager.get_chat_snapshots()
@@ -2395,6 +2471,8 @@ def _resolve_intake_chat(state: ChatAppState, intake: IntakeRequest) -> _Resolve
             return _lounge_or_refusal(state)
         case IntakeTarget.APP_CHAT:
             return _app_chat_or_refusal(state, intake)
+        case IntakeTarget.APP_ASK:
+            return _app_ask_chat_or_refusal(state, intake)
         case IntakeTarget.CHAT:
             parsed = parse_chat_ref(intake.chat_id)
             if parsed is None or not agent_manager.knows_chat(parsed):
@@ -2503,7 +2581,8 @@ def _intake_chat() -> Response:
     agent_manager = state.agent_manager
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
-    intake = parse_request_body(IntakeRequest)
+    # Named before the chat is resolved: resolving an ask may create its chat with the text as the first message.
+    intake = _intake_naming_its_app(parse_request_body(IntakeRequest))
     resolved = _resolve_intake_chat(state, intake)
     if isinstance(resolved, Response):
         return resolved
@@ -2515,6 +2594,8 @@ def _intake_chat() -> Response:
         return model_response(IntakeResponse(path=intake_path(None, token)))
     if resolved.chat_id is None:
         return _intake_into_new_chat(state, intake)
+    if resolved.is_sent_with_create:
+        return model_response(IntakeResponse(path=intake_path(resolved.chat_id, None)))
     if intake.target is IntakeTarget.APP_CHAT:
         # Held even with nothing sent: the root applies it to prefill the composer with the lead-in that names
         # the app (the agent otherwise cannot tell what "make it blue" is about), set its hint, and focus it.
@@ -2528,6 +2609,32 @@ def _intake_chat() -> Response:
     return _intake_into_listed_chat(state, resolved.chat_id, intake)
 
 
+def _create_chat_with_intake_text(
+    state: ChatAppState,
+    intake: IntakeRequest,
+    account: str,
+    # The chat's title; empty mints the first free "Chat N".
+    name: str,
+    labels: Mapping[str, str],
+) -> CreatedChat | Response:
+    """Create a chat on ``account`` whose first message is the intake's text, attributed to the sender the request
+    vouches for and raising the bubble a new chat's first message is due; the refusals are the create route's."""
+    identity = request_identity()
+    message_id = uuid4().hex
+    attributed = _attributed_send(state, intake.message, message_id, identity, is_prefixed=True)
+    created = _created_or_refusal(
+        lambda: state.agent_manager.create_chat(
+            name, account_id=account, message=attributed.delivered_text, labels=labels, message_id=message_id
+        )
+    )
+    if isinstance(created, Response):
+        return created
+    if attributed.annotation is not None:
+        state.authors.record(created.chat_id, attributed.annotation)
+    _bubble_new_chats_first_message(state, created, intake.message, identity, message_id)
+    return created
+
+
 def _intake_into_new_chat(state: ChatAppState, intake: IntakeRequest) -> Response:
     """The ``new_chat`` rules (spec 3.5): with an account and a send, the chat is created with the text as its
     first message; otherwise a chat awaiting its first send is minted and the intake held for it."""
@@ -2536,19 +2643,10 @@ def _intake_into_new_chat(state: ChatAppState, intake: IntakeRequest) -> Respons
     if isinstance(account, Response):
         return account
     if account is not None and not intake.is_draft:
-        message_id = uuid4().hex
-        attributed = _attributed_send(state, intake.message, message_id, request_identity(), is_prefixed=True)
-        created = _created_or_refusal(
-            lambda: agent_manager.create_chat(
-                "", account_id=account, message=attributed.delivered_text, message_id=message_id
-            )
-        )
+        created = _create_chat_with_intake_text(state, intake, account, name="", labels={})
         if isinstance(created, Response):
             return created
-        if attributed.annotation is not None:
-            state.authors.record(created.chat_id, attributed.annotation)
         _consider_naming_chat(state, created.chat_id, intake.message)
-        _bubble_new_chats_first_message(state, created, intake.message, request_identity(), message_id)
         return model_response(IntakeResponse(path=intake_path(created.chat_id, None)))
     minted = agent_manager.mint_awaiting_chat(account or "")
     token = state.pending_intakes.mint(intake, minted.chat_id, needs_pick=False)

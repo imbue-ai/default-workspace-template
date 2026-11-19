@@ -22,7 +22,8 @@
  * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
  * this client's own stored path, which arrives with the layout), and the pages' own
  * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, ``shell:start-with-text``,
- * ``shell:message``, ``shell:open-link``, and ``shell:report-bug``. Messages cross through ``relay.ts``.
+ * ``shell:ask-agent``, ``shell:message``, ``shell:open-link``, and ``shell:report-bug``. Messages cross
+ * through ``relay.ts``.
  *
  * The phone layout mounts differently (plan-phone-interface.md): under the ``shown`` policy only the shown
  * window's page lives, laid over the whole host, plus the pages it keeps (the pinned chat window's, created
@@ -36,6 +37,8 @@
 
 import {
   INPUT_REPORT_INTERVAL_MS,
+  SHELL_ASK_AGENT,
+  SHELL_ASK_AGENT_RESULT,
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
   SHELL_DRAFT_TEXT,
@@ -53,8 +56,11 @@ import {
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   SHELL_START_WITH_TEXT,
+  SHELL_START_WITH_TEXT_RESULT,
   reportedFailureOf,
 } from "@imbue/workspace-ui/src/app_contract";
+import type { StartOutcome } from "@imbue/workspace-ui/src/app_contract";
+import { DEFAULT_WHAT_FAILED, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { viewportRect } from "../geometry/frames";
 import type { PixelRect } from "../geometry/frames";
@@ -256,6 +262,11 @@ export class LivePagesLayer implements PageDriver {
   private mountPolicy: MountPolicy = { kind: "all" };
   /** The overview's tiles while it is up, else null. */
   private overview: OverviewPresentation | null = null;
+  /** This load of the shell, in every handshake: a page settles the requests it is still waiting on only when a
+   *  handshake names another load (the shell started again and forgot them). */
+  private readonly shellId = Array.from(crypto.getRandomValues(new Uint32Array(2)), (part) =>
+    part.toString(16).padStart(8, "0"),
+  ).join("");
 
   constructor(
     private readonly host: HTMLElement,
@@ -273,6 +284,7 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_INPUT, (frame) => this.takeInput(frame));
     setChildFrameMessageHandler(SHELL_OPEN, (frame, payload) => this.takeOpen(frame, payload));
     setChildFrameMessageHandler(SHELL_START_WITH_TEXT, (frame, payload) => this.takeStartWithText(frame, payload));
+    setChildFrameMessageHandler(SHELL_ASK_AGENT, (frame, payload) => this.takeAskAgent(frame, payload));
     setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
     setChildFrameMessageHandler(SHELL_MESSAGE, (frame, payload) => this.takeMessage(frame, payload));
     setChildFrameMessageHandler(SHELL_OPEN_LINK, (frame, payload) => this.takeOpenLink(frame, payload));
@@ -989,6 +1001,7 @@ export class LivePagesLayer implements PageDriver {
       canReportBug: this.store.getCanReportBug(),
       opensLocalFiles: this.store.getOpensLocalFiles(),
       isViewing,
+      shellId: this.shellId,
     });
     page.greetedDesktopId = desktopId;
     page.greetedIsViewing = isViewing;
@@ -1089,11 +1102,58 @@ export class LivePagesLayer implements PageDriver {
     this.store.raiseWindow(page.windowId);
   }
 
-  /** ``shell:start-with-text {text}`` from a page: the launcher's primary text action runs with it, on the active
-   *  desktop (a page can only be pressed there); the frame has to be one the shell created. */
+  /** ``shell:start-with-text {text, requestId}`` from a page: the launcher's primary text action runs with it, on the
+   *  active desktop (a page can only be pressed there), and the page is answered with
+   *  ``shell:start-with-text-result``; the frame has to be one the shell created. */
   private takeStartWithText(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
-    const text = this.textFromPage(frame, payload, SHELL_START_WITH_TEXT);
-    if (text !== null) void this.store.startWithText(text);
+    this.startAndAnswer(frame, payload, SHELL_START_WITH_TEXT, SHELL_START_WITH_TEXT_RESULT, (text) =>
+      this.store.startWithText(text),
+    );
+  }
+
+  /** ``shell:ask-agent {text, requestId}`` from a page ("Ask an agent to fix this"): the text is sent to the chat
+   *  about the app of the page's window, shown beside that window, and the page is answered with
+   *  ``shell:ask-agent-result``. */
+  private takeAskAgent(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    const windowId = this.pageOfFrame(frame)?.windowId ?? null;
+    this.startAndAnswer(frame, payload, SHELL_ASK_AGENT, SHELL_ASK_AGENT_RESULT, (text) =>
+      this.store.askAgent(text, windowId),
+    );
+  }
+
+  /** Run ``start`` with a page's text and answer the page with ``resultType`` once the window opened or the start
+   *  failed; a start that throws is answered with the fallback, so the page's button never stays pending. A failure
+   *  is toasted too unless the request says ``showsOutcome``: a page that drops the answer still has it told. */
+  private startAndAnswer(
+    frame: HTMLIFrameElement,
+    payload: Record<string, unknown>,
+    type: string,
+    resultType: string,
+    start: (text: string) => Promise<StartOutcome>,
+  ): void {
+    const text = this.textFromPage(frame, payload, type);
+    if (text === null) return;
+    const requestId = payload.requestId;
+    if (typeof requestId !== "string" || requestId === "") {
+      console.warn(`[si] ${type} ignored: it carried no request id (${JSON.stringify(payload)})`);
+      return;
+    }
+    void start(text)
+      .catch((error: unknown): StartOutcome => {
+        console.error(`[si] ${type} failed`, error);
+        return {
+          isOpened: false,
+          failure: {
+            message: fallbackSentence(DEFAULT_WHAT_FAILED),
+            details: error instanceof Error ? error.message : String(error),
+            isReportable: true,
+          },
+        };
+      })
+      .then((outcome) => {
+        sendToChildFrame(frame, resultType, { requestId, ...outcome });
+        if (!outcome.isOpened && payload.showsOutcome !== true) this.store.showStartFailure(outcome.failure);
+      });
   }
 
   /** ``shell:draft-text {text}`` from a page (element-reference-menu plan section 5): the text is drafted into the

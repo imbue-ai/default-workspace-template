@@ -23,9 +23,11 @@ from imbue.chat.documents import FRONTEND_BUILT_HEADER
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import FIXTURE_AGENT_ID
+from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import running_workspace
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
+from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 
@@ -70,9 +72,9 @@ def _wait_for_the_chat_app(shell_url: str) -> dict[str, Any]:
 @pytest.mark.timeout(60, func_only=False)
 def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: Path) -> None:
     """The chat reaches the shell's inventory as an app: running, with the launch paths of its manifest (the ``root``
-    page, and ``main``, ``new``, ``send``, ``draft``, ``lounge``, and ``app-chat`` as POSTs onto its intake route with
-    their presets and text, draft, mention, or app params) and its default shortcut, and nothing about the chats
-    inside it."""
+    page, and ``main``, ``new``, ``send``, ``draft``, ``lounge``, ``app-chat``, and ``app-ask`` as POSTs onto its
+    intake route with their presets and text, draft, mention, or app params) and its default shortcut, and nothing
+    about the chats inside it."""
     with running_workspace(tmp_path, find_free_port(), find_free_port()) as workspace:
         listed = _wait_for_the_chat_app(workspace.shell_url)
         assert listed["display_name"] == "Chat"
@@ -85,12 +87,14 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
             ("draft", "/api/chats/intake", "POST"),
             ("lounge", "/api/chats/intake", "POST"),
             ("app-chat", "/api/chats/intake", "POST"),
+            ("app-ask", "/api/chats/intake", "POST"),
         ]
         assert [launch["text_param"] for launch in listed["launch_paths"]] == [
             None,
             "message",
             "message",
             "message",
+            None,
             None,
             None,
             None,
@@ -103,6 +107,7 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
             "message",
             None,
             None,
+            None,
         ]
         assert [launch["mention_param"] for launch in listed["launch_paths"]] == [
             None,
@@ -112,6 +117,7 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
             None,
             "message",
             None,
+            None,
         ]
         assert [launch["app_params"] for launch in listed["launch_paths"]] == [
             None,
@@ -120,7 +126,8 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
             None,
             None,
             None,
-            {"name": "app", "display_name": "app_display_name"},
+            {"name": "app", "display_name": "app_display_name", "text": None},
+            {"name": "app", "display_name": "app_display_name", "text": "message"},
         ]
         assert [launch["presets"] for launch in listed["launch_paths"]] == [
             {},
@@ -130,6 +137,7 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
             {"target": "current_chat", "is_draft": "true"},
             {"target": "lounge", "is_draft": "true"},
             {"target": "app_chat"},
+            {"target": "app_ask"},
         ]
         assert listed["default_shortcuts"] == [{"launch": "root", "mode": "new"}]
 
@@ -164,6 +172,67 @@ def test_an_agents_open_of_a_chat_page_lands_a_window_the_chat_serves(tmp_path: 
         with urllib.request.urlopen(f"{workspace.chat_url}{window['path']}", timeout=5) as response:
             assert response.status == 200
             assert response.headers[FRONTEND_BUILT_HEADER] in ("true", "false")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_an_ask_run_through_the_shell_reaches_the_chat_about_its_app_which_opens_beside_the_asking_window(
+    tmp_path: Path,
+) -> None:
+    """The seam a page's ask crosses: the shell runs the chat's ``app-ask`` launch path as the registry row carries
+    it (the app's name, its display name and the text as the params ``app_params`` names), the chat's intake sends
+    the text to the chat about that app, led by the sentence that names the app, and the shell shows the chat it
+    answers beside the window the ask came from."""
+    docs_chat_id = "agent-00000000000000000000000000000d0c"
+    messenger = RecordingMngrMessenger()
+    docs_row = registry_row_toml("docs", f"http://127.0.0.1:{find_free_port()}", display_name="Docs")
+    with running_workspace(
+        tmp_path,
+        find_free_port(),
+        find_free_port(),
+        additional_agents=((docs_chat_id, "Docs-Chat"),),
+        messenger=messenger,
+        extra_rows=(docs_row,),
+    ) as workspace:
+        _wait_for_the_chat_app(workspace.shell_url)
+        client_queue = workspace.shell_state.shell.broadcaster.register()
+        workspace.shell_state.shell.broadcaster.set_client_info(client_queue, "client-1", _HOME_DESKTOP_ID)
+        try:
+            _, opened = _post_json(
+                f"{workspace.shell_url}/api/desktops/{_HOME_DESKTOP_ID}/windows",
+                {"app": "docs", "path": "/", "client_id": "client-1"},
+            )
+            asking_window_id = opened["window"]["id"]
+            _, launched = _post_json(
+                f"{workspace.shell_url}/api/desktops/{_HOME_DESKTOP_ID}/launch",
+                {
+                    "app": "chat",
+                    "launch": "app-ask",
+                    "params": {"app": "docs", "app_display_name": "Docs", "message": "The preview is blank. Fix it."},
+                    "client_id": "client-1",
+                    "target": {"kind": "show", "beside": asking_window_id},
+                },
+            )
+        finally:
+            workspace.shell_state.shell.broadcaster.unregister(client_queue)
+        assert (launched["window"]["app"], launched["path"]) == ("chat", f"/?chat={docs_chat_id}")
+        wait_for(
+            lambda: messenger.sent
+            == [(docs_chat_id, "/assist This is about the Docs app.\n\nThe preview is blank. Fix it.")],
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message=f"the ask never reached the chat about Docs alone: {messenger.sent}",
+        )
+        with urllib.request.urlopen(
+            f"{workspace.shell_url}/api/placements/{_HOME_DESKTOP_ID}?client=client-1", timeout=5
+        ) as response:
+            placements = json.loads(response.read())["placements"]
+        # The two windows share the backdrop by halves, the chat on top; which half is whose is the show rule's.
+        state_by_window_id = {placement["window_id"]: placement["state"] for placement in placements}
+        assert {state_by_window_id[asking_window_id], state_by_window_id[launched["window"]["id"]]} == {
+            "SNAPPED_LEFT",
+            "SNAPPED_RIGHT",
+        }
+        assert placements[-1]["window_id"] == launched["window"]["id"]
 
 
 def _chat_create_template() -> dict[str, object]:
