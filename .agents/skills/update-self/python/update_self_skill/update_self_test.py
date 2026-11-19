@@ -7663,6 +7663,29 @@ def test_finish_restore_leaves_a_record_without_an_unrestored_list_to_a_hand_rep
     assert not (apply_repo / "static").exists()
 
 
+def test_finish_restore_refuses_left_over_copies_whose_record_never_got_written(
+    apply_repo: Path, capsys
+) -> None:
+    """``recover`` writes the record best-effort, and the full disk that failed the restore can
+    fail that write too; "nothing to put back" over the copies would end the repair there."""
+    _, copy = _recover_over_an_unrestorable_bundle(apply_repo)
+    update_apply_contract.emergency_path(apply_repo).unlink()
+    (apply_repo / "blocked").unlink()
+    capsys.readouterr()
+
+    assert _finish_restore(apply_repo) == 1
+
+    assert "repair by hand" in capsys.readouterr().err
+    assert (copy / "index.html").exists()
+    assert not (apply_repo / "blocked").exists()
+
+    # Copies a kept rollback point owns are that point's, not a failed restore's.
+    _keep_a_later_apply_rollback_point(apply_repo)
+    assert _finish_restore(apply_repo) == 0
+    assert "nothing to put back" in capsys.readouterr().err
+    assert (copy / "index.html").exists()
+
+
 def _keep_a_later_apply_rollback_point(apply_repo: Path) -> None:
     update_apply_contract.write_last_good(
         update_apply_contract.LastGoodRecord(

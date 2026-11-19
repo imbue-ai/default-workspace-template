@@ -2439,11 +2439,12 @@ def finish_restore(repo_root: Path, *, now: Callable[[], float] = time.time) -> 
     The restore is the one ``recover`` attempted, so a tool environment gets its entrypoints
     back too. Health is not probed here, so the record stays: the agent clears it once the
     workspace is confirmed healthy. Returns 0 when every copy is back (or there is no
-    emergency at all), and 3 when some still would not restore, which stay named.
+    emergency and no copy left over), and 3 when some still would not restore, which stay named.
 
     Returns 1, touching nothing, when it cannot tell what to put back: the record is
-    unreadable, or it keeps no readable list of unrestored copies (an emergency from anything
-    but a boot-time partial restore), which is a repair by hand. Refused (1) too while an apply's
+    unreadable, it keeps no readable list of unrestored copies (an emergency from anything
+    but a boot-time partial restore), or there is no record but copies no kept rollback point
+    owns are left behind, which is a repair by hand. Refused (1) too while an apply's
     marker exists, or a later apply's rollback point is kept: that apply took its copies at the
     same paths, so restoring from them would put its pre-apply state over the live tree, and
     discarding them would take away its way back. That check follows the record's: the
@@ -2463,6 +2464,15 @@ def finish_restore(repo_root: Path, *, now: Callable[[], float] = time.time) -> 
             sys.stderr.write(
                 "error: the emergency record cannot be read, so what to put back is "
                 f"unknown; the copies are at {snapshots_root(repo_root)}: repair by hand.\n"
+            )
+            return 1
+        # ``recover`` writes the record best-effort, so the full disk that failed the restore
+        # can fail the record too: copies no kept rollback point owns are then that restore's.
+        root = snapshots_root(repo_root)
+        if read_last_good(repo_root) is None and root.is_dir() and any(root.iterdir()):
+            sys.stderr.write(
+                "error: no emergency is recorded, but pre-apply copies are kept at "
+                f"{root} with nothing naming where they belong: repair by hand.\n"
             )
             return 1
         sys.stderr.write("no emergency is recorded; nothing to put back.\n")

@@ -139,9 +139,10 @@ not restore, which stay listed for another run. It exits 1 having done
 nothing while an apply is in flight, since that apply re-takes its copies at
 the same paths (let it finish, or `recover` it, first); once a later apply
 has kept its rollback point (`last-good.json`), whose copies sit at those
-paths too; and when the record is unreadable or keeps no `unrestored` list.
-The last two make the repair one by hand from the copies under
-`data/.state/update-apply/snapshots/`. A copy that is gone has to be rebuilt
+paths too; when the record is unreadable or keeps no `unrestored` list; and
+when there is no record at all but copies are left over (the restore's
+failure kept `recover` from writing it, too). All but the first make the
+repair one by hand from the copies under `data/.state/update-apply/snapshots/`. A copy that is gone has to be rebuilt
 instead. Then verify the workspace is healthy and delete `emergency.json`, as
 above.
 
