@@ -119,9 +119,7 @@ behavior.
 what outputs are correct. Describe success; the incident itself is above.>
 
 ## What to do
-Invoke the \`harden-worker\` skill. On a harness that cannot invoke skills, read
-and follow \`.agents/skills/harden-worker/SKILL.md\` from your own checkout. It
-reads \`operation\` and \`creations\` from this frontmatter and follows the
+Invoke the \`harden-worker\` skill. It reads \`operation\` and \`creations\` from this frontmatter and follows the
 matching references: reproduce the failure, find the root cause, apply a minimal fix,
 re-run 2-3 fresh scenarios, and push through the single final-creation gate.
 Push reports to the lead per its reporting protocol.
