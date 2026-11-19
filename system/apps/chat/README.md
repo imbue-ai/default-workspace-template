@@ -936,13 +936,9 @@ on "Ask again". A server the app lists carries a `studio_port`. The sign-in
 submits `{endpoint: {base_url, model_id, context_window, api_key, studio_port}}`
 to the flow; with a `studio_port` the app is first asked to open its tunnel, and
 the account runs on the loopback address the tunnel answers on in the workspace.
-A send to a chat on a local-model account first asks the account's server for its
-model list (`is_server_answering`, five seconds): a tunnel to a sleeping computer
-takes a request and never answers it, and pi would wait minutes on it. A server
-that does not answer refuses the send with 409 `kind: model_server_unreachable`,
-and the composer keeps the text beside what to check. Before anything is kept the model is asked for one tool call, since
-a model that prints its tool calls as text runs nothing and still reports a
-finished turn, and Ollama is asked what context it loaded the model with, since
+Before anything is kept the model is asked for one tool call, since a model that
+prints its tool calls as text runs nothing and still reports a finished turn,
+and Ollama is asked what context it loaded the model with, since
 it keeps its own (4,096 tokens unless configured) whatever pi is told; a context
 under 32,768 tokens fails the sign-in with the setting that raises it, since a
 new chat's first request alone measured about 24,000 (the workspace's
@@ -956,6 +952,11 @@ declaration turns off the `developer` role, which Ollama drops silently, and for
 Ollama names the effort that stops the reasoning. The model bar matches a
 pi agent's live model against the catalog plus the models of its own
 `models.json`, and its picker lists the model in use when no catalog names it.
+A send to a chat on a local-model account first asks the account's server for its
+model list (`is_server_answering`, five seconds): a tunnel to a sleeping computer
+takes a request and never answers it, and pi would wait minutes on it. A server
+that does not answer refuses the send with 409 `kind: model_server_unreachable`,
+and the composer keeps the text beside what to check.
 
 A Claude or ChatGPT sign-in finishes in the user's own browser. The CLI (`claude
 auth login`, or a short-lived `codex app-server` for ChatGPT) runs with
