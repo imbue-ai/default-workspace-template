@@ -933,7 +933,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     return m("div", { "data-e2e": "local-model-form" }, [
       m("p", { class: css.LEAD }, method?.description ?? ""),
       stepLabel(null, "Model"),
-      // One of these three, never a hole: mithril refuses a fragment that mixes keyed and unkeyed.
+      // One of these, never a hole: mithril refuses a fragment that mixes keyed and unkeyed.
       servers === null || (isLookingForServers && choices.length === 0)
         ? m("p", { class: css.HINT, "data-e2e": "local-model-looking" }, "Looking for a model server...")
         : choices.length > 0
