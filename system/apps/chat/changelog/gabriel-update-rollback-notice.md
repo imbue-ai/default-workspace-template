@@ -1,1 +1,1 @@
-- The note an agent receives after a restart rolled its update back now shows as a one-line notice ("Workspace put back", or "Workspace needs repair" when the rollback could not restore everything) instead of a message bubble showing the agent's instructions as if the user had typed them.
+- The chat app's tests now also pin the note bootstrap sends after a restart rolls an apply back, which the chat shows as its existing "Workspace update not applied" notice rather than as a message bubble of agent instructions.

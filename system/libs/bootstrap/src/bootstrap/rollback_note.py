@@ -1,10 +1,11 @@
 """The note bootstrap sends the agent whose apply a boot-time rollback undid.
 
 The whole note reaches the agent; the chat shows the user only its ``<summary>`` line, as a
-notice labelled by the outcome the opening tag carries. The tag is the one the update-self
-skill's resume note uses (``update_resume_note.py``); the chat app's
-``harnesses/message_display.py`` keeps its own copy of the tag and of these outcomes, and a test
-there pins them equal by classifying notes this module composed.
+notice labelled by the outcome the opening tag carries. The tag and the ``not-landed`` outcome
+are the update-self skill's resume note's (``update_resume_note.py``), which every chat app
+already shows: the chat app that reads this note is the rolled-back one, which may predate it.
+``harnesses/message_display.py`` keeps its own copy of both, and a test there pins them equal by
+classifying notes this module composed.
 
 Standard library only: bootstrap depends on nothing it does not need, and the chat app's test
 imports this module.
@@ -16,11 +17,7 @@ from typing import NamedTuple
 
 WORKSPACE_UPDATE_NOTE_TAG = "workspace-update-note"
 
-# The tree and every pre-apply copy are back.
-OUTCOME_ROLLED_BACK = "rolled-back"
-
-# The tree is back, but a pre-apply copy could not be put back (``recover``'s emergency exit).
-OUTCOME_ROLLBACK_INCOMPLETE = "rollback-incomplete"
+OUTCOME_NOT_LANDED = "not-landed"
 
 EMERGENCY_RECORD = "data/.state/update-apply/emergency.json"
 
@@ -51,7 +48,7 @@ def _summary(rollback: BootRollback) -> str:
     subject = (
         "The update to this workspace"
         if rollback.release is not None
-        else "A change to this workspace's apps"
+        else "A change to this workspace"
     )
     if rollback.is_restore_complete:
         return (
@@ -106,13 +103,8 @@ def compose_rollback_note(rollback: BootRollback) -> str:
         "the user in a line or two how the workspace checked out."
     )
     body = "\n".join(lines)
-    outcome = (
-        OUTCOME_ROLLED_BACK
-        if rollback.is_restore_complete
-        else OUTCOME_ROLLBACK_INCOMPLETE
-    )
     return (
-        f'<{WORKSPACE_UPDATE_NOTE_TAG} outcome="{outcome}">\n'
+        f'<{WORKSPACE_UPDATE_NOTE_TAG} outcome="{OUTCOME_NOT_LANDED}">\n'
         f"<summary>{_summary(rollback)}</summary>\n"
         f"{body}\n"
         f"</{WORKSPACE_UPDATE_NOTE_TAG}>"

@@ -210,11 +210,12 @@ by hand. Say so to the user if that is the update you are running.
 ### After a restart rolled it back
 
 When bootstrap rolls an apply back at boot, it starts the agent that was
-driving it and sends it a note. The user sees only the note's summary line:
-on a full rollback, that the update stopped part-way when the workspace
-restarted, that the workspace was put back the way it was, and that they can
-ask to try it again; on a partial one (`rollback-incomplete`), that it
-couldn't be fully put back. The rest of the note is for you.
+driving it and sends it a note, shown as "Workspace update not applied". The
+user sees only the note's summary line: on a full rollback, that the update
+stopped part-way when the workspace restarted, that the workspace was put back
+the way it was, and that they can ask to try it again; on a partial one, that
+it couldn't be fully put back. The rest of the note is for you, and says which
+of the two it was.
 
 **Never retry it on your own.** This is not exit 2: the update itself may be
 what restarted the workspace (the new version pushing memory past the
@@ -222,7 +223,7 @@ container's limit, say), and from inside the workspace that cause is often
 invisible, so an unattended retry can loop. Exit 2's retry rules do not apply.
 Instead:
 
-1. On `rollback-incomplete`, finish the restore first (Exit 3, "A partial
+1. After a partial rollback, finish the restore first (Exit 3, "A partial
    restore at boot"), without waiting to be asked: it only puts back what
    the workspace had.
 2. Check the workspace is healthy: `supervisorctl status` shows the programs
@@ -235,7 +236,7 @@ Instead:
    the worker rather than destroying it, as after any rollback.
 4. Tell the user in a line or two how the workspace checked out. After a
    full rollback the notice already told them what happened and that they
-   can ask to try again, so don't repeat the offer. The `rollback-incomplete`
+   can ask to try again, so don't repeat the offer. A partial rollback's
    notice made no such offer: once the restore is finished and the workspace
    is healthy, say it is back the way it was and that they can ask to try the
    update again.
