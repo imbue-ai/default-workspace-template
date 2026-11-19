@@ -6940,7 +6940,9 @@ class AgentManager:
             if is_working_activity_state(new_state):
                 self._interrupted_agent_ids.discard(agent_id)
             elif (
-                is_turn_cut_off(agent_state.state, is_active_marker_present, tracker.is_tail_mid_turn)
+                is_turn_cut_off(
+                    agent_state.state, is_active_marker_present, tracker.is_tail_mid_turn(process_started_at)
+                )
                 and not self._letting_go_counts_by_agent.get(agent_id, 0)
                 and not self._is_archived_member_locked(agent_id)
                 and not self._is_chat_switching_locked(agent_id)

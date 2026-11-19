@@ -9,7 +9,6 @@ class RoomActivityTracker(PlaceholderActivityTracker):
 
     marker_filename: ClassVar[str] = "room_process_started"
 
-    @property
-    def is_tail_mid_turn(self) -> bool:
+    def is_tail_mid_turn(self, process_started_at: float | None) -> bool:
         """Never: a room has no turns, and every line of its transcript is a ``user_message``."""
         return False
