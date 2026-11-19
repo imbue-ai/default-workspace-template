@@ -60,7 +60,7 @@ dev = [
     # The shell, for the two-process fixture the e2e suite and the system tests boot (the
     # chat is framed by the shell, so a chat page can only be driven through it).
     "system-interface",
-    # The stdlib-only scripts whose copies of this package's wire constants the tests pin.
+    # The packages holding the other copies of this package's wire constants, which the tests pin.
     "workspace-scripts",
     "update-self-skill",
     "bootstrap",
