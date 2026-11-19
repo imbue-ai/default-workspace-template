@@ -61,8 +61,9 @@ belong in tested code rather than agent prose:
     moved or not).
 
 ``changelog-entries``
-    List ``changelog/`` entries newly added between two refs -- the raw input for
-    the worker's "what's new" report.
+    List the target's root CHANGELOG.md section for each release newer than the base's
+    -- the raw input for the worker's "what's new" report. ``--out`` writes their text
+    to one file.
 
 ``pending-rollbacks``
     List the rollbacks of earlier updates that nothing has undone yet, newest
@@ -155,7 +156,8 @@ classes and the apply plan), ``update_apply_contract`` (every path, phase,
 verdict and record the Imbue Studio app, bootstrap and the system interface read),
 ``update_layout``, ``update_banding``, ``update_runtime``,
 ``update_environment``, ``update_probes``, ``update_ledger``,
-``update_history_bridge``, ``update_apply`` (the apply and recover
+``update_history_bridge``, ``update_whats_new`` (what ``changelog-entries``
+lists), ``update_apply`` (the apply and recover
 orchestration), ``update_chat_pause`` (``run-status stop-chats`` /
 ``resume-chats``), ``update_app_pause`` (``run-status stop-apps`` /
 ``resume-apps``), ``update_resume_note`` (the note a resumed chat is
@@ -259,6 +261,7 @@ from update_self_skill.update_target import (
     fetch_app_template_ref,
     resolve_target,
 )
+from update_self_skill.update_whats_new import list_whats_new
 
 # The repo-relative directory holding the update-self skill (SKILL.md,
 # references/, scripts/, python/). Used by ``bootstrap-skill`` to extract the target
@@ -632,34 +635,11 @@ def _cmd_footprint_ranges(args: argparse.Namespace) -> int:
 
 
 def _cmd_changelog_entries(args: argparse.Namespace) -> int:
-    repo_root = _repo_root(args)
-    # Per-PR changelog entries live in a ``changelog/`` dir under each project
-    # bucket -- ``system/changelog/``, ``.agents/changelog/``, and
-    # ``system/{libs,services,apps}/<name>/changelog/`` (see
-    # system/scripts/workspace_scripts/check_changelog_entries.py for the bucket definition).
-    # Match every one of them at any depth with a single glob rather than one
-    # dir alone, or the "what's new" digest silently drops everything landed
-    # under the bucketed layout. Exclude system/vendor, whose snapshots carry
-    # their own changelog systems. ``top`` anchors both pathspecs at the
-    # repository root: a git pathspec is otherwise relative to the cwd, so run
-    # from a subdirectory the glob matched nothing and the digest came back
-    # empty with no error.
-    added = _list_names(
-        _git(
-            [
-                "diff",
-                "--name-only",
-                "--diff-filter=A",
-                args.base,
-                args.target,
-                "--",
-                ":(top,glob)**/changelog/*",
-                ":(top,exclude)system/vendor",
-            ],
-            repo_root,
+    print(
+        json.dumps(
+            list_whats_new(args.base, args.target, _repo_root(args), Runner(), args.out)
         )
     )
-    print(json.dumps({"added": added}))
     return 0
 
 
@@ -1307,12 +1287,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     changelog_parser = sub.add_parser(
         "changelog-entries",
-        help="List per-PR changelog entries newly added between two refs "
-        "(across every project bucket, not just the top-level changelog/).",
+        help="List the target's root CHANGELOG.md section for each release newer than "
+        "the base's.",
         parents=[common],
     )
     changelog_parser.add_argument("--base", required=True, help="Base ref.")
     changelog_parser.add_argument("--target", required=True, help="Target ref.")
+    changelog_parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Write the listed sections' text to this file, newest first.",
+    )
     changelog_parser.set_defaults(func=_cmd_changelog_entries)
 
     pending_parser = sub.add_parser(
