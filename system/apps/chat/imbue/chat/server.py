@@ -66,8 +66,8 @@ from imbue.chat import accounts_endpoints
 from imbue.chat import focus_chat
 from imbue.chat import keybindings_endpoints
 from imbue.chat import latchkey_endpoints
-from imbue.chat import mentions_endpoints
 from imbue.chat import memory_changes_endpoints
+from imbue.chat import mentions_endpoints
 from imbue.chat import secret_requests_endpoints
 from imbue.chat.account_labels import account_id_of
 from imbue.chat.accounts import AccountError
