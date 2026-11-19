@@ -193,6 +193,16 @@ def test_an_answer_that_is_not_a_listing_is_unreachable_and_logged(
     assert len([record for record in loguru_records if record.startswith("WARNING") and logged in record]) == 1
 
 
+def test_an_answer_whose_text_cannot_be_decoded_is_unreachable() -> None:
+    answer = httpx.Response(
+        200, content=b"<html>not the app</html>", headers={"Content-Type": "text/html; charset=utf-16"}
+    )
+
+    found = find_studio_model_servers(_client(lambda _request: answer), _GATEWAY, _AGENT_ID, True)
+
+    assert found.link is StudioLink.UNREACHABLE
+
+
 def test_a_server_listed_in_a_form_this_workspace_cannot_read_is_skipped_with_a_warning(
     loguru_records: list[str],
 ) -> None:
@@ -214,7 +224,9 @@ def test_a_server_listed_in_a_form_this_workspace_cannot_read_is_skipped_with_a_
     assert "'11434'" in skipped[0]
 
 
-def test_a_listing_with_no_readable_server_is_not_taken_for_a_computer_running_none() -> None:
+def test_a_listing_with_no_readable_server_is_not_taken_for_a_computer_running_none(
+    loguru_records: list[str],
+) -> None:
     listing = {"servers": [{"port": 11434, "name": "Ollama"}, "LM Studio"]}
 
     found = find_studio_model_servers(
@@ -222,6 +234,7 @@ def test_a_listing_with_no_readable_server_is_not_taken_for_a_computer_running_n
     )
 
     assert (found.link, found.servers) == (StudioLink.UNREACHABLE, ())
+    assert len([record for record in loguru_records if record.startswith("WARNING") and "Skipped" in record]) == 2
 
 
 def test_the_permission_request_failing_to_reach_the_app_is_unreachable() -> None:
