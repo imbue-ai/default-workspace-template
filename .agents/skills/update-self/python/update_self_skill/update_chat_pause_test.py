@@ -207,6 +207,28 @@ def test_a_second_pause_tells_a_chat_only_about_what_it_has_not_heard() -> None:
     ]
 
 
+def test_a_chat_still_owed_a_note_and_paused_again_while_idle_is_still_told(
+    tmp_path: Path, fake_agents: FakeAgents
+) -> None:
+    """Started again by a resume whose note never arrived, it sits idle; pausing it for memory
+    must not drop the note it is still owed."""
+    fake_agents.set_agents(
+        [chat("agent-lead", _LEAD, "RUNNING"), chat("agent-a", "Chat-A", "RUNNING")]
+    )
+    assert _main(tmp_path, "run-status", "start") == 0
+    assert _main(tmp_path, "run-status", "stop-chats") == 0
+    fake_agents.fail({"message": ["agent-a"]})
+    assert _main(tmp_path, "run-status", "resume-chats") != 0
+    fake_agents.fail({})
+    assert _main(tmp_path, "run-status", "stop-chats", "--agent", "Chat-A") == 0
+    fake_agents.clear_calls()
+
+    assert _main(tmp_path, "run-status", "resume-chats") == 0
+
+    assert fake_agents.states()["Chat-A"] == "WAITING"
+    assert set(fake_agents.notes()) == {"agent-a"}
+
+
 def test_a_paused_chat_deleted_before_the_resume_does_not_hold_it_open(
     tmp_path: Path, fake_agents: FakeAgents
 ) -> None:
@@ -349,6 +371,87 @@ def test_stop_chats_pauses_a_named_agent_for_memory_and_refuses_one_it_may_not(
     assert _main(tmp_path, "run-status", "stop-chats", "--agent", "no-such-chat") == 1
     assert fake_agents.mngr_verbs() == []
     assert [entry.id for entry in _record(tmp_path).stopped_agents] == ["agent-idle"]
+
+
+def test_a_chat_paused_for_memory_while_idle_is_left_stopped_and_told_nothing(
+    tmp_path: Path, fake_agents: FakeAgents, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Starting it would take back the memory its pause freed, and a note would start a turn in a
+    chat with nothing to carry on with; the user's next message starts it."""
+    fake_agents.set_agents(_workspace_agents())
+    assert _main(tmp_path, "run-status", "start") == 0
+    assert _main(tmp_path, "run-status", "stop-chats", "--agent", "Plan-the-trip") == 0
+    assert _main(tmp_path, "run-status", "stop-chats") == 0
+    fake_agents.clear_calls()
+    capsys.readouterr()
+
+    assert (
+        _main(tmp_path, "run-status", "resume-chats", "--landed", "minds-v0.9.0") == 0
+    )
+
+    assert fake_agents.states()["Plan-the-trip"] == "STOPPED"
+    assert ["start", "agent-idle"] not in fake_agents.mngr_verbs()
+    assert fake_agents.states()["Fix-the-login"] == "WAITING"
+    assert set(fake_agents.notes()) == {"agent-busy"}
+    assert "Left Plan-the-trip stopped" in capsys.readouterr().out
+
+    # Nothing is left for a later resume or the next run to bring back.
+    fake_agents.clear_calls()
+    assert _main(tmp_path, "run-status", "resume-chats") == 0
+    assert fake_agents.mngr_verbs() == []
+    assert _main(tmp_path, "run-status", "start", "--chat", f"{_LEAD}-2") == 0
+    assert _record(tmp_path).stopped_agents == []
+
+
+def test_a_resume_whose_only_pause_was_idle_still_names_the_chat_it_left_stopped(
+    tmp_path: Path, fake_agents: FakeAgents, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The results message names each chat left stopped from the resume's own lines."""
+    fake_agents.set_agents(_workspace_agents())
+    assert _main(tmp_path, "run-status", "start") == 0
+    assert _main(tmp_path, "run-status", "stop-chats", "--agent", "Plan-the-trip") == 0
+    fake_agents.clear_calls()
+    capsys.readouterr()
+
+    assert _main(tmp_path, "run-status", "resume-chats") == 0
+
+    assert "Left Plan-the-trip stopped" in capsys.readouterr().out
+    assert fake_agents.mngr_verbs() == []
+    assert fake_agents.notes() == {}
+
+
+def test_a_chat_left_stopped_that_the_user_started_again_is_not_named_as_stopped(
+    tmp_path: Path, fake_agents: FakeAgents, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Paused for memory early in the run, it is started by the user's next message long
+    before the resume, and idle again by 5b, which pauses only busy chats."""
+    fake_agents.set_agents(_workspace_agents())
+    assert _main(tmp_path, "run-status", "start") == 0
+    assert _main(tmp_path, "run-status", "stop-chats", "--agent", "Plan-the-trip") == 0
+    fake_agents.set_agents(_workspace_agents())
+    fake_agents.clear_calls()
+    capsys.readouterr()
+
+    assert _main(tmp_path, "run-status", "resume-chats") == 0
+
+    out = capsys.readouterr().out
+    assert "Left Plan-the-trip as it is" in out
+    assert "Left Plan-the-trip stopped" not in out
+    assert fake_agents.mngr_verbs() == []
+    assert fake_agents.notes() == {}
+
+
+def test_a_chat_named_for_memory_mid_turn_is_brought_back_like_any_busy_chat(
+    tmp_path: Path, fake_agents: FakeAgents
+) -> None:
+    fake_agents.set_agents(_workspace_agents())
+    assert _main(tmp_path, "run-status", "start") == 0
+    assert _main(tmp_path, "run-status", "stop-chats", "--agent", "Fix-the-login") == 0
+
+    assert _main(tmp_path, "run-status", "resume-chats") == 0
+
+    assert fake_agents.states()["Fix-the-login"] == "WAITING"
+    assert set(fake_agents.notes()) == {"agent-busy"}
 
 
 def test_the_main_chat_is_interrupted_for_the_apply_and_never_paused_for_memory(

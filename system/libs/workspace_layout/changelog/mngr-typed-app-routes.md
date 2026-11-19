@@ -1,1 +1,0 @@
-`parse_window_closed_hint` is gone: the browser and the terminal, its only readers, now take the shell's close hint as a `WindowClosedHint` through `app_schema.routes.parse_request_body`, which refuses a body of another shape as a 400 instead of ignoring it.

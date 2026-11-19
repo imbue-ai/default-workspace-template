@@ -60,6 +60,12 @@ describe("attachmentServeUrl", () => {
     expect(attachmentServeUrl(IMAGE_PATH)).toBe("/api/uploads/aaa/diagram.png");
   });
 
+  it("maps a chat's own upload to that chat's route", () => {
+    expect(
+      attachmentServeUrl("/home/user/workspace/data/.apps/chat/chats/agent-abc123/uploads/ddd/pasted-text-1.txt"),
+    ).toBe("/api/chats/agent-abc123/uploads/ddd/pasted-text-1.txt");
+  });
+
   it("percent-encodes each path segment", () => {
     expect(attachmentServeUrl("/x/uploads/id/na me.png")).toBe("/api/uploads/id/na%20me.png");
   });
@@ -72,6 +78,16 @@ describe("attachmentMarkdown", () => {
 
   it("renders a non-image as a plain file link", () => {
     expect(attachmentMarkdown(FILE_PATH)).toBe(`[${FILE_PATH}](${FILE_PATH})`);
+  });
+
+  it("labels a long paste's link with its file name, still pointing at its path", () => {
+    const pasted = "/code/uploads/ccc/pasted-text-2.txt";
+    expect(attachmentMarkdown(pasted)).toBe(`[pasted-text-2.txt](${pasted})`);
+    // The bubble still finds the block, and draws the link by its name.
+    expect(parseMessageAttachments(buildMessageWithAttachments("read this", [pasted]))).toEqual({
+      visibleText: "read this",
+      attachmentBlock: `[pasted-text-2.txt](${pasted})`,
+    });
   });
 });
 

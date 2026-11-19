@@ -4,27 +4,12 @@
  * the worker; it is the one place the speech runtime is imported.
  */
 
-import type { Device, EngineSpec } from "./engines";
-import { engineVariant } from "./engines";
+import type { GpuNavigatorLike } from "./devicePick";
+import { pickDevice } from "./devicePick";
 import { loadTransformersEngine } from "./transformersEngine";
 import type { HostPort } from "./workerHost";
 import { createWorkerHost } from "./workerHost";
 import type { PageMessage } from "./workerProtocol";
-
-/** WebGPU when the device has an adapter and the engine a variant for it, else WebAssembly; the page's
- *  preference, when it has one and the engine can honour it, wins. */
-async function pickDevice(spec: EngineSpec, preferred: Device | null): Promise<Device> {
-  if (preferred !== null && engineVariant(spec, preferred) !== null) return preferred;
-  const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
-  if (gpu !== undefined && engineVariant(spec, "webgpu") !== null) {
-    try {
-      if ((await gpu.requestAdapter()) !== null) return "webgpu";
-    } catch {
-      // No usable adapter: WebAssembly below.
-    }
-  }
-  return "wasm";
-}
 
 export interface ConnectablePort extends HostPort {
   onmessage: ((event: MessageEvent<PageMessage>) => void) | null;
@@ -39,7 +24,10 @@ export interface WorkerScopeLike {
   window?: unknown;
 }
 
-const host = createWorkerHost({ loadEngine: loadTransformersEngine, pickDevice });
+const host = createWorkerHost({
+  loadEngine: loadTransformersEngine,
+  pickDevice: (spec, preferred) => pickDevice(spec, preferred, navigator as Navigator & GpuNavigatorLike),
+});
 
 function attach(port: ConnectablePort): void {
   const handle = host.connect(port);

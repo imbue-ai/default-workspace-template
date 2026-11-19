@@ -555,6 +555,7 @@ _PYTHON3_SCRIPT_RE = re.compile(
 _UNDER_UV_RUN_RE = re.compile(r"\buv run(?:\s+--[\w-]+)*\s+$")
 # Spellings of the repo root (and of update-self's staged copy of it) in commands.
 _REPO_ROOT_PREFIXES = (
+    "${CLAUDE_PROJECT_DIR}/",
     "${MNGR_AGENT_WORK_DIR:-.}/",
     "${MNGR_AGENT_WORK_DIR}/",
     "$MNGR_AGENT_WORK_DIR/",
@@ -563,6 +564,15 @@ _REPO_ROOT_PREFIXES = (
     "/home/user/workspace/",
     "data/.tasks/update-self/skill-at-target/",
 )
+
+
+# Claude hook commands quote the project-dir placeholder on its own (`"${CLAUDE_PROJECT_DIR}"/x.py`, escaped in
+# JSON), which would end the path at the quote; reading it unquoted keeps those commands in the scan.
+_QUOTED_PROJECT_DIR_RE = re.compile(r'\\?"\$\{CLAUDE_PROJECT_DIR\}\\?"/')
+
+
+def _unquote_project_dir(line: str) -> str:
+    return _QUOTED_PROJECT_DIR_RE.sub("${CLAUDE_PROJECT_DIR}/", line)
 
 
 def _resolve_written_path(written: str, file_dir: Path, repo_root: Path) -> Path | None:
@@ -589,7 +599,7 @@ def _named_python3_scripts(
 ) -> list[tuple[str, Path | None]]:
     """Every ``(as written, resolved path)`` a ``python3`` in ``text`` runs; None when it cannot be resolved."""
     found: list[tuple[str, Path | None]] = []
-    for line in text.splitlines():
+    for line in map(_unquote_project_dir, text.splitlines()):
         for match in _PYTHON3_SCRIPT_RE.finditer(line):
             if _UNDER_UV_RUN_RE.search(line[: match.start()]):
                 continue
@@ -612,7 +622,9 @@ def _missing_uv_run_scripts(
     """Every ``(file, path as written)`` for a ``uv run <path>.py`` whose script is not in the tree."""
     missing: list[tuple[Path, str]] = []
     for path in files:
-        for line in path.read_text(errors="replace").splitlines():
+        for line in map(
+            _unquote_project_dir, path.read_text(errors="replace").splitlines()
+        ):
             for match in _UV_RUN_SCRIPT_RE.finditer(line):
                 written = match.group(2)
                 if _names_no_tree_file(written):
@@ -657,6 +669,8 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(
                 "python3 system/scripts/no_such_script.py",
                 "uv run --no-sync python3 .agents/shared/scripts/agents_shared/validate_skill.py skill-dir",
                 'command": "python3 \\"$MNGR_AGENT_WORK_DIR/system/scripts/agent_rewrite_bash_command.py\\""',
+                'command": "python3 \\"${CLAUDE_PROJECT_DIR}\\"/system/scripts/agent_rewrite_bash_command.py"',
+                'command": "python3 \\"${CLAUDE_PROJECT_DIR}\\"/system/scripts/no_such_hook.py"',
             ]
         )
     )
@@ -672,6 +686,7 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(
     assert offenders == [
         ".agents/shared/scripts/agents_shared/validate_skill.py",
         "system/scripts/no_such_script.py",
+        "${CLAUDE_PROJECT_DIR}/system/scripts/no_such_hook.py",
     ]
 
 

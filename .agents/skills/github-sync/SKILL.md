@@ -67,7 +67,7 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
 
    ```bash
    latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
-     -H 'Content-Type: application/json' \
+     -H 'Content-Type: application/json' -H 'X-Latchkey-Device: *' \
      -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "predefined", "payload": {"scope": "github-git", "permissions": ["github-git-read", "github-git-write"]}, "rationale": "GitHub sync: push this workspace'"'"'s branches to your private sync repo."}'
    ```
 
@@ -75,7 +75,7 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
 
    ```bash
    latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
-     -H 'Content-Type: application/json' \
+     -H 'Content-Type: application/json' -H 'X-Latchkey-Device: *' \
      -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "predefined", "payload": {"scope": "github-rest-api", "permissions": ["github-read-user", "github-read-repos", "github-write-all"]}, "rationale": "GitHub sync: create the private sync repo (needs github-write-all), confirm which GitHub account it lands under (github-read-user), and verify it stays private (github-read-repos)."}'
    ```
 

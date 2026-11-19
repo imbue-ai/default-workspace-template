@@ -1,1 +1,0 @@
-- The "create a workspace from this template" prompt names the `imbue-studio` skill, which replaces the retired `minds-api` skill.
