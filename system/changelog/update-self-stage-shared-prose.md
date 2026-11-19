@@ -1,1 +1,1 @@
-`system/test_skills.py` checks that every reference `update-self`'s prose reaches, through any number of links, lies in a path the flow stages, so a staged file cannot send the flow to a file read from the workspace's own tree.
+`system/test_skills.py` checks that every reference `update-self`'s prose reaches, through any number of links, lies in a path the flow stages, so a staged file cannot send the flow to a file read from the workspace's own tree. The crawl behind it is `references_reached_outside` in `skill_checks.py`.
