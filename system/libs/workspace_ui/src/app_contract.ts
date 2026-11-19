@@ -619,8 +619,9 @@ function fenceFor(text: string): string {
 }
 
 /** The one task every "Ask an agent to fix this" button gives the agent: what failed, the details as they are, and
- *  what to do about it, said by Imbue Studio about the user rather than as the user, who did not write it. */
-function agentFixTask({ whatFailed, details }: AgentFixRequest): string {
+ *  what to do about it, said by Imbue Studio about the user rather than as the user, who did not write it. The shell
+ *  words its own asks about a failure with it too. */
+export function agentFixTask({ whatFailed, details }: AgentFixRequest): string {
   const stem = whatFailed.trim();
   const parts = [`Imbue Studio showed the user this failure: ${/[.!?]$/.test(stem) ? stem : `${stem}.`}`];
   if (details !== null && details.trim() !== "") {
