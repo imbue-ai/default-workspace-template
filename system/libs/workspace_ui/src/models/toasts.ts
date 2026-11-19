@@ -30,10 +30,13 @@ export type ToastOptions =
       readonly details?: string | null;
       /** Buttons after the message (Try again, Ask an agent to ...), in order. */
       readonly actions?: readonly ToastAction[];
-      /** The message asks for a bug report: the toast offers "Report a bug" after its buttons wherever the page can
-       *  open one when the toast is drawn (``components/toasts.ts``'s ``onReportBug``), which may be only after the
-       *  toast went up. */
+      /** The message asks for a bug report: the toast offers "Ask an agent to fix this" and "Report a bug" after its
+       *  buttons wherever the page can ask one or open one when the toast is drawn (``components/toasts.ts``'s
+       *  ``onAskAgent`` and ``onReportBug``), which may be only after the toast went up. */
       readonly isReportable?: boolean;
+      /** No agent is offered for this reportable failure, even where the page can ask one: the ask would go through
+       *  what failed (the chat app's own server not answering), so it could not reach an agent. */
+      readonly isAgentWithheld?: boolean;
     };
 
 export interface Toast {
@@ -44,6 +47,8 @@ export interface Toast {
   readonly isLasting: boolean;
   /** A lasting toast whose message asks for a bug report; never a plain one. */
   readonly isReportable: boolean;
+  /** A reportable toast that offers an agent where the page can ask one (``isAgentWithheld`` unset). */
+  readonly isAgentOffered: boolean;
 }
 
 /** How long a plain toast stays up. */
@@ -68,7 +73,16 @@ export class ToastQueue {
     const details = options.details ?? null;
     const actions = options.isLasting ? (options.actions ?? []) : [];
     const isReportable = options.isLasting && options.isReportable === true;
-    const toast: Toast = { id: this.nextId, message, details, actions, isLasting: options.isLasting, isReportable };
+    const isAgentOffered = isReportable && options.isAgentWithheld !== true;
+    const toast: Toast = {
+      id: this.nextId,
+      message,
+      details,
+      actions,
+      isLasting: options.isLasting,
+      isReportable,
+      isAgentOffered,
+    };
     this.nextId += 1;
     let kept = this.toasts.filter((other) => other.message !== message || other.details !== details);
     if (toast.isLasting) {

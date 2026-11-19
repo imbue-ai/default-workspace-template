@@ -233,9 +233,10 @@ export interface ShellConnection {
   /** Ask the shell to start something with ``text``: its launcher's primary text action (the main chat on a stock
    *  machine). Settles as ``askAgent`` does. */
   startWithText(text: string, options?: StartOptions): Promise<StartOutcome>;
-  /** Ask the shell to send ``text`` to an agent as a message about this page's app: to the chat about the app, shown
-   *  beside this page's window, or through its launcher's primary text action (the main chat on a stock machine)
-   *  when the app is internal or no app takes an ask. Settles on the shell's answer; as not answered at once
+  /** Ask the shell to send ``text`` to an agent as a message about this page's app, run through the assist flow
+   *  (``ASSIST_COMMAND``, which whoever starts the chat puts first): to the chat about the app, shown beside this
+   *  page's window, or through its launcher's primary text action (the main chat on a stock machine) when the app is
+   *  internal or no app takes an ask. Settles on the shell's answer; as not answered at once
    *  without a shell, when a handshake from a shell that started again comes first (it forgot the request), and on
    *  ``disconnect``, after which no answer is heard, so a later call settles at once too. The shell toasts a failure
    *  itself unless ``options`` say the page shows the outcome; an answer that arrives after all for a request
@@ -618,16 +619,26 @@ function fenceFor(text: string): string {
 }
 
 /** The one task every "Ask an agent to fix this" button gives the agent: what failed, the details as they are, and
- *  what to do about it. */
+ *  what to do about it, said by Imbue Studio about the user rather than as the user, who did not write it. */
 function agentFixTask({ whatFailed, details }: AgentFixRequest): string {
   const stem = whatFailed.trim();
-  const parts = [/[.!?]$/.test(stem) ? stem : `${stem}.`];
+  const parts = [`Imbue Studio showed the user this failure: ${/[.!?]$/.test(stem) ? stem : `${stem}.`}`];
   if (details !== null && details.trim() !== "") {
     const fence = fenceFor(details);
     parts.push(`Details:\n${fence}\n${details}\n${fence}`);
   }
-  parts.push("Find out why this failed and fix it. Then tell me what was wrong and what you changed.");
+  parts.push("Find out why it failed and fix it, then tell the user what was wrong and what you changed.");
   return parts.join("\n\n");
+}
+
+/** The command that starts the workspace's assist flow (``.agents/skills/assist``), which diagnoses a failure, fixes
+ *  it, and reports a fault in built-in code to Imbue. Every ask of an agent is sent behind it. */
+export const ASSIST_COMMAND = "/assist";
+
+/** ``request`` as the first message of an ask that runs the assist flow: the command must come first, since a chat
+ *  only runs a command its message starts with. */
+export function assistRequest(request: string): string {
+  return `${ASSIST_COMMAND} ${request}`;
 }
 
 /** "Ask an agent to fix this": send an agent a message asking it to fix ``failure``, through the shell's

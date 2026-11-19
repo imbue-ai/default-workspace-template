@@ -577,7 +577,9 @@ the text to the chat about the app as a message (making that chat with it when
 there is none, and sending it to the main chat when that chat cannot take it).
 With no such launch path, an internal app, or no window (the shell's own ask),
 the ask runs the primary free-text row instead, as `shell:start-with-text`
-does. The shell names no app in any of this.
+does, with the text behind `/assist ` (`assistRequest`), so the agent runs the
+workspace's assist flow either way (the chat app puts the command in front of
+its own lead-in on the other path). The shell names no app in any of this.
 
 **The tray** (the multiplayer spec, section 6; `frontend/src/views/SystemTray.ts`
 and `views/tray/`) is where the people and the agent live: the share button (a

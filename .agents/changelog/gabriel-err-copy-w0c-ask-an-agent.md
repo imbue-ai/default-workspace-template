@@ -1,0 +1,1 @@
+The `assist` skill is also run by the workspace's "Ask an agent ..." buttons on a failure, and treats a description that starts "Imbue Studio showed the user this failure" as the failure the user saw, not the user's own words.

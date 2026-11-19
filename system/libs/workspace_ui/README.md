@@ -50,8 +50,11 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   to, which the shell opens beside the page's window (the main chat where
   the workspace offers no chat about an app, or the page's app is internal;
   `askAgentToFix` in `src/app_contract.ts`, through `shell:ask-agent`, one
-  task text for every caller: what failed, the details verbatim, and what to
-  do), and renders nothing where no shell frames the page. `askAgentToFix`
+  task text for every caller, written as Imbue Studio about the user: what
+  failed, the details verbatim, and what to do; the chat that takes it
+  receives it behind `/assist` (`ASSIST_COMMAND`, `assistRequest`), the
+  workspace's assist flow, which also reports a fault in built-in code to
+  Imbue), and renders nothing where no shell frames the page. `askAgentToFix`
   answers a promise that settles on the shell's `shell:ask-agent-result`
   (`{isOpened: true}`, or `{isOpened: false, failure}`; as not answered at
   once without a shell, on a handshake from a shell that started again (a
@@ -70,7 +73,13 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   for a request that goes to the main chat (such as "Ask an agent to free up
   space"), answers the same way through `shell:start-with-text-result`. A
   call without `{showsOutcome: true}` leaves a failure to the shell's toast.
-  `ReportBugButton` asks the
+  `FailureRemedies` is what a failure that asks for a bug report offers by
+  default, so a surface draws it rather than choosing buttons: "Ask an agent
+  to fix this", then "Report a bug", whose report also files a refused ask;
+  nothing for a failure that asks for none (its surface offers its own
+  remedy), and no agent where the surface passes `isAgentWithheld` (the ask
+  would go through what failed, such as the chat app's own server not
+  answering). `ReportBugButton` asks the
   shell to open Imbue Studio's bug report about the failure it is given (a
   `ReportedFailure`: the sentence on screen and what its "See details" holds,
   sent as `shell:report-bug {message, details}`), and renders only where the
@@ -87,9 +96,13 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   buttons ("Try again", ...), at most three on screen. A toast that says the
   same as one already up (message and details) replaces it. A lasting toast
   says whether its message asks for a bug report (`isReportable`), and
-  `Toasts` draws "Report a bug" on it while the page passes `onReportBug`,
-  decided at each draw, so a toast shown before the page learned it can open
-  a bug report gains the button once it does. Pressing a button dismisses
+  `Toasts` draws "Ask an agent to fix this" on it while the page passes
+  `onAskAgent` (`askAgentFromToasts(connection)` for a framed page, whose
+  refused ask the shell toasts; read "Asking an agent…" until it settles)
+  unless the toast says `isAgentWithheld`, then "Report a bug" while the page
+  passes `onReportBug`, each decided at each draw, so a toast shown before
+  the page learned it can ask an agent or open a bug report gains the button
+  once it does. Pressing a button dismisses
   its toast, except one marked `keepsToast` (a button that hands the failure
   on, "Ask an agent to ...", and "Report a bug"), after which the toast's
   other buttons still apply. An action with `pending` (`{isPending, label}`)
