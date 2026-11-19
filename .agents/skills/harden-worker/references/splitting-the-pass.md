@@ -3,8 +3,8 @@
 Part of the harden contract (`harden-creation.md`, beside this file; its
 section of the same name has the rule for when to split).
 
-Launch each worker with the launch-task skill exactly as a chat agent would
-(`.agents/skills/launch-task/SKILL.md`). Name each one with your own worker
+Launch each worker with the `launch-task` skill exactly as a chat agent would.
+Name each one with your own worker
 name as the prefix (`update-roadmap-ingest`, `update-roadmap-frontend`): names
 are unique across the host in every state, so a re-run of the same pass reaches
 the same names only after the old pass has been superseded and destroyed. You

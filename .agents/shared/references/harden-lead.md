@@ -114,9 +114,7 @@ The body is your skill's template, filled in:
   something in your transcript: the user's request, the failing command or
   error, a tool output that defined the recipe. Without anchors the worker
   scans the wrong region of your transcript.
-- Tell the worker to invoke the `harden-worker` skill, and, on a harness that
-  cannot invoke skills, to read and follow
-  `.agents/skills/harden-worker/SKILL.md` from its own checkout.
+- Tell the worker to invoke the `harden-worker` skill.
 - Fill in the real content; do not leave a placeholder.
 
 ## Launching the worker

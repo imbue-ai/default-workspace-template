@@ -70,7 +70,7 @@ work stands; extend it to the new base rather than starting over.
    does not hold; then run the gate from the regenerated `$SCOPE_FILE`
    instead, as in "The test gate" of the harden contract. For a test that
    fails in this run, the tree before your change ("A failing test you would
-   change", in `review-gates.md`) is the commit
+   change", in `.agents/shared/references/review-gates.md`) is the commit
    you merged, the catch-up merge's second parent, not `$DIFF_BASE`: a test
    that fails there was already failing at the lead's `HEAD`, and one absent
    there is your pass's own.

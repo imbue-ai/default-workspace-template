@@ -14,6 +14,7 @@ from agents_shared.skill_checks import (
     Check,
     check_failures,
     outside_links_into_skills,
+    references_reached_outside,
     unreached_shared_files,
 )
 from agents_shared.skill_exemptions import (
@@ -663,3 +664,32 @@ def test_a_skill_links_no_file_inside_another_skill_but_its_skill_md(
         ".agents/skills/reaching/references/deeper.md links "
         ".agents/skills/other/references/own.md, a file inside another skill"
     ]
+
+
+def test_a_reference_reached_through_a_kept_directory_and_outside_it_is_reported(
+    tmp_path: Path,
+) -> None:
+    copy = "data/.tasks/update-self/skill-at-target"
+    skill = _skill(
+        tmp_path,
+        "staged",
+        f"Read `references/own.md` and `{copy}/.agents/shared/references/one.md`.\n",
+    )
+    _write(skill, "references/own.md", "Read `.agents/shared/references/one.md`.\n")
+    _write(
+        tmp_path,
+        ".agents/shared/references/one.md",
+        "Read `.agents/shared/references/two.md`, or invoke the skill at "
+        "`.agents/skills/other/SKILL.md`.\n",
+    )
+    two = _write(tmp_path, ".agents/shared/references/two.md", "The end.\n")
+    other = _skill(tmp_path, "other")
+    _write(other, "references/far.md", "Read `references/farther.md`.\n")
+    _write(other, "references/farther.md", "The end.\n")
+    assert references_reached_outside(skill, [".agents/shared"]) == []
+
+    two.write_text("Read `.agents/skills/other/references/far.md`.\n")
+    assert references_reached_outside(skill, [".agents/shared"]) == [
+        ".agents/skills/other/references/far.md"
+    ]
+    assert references_reached_outside(skill, []) == [".agents/shared/references/one.md"]

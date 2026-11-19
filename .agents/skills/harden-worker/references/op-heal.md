@@ -65,7 +65,8 @@ Fixed <app> on branch `<branch>`. Ready to preview.
   describing what you observed. Don't apply a speculative fix.
 - If an earlier change introduced the break, note that commit: once your fix
   has its test, check whether the gate would have caught it, per
-  `review-gates.md` ("A regression the gate let through").
+  `.agents/shared/references/review-gates.md` ("A regression the gate let
+  through").
 
 ## Stage 3: Apply the minimal fix
 

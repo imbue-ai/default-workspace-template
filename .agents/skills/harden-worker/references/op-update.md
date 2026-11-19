@@ -62,7 +62,8 @@ Read the task body for which of the two handoff shapes you were given:
   approved shape.
 
 Either way, verify each creation in the pass per its own type reference --
-the apps per `type-app.md` and `web-frontend-testing.md` -- then report `done`
+the apps per `type-app.md` and
+`.agents/shared/references/web-frontend-testing.md` -- then report `done`
 (or a mid-flight `question`, or `stuck`) with a body that tells the lead what
 landed:
 

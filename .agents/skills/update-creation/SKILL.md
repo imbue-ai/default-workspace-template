@@ -179,10 +179,9 @@ now exchange with each other. Describe the new contract; the incident is
 captured above.>
 
 ## What to do
-Invoke the \`harden-worker\` skill. On a harness that cannot invoke skills, read
-and follow \`.agents/skills/harden-worker/SKILL.md\` from your own checkout. It
-reads \`operation\`, \`creations\`, and the \`## Change origin\` marker, then
-follows the matching references. Report to the lead per its reporting protocol.
+Invoke the \`harden-worker\` skill. It reads \`operation\`, \`creations\`, and
+the \`## Change origin\` marker, then follows the matching references. Report
+to the lead per its reporting protocol.
 
 ## Success criteria
 - The change is hardened, tested, and passes the review gates on your branch.

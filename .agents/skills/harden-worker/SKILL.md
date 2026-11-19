@@ -71,9 +71,7 @@ type's reference once however many creations share it.
 
 Read the ones your pass selects top to bottom, then follow them. A bare
 filename is relative to `.agents/skills/harden-worker/references/`; the
-shared references are written with their full paths. Inside the references,
-`worker-reporting.md`, `review-gates.md`, `spec-summary.md`,
-`web-frontend-testing.md` and `lead-proxy.md` always mean those shared files.
+shared references are written with their full paths.
 
 Every pass:
 
