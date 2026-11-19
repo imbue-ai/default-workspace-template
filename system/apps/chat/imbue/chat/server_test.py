@@ -1578,8 +1578,7 @@ def test_a_chat_on_a_local_model_whose_server_does_not_answer_is_told_what_to_ch
     write_models_file(
         account_path,
         "http://127.0.0.1:11435/v1",
-        "qwen3:8b",
-        LocalModelProfile(context_window=65_536, is_reasoning=False),
+        {"qwen3:8b": LocalModelProfile(context_window=65_536, is_reasoning=False)},
     )
     asked: list[str] = []
 

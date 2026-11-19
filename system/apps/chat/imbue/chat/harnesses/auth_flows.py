@@ -78,7 +78,11 @@ from imbue.chat.harnesses.pi_coding.local_model import MODELS_FILENAME
 from imbue.chat.harnesses.pi_coding.local_model import PLACEHOLDER_API_KEY
 from imbue.chat.harnesses.pi_coding.local_model import normalize_base_url
 from imbue.chat.harnesses.pi_coding.local_model import verify_local_model
-from imbue.chat.harnesses.pi_coding.local_model import write_models_file
+from imbue.chat.harnesses.pi_coding.local_model_account import ACCOUNT_MODELS_FILENAME
+from imbue.chat.harnesses.pi_coding.local_model_account import LocalModelSignIn
+from imbue.chat.harnesses.pi_coding.local_model_account import plan_local_model_sign_in_with_own_client
+from imbue.chat.harnesses.pi_coding.local_model_account import with_checked_model
+from imbue.chat.harnesses.pi_coding.local_model_account import write_account_models
 from imbue.chat.harnesses.pty_auth import PtyAuthError
 from imbue.chat.harnesses.pty_auth import drain_pty_stream
 from imbue.chat.harnesses.pty_auth import drain_pty_stream_until_quiet
@@ -307,6 +311,9 @@ class AuthFlowService:
     # Checks a local model against its server: (base_url, api_key, model_id, context_window) to
     # what pi is to be told about it, raising LocalModelError with words for the user.
     _verify_local_model: Callable[[str, str, str, int], LocalModelProfile]
+    # Works out which model of the server a sign-in runs and which models the account gets:
+    # (base_url, api_key, model_id, context_window), raising LocalModelError likewise.
+    _plan_local_model_sign_in: Callable[[str, str, str, int], LocalModelSignIn]
 
     @classmethod
     def create(
@@ -320,6 +327,7 @@ class AuthFlowService:
         clock: Callable[[], float] | None = None,
         login_client_connector: Callable[[Path], CodexLoginClient] | None = None,
         local_model_verifier: Callable[[str, str, str, int], LocalModelProfile] | None = None,
+        local_model_sign_in_planner: Callable[[str, str, str, int], LocalModelSignIn] | None = None,
     ) -> "AuthFlowService":
         """`spawner` stands in for `spawn_pty`, `probe` for `is_signed_in`.
 
@@ -340,6 +348,7 @@ class AuthFlowService:
         service._clock = clock or time.monotonic
         service._connect_login_client = login_client_connector or connect_login_client
         service._verify_local_model = local_model_verifier or verify_local_model
+        service._plan_local_model_sign_in = local_model_sign_in_planner or plan_local_model_sign_in_with_own_client
         return service
 
     # lifecycle
@@ -652,7 +661,10 @@ class AuthFlowService:
     def submit_endpoint(
         self, flow_id: str, base_url: str, model_id: str, context_window: int, api_key: str = ""
     ) -> FlowStatus:
-        """Sign in to a model server: check the model against it, then write pi's two files.
+        """Sign in to a model server: check the model against it, then write the account's files.
+
+        The account is given every model the server offers a chat, the one named here first; only
+        that one is checked now, and the rest as a chat switches to them.
 
         The check talks to the server and can wait a minute on a model that is not loaded, so it
         runs outside the lock: the flow stays abortable meanwhile, and is looked up again after.
@@ -660,7 +672,8 @@ class AuthFlowService:
         self.require_endpoint_flow(flow_id)
         try:
             base_url = normalize_base_url(base_url)
-            profile = self._verify_local_model(base_url, api_key, model_id, context_window)
+            sign_in = self._plan_local_model_sign_in(base_url, api_key, model_id, context_window)
+            profile = self._verify_local_model(base_url, api_key, sign_in.model_id, sign_in.context_window)
         except LocalModelError as e:
             with self._lock:
                 session = self._require_locked(flow_id, must_be_pending=True)
@@ -669,14 +682,18 @@ class AuthFlowService:
         with self._lock:
             session = self._require_locked(flow_id, must_be_pending=True)
             path = accounts.account_dir(session.account_id, self._home)
-            written = (*_credential_paths(PasteSink.PI_AUTH_JSON, path), path / MODELS_FILENAME)
+            written = (
+                *_credential_paths(PasteSink.PI_AUTH_JSON, path),
+                path / MODELS_FILENAME,
+                path / ACCOUNT_MODELS_FILENAME,
+            )
             # As for a pasted key: on a re-auth the folder is a live account, so a configuration
             # pi turns down must not be left where the agents bound to it would read it.
             with _credentials_restored_on_error(written) as before:
                 display = _write_paste(
                     PasteSink.PI_AUTH_JSON, path, api_key or PLACEHOLDER_API_KEY, None, session.lane
                 )
-                write_models_file(path, base_url, model_id, profile)
+                write_account_models(path, base_url, with_checked_model(sign_in.account, sign_in.model_id, profile))
                 verdict = self._probe(session.lane.harness, path)
                 session.last_verdict = verdict
                 if verdict is SignedIn.NO:

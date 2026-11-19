@@ -10,6 +10,7 @@ from pydantic import SecretStr
 
 from imbue.chat.harnesses.pi_coding.local_model import LocalModelError
 from imbue.chat.harnesses.pi_coding.local_model import LocalModelServer
+from imbue.chat.harnesses.pi_coding.local_model_catalog import LocalModelChoice
 from imbue.chat.studio_model_servers import StudioLink
 from imbue.chat.studio_model_servers import find_studio_model_servers
 from imbue.chat.studio_model_servers import open_studio_tunnel
@@ -39,11 +40,53 @@ def test_the_servers_on_the_users_computer_are_listed_with_the_port_each_is_reac
 
     assert found.link is StudioLink.CONNECTED
     assert found.servers == (
-        LocalModelServer(base_url="http://127.0.0.1:11434/v1", name="Ollama", models=("qwen3:8b",), studio_port=11434),
+        LocalModelServer(
+            base_url="http://127.0.0.1:11434/v1",
+            name="Ollama",
+            models=("qwen3:8b",),
+            choices=(LocalModelChoice(model_id="qwen3:8b"),),
+            studio_port=11434,
+        ),
     )
     (request,) = seen
     assert (request.method, request.url.path) == ("GET", _SERVERS_PATH)
     assert request.headers["X-Latchkey-Gateway-Password"] == "pw"
+
+
+def test_what_the_app_says_of_a_servers_models_folds_a_models_sizes_into_it() -> None:
+    """An app that describes the models lets the form offer each once, before any tunnel is open."""
+    entry = {
+        "port": 11434,
+        "name": "Ollama",
+        "models": ["qwen3:8b", "qwen3-40k:latest", "qwen2.5:7b"],
+        "described_models": [
+            {"id": "qwen3:8b", "base_id": "qwen3:8b", "max_context_window": 40_960, "parameter_size": "8.2B"},
+            {"id": "qwen3-40k:latest", "base_id": "qwen3:8b", "context_window": 40_960, "max_context_window": 40_960},
+            {"id": "qwen2.5:7b", "base_id": "qwen2.5:7b", "max_context_window": 32_768, "is_tool_caller": True},
+        ],
+    }
+
+    found = find_studio_model_servers(
+        _client(lambda _request: httpx.Response(200, json={"servers": [entry]})), _GATEWAY, _AGENT_ID, True
+    )
+
+    (server,) = found.servers
+    assert [(choice.model_id, choice.context_windows) for choice in server.choices] == [
+        ("qwen3:8b", (40_960,)),
+        ("qwen2.5:7b", ()),
+    ]
+    assert server.choices[0].unusable_reason is None
+    assert "32,768" in (server.choices[1].unusable_reason or "")
+
+
+def test_a_description_this_workspace_cannot_read_leaves_the_models_as_listed() -> None:
+    entry = {"port": 11434, "name": "Ollama", "models": ["qwen3:8b"], "described_models": [{"base_id": "qwen3:8b"}]}
+
+    found = find_studio_model_servers(
+        _client(lambda _request: httpx.Response(200, json={"servers": [entry]})), _GATEWAY, _AGENT_ID, True
+    )
+
+    assert found.servers[0].choices == (LocalModelChoice(model_id="qwen3:8b"),)
 
 
 def test_a_computer_running_no_model_server_is_connected_with_nothing_to_offer() -> None:

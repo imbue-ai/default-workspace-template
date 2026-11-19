@@ -21,9 +21,14 @@ import httpx
 from latchkey_access.gateway import GatewayAccess
 from loguru import logger
 from pydantic import Field
+from pydantic import ValidationError
 
 from imbue.chat.harnesses.pi_coding.local_model import LocalModelError
 from imbue.chat.harnesses.pi_coding.local_model import LocalModelServer
+from imbue.chat.harnesses.pi_coding.local_model import MIN_CONTEXT_WINDOW
+from imbue.chat.harnesses.pi_coding.local_model_catalog import LocalModel
+from imbue.chat.harnesses.pi_coding.local_model_catalog import LocalModelChoice
+from imbue.chat.harnesses.pi_coding.local_model_catalog import group_model_choices
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 
@@ -68,16 +73,32 @@ def _agent_route(gateway: GatewayAccess, agent_id: str, route: str) -> str:
     return gateway.url(f"/minds-api-proxy/api/v1/agents/{agent_id}/local-model/{route}")
 
 
+def _to_described_models(entries: Any) -> tuple[LocalModel, ...] | None:
+    """What the app says of a server's models; None from an app that says nothing, or for a server that is not Ollama."""
+    if not isinstance(entries, list):
+        return None
+    try:
+        return tuple(LocalModel.model_validate(entry) for entry in entries)
+    except ValidationError as e:
+        logger.debug("Imbue Studio described a server's models in a form this workspace cannot read: {}", e)
+        return None
+
+
 def _to_server(entry: Any) -> LocalModelServer | None:
     if not isinstance(entry, dict):
         return None
     port, name, models = entry.get("port"), entry.get("name"), entry.get("models")
     if not isinstance(port, int) or not isinstance(name, str) or not isinstance(models, list):
         return None
+    model_ids = tuple(model for model in models if isinstance(model, str))
+    described = _to_described_models(entry.get("described_models"))
     return LocalModelServer(
         base_url=f"http://127.0.0.1:{port}/v1",
         name=name,
-        models=tuple(model for model in models if isinstance(model, str)),
+        models=model_ids,
+        choices=group_model_choices(described, MIN_CONTEXT_WINDOW)
+        if described is not None
+        else tuple(LocalModelChoice(model_id=model_id) for model_id in model_ids),
         studio_port=port,
     )
 

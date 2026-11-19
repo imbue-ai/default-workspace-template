@@ -29,6 +29,7 @@ from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
 from imbue.chat.testing import FakePexpectProcess
 from imbue.chat.testing import build_test_state
+from imbue.chat.testing import plan_sign_in_on_the_model_as_named
 from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.mngr_codex.app_server_client import ReasoningEffortOption
 
@@ -508,6 +509,7 @@ def test_a_named_model_server_answers_with_every_key_the_form_reads() -> None:
             "base_url": f"http://{_MODEL_SERVER_ADDRESS}/v1",
             "name": _MODEL_SERVER_ADDRESS,
             "models": ["qwen2.5:7b"],
+            "choices": [{"model_id": "qwen2.5:7b", "detail": "", "context_windows": [], "unusable_reason": None}],
             "studio_port": None,
         }
     ]
@@ -545,6 +547,7 @@ def test_a_local_model_sign_in_mints_an_account_and_lists_it(tmp_path: Path) -> 
         work_dir=tmp_path / "work",
         probe=lambda *_a: SignedIn.YES,
         local_model_verifier=_accept_local_model,
+        local_model_sign_in_planner=plan_sign_in_on_the_model_as_named,
     )
     with _client(service) as client:
         started = client.post("/api/accounts", json={"lane_id": "local-model", "method_id": "endpoint"})
@@ -638,7 +641,13 @@ def test_the_servers_on_the_users_computer_are_offered_once_the_user_has_allowed
 
     assert body["studio_link"] == "CONNECTED"
     assert body["servers"] == [
-        {"base_url": "http://127.0.0.1:11434/v1", "name": "Ollama", "models": ["qwen3:8b"], "studio_port": 11434}
+        {
+            "base_url": "http://127.0.0.1:11434/v1",
+            "name": "Ollama",
+            "models": ["qwen3:8b"],
+            "choices": [{"model_id": "qwen3:8b", "detail": "", "context_windows": [], "unusable_reason": None}],
+            "studio_port": 11434,
+        }
     ]
 
 
@@ -656,7 +665,11 @@ def test_a_local_model_sign_in_through_the_imbue_studio_app_runs_on_the_tunnels_
         return LocalModelProfile(context_window=context_window, is_reasoning=False)
 
     service = AuthFlowService.create(
-        home=None, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES, local_model_verifier=verify
+        home=None,
+        work_dir=tmp_path / "work",
+        probe=lambda *_a: SignedIn.YES,
+        local_model_verifier=verify,
+        local_model_sign_in_planner=plan_sign_in_on_the_model_as_named,
     )
     with _client_for(build_test_state(auth_flows=service, http_client=studio.client())) as client:
         flow_id = client.post("/api/accounts", json={"lane_id": "local-model", "method_id": "endpoint"}).get_json()[

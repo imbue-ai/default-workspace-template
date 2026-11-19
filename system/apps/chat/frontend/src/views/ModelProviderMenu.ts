@@ -37,7 +37,16 @@ import { getChatById, getProvisionalChat, setLaunchChoice } from "../models/Chat
 import type { ProvisionalChat } from "../models/Chats";
 import type { ChatSnapshot } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
-import { effortInEffect, ensureHarnessCatalogs, getHarnessCatalog, startingEffort } from "../models/HarnessCatalog";
+import {
+  contextSizeOptions,
+  effortInEffect,
+  ensureHarnessCatalogs,
+  formatContextWindow,
+  getHarnessCatalog,
+  modelName,
+  oneOptionPerModel,
+  startingEffort,
+} from "../models/HarnessCatalog";
 import type { ChatFastModeState } from "../models/FastMode";
 import {
   FAST_MODES,
@@ -969,9 +978,13 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
     // that omitted it would read as the chat having no model.
     const isMatchedMissing =
       matched !== null && matched.in_picker && !listed.some((option) => option.id === matched.id);
-    const all = isMatchedMissing && matched !== null ? [matched, ...listed] : listed;
+    // A model that runs at several context sizes is one row here; its sizes are the Context window row's.
+    const all = oneOptionPerModel(
+      isMatchedMissing && matched !== null ? [matched, ...listed] : listed,
+      matched?.context_window ?? null,
+    );
     const query = modelQuery.trim().toLowerCase();
-    const filtered = query === "" ? all : all.filter((option) => option.label.toLowerCase().includes(query));
+    const filtered = query === "" ? all : all.filter((option) => modelName(option).toLowerCase().includes(query));
     const visible = filtered.slice(0, MODEL_SEARCH_CAP);
     const loading = (searchable || dynamic) && (offeredLoading || !offeredLoaded);
     const hasSearchField = searchable || all.length > 8;
@@ -1004,7 +1017,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
           : visible.length === 0
             ? [m("div", { class: css.SUBMENU_EMPTY }, "No models available.")]
             : visible.map((option) => {
-                const isCurrent = matched !== null && option.id === matched.id;
+                const isCurrent = matched !== null && modelName(option) === modelName(matched);
                 return m(
                   "button",
                   {
@@ -1012,19 +1025,14 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
                     key: option.id,
                     class: isCurrent ? css.SUBMENU_ROW_SELECTED : css.SUBMENU_ROW,
                     onclick: () => {
-                      const next: ModelIdentity = {
-                        model_id: option.id,
-                        effort: clampEffort(option, effortInEffect(currentIdentity.effort, matched)),
-                        fast: option.supports_fast ? currentIdentity.fast : false,
-                      };
-                      setModelChoice(chatId, next, option, changedAxes(currentIdentity, next), optimistic);
+                      pickOption(chatId, option, matched, currentIdentity, optimistic);
                       // The menu stays, with the new model's effort and fast rows there to adjust.
                       closeSubmenu();
                     },
                   },
                   [
                     // Front-truncated: an openrouter id is a path whose tail tells rows apart.
-                    startTruncated(option.label),
+                    startTruncated(modelName(option)),
                     isCurrent
                       ? m("span", { class: css.SUBMENU_CHECK }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
                       : null,
@@ -1033,6 +1041,62 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
               }),
       ),
     ];
+  }
+
+  /** Move the chat to `option`, keeping the effort and fast mode it runs at where `option` offers them. */
+  function pickOption(
+    chatId: string,
+    option: CatalogModelOption,
+    matched: CatalogModelOption | null,
+    currentIdentity: ModelIdentity,
+    optimistic: boolean,
+  ): void {
+    const next: ModelIdentity = {
+      model_id: option.id,
+      effort: clampEffort(option, effortInEffect(currentIdentity.effort, matched)),
+      fast: option.supports_fast ? currentIdentity.fast : false,
+    };
+    setModelChoice(chatId, next, option, changedAxes(currentIdentity, next), optimistic);
+  }
+
+  /** The Context window row's submenu: the sizes the chat's model can run at. */
+  function contextWindowSubmenu(
+    chatId: string,
+    sourceOptions: readonly CatalogModelOption[],
+    matched: CatalogModelOption,
+    currentIdentity: ModelIdentity,
+    optimistic: boolean,
+  ): m.Children {
+    const sizes = contextSizeOptions(sourceOptions, matched);
+    const isLoading = offeredLoading || !offeredLoaded;
+    return m(
+      "div",
+      { class: css.SUBMENU_SCROLL },
+      isLoading
+        ? [loadingRow()]
+        : (sizes.length > 0 ? sizes : [matched]).map((option) => {
+            const isCurrent = option.id === matched.id;
+            return m(
+              "button",
+              {
+                type: "button",
+                key: option.id,
+                class: isCurrent ? css.SUBMENU_ROW_SELECTED : css.SUBMENU_ROW,
+                "data-context-window": String(option.context_window ?? ""),
+                onclick: () => {
+                  pickOption(chatId, option, matched, currentIdentity, optimistic);
+                  closeSubmenu();
+                },
+              },
+              [
+                `${formatContextWindow(option.context_window ?? 0)} tokens`,
+                isCurrent
+                  ? m("span", { class: css.SUBMENU_CHECK }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
+                  : null,
+              ],
+            );
+          }),
+    );
   }
 
   return {
@@ -1176,7 +1240,9 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
         matched === null
           ? { model_id: "", effort: recordedEffort, fast: currentFast }
           : { model_id: matched.id, effort: recordedEffort, fast: currentFast };
-      const sourceOptions: CatalogModelOption[] = dynamic ? (dynamicOptions ?? []) : (catalog?.options ?? []);
+      // An account that brings its own models (a local model server) answers with them whatever the
+      // harness's picker mode, and they are then the whole offer.
+      const sourceOptions: CatalogModelOption[] = dynamicOptions ?? (dynamic ? [] : (catalog?.options ?? []));
 
       const rows: MenuRow[] = [];
       if (armed !== null) {
@@ -1235,7 +1301,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
             kind: "submenu",
             key: "model",
             label: "Model",
-            value: matched.label,
+            value: modelName(matched),
             truncateValue: "start",
             maxHeight: css.MODEL_SUBMENU_MAX_HEIGHT,
             onOpen: () => {
@@ -1244,6 +1310,16 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
             content: () =>
               modelSubmenu(chatId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic),
           });
+          if (matched.context_window != null) {
+            rows.push({
+              kind: "submenu",
+              key: "context-window",
+              label: "Context window",
+              value: formatContextWindow(matched.context_window),
+              onOpen: () => warmOfferedModels(chatId),
+              content: () => contextWindowSubmenu(chatId, sourceOptions, matched, currentIdentity, optimistic),
+            });
+          }
           rows.push({
             kind: "custom",
             key: "effort",

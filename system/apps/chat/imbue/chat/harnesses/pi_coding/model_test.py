@@ -13,6 +13,10 @@ from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.model import PickerMode
 from imbue.chat.harnesses.model import SwitchMode
+from imbue.chat.harnesses.pi_coding.local_model import LocalModelError
+from imbue.chat.harnesses.pi_coding.local_model_account import LocalModelAccount
+from imbue.chat.harnesses.pi_coding.local_model_account import LocalModelRecord
+from imbue.chat.harnesses.pi_coding.local_model_account import write_account_models
 from imbue.chat.harnesses.pi_coding.model import PiFlushTapStatus
 from imbue.chat.harnesses.pi_coding.model import PiModelResolver
 from imbue.chat.harnesses.pi_coding.model import _parse_list_models
@@ -245,3 +249,116 @@ def test_a_custom_reasoning_model_offers_its_thinking_levels(tmp_path: Path) -> 
     (option,) = read_custom_model_options(tmp_path)
 
     assert [effort.level for effort in option.efforts] == ["off", "minimal", "low", "medium", "high"]
+
+
+def _local_model_account() -> LocalModelAccount:
+    return LocalModelAccount(
+        is_context_managed=True,
+        records=(
+            LocalModelRecord(
+                id="qwen3-40k:latest",
+                base_id="qwen3:8b",
+                context_window=40_960,
+                is_reasoning=True,
+                reasoning_off_effort="none",
+                is_checked=True,
+            ),
+            LocalModelRecord(id="llama3.3:latest-ctx65536", base_id="llama3.3:latest", context_window=65_536),
+            LocalModelRecord(id="llama3.3:latest-ctx131072", base_id="llama3.3:latest", context_window=131_072),
+        ),
+    )
+
+
+def test_a_local_model_account_s_options_carry_each_model_s_name_and_size_apart(tmp_path: Path) -> None:
+    """A picker offers the model once and its sizes beside it, which the tag alone does not let it do."""
+    write_account_models(tmp_path, "http://127.0.0.1:11434/v1", _local_model_account())
+
+    options = read_custom_model_options(tmp_path)
+
+    assert [(option.id, option.label, option.family, option.context_window) for option in options] == [
+        ("local-model/qwen3-40k:latest", "qwen3:8b (40K)", "qwen3:8b", 40_960),
+        ("local-model/llama3.3:latest-ctx65536", "llama3.3:latest (64K)", "llama3.3:latest", 65_536),
+        ("local-model/llama3.3:latest-ctx131072", "llama3.3:latest (128K)", "llama3.3:latest", 131_072),
+    ]
+    assert [effort.level for effort in options[0].efforts] == ["off", "minimal", "low", "medium", "high"]
+    assert [effort.level for effort in options[1].efforts] == ["off"]
+
+
+def test_a_local_model_chat_s_picker_is_offered_the_server_s_models_asked_for_afresh(tmp_path: Path) -> None:
+    asked: list[Path] = []
+
+    def refresh(config_dir: Path) -> LocalModelAccount | None:
+        asked.append(config_dir)
+        return _local_model_account()
+
+    resolver = PiModelResolver.build(
+        _agent_info(tmp_path), start_agent_fn=lambda name: None, refresh_local_models=refresh
+    )
+
+    offered = resolver.list_offered_options()
+
+    assert offered is not None
+    assert [option.family for option in offered] == ["qwen3:8b", "llama3.3:latest", "llama3.3:latest"]
+    assert asked == [tmp_path / "plugin" / "pi_coding"]
+
+
+def test_any_other_pi_chat_s_picker_is_offered_the_catalog(tmp_path: Path) -> None:
+    resolver = PiModelResolver.build(
+        _agent_info(tmp_path), start_agent_fn=lambda name: None, refresh_local_models=lambda config_dir: None
+    )
+
+    assert resolver.list_offered_options() is None
+
+
+def test_a_switch_to_a_local_model_readies_it_before_pi_hears_of_the_switch(tmp_path: Path) -> None:
+    readied: list[tuple[Path, str, bool]] = []
+    control_path = tmp_path / "pi_control.json"
+    resolver = PiModelResolver.build(
+        _agent_info(tmp_path),
+        start_agent_fn=lambda name: None,
+        prepare_local_model=lambda config_dir, model_id: readied.append((config_dir, model_id, control_path.exists())),
+    )
+    identity = ModelIdentity(model_id="local-model/llama3.3:latest-ctx65536", effort="off", fast=False)
+
+    result = resolver.switch(identity, frozenset({ModelAxis.MODEL}), lambda line: True)
+
+    assert result.ok
+    assert readied == [(tmp_path / "plugin" / "pi_coding", "llama3.3:latest-ctx65536", False)]
+    assert json.loads(control_path.read_text())["model_id"] == "local-model/llama3.3:latest-ctx65536"
+
+
+def test_a_local_model_that_cannot_run_a_chat_is_refused_and_pi_is_told_nothing(tmp_path: Path) -> None:
+    def refuse(config_dir: Path, model_id: str) -> None:
+        raise LocalModelError(f"{model_id} answered without calling a tool.")
+
+    woken: list[str] = []
+    resolver = PiModelResolver.build(_agent_info(tmp_path), start_agent_fn=woken.append, prepare_local_model=refuse)
+    identity = ModelIdentity(model_id="local-model/qwen2.5-coder:32b-ctx65536", effort="off", fast=False)
+
+    result = resolver.switch(identity, frozenset({ModelAxis.MODEL}), lambda line: True)
+
+    assert (result.ok, result.detail) == (False, "qwen2.5-coder:32b-ctx65536 answered without calling a tool.")
+    assert not (tmp_path / "pi_control.json").exists()
+    assert woken == []
+
+
+def test_a_change_of_effort_alone_or_to_a_model_of_another_provider_readies_nothing(tmp_path: Path) -> None:
+    readied: list[str] = []
+    resolver = PiModelResolver.build(
+        _agent_info(tmp_path),
+        start_agent_fn=lambda name: None,
+        prepare_local_model=lambda config_dir, model_id: readied.append(model_id),
+    )
+
+    resolver.switch(
+        ModelIdentity(model_id="local-model/qwen3-40k:latest", effort="high", fast=False),
+        frozenset({ModelAxis.EFFORT}),
+        lambda line: True,
+    )
+    resolver.switch(
+        ModelIdentity(model_id="openrouter/qwen/qwen3", effort="off", fast=False),
+        frozenset({ModelAxis.MODEL}),
+        lambda line: True,
+    )
+
+    assert readied == []
