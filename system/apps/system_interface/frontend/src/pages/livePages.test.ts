@@ -648,7 +648,7 @@ describe("covered pages", () => {
     expect(isParked(wrapperOf("win-1"))).toBe(false);
   });
 
-  it("unparks every covered page while a window is moved, which moves it with no reconcile, but not for a press", () => {
+  it("unparks a page the moved window covers, which moves with no reconcile, but not for a press", () => {
     drawChromeAt("win-2", CASCADE_RECT);
     layer.reconcile();
     // A press that may still become a drag moves nothing yet.
@@ -660,6 +660,44 @@ describe("covered pages", () => {
     store.endWindowMove({ x: 300, y: 60 });
     layer.setGestureActive(false);
     expect(isParked(wrapperOf("win-1"))).toBe(true);
+  });
+
+  it("keeps parked, while another window is moved, a page that a window staying put covers", () => {
+    // win-2 covers win-1 and stays put; win-3, raised in front of both and clear of them, is the one dragged.
+    store.restoreWindow("win-3");
+    store.raiseWindow("win-3");
+    drawChromeAt("win-2", CASCADE_RECT);
+    drawChromeAt("win-3", { left: 700, top: 48, width: 280, height: 300 });
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+    layer.setGestureActive(true);
+    store.beginWindowMove("win-3", { x: 800, y: 60 });
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+    expect(isParked(wrapperOf("win-2"))).toBe(false);
+    expect(isParked(wrapperOf("win-3"))).toBe(false);
+    store.endWindowMove({ x: 800, y: 60 });
+    layer.setGestureActive(false);
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+  });
+
+  it("gives the moved window's page a compositor layer of its own until the move ends, and no other page one", () => {
+    store.restoreWindow("win-3");
+    layer.reconcile();
+    const promoted = (): string[] =>
+      ["win-1", "win-2", "win-3"].filter((windowId) => wrapperOf(windowId).style.willChange === "transform");
+    layer.setGestureActive(true);
+    expect(promoted()).toEqual([]);
+    store.beginWindowMove("win-2", { x: 300, y: 60 });
+    layer.reconcile();
+    expect(promoted()).toEqual(["win-2"]);
+    store.endWindowMove({ x: 300, y: 60 });
+    layer.setGestureActive(false);
+    expect(promoted()).toEqual([]);
+    // A resize changes the page's size on every move, which a layer of its own would not spare it repainting.
+    store.beginWindowResize("win-2", "se");
+    layer.reconcile();
+    expect(promoted()).toEqual([]);
   });
 
   it("parks a page whose content is below the backdrop, but not the focused window's, which keeps the keyboard", () => {

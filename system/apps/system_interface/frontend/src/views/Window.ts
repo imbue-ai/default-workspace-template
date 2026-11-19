@@ -75,6 +75,10 @@ export interface WindowAttrs {
   readonly state: WindowState;
   readonly stackIndex: number;
   readonly isFocused: boolean;
+  /** Whether the window is being moved by a drag: it gets a compositor layer of its own (``will-change``) until the
+   *  drag ends, so each move slides the layer instead of repainting the window and what it passes over, repaints
+   *  that run the renderer out of GPU tile memory. */
+  readonly isMoving: boolean;
   readonly isTouch: boolean;
   readonly isMenuOpen: boolean;
   /** Whether the title bar offers "Chat about this app" (the multiplayer spec, section 9.1). */
@@ -192,6 +196,7 @@ export function Window(): m.Component<WindowAttrs> {
           style: {
             ...rectStyle(rect),
             zIndex: windowChromeZIndex(stackIndex),
+            ...(attrs.isMoving ? { willChange: "transform" } : {}),
           },
           onpointerdown: () => {
             if (!isFocused) attrs.onRaise();

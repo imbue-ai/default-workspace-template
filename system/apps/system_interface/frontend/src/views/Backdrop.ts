@@ -217,6 +217,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                           state: placement.state,
                           stackIndex: index,
                           isFocused: window.id === focusedWindowId,
+                          isMoving: gesture !== null && gesture.kind === "move" && gesture.windowId === window.id,
                           isTouch: state.modes.isTouch,
                           isMenuOpen: attrs.openMenuWindowId === window.id,
                           hasAppChat: isAppChatOffered && app !== undefined && !app.internal,

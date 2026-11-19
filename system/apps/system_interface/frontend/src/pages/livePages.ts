@@ -779,7 +779,8 @@ export class LivePagesLayer implements PageDriver {
   /**
    * The shown pages the windows in front of them cover, both where the windows are drawn now and where they are
    * going: a window still travelling to its place covers nothing until it lands there, and one travelling away
-   * uncovers at once. Nothing is covered while a window is moved or resized, which moves it with no reconcile.
+   * uncovers at once. A window being moved or resized moves with no reconcile, so for the length of the gesture it
+   * neither is covered nor covers: the pages behind the windows that stay put stay parked.
    * The focused window's page never is: nothing is in front of it, and parking it (its content dragged below the
    * backdrop) would take the keyboard from the window the user is in.
    */
@@ -789,7 +790,7 @@ export class LivePagesLayer implements PageDriver {
     focused: string | null,
   ): Set<string> {
     const covered = new Set<string>();
-    if (this.store.windowGesture() !== null) return covered;
+    const gestureWindowId = this.store.windowGesture()?.windowId ?? null;
     const metrics = this.store.getMetrics();
     const backdrop = this.store.frameBackdrop();
     // While a fullscreen window is on screen the desktop paints over the taskbar's band as well.
@@ -805,11 +806,15 @@ export class LivePagesLayer implements PageDriver {
       const rect = this.windowBox(entry.windowId);
       return rect === null ? null : { rect, hasTitleBar: entry.hasTitleBar, isContentOpaque: isContentOpaque[index] };
     });
+    const isStill = (index: number): boolean => drawn[index].windowId !== gestureWindowId;
     drawn.forEach((entry, index) => {
       const here = now[index];
-      if (!shownPageIds.has(entry.windowId) || entry.windowId === focused || here === null) return;
-      const isCoveredWhereGoing = isPageCovered(going[index], going.slice(index + 1), drawnArea, metrics);
-      const frontNow = now.slice(index + 1).filter((front): front is FrontWindow => front !== null);
+      if (!shownPageIds.has(entry.windowId) || entry.windowId === focused || !isStill(index) || here === null) return;
+      const goingFront = going.filter((_, frontIndex) => frontIndex > index && isStill(frontIndex));
+      const isCoveredWhereGoing = isPageCovered(going[index], goingFront, drawnArea, metrics);
+      const frontNow = now.filter(
+        (front, frontIndex): front is FrontWindow => front !== null && frontIndex > index && isStill(frontIndex),
+      );
       if (isCoveredWhereGoing && isPageCovered(here, frontNow, drawnArea, metrics)) covered.add(entry.windowId);
     });
     return covered;
@@ -936,6 +941,7 @@ export class LivePagesLayer implements PageDriver {
     page.isHidden = false;
     page.isCovered = isCovered;
     this.updateParking(page);
+    this.updateLayerPromotion(page);
     this.syncVisibility(page, true);
   }
 
@@ -943,7 +949,17 @@ export class LivePagesLayer implements PageDriver {
     page.isHidden = true;
     page.isCovered = false;
     this.updateParking(page);
+    this.updateLayerPromotion(page);
     this.syncVisibility(page, false);
+  }
+
+  /** Give the page of the window being moved a compositor layer of its own for the length of the move, as its
+   *  chrome has (``Window``): each move then slides the layer instead of repainting the page, and the repaints
+   *  of a drag are what run the renderer out of GPU tile memory. */
+  private updateLayerPromotion(page: LivePage): void {
+    const gesture = this.store.windowGesture();
+    const isMoving = !page.isHidden && gesture?.kind === "move" && gesture.windowId === page.windowId;
+    page.wrapper.style.willChange = isMoving ? "transform" : "";
   }
 
   /** Park a page that is hidden or covered, and take the document's focus out of it: a parked frame left holding
