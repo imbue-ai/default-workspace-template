@@ -1,8 +1,8 @@
-"""Tests for the OOM drill's prediction and its wrong-victim check.
+"""Tests for the OOM drill's prediction, its wrong-victim check and its defaults.
 
 The drill itself needs real memory pressure and a running earlyoom, so only its
-pieces that need neither are tested here; the drill is run for real in the
-staging rehearsal and the AWS release test.
+pieces that need neither are tested here; the drill is run by hand on a
+disposable workspace (``OOM_DRILL.md``).
 """
 
 import json

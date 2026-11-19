@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """A live OOM drill: check that earlyoom sheds in the predicted order.
 
-Starts one sleeper per requested band (each holding about ``--sleeper-percent``
-of MemTotal at that ``oom_score_adj``), then a hog at ``oom_score_adj`` -1000
+Starts one sleeper per band, by default at each score the shed policy assigns
+(each holding about ``--sleeper-percent`` of MemTotal at that
+``oom_score_adj``), then a hog at ``oom_score_adj`` -1000
 that grows in small steps until earlyoom has shed the last sleeper. Every
 second it snapshots each process's ``oom_score_adj`` and RSS; each kill (from
 the shed ledger, with earlyoom's own log line for detail) is judged against the
@@ -21,7 +22,7 @@ stops the drill at once and frees the hog's memory.
 
 Stdlib-only and self-contained, so it can be sent into a workspace inside the
 command (``mngr exec`` does not pass its stdin through):
-``mngr exec <agent> "echo $(base64 < oom_drill.py | tr -d '\\n') | base64 -d | python3 - --bands 1000,900,800,600,300"``.
+``mngr exec <agent> "echo $(base64 < oom_drill.py | tr -d '\\n') | base64 -d | python3 -"``.
 It must run as a process allowed to set -1000 (root under gVisor, or anywhere
 with ``CAP_SYS_RESOURCE``). Prints one JSON verdict on stdout and exits 0 only
 when the drill passed.

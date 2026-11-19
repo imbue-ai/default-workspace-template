@@ -7,8 +7,10 @@ real container (not macOS -- the tagging needs `/proc`).
 
 To check the shed *order* itself, run the automated drill,
 `system/services/oom_priority/bin/oom_drill.py`. It starts one memory-holding
-sleeper per band you name, grows a hog at `oom_score_adj` -1000 until the last
-sleeper is shed, and checks each kill against a prediction of earlyoom's
+sleeper at each score the shed policy assigns, from an aged chat (1000) down to
+a user agent (300), or at the scores `--bands` names; grows a hog at
+`oom_score_adj` -1000 until the last sleeper is shed; and checks each kill
+against a prediction of earlyoom's
 badness taken before earlyoom chose it; it prints a JSON verdict and exits
 non-zero on the first wrong victim. It is stdlib-only, so it can be sent in as
 part of the command. `mngr exec` does not pass its stdin through (a `python3 -` fed by
@@ -16,14 +18,14 @@ part of the command. `mngr exec` does not pass its stdin through (a `python3 -` 
 base64-encoded:
 
 ```bash
-mngr exec <agent> "echo $(base64 < system/services/oom_priority/bin/oom_drill.py | tr -d '\n') | base64 -d | python3 - --bands 1000,900,800,600,300"
+mngr exec <agent> "echo $(base64 < system/services/oom_priority/bin/oom_drill.py | tr -d '\n') | base64 -d | python3 -"
 ```
 
 The drill sheds processes for real, so run it only on a disposable workspace,
 never a user's. Stop the browser and every chat first, so the drill's sleepers
 are what earlyoom has to choose from. Anything still running that outranks a
 sleeper is shed before it, for real, so keep the lowest band above what
-remains: the built-in services sit at 5-80, and on a Lima workspace the
+remains: the built-in services sit at 5-86, and on a Lima workspace the
 terminal's shell and the rootless Docker daemons sit at 200.
 
 ## 0. Confirm earlyoom is running
@@ -49,6 +51,9 @@ cat /proc/<subprocess_pid>/oom_score_adj      # 900
 cat /proc/$(pgrep -f system-interface | head -1)/oom_score_adj   # 20
 # The never-kill infra (sshd, supervisord, earlyoom, earlyoom-stamp, tini, tmux) stays at 0:
 cat /proc/$(pgrep -x supervisord | head -1)/oom_score_adj        # 0
+# With the browser open, the Screen's sweep moves Chromium's processes to 910
+# (its main process), 943 (GPU and utility) and 960 (the processes that draw tabs):
+for pid in $(pgrep -x tilion); do echo "$pid $(cat /proc/$pid/oom_score_adj)"; done
 ```
 
 ## 2. Trigger a shed with a memory hog
