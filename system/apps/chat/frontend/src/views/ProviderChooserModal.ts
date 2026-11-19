@@ -46,6 +46,7 @@ import { Dropdown } from "@imbue/workspace-ui/src/components/dropdown";
 import { renderMarkdown } from "../markdown";
 import { providerMark } from "./providerMarks";
 import { removeAccountDialog } from "./removeAccountDialog";
+import { localModelsSettingsLink } from "./localModelsSettingsLink";
 import * as css from "./providerSignInStyles";
 import { formatContextWindow } from "../models/HarnessCatalog";
 import type {
@@ -1002,13 +1003,17 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                 ),
               ])
             : m("p", { class: css.HINT, "data-e2e": "local-model-none" }, [
-                studioLink === "UNREACHABLE"
-                  ? "Imbue Studio on your computer did not answer. Check that the computer is awake and " +
-                    "Studio is open. "
-                  : studioLink === "CONNECTED"
-                    ? "No model server is running on your computer. Imbue Studio can install one for you: open its " +
-                      "Settings and choose Local models. Or start your own (Ollama, LM Studio or llama.cpp). "
-                    : "No model server answered on your computer. ",
+                ...(studioLink === "UNREACHABLE"
+                  ? [
+                      "Imbue Studio on your computer did not answer. Check that the computer is awake and " +
+                        "Studio is open. ",
+                    ]
+                  : [
+                      "No model server is running on your computer. You may need to install Ollama: Imbue Studio " +
+                        "can do it for you in its Settings, under Local models. ",
+                      localModelsSettingsLink(),
+                      ". Or start your own (Ollama, LM Studio or llama.cpp). ",
+                    ]),
                 m(
                   "button",
                   {

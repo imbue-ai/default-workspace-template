@@ -945,7 +945,24 @@ describe("a local model", () => {
 
     const hint = root.querySelector('[data-e2e="local-model-none"]')?.textContent;
     expect(hint).toContain("No model server is running on your computer");
-    expect(hint).toContain("Imbue Studio can install one for you: open its Settings and choose Local models");
+    expect(hint).toContain(
+      "You may need to install Ollama: Imbue Studio can do it for you in its Settings, under Local models.",
+    );
+    expect(hint).toContain("Open Local models settings");
+  });
+
+  it("asks Imbue Studio to open its Local models settings from the hint's link", async () => {
+    findLocalModelServers.mockResolvedValue(found([], "CONNECTED"));
+    const posted: unknown[] = [];
+    const post = vi.spyOn(window.parent, "postMessage").mockImplementation((message: unknown) => {
+      posted.push(message);
+    });
+
+    const { root } = await openForm();
+    root.querySelector<HTMLButtonElement>('[data-e2e="open-local-models-settings"]')?.click();
+    post.mockRestore();
+
+    expect(posted).toEqual([{ type: "minds:open-local-models-settings" }]);
   });
 
   it("asks for an address when no server answers, and looks at the one named", async () => {
@@ -954,7 +971,7 @@ describe("a local model", () => {
 
     const { root, draw } = await openForm();
 
-    expect(root.textContent).toContain("No model server answered on your computer.");
+    expect(root.textContent).toContain("No model server is running on your computer. You may need to install Ollama");
     expect((root.querySelector('[data-e2e="connect-local-model"]') as HTMLButtonElement).disabled).toBe(true);
     type(root, "local-model-address", "box.lan:9000");
     type(root, "local-model-key", "sk-secret");

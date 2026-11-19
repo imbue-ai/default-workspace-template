@@ -93,6 +93,7 @@ import { isChatConnecting } from "./ConnectingIndicator";
 import { isAgentProcessDead } from "./agentLiveness";
 import { apiUrl, getBasePath } from "@imbue/workspace-ui/src/base-path";
 import { harnessLabel } from "./harness-labels";
+import { LOCAL_MODELS_SETTINGS_LINK_LABEL, openLocalModelsSettings } from "./localModelsSettingsLink";
 import { handoffComposerPlaceholder } from "./handoff-phase";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { ensureMentionHandles, matchingHandles } from "../models/Mentions";
@@ -606,6 +607,14 @@ function chooseProviderToContinue(chatId: string): void {
 }
 
 /** What an awaiting chat's first send launches it as: a chat on an account, or a room. */
+/** A send the server refused with something to tell the user, shown in a dialog over the composer. */
+interface DeclinedSend {
+  title: string;
+  body: string;
+  /** The model server did not answer: the dialog also says Imbue Studio can install one. */
+  isAboutModelServer?: boolean;
+}
+
 type FirstSendChoice = { kind: "account"; id: string } | { kind: "room" };
 
 export function MessageInput(): m.Component<MessageInputAttrs> {
@@ -629,7 +638,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   // A message the chat declines to deliver: a slash command that would change the agent's terminal
   // rather than start a turn (it still works from that terminal, which the notice says), or a
   // /compact the server declined to run (nothing to compact yet, or the agent is busy or stopped).
-  let declinedSend: { title: string; body: string } | null = null;
+  let declinedSend: DeclinedSend | null = null;
   // Why the last send or interrupt failed, in the harness's own words, shown as a notice.
   // Component state like the notices above, NOT module state: every open chat panel mounts its
   // own MessageInput, and a module-level value would raise the notice in all of them at once.
@@ -1587,7 +1596,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             if (isDeclined) {
               declinedSend = { title: "/compact wasn't sent", body: detail };
             } else if (isModelServerUnreachable) {
-              declinedSend = { title: "Your model server didn't answer", body: detail };
+              declinedSend = { title: "Your model server didn't answer", body: detail, isAboutModelServer: true };
             } else {
               actionFailureTitle = "Couldn't send your message";
               actionFailureDetail = detail;
@@ -2251,11 +2260,30 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         });
       }
 
-      function renderDeclinedCommandNotice(declined: { title: string; body: string }): m.Children {
+      function renderDeclinedCommandNotice(declined: DeclinedSend): m.Children {
+        const isAboutModelServer = declined.isAboutModelServer === true;
         return m(declinedCommandNotice, {
           title: declined.title,
-          body: [declined.body],
+          body: [
+            declined.body,
+            isAboutModelServer
+              ? "If Ollama is not installed on that computer, Imbue Studio can install it for you in its " +
+                "Settings, under Local models."
+              : null,
+          ],
           dismissLabel: "OK",
+          actions: isAboutModelServer
+            ? [
+                {
+                  label: LOCAL_MODELS_SETTINGS_LINK_LABEL,
+                  isSecondary: true,
+                  run: () => {
+                    openLocalModelsSettings();
+                    dismissDeclinedCommandNotice();
+                  },
+                },
+              ]
+            : [],
           onDismiss: dismissDeclinedCommandNotice,
         });
       }

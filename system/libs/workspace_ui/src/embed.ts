@@ -113,6 +113,14 @@ export const HIGHLIGHT_CHROME: "minds:highlight-chrome" =
 export const OPEN_LOCAL_FILES: "minds:open-local-files" =
   "OPEN_LOCAL_FILES" in embedContract ? embedContract.OPEN_LOCAL_FILES : "minds:open-local-files";
 
+// Workspace -> embedder (contract v16): open the chrome's Settings at Local models, where the user installs Ollama
+// and downloads models. Payload: {}. Sent to any embedder: the text beside the link says where the section is, for
+// a chrome that does not take this.
+export const OPEN_LOCAL_MODELS_SETTINGS: "minds:open-local-models-settings" =
+  "OPEN_LOCAL_MODELS_SETTINGS" in embedContract
+    ? embedContract.OPEN_LOCAL_MODELS_SETTINGS
+    : "minds:open-local-models-settings";
+
 // The immersive-mode pair (contract v12, the Screen integration spec section 5), probed the same way.
 // Workspace -> embedder: take the app window Fullscreen-API fullscreen with the keyboard locked for this window
 // (``on: true``), or give it back. Payload: { windowId, on }. Sent only to an embedder that said ``immersive`` with

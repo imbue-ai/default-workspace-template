@@ -66,7 +66,7 @@ _REACHABILITY_TIMEOUT_SECONDS: Final = 5.0
 
 UNREACHABLE_MESSAGE: Final = (
     "The model server on your computer did not answer. Check that the computer is awake, that "
-    "Imbue Studio is open on it, and that the model server (for example Ollama) is running. "
+    "Imbue Studio is open on it, and that a model server (for example Ollama) is installed and running. "
     "Then send your message again."
 )
 # A model that is not loaded yet is read off disk before it answers.
