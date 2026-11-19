@@ -4,8 +4,6 @@ description: "Create a new app for the user -- a page, dashboard, or tool they c
 metadata:
   author: imbue
   crystallized: true
-  exempt-checks: contents
-  exempt-reason: awaiting-restructure
 ---
 
 # How to build an app

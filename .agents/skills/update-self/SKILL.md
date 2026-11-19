@@ -3,8 +3,6 @@ name: update-self
 description: Safely pull updates from the upstream template repo. Use to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 metadata:
   author: imbue
-  exempt-checks: contents
-  exempt-reason: awaiting-restructure
 ---
 
 # Pulling updates from the upstream template, safely
