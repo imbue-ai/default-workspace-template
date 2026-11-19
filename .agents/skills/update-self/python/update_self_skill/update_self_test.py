@@ -7630,19 +7630,49 @@ def test_finish_restore_leaves_a_record_without_an_unrestored_list_to_a_hand_rep
     assert not (apply_repo / "static").exists()
 
 
-def test_finish_restore_refuses_while_an_apply_is_in_flight(
-    apply_repo: Path, capsys
+def _keep_a_later_apply_rollback_point(apply_repo: Path) -> None:
+    update_apply_contract.write_last_good(
+        update_apply_contract.LastGoodRecord(
+            merge_sha="fedcba9876543",
+            rollback_to=_ROLLBACK,
+            applied_at=1.0,
+            driven_by="lead",
+            snapshots=[],
+            programs=[],
+            apps=[],
+            needs_system_services_restart=False,
+        ),
+        apply_repo,
+    )
+
+
+@pytest.mark.parametrize(
+    ("later_apply", "refusal"),
+    [
+        (
+            lambda repo: _plant_marker(repo, merge_ref="mngr/update-retry"),
+            "an apply is in flight",
+        ),
+        (_keep_a_later_apply_rollback_point, "a later apply kept its rollback point"),
+    ],
+    ids=["in-flight", "rollback-point-kept"],
+)
+def test_finish_restore_refuses_once_a_later_apply_holds_the_copy_paths(
+    apply_repo: Path,
+    capsys,
+    later_apply: Callable[[Path], None],
+    refusal: str,
 ) -> None:
-    """A new apply re-takes its copies at the paths the record names, so restoring from
+    """A later apply takes its copies at the paths the record names, so restoring from
     them, or discarding them, would undercut that apply's own way back."""
     _, copy = _recover_over_an_unrestorable_bundle(apply_repo)
     (apply_repo / "blocked").unlink()
-    _plant_marker(apply_repo, merge_ref="mngr/update-retry")
+    later_apply(apply_repo)
 
     code = update_self.main(["finish-restore", "--repo-root", str(apply_repo)])
 
     assert code == 1
-    assert "an apply is in flight" in capsys.readouterr().err
+    assert refusal in capsys.readouterr().err
     assert (copy / "index.html").exists()
     assert not (apply_repo / "blocked").exists()
     assert [entry["name"] for entry in _read_emergency(apply_repo)["unrestored"]] == [

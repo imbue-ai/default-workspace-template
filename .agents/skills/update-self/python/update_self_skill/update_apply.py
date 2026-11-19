@@ -2444,14 +2444,22 @@ def finish_restore(repo_root: Path, *, now: Callable[[], float] = time.time) -> 
     Returns 1, touching nothing, when it cannot tell what to put back: the record is
     unreadable, or it keeps no readable list of unrestored copies (an emergency from anything
     but a boot-time partial restore), which is a repair by hand. Refused (1) too while an apply's
-    marker exists: that apply re-takes its copies at the same paths, so restoring from them
-    would put its pre-apply state over the live tree, and discarding them would take away
-    its own way back.
+    marker exists, or a later apply's rollback point is kept: that apply took its copies at the
+    same paths, so restoring from them would put its pre-apply state over the live tree, and
+    discarding them would take away its way back. The interrupted apply cleared any earlier
+    rollback point before it began, so one kept now is always a later apply's.
     """
     if marker_path(repo_root).exists():
         sys.stderr.write(
             "error: an apply is in flight (its marker exists); finish or `recover` it "
             "before putting back an earlier rollback's copies.\n"
+        )
+        return 1
+    if read_last_good(repo_root) is not None:
+        sys.stderr.write(
+            "error: a later apply kept its rollback point, and its copies are at the "
+            "paths the emergency record names, so putting them back would undo part of "
+            f"that apply; the copies are at {snapshots_root(repo_root)}: repair by hand.\n"
         )
         return 1
     record = read_emergency(repo_root)
