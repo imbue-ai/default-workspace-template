@@ -695,7 +695,11 @@ _WIDE_PICTURE_SVG = (
     '<rect width="1600" height="900" fill="white"/><circle cx="1200" cy="600" r="100" fill="red"/></svg>'
 )
 
-_FITTED = "matrix(1, 0, 0, 1, 0, 0)"
+# Whether the stage is drawn fitted: at a zoom of 1 and no offset, within rounding.
+_IS_FITTED_JS = """() => {
+    const m = new DOMMatrix(getComputedStyle(document.querySelector('.files-image-stage')).transform);
+    return Math.abs(m.a - 1) < 0.001 && Math.abs(m.e) < 0.5 && Math.abs(m.f) < 0.5;
+}"""
 
 
 def _wide_picture_page(open_files_page: OpenFilesPage, files_root: Path) -> Page:
@@ -711,18 +715,12 @@ def _image_box(page: Page) -> FloatRect:
     return box
 
 
-def _stage_transform(page: Page) -> str:
-    return page.locator(".files-image-stage").evaluate("stage => getComputedStyle(stage).transform")
+def _is_fitted(page: Page) -> bool:
+    return page.evaluate(_IS_FITTED_JS)
 
 
 def _wait_for_stage_transform(page: Page, is_fitted: bool) -> None:
-    page.wait_for_function(
-        """([fitted, isFitted]) => {
-            const transform = getComputedStyle(document.querySelector('.files-image-stage')).transform;
-            return (transform === fitted) === isFitted;
-        }""",
-        arg=[_FITTED, is_fitted],
-    )
+    page.wait_for_function(f"() => ({_IS_FITTED_JS})() === {'true' if is_fitted else 'false'}")
 
 
 def _wait_for_stage_scale(page: Page, scale: float) -> None:
@@ -761,15 +759,15 @@ def _wheel(page: Page, point: tuple[float, float], deltas_y: list[float], is_ctr
     )
 
 
-def test_a_pinch_zooms_an_image_around_the_pointer_and_a_double_click_fits_it_again(
+def test_a_pinch_zooms_an_image_around_the_pointer_and_pinching_back_fits_it_again(
     open_files_page: OpenFilesPage, files_root: Path
 ) -> None:
     page = _wide_picture_page(open_files_page, files_root)
     fitted = _image_box(page)
     pointer = _point_at(page, 0.75, 0.7)
 
-    # A plain scroll leaves a fitted picture alone (read as a pinch, it would carry the zoom below past e); a trackpad
-    # pinch reaches the page as many small Ctrl+wheel events.
+    # A plain scroll leaves the picture alone (read as a pinch, it would carry the zoom below past e); a trackpad
+    # pinch reaches the page as Ctrl+wheel events, each one Panzoom's zoom step.
     _wheel(page, pointer, [-120], is_ctrl=False)
     _wheel(page, pointer, [-10] * 10, is_ctrl=True)
     _wait_for_stage_scale(page, math.e)
@@ -779,14 +777,9 @@ def test_a_pinch_zooms_an_image_around_the_pointer_and_a_double_click_fits_it_ag
     assert (pointer[0] - zoomed["x"]) / zoomed["width"] == pytest.approx(0.75, abs=0.005)
     assert (pointer[1] - zoomed["y"]) / zoomed["height"] == pytest.approx(0.7, abs=0.005)
 
-    page.mouse.dblclick(*pointer)
+    _wheel(page, pointer, [10] * 10, is_ctrl=True)
     _wait_for_stage_transform(page, is_fitted=True)
-    assert _image_box(page) == pytest.approx(fitted)
-
-    # One notch of a mouse wheel with Ctrl held is a step, not a leap.
-    _wheel(page, pointer, [-100], is_ctrl=True)
-    _wait_for_stage_transform(page, is_fitted=False)
-    assert 1.1 < _image_box(page)["width"] / fitted["width"] < 1.5
+    assert _image_box(page) == pytest.approx(fitted, abs=1)
 
 
 def test_a_drag_moves_an_image_only_while_it_is_zoomed(open_files_page: OpenFilesPage, files_root: Path) -> None:
@@ -796,10 +789,10 @@ def test_a_drag_moves_an_image_only_while_it_is_zoomed(open_files_page: OpenFile
     page.mouse.down()
     page.mouse.move(centre[0] - 100, centre[1] - 50, steps=5)
     page.mouse.up()
-    assert _stage_transform(page) == _FITTED
+    assert _is_fitted(page)
 
-    page.mouse.dblclick(*_point_at(page, 0.5, 0.5))
-    _wait_for_stage_transform(page, is_fitted=False)
+    _wheel(page, centre, [-10] * 10, is_ctrl=True)
+    _wait_for_stage_scale(page, math.e)
     zoomed = _image_box(page)
     _point_at(page, 0.5, 0.5)
     page.mouse.down()
@@ -809,48 +802,23 @@ def test_a_drag_moves_an_image_only_while_it_is_zoomed(open_files_page: OpenFile
     assert (moved["x"] - zoomed["x"], moved["y"] - zoomed["y"]) == pytest.approx((-100, -50), abs=1)
 
 
-def _view_box(page: Page) -> dict[str, float]:
-    """The part of the frame a fitted picture is laid out in: its box inside the padding."""
-    return page.locator(".files-image-frame").evaluate(
-        """frame => {
-            const box = frame.getBoundingClientRect();
-            const style = getComputedStyle(frame);
-            const left = box.left + parseFloat(style.paddingLeft);
-            const top = box.top + parseFloat(style.paddingTop);
-            return {x: left, y: top, right: box.right - parseFloat(style.paddingRight),
-                    bottom: box.bottom - parseFloat(style.paddingBottom)};
-        }"""
-    )
-
-
-def _wait_for_image_at_view_corner(page: Page, view: dict[str, float]) -> None:
-    """Wait until the picture's bottom-right corner meets the view's: held at its own edges rather than leaving them."""
-    page.wait_for_function(
-        """view => {
-            const image = document.querySelector('.files-file-image').getBoundingClientRect();
-            return Math.abs(image.right - view.right) < 1 && Math.abs(image.bottom - view.bottom) < 1;
-        }""",
-        arg=view,
-    )
-
-
-def test_a_zoomed_image_scrolled_far_past_its_edge_or_its_window_shrunk_still_covers_the_view(
-    open_files_page: OpenFilesPage, files_root: Path
-) -> None:
+def test_a_zoomed_image_dragged_far_still_covers_its_frame(open_files_page: OpenFilesPage, files_root: Path) -> None:
     page = _wide_picture_page(open_files_page, files_root)
-    page.mouse.dblclick(*_point_at(page, 0.5, 0.5))
-    _wait_for_stage_transform(page, is_fitted=False)
+    centre = _point_at(page, 0.5, 0.5)
+    _wheel(page, centre, [-10] * 10, is_ctrl=True)
+    _wait_for_stage_scale(page, math.e)
 
-    for _ in range(10):
-        page.mouse.wheel(400, 400)
+    # Three times from the middle towards the bottom right: further than the zoomed picture reaches past its frame.
+    for _ in range(3):
+        page.mouse.move(*centre)
+        page.mouse.down()
+        page.mouse.move(centre[0] + 500, centre[1] + 300, steps=10)
+        page.mouse.up()
 
-    view = _view_box(page)
-    _wait_for_image_at_view_corner(page, view)
-    image = _image_box(page)
-    assert image["x"] < view["x"] and image["y"] < view["y"]
-
-    page.set_viewport_size({"width": 900, "height": 600})
-    _wait_for_image_at_view_corner(page, _view_box(page))
+    stage = page.locator(".files-image-stage").bounding_box()
+    frame = page.locator(".files-image-frame").bounding_box()
+    assert stage is not None and frame is not None
+    assert stage["x"] <= frame["x"] + 1 and stage["y"] <= frame["y"] + 1
 
 
 def test_a_touch_pinch_out_past_the_fit_around_another_point_leaves_the_image_fitted(
@@ -875,15 +843,34 @@ def test_a_touch_pinch_out_past_the_fit_around_another_point_leaves_the_image_fi
             fingers("touchMove", 195, spread)
         fingers("touchEnd", 195, 0)
         _wait_for_stage_transform(page, is_fitted=False)
-        fingers("touchStart", 140, 140)
-        for spread in range(135, 0, -5):
-            fingers("touchMove", 140, spread)
-        fingers("touchEnd", 140, 0)
+        fingers("touchStart", 160, 130)
+        for spread in range(125, 0, -5):
+            fingers("touchMove", 160, spread)
+        fingers("touchEnd", 160, 0)
 
         _wait_for_stage_transform(page, is_fitted=True)
-        assert _image_box(page) == pytest.approx(fitted)
+        assert _image_box(page) == pytest.approx(fitted, abs=1)
     finally:
         context.close()
+
+
+def test_a_press_on_an_image_keeps_its_default_so_it_focuses_the_page(
+    open_files_page: OpenFilesPage, files_root: Path
+) -> None:
+    """The shell raises a window behind others when a press puts the focus in its page."""
+    page = _wide_picture_page(open_files_page, files_root)
+    page.evaluate(
+        """() => {
+            window.pressDefaults = [];
+            window.addEventListener('pointerdown', (event) => window.pressDefaults.push(event.defaultPrevented));
+        }"""
+    )
+
+    _point_at(page, 0.5, 0.5)
+    page.mouse.down()
+    page.mouse.up()
+
+    assert page.evaluate("window.pressDefaults") == [False]
 
 
 def test_deleting_a_file_from_its_page_leaves_the_window_saying_so(

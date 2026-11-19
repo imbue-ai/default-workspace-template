@@ -144,7 +144,7 @@ function body(page: FilePageModel): m.Children {
   }
   switch (preview) {
     case "image":
-      return m(ZoomableImage, { src: url, alt: name, frameClass: "h-full bg-page p-6" });
+      return m(ZoomableImage, { src: url, alt: name, frameClass: "h-full bg-page" });
     case "video":
       return m("div", { class: centred }, m("video", { src: url, controls: true, class: "max-h-full max-w-full" }));
     case "audio":
