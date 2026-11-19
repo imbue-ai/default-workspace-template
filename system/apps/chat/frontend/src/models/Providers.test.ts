@@ -227,6 +227,23 @@ describe("startFlow", () => {
     await started;
     expect(getFlow()?.flow_id).toBe("flow-api-key");
   });
+
+  it("says whether the flow it started is the live one, which a newer start overtakes", async () => {
+    let arriveOlder: (value: unknown) => void = () => {};
+    mockRequest.mockReturnValueOnce(
+      new Promise((resolve) => {
+        arriveOlder = resolve;
+      }),
+    );
+    const older = startFlow("anthropic", "subscription");
+    mockRequest.mockResolvedValueOnce({ flow_id: "flow-newer", shape: "paste", url: null, code: null });
+    const newer = startFlow("anthropic", "api_key");
+
+    expect(await newer).toBe(true);
+    arriveOlder({ flow_id: "flow-older", shape: "code_then_wait", url: null, code: "ABCD-1234" });
+    expect(await older).toBe(false);
+    expect(getFlow()?.flow_id).toBe("flow-newer");
+  });
 });
 
 describe("the provider chooser's hooks", () => {
