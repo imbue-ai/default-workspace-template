@@ -7589,6 +7589,24 @@ def test_finish_restore_puts_back_what_a_boot_rollback_could_not_once_the_cause_
     assert "restored: bundle" in capsys.readouterr().err
 
 
+def test_finish_restore_names_a_copy_that_is_gone_as_one_to_rebuild(
+    apply_repo: Path, capsys
+) -> None:
+    _, copy = _recover_over_an_unrestorable_bundle(apply_repo)
+    (apply_repo / "blocked").unlink()
+    shutil.rmtree(copy)
+    capsys.readouterr()
+
+    assert update_self.main(["finish-restore", "--repo-root", str(apply_repo)]) == 3
+
+    err = capsys.readouterr().err
+    assert "no copy is left of: bundle" in err
+    assert "the copies stay at" not in err
+    assert [entry["name"] for entry in _read_emergency(apply_repo)["unrestored"]] == [
+        "bundle"
+    ]
+
+
 def test_finish_restore_leaves_a_record_without_an_unrestored_list_to_a_hand_repair(
     apply_repo: Path, capsys
 ) -> None:

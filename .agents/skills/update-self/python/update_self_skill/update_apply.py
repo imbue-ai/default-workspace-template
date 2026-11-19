@@ -2493,10 +2493,18 @@ def finish_restore(repo_root: Path, *, now: Callable[[], float] = time.time) -> 
         unrestored=remaining,
     )
     if remaining:
-        sys.stderr.write(
-            f"still could not restore: {', '.join(sorted(failed))}; the copies stay at "
-            f"{snapshots_root(repo_root)}, and the emergency record still names them.\n"
-        )
+        gone = sorted(s.name for s in remaining if not Path(s.copy).exists())
+        kept = sorted(s.name for s in remaining if s.name not in gone)
+        if kept:
+            sys.stderr.write(
+                f"still could not restore: {', '.join(kept)}; the copies stay at "
+                f"{snapshots_root(repo_root)}, and the emergency record still names them.\n"
+            )
+        if gone:
+            sys.stderr.write(
+                f"no copy is left of: {', '.join(gone)}, so another run cannot put it "
+                "back; rebuild it instead.\n"
+            )
         return 3
     discard_snapshots(repo_root)
     sys.stderr.write(
