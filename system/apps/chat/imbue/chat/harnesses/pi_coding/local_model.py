@@ -319,9 +319,13 @@ def verify_model(
 
 def read_server_base_url(account_dir: Path) -> str | None:
     """The address of the model server a local-model account runs on; None for any other account."""
+    path = account_dir / MODELS_FILENAME
     try:
-        config = json.loads((account_dir / MODELS_FILENAME).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        logger.warning("Could not read the model server address from {}: {}", path, e)
         return None
     providers = config.get("providers") if isinstance(config, dict) else None
     provider = providers.get(LOCAL_MODEL_PROVIDER_ID) if isinstance(providers, dict) else None
