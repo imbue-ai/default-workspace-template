@@ -2341,8 +2341,8 @@ def recover(
             # The copies stay, for the same reason the emergency path keeps
             # them: a restore that failed for anything other than a missing
             # copy (a full disk, a permission fault) leaves the copy sitting
-            # right there, and putting it back by hand is the way out. Deleting
-            # them here would destroy the only remaining route.
+            # right there, and `finish-restore` puts it back from the record
+            # below. Deleting them here would destroy the only remaining route.
             reason = (
                 f"could not restore: {', '.join(sorted(failed))}. The tree is "
                 "rolled back but the pre-apply state is NOT -- the copies are kept at "
