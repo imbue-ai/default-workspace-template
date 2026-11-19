@@ -1,9 +1,8 @@
-"""Tests for the OOM drill's prediction, its wrong-victim check and its defaults.
+"""Tests for the OOM drill.
 
 The drill itself needs real memory pressure and a running earlyoom, so only its
-pieces that need neither are tested here; the drill runs for real in the Imbue
-Studio smoke journey's workspace and through ``just dwt-oom-drill``
-(``OOM_DRILL.md``).
+pieces that need neither are tested here; ``OOM_DRILL.md`` says where the drill
+runs for real.
 """
 
 import json

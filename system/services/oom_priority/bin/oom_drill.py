@@ -17,8 +17,8 @@ with ``--avoid`` names 300 points lower -- the imbue-ai earlyoom fork's
 scoring, which on a Linux kernel is also the kernel's own. Under gVisor, whose
 status has no RssAnon line, the fork counts the sum of the Anonymous lines in
 /proc/<pid>/smaps in place of VmRSS, and so does the drill. A wrong victim, or
-a built-in service (adj <= 86) shed while something at adj >= 900 remained,
-stops the drill at once and frees the hog's memory.
+a built-in service shed while something expendable remained, stops the drill at
+once and frees the hog's memory.
 
 Before its sleepers start it stops the Screen's desktop and its watcher, and it
 starts the watcher again when it ends; the desktop starts when something next
@@ -55,13 +55,11 @@ UNKILLABLE_ADJ: Final[int] = -1000
 PROTECTED_MAX_ADJ: Final[int] = 86
 # Agent subprocesses and Chromium.
 EXPENDABLE_MIN_ADJ: Final[int] = 900
-# One sleeper at each score the shed policy assigns, highest first: an aged chat,
-# Chromium's tabs, its GPU and utility processes, its main process, an agent's
-# commands, the Screen's stack, a worker agent, a fresh chat and a user agent.
-# Written out because the drill cannot import oom_priority.bands; its test holds
-# the two together.
+# One sleeper at each score the shed policy assigns, highest first. Written out
+# because the drill cannot import oom_priority.bands; its test holds the two
+# together.
 DEFAULT_BANDS: Final[tuple[int, ...]] = (1000, 960, 943, 910, 900, 850, 600, 560, 300)
-# The Screen's desktop, which sits above most of DEFAULT_BANDS, and its
+# The Screen's desktop, which earlyoom would shed during the drill, and its
 # watcher. Shedding one member of the desktop makes the watcher stop the rest
 # within a fraction of a second, sooner than the drill's snapshots can see, so
 # the drill stops them first: the desktop before the watcher, which tells the
