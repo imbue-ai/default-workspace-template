@@ -4,7 +4,7 @@
 starts, but the agent is only registered with the ``AgentManager`` when that
 thread finishes. Every endpoint the freshly opened panel calls resolves the
 agent through that registry, so the panel's first ``/events`` fetch 404s and
-latches into the "No conversation data" view.
+latches into the "nothing to show" view.
 
 The ``provisional_chat_created`` broadcast normally covers that window with the
 page of a chat being created, but it is a transient edge event: the frontend holds
@@ -29,6 +29,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from collections.abc import Generator
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,7 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.config import Config
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import HeldSendSnapshot
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatAsShown
 from imbue.chat.primitives import ChatId
@@ -106,10 +108,18 @@ class _WithholdProtoCreatedBroadcaster(WebSocketBroadcaster):
         if type(self)._release_on_completion:
             type(self)._withheld.append(send)
 
-    def broadcast_provisional_chat_completed(self, chat_id: ChatId, success: bool, error: str | None) -> None:
+    def broadcast_provisional_chat_completed(
+        self,
+        chat_id: ChatId,
+        success: bool,
+        error: str | None,
+        held_sends: Sequence[HeldSendSnapshot] | None = None,
+    ) -> None:
         while type(self)._withheld:
             type(self)._withheld.pop(0)()
-        WebSocketBroadcaster.broadcast_provisional_chat_completed(self, chat_id=chat_id, success=success, error=error)
+        WebSocketBroadcaster.broadcast_provisional_chat_completed(
+            self, chat_id=chat_id, success=success, error=error, held_sends=held_sends
+        )
 
 
 class _ReplayHidingAgentManager(AgentManager):
@@ -271,7 +281,7 @@ def test_not_found_panel_recovers_when_the_agent_resolves(
     """A panel that 404s its first events fetch reloads itself once the agent registers.
 
     With ``provisional_chat_created`` dropped, nothing covers the creation window: the
-    panel 404s, shows "No conversation data", and is the state the user is stuck
+    panel 404s, shows the "nothing to show" view, and is the state the user is stuck
     in today. It must leave that state on its own -- no reload, no tab switch --
     once ``chats_updated`` names the agent.
     """

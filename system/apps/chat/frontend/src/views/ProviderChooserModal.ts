@@ -46,6 +46,12 @@ import { Dropdown } from "@imbue/workspace-ui/src/components/dropdown";
 import { renderMarkdown } from "../markdown";
 import { providerMark } from "./providerMarks";
 import { removeAccountDialog } from "./removeAccountDialog";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
+import { FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
+import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
+import { getShellConnection } from "../shellConnection";
+import { plainFailureLines, plainFailureSentence } from "./failure-lines";
 import * as css from "./providerSignInStyles";
 import type { Lane, LaneMethod, UnpickableReason } from "../models/Providers";
 import {
@@ -101,7 +107,10 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let codeInput = "";
   let keyInput = "";
   let keyProvider: string | null = null;
-  let error: string | null = null;
+  let error: ChooserFailure | null = null;
+  // Why the providers and accounts couldn't be loaded, kept apart from a failed action's ``error`` because only this
+  // one is answered by loading again.
+  let loadError: ChooserFailure | null = null;
   let busy = false;
   let reauthAccountId: string | null = null;
   let confirmingDelete: string | null = null;
@@ -245,7 +254,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       }
     } catch (e) {
       if (attempt !== generation) return;
-      error = errorText(e);
+      error = signInFailure(e);
     } finally {
       if (attempt === generation) {
         busy = false;
@@ -260,7 +269,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   /** Run a credential handover. `holdUntilVerdict` keeps the waiting screen up after the
    *  request returns, for the flows whose answer arrives on a later poll rather than in the
    *  response body. */
-  async function send(action: () => Promise<void>, holdUntilVerdict = false): Promise<void> {
+  async function send(
+    action: () => Promise<void>,
+    holdUntilVerdict = false,
+    describe: (e: unknown) => ChooserFailure = signInFailure,
+  ): Promise<void> {
     busy = true;
     error = null;
     if (holdUntilVerdict) awaitingVerdict = true;
@@ -268,7 +281,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     try {
       await action();
     } catch (e) {
-      error = errorText(e);
+      error = describe(e);
       awaitingVerdict = false;
     } finally {
       busy = false;
@@ -381,32 +394,43 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   /** Fetch the lanes and the accounts. Also the retry after either fails. */
   async function load(): Promise<void> {
     busy = true;
-    error = null;
+    loadError = null;
     try {
       await loadLanesAndAccountsWithRetry();
     } catch (e) {
-      error = (e as Error).message || "Could not reach the workspace.";
+      const lines = plainFailureLines(e, "Couldn't load the list of providers", { requestKind: "read" });
+      loadError = { message: plainFailureSentence(lines), details: lines.details, isReportable: lines.isReportable };
     } finally {
       busy = false;
       m.redraw();
     }
   }
 
+  /** A load that failed before any provider was listed leaves nothing to choose from, so it takes the whole screen. */
+  function isLoadFailureScreen(): boolean {
+    return loadError !== null && !areLanesLoaded();
+  }
+
+  function loadAgainButton(): m.Children {
+    return m(
+      Button,
+      { variant: "primary", disabled: busy, "data-e2e": "retry-providers", onclick: () => void load() },
+      "Try again",
+    );
+  }
+
+  /** A failure shown above the providers, with its buttons under it when it has any. */
+  function inlineFailure(failure: ChooserFailure, actions: m.Children): m.Children {
+    return m("div", { class: `${css.HINT} text-red-600` }, [
+      m("p", failure.message),
+      m(SeeDetails, { details: failure.details }),
+      actions === null ? null : m("div", { class: `${css.FOOTER_ROW} mt-2` }, actions),
+    ]);
+  }
+
   function renderChooser(): m.Children {
-    // A failed load leaves no lanes and no way to ask again, so the spinner is forever.
-    if (error !== null && !areLanesLoaded()) {
-      return [
-        statusScreen("error", "Could not load providers", error),
-        m(
-          "div",
-          { class: css.FOOTER_ROW },
-          m(
-            Button,
-            { variant: "primary", disabled: busy, "data-e2e": "retry-providers", onclick: () => void load() },
-            "Try again",
-          ),
-        ),
-      ];
+    if (loadError !== null && isLoadFailureScreen()) {
+      return statusScreen("error", "Could not load providers", loadError.message, failureMark(loadError));
     }
     if (!areLanesLoaded()) return statusScreen("pending", "Loading providers...", null);
     // Signed-in accounts lead: what you already have is the answer to "can I chat?", so it
@@ -416,9 +440,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     const signedIn = renderAccounts();
     return [
       signedIn,
+      // The providers are listed but the accounts may not be, so the failure sits above them with a way to load again.
+      loadError !== null ? inlineFailure(loadError, [failureRemedies(loadError), loadAgainButton()]) : null,
       // Removing an account can fail -- a row with no folder, a store that will not write --
       // and without this the row simply stays put with no explanation.
-      error !== null ? m("p", { class: `${css.HINT} text-red-600` }, error) : null,
+      error !== null ? inlineFailure(error, failureRemedies(error)) : null,
       signedIn !== null ? m("div", { class: `${css.SECTION_LABEL} mt-6` }, "Add more") : null,
       m("div", { class: css.ROW_STACK }, getLanes().map(laneRow)),
       roomRow(),
@@ -504,7 +530,18 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             confirming,
             () => {
               confirmingDelete = null;
-              void send(() => deleteAccount(confirming.id));
+              void send(
+                () => deleteAccount(confirming.id),
+                false,
+                (e) => {
+                  const lines = plainFailureLines(e, "That account couldn't be removed");
+                  return {
+                    message: plainFailureSentence(lines),
+                    details: lines.details,
+                    isReportable: lines.isReportable,
+                  };
+                },
+              );
             },
             () => {
               confirmingDelete = null;
@@ -911,8 +948,12 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             : `Sign in to ${current.provider_name}`;
 
       let body: m.Children;
+      // The screen's buttons, pinned under the body so a body that scrolls (an opened See details) cannot carry them
+      // out of sight.
+      let footer: m.Children = null;
       if (current === null) {
         body = renderChooser();
+        if (isLoadFailureScreen()) footer = [failureRemedies(loadError), loadAgainButton()];
       } else if (isSuccess) {
         body = statusScreen(
           "success",
@@ -926,35 +967,38 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           m("div", { class: css.STATUS_MARK }, [m.trust(providerMark(current.id, 18)), current.provider_name]),
         );
       } else if (isFailed || error !== null) {
-        body = [
-          statusScreen("error", "That didn't work", (isFailed ? flow.status.detail : null) ?? error),
-          m("div", { class: css.FOOTER_ROW }, [
-            hasOtherWays(current)
-              ? m(
-                  Button,
-                  {
-                    variant: "secondary",
-                    disabled: busy,
-                    "data-e2e": "sign-in-another-way",
-                    onclick: () => signInAnotherWay(current),
-                  },
-                  "Try another way",
-                )
-              : null,
-            m(
-              Button,
-              {
-                variant: "primary",
-                disabled: busy,
-                onclick: () =>
-                  void begin(current, method ?? current.methods[0], {
-                    fromChooser: cameFromChooser,
-                    accountId: reauthAccountId ?? undefined,
-                  }),
-              },
-              "Try again",
-            ),
-          ]),
+        const failure: ChooserFailure | null =
+          isFailed && flow.status.detail !== null
+            ? { message: flow.status.detail, details: flow.status.details ?? null, isReportable: false }
+            : error;
+        body = statusScreen("error", "That didn't work", failure?.message ?? null, failureMark(failure));
+        footer = [
+          failureRemedies(failure),
+          hasOtherWays(current)
+            ? m(
+                Button,
+                {
+                  variant: "secondary",
+                  disabled: busy,
+                  "data-e2e": "sign-in-another-way",
+                  onclick: () => signInAnotherWay(current),
+                },
+                "Try another way",
+              )
+            : null,
+          m(
+            Button,
+            {
+              variant: "primary",
+              disabled: busy,
+              onclick: () =>
+                void begin(current, method ?? current.methods[0], {
+                  fromChooser: cameFromChooser,
+                  accountId: reauthAccountId ?? undefined,
+                }),
+            },
+            "Try again",
+          ),
         ];
       } else if (isPending) {
         body = statusScreen(
@@ -990,7 +1034,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         current === null ? "chooser" : mode === "menu" ? "menu" : "form";
       const screen: "status" | "menu" | "form" | "chooser" = isPending
         ? settledScreen
-        : isSuccess || error !== null
+        : isSuccess || error !== null || (current === null && isLoadFailureScreen())
           ? "status"
           : settledScreen;
       // The entry screen keeps a floor: the flow always returns there, and a panel that shrinks
@@ -1073,7 +1117,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                       m(Button, { variant: "primary", "data-e2e": "done", onclick: onClose }, "Done"),
                     ),
                   )
-                : null,
+                : footer !== null
+                  ? m("div", { class: css.FOOTER }, m("div", { class: css.FOOTER_ROW }, footer))
+                  : null,
             ]),
           ),
         ],
@@ -1082,8 +1128,40 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   };
 }
 
-function errorText(e: unknown): string {
-  const response = (e as { response?: { detail?: string } })?.response;
-  if (response?.detail) return response.detail;
-  return (e as Error)?.message ?? "Something went wrong.";
+/** A failure on one of the chooser's screens: the sentence, what goes behind "See details", and whether to offer
+ *  "Report a bug". */
+interface ChooserFailure {
+  readonly message: string;
+  readonly details: string | null;
+  readonly isReportable: boolean;
+}
+
+const SIGN_IN_FAILED_WITH_NO_REASON =
+  "The sign-in didn't complete. Try again, or try another way in. If this persists, report a bug.";
+
+/** A refused or unanswered sign-in request: the server's own sentence where it wrote one, else ours. */
+function signInFailure(e: unknown): ChooserFailure {
+  const failure = describeRequestFailure(e);
+  const told = failureSentence(failure, "The sign-in didn't complete. Try again, or try another way in");
+  if (failure.cause !== "user_facing" && told.isReportable) {
+    return { message: SIGN_IN_FAILED_WITH_NO_REASON, details: told.details, isReportable: true };
+  }
+  return told;
+}
+
+function failureMark(failure: ChooserFailure | null): m.Children {
+  return failure === null ? null : m(SeeDetails, { details: failure.details });
+}
+
+/** What a failure on the chooser offers when it asks for a bug report: "Ask an agent to fix this", then "Report a
+ *  bug". No agent while nothing is signed in, since an agent needs an account to run on. */
+function failureRemedies(failure: ChooserFailure | null): m.Children {
+  return failure === null
+    ? null
+    : m(FailureRemedies, {
+        connection: getShellConnection(),
+        failure,
+        variant: "secondary",
+        isAgentWithheld: getAccounts().length === 0,
+      });
 }

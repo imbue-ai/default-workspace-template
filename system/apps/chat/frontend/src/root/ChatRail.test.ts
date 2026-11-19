@@ -15,6 +15,11 @@ const verbs = vi.hoisted(() => ({
   destroyChat: vi.fn(async (_chatId: string) => undefined),
 }));
 vi.mock("./verbs", () => verbs);
+const rootNotices = vi.hoisted(() => [] as { title: string; lines: { details: string | null } }[]);
+vi.mock("./rootNotice", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./rootNotice")>()),
+  raiseRootNotice: (notice: { title: string; lines: { details: string | null } }) => rootNotices.push(notice),
+}));
 
 import m from "mithril";
 import { setParticipantsForTesting } from "../models/Participants";
@@ -282,17 +287,18 @@ describe("ChatRail delete", () => {
 
   it("brings the chat back and says why when the chat app refuses", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
-    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
+    rootNotices.length = 0;
     verbs.destroyChat.mockRejectedValueOnce(new Error("mngr failed"));
     const onDeleteRefused = vi.fn<() => void>();
 
     deleteFromMenu(chatRailAttrsFixture({ rows: [first, second], onDeleteRefused }), first);
     expect(hasPendingDelete()).toBe(true);
 
-    await vi.waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(rootNotices).toHaveLength(1));
     expect(withoutPendingDeletes([first, second])).toEqual([first, second]);
     expect(onDeleteRefused).toHaveBeenCalledTimes(1);
-    expect(alertSpy.mock.calls[0][0]).toContain("mngr failed");
+    expect(rootNotices[0].title).toBe("Couldn't delete the chat");
+    expect(rootNotices[0].lines.details).toContain("mngr failed");
   });
 });
 

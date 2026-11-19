@@ -88,6 +88,8 @@ export interface DisplayDecision {
   display?: UserMessageEvent["display"] | null;
   display_label?: string | null;
   display_body?: string | null;
+  resolution?: UserMessageEvent["resolution"] | null;
+  display_details?: string | null;
 }
 
 /** Who sent a message not on the transcript yet, joined from the chat's author annotations as its turn's will
@@ -234,8 +236,19 @@ type WsEvent =
   | { type: "chats_updated"; chats: ChatSnapshot[]; main_chat_id: string | null }
   | { type: "mentions_updated" }
   | ({ type: "provisional_chat_created" } & ProvisionalChat)
-  | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null }
+  | {
+      type: "provisional_chat_completed";
+      chat_id: string;
+      success: boolean;
+      error: string | null;
+      // A discard's: the messages the chat held, dropped with it. Absent from any other completion.
+      held_sends?: HeldSend[];
+    }
   | { type: "accounts_updated" };
+
+/** A send refused because its chat never became an agent (its create failed, or it was closed first): there is no
+ *  agent behind it to retry or restart. */
+export class ChatNotStartedError extends Error {}
 
 export type ChatsUpdatedListener = (chats: ChatSnapshot[]) => void;
 /**
@@ -249,6 +262,17 @@ export type ChatActivityListener = (chatId: string, previous: string | null, cur
  * (a handoff completed). Per-agent state a view holds (an optimistic model pick) is stale then.
  */
 export type ChatActiveAgentListener = (chatId: string, previousAgentId: string, currentAgentId: string) => void;
+
+/** A chat deleted before its agent landed, with the messages the chat app was holding for it, dropped with it, in the
+ *  order they were held. */
+export interface DiscardedChat {
+  chat_id: string;
+  held_sends: readonly HeldSend[];
+}
+
+/** Told when a chat that was not yet an agent is discarded: by the chat app's discard (live, or replayed to a page that
+ *  connects after it), or, for a record a reconnect's replay no longer carries at all, from that record. */
+export type ProvisionalChatDiscardedListener = (discarded: DiscardedChat) => void;
 
 let chats: ChatSnapshot[] = [];
 // The workspace's main chat (the backend's ``main_chat.py``): listed first, and where a text with no chat of its
@@ -274,6 +298,7 @@ let chatsUpdatedListeners: ChatsUpdatedListener[] = [];
 let mentionsUpdatedListeners: (() => void)[] = [];
 let chatActivityListeners: ChatActivityListener[] = [];
 let chatActiveAgentListeners: ChatActiveAgentListener[] = [];
+const provisionalChatDiscardedListeners: ProvisionalChatDiscardedListener[] = [];
 let ws: WebSocket | null = null;
 // Whether the socket has opened before, so an open is a reconnect.
 let hasConnectedBefore = false;
@@ -380,14 +405,21 @@ function handleEvent(event: WsEvent): void {
       provisionalChats = provisionalChats.filter((p) => !registeredIds.has(p.chat_id));
       for (const chatId of registeredIds) settleRegistration(chatId, null);
       if (replayedProvisionalIds !== null) {
-        // The list ends a (re)connect's replay. A record the app did not replay is one it no
-        // longer holds (it restarted while the create ran), so no push is coming for it: the
-        // record goes, and a send held for it proceeds to report the backend's refusal.
+        // The list ends a (re)connect's replay. A record the app neither replayed nor replayed a
+        // discard of is one it forgot (it restarted while the create ran), so no push is coming for
+        // it: the record goes as a discarded one, its own held list standing in for the one the app
+        // no longer has, and a send waiting on it proceeds to report the backend's refusal.
         const replayed = replayedProvisionalIds;
         replayedProvisionalIds = null;
+        const vanished = provisionalChats.filter((p) => !replayed.has(p.chat_id));
         provisionalChats = provisionalChats.filter((p) => replayed.has(p.chat_id));
         for (const chatId of [...registrationWaiters.keys()]) {
           if (getProvisionalChat(chatId) === undefined) settleRegistration(chatId, null);
+        }
+        for (const discarded of vanished) {
+          for (const listener of provisionalChatDiscardedListeners) {
+            listener({ chat_id: discarded.chat_id, held_sends: discarded.held_sends });
+          }
         }
       }
       for (const listener of chatsUpdatedListeners) {
@@ -420,7 +452,10 @@ function handleEvent(event: WsEvent): void {
       replayedProvisionalIds?.add(provisional.chat_id);
       if (provisional.phase !== "awaiting_first_send") launchesInFlight.delete(provisional.chat_id);
       if (provisional.phase === "failed") {
-        settleRegistration(provisional.chat_id, new Error(provisional.error ?? "The chat could not be started"));
+        settleRegistration(
+          provisional.chat_id,
+          new ChatNotStartedError(provisional.error ?? "The chat could not be started"),
+        );
       }
       break;
     }
@@ -432,13 +467,18 @@ function handleEvent(event: WsEvent): void {
       } else if (event.error === null) {
         // Discarded before it launched: gone, with nothing to show.
         provisionalChats = provisionalChats.filter((p) => p.chat_id !== event.chat_id);
-        settleRegistration(event.chat_id, new Error("The chat was closed before it started"));
+        settleRegistration(event.chat_id, new ChatNotStartedError("The chat was closed before it started"));
+        const heldSends = event.held_sends;
+        if (heldSends !== undefined) {
+          for (const listener of provisionalChatDiscardedListeners)
+            listener({ chat_id: event.chat_id, held_sends: heldSends });
+        }
       } else {
         const error = event.error;
         provisionalChats = provisionalChats.map((p) =>
           p.chat_id === event.chat_id ? { ...p, phase: "failed", error } : p,
         );
-        settleRegistration(event.chat_id, new Error(error));
+        settleRegistration(event.chat_id, new ChatNotStartedError(error));
       }
       break;
   }
@@ -474,7 +514,7 @@ function settleRegistration(chatId: string, error: Error | null): void {
 export function refuseSendToFailedChat(chatId: string): void {
   const provisional = getProvisionalChat(chatId);
   if (getChatById(chatId) === undefined && provisional?.phase === "failed") {
-    throw new Error(provisional.error ?? "The chat could not be started");
+    throw new ChatNotStartedError(provisional.error ?? "The chat could not be started");
   }
 }
 
@@ -482,7 +522,7 @@ export function whenChatRegistered(chatId: string): Promise<void> {
   const provisional = getProvisionalChat(chatId);
   if (getChatById(chatId) !== undefined || provisional === undefined) return Promise.resolve();
   if (provisional.phase === "failed") {
-    return Promise.reject(new Error(provisional.error ?? "The chat could not be started"));
+    return Promise.reject(new ChatNotStartedError(provisional.error ?? "The chat could not be started"));
   }
   return new Promise((resolve, reject) => {
     const waiters = registrationWaiters.get(chatId) ?? [];
@@ -568,6 +608,10 @@ export function addChatActivityListener(listener: ChatActivityListener): void {
 
 export function removeChatActivityListener(listener: ChatActivityListener): void {
   chatActivityListeners = chatActivityListeners.filter((l) => l !== listener);
+}
+
+export function addProvisionalChatDiscardedListener(listener: ProvisionalChatDiscardedListener): void {
+  provisionalChatDiscardedListeners.push(listener);
 }
 
 export function addActiveAgentChangedListener(listener: ChatActiveAgentListener): void {

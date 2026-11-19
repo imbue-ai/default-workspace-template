@@ -33,6 +33,7 @@ vi.mock("../models/ModelSettings", () => ({
   effectiveChoice: () => settingsState.choice,
   changedAxes: () => ["model"],
   setModelChoice: () => undefined,
+  addModelChoiceFailureListener: () => undefined,
 }));
 
 const providerState: { accounts: unknown[] } = { accounts: [] };

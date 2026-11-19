@@ -62,6 +62,7 @@ from imbue.chat.harnesses.codex.tool_labels import is_single_delegated_call
 from imbue.chat.harnesses.codex.tool_labels import shell_command
 from imbue.chat.harnesses.codex.tool_labels import shell_commands
 from imbue.chat.harnesses.codex.tool_labels import tool_labels
+from imbue.chat.harnesses.error_patterns import CONTEXT_TOO_LONG_KIND
 from imbue.chat.harnesses.error_patterns import classify_api_error
 from imbue.chat.harnesses.error_patterns import is_provider_fault
 from imbue.chat.harnesses.events import DisplayKind
@@ -101,7 +102,7 @@ _CODEX_ERROR_KINDS: Final[dict[str, str]] = {
     "rate_limit_exceeded": "rate_limit",
     "rate_limit": "rate_limit",
     "overloaded": "overloaded",
-    "context_window_exceeded": "request_too_large",
+    "context_window_exceeded": CONTEXT_TOO_LONG_KIND,
 }
 
 

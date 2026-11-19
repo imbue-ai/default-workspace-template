@@ -53,6 +53,25 @@ def test_a_server_error_with_no_status_is_not_blamed_on_the_provider() -> None:
     assert is_provider_fault(notice.api_error_kind) is False
 
 
+@pytest.mark.parametrize(
+    ("record", "text"),
+    [
+        pytest.param(
+            _stamped(apiErrorStatus=400, error="invalid_request"),
+            'API Error: 400 {"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"prompt is too long: 214332 tokens > 200000 maximum"}}',
+            id="api-body",
+        ),
+        pytest.param(_stamped(error="invalid_request"), "Prompt is too long", id="claude-codes-own-words"),
+    ],
+)
+def test_a_prompt_too_long_is_its_own_kind_whatever_the_status_says(record: dict[str, Any], text: str) -> None:
+    """The 400 alone would make it an ordinary refused request, which reads as though trying again could help."""
+    notice = classify_error_notice(record, text)
+    assert notice.is_api_error is True
+    assert notice.api_error_kind == "context_too_long"
+
+
 def test_a_404_names_the_model_rather_than_the_provider() -> None:
     notice = classify_error_notice(
         _stamped(apiErrorStatus=404, error="model_not_found"),

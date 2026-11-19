@@ -8,8 +8,9 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getActiveDesktopId, getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { isHandoffPromptChip } from "./handoffPrompt";
 import { dropOutgoingByMessageId, noteBackendArrivals } from "./OutgoingMessages";
+import type { Failure } from "@imbue/workspace-ui/src/models/failure";
+import { describeRequestFailure, isUnansweredRequest } from "@imbue/workspace-ui/src/models/request-error";
 import { ensureParticipantsKnowAuthors } from "./Participants";
-import { describeRequestError, isUnansweredRequest } from "@imbue/workspace-ui/src/models/request-error";
 
 export interface SubagentMetadata {
   agent_type: string;
@@ -116,8 +117,11 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   display_body?: string;
   // permission_resolution / secret_resolution only: the verdict written onto the
   // earlier card (granted / denied / error for a permission card; stored / declined /
-  // superseded for a secret card).
-  resolution?: "granted" | "denied" | "error" | "stored" | "declined" | "superseded";
+  // superseded for a secret card). notice only: failed, for a background task that did
+  // not exit cleanly.
+  resolution?: "granted" | "denied" | "error" | "stored" | "declined" | "superseded" | "failed";
+  // notice only: what goes behind "See details" (a failed task's exit code or signal).
+  display_details?: string;
   // permission_resolution / secret_resolution only: the resolved request's own id,
   // when the notice carries one (absent for a permission notice recorded before
   // request-id embedding shipped, which the walk instead correlates by arrival
@@ -578,7 +582,7 @@ const loadedChatIds = new Set<string>();
 export interface TranscriptLoadState {
   readonly phase: "idle" | "loading" | "error";
   /** Why it failed. Set when `phase` is "error", null otherwise. */
-  readonly error: string | null;
+  readonly error: Failure | null;
 }
 
 const IDLE_LOAD_STATE: TranscriptLoadState = { phase: "idle", error: null };
@@ -930,10 +934,7 @@ async function loadSnapshot(chatId: string): Promise<TranscriptEvent[]> {
       if (requestError.code === 404) {
         notFoundChatIds.add(chatId);
       }
-      loadStateByChat.set(chatId, {
-        phase: "error",
-        error: describeRequestError(error, "read"),
-      });
+      loadStateByChat.set(chatId, { phase: "error", error: describeRequestFailure(error, "read") });
     }
     throw error;
   }

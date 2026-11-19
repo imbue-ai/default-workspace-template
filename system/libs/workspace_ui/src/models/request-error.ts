@@ -89,6 +89,8 @@ export type SendFailureKind =
   | "agent_not_found"
   | "not_submitted"
   | "submission_unconfirmed"
+  | "account_signed_out"
+  | "chat_gone"
   | "unknown";
 
 const KNOWN_SEND_FAILURE_KINDS: ReadonlySet<string> = new Set([
@@ -99,6 +101,8 @@ const KNOWN_SEND_FAILURE_KINDS: ReadonlySet<string> = new Set([
   "agent_not_found",
   "not_submitted",
   "submission_unconfirmed",
+  "account_signed_out",
+  "chat_gone",
 ]);
 
 export function describeRequestErrorKind(error: unknown): SendFailureKind {
