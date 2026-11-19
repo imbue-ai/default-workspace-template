@@ -443,7 +443,9 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    that it couldn't be fully put back. Never re-apply on your own: the change
    may be what restarted the workspace, and a retry could do it again. On a
    partial rollback, finish the restore first, as `update-self`'s
-   `apply-outcomes.md` ("A partial restore at boot") says. Then check the
+   `apply-outcomes.md` ("A partial restore at boot") says, with
+   `python3 .agents/skills/update-self/scripts/update_self.py finish-restore`.
+   Then check the
    workspace is healthy, tear down as step 4 does after a failed apply, and
    tell the user in a line or two how it checked out. A retry the user asks
    for is a fresh pass off the current `HEAD`.

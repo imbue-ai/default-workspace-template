@@ -126,10 +126,12 @@ path it belongs at, under `unrestored` in `emergency.json`. Fix what stopped
 the restore (its reason says what failed); ask the user before deleting
 anything of theirs to free space. Then put the copies back with the same
 restore `recover` attempted, which also relinks a tool environment's
-entrypoints:
+entrypoints (after a critical app's go-live, run the workspace's own
+`.agents/skills/update-self/scripts/update_self.py`, as that flow does):
 
 ```bash
-python3 .agents/skills/update-self/scripts/update_self.py finish-restore
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    finish-restore
 ```
 
 It exits 0 once every copy is back, and 3 naming the ones that still would
