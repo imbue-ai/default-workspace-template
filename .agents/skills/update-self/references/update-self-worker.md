@@ -91,6 +91,14 @@ Triage each conflict; the first rule that applies wins:
   --package-lock-only` for npm) and `git add` the result.
 - **Agent-owned files -> keep local** (`PURPOSE.md`, `data/`):
   `git checkout --ours -- <path> && git add <path>`.
+- **The template's changelog -> take the target's side**: `git checkout
+  --theirs -- <path> && git add <path>` for the root `CHANGELOG.md` and
+  `UNABRIDGED_CHANGELOG.md`, and `git rm <path>` for a `changelog/` entry file
+  the target deletes (its text has moved into those two files). When the
+  workspace's side holds text the target's lacks (its own lines in a root
+  file, or its edit to an entry file), first save the workspace's version to a
+  new path outside any `changelog/` folder (`git show :2:<path> > <new path>`)
+  and name the move in your report.
 - **Mixed files (`CLAUDE.md` and similar) -> merge by judgment.** Keep the
   agent-specific customizations, fold in the upstream additions. Side-picking
   one side of a code file outside the agent-owned rule is a last resort, and
@@ -528,8 +536,15 @@ fallback is a restart.
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    changelog-entries --base "$BASE" --target "$TARGET_REF"
+    changelog-entries --base "$BASE" --target "$TARGET_REF" \
+    --out data/.tasks/update-self/whats-new.md
 ```
+
+`data/.tasks/update-self/whats-new.md` is what you digest: for each release
+newer than the workspace's (`release` in the printed JSON), newest first, its
+section of the target's root `CHANGELOG.md`, plus `[Unreleased]` when the target
+has unreleased changes. `sections` names each one. Repeat any `note` in your
+report. Read a long file in parts.
 
 ## 6. Report back
 
@@ -567,7 +582,8 @@ Valid `name:` values:
 - `done` (`type: status`) -- merged, triaged, validated on `mngr/update-self`.
   The body gives the lead everything for the audit, the apply, and the results
   message:
-  - **What's new** -- a digest of the changelog entries.
+  - **What's new** -- a digest of Step 5's file, release by release, and any
+    `note`.
   - **Conflicts** -- each one and its resolution. For any side-pick, or claim
     that the kept side subsumes the other, list what the discarded side changed
     and where each change ended up, from the base-diff accounting of Step 2.
