@@ -222,8 +222,13 @@ def up(
     """Frame the app as a mock with ``note``, then open (``surface="open"``) or reload (``"refresh"``) its window.
 
     A ``note`` or ``inner_path`` left out is the one the app's frame was last booted
-    with (the page defaults to ``/``); a first frame needs a note.
+    with (the page defaults to ``/``); a first frame needs a note. Refused from a git
+    worktree, whose registry the workspace never reads.
     """
+    if serve_isolated_instance.refuses_registering_from_a_worktree(
+        repo_root, "mock frame", ""
+    ):
+        return 1
     if note is None or inner_path is None:
         recorded = frames.recorded(app_name, repo_root)
         if note is None:

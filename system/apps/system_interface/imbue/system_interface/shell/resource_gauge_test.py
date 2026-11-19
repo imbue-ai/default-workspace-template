@@ -25,6 +25,8 @@ from imbue.system_interface.shell.resource_gauge import NOTIFY_RETRY_SECONDS
 from imbue.system_interface.shell.resource_gauge import NO_READINGS
 from imbue.system_interface.shell.resource_gauge import PUSH_HEARTBEAT_SECONDS
 from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_FILENAME
+from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_STATE_FILENAME
+from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_STATE_FILE_VERSION
 from imbue.system_interface.shell.resource_gauge import ResourceGaugeMonitor
 from imbue.system_interface.shell.resource_gauge import ResourceGaugeSettings
 from imbue.system_interface.shell.resource_gauge import ResourceGaugeSettingsStore
@@ -36,7 +38,6 @@ from imbue.system_interface.shell.resource_gauge import StoppedProgram
 from imbue.system_interface.shell.resource_gauge import describe_agent_notice
 from imbue.system_interface.shell.resource_gauge import describe_alert
 from imbue.system_interface.shell.resource_gauge import describe_notification
-from imbue.system_interface.shell.resource_gauge import describe_stops_notification
 from imbue.system_interface.shell.resource_gauge import estimate_seconds_to_full
 from imbue.system_interface.shell.resource_gauge import format_duration
 from imbue.system_interface.shell.resource_gauge import format_gigabytes
@@ -66,10 +67,15 @@ def _memory(percent: float) -> AmountReading:
 
 
 def _readings(
-    disk_free_gb: float | None = None, memory_percent: float | None = None, seconds_to_full: float | None = None
+    disk_free_gb: float | None = None,
+    memory_percent: float | None = None,
+    seconds_to_full: float | None = None,
+    cpu_recent_percent: float | None = None,
 ) -> ResourceReadings:
     return ResourceReadings(
-        cpu=None,
+        cpu=CpuReading(percent=cpu_recent_percent, recent_percent=cpu_recent_percent, cores=4)
+        if cpu_recent_percent is not None
+        else None,
         memory=_memory(memory_percent) if memory_percent is not None else None,
         disk=_disk(disk_free_gb, seconds_to_full) if disk_free_gb is not None else None,
     )
@@ -121,12 +127,13 @@ class _Harness:
         return [title for title, _ in self.notifier.sent]
 
 
-def test_settings_default_to_a_disk_warning_at_5_gb_left_and_round_trip(tmp_path: Path) -> None:
+def test_settings_default_to_disk_and_sustained_cpu_warnings_and_round_trip(tmp_path: Path) -> None:
     store = ResourceGaugeSettingsStore(state_directory=tmp_path)
     assert store.read() == DEFAULT_RESOURCE_GAUGE_SETTINGS
     assert store.read().visibility == GaugeVisibility.WHEN_WARNING
     assert store.read().disk_warning_free_gb == 5.0
     assert store.read().memory_warning_percent is None
+    assert store.read().cpu_warning_percent == 90
     settings = ResourceGaugeSettings(
         visibility=GaugeVisibility.ALWAYS,
         disk_warning_free_gb=2.5,
@@ -212,7 +219,7 @@ def test_the_cpu_warning_is_judged_on_the_recent_mean_not_the_latest_reading() -
     assert next_warnings(frozenset(), spike, settings) == frozenset()
     sustained = ResourceReadings(cpu=CpuReading(percent=60, recent_percent=85, cores=4), memory=None, disk=None)
     assert next_warnings(frozenset(), sustained, settings) == {GaugeResource.CPU}
-    assert describe_alert(GaugeResource.CPU, sustained, settings).detail == "85% in use over the last two minutes"
+    assert describe_alert(GaugeResource.CPU, sustained, settings).detail == "85% in use over the last five minutes"
 
 
 def test_the_time_to_full_comes_from_the_fill_rate_once_a_minute_of_samples_is_in() -> None:
@@ -260,11 +267,11 @@ def _recent_file(sampled_at: float, usage: float, samples: list[list[float]]) ->
     }
 
 
-def test_the_cpu_reading_averages_the_samples_of_the_last_two_minutes() -> None:
+def test_the_cpu_reading_averages_the_samples_of_the_last_five_minutes() -> None:
     now = 1_000_000.0
     samples = [
-        [(now - 300) * 1000, 1.0, 0.5],
-        [(now - 100) * 1000, 0.5, 0.5],
+        [(now - 400) * 1000, 1.0, 0.5],
+        [(now - 290) * 1000, 0.5, 0.5],
         [(now - 10) * 1000, 0.7, 0.5],
     ]
     reading = parse_cpu_reading(_recent_file(now - 2, 0.25, samples), now)
@@ -283,7 +290,24 @@ def test_a_stale_foreign_or_missing_cpu_reading_is_none(tmp_path: Path) -> None:
     (tmp_path / "recent.json").write_text(json.dumps(_recent_file(now, 0.5, [])))
     reading = read_cpu(tmp_path / "recent.json", clock=lambda: now)
     assert reading is not None
-    assert reading.recent_percent == pytest.approx(50.0)
+    assert reading.percent == pytest.approx(50.0)
+    assert reading.recent_percent is None
+
+
+def test_the_cpu_has_no_recent_mean_until_the_sampler_covers_the_whole_window() -> None:
+    now = 1_000_000.0
+    # A sampler that started three minutes ago at full use: not yet five minutes of load.
+    young = [[(now - age) * 1000, 1.0, 0.5] for age in range(180, 0, -5)]
+    reading = parse_cpu_reading(_recent_file(now, 1.0, young), now)
+    assert reading is not None and reading.recent_percent is None
+    settings = ResourceGaugeSettings(disk_warning_free_gb=None)
+    assert next_warnings(frozenset(), ResourceReadings(cpu=reading, memory=None, disk=None), settings) == frozenset()
+    full = [[(now - age) * 1000, 1.0, 0.5] for age in range(305, 0, -5)]
+    reading = parse_cpu_reading(_recent_file(now, 1.0, full), now)
+    assert reading is not None and reading.recent_percent == pytest.approx(100.0)
+    assert next_warnings(frozenset(), ResourceReadings(cpu=reading, memory=None, disk=None), settings) == {
+        GaugeResource.CPU
+    }
 
 
 def test_the_monitor_notifies_once_per_warning_and_again_only_after_it_cleared(tmp_path: Path) -> None:
@@ -306,6 +330,18 @@ def test_a_restart_of_the_shell_does_not_notify_a_standing_warning_again(tmp_pat
     harness.read(restarted, disk_free_gb=30.0)
     harness.read(restarted, disk_free_gb=2.0)
     assert len(harness.titles()) == 2
+
+
+def test_a_sustained_cpu_warning_shows_in_the_tray_and_tells_the_agents_but_sends_no_notification(
+    tmp_path: Path,
+) -> None:
+    harness = _Harness(tmp_path)
+    harness.read(disk_free_gb=50.0, cpu_recent_percent=95.0)
+    assert [alert.resource for alert in harness.monitor.view().alerts] == [GaugeResource.CPU]
+    assert harness.pushed[-1].alerts[0].headline == "CPU is busy"
+    assert "CPU is busy" in (tmp_path / AGENT_NOTICE_FILENAME).read_text()
+    harness.read(disk_free_gb=4.0, cpu_recent_percent=95.0)
+    assert harness.titles() == ["Disk space is low: 4.0 GB left"]
 
 
 def test_a_notification_that_could_not_be_delivered_is_retried_after_a_minute(tmp_path: Path) -> None:
@@ -343,22 +379,34 @@ def test_the_disks_projection_comes_from_the_monitors_own_samples(tmp_path: Path
     assert disk is not None and disk.seconds_to_full == pytest.approx(38 * 60.0, rel=0.01)
 
 
-def test_programs_the_memory_guard_stops_are_reported_but_not_the_ledgers_history(tmp_path: Path) -> None:
+def test_programs_the_memory_guard_stops_are_listed_but_never_notified(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
-    harness.stops = [StoppedProgram(at="2026-11-12T10:00:00.000000Z", what="a background program")]
+    harness.now = 1_800_000_000.0
     harness.read(disk_free_gb=50.0)
-    assert harness.titles() == []
     harness.stops = [
-        *harness.stops,
-        StoppedProgram(at="2026-11-12T10:05:00.000000Z", what="the Report chat's agent"),
+        StoppedProgram(at="2027-01-15T07:00:00.000000Z", what="a background program"),
+        StoppedProgram(at="2027-01-15T07:30:00.000000Z", what="the Report chat's agent"),
     ]
     harness.read()
-    assert harness.notifier.sent == [("Stopped the Report chat's agent to free memory", GaugeResource.MEMORY)]
-    harness.read()
     harness.read(harness.build())
-    assert len(harness.titles()) == 1
-    title, _ = describe_stops_notification(harness.stops)
-    assert title == "Stopped 2 programs to free memory"
+    assert harness.notifier.sent == []
+    assert [stop.what for stop in harness.monitor.view().recent_stops] == [
+        "the Report chat's agent",
+        "a background program",
+    ]
+
+
+def test_a_state_file_from_before_stops_went_unnotified_still_reads(tmp_path: Path) -> None:
+    (tmp_path / RESOURCE_GAUGE_STATE_FILENAME).write_text(
+        json.dumps(
+            {
+                "version": RESOURCE_GAUGE_STATE_FILE_VERSION,
+                "notified": ["disk"],
+                "last_stop_timestamp": "2026-11-12T10:00:00.000000Z",
+            }
+        )
+    )
+    assert DeliveryStore(state_directory=tmp_path).read() == DeliveryRecord(notified=(GaugeResource.DISK,))
 
 
 def test_the_view_lists_the_last_days_stops_newest_first(tmp_path: Path) -> None:
@@ -434,7 +482,7 @@ def test_a_monitor_with_no_notifier_raises_warnings_and_tells_nobody(tmp_path: P
     harness.read(disk_free_gb=2.0)
     assert [alert.severity for alert in harness.monitor.view().alerts] == [AlertSeverity.WARNING]
     assert harness.titles() == []
-    assert DeliveryStore(state_directory=tmp_path).read() == DeliveryRecord(notified=(), last_stop_timestamp="")
+    assert DeliveryStore(state_directory=tmp_path).read() == DeliveryRecord()
 
 
 _NOTIFICATIONS_PATH = "/minds-api-proxy/api/v1/agents/agent-services/notifications"

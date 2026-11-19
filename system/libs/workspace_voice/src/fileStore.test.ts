@@ -47,6 +47,24 @@ describe("the Cache Storage file store", () => {
     expect(new Set(opened)).toEqual(new Set([PINNED_FILE_CACHE_NAME]));
   });
 
+  it("says whether a URL is kept, and no for a cache it cannot open", async () => {
+    const { storage } = fakeStorage();
+    const store = cacheStorageFileStore(storage);
+    const url = `${REPO}resolve/abc/config.json`;
+    expect(await store.has(url)).toBe(false);
+    await store.write(url, new ArrayBuffer(1));
+    expect(await store.has(url)).toBe(true);
+    expect(await store.has(`${REPO}resolve/abc/tokenizer.json`)).toBe(false);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const broken = cacheStorageFileStore({
+      open: async () => {
+        throw new Error("no storage in this context");
+      },
+    });
+    expect(await broken.has(url)).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
   it("prunes the engine's other entries and leaves other engines' alone", async () => {
     const { storage, entries } = fakeStorage();
     const store = cacheStorageFileStore(storage);
@@ -79,6 +97,7 @@ describe("the Cache Storage file store", () => {
     expect(store).toBe(NO_FILE_STORE);
     await store.write("x", new ArrayBuffer(1));
     expect(await store.read("x")).toBeNull();
+    expect(await store.has("x")).toBe(false);
     vi.unstubAllGlobals();
   });
 });

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DICTATION_NOTE } from "../models/dictationNote";
 import type { AssistantMessageEvent, TranscriptEvent, UserMessageEvent } from "../models/Response";
 import { computeAuthErrorHiddenEventIds, messagesToSendAgain, refusedTurns } from "./auth-recovery";
 
@@ -56,6 +57,12 @@ describe("computeAuthErrorHiddenEventIds", () => {
     ["ahead of the message, before its copy is answered", [REFUSED, ASKED, COPY]],
   ])("hides the refused message and its failure once a copy is sent: failure %s", (_case, events) => {
     expect(computeAuthErrorHiddenEventIds(events)).toEqual(new Set(["asked", "refused"]));
+  });
+
+  it("counts the same words typed again as the copy of a dictated message, whose note is not among its words", () => {
+    const dictated = typed("asked", `what is 2+2?\n\n${DICTATION_NOTE}`, ASKED.timestamp);
+
+    expect(computeAuthErrorHiddenEventIds([dictated, REFUSED, COPY, ANSWER])).toEqual(new Set(["asked", "refused"]));
   });
 
   it("hides nothing while the refused message exists only once", () => {

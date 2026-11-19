@@ -29,6 +29,7 @@ from workspace_layout.primitives import ChatActivityKind
 from workspace_layout.primitives import ChatActivityStatus
 from workspace_layout.primitives import ParticipantKey
 
+from imbue.chat.dictation_note import without_dictation_notes
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
@@ -44,8 +45,9 @@ CHATS_ACTIVITY_REPOST_INTERVAL_SECONDS: Final[float] = 60.0
 
 @pure
 def bubble_text(text: str) -> str:
-    """What a bubble shows of a message: its first ``BUBBLE_TEXT_LIMIT`` characters, the ends trimmed."""
-    return text.strip()[:BUBBLE_TEXT_LIMIT]
+    """What a bubble shows of a message: its first ``BUBBLE_TEXT_LIMIT`` characters, the ends trimmed, and never
+    the note a dictated message carries for the model."""
+    return without_dictation_notes(text).strip()[:BUBBLE_TEXT_LIMIT]
 
 
 def _settled_future() -> Future[None]:
