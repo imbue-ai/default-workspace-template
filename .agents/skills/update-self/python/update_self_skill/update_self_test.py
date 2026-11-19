@@ -5536,8 +5536,10 @@ def test_every_bands_attribute_the_script_reads_is_declared_required() -> None:
         (["--repo-root", "/w", "apply", "--merge-ref", "x"], "/w"),
         (["apply", "--repo-root", "/w", "--merge-ref", "x"], "/w"),
         (["apply", "--repo-root=/w"], "/w"),
-        # Only the two motions that can be interrupted half-way through
-        # replacing what the workspace runs band themselves.
+        (["rollback-last"], "cwd"),
+        (["finish-restore", "--repo-root", "/w"], "/w"),
+        # Only the motions that can be interrupted half-way through replacing
+        # what the workspace runs band themselves.
         (["resolve-target", "--local-tags"], None),
         (["classify-merge", "--target", "main"], None),
         ([], None),
@@ -5551,13 +5553,15 @@ def test_every_bands_attribute_the_script_reads_is_declared_required() -> None:
         "repo-root-before",
         "repo-root-after",
         "repo-root-equals",
+        "rollback-last",
+        "finish-restore",
         "resolve-target",
         "classify-merge",
         "no-args",
         "apply-as-a-flag-value",
     ],
 )
-def test_only_apply_and_recover_band_themselves(
+def test_only_the_restoring_motions_band_themselves(
     argv: list[str], expected: str | None
 ) -> None:
     # Getting this wrong runs the apply unbanded, so a memory shed can kill the

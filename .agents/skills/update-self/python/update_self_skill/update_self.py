@@ -1728,12 +1728,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def shed_protection_target(argv: Sequence[str]) -> Path | None:
-    """The repo root to band for when ``argv`` names apply/recover, else None.
+    """The repo root to band for when ``argv`` names a banded motion, else None.
 
-    Only those two band themselves: they are the motions that can be
-    interrupted half-way through replacing what the workspace runs, and the
-    ones holding the only copies of what it ran before. A crude parse rather
-    than argparse, because banding must happen before ``main`` does anything.
+    Only apply, recover, rollback-last and finish-restore band themselves: they
+    are the motions that can be interrupted half-way through replacing what the
+    workspace runs, and the ones holding the only copies of what it ran before.
+    A crude parse rather than argparse, because banding must happen before
+    ``main`` does anything.
     """
     tokens = list(argv)
     repo_root = Path.cwd()
@@ -1752,6 +1753,6 @@ def shed_protection_target(argv: Sequence[str]) -> Path | None:
         if subcommand is None and not token.startswith("-"):
             subcommand = token
         index += 1
-    if subcommand in ("apply", "recover", "rollback-last"):
+    if subcommand in ("apply", "recover", "rollback-last", "finish-restore"):
         return repo_root
     return None
