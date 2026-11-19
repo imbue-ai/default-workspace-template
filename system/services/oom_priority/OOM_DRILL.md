@@ -21,12 +21,26 @@ base64-encoded:
 mngr exec <agent> "echo $(base64 < system/services/oom_priority/bin/oom_drill.py | tr -d '\n') | base64 -d | python3 -"
 ```
 
+The drill must be able to set its own `oom_score_adj` to -1000, which root can
+under gVisor and on a Lima VM but not in a local Docker container under runc
+(Docker withholds `CAP_SYS_RESOURCE`), where it fails at once with a
+`PermissionError`. There, run it from the machine hosting the container:
+
+```bash
+docker exec --privileged -i <container> python3 - < system/services/oom_priority/bin/oom_drill.py
+```
+
 The drill sheds processes for real, so run it only on a disposable workspace,
-never a user's. Stop the browser and every chat first, so the drill's sleepers
+never a user's. Stop the browser, every chat and the Screen's desktop first
+(`supervisorctl stop screen-watch 'screen-stack:*'`), so the drill's sleepers
 are what earlyoom has to choose from. Anything still running that outranks a
 sleeper is shed before it, for real, so keep the lowest band above what
 remains: the built-in services sit at 5-86, and on a Lima workspace the
-terminal's shell and the rootless Docker daemons sit at 200.
+terminal's shell and the rootless Docker daemons sit at 200. The desktop is
+worth stopping even though the drill judges its kills too: shedding one of its
+members makes the watcher stop the rest within a fraction of a second, sooner
+than the drill's once-a-second snapshot can see, so the drill can call the next
+pick a wrong victim.
 
 ## 0. Confirm earlyoom is running
 
@@ -53,7 +67,7 @@ cat /proc/$(pgrep -f system-interface | head -1)/oom_score_adj   # 20
 cat /proc/$(pgrep -x supervisord | head -1)/oom_score_adj        # 0
 # With the browser open, the Screen's sweep moves Chromium's processes to 910
 # (its main process), 943 (GPU and utility) and 960 (the processes that draw tabs):
-for pid in $(pgrep -x tilion); do echo "$pid $(cat /proc/$pid/oom_score_adj)"; done
+for pid in $(pgrep -x chrome); do echo "$pid $(cat /proc/$pid/oom_score_adj)"; done
 ```
 
 ## 2. Trigger a shed with a memory hog
