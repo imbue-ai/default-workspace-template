@@ -265,6 +265,14 @@ function isTkLifecycleCall(tc: ToolCall): boolean {
   return tc.display === "hidden";
 }
 
+/** True when a tool call ran a tk lifecycle command that failed before tk printed anything: the
+ *  step hooks refused it (a `cd` before a `tk close`), so it did no work and moved no step. Counting
+ *  it as work would turn a line the agent said just before closing a step into mid-step narration. */
+function isRefusedTkCall(tc: ToolCall, toolResults: Map<string, ToolResultEvent>): boolean {
+  const toolResult = toolResults.get(tc.tool_call_id);
+  return tkCommand(tc) !== null && toolResult?.is_error === true && !toolResult.tk_stamp;
+}
+
 /** True when an assistant message FILED a permission request -- one the user can
  *  still answer. A call the harness refused never reached the gateway, so it
  *  neither breaks out of its step nor takes a place in the queue a later verdict
@@ -432,9 +440,11 @@ function parseMessage(e: AssistantMessageEvent, toolResults: Map<string, ToolRes
   }
 
   // Only a recognised, pure tk lifecycle call is hidden from the rendered
-  // output. Anything else (including a command that merely mentions a tk verb)
-  // renders as normal work, so real work is never silently dropped.
-  const realCalls = e.tool_calls.filter((tc) => !isTkLifecycleCall(tc));
+  // output, and a tk call that failed without tk printing a line (refused before
+  // it ran, as the step hooks refuse `cd x && tk close s1`): it did no work. Anything
+  // else (including a command that merely mentions a tk verb) renders as normal
+  // work, so real work is never silently dropped.
+  const realCalls = e.tool_calls.filter((tc) => !isTkLifecycleCall(tc) && !isRefusedTkCall(tc, toolResults));
   if (realCalls.length === e.tool_calls.length) {
     return { transitions, render: e };
   }

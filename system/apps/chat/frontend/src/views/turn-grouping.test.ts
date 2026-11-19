@@ -833,6 +833,45 @@ describe("narration and close-time ejection", () => {
     expect(afterNotice.live_step_id).toBeNull();
   });
 
+  // Agents often write `cd x && tk close s1`, which the step hooks refuse before it runs. The refused
+  // call did no work, so a finding said just before it is still the step's closing remark (seen in a
+  // real Opus run that followed the instruction to say findings before closing the step).
+  it("shows a line said before a refused tk call and the close that follows as the step's closing remark", () => {
+    const refusedClose: AssistantMessageEvent = {
+      ...bashMsg("t4", "cd /repo && tk close s1 done", "t4"),
+      tool_calls: [
+        {
+          ...bashMsg("t4", "cd /repo && tk close s1 done", "t4").tool_calls[0],
+          tk_command: "cd /repo && tk close s1 done",
+        },
+      ],
+    };
+    const events = [
+      userMsg("t0", "summarize each app; tell me anything surprising"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Read the shorter app write-ups")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      assistantText("t3", "Datalib stays off by default, and its server can run shell commands.", "finding"),
+      refusedClose,
+      { ...result("t4", "t4", ""), is_error: true, tk_stamp: undefined },
+      tkMsg("t5", "tk close s1 done; tk start s2", "t5"),
+      result(
+        "t5",
+        "t5",
+        `${closeOut("s1", "Read the shorter app write-ups", "Read them")}\n${startOut("s2", "Read the rest")}`,
+      ),
+      workMsg("t6", "Bash", "w2"),
+      result("t6", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const inlineIds = sections[0].items.flatMap((item) =>
+      item.kind === "ungrouped" ? item.events.flatMap((part) => ("event_id" in part ? [part.event_id] : [])) : [],
+    );
+    expect(inlineIds).toEqual(["finding"]);
+    expect(stepItems(sections[0].items)[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
+  });
+
   // Sent after the agent stopped (a Stop, or a turn's end), a message starts a new turn: once the agent
   // takes up a step, its progress lines stay that step's captions.
   it("keeps progress lines in the steps after a message that started a new turn", () => {

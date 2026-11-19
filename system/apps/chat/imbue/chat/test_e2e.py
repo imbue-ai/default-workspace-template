@@ -704,7 +704,10 @@ def test_a_stretch_of_the_agents_output_is_prose_bubbles_and_work_on_one_line(tm
 
 def _bash_line(uuid: str, timestamp: str, tool_use_id: str, command: str) -> dict[str, Any]:
     return _assistant_line(
-        uuid, timestamp, [{"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {"command": command}}], "tool_use"
+        uuid,
+        timestamp,
+        [{"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {"command": command}}],
+        "tool_use",
     )
 
 
@@ -731,7 +734,9 @@ def _question_mid_task_session(question_line: dict[str, Any]) -> list[dict[str, 
         _bash_line("uuid-mt-4", "2026-01-01T00:00:03Z", "toolu_mt2", "cat system/apps/chat/README.md"),
         _tool_result_line("uuid-mt-5", "2026-01-01T00:00:04Z", "toolu_mt2", "readme"),
         question_line,
-        _bash_line("uuid-mt-7", "2026-01-01T00:00:06Z", "toolu_mt3", "tk close ws-step-chat done; tk start ws-step-data"),
+        _bash_line(
+            "uuid-mt-7", "2026-01-01T00:00:06Z", "toolu_mt3", "tk close ws-step-chat done; tk start ws-step-data"
+        ),
         _tool_result_line(
             "uuid-mt-8",
             "2026-01-01T00:00:07Z",
@@ -784,6 +789,70 @@ def test_a_progress_line_after_a_message_that_started_a_turn_stays_in_its_step(t
         expect(chat.locator(".message-user", has_text="Which app folder is the biggest?")).to_be_visible(timeout=15000)
         expect(chat.get_by_text("Summarize the data library", exact=True)).to_be_visible()
         expect(chat.locator("[data-machine-bubble]", has_text="The chat folder is the biggest")).to_have_count(0)
+
+
+_REFUSED_CLOSE_SESSION: list[dict[str, Any]] = [
+    {
+        "type": "user",
+        "uuid": "uuid-rc-1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "message": {"role": "user", "content": "Summarize each app; tell me anything surprising"},
+    },
+    _bash_line("uuid-rc-2", "2026-01-01T00:00:01Z", "toolu_rc1", "tk start ws-step-short"),
+    _tool_result_line(
+        "uuid-rc-3",
+        "2026-01-01T00:00:02Z",
+        "toolu_rc1",
+        "Updated ws-step-short -> in_progress\ntk-step ws-step-short title: Read the shorter write-ups",
+    ),
+    _bash_line("uuid-rc-4", "2026-01-01T00:00:03Z", "toolu_rc2", "cat system/apps/datalib/README.md"),
+    _tool_result_line("uuid-rc-5", "2026-01-01T00:00:04Z", "toolu_rc2", "readme"),
+    _text_line(
+        "uuid-rc-6", "2026-01-01T00:00:05Z", "Datalib stays off by default, and its server can run shell commands."
+    ),
+    _bash_line("uuid-rc-7", "2026-01-01T00:00:06Z", "toolu_rc3", "cd /repo && tk close ws-step-short done"),
+    {
+        "type": "user",
+        "uuid": "uuid-rc-8",
+        "timestamp": "2026-01-01T00:00:07Z",
+        "message": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_rc3",
+                    "is_error": True,
+                    "content": "PreToolUse:Bash hook error: Blocked: a `tk start` / `tk close` may share its tool call "
+                    "only with other tk commands",
+                }
+            ],
+        },
+    },
+    _bash_line("uuid-rc-9", "2026-01-01T00:00:08Z", "toolu_rc4", "tk close ws-step-short done"),
+    _tool_result_line(
+        "uuid-rc-10",
+        "2026-01-01T00:00:09Z",
+        "toolu_rc4",
+        "Updated ws-step-short -> closed\ntk-step ws-step-short title: Read the shorter write-ups\n"
+        "tk-step ws-step-short summary: Read them",
+    ),
+    _assistant_line(
+        "uuid-rc-11", "2026-01-01T00:00:10Z", [{"type": "text", "text": "I wrote a summary of each app."}], "end_turn"
+    ),
+]
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_finding_said_before_a_refused_close_is_a_bubble(tmp_path: Path, page: Page) -> None:
+    """The agent says a finding at the end of a step, then its first try at closing the step is refused (a `cd`
+    before `tk close`): the refused call did no work, so the finding is a bubble, not folded into the step."""
+    with _running_e2e_server(tmp_path, session_events=_REFUSED_CLOSE_SESSION) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator("[data-machine-bubble]", has_text="I wrote a summary of each app.")).to_be_visible(
+            timeout=15000
+        )
+        expect(chat.locator("[data-machine-bubble]", has_text="Datalib stays off by default")).to_be_visible()
 
 
 @pytest.mark.timeout(60, func_only=False)
