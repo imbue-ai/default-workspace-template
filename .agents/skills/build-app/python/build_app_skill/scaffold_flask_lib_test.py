@@ -872,6 +872,12 @@ def test_a_scaffolded_app_is_a_standalone_project_that_boots_from_its_own_venv(
         for package in root_lock["package"]
         if package["name"] == "imbue-common"
     )
+    # The harden pass's browser tests run from this venv, which the repo root's does not reach.
+    assert by_name["playwright"]["version"] == root_versions["playwright"]
+    assert "pytest-timeout" in by_name
+    pyproject = tomllib.loads((app / "pyproject.toml").read_text())
+    marks = pyproject["tool"]["pytest"]["ini_options"]["markers"]
+    assert {mark.split(":")[0] for mark in marks} == {"browser", "frontend"}
     # The program line, run as supervisord would (less the registration with the shell,
     # which needs a live workspace), boots the app from its own venv.
     command = configparser.RawConfigParser()
