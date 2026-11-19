@@ -60,7 +60,6 @@ from update_self_skill.update_apply_contract import (
     read_marker,
     rollback_lock_path,
     snapshots_root,
-    unrestored_snapshots,
     write_emergency,
     write_last_good,
     write_marker,
@@ -2477,7 +2476,7 @@ def finish_restore(repo_root: Path, *, now: Callable[[], float] = time.time) -> 
             return 1
         sys.stderr.write("no emergency is recorded; nothing to put back.\n")
         return 0
-    snapshots = unrestored_snapshots(record)
+    snapshots = record.unrestored
     if snapshots is None:
         sys.stderr.write(
             "error: the emergency record keeps no readable list of unrestored copies (it "
@@ -2499,8 +2498,8 @@ def finish_restore(repo_root: Path, *, now: Callable[[], float] = time.time) -> 
     remaining = [s for s in snapshots if s.name in failed]
     write_emergency(
         repo_root,
-        str(record.get("reason", "")),
-        str(record.get("dri_agent", "")),
+        record.reason,
+        record.dri_agent,
         now,
         unrestored=remaining,
     )

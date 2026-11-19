@@ -787,6 +787,62 @@ def emergency_path(repo_root: Path) -> Path:
     return repo_root / STATE_DIR_REL / EMERGENCY_FILENAME
 
 
+@dataclass
+class EmergencyRecord:
+    """A rollback that left the workspace unhealthy, as ``emergency.json`` keeps it.
+
+    ``unrestored`` are the pre-apply copies a boot-time rollback could not put
+    back, each with the path it belongs at: the marker that named those paths
+    is gone, and ``finish-restore`` puts them back from this record. ``None``
+    (every other emergency) leaves the field out, so a record that never had
+    such a list is not read as one whose copies are all back.
+    """
+
+    reason: str
+    recorded_at: float
+    dri_agent: str
+    snapshots_dir: str
+    unrestored: list[SnapshotRecord] | None = None
+
+    def to_json(self) -> str:
+        payload: dict[str, object] = {
+            "reason": self.reason,
+            "recorded_at": self.recorded_at,
+            "dri_agent": self.dri_agent,
+            "snapshots_dir": self.snapshots_dir,
+        }
+        if self.unrestored is not None:
+            payload["unrestored"] = [s.to_payload() for s in self.unrestored]
+        return json.dumps(payload, indent=2)
+
+    @classmethod
+    def from_json(cls, text: str) -> EmergencyRecord:
+        """Raises ``ValueError`` for a record that cannot be read whole: an
+        ``unrestored`` entry skipped here would be dropped from the record and its
+        copy discarded."""
+        raw = json.loads(text)
+        if not isinstance(raw, dict):
+            raise ValueError(f"expected a JSON object, got {type(raw).__name__}")
+        entries = raw.get("unrestored")
+        if entries is not None and not (
+            isinstance(entries, list)
+            and all(
+                isinstance(e, dict) and {"name", "source", "copy"} <= e.keys()
+                for e in entries
+            )
+        ):
+            raise ValueError("its unrestored list is malformed")
+        return cls(
+            reason=str(raw.get("reason", "")),
+            recorded_at=float(raw.get("recorded_at", 0.0)),
+            dri_agent=str(raw.get("dri_agent", "")),
+            snapshots_dir=str(raw.get("snapshots_dir", "")),
+            unrestored=None
+            if entries is None
+            else [SnapshotRecord.from_payload(e) for e in entries],
+        )
+
+
 def write_emergency(
     repo_root: Path,
     reason: str,
@@ -801,31 +857,24 @@ def write_emergency(
     cron, bootstrap) carry no ``MNGR_AGENT_NAME`` at all, and an agent-driven
     ``recover`` carries the *recovering* agent rather than the one whose apply
     failed. The marker is the only other place that name lives and it comes
-    down on this same path.
-
-    ``unrestored`` are the pre-apply copies a boot-time rollback could not put
-    back, each with the path it belongs at: the marker that named those paths
-    is gone, and ``finish-restore`` puts them back from this record. ``None``
-    (every other emergency) leaves the field out, so a record that never had
-    such a list is not read as one whose copies are all back.
+    down on this same path. ``unrestored`` is :class:`EmergencyRecord`'s.
 
     Best-effort: this runs on the way out of a failure that has already been
     written to stderr in full, so a filesystem that will not take the record
     must not turn a reported emergency into a traceback.
     """
     path = emergency_path(repo_root)
+    record = EmergencyRecord(
+        reason=reason,
+        recorded_at=now(),
+        dri_agent=dri_agent,
+        snapshots_dir=str(snapshots_root(repo_root)),
+        unrestored=None if unrestored is None else list(unrestored),
+    )
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         scratch = path.with_suffix(".json.tmp")
-        record: dict[str, object] = {
-            "reason": reason,
-            "recorded_at": now(),
-            "dri_agent": dri_agent,
-            "snapshots_dir": str(snapshots_root(repo_root)),
-        }
-        if unrestored is not None:
-            record["unrestored"] = [s.to_payload() for s in unrestored]
-        scratch.write_text(json.dumps(record, indent=2))
+        scratch.write_text(record.to_json())
         scratch.replace(path)
     except OSError as exc:
         sys.stderr.write(
@@ -833,37 +882,16 @@ def write_emergency(
         )
 
 
-def read_emergency(repo_root: Path) -> dict[str, object] | None:
-    """The emergency record as written, or ``None`` when there is none or it cannot be read."""
+def read_emergency(repo_root: Path) -> EmergencyRecord | None:
+    """The emergency record, or ``None`` when there is none or it cannot be read whole."""
     path = emergency_path(repo_root)
     try:
-        raw = json.loads(path.read_text())
+        return EmergencyRecord.from_json(path.read_text())
     except FileNotFoundError:
         return None
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, TypeError) as exc:
         sys.stderr.write(f"warning: could not read {path} ({exc}).\n")
         return None
-    if not isinstance(raw, dict):
-        sys.stderr.write(f"warning: {path} is not a JSON object.\n")
-        return None
-    return raw
-
-
-def unrestored_snapshots(record: Mapping[str, object]) -> list[SnapshotRecord] | None:
-    """The copies an emergency record names as not put back, or ``None`` for a record that
-    keeps no such list (anything but a boot-time partial restore) or one that cannot be read
-    whole: an entry skipped here would be dropped from the record and its copy discarded."""
-    entries = record.get("unrestored")
-    if not isinstance(entries, list):
-        return None
-    if not all(
-        isinstance(e, dict) and {"name", "source", "copy"} <= e.keys() for e in entries
-    ):
-        sys.stderr.write(
-            "warning: the emergency record's unrestored list is malformed.\n"
-        )
-        return None
-    return [SnapshotRecord.from_payload(e) for e in entries]
 
 
 def clear_emergency(repo_root: Path) -> None:
