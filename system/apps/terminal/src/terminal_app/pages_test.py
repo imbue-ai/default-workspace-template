@@ -14,10 +14,19 @@ from flask.testing import FlaskClient
 from workspace_themes.contract import STANDARD_THEME_ID, TERMINAL_TOKENS
 
 from terminal_app.data_types import TerminalPaths
+from terminal_app.errors import (
+    TerminalAppError,
+    TerminalStoreError,
+    TerminalStoreVersionError,
+    TmuxCommandError,
+    UnknownSessionPageError,
+)
 from terminal_app.pages import (
     NEW_PATH,
+    AgentFix,
     PageConfig,
     SessionPage,
+    page_failure,
     render_page,
 )
 from terminal_app.primitives import VIEWER_ARGUMENT, TerminalTitle, TmuxSessionName
@@ -196,6 +205,30 @@ def test_a_window_while_tmux_cannot_run_asks_to_try_again(
     assert (is_retryable, shell_buttons) == (True, {"agent_fix": None, "is_reportable": False})
     # A launch is answered to the shell, as JSON.
     assert "cannot run" in launch.get_json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        UnknownSessionPageError("no terminal has the name 'a.b'"),
+        TmuxCommandError("tmux did not finish list-sessions within 5.0s"),
+        TerminalStoreVersionError("written by a newer version of the app"),
+        TerminalStoreError("is not valid JSON"),
+        TerminalAppError("unexpected"),
+    ],
+    ids=lambda error: type(error).__name__,
+)
+def test_every_failure_page_that_asks_for_a_bug_report_offers_an_agent_first(error: TerminalAppError) -> None:
+    failure = page_failure(error, "terminal-1")
+
+    if failure.is_reportable:
+        assert failure.agent_fix is not None and failure.agent_fix.details == str(error)
+
+
+def test_the_fallback_failure_page_asks_an_agent_about_the_terminal_it_could_not_open() -> None:
+    assert page_failure(TerminalAppError("unexpected"), "terminal-1").agent_fix == AgentFix(
+        what_failed="The terminal terminal-1 couldn't be opened", details="unexpected"
+    )
 
 
 def test_new_allocates_a_terminal_in_the_posted_workdir_and_answers_its_page_path(

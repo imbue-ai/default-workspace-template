@@ -248,11 +248,13 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   }
 
   // What the pty page says the terminal ended for (dispatch.py's kinds), and what the person can do about it.
-  // The user's own exit sends nothing, so ttyd's overlay, which reconnects, stays the answer to that.
+  // The user's own exit sends nothing, so ttyd's overlay, which reconnects, stays the answer to that. An ending that
+  // asks for a bug report offers an agent first, told what failed (``whatFailed``, read when the ending is shown).
   const NOT_STARTED = {
     message: "This terminal couldn't start. Try again. If this persists, report a bug.",
     cause: "",
-    actions: ["retry", "ask", "report"],
+    actions: ["retry", "report"],
+    whatFailed: () => `The terminal ${current} couldn't start`,
   };
   const ENDINGS = {
     "__ENDED_NOT_STARTED__": NOT_STARTED,
@@ -266,6 +268,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   let endedActions = [];
   let endedDetail = "";
   let endedSentence = "";
+  let endedWhatFailed = null;
   // An ask belongs to the ending it was made about (counted by showEnding) and to its press: an answer for an
   // earlier ending or an earlier press changes nothing on screen.
   let endingCount = 0;
@@ -280,6 +283,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     endedActions = ending.actions;
     endedDetail = detail;
     endedSentence = ending.cause === "" ? ending.message : `${ending.message} ${ending.cause}`;
+    endedWhatFailed = endedActions.includes("report") ? ending.whatFailed() : null;
     document.getElementById("ended-message").textContent = ending.message;
     const cause = document.getElementById("ended-cause");
     cause.textContent = ending.cause;
@@ -298,7 +302,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   // The two buttons that go through the shell show once its handshake says they can work: the agent with any shell,
   // the bug report where the shell's embedder opens one.
   function syncShellButtons() {
-    endedAsk.hidden = !endedActions.includes("ask") || connection === null || !connection.hasShell();
+    endedAsk.hidden = endedWhatFailed === null || connection === null || !connection.hasShell();
     // One Report a bug files the ending and a failed ask's failure together.
     const isReportable = endedActions.includes("report") || askFailure?.isReportable === true;
     endedReport.hidden = !isReportable || connection === null || !connection.canReportBug();
@@ -344,7 +348,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     };
     const outcome = await askAgentToFix(
       connection,
-      { whatFailed: `The terminal ${current} couldn't start`, details: endedDetail || null },
+      { whatFailed: endedWhatFailed, details: endedDetail || null },
       { showsOutcome: true, onLateAnswer: showOutcome },
     );
     if (askingAbout === askedAbout && askPresses === press) askingAbout = null;
@@ -366,6 +370,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
           message: "A new terminal couldn't be opened. Try again. If this persists, report a bug.",
           cause: "",
           actions: ["new", "report"],
+          whatFailed: () => "A new terminal couldn't be opened",
         },
         String(error?.message ?? error),
       );
@@ -816,7 +821,12 @@ def page_failure(error: TerminalAppError, raw_session: str) -> PageFailure:
                 message="This terminal couldn't be opened. Try again. If this persists, report a bug.",
                 details=details,
                 is_retryable=True,
-                agent_fix=None,
+                agent_fix=AgentFix(
+                    what_failed=f"The terminal {raw_session} couldn't be opened"
+                    if raw_session != ""
+                    else "A terminal couldn't be opened",
+                    details=details,
+                ),
                 is_reportable=True,
                 status=HTTP_INTERNAL_ERROR,
             )

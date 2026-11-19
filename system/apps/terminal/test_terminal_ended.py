@@ -73,9 +73,12 @@ def desktop_context(module_browser: Browser) -> Iterator[BrowserContext]:
     context.close()
 
 
-def _serve(context: BrowserContext, wrapper_html: str, can_report_bug: bool = False) -> list[str]:
+def _serve(
+    context: BrowserContext, wrapper_html: str, can_report_bug: bool = False, is_new_refused: bool = False
+) -> list[str]:
     """Serve a shell stand-in saying ``can_report_bug`` and framing ``wrapper_html``, the real ttyd client, the shell's
-    built contract, and the wrapper's ``new`` and session routes; answers the methods ``new`` was asked with."""
+    built contract, and the wrapper's ``new`` (refused with a 500 when ``is_new_refused``) and session routes; answers
+    the methods ``new`` was asked with."""
     client = add_pty_page_script(gzip.decompress(load_ttyd_web_client(None) or b""))
     contract_source = built_app_contract_source()
     stand_in = shell_stand_in_page(_WRAPPER_URL, can_report_bug)
@@ -93,7 +96,10 @@ def _serve(context: BrowserContext, wrapper_html: str, can_report_bug: bool = Fa
             route.fulfill(content_type="text/javascript", body=contract_source)
         elif url == f"http://{_WRAPPER_HOST}/new":
             launched.append(route.request.method)
-            route.fulfill(content_type="application/json", body=json.dumps({"path": "/?session=terminal-2"}))
+            if is_new_refused:
+                route.fulfill(status=500, content_type="text/plain", body="tmux refused new-session")
+            else:
+                route.fulfill(content_type="application/json", body=json.dumps({"path": "/?session=terminal-2"}))
         elif url == f"http://{_WRAPPER_HOST}/api/sessions/terminal-2":
             body = {
                 "name": "terminal-2",
@@ -151,7 +157,9 @@ def test_a_terminal_tmux_would_not_start_says_so_and_offers_try_again_an_agent_a
     # The page shows the outcome under the button, so the shell toasts nothing of its own.
     assert asked["showsOutcome"] is True
     task = str(asked["text"])
-    assert task.startswith("The terminal terminal-1 couldn't start.\n\nDetails:\n```\n")
+    # Imbue Studio says what the user saw; the chat about the terminal puts the assist command in front of it.
+    assert task.startswith("Imbue Studio showed the user this failure: The terminal terminal-1 couldn't start.\n\n")
+    assert "\n\nDetails:\n```\n" in task
     assert "no server running on /tmp/tmux-1000/default\n```" in task
     _expect_asking_then_told_why(page, ended)
     # The ending's own "See details" stays with its sentence, above what the ask came back with.
@@ -199,6 +207,29 @@ def test_a_terminal_whose_folder_is_gone_says_so_and_starts_a_new_one_in_the_sam
     page.wait_for_function("window.shellMessages.some((message) => message.path === '/?session=terminal-2')")
     locations = shell_messages(page, "shell:location")
     assert locations[-1] == {"type": "shell:location", "path": "/?session=terminal-2", "title": "Terminal 2"}
+
+
+def test_a_new_terminal_that_could_not_be_opened_offers_an_agent_before_report_a_bug(
+    desktop_context: BrowserContext,
+) -> None:
+    _serve(desktop_context, _wrapper_html("terminal-1"), can_report_bug=True, is_new_refused=True)
+    page, wrapper, pty = _open(desktop_context)
+    _print_end(pty, ENDED_MISSING_FOLDER, "/data/gone")
+    ended = wrapper.locator("#ended")
+
+    ended.get_by_role("button", name="Start a new terminal").click()
+
+    expect(ended.locator("#ended-message")).to_have_text(
+        "A new terminal couldn't be opened. Try again. If this persists, report a bug."
+    )
+    buttons = ended.locator(".actions button:visible")
+    expect(buttons).to_have_text(["Ask an agent to fix this", "Start a new terminal", "Report a bug"])
+    ended.get_by_role("button", name="Ask an agent to fix this").click()
+    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:ask-agent')")
+    [asked] = shell_messages(page, "shell:ask-agent")
+    task = str(asked["text"])
+    assert task.startswith("Imbue Studio showed the user this failure: A new terminal couldn't be opened.\n\n")
+    assert "HTTP 500 tmux refused new-session" in task
 
 
 def test_an_unknown_kind_from_the_pty_reads_as_a_terminal_that_closed(desktop_context: BrowserContext) -> None:
@@ -312,7 +343,10 @@ def test_a_failure_page_for_unreadable_saved_terminals_asks_an_agent_through_the
     # The page shows the outcome under the button, so the shell toasts nothing of its own.
     assert asked["showsOutcome"] is True
     task = str(asked["text"])
-    assert task.startswith("The Terminal app can't open terminals: it can't read this workspace's saved terminals.")
+    assert task.startswith(
+        "Imbue Studio showed the user this failure: "
+        "The Terminal app can't open terminals: it can't read this workspace's saved terminals."
+    )
     assert "the terminal store /x/instances.json is not valid JSON: x\n```" in task
     _expect_asking_then_told_why(page, wrapper.locator("body"))
     expect(wrapper.get_by_role("button", name="Report a bug")).to_be_hidden()
@@ -347,13 +381,19 @@ def test_a_failure_page_while_tmux_does_not_answer_offers_only_try_again(desktop
 
 
 @pytest.mark.parametrize("can_report_bug", [True, False], ids=["embedder-opens-reports", "no-bug-report"])
-def test_a_failure_page_that_asks_for_a_bug_report_offers_one_only_where_the_shell_can_open_it(
+def test_a_failure_page_that_asks_for_a_bug_report_offers_an_agent_and_a_report_only_where_the_shell_can_open_it(
     desktop_context: BrowserContext, can_report_bug: bool
 ) -> None:
     page, wrapper = _open_failure_page(desktop_context, TerminalAppError("unexpected"), can_report_bug)
 
     expect(wrapper.get_by_role("button", name="Try again")).to_be_visible()
-    expect(wrapper.get_by_role("button", name="Ask an agent to fix this")).to_be_hidden()
+    wrapper.get_by_role("button", name="Ask an agent to fix this").click()
+    page.wait_for_function("window.shellMessages.some((message) => message.type === 'shell:ask-agent')")
+    [asked] = shell_messages(page, "shell:ask-agent")
+    assert asked["showsOutcome"] is True
+    assert str(asked["text"]).startswith(
+        "Imbue Studio showed the user this failure: The terminal terminal-1 couldn't be opened.\n\n"
+    )
     report = wrapper.get_by_role("button", name="Report a bug")
     if not can_report_bug:
         expect(report).to_be_hidden()
