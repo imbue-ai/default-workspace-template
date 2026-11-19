@@ -702,6 +702,90 @@ def test_a_stretch_of_the_agents_output_is_prose_bubbles_and_work_on_one_line(tm
                 )
 
 
+def _bash_line(uuid: str, timestamp: str, tool_use_id: str, command: str) -> dict[str, Any]:
+    return _assistant_line(
+        uuid, timestamp, [{"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {"command": command}}], "tool_use"
+    )
+
+
+def _text_line(uuid: str, timestamp: str, text: str) -> dict[str, Any]:
+    return _assistant_line(uuid, timestamp, [{"type": "text", "text": text}], "tool_use")
+
+
+def _question_mid_task_session(question_line: dict[str, Any]) -> list[dict[str, Any]]:
+    """The shape of a real Opus run: asked mid-task, the agent moves a step and looks it up before answering."""
+    return [
+        {
+            "type": "user",
+            "uuid": "uuid-mt-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": "Summarize each app, one at a time"},
+        },
+        _bash_line("uuid-mt-2", "2026-01-01T00:00:01Z", "toolu_mt1", "tk start ws-step-chat"),
+        _tool_result_line(
+            "uuid-mt-3",
+            "2026-01-01T00:00:02Z",
+            "toolu_mt1",
+            "Updated ws-step-chat -> in_progress\ntk-step ws-step-chat title: Summarize the chat app",
+        ),
+        _bash_line("uuid-mt-4", "2026-01-01T00:00:03Z", "toolu_mt2", "cat system/apps/chat/README.md"),
+        _tool_result_line("uuid-mt-5", "2026-01-01T00:00:04Z", "toolu_mt2", "readme"),
+        question_line,
+        _bash_line("uuid-mt-7", "2026-01-01T00:00:06Z", "toolu_mt3", "tk close ws-step-chat done; tk start ws-step-data"),
+        _tool_result_line(
+            "uuid-mt-8",
+            "2026-01-01T00:00:07Z",
+            "toolu_mt3",
+            "Updated ws-step-chat -> closed\ntk-step ws-step-chat title: Summarize the chat app\n"
+            "tk-step ws-step-chat summary: Read it\n"
+            "Updated ws-step-data -> in_progress\ntk-step ws-step-data title: Summarize the data library",
+        ),
+        _bash_line("uuid-mt-9", "2026-01-01T00:00:08Z", "toolu_mt4", "du -sh system/apps/*"),
+        _tool_result_line("uuid-mt-10", "2026-01-01T00:00:09Z", "toolu_mt4", "92K chat"),
+        _text_line("uuid-mt-11", "2026-01-01T00:00:10Z", "The chat folder is the biggest, at 92 KB."),
+        _bash_line("uuid-mt-12", "2026-01-01T00:00:11Z", "toolu_mt5", "cat system/apps/datalib/README.md"),
+        _tool_result_line("uuid-mt-13", "2026-01-01T00:00:12Z", "toolu_mt5", "readme"),
+    ]
+
+
+_QUEUED_QUESTION = {
+    "type": "attachment",
+    "uuid": "uuid-mt-6",
+    "timestamp": "2026-01-01T00:00:05Z",
+    "attachment": {"type": "queued_command", "prompt": "Which app folder is the biggest?", "commandMode": "prompt"},
+}
+
+_NEW_TURN_QUESTION = {
+    "type": "user",
+    "uuid": "uuid-mt-6",
+    "timestamp": "2026-01-01T00:00:05Z",
+    "message": {"role": "user", "content": "Which app folder is the biggest?"},
+}
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_answer_to_a_question_asked_mid_task_is_a_bubble(tmp_path: Path, page: Page) -> None:
+    """A question the agent took into its running turn: its answer, given after a step move and a lookup, is a
+    bubble the user reads without opening a step."""
+    with _running_e2e_server(tmp_path, session_events=_question_mid_task_session(_QUEUED_QUESTION)) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator(".message-user", has_text="Which app folder is the biggest?")).to_be_visible(timeout=15000)
+        expect(chat.locator("[data-machine-bubble]", has_text="The chat folder is the biggest")).to_be_visible()
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_progress_line_after_a_message_that_started_a_turn_stays_in_its_step(tmp_path: Path, page: Page) -> None:
+    """The same lines after a message that started a turn of its own (sent after a Stop): once the agent has moved a
+    step, what it says is that step's progress, not a bubble."""
+    with _running_e2e_server(tmp_path, session_events=_question_mid_task_session(_NEW_TURN_QUESTION)) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator(".message-user", has_text="Which app folder is the biggest?")).to_be_visible(timeout=15000)
+        expect(chat.get_by_text("Summarize the data library", exact=True)).to_be_visible()
+        expect(chat.locator("[data-machine-bubble]", has_text="The chat folder is the biggest")).to_have_count(0)
+
+
 @pytest.mark.timeout(60, func_only=False)
 def test_live_stream_delivers_new_events(e2e_server: RunningWorkspace, page: Page) -> None:
     """New events written to the session file appear in the UI as they stream in."""

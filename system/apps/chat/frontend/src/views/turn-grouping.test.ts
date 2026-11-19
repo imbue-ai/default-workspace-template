@@ -739,6 +739,128 @@ describe("narration and close-time ejection", () => {
     expect(step.narration).toBe("The routes live in one file; adding the page there.");
   });
 
+  // A message sent while the agent works reaches it inside the turn it is running. Its answer can
+  // come after a step move and a lookup (seen with real Opus runs), so every line it writes from
+  // there to the turn's end is a reply; its work still groups under the steps.
+  it("shows every line after a message sent mid-task, when the answer follows a step move", () => {
+    const events = [
+      userMsg("t0", "summarize each app"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Summarize the chat app")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "which app folder is the biggest?", "q", { delivered_mid_turn: true }),
+      tkMsg("t4", "tk close s1 done; tk start s2", "t4"),
+      result(
+        "t4",
+        "t4",
+        `${closeOut("s1", "Summarize the chat app", "Read it")}\n${startOut("s2", "Summarize the data library")}`,
+      ),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+      assistantText("t6", "The chat folder is the biggest, at 92 KB.", "ans"),
+      workMsg("t7", "Read", "w3"),
+      result("t7", "w3", "ok"),
+      assistantText("t8", "Six of the ten apps are done.", "narr"),
+      workMsg("t9", "Bash", "w4"),
+      result("t9", "w4", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const inlineIds = sections[1].items.flatMap((item) =>
+      item.kind === "ungrouped" ? item.events.flatMap((part) => ("event_id" in part ? [part.event_id] : [])) : [],
+    );
+    expect(inlineIds).toEqual(["ans", "narr"]);
+    const step = stepItems(sections[1].items).find((s) => s.ticket_id === "s2")!;
+    expect(step.events.map((e) => e.event_id)).toEqual(["a-w2", "a-w3", "a-w4"]);
+    expect(step.narration).toBeNull();
+    expect(sections[1].live_step_id).toBeNull();
+  });
+
+  it("shows the answer to a message sent mid-task after a line about the earlier work", () => {
+    const events = [
+      userMsg("t0", "summarize each app"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Summarize the data library")),
+      workMsg("t2", "Read", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "which app folder is the biggest?", "q", { delivered_mid_turn: true }),
+      assistantText("t4", "The data library summary didn't save, so I'm adding it again.", "old"),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+      tkMsg("t6", "tk close s1 done; tk start s2", "t6"),
+      result(
+        "t6",
+        "t6",
+        `${closeOut("s1", "Summarize the data library", "Read it")}\n${startOut("s2", "Summarize files")}`,
+      ),
+      assistantText("t7", "The chat folder is the biggest, at 92 KB.", "ans"),
+      workMsg("t8", "Bash", "w3"),
+      result("t8", "w3", "ok"),
+    ];
+    const sections = run(events, /* idle */ true);
+    const visibleIds = [
+      ...sections[1].items.flatMap((item) =>
+        item.kind === "ungrouped" ? item.events.flatMap((part) => ("event_id" in part ? [part.event_id] : [])) : [],
+      ),
+      ...sections[1].trailing_reply.map((e) => e.event_id),
+    ];
+    expect(visibleIds).toEqual(expect.arrayContaining(["old", "ans"]));
+    expect(stepItems(sections[1].items).flatMap((s) => s.events.map((e) => e.event_id))).not.toContain("ans");
+  });
+
+  // A finished background task's notice continues the turn it lands in, so it keeps showing every line.
+  it("keeps showing every line after a message sent mid-task past a background task's notice", () => {
+    const events = [
+      userMsg("t0", "summarize each app"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Summarize the chat app")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "how long will this take?", "q", { delivered_mid_turn: true }),
+      workMsg("t4", "Bash", "w2"),
+      result("t4", "w2", "ok"),
+      notice("t5", "n1"),
+      workMsg("t6", "Bash", "w3"),
+      result("t6", "w3", "ok"),
+      assistantText("t7", "About two more minutes; the build is done.", "ans"),
+      workMsg("t8", "Bash", "w4"),
+      result("t8", "w4", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const afterNotice = sections[2];
+    expect(afterNotice.user_event?.event_id).toBe("n1");
+    expect(stepItems(afterNotice.items).flatMap((s) => s.events.map((e) => e.event_id))).not.toContain("ans");
+    expect(afterNotice.live_step_id).toBeNull();
+  });
+
+  // Sent after the agent stopped (a Stop, or a turn's end), a message starts a new turn: once the agent
+  // takes up a step, its progress lines stay that step's captions.
+  it("keeps progress lines in the steps after a message that started a new turn", () => {
+    const events = [
+      userMsg("t0", "summarize each app"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Summarize the chat app")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "keep going"),
+      tkMsg("t4", "tk close s1 done; tk start s2", "t4"),
+      result(
+        "t4",
+        "t4",
+        `${closeOut("s1", "Summarize the chat app", "Read it")}\n${startOut("s2", "Summarize the data library")}`,
+      ),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+      assistantText("t6", "Six of the ten apps are done.", "narr"),
+      workMsg("t7", "Bash", "w3"),
+      result("t7", "w3", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const step = stepItems(sections[1].items).find((s) => s.ticket_id === "s2")!;
+    expect(step.events.map((e) => e.event_id)).toEqual(["a-w2", "narr", "a-w3"]);
+    expect(sections[1].live_step_id).toBe("s2");
+  });
+
   // Moving a step ends the carried-over step's claim on the turn without taking it up: the agent
   // closing it and answering leaves the answer as the turn's reply.
   it("leaves a carried-over step out of the turn once the agent moves a step", () => {

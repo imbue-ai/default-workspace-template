@@ -35,8 +35,13 @@
  * prose does not join it until the agent works while it is open or moves a
  * step (re-starting that same step is no move). The agent's first prose in a
  * turn the user started, before it moves a step, is its answer: it stays a
- * reply even if the agent worked first and works on after it. A turn that never works in it or closes it does not draw it at all;
- * the same holds for a step carried over a switch to another agent, whose
+ * reply even if the agent worked first and works on after it. After a message
+ * the agent took into the turn it was running (sent while it worked), all of
+ * its prose to that turn's end is a reply: its answer can follow a line about
+ * the earlier work or a step move, so its work still groups under the steps but
+ * its prose does not. A turn that never works in the carried-over step or closes
+ * it does not draw it at all; the same holds for a step carried over a switch to
+ * another agent, whose
  * successor starts on the message the user switched with. A turn the agent did
  * nothing in (two boundaries back to back) keeps no copy either, so the step is
  * drawn again at most once, under the later boundary.
@@ -500,6 +505,10 @@ interface SectionBuilder {
    *  prose is its answer to them, so it stays a reply even when the agent looked something up
    *  first and keeps working after it. */
   awaiting_answer: boolean;
+  /** In a turn opened by a message the agent took into the turn it was running, true to the turn's
+   *  end: everything it says is shown as a reply. Its answer to a question asked mid-task can come
+   *  after a line about the earlier work or a step move, so no single line can be picked out. */
+  answering_mid_task: boolean;
   /** The handoff node open in this section: every assistant message from the summary request
    *  on belongs to it, until the switch closes it. */
   open_handoff: HandoffNode | null;
@@ -517,6 +526,7 @@ function newSection(user_event: UserMessageEvent | null, key: string, is_after_s
     dormant_step_id: null,
     untaken_carryover_ids: new Set(),
     awaiting_answer: false,
+    answering_mid_task: false,
     open_handoff: null,
   };
 }
@@ -691,9 +701,11 @@ export function buildSections(
     if (isNewRequest) {
       setCarryoverDormant(current);
       current.awaiting_answer = true;
+      current.answering_mid_task = user_event?.delivered_mid_turn === true;
     } else {
       continueCarryover(previous, current);
       current.awaiting_answer = previous?.awaiting_answer ?? false;
+      current.answering_mid_task = previous?.answering_mid_task ?? false;
     }
   };
 
@@ -872,7 +884,7 @@ export function buildSections(
           // responds keeps grouping under it.
           supersedeOlderSecretRequests(parsed.render, toolResults, pendingSecretRequestByFile, resolutionsByRequestId);
           current.entries.push({ kind: "permission", event: parsed.render });
-        } else if (current.awaiting_answer && isProse(parsed.render)) {
+        } else if ((current.awaiting_answer || current.answering_mid_task) && isProse(parsed.render)) {
           routeMessage(current, parsed.render, null);
           current.awaiting_answer = false;
         } else {
@@ -1245,6 +1257,7 @@ function finalizeSection(
     items,
     trailing_reply,
     trailing_status,
-    live_step_id: section.open_handoff === null && !section.awaiting_answer ? frontierId : null,
+    live_step_id:
+      section.open_handoff === null && !section.awaiting_answer && !section.answering_mid_task ? frontierId : null,
   };
 }
