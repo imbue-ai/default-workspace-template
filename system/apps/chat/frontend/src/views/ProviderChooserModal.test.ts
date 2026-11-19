@@ -943,9 +943,9 @@ describe("a local model", () => {
 
     const { root } = await openForm();
 
-    expect(root.querySelector('[data-e2e="local-model-none"]')?.textContent).toContain(
-      "No model server is running on your computer",
-    );
+    const hint = root.querySelector('[data-e2e="local-model-none"]')?.textContent;
+    expect(hint).toContain("No model server is running on your computer");
+    expect(hint).toContain("Imbue Studio can install one for you: open its Settings and choose Local models");
   });
 
   it("asks for an address when no server answers, and looks at the one named", async () => {

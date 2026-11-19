@@ -1,6 +1,6 @@
 ---
 name: use-ai-integration
-description: Use when writing or reasoning about code that calls Claude -- an AI-driven app or service, an AI integration, or a skill's scripted model step. Covers the three scenarios (one-shot completion, one-shot agentic task, full agent) and the cost / credentialing model.
+description: Use when writing or reasoning about code that calls a model -- an AI-driven app or service, an AI integration, or a skill's scripted model step -- including when the user asks for that work to run on their local model (a model on their own computer, Ollama) instead of Claude. Covers the three Claude scenarios (one-shot completion, one-shot agentic task, full agent), the local-model completion, and the cost / credentialing model.
 metadata:
   author: imbue
 ---
@@ -145,6 +145,76 @@ throughput difference is large. Use enough workers to actually saturate the work
 you hit provider rate limits. When you need structured output, prefer the
 provider's own JSON / structured-output mode over parsing free text and retrying
 -- it is what keeps the response well-formed.
+
+## On the user's local model -- one-shot completion only
+
+Use this path when, and only when, **the user asks for it** ("do the refreshes
+with the local model", "use my Ollama for the summaries", "keep this off the
+API"). It runs a scenario 1 completion on a model the user hosts on their own
+computer, at no cost and with nothing leaving their machines. It is not a
+cheaper default: a local model is smaller and slower than Claude, so moving work
+onto it without being asked trades away quality the user did not offer.
+
+The workspace reaches that model through its **Local model** connection (the
+provider of that name in a chat's provider menu). Copy this skill's
+`python/use_ai_integration_skill/local_model.py` and call
+`local_model_completion`; it reads the connection's address, model and key from
+the account, so the code names none of them.
+
+```python
+from local_model import LocalModelUnreachableError, local_model_completion  # the file you copied in
+
+try:
+    result = local_model_completion(
+        "Summarize this article in two sentences:\n\n" + article_text,
+        system="You write short, plain news summaries. Answer with the summary only.",  # required
+    )
+except LocalModelUnreachableError as e:
+    # The user's computer is asleep or offline. Not a bug: skip, and say so.
+    skip_this_run(reason=str(e))
+print(result.text, result.duration_seconds)
+```
+
+Check that the connection exists before building on it. With none, this prints
+the instruction to pass on to the user rather than an endpoint:
+
+```bash
+uv run --no-sync python -c "from use_ai_integration_skill.local_model import read_local_model_endpoint; print(read_local_model_endpoint())"
+```
+
+What is different from Claude, and what to build for:
+
+- **It is not always there.** The model answers only while the user's computer
+  is awake, its model server is running and, for a workspace that is not on that
+  computer, Imbue Studio is open. A scheduled refresh will run into nights when
+  it is not. Catch `LocalModelUnreachableError`, keep the data the app already
+  has, and record that the run was skipped and why (for a routine, in
+  `$ROUTINES_RUN_DIR/result.json`; in an app, beside the "last refreshed" time
+  it shows). Never fall back to Claude for a run the user asked to keep local.
+- **One call at a time.** A local server answers requests in turn, so a thread
+  pool only queues them. Loop over the items, and expect seconds to minutes
+  each; the first call after a pause also waits for the model to load. Size a
+  refresh to that: a routine's default timeout is an hour.
+- **One item per call, short and explicit.** The window (`context_window` on the
+  endpoint, often 40,960 tokens) holds the prompt and the answer together. Send
+  one article, not twenty. Say exactly what to answer with; a small model
+  wanders where Claude would not.
+- **Ask for JSON when you need structure:**
+  `response_format={"type": "json_object"}`, with the shape spelled out in
+  `system`. Validate what comes back and skip an item that does not parse rather
+  than failing the run.
+- **Completions only.** No tools, no file access, no web search. A step that
+  needs any of those is a scenario 2 or 3 job and stays on Claude; say so to the
+  user if they asked for all of it to be local.
+- **Reasoning is off unless you ask.** A reasoning model would otherwise think
+  before every answer, which for a summary or a label is most of the wait.
+  `is_reasoning_wanted=True` turns it on for a step that needs it; raise
+  `max_tokens` when you do, since the thinking counts against it.
+- **Nothing to cost out.** Skip the cost measurement below; measure wall-clock
+  on one real item instead, and tell the user how long a full run takes.
+
+A model other than the one the connection was signed in on is named by its
+Ollama name (`model="qwen3:8b"`), and has to have been used in a chat first.
 
 ## Scenario 2 -- one-shot agentic task
 

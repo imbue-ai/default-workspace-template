@@ -1006,7 +1006,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                   ? "Imbue Studio on your computer did not answer. Check that the computer is awake and " +
                     "Studio is open. "
                   : studioLink === "CONNECTED"
-                    ? "No model server is running on your computer. Start one (Ollama, LM Studio or llama.cpp). "
+                    ? "No model server is running on your computer. Imbue Studio can install one for you: open its " +
+                      "Settings and choose Local models. Or start your own (Ollama, LM Studio or llama.cpp). "
                     : "No model server answered on your computer. ",
                 m(
                   "button",

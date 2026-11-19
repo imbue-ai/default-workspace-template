@@ -531,7 +531,10 @@ If your service needs to call Claude (classify/summarize content, run a one-shot
 agentic task, or launch a full agent), follow the `use-ai-integration` skill: it
 picks the path (a keyed `litellm` call or the keyless `claude_p.py` helper),
 covers the `claude -p` environment fix and the cost model, and saves you from
-hand-rolling the call.
+hand-rolling the call. It also covers running a completion on the user's local
+model (one hosted on their own computer), for when they ask for that -- "do the
+refreshes with the local model" -- and what a scheduled job has to do on the
+nights that model is not there.
 
 ### Always surface the raw data and its source
 
