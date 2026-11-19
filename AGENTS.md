@@ -181,6 +181,8 @@ Fixing it locally is *not* an alternative: a fix to a file that is byte-identica
 
 - **Prefer an applicable skill over reinventing.** Skill descriptions are auto-injected into your context, so match by purpose, not by name.
 
+- **After a compaction, re-read the skill you are following.** A compaction keeps at most the start of a skill and may keep none of the references you read. Before you go on, re-read the skill's `SKILL.md`, then the reference your current step names.
+
 - **Follow a skill without naming it.** Describe the work, not the skill, even when your harness tells you to announce which skills you use. Repeat a skill's name only after the user has used it (`.agents/shared/references/user-facing-language.md`, "Skills in particular").
 
 - **Run the creation, don't redo its job.** When a creation already does what's being asked -- an app that ingests this kind of data, a skill that runs this process -- run it, or extend it and run it. Producing the same result by hand beside it leaves the creation untested against the real case and the user with two sources of truth.

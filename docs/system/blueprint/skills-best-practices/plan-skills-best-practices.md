@@ -5,7 +5,7 @@ The first release is given in file-level detail; later areas are outlined and ge
 
 ## Overview
 
-- **Why size matters.** After a compaction Claude Code re-attaches only the first 5,000 tokens of each invoked skill (25,000 combined) and never re-reads the file. A reference that was merely read is not re-attached at all.
+- **Why size matters.** After a compaction Claude Code re-attaches only the first 5,000 tokens of each invoked skill (25,000 combined) and never re-reads the file. A reference that was merely read may not come back: at most five files of the session's are re-read, and one over 5,000 tokens only as a path.
 - **What 5,000 tokens is here.** Measured with `count_tokens` over all 111 markdown files under `.agents/`: tokens are bytes / 2.8 (5% spread). 5,000 tokens is 14 KB, about 250 lines of this prose. A 500-line skill is about 10,000 tokens.
 - **Where we are.** 13 of 42 SKILL.md files are over 14 KB. `build-app` is 18,689 tokens and `update-self` 18,247.
 - **One guide, two enforcers.** A skill authoring guide lives in mngr and is vendored into dwt. Deterministic rules go into `validate_skill.py`; judgment rules go into a `skill_hygiene` code-guardian category that defers to the guide.
@@ -39,7 +39,7 @@ The first release is given in file-level detail; later areas are outlined and ge
 - Every file under a skill's directory, and every file under `.agents/shared/`, is reached from something.
 - `dealing-with-the-unexpected` is gone; AGENTS.md points at `check-app-errors` and `assist`.
 - The browser skill is `use-browser` and its command is `use-browser`. The old command name does not exist.
-- A harden worker invokes the `harden-worker` skill. On a harness with no skill invocation it reads `.agents/skills/harden-worker/SKILL.md`.
+- A harden worker invokes the `harden-worker` skill: every harness a worker runs on loads skills.
 - The catalog gains one short line for `harden-worker` and loses one for the deleted skill.
 
 ### An agent creating or editing a skill
