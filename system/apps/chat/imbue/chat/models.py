@@ -745,7 +745,7 @@ class ActiveAgentSnapshot(FrozenModel):
     is_interrupted: bool = Field(
         description=(
             "Whether the agent's process died mid-turn and nothing has reached it since: the chat offers to resume "
-            "it, and never resumes it on its own"
+            "it, and the page never sends that on its own"
         )
     )
 
