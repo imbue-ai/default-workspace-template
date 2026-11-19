@@ -238,6 +238,8 @@ const pendingComposerFocuses = new Set<string>();
 interface PendingFailureNotice {
   title: string;
   detail: string;
+  /** What goes behind the notice's "See details". */
+  details?: string | null;
   /** mngr's classification, so a sibling's failure earns the same buttons the composer's would. */
   kind?: SendFailureKind;
   /** Repeated by Retry. Omitted when the operation cannot be repeated. */
@@ -337,7 +339,13 @@ addHeldSendFailedListener((chatId, messageId, detail, kind) => {
   heldSendDrafts.delete(messageId);
   dropOutgoingByMessageId(chatId, [messageId]);
   restoreComposerDraft(chatId, held.draft);
-  raiseFailureNotice(chatId, { title: "Couldn't send your message", detail, kind: sendFailureKindOf(kind) });
+  const told = failureSentence(describeRequestFailure(detail), "Your message wasn't delivered");
+  raiseFailureNotice(chatId, {
+    title: "Couldn't send your message",
+    detail: told.message,
+    details: told.details,
+    kind: sendFailureKindOf(kind),
+  });
 });
 
 /**
@@ -1321,6 +1329,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         clearActionFailureNotice();
         actionFailureTitle = pendingNotice.title;
         actionFailureDetail = pendingNotice.detail;
+        actionFailureDetails = pendingNotice.details ?? null;
         actionFailureKind = pendingNotice.kind ?? "unknown";
         externalRetry = pendingNotice.retry ?? null;
       }

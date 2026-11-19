@@ -1334,7 +1334,7 @@ describe("MessageInput send to a chat still being created", () => {
     expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
   });
 
-  it("hands a held send back to the composer with the reason when the chat app reports it never landed", async () => {
+  it("hands a held send back to the composer, its reason behind See details, when the chat app reports it never landed", async () => {
     mocks.sendMessage.mockResolvedValueOnce("held");
     const component = MessageInput();
     await typeAndSend(component, "agent-1", "held hello");
@@ -1345,6 +1345,8 @@ describe("MessageInput send to a chat still being created", () => {
     const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
     const text = renderedText(after);
     expect(text).toContain("Couldn't send your message");
+    expect(text).toContain("Your message wasn't delivered.");
+    expect(findByClass(after, "see-details")).toBeDefined();
     expect(text).toContain("The agent didn't take the message.");
     expect(localStorage.getItem("message-text:agent-1")).toContain("held hello");
     expect(getOutgoingMessages("agent-1").map((outgoing) => outgoing.content)).not.toContain(
