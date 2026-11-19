@@ -232,9 +232,12 @@ Instead:
    REFUSED --detail "The update stopped part-way when the workspace restarted
    and was put back."` (`STUCK` when the workspace is still unhealthy). Stop
    the worker rather than destroying it, as after any rollback.
-4. Tell the user in a line or two how the workspace checked out. The notice
-   already told them what happened and that they can ask to try again, so
-   don't repeat the offer.
+4. Tell the user in a line or two how the workspace checked out. After a
+   full rollback the notice already told them what happened and that they
+   can ask to try again, so don't repeat the offer. The `rollback-incomplete`
+   notice made no such offer: once the restore is finished and the workspace
+   is healthy, say it is back the way it was and that they can ask to try the
+   update again.
 
 When the user asks to try again, run the update as a fresh pass from Step 1:
 it sets the stopped worker aside, and the new worker reverts the rollback as

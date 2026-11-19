@@ -92,7 +92,9 @@ def compose_rollback_note(rollback: BootRollback) -> str:
             f"mismatch; {EMERGENCY_RECORD} names what is left. Finish that restore yourself "
             "now, without waiting to be asked: it puts back what the workspace had, it does "
             "not retry anything. Fix what stopped it first, and ask the user before you "
-            "delete anything of theirs to do so (to free disk space, say)."
+            "delete anything of theirs to do so (to free disk space, say). The summary "
+            "made the user no offer to try again, so once everything is back, tell them "
+            "they can ask to."
         )
     lines.append(
         "Do not retry the apply on your own: it may be what restarted the workspace (by "
