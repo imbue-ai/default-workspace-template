@@ -968,7 +968,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             : m("p", { class: css.HINT, "data-e2e": "local-model-none" }, [
                 studioLink === "UNREACHABLE"
                   ? "Imbue Studio on your computer did not answer. Check that the computer is awake and " +
-                    "Imbue Studio is open. "
+                    "Studio is open. "
                   : studioLink === "CONNECTED"
                     ? "No model server is running on your computer. Start one (Ollama, LM Studio or llama.cpp). "
                     : "No model server answered on your computer. ",

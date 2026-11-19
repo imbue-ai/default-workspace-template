@@ -150,9 +150,9 @@ def test_a_tunnel_the_user_no_longer_allows_says_to_ask_again() -> None:
 
 
 def test_a_tunnel_the_app_cannot_open_says_what_to_check() -> None:
-    with pytest.raises(LocalModelError, match="Imbue Studio is open"):
+    with pytest.raises(LocalModelError, match="Studio is open"):
         open_studio_tunnel(_client(_unreachable), _GATEWAY, _AGENT_ID, 11434)
-    with pytest.raises(LocalModelError, match="Imbue Studio is open"):
+    with pytest.raises(LocalModelError, match="Studio is open"):
         open_studio_tunnel(_client(lambda _request: httpx.Response(502, text="oops")), _GATEWAY, _AGENT_ID, 11434)
     with pytest.raises(LocalModelError, match="no connection to Imbue Studio"):
         open_studio_tunnel(_client(_unreachable), None, _AGENT_ID, 11434)

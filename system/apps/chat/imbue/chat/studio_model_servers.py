@@ -40,7 +40,7 @@ _TUNNEL_TIMEOUT_SECONDS: Final = 45.0
 _UNSUPPORTED_STATUSES: Final = frozenset({400, 404, 405, 501})
 
 STUDIO_UNREACHABLE_MESSAGE: Final = (
-    "Imbue Studio on your computer did not answer. Check that the computer is awake and Imbue Studio is open."
+    "Imbue Studio on your computer did not answer. Check that the computer is awake and Studio is open."
 )
 
 
@@ -176,6 +176,6 @@ def open_studio_tunnel(client: httpx.Client, gateway: GatewayAccess | None, agen
         )
         raise LocalModelError(
             "Imbue Studio could not connect this workspace to the model server on your computer. "
-            "Check that the computer is awake and Imbue Studio is open, then try again."
+            "Check that the computer is awake and Studio is open, then try again."
         )
     return f"http://127.0.0.1:{workspace_port}/v1"
