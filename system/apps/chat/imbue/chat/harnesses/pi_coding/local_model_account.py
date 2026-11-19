@@ -14,7 +14,8 @@ it was.
 
 The files are brought up to date with the server whenever a chat's model menu is opened
 (:func:`refresh_account_models`): a model pulled since shows up, one removed goes. A chat that
-was running before a model appeared reaches it once its agent has restarted.
+was running before a model appeared reaches it once its agent has restarted. An account signed in
+before `local_models.json` was kept gains it the same way, from what its `models.json` names.
 """
 
 import json
@@ -36,6 +37,7 @@ from imbue.chat.harnesses.pi_coding.local_model import MIN_CONTEXT_WINDOW
 from imbue.chat.harnesses.pi_coding.local_model import MODELS_FILENAME
 from imbue.chat.harnesses.pi_coding.local_model import PLACEHOLDER_API_KEY
 from imbue.chat.harnesses.pi_coding.local_model import list_models
+from imbue.chat.harnesses.pi_coding.local_model import read_models_file_providers
 from imbue.chat.harnesses.pi_coding.local_model import read_server_base_url
 from imbue.chat.harnesses.pi_coding.local_model import verify_model
 from imbue.chat.harnesses.pi_coding.local_model import write_models_file
@@ -269,6 +271,52 @@ def _read_api_key(account_dir: Path) -> str:
     return key if isinstance(key, str) and key != PLACEHOLDER_API_KEY else ""
 
 
+def _adopt_earlier_account(
+    client: httpx.Client, account_dir: Path, base_url: str, api_key: str
+) -> LocalModelAccount | None:
+    """The models of an account signed in before `local_models.json` was kept, read from what pi was told.
+
+    Its sign-in checked every model its `models.json` names, so each is taken as checked. What
+    each is a context size of comes from the server as it is now; a server that does not answer
+    leaves the account to be adopted another time.
+    """
+    provider = read_models_file_providers(account_dir).get(LOCAL_MODEL_PROVIDER_ID)
+    entries = provider.get("models") if isinstance(provider, dict) else None
+    named = [
+        entry
+        for entry in entries or ()
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str) and isinstance(entry.get("contextWindow"), int)
+    ]
+    if not named:
+        return None
+    described = read_ollama_models(client, base_url, api_key)
+    if described is None:
+        try:
+            list_models(client, base_url, api_key)
+        except LocalModelError as e:
+            logger.debug("Left the local-model account in {} to be adopted later: {}", account_dir, e)
+            return None
+    base_id_by_id = {model.id: model.base_id for model in described or ()}
+    records = tuple(
+        LocalModelRecord(
+            id=entry["id"],
+            base_id=base_id_by_id.get(entry["id"], entry["id"]),
+            context_window=entry["contextWindow"],
+            is_reasoning=entry.get("reasoning") is True,
+            reasoning_off_effort=_read_reasoning_off_effort(entry),
+            is_checked=True,
+        )
+        for entry in named
+    )
+    return LocalModelAccount(is_context_managed=described is not None, records=records)
+
+
+def _read_reasoning_off_effort(pi_model: dict[str, Any]) -> str | None:
+    level_map = pi_model.get("thinkingLevelMap")
+    effort = level_map.get("off") if isinstance(level_map, dict) else None
+    return effort if isinstance(effort, str) else None
+
+
 def refresh_account_models(client: httpx.Client, config_dir: Path) -> LocalModelAccount | None:
     """Bring the account's models up to date with its server, and return them; None for any other account.
 
@@ -277,9 +325,18 @@ def refresh_account_models(client: httpx.Client, config_dir: Path) -> LocalModel
     account = read_account_models(config_dir)
     account_dir = find_account_dir(config_dir)
     base_url = read_server_base_url(account_dir)
-    if account is None or base_url is None or not account.records:
+    if base_url is None:
         return account
     api_key = _read_api_key(account_dir)
+    is_adopted = False
+    if account is None:
+        # CLEANUP: drop this adoption (and _adopt_earlier_account) once the Local model provider has
+        # shipped in a release: only workspaces built from its development branches hold an account
+        # signed in before local_models.json was kept.
+        account = _adopt_earlier_account(client, account_dir, base_url, api_key)
+        is_adopted = account is not None
+    if account is None or not account.records:
+        return account
     first_id = account.records[0].id
     if account.is_context_managed:
         described = read_ollama_models(client, base_url, api_key)
@@ -298,7 +355,7 @@ def refresh_account_models(client: httpx.Client, config_dir: Path) -> LocalModel
     refreshed = LocalModelAccount(
         is_context_managed=account.is_context_managed, records=_order_records(planned, account.records, first_id)
     )
-    if refreshed != account:
+    if refreshed != account or is_adopted:
         write_account_models(account_dir, base_url, refreshed)
     return refreshed
 

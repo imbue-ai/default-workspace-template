@@ -5,3 +5,5 @@
 - The Local model form no longer offers a model that cannot run a chat. Models that list no tool calling, or whose own context limit is under 40,960 tokens, are named under the picker with why.
 
 - When your computer runs no model server, the Local model form now says that Imbue Studio can install one for you (Settings > Local models) in place of only telling you to start one.
+
+- A local-model account signed in before this change picks all of this up the first time a chat's model menu is opened, with no need to sign in again.

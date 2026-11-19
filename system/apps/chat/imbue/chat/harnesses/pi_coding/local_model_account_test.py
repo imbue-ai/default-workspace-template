@@ -338,6 +338,69 @@ def test_a_server_that_only_lists_its_models_is_followed_too(tmp_path: Path) -> 
     ]
 
 
+def _signed_in_before_the_account_kept_its_models(account_dir: Path, base_url: str, pi_model: dict[str, Any]) -> None:
+    """An account dir as an earlier sign-in left it: pi's `models.json` naming one model, and nothing beside it."""
+    provider = {"baseUrl": base_url, "api": "openai-completions", "models": [pi_model]}
+    (account_dir / "models.json").write_text(json.dumps({"providers": {LOCAL_MODEL_PROVIDER_ID: provider}}))
+
+
+def test_an_account_from_an_earlier_sign_in_gains_its_server_s_models_with_its_own_taken_as_checked(
+    tmp_path: Path,
+) -> None:
+    ollama = _Ollama()
+    ollama.add("qwen3:8b", limit=40_960, capabilities=("completion", "tools", "thinking"))
+    ollama.add("qwen3-40k:latest", limit=40_960, parent="qwen3:8b", named_context=40_960)
+    ollama.add("llama3.3:latest", limit=65_536)
+    _signed_in_before_the_account_kept_its_models(
+        tmp_path,
+        _OLLAMA,
+        {"id": "qwen3-40k:latest", "contextWindow": 40_960, "reasoning": True, "thinkingLevelMap": {"off": "none"}},
+    )
+    assert read_account_models(tmp_path) is None
+
+    adopted = refresh_account_models(ollama.client(), tmp_path)
+
+    assert adopted is not None
+    assert adopted.is_context_managed is True
+    assert adopted.records[0] == LocalModelRecord(
+        id="qwen3-40k:latest",
+        base_id="qwen3:8b",
+        context_window=40_960,
+        is_reasoning=True,
+        reasoning_off_effort="none",
+        is_checked=True,
+    )
+    assert [(record.id, record.is_checked) for record in adopted.records[1:]] == [
+        ("llama3.3:latest-ctx40960", False),
+        ("llama3.3:latest-ctx65536", False),
+    ]
+    assert read_account_models(tmp_path) == adopted
+    assert _pi_model_ids(tmp_path)[0] == "qwen3-40k:latest"
+
+
+def test_an_earlier_account_on_a_server_that_only_lists_its_models_is_adopted_as_listed(tmp_path: Path) -> None:
+    _signed_in_before_the_account_kept_its_models(tmp_path, _LM_STUDIO, {"id": "phi-4", "contextWindow": 49_152})
+
+    adopted = refresh_account_models(_listing_server(("phi-4", "mistral-small")), tmp_path)
+
+    assert adopted is not None
+    assert adopted.is_context_managed is False
+    assert [(record.id, record.context_window, record.is_checked) for record in adopted.records] == [
+        ("phi-4", 49_152, True),
+        ("mistral-small", 49_152, False),
+    ]
+
+
+def test_an_earlier_account_whose_server_does_not_answer_is_left_for_another_time(tmp_path: Path) -> None:
+    _signed_in_before_the_account_kept_its_models(
+        tmp_path, _OLLAMA, {"id": "qwen3-40k:latest", "contextWindow": 40_960}
+    )
+
+    assert refresh_account_models(_unreachable(), tmp_path) is None
+    assert not (tmp_path / "local_models.json").exists()
+    assert _pi_model_ids(tmp_path) == ["qwen3-40k:latest"]
+
+
 def test_a_switch_to_a_size_nobody_asked_for_yet_makes_the_copy_and_checks_it(tmp_path: Path) -> None:
     ollama = _Ollama()
     ollama.add("llama3.3:latest")
