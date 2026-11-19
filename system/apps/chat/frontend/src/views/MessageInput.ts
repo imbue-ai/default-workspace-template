@@ -1,11 +1,13 @@
 import m from "mithril";
+import { askAgentToFix } from "@imbue/workspace-ui/src/app_contract";
+import type { AgentFixRequest, ShellConnection, ShownFailure } from "@imbue/workspace-ui/src/app_contract";
 import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
-import type { NoticeAction } from "@imbue/workspace-ui/src/components/NoticeDialog";
+import type { NoticeAction, NoticeDialogAttrs } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import type { SendFailureKind } from "@imbue/workspace-ui/src/models/request-error";
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { startChatOnAccount } from "../shell";
 import { getShellConnection } from "../shellConnection";
-import { reportBugActions } from "./failure-actions";
+import { failureRemedyActions } from "./failure-actions";
 import {
   composerFailureKindOf,
   describeCancelSwitchFailure,
@@ -17,7 +19,7 @@ import {
   isNothingToCancel,
 } from "./composer-failures";
 import type { ComposerFailureKind } from "./composer-failures";
-import { plainFailureLines } from "./failure-lines";
+import { plainFailureLines, plainFailureSentence, withRefusedAsk } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 import {
   clearComposerAttachments,
@@ -222,6 +224,9 @@ const KINDS_THAT_MAY_HAVE_ARRIVED: ReadonlySet<ComposerFailureKind> = new Set([
   "submission_unconfirmed",
   "not_answered",
 ]);
+// The server's kinds for a send refused while the chat app cannot read its agent list: an ask reaches its chat through
+// the same chat app, which refuses it on the same grounds, so no agent is offered.
+const SERVER_KINDS_AN_ASK_WOULD_MEET: ReadonlySet<string | null> = new Set(["chat_starting", "agent_list_unreadable"]);
 // The kinds of the server's refusal of a /compact it declines to run: before the agent has anything
 // to compact, and while it is busy or stopped.
 const DECLINED_COMPACT_SEND_FAILURE_KINDS: ReadonlySet<string | null> = new Set([
@@ -790,7 +795,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   // The notice's own ways forward beyond Retry and Restart (Try again for a Stop, Start a new chat for a gone one).
   let actionFailureActions: NoticeAction[] = [];
   // Which recovery action is mid-flight, so the buttons disable rather than fire twice.
-  let actionFailureInFlight: "retry" | "restart" | null = null;
+  let actionFailureInFlight: "retry" | "restart" | "ask" | null = null;
+  // Why the notice's "Ask an agent to fix this" could not be sent, shown in the notice until it is asked again.
+  let actionFailureAskFailure: ShownFailure | null = null;
   // One notice instance each: the component closes over its own dismiss handler, so sharing one
   // between notices would let whichever rendered last answer the others' Escape.
   const actionFailureNotice = makeNoticeDialog();
@@ -2175,6 +2182,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         actionFailureRecovery = null;
         actionFailureLaunch = null;
         actionFailureInFlight = null;
+        actionFailureAskFailure = null;
         externalRetry = null;
         externalDescribe = null;
         externalAction = null;
@@ -2189,6 +2197,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       function noteSendFailure(error: unknown): void {
         actionFailureTitle = "Couldn't send your message";
         actionFailure = describeSendFailure(error);
+        actionFailureAskFailure = null;
         // The reason can change between attempts -- a blocked input can become an agent that is gone -- and the
         // buttons follow the kind, so it is read with the text every time.
         actionFailureKind = composerFailureKindOf(error);
@@ -2196,6 +2205,35 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         isActionFailureOnSignedOutAccount = actionFailureKind === "account_signed_out";
         actionFailureActions =
           actionFailureKind === "chat_gone" ? [{ label: "Start a new chat", run: startNewChatInsteadOfGoneOne }] : [];
+      }
+
+      /** Mark ``action`` as the one the notice is running. What an earlier ask came to was about the failure as it
+       *  stood, which the action may replace, so it is dropped. */
+      function beginNoticeAction(action: "retry" | "restart" | "ask"): void {
+        actionFailureInFlight = action;
+        actionFailureAskFailure = null;
+        m.redraw();
+      }
+
+      /** The notice's "Ask an agent to fix this": hand the failure to an agent through ``asker``, which shows the
+       *  agent's chat; that closes the notice. A refused ask says why in the notice, under the failure it was about. */
+      async function askAgentAboutNotice(
+        asker: Pick<ShellConnection, "askAgent">,
+        request: AgentFixRequest,
+      ): Promise<void> {
+        if (actionFailureInFlight !== null) return;
+        const noticeAsked = actionFailure;
+        beginNoticeAction("ask");
+        const outcome = await askAgentToFix(asker, request, { showsOutcome: true });
+        // The composer moved to another chat meanwhile, which closed the notice.
+        if (actionFailure !== noticeAsked) return;
+        if (outcome.isOpened) {
+          clearActionFailureNotice();
+        } else {
+          actionFailureInFlight = null;
+          actionFailureAskFailure = outcome.failure;
+        }
+        m.redraw();
       }
 
       /** A Try again that closes the notice and runs ``run``, which raises its own notice if it fails again. */
@@ -2250,8 +2288,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         if (recovery === null && launch === null && retryExternal === null) {
           return;
         }
-        actionFailureInFlight = "retry";
-        m.redraw();
+        beginNoticeAction("retry");
         if (recovery !== null) {
           await repeatFailedSend(recovery);
           return;
@@ -2337,8 +2374,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         if (recovery === null || actionFailureInFlight !== null) {
           return;
         }
-        actionFailureInFlight = "restart";
-        m.redraw();
+        beginNoticeAction("restart");
         // Rescue anything queued inside the harness first. The restart below SIGKILLs the agent,
         // which drops that queue -- and a feature whose rule is "never lose the message" must not
         // have a button that quietly loses other people's. Best-effort on purpose: the agent we
@@ -2500,16 +2536,43 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                 isRestartOffered ? (SEND_FAILURE_RESTART_SENTENCES[actionFailureKind] ?? null) : null,
               ],
             };
-        return m(actionFailureNotice, {
+        // A failure that asks for a bug report offers an agent first, through the shell, unless the ask would meet
+        // what failed. The ask carries the failure as the server worded it, without the Restart line.
+        const shellConnection = getShellConnection();
+        const ask =
+          !shown.isReportable ||
+          SERVER_KINDS_AN_ASK_WOULD_MEET.has(actionFailureServerKind) ||
+          shellConnection === null ||
+          !shellConnection.hasShell()
+            ? null
+            : {
+                isAsking: actionFailureInFlight === "ask",
+                run: () =>
+                  void askAgentAboutNotice(shellConnection, {
+                    whatFailed: plainFailureSentence(failure),
+                    details: failure.details,
+                  }),
+              };
+        // A refused ask is told as part of the notice, so the notice keeps one "See details" and its bug report
+        // files both.
+        const told = withRefusedAsk(shown, actionFailureAskFailure);
+        // While one of the notice's actions runs, none of them can be pressed, whoever supplied it.
+        const disabledWhileBusy = (action: NoticeAction): NoticeAction =>
+          actionFailureInFlight === null ? action : { ...action, isDisabled: true };
+        const notice: NoticeDialogAttrs = {
           title: isUnconfirmed
             ? "Couldn't confirm your message arrived"
             : isNotAnswered
               ? "Your message may not have been sent"
               : actionFailureTitle,
-          body: shown.body,
-          details: shown.details,
+          body: told.body,
+          details: told.details,
           dismissLabel:
-            isRepeatable || isRestartOffered || actionFailureActions.length > 0 || externalAction !== null
+            isRepeatable ||
+            isRestartOffered ||
+            actionFailureActions.length > 0 ||
+            externalAction !== null ||
+            ask !== null
               ? "Cancel"
               : "OK",
           isDismissable: actionFailureInFlight === null,
@@ -2520,7 +2583,6 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   {
                     label: actionFailureInFlight === "retry" ? retryWording.inFlight : retryWording.label,
                     tooltip: retryWording.tooltip,
-                    isDisabled: actionFailureInFlight !== null,
                     run: () => void retryFailedSend(),
                   },
                 ]
@@ -2540,7 +2602,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   },
                 ]
               : []),
-            ...reportBugActions(getShellConnection(), shown),
+            ...failureRemedyActions(shellConnection, told, ask),
             ...(!isRestartOffered
               ? []
               : [
@@ -2548,12 +2610,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     label: actionFailureInFlight === "restart" ? "Restarting…" : "Restart",
                     tooltip: "Restarts the agent, then sends your message. Anything it's working on stops.",
                     isDestructive: true,
-                    isDisabled: actionFailureInFlight !== null,
                     run: () => void restartFailedSend(),
                   },
                 ]),
-          ],
-        });
+          ].map(disabledWhileBusy),
+        };
+        return m(actionFailureNotice, notice);
       }
 
       /**

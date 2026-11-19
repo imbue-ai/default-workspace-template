@@ -20,12 +20,12 @@ import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { postJson } from "@imbue/workspace-ui/src/models/http";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { describeRequestErrorKind, describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { getShellConnection } from "../shellConnection";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import { mintMessageId, sendMessage } from "../models/Response";
 import { describeSendFailure } from "./composer-failures";
-import { plainFailureLinesOf, plainFailureSentence, reportedFailureOfLines } from "./failure-lines";
+import { plainFailureLinesOf, plainFailureSentence, shownFailureOfLines } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 import { raiseFailureNotice } from "./MessageInput";
 import type { SecretResolution } from "./message-classification";
@@ -436,7 +436,7 @@ export function renderSecretCard(
             plainFailureSentence(state.error),
           ),
           m("div", { class: "text-secondary" }, m(SeeDetails, { details: state.error.details })),
-          m("div", { class: "flex items-center gap-2" }, [
+          m("div", { class: "flex flex-wrap items-center gap-2" }, [
             state.isRequestGone
               ? m(
                   Button,
@@ -444,13 +444,11 @@ export function renderSecretCard(
                   "Ask the agent again",
                 )
               : null,
-            state.error.isReportable
-              ? m(ReportBugButton, {
-                  connection: getShellConnection(),
-                  failure: reportedFailureOfLines(state.error),
-                  sm: true,
-                })
-              : null,
+            m(FailureRemedies, {
+              connection: getShellConnection(),
+              failure: shownFailureOfLines(state.error),
+              sm: true,
+            }),
           ]),
         ])
       : null,

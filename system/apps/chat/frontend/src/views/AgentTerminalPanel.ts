@@ -13,9 +13,9 @@ import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { postJson } from "@imbue/workspace-ui/src/models/http";
-import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { getShellConnection } from "../shellConnection";
-import { plainFailureLines, plainFailureSentence, reportedFailureOfLines } from "./failure-lines";
+import { plainFailureLines, plainFailureSentence, shownFailureOfLines } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 import { getChatById } from "../models/Chats";
 import { isAgentProcessAlive, isAgentProcessDead } from "./agentLiveness";
@@ -145,13 +145,16 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
               "Start agent",
             ),
             startError?.isReportable === true
-              ? m(ReportBugButton, {
-                  connection: getShellConnection(),
-                  failure: reportedFailureOfLines(startError),
-                  variant: "ghost",
-                  sm: true,
-                  extra: "agent-terminal-report-bug",
-                })
+              ? m(
+                  "div",
+                  { class: "flex flex-wrap items-center justify-center gap-2" },
+                  m(FailureRemedies, {
+                    connection: getShellConnection(),
+                    failure: shownFailureOfLines(startError),
+                    variant: "ghost",
+                    sm: true,
+                  }),
+                )
               : null,
           ],
         );

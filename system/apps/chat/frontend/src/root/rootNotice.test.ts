@@ -29,13 +29,13 @@ vi.mock("../models/Chats", async (importOriginal) => ({
 }));
 
 import m from "mithril";
-import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
+import type { ReportedFailure, StartOptions, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { rowMenuRows } from "./ChatRail";
 import { hasPendingDelete } from "./pendingDeletes";
 import type { ChatRow } from "./rows";
-import { RootNoticeView } from "./rootNotice";
+import { RootNoticeView, raiseRootNotice } from "./rootNotice";
 import { chatRailAttrsFixture } from "./chatRailAttrsFixture";
 
 const ROW: ChatRow = {
@@ -58,12 +58,23 @@ function select(key: string): void {
   row.onSelect();
 }
 
-/** A connection whose shell can open the bug report, recording each time it is asked to. */
-function reportingConnection(canReportBug: boolean): {
+/** A connection to a shell that can open the bug report when ``canReportBug``, recording each time it is asked to
+ *  report one or to ask an agent; an ask answers ``askOutcome``. */
+function reportingConnection(
+  canReportBug: boolean,
+  askOutcome: Promise<StartOutcome> = Promise.resolve({ isOpened: true }),
+): {
+  hasShell: () => boolean;
+  askAgent: ReturnType<typeof vi.fn<(text: string, options?: StartOptions) => Promise<StartOutcome>>>;
   canReportBug: () => boolean;
   reportBug: (failure: ReportedFailure) => void;
 } {
-  return { canReportBug: () => canReportBug, reportBug: vi.fn() };
+  return {
+    hasShell: () => true,
+    askAgent: vi.fn(() => askOutcome),
+    canReportBug: () => canReportBug,
+    reportBug: vi.fn(),
+  };
 }
 
 async function rendered(connection = reportingConnection(true)): Promise<HTMLElement> {
@@ -71,6 +82,11 @@ async function rendered(connection = reportingConnection(true)): Promise<HTMLEle
   const root = document.createElement("div");
   m.render(root, m(RootNoticeView, { connection }));
   return root;
+}
+
+/** The labels of the notice's buttons, in order. */
+function labels(root: HTMLElement): string[] {
+  return Array.from(root.querySelectorAll("button")).map((b) => b.textContent ?? "");
 }
 
 function httpError(status: number, body: unknown): HttpError {
@@ -111,6 +127,77 @@ describe("the chat list's failed verbs", () => {
     });
     button(root, "Try again")!.click();
     expect(verbs.stopChat).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers an agent before Report a bug, asks it as Imbue Studio, and closes once the agent's chat opened", async () => {
+    verbs.stopChat.mockRejectedValue(
+      httpError(500, { detail: "Failed to stop agent 'plan': mngr exited with code 1" }),
+    );
+    select("stop");
+    let answer: (outcome: StartOutcome) => void = () => undefined;
+    const connection = reportingConnection(
+      true,
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const root = await rendered(connection);
+    expect(labels(root)).toEqual(["Cancel", "Ask an agent to fix this", "Report a bug", "Try again"]);
+
+    button(root, "Ask an agent to fix this")!.click();
+    const [text, options] = connection.askAgent.mock.calls[0]!;
+    expect(text).toMatch(
+      /^Imbue Studio showed the user this failure: Couldn't stop "Plan the trip"\. It's still running\. Try again\./,
+    );
+    expect(text).toContain("mngr exited with code 1");
+    expect(options).toEqual({ showsOutcome: true, onLateAnswer: undefined });
+    m.render(root, m(RootNoticeView, { connection }));
+    expect(button(root, "Asking an agent…")?.getAttribute("aria-disabled")).toBe("true");
+    expect(button(root, "Try again")?.getAttribute("aria-disabled")).toBe("true");
+
+    answer({ isOpened: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    m.render(root, m(RootNoticeView, { connection }));
+    expect(root.textContent).not.toContain("Couldn't stop");
+  });
+
+  it("tells a refused ask in the notice, and files both in the one bug report", async () => {
+    verbs.stopChat.mockRejectedValue(
+      httpError(500, { detail: "Failed to stop agent 'plan': mngr exited with code 1" }),
+    );
+    select("stop");
+    const refused = { message: "Chat couldn't open that.", details: "HTTP 503", isReportable: true };
+    const connection = reportingConnection(true, Promise.resolve({ isOpened: false, failure: refused }));
+    const root = await rendered(connection);
+
+    button(root, "Ask an agent to fix this")!.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    m.render(root, m(RootNoticeView, { connection }));
+
+    expect(root.textContent).toContain("Chat couldn't open that.");
+    button(root, "Report a bug")!.click();
+    expect(connection.reportBug).toHaveBeenCalledExactlyOnceWith({
+      message:
+        `Couldn't stop "Plan the trip". It's still running. Try again. If this persists, report a bug. ` +
+        "Chat couldn't open that.",
+      details: expect.stringMatching(/mngr exited with code 1[\s\S]*\n\nHTTP 503$/),
+    });
+  });
+
+  it("offers no agent on a notice that withholds one, where the ask would go through what failed", async () => {
+    raiseRootNotice({
+      title: "Couldn't send your message",
+      lines: {
+        body: ["Your message couldn't be sent to a chat. Try again. If this persists, report a bug."],
+        details: "HTTP 500",
+        isReportable: true,
+      },
+      retry: null,
+      isAgentWithheld: true,
+    });
+    const root = await rendered();
+
+    expect(labels(root)).toEqual(["OK", "Report a bug"]);
   });
 
   it("offers Report a bug only where the shell said Imbue Studio can open one", async () => {
