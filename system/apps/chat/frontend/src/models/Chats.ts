@@ -234,7 +234,12 @@ type WsEvent =
   | { type: "mentions_updated" }
   | ({ type: "provisional_chat_created" } & ProvisionalChat)
   | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null }
-  | { type: "accounts_updated" };
+  | { type: "accounts_updated" }
+  | { type: "held_send_failed"; chat_id: string; message_id: string; detail: string; kind: string };
+
+/** Notified when a message the chat app held while its agent came up never reached the agent: the chat, the message's
+ *  send-time id, why (in the harness's words when it gave any) and mngr's classification of it. */
+export type HeldSendFailedListener = (chatId: string, messageId: string, detail: string, kind: string) => void;
 
 export type ChatsUpdatedListener = (chats: ChatSnapshot[]) => void;
 /**
@@ -271,6 +276,7 @@ const registrationWaiters = new Map<string, { resolve: () => void; reject: (erro
 const launchesInFlight = new Set<string>();
 let chatsUpdatedListeners: ChatsUpdatedListener[] = [];
 let mentionsUpdatedListeners: (() => void)[] = [];
+const heldSendFailedListeners: HeldSendFailedListener[] = [];
 let chatActivityListeners: ChatActivityListener[] = [];
 let chatActiveAgentListeners: ChatActiveAgentListener[] = [];
 let ws: WebSocket | null = null;
@@ -360,6 +366,11 @@ function handleEvent(event: WsEvent): void {
       break;
     case "mentions_updated":
       notifyMentionsUpdated();
+      break;
+    case "held_send_failed":
+      for (const listener of heldSendFailedListeners) {
+        listener(event.chat_id, event.message_id, event.detail, event.kind);
+      }
       break;
     case "chats_updated": {
       isChatListReceived = true;
@@ -541,6 +552,10 @@ export function addMentionsUpdatedListener(listener: () => void): void {
 
 export function removeMentionsUpdatedListener(listener: () => void): void {
   mentionsUpdatedListeners = mentionsUpdatedListeners.filter((entry) => entry !== listener);
+}
+
+export function addHeldSendFailedListener(listener: HeldSendFailedListener): void {
+  heldSendFailedListeners.push(listener);
 }
 
 /** Every chat the app has minted that is not an agent yet, for the root's list. */

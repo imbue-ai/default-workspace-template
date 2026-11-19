@@ -49,6 +49,7 @@ import {
   addOutgoing,
   clearOutgoing,
   dropOutgoing,
+  dropOutgoingByMessageId,
   dropOutgoingNoTurnWillRetire,
   getOutgoingMessages,
 } from "../models/OutgoingMessages";
@@ -56,6 +57,7 @@ import {
   describeRequestError,
   describeRequestErrorKind,
   isUnansweredRequest,
+  sendFailureKindOf,
 } from "@imbue/workspace-ui/src/models/request-error";
 import {
   accountForFirstSend,
@@ -74,6 +76,7 @@ import {
 } from "../models/HarnessCatalog";
 import { chooseFastMode, parseFastModeCommand } from "./fast-mode-limit";
 import {
+  addHeldSendFailedListener,
   getChatById,
   getProvisionalChat,
   refuseSendToFailedChat,
@@ -315,6 +318,28 @@ export function restoreComposerDraft(chatId: string, taken: TakenComposerDraft):
   restoreToComposer(chatId, taken.text, taken.attachments);
   if (taken.mayContainDictatedSpeech) markDictatedSpeech(chatId);
 }
+
+// The sends this page posted that the chat app held for an agent still coming up, by send-time id: the draft each
+// was sent from, for handing back if the chat app reports it never reached the agent. Page memory, like the
+// "Sending…" bubble it stands behind.
+const heldSendDrafts = new Map<string, { chatId: string; draft: TakenComposerDraft }>();
+
+/** Note a send the chat app answered "held", so a later report that it never landed can hand it back. */
+function rememberHeldSend(chatId: string, messageId: string, draft: TakenComposerDraft): void {
+  heldSendDrafts.set(messageId, { chatId, draft });
+}
+
+// Only the page that sent a held send holds its draft, so only that page answers.
+addHeldSendFailedListener((chatId, messageId, detail, kind) => {
+  const held = heldSendDrafts.get(messageId);
+  if (held === undefined || held.chatId !== chatId) {
+    return;
+  }
+  heldSendDrafts.delete(messageId);
+  dropOutgoingByMessageId(chatId, [messageId]);
+  restoreComposerDraft(chatId, held.draft);
+  raiseFailureNotice(chatId, { title: "Couldn't send your message", detail, kind: sendFailureKindOf(kind) });
+});
 
 /**
  * Put ``text`` and ``attachments`` back in ``chatId``'s composer, above whatever is in it now.
@@ -1499,7 +1524,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             } else {
               await launchChat(chatId, choice.id, "", "agent");
               priorTurnIds = sentUserTurnIds(chatId);
-              dropOutgoingNoTurnWillRetire(chatId, outgoingId, await sendMessage(chatId, finalText, messageId));
+              const firstStatus = await sendMessage(chatId, finalText, messageId);
+              if (firstStatus === "held") rememberHeldSend(chatId, messageId, prepared);
+              dropOutgoingNoTurnWillRetire(chatId, outgoingId, firstStatus);
               refocusAfterSend();
               return;
             }
@@ -1527,6 +1554,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           refuseSendToFailedChat(chatId);
           priorTurnIds = sentUserTurnIds(chatId);
           const status = await sendMessage(chatId, finalText, messageId);
+          if (status === "held") rememberHeldSend(chatId, messageId, prepared);
           // The send resolved: the message is now real (committed, queued, or held for the
           // agent the chat is switching to), so its "Sending…" bubble is removed by the arriving
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).

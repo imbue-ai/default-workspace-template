@@ -66,6 +66,8 @@ const mocks = vi.hoisted(() => {
     launchAwaitingChatAsRoom: vi.fn(async (_chatId: string) => {}),
     // What the composer registered to hear of a model pick the chat app refused.
     modelChoiceFailureListener: null as ((chatId: string, detail: string) => void) | null,
+    // What the composer registered to hear of a held send that never reached its agent.
+    heldSendFailedListener: null as ((chatId: string, messageId: string, detail: string, kind: string) => void) | null,
     // The account ids that read as signed out; empty at rest.
     signedOutAccountIds: new Set<string>(),
     loadAccounts: vi.fn(async () => {}),
@@ -205,6 +207,7 @@ vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({
   describeRequestErrorKind: (e: unknown) =>
     typeof e === "object" && e !== null && "kind" in e ? (e as { kind: string }).kind : "unknown",
   isUnansweredRequest: (e: unknown) => typeof e === "object" && e !== null && (e as { code?: unknown }).code === 0,
+  sendFailureKindOf: (kind: unknown) => (typeof kind === "string" ? kind : "unknown"),
 }));
 vi.mock("../models/ModelSettings", () => ({
   addModelChoiceFailureListener: (listener: (chatId: string, detail: string) => void) => {
@@ -267,6 +270,9 @@ vi.mock("../models/Chats", async (importOriginal) => ({
   getChatById: () =>
     mocks.isChatRegistered ? { active_agent: mocks.agent, handoff: mocks.switching.handoff } : undefined,
   getProvisionalChat: () => mocks.provisional,
+  addHeldSendFailedListener: (listener: (chatId: string, messageId: string, detail: string, kind: string) => void) => {
+    mocks.heldSendFailedListener = listener;
+  },
   isLaunchInFlight: () => mocks.isLaunchInFlight,
   isRoomChat: () => mocks.isRoom,
   launchChat: (chatId: string, accountId: string, message?: string, kind?: string) =>
@@ -1326,6 +1332,34 @@ describe("MessageInput send to a chat still being created", () => {
     expect(text).toContain("mngr create exited with code 3");
     expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
   });
+
+  it("hands a held send back to the composer with the reason when the chat app reports it never landed", async () => {
+    mocks.sendMessage.mockResolvedValueOnce("held");
+    const component = MessageInput();
+    await typeAndSend(component, "agent-1", "held hello");
+    const messageId = (mocks.sendMessage.mock.calls[0] as unknown as [string, string, string])[2];
+
+    mocks.heldSendFailedListener!("agent-1", messageId, "The agent didn't take the message.", "failed");
+
+    const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    const text = renderedText(after);
+    expect(text).toContain("Couldn't send your message");
+    expect(text).toContain("The agent didn't take the message.");
+    expect(localStorage.getItem("message-text:agent-1")).toContain("held hello");
+    expect(getOutgoingMessages("agent-1").map((outgoing) => outgoing.content)).not.toContain(
+      expect.stringContaining("held hello"),
+    );
+  });
+
+  it("ignores a report of a held send this page did not send", async () => {
+    const component = MessageInput();
+
+    mocks.heldSendFailedListener!("agent-1", "someone-elses-message", "refused", "input_blocked");
+
+    const text = renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never));
+    expect(text).not.toContain("Couldn't send your message");
+    expect(localStorage.getItem("message-text:agent-1")).toBeNull();
+  });
 });
 
 describe("MessageInput first send of a seeded chat", () => {
@@ -1479,6 +1513,20 @@ describe("MessageInput first send of a chat with no seed", () => {
     expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-1", "", "agent");
     expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
     expect(mocks.sendMessage.mock.calls[0]).toEqual(expect.arrayContaining(["agent-1", "Plan my week"]));
+  });
+
+  it("hands the first send back to the composer when the chat app reports it never reached the new agent", async () => {
+    mocks.sendMessage.mockResolvedValueOnce("held");
+    const component = MessageInput();
+    await typeAndSend(component, "agent-1", "Plan my month");
+    const messageId = (mocks.sendMessage.mock.calls[0] as unknown as [string, string, string])[2];
+
+    mocks.heldSendFailedListener!("agent-1", messageId, "The agent didn't take the message.", "not_ready");
+
+    expect(renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never))).toContain(
+      "Couldn't send your message",
+    );
+    expect(localStorage.getItem("message-text:agent-1")).toContain("Plan my month");
   });
 
   it("drops the bubble of a first send that Stop took back, which no turn will retire", async () => {
