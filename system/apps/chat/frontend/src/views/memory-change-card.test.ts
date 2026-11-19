@@ -3,7 +3,7 @@ import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import type { MemoryChange, MemoryChangeCardHandlers, MemoryChangeCardState } from "./memory-change-card";
-import { lineDiff, MemoryChangeCard, renderMemoryChangeCard } from "./memory-change-card";
+import { lineDiff, MemoryChangeCard, memoryChangeCache, renderMemoryChangeCard } from "./memory-change-card";
 
 const CHANGE: MemoryChange = {
   id: "c1",
@@ -62,7 +62,12 @@ function draw(state: Partial<MemoryChangeCardState>, handlers: Partial<MemoryCha
   return root;
 }
 
+/** The roots the live tests mounted, unmounted after each test so a failed assertion leaves no fetch running. */
+const mountedRoots: HTMLElement[] = [];
+
 afterEach(() => {
+  for (const root of mountedRoots.splice(0)) m.mount(root, null);
+  memoryChangeCache.clearForTesting();
   vi.unstubAllGlobals();
 });
 
@@ -103,9 +108,9 @@ describe("renderMemoryChangeCard", () => {
     expect(files[1]).toContain("New note: Tea");
     expect(files[1]).toContain("Summary: Likes tea");
     expect(files[1]).toContain("The user likes tea.");
-    const added = [...root.querySelectorAll(".memory-change-file")[1].querySelectorAll(".diff-added")].map(
-      (line) => line.textContent,
-    );
+    const added = [
+      ...root.querySelectorAll(".memory-change-file")[1].querySelectorAll(".memory-change-line--added"),
+    ].map((line) => line.textContent);
     expect(added).toEqual(["Summary: Likes tea", "\u00a0", "The user likes tea."]);
     expect(files[1]).not.toContain("name:");
   });
@@ -126,6 +131,7 @@ describe("renderMemoryChangeCard", () => {
   it("drops Undo once the change is undone", () => {
     const root = draw({ change: { ...CHANGE, undone_at: "2026-11-18T22:05:00+00:00" } });
     expect(root.textContent).toContain("Memory change undone:");
+    expect(root.querySelector(".memory-change-card--undone")).not.toBeNull();
     expect(root.querySelector(".memory-change-undo")).toBeNull();
   });
 
@@ -140,6 +146,7 @@ describe("renderMemoryChangeCard", () => {
     const root = draw({ confirmDetail: "Changed again since: the index." }, { onUndoAnyway, onKeep });
     expect(root.querySelector(".memory-change-confirm")?.textContent).toContain("Changed again since: the index.");
     expect(root.querySelector(".memory-change-undo")).toBeNull();
+    expect(root.querySelector(".memory-change-undo-anyway")?.getAttribute("data-variant")).toBe("destructive");
     (root.querySelector(".memory-change-undo-anyway") as HTMLButtonElement).click();
     (root.querySelector(".memory-change-keep") as HTMLButtonElement).click();
     expect(onUndoAnyway).toHaveBeenCalledOnce();
@@ -176,6 +183,7 @@ describe("MemoryChangeCard", () => {
     m.mount(root, {
       view: () => m(MemoryChangeCard, { changeId: "c1", label: "Memory changed", summary: CHANGE.summary }),
     });
+    mountedRoots.push(root);
     return root;
   }
 
@@ -204,7 +212,6 @@ describe("MemoryChangeCard", () => {
     await settle(() => root.querySelector(".memory-change-error") !== null);
     expect(root.querySelector(".memory-change-error")?.textContent).toBe("That memory change is not in the record.");
     expect(root.querySelector(".memory-change-undo")).toBeNull();
-    m.mount(root, null);
   });
 
   it("asks in the card when a file changed again since, and undoes anyway when told to", async () => {
@@ -227,7 +234,6 @@ describe("MemoryChangeCard", () => {
     expect(root.querySelector(".memory-change-confirm")).toBeNull();
     expect(postedBodies(fetchMock)).toEqual([{ is_forced: false }, { is_forced: true }]);
     expect(String(fetchMock.mock.calls[2][0])).toContain("/api/memory-changes/c1/undo");
-    m.mount(root, null);
   });
 
   it("keeps everything as it is when told to keep it", async () => {
@@ -242,7 +248,6 @@ describe("MemoryChangeCard", () => {
     await settle(() => root.querySelector(".memory-change-confirm") === null);
     expect(root.querySelector(".memory-change-undo")).not.toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    m.mount(root, null);
   });
 
   it("disables Undo while the undo is in flight", async () => {
@@ -260,7 +265,6 @@ describe("MemoryChangeCard", () => {
     answerUndo(jsonResponse({ ...CHANGE, undone_at: "2026-11-18T22:05:00Z" }, 200));
     await settle(() => root.querySelector(".memory-change-undo") === null);
     expect(root.textContent).toContain("Memory change undone:");
-    m.mount(root, null);
   });
 
   it("says when the chat app cannot be reached", async () => {
@@ -271,6 +275,25 @@ describe("MemoryChangeCard", () => {
     await settle(() => root.querySelector(".memory-change-error") !== null);
     expect(root.querySelector(".memory-change-error")?.textContent).toBe("The chat app could not be reached.");
     expect((root.querySelector(".memory-change-undo") as HTMLButtonElement).disabled).toBe(false);
-    m.mount(root, null);
+  });
+
+  it("keeps what it loaded, what was undone and whether it was open when remounted", async () => {
+    const fetchMock = fetchAnswering(
+      jsonResponse(CHANGE, 200),
+      jsonResponse({ ...CHANGE, undone_at: "2026-11-18T22:05:00Z" }, 200),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const first = mountCard();
+    await settle(() => first.querySelector(".memory-change-undo") !== null);
+    click(first, ".memory-change-toggle");
+    click(first, ".memory-change-undo");
+    await settle(() => (first.textContent ?? "").includes("Memory change undone:"));
+    m.mount(first, null);
+
+    const second = mountCard();
+    m.redraw.sync();
+    expect(second.textContent).toContain("Memory change undone:");
+    expect(second.querySelector(".memory-change-diff")).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

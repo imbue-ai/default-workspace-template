@@ -9,17 +9,20 @@
  * undoes it through `POST /api/memory-changes/:id/undo` (the agent_memory library does both);
  * a 409 (a file changed again since) asks in the card whether to undo anyway.
  *
- * The seam: `MemoryChangeCard` is the live component (it fetches, holds the expanded and
- * busy state, and handles Undo), and `renderMemoryChangeCard` is the pure renderer the
- * tests drive directly.
+ * The seam: `MemoryChangeCard` is the live component (it reads and undoes the change through
+ * `memoryChangeCache`), and `renderMemoryChangeCard` is the pure renderer the tests drive
+ * directly. The change's state lives in that page-wide cache and the card's expansion in
+ * expansion-state.ts, never in the component: the transcript's virtualized window slides rows
+ * out and back in, and a card remounted that way keeps what it loaded, what was undone, and
+ * whether it was open.
  */
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { Button, buttonClass, buttonPartAttrs } from "@imbue/workspace-ui/src/components/Button";
-import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { HttpError, requestJson } from "@imbue/workspace-ui/src/models/http";
-import { railNodeAttrs } from "./agent-rail";
+import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
+import { renderNotice } from "./user-message-display";
 
 export interface ChangedMemoryFile {
   name: string;
@@ -109,17 +112,17 @@ const DIFF_LINE_CLASS: Record<DiffLineKind, string> = {
 
 function renderFile(file: ChangedMemoryFile): m.Vnode {
   return m("div", { class: "memory-change-file flex flex-col gap-1" }, [
-    m("span", { class: "text-faint" }, file.label),
+    m("span", { class: "memory-change-file-label text-faint" }, file.label),
     m(
       "div",
       {
         class:
-          "memory-change-diff m-0 flex flex-col rounded-md bg-surface-secondary px-2 py-1.5 whitespace-pre-wrap break-words",
+          "memory-change-diff flex flex-col rounded-md bg-surface-secondary px-2 py-1.5 whitespace-pre-wrap break-words",
       },
       lineDiff(file.before_text, file.after_text).map(([kind, text]) =>
         m(
           "div",
-          { class: `memory-change-line diff-${kind} rounded-sm px-1 ${DIFF_LINE_CLASS[kind]}` },
+          { class: `memory-change-line memory-change-line--${kind} rounded-sm px-1 ${DIFF_LINE_CLASS[kind]}` },
           text || "\u00a0",
         ),
       ),
@@ -147,15 +150,16 @@ export interface MemoryChangeCardHandlers {
   onKeep(): void;
 }
 
-/** The ask after a refused Undo: why it was refused, then "Undo anyway" or "Keep it". */
+/** The ask after a refused Undo: why it was refused, then "Undo anyway" (which also throws away the later
+ *  edits, so it reads as destructive) or "Keep it". */
 function renderConfirm(detail: string, state: MemoryChangeCardState, handlers: MemoryChangeCardHandlers): m.Vnode {
   return m("div", { class: "memory-change-confirm flex flex-wrap items-center gap-x-2 gap-y-1 pl-5" }, [
-    m("span", { class: "text-secondary" }, detail),
-    m("span", { class: "flex gap-1" }, [
+    m("span", { class: "memory-change-confirm-detail text-secondary" }, detail),
+    m("span", { class: "memory-change-confirm-actions flex gap-1" }, [
       m(
         Button,
         {
-          variant: "secondary",
+          variant: "destructive",
           sm: true,
           extra: "memory-change-undo-anyway",
           disabled: state.isBusy,
@@ -166,7 +170,6 @@ function renderConfirm(detail: string, state: MemoryChangeCardState, handlers: M
       m(
         Button,
         {
-          variant: "ghost",
           sm: true,
           extra: "memory-change-keep",
           disabled: state.isBusy,
@@ -178,65 +181,69 @@ function renderConfirm(detail: string, state: MemoryChangeCardState, handlers: M
   ]);
 }
 
+/** The card's actions beside the notice's line: show or hide the lines, open the note, and Undo. */
+function renderActions(
+  change: MemoryChange,
+  state: MemoryChangeCardState,
+  handlers: MemoryChangeCardHandlers,
+  isUndone: boolean,
+): m.Vnode {
+  return m("span", { class: "memory-change-actions flex gap-1" }, [
+    m(
+      Button,
+      { variant: "ghost", sm: true, extra: "memory-change-toggle", onclick: () => handlers.onToggle() },
+      state.isExpanded ? "Hide changes" : "Show changes",
+    ),
+    change.details_url
+      ? m(
+          "a",
+          {
+            class: buttonClass("ghost", { sm: true, extra: "memory-change-details no-underline" }),
+            ...buttonPartAttrs("ghost", false),
+            href: change.details_url,
+            target: "_blank",
+            rel: "noopener noreferrer",
+          },
+          "View details",
+        )
+      : null,
+    isUndone || state.confirmDetail !== null
+      ? null
+      : m(
+          Button,
+          {
+            variant: "ghost",
+            sm: true,
+            extra: "memory-change-undo",
+            disabled: state.isBusy,
+            onclick: () => handlers.onUndo(),
+          },
+          "Undo",
+        ),
+  ]);
+}
+
 /** The card itself, from its state: the notice line with its actions, then (expanded) each file's changed lines. */
 export function renderMemoryChangeCard(state: MemoryChangeCardState, handlers: MemoryChangeCardHandlers): m.Vnode {
   const change = state.change;
   const isUndone = change !== null && change.undone_at !== null;
-  const isConfirming = state.confirmDetail !== null;
-  const summary = change?.summary ?? state.summary;
-  return m("div", { class: "memory-change-card flex flex-col gap-1.5 text-(length:--font-size-helper)" }, [
-    m("div", { class: "flex flex-wrap items-center gap-x-2 gap-y-1" }, [
-      m(
-        "span",
-        { class: `mt-px shrink-0 ${isUndone ? "text-faint" : "text-accent"}`, ...railNodeAttrs("point") },
-        m.trust(icon(isUndone ? "refresh" : "check", { size: 13, strokeWidth: 2.5 })),
-      ),
-      m("span", { class: "min-w-0 text-secondary" }, [
-        m("span", { class: "font-medium text-primary" }, isUndone ? "Memory change undone:" : `${state.label}:`),
-        ` ${summary}`,
-      ]),
-      change === null
-        ? null
-        : m("span", { class: "flex gap-1" }, [
-            m(
-              Button,
-              { variant: "ghost", sm: true, extra: "memory-change-toggle", onclick: () => handlers.onToggle() },
-              state.isExpanded ? "Hide changes" : "Show changes",
-            ),
-            change.details_url
-              ? m(
-                  "a",
-                  {
-                    class: buttonClass("ghost", { sm: true, extra: "memory-change-details no-underline" }),
-                    ...buttonPartAttrs("ghost", false),
-                    href: change.details_url,
-                    target: "_blank",
-                    rel: "noopener noreferrer",
-                  },
-                  "View details",
-                )
-              : null,
-            isUndone || isConfirming
-              ? null
-              : m(
-                  Button,
-                  {
-                    variant: "ghost",
-                    sm: true,
-                    extra: "memory-change-undo",
-                    disabled: state.isBusy,
-                    onclick: () => handlers.onUndo(),
-                  },
-                  "Undo",
-                ),
-          ]),
-    ]),
-    state.confirmDetail !== null && !isUndone ? renderConfirm(state.confirmDetail, state, handlers) : null,
-    state.error ? m("span", { class: "memory-change-error text-danger" }, state.error) : null,
-    state.isExpanded && change !== null
-      ? m("div", { class: "flex flex-col gap-2 pl-5" }, change.files.map(renderFile))
-      : null,
-  ]);
+  return m(
+    "div",
+    { class: `memory-change-card ${isUndone ? "memory-change-card--undone" : ""} flex flex-col gap-1.5` },
+    [
+      renderNotice(isUndone ? "Memory change undone" : state.label, change?.summary ?? state.summary, {
+        iconName: isUndone ? "refresh" : "check",
+        isIconFaint: isUndone,
+        extra: "memory-change-header flex-wrap",
+        actions: change === null ? null : renderActions(change, state, handlers, isUndone),
+      }),
+      state.confirmDetail !== null && !isUndone ? renderConfirm(state.confirmDetail, state, handlers) : null,
+      state.error ? m("span", { class: "memory-change-error type-helper text-danger" }, state.error) : null,
+      state.isExpanded && change !== null
+        ? m("div", { class: "memory-change-files type-helper flex flex-col gap-2 pl-5" }, change.files.map(renderFile))
+        : null,
+    ],
+  );
 }
 
 const UNREACHABLE_DETAIL = "The chat app could not be reached.";
@@ -245,61 +252,108 @@ function changeUrl(changeId: string, suffix: string): string {
   return apiUrl(`/api/memory-changes/${encodeURIComponent(changeId)}${suffix}`);
 }
 
+/** One change as far as this page knows it: what was loaded, an Undo in flight, and what went wrong. */
+interface MemoryChangeEntry {
+  change: MemoryChange | null;
+  isBusy: boolean;
+  error: string;
+  confirmDetail: string | null;
+}
+
+/**
+ * The live cards' state, one entry per change, kept for the page's life so a remounted card keeps it.
+ * Every change bumps a version that the memoized row around a card compares (see StableUserMessage), the
+ * way expansion-state.ts's version does for expansions.
+ */
+export class MemoryChangeCache {
+  private readonly entries = new Map<string, MemoryChangeEntry>();
+  private version = 0;
+
+  getVersion(): number {
+    return this.version;
+  }
+
+  /** The change's entry; the first ask for a change starts loading it. */
+  entry(changeId: string): MemoryChangeEntry {
+    const known = this.entries.get(changeId);
+    if (known !== undefined) return known;
+    const fresh: MemoryChangeEntry = { change: null, isBusy: false, error: "", confirmDetail: null };
+    this.entries.set(changeId, fresh);
+    void this.load(changeId);
+    return fresh;
+  }
+
+  /** Undo the change; a 409 (a file changed again since) leaves the reason for the card to ask about. */
+  async undo(changeId: string, isForced: boolean): Promise<void> {
+    this.update(changeId, { isBusy: true, error: "" });
+    try {
+      const change = await requestJson<MemoryChange>("POST", changeUrl(changeId, "/undo"), { is_forced: isForced });
+      this.update(changeId, { change, confirmDetail: null, isBusy: false });
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 409) {
+        this.update(changeId, { confirmDetail: error.message, isBusy: false });
+      } else {
+        this.update(changeId, { error: describeFailure(error), isBusy: false });
+      }
+    }
+  }
+
+  /** Drop the question a refused Undo raised, keeping the change as it is. */
+  keep(changeId: string): void {
+    this.update(changeId, { confirmDetail: null });
+  }
+
+  /** Forget every change; for tests, which reuse ids across cases. */
+  clearForTesting(): void {
+    this.entries.clear();
+    this.version += 1;
+  }
+
+  private async load(changeId: string): Promise<void> {
+    try {
+      this.update(changeId, { change: await requestJson<MemoryChange>("GET", changeUrl(changeId, "")) });
+    } catch (error) {
+      this.update(changeId, { error: describeFailure(error) });
+    }
+  }
+
+  private update(changeId: string, patch: Partial<MemoryChangeEntry>): void {
+    const known = this.entries.get(changeId) ?? { change: null, isBusy: false, error: "", confirmDetail: null };
+    this.entries.set(changeId, { ...known, ...patch });
+    this.version += 1;
+    m.redraw();
+  }
+}
+
+function describeFailure(error: unknown): string {
+  return error instanceof HttpError ? error.message : UNREACHABLE_DETAIL;
+}
+
+/** The live cards' cache: one per page. */
+export const memoryChangeCache = new MemoryChangeCache();
+
+/** The expansion key of a change's card (expansion-state.ts). */
+export function memoryChangeExpansionKey(changeId: string): string {
+  return `memory-change:${changeId}`;
+}
+
 /** The live card for one change: loads it, and undoes it (asking in the card first when a file changed again since). */
 export function MemoryChangeCard(): m.Component<{ changeId: string; label: string; summary: string }> {
-  const state: MemoryChangeCardState = {
-    label: "",
-    summary: "",
-    change: null,
-    isExpanded: false,
-    isBusy: false,
-    error: "",
-    confirmDetail: null,
-  };
-  let changeId = "";
-
-  async function load(): Promise<void> {
-    try {
-      state.change = await requestJson<MemoryChange>("GET", changeUrl(changeId, ""));
-    } catch (error) {
-      state.error = error instanceof HttpError ? error.message : UNREACHABLE_DETAIL;
-    }
-    m.redraw();
-  }
-
-  async function undo(isForced: boolean): Promise<void> {
-    state.isBusy = true;
-    state.error = "";
-    m.redraw();
-    try {
-      state.change = await requestJson<MemoryChange>("POST", changeUrl(changeId, "/undo"), { is_forced: isForced });
-      state.confirmDetail = null;
-    } catch (error) {
-      if (error instanceof HttpError && error.status === 409) state.confirmDetail = error.message;
-      else state.error = error instanceof HttpError ? error.message : UNREACHABLE_DETAIL;
-    }
-    state.isBusy = false;
-    m.redraw();
-  }
-
   return {
-    oninit(vnode) {
-      changeId = vnode.attrs.changeId;
-      state.label = vnode.attrs.label;
-      state.summary = vnode.attrs.summary;
-      void load();
-    },
-    view() {
-      return renderMemoryChangeCard(state, {
-        onToggle: () => {
-          state.isExpanded = !state.isExpanded;
+    view(vnode) {
+      const { changeId, label, summary } = vnode.attrs;
+      const entry = memoryChangeCache.entry(changeId);
+      const expansionKey = memoryChangeExpansionKey(changeId);
+      const isExpanded = isBlockExpanded(expansionKey);
+      return renderMemoryChangeCard(
+        { label, summary, isExpanded, ...entry },
+        {
+          onToggle: () => setBlockExpanded(expansionKey, !isExpanded),
+          onUndo: () => void memoryChangeCache.undo(changeId, false),
+          onUndoAnyway: () => void memoryChangeCache.undo(changeId, true),
+          onKeep: () => memoryChangeCache.keep(changeId),
         },
-        onUndo: () => void undo(false),
-        onUndoAnyway: () => void undo(true),
-        onKeep: () => {
-          state.confirmDetail = null;
-        },
-      });
+      );
     },
   };
 }
