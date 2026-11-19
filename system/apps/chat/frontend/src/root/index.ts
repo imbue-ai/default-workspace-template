@@ -318,6 +318,7 @@ async function applyIntake(token: string, pickedChatId: string | null, intake: P
       title: "Couldn't send your message",
       lines: describeIntakeApplyFailure(error, isDrafted),
       retry: null,
+      isAgentWithheld: true,
     });
   }
 }
@@ -341,6 +342,7 @@ async function takeIntake(token: string): Promise<void> {
           pendingToken = token;
           void takeIntake(token);
         },
+        isAgentWithheld: true,
       });
     }
     return;

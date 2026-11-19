@@ -136,7 +136,7 @@ vi.mock("./FastModeNotice", () => ({ FastModeNotice: { view: () => null } }));
 import type { ChatSnapshot, CreateFailureKind } from "../models/Chats";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { ChatPanel } from "./ChatPanel";
-import { AskAgentToFixButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { AskAgentToFixButton, FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
 import type { AskAgentToFixButtonAttrs } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
@@ -465,6 +465,12 @@ describe("ChatPanel over a provisional chat", () => {
       "This chat couldn't be started. Try again. If this persists, report a bug.",
     );
     expect(detailsShown(refused)).toContain("account acct-1 is on a lane this build does not have");
+    // The refused relaunch is the page's own failure again, so it gets no "Ask an agent" beside the page's.
+    expect(
+      flatten(refused)
+        .filter((vnode) => vnode.tag === FailureRemedies)
+        .map((vnode) => (vnode.attrs as { isAgentWithheld?: boolean }).isAgentWithheld),
+    ).toEqual([true]);
 
     mocks.proto = {
       chat_id: AGENT_ID,
@@ -540,9 +546,9 @@ describe("ChatPanel over a provisional chat", () => {
       expect(button.disabled).toBe(true);
       expect(mocks.sendMessage).toHaveBeenCalledExactlyOnceWith(
         "chat-main",
-        'The chat "Chat 1" couldn\'t be started.\n\n' +
+        '/assist Imbue Studio showed the user this failure: The chat "Chat 1" couldn\'t be started.\n\n' +
           "Details:\n```\nmngr create exited with code 1: no space left on device\n```\n\n" +
-          "Find out why this failed and fix it. Then tell me what was wrong and what you changed.",
+          "Find out why it failed and fix it, then tell the user what was wrong and what you changed.",
         "minted-id",
       );
       expect(mocks.openChatPage).not.toHaveBeenCalled();
@@ -612,7 +618,7 @@ describe("ChatPanel over a provisional chat", () => {
       expect(ask.querySelector("button")?.textContent).toBe("Ask an agent to fix this");
     });
 
-    it("tells a refused ask at the end of the page, under every button", async () => {
+    it("tells a refused ask under the ask's button, after the page's other ways out", async () => {
       mocks.chats = [chatSnapshotFixture("chat-main")];
       mocks.mainChatId = "chat-main";
       failed("acct-1", "mngr create exited with code 1");
@@ -741,6 +747,27 @@ describe("ChatPanel over a failed create, told by its kind and reported as a bug
     expect(shell.posted("shell:report-bug")).toEqual([
       { type: "shell:report-bug", message: example.sentence, details: example.error },
     ]);
+  });
+
+  it("offers the agent before the page's Report a bug, and tells a refused ask between them", async () => {
+    mocks.chats = [chatSnapshotFixture("chat-main")];
+    mocks.mainChatId = "chat-main";
+    failed("acct-1", "mngr create exited with code 3");
+    mocks.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("{}"), { code: 500, response: { detail: "mngr message exited 1" } }),
+    );
+    const page = mountPage();
+    const controls = (): string[] =>
+      [...page.querySelectorAll(".message-list-create-failed :is(button, .ask-agent-failure)")].map((control) =>
+        control.classList.contains("ask-agent-failure") ? "(refused ask)" : (control.textContent ?? ""),
+      );
+    expect(controls().slice(-2)).toEqual(["Ask an agent to fix this", "Report a bug"]);
+
+    page.querySelector<HTMLButtonElement>(".ask-agent-to-fix")!.click();
+    await flushAsync();
+    m.redraw.sync();
+
+    expect(controls().slice(-3)).toEqual(["Ask an agent to fix this", "(refused ask)", "Report a bug"]);
   });
 
   it("offers no Report a bug where the shell said Imbue Studio cannot open one", () => {

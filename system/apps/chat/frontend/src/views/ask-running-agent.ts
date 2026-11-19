@@ -4,7 +4,8 @@
  * through the chat app's own send route rather than through the shell.
  */
 
-import type { ShellConnection, ShownFailure, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
+import { assistRequest } from "@imbue/workspace-ui/src/app_contract";
+import type { ShellConnection, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { getChatById, getChats, getMainChatId } from "../models/Chats";
 import type { ProvisionalChat } from "../models/Chats";
@@ -52,18 +53,6 @@ function describeAskFailure(error: unknown, targetChatId: string): FailureLines 
   return { ...lines, details: lines.details === null ? null : `Asking ${asked}:\n${lines.details}` };
 }
 
-/** ``lines`` told together with a refused ask about them, for a surface that shows both as one failure: the ask's
- *  sentence is the last paragraph, and one "See details" holds the failure's details and then the ask's. */
-export function withRefusedAsk(lines: FailureLines, ask: ShownFailure | null): FailureLines {
-  if (ask === null) return lines;
-  const details = [lines.details, ask.details].filter((part): part is string => part !== null && part.trim() !== "");
-  return {
-    body: [...lines.body, ask.message],
-    details: details.length === 0 ? null : details.join("\n\n"),
-    isReportable: lines.isReportable || ask.isReportable,
-  };
-}
-
 async function sendAsk(targetChatId: string, text: string): Promise<StartOutcome> {
   try {
     await sendMessage(targetChatId, text, mintMessageId());
@@ -79,14 +68,15 @@ async function sendAsk(targetChatId: string, text: string): Promise<StartOutcome
 }
 
 /** What ``askAgentToFix`` and ``AskAgentToFixButton`` take in place of the page's shell connection, so the ask is a
- *  message to ``targetChatId``, shown once it is sent. A bug report about a refused ask still goes to the shell. */
+ *  message to ``targetChatId``, shown once it is sent. It is sent behind the assist command, as an ask through the
+ *  shell is, so the agent runs the workspace's assist flow. A bug report about a refused ask still goes to the shell. */
 export function askConnectionToChat(
   targetChatId: string,
 ): Pick<ShellConnection, "hasShell" | "askAgent" | "canReportBug" | "reportBug"> {
   return {
     // The send route carries the ask, so it can be made with or without a shell framing the page.
     hasShell: () => true,
-    askAgent: (text) => sendAsk(targetChatId, text),
+    askAgent: (text) => sendAsk(targetChatId, assistRequest(text)),
     canReportBug: () => getShellConnection()?.canReportBug() ?? false,
     reportBug: (failure) => getShellConnection()?.reportBug(failure),
   };

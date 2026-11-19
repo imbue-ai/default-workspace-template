@@ -11,7 +11,7 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { getChatById } from "../models/Chats";
 import type { ChatSnapshot, HandoffState } from "../models/Chats";
 import { retryHandoff } from "../models/Handoffs";
@@ -21,7 +21,7 @@ import { startChatOnAccount } from "../shell";
 import { getShellConnection } from "../shellConnection";
 import { raiseNewChatFailure } from "./MessageInput";
 import { harnessLabel } from "./harness-labels";
-import { plainFailureLines, plainFailureSentence, reportedFailureOfLines } from "./failure-lines";
+import { plainFailureLines, plainFailureSentence, shownFailureOfLines } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 
@@ -147,14 +147,15 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
             ? m("div", { class: "flex flex-col gap-1" }, [
                 m("p", { class: "handoff-retry-error text-sm text-danger" }, plainFailureSentence(retryError)),
                 m("div", { class: "text-secondary" }, m(SeeDetails, { details: retryError.details })),
-                retryError.isReportable
-                  ? m(ReportBugButton, {
-                      connection: getShellConnection(),
-                      failure: reportedFailureOfLines(retryError),
-                      sm: true,
-                      extra: "self-start",
-                    })
-                  : null,
+                m(
+                  "div",
+                  { class: "flex flex-wrap items-center gap-2" },
+                  m(FailureRemedies, {
+                    connection: getShellConnection(),
+                    failure: shownFailureOfLines(retryError),
+                    sm: true,
+                  }),
+                ),
               ])
             : null,
         ],

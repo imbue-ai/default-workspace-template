@@ -7535,7 +7535,7 @@ def test_an_app_chat_intake_with_nothing_signed_in_mints_the_titled_chat_awaitin
 
 _ASK = "The preview couldn't load. Find out why this failed and fix it."
 # The ask as a chat receives it from a page of the Docs app: the page's task does not say which app failed.
-_ASK_NAMING_DOCS = f"This is about the Docs app.\n\n{_ASK}"
+_ASK_NAMING_DOCS = f"/assist This is about the Docs app.\n\n{_ASK}"
 
 
 def _ask_about_docs(client: FlaskClient, **fields: object) -> Any:
@@ -7682,13 +7682,12 @@ def test_an_app_ask_with_no_chat_about_the_app_creates_it_with_the_ask_as_its_fi
     visitors_chat_id = _chat_id_of(visitors.get_json()["path"])
     visitors_chat = manager.get_provisional_chat(visitors_chat_id)
     assert visitors_chat is not None
-    ask_naming_notes = f"This is about the Notes app.\n\n{_ASK}"
-    assert (visitors_chat.name, visitors_chat.message) == ("Notes Chat", f"[from: Bob] {ask_naming_notes}")
+    ask_naming_notes = f"/assist This is about the Notes app.\n\n{_ASK}"
+    # An ask runs the assist command, which a chat never prefixes with its sender, so who pressed it is in the
+    # annotation alone.
+    assert (visitors_chat.name, visitors_chat.message) == ("Notes Chat", ask_naming_notes)
     (annotation,) = state.authors.annotations(ChatId(visitors_chat_id))
-    assert (str(annotation.author), annotation.text_sha256) == (
-        _VISITOR_KEY,
-        text_sha256(f"[from: Bob] {ask_naming_notes}"),
-    )
+    assert (str(annotation.author), annotation.text_sha256) == (_VISITOR_KEY, text_sha256(ask_naming_notes))
     wait_until_true(lambda: len(shell.bubbles) == 1, 10.0, "the visitor's first message's bubble to reach the shell")
     assert [(str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text) for bubble in shell.bubbles] == [
         (_VISITOR_KEY, visitors_chat_id, "Notes Chat", ask_naming_notes)

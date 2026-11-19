@@ -1,16 +1,18 @@
 /**
  * The chat root's one notice: a failure of something done from the chat list (stop, restart, delete) or of a
  * message sent from outside a chat, told in a styled dialog over the list rather than a browser alert. Our sentence
- * on screen, the server's text behind "See details", Try again where repeating the operation can help, and "Report
- * a bug" when the sentence asks for one.
+ * on screen, the server's text behind "See details", Try again where repeating the operation can help, and "Ask an
+ * agent to fix this" and "Report a bug" when the sentence asks for a bug report.
  */
 
 import m from "mithril";
-import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
+import { askAgentToFix } from "@imbue/workspace-ui/src/app_contract";
+import type { ShellConnection, ShownFailure } from "@imbue/workspace-ui/src/app_contract";
 import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
-import { reportBugActions } from "../views/failure-actions";
+import { failureRemedyActions } from "../views/failure-actions";
+import { plainFailureSentence, withRefusedAsk } from "../views/failure-lines";
 import type { FailureLines } from "../views/failure-lines";
 
 export interface RootNotice {
@@ -18,23 +20,56 @@ export interface RootNotice {
   readonly lines: FailureLines;
   /** Repeats the operation; null when repeating it cannot help or is not safe. */
   readonly retry: (() => void) | null;
+  /** Offer no agent: the ask would go through what failed (an ask reaches its chat through the same intake route a
+   *  message from outside a chat does). */
+  readonly isAgentWithheld?: boolean;
 }
 
 let current: RootNotice | null = null;
+// The notice's "Ask an agent to fix this" while it is under way, and why it was refused once it was.
+let isAsking = false;
+let askFailure: ShownFailure | null = null;
 
 export function raiseRootNotice(notice: RootNotice): void {
   current = notice;
+  isAsking = false;
+  askFailure = null;
   m.redraw();
 }
 
 function closeRootNotice(): void {
   current = null;
+  isAsking = false;
+  askFailure = null;
+  m.redraw();
+}
+
+/** Hand ``notice``'s failure to an agent through the shell, which shows its chat; that closes the notice. A refused
+ *  ask is told in the notice, under the failure it was about. */
+async function askAgentAbout(notice: RootNotice, connection: Pick<ShellConnection, "askAgent">): Promise<void> {
+  if (isAsking) return;
+  isAsking = true;
+  askFailure = null;
+  m.redraw();
+  const outcome = await askAgentToFix(
+    connection,
+    { whatFailed: plainFailureSentence(notice.lines), details: notice.lines.details },
+    { showsOutcome: true },
+  );
+  // Another notice took this one's place meanwhile.
+  if (current !== notice) return;
+  isAsking = false;
+  if (outcome.isOpened) {
+    closeRootNotice();
+    return;
+  }
+  askFailure = outcome.failure;
   m.redraw();
 }
 
 export interface RootNoticeViewAttrs {
   /** The root's connection to the shell, null before it connects. */
-  readonly connection: Pick<ShellConnection, "canReportBug" | "reportBug"> | null;
+  readonly connection: Pick<ShellConnection, "hasShell" | "askAgent" | "canReportBug" | "reportBug"> | null;
 }
 
 /** Mounted once by the chat root, over everything else. */
@@ -44,15 +79,22 @@ export function RootNoticeView(): m.Component<RootNoticeViewAttrs> {
     view(vnode) {
       const notice = current;
       if (notice === null) return null;
+      const { connection } = vnode.attrs;
       const retry = notice.retry;
+      const told = withRefusedAsk(notice.lines, askFailure);
+      const ask =
+        !notice.lines.isReportable || notice.isAgentWithheld === true || connection === null || !connection.hasShell()
+          ? null
+          : { isAsking, run: () => void askAgentAbout(notice, connection) };
       return m(dialog, {
         title: notice.title,
-        body: notice.lines.body,
-        details: notice.lines.details,
-        dismissLabel: retry === null ? "OK" : "Cancel",
+        body: told.body,
+        details: told.details,
+        dismissLabel: retry === null && ask === null ? "OK" : "Cancel",
+        isDismissable: !isAsking,
         onDismiss: closeRootNotice,
         actions: [
-          ...reportBugActions(vnode.attrs.connection, notice.lines),
+          ...failureRemedyActions(connection, told, ask),
           ...(retry === null
             ? []
             : [
@@ -64,7 +106,7 @@ export function RootNoticeView(): m.Component<RootNoticeViewAttrs> {
                   },
                 },
               ]),
-        ],
+        ].map((action) => (isAsking ? { ...action, isDisabled: true } : action)),
       });
     },
   };

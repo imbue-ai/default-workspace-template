@@ -855,6 +855,35 @@ describe("a failure on the chooser's screens", () => {
     shell.release();
   });
 
+  it("offers an agent for a failed sign-in only while an account is signed in, for the agent to run on", async () => {
+    startFlow.mockRejectedValue(
+      rejection(400, {
+        detail: "Timed out waiting for the sign-in details.",
+        user_facing_message: "Imbue Studio couldn't start the sign-in. Try again. If this persists, report a bug.",
+        reportable: true,
+      }),
+    );
+    const shell = framePageInShell(true);
+    const { root, draw } = await mounted();
+    (root.querySelector('[data-e2e="lane-anthropic"]') as HTMLElement).click();
+    await settled();
+    draw();
+
+    // Nothing is signed in, so no agent could take the ask.
+    expect(root.querySelector(".ask-agent-to-fix")).toBeNull();
+    expect(root.querySelector(".report-bug")).not.toBeNull();
+
+    state.accounts = [account("a1", "openai", "OpenAI (Codex)")];
+    draw();
+    (root.querySelector(".ask-agent-to-fix") as HTMLElement).click();
+    const [ask] = shell.posted("shell:ask-agent");
+    expect(String(ask?.text)).toMatch(
+      /^Imbue Studio showed the user this failure: Imbue Studio couldn't start the sign-in\. Try again\./,
+    );
+    expect(String(ask?.text)).toContain("Timed out waiting for the sign-in details.");
+    shell.release();
+  });
+
   it("words a sign-in refused with no reason itself, never as the rejection's own text", async () => {
     startFlow.mockRejectedValue(rejection(500, null));
     const { root, draw } = await mounted();

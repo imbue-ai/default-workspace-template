@@ -97,7 +97,11 @@ import { hasLandedLiveSwitch, hasOpenHandoffRequest, isTailTurnSettled, liveComp
 import { closeRunningCompactionChips } from "./compaction-chips";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { AskAgentToFixButton, ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import {
+  AskAgentToFixButton,
+  FailureRemedies,
+  ReportBugButton,
+} from "@imbue/workspace-ui/src/components/FailureButtons";
 import { withAskFailure } from "@imbue/workspace-ui/src/app_contract";
 import type { ShownFailure } from "@imbue/workspace-ui/src/app_contract";
 import { askConnectionToChat, chatToAskAboutFailedCreate } from "./ask-running-agent";
@@ -107,7 +111,7 @@ import {
   plainFailureLines,
   plainFailureLinesOf,
   plainFailureSentence,
-  reportedFailureOfLines,
+  shownFailureOfLines,
 } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 
@@ -480,14 +484,24 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     };
   }
 
-  /** A failure line under a page's controls, with its details collapsed beneath it. */
-  function renderFailureLines(lines: FailureLines | null, extraClass: string): m.Children {
+  /** A failure line under a page's controls, with its details collapsed beneath it. ``isAgentWithheld`` where the
+   *  page's own "Ask an agent to fix this" already covers it. */
+  function renderFailureLines(lines: FailureLines | null, extraClass: string, isAgentWithheld = false): m.Children {
     if (lines === null) return null;
     return m("div", { class: `${extraClass} flex flex-col items-center gap-1 text-center` }, [
       m("p", { class: "text-danger text-sm" }, plainFailureSentence(lines)),
       m("div", { class: "text-secondary" }, m(SeeDetails, { details: lines.details })),
       lines.isReportable
-        ? m(ReportBugButton, { connection: getShellConnection(), failure: reportedFailureOfLines(lines), sm: true })
+        ? m(
+            "div",
+            { class: "flex flex-wrap items-center justify-center gap-2" },
+            m(FailureRemedies, {
+              connection: getShellConnection(),
+              failure: shownFailureOfLines(lines),
+              isAgentWithheld,
+              sm: true,
+            }),
+          )
         : null,
     ]);
   }
@@ -649,7 +663,9 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         m("p", { class: "type-heading text-primary" }, "This chat could not be started"),
         m("p", { class: "message-list-create-failed-text text-secondary text-center" }, sentence),
         m("div", { class: "text-secondary" }, m(SeeDetails, { details: provisional.error })),
-        renderFailureLines(launchError, "message-list-create-retry-failed"),
+        // A Try again that failed again is the page's own failure, which the page's ask (a running chat's, or none
+        // where a new chat would meet it too) is about.
+        renderFailureLines(launchError, "message-list-create-retry-failed", true),
         renderFailureLines(pageActionError, "message-list-remove-failed"),
         m("div", { class: FAILED_CREATE_BUTTONS_CLASS }, [
           hasAccount
@@ -698,13 +714,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
             },
             "Remove this chat",
           ),
-          m(ReportBugButton, {
-            connection: getShellConnection(),
-            failure: withAskFailure({ message: sentence, details: provisional.error }, refusedAsk),
-            extra: "message-list-create-report-bug",
-          }),
-          // Last in the row: the button says under itself what a refused ask came to, which then ends the page
-          // rather than sitting between its buttons.
+          // The agent first, then the page's one Report a bug, as every failure offers them. A refused ask is told
+          // under the ask's button, on a line of its own, and the report files it with the create's failure.
           chatToAskId === null
             ? null
             : m(AskAgentToFixButton, {
@@ -719,6 +730,11 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                   },
                 },
               }),
+          m(ReportBugButton, {
+            connection: getShellConnection(),
+            failure: withAskFailure({ message: sentence, details: provisional.error }, refusedAsk),
+            extra: "message-list-create-report-bug",
+          }),
         ]),
       ],
     );
@@ -956,15 +972,9 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       const lines = plainFailureLinesOf(load.error, "This conversation couldn't be loaded", { requestKind: "read" });
       return m("div", { class: "message-list-error flex flex-col items-center justify-center h-full gap-3 p-8" }, [
         m("p", { class: "message-list-error-text text-danger text-center" }, plainFailureSentence(lines)),
-        m("div", { class: "flex items-center gap-2" }, [
+        m("div", { class: "flex flex-wrap items-center justify-center gap-2" }, [
           m(Button, { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(chatId) }, "Refresh"),
-          lines.isReportable
-            ? m(ReportBugButton, {
-                connection: getShellConnection(),
-                failure: reportedFailureOfLines(lines),
-                sm: true,
-              })
-            : null,
+          m(FailureRemedies, { connection: getShellConnection(), failure: shownFailureOfLines(lines), sm: true }),
         ]),
         m("div", { class: "text-secondary" }, m(SeeDetails, { details: lines.details })),
       ]);

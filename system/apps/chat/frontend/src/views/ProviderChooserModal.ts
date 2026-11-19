@@ -47,7 +47,7 @@ import { renderMarkdown } from "../markdown";
 import { providerMark } from "./providerMarks";
 import { removeAccountDialog } from "./removeAccountDialog";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { getShellConnection } from "../shellConnection";
@@ -441,10 +441,10 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     return [
       signedIn,
       // The providers are listed but the accounts may not be, so the failure sits above them with a way to load again.
-      loadError !== null ? inlineFailure(loadError, [reportBugButton(loadError), loadAgainButton()]) : null,
+      loadError !== null ? inlineFailure(loadError, [failureRemedies(loadError), loadAgainButton()]) : null,
       // Removing an account can fail -- a row with no folder, a store that will not write --
       // and without this the row simply stays put with no explanation.
-      error !== null ? inlineFailure(error, reportBugButton(error)) : null,
+      error !== null ? inlineFailure(error, failureRemedies(error)) : null,
       signedIn !== null ? m("div", { class: `${css.SECTION_LABEL} mt-6` }, "Add more") : null,
       m("div", { class: css.ROW_STACK }, getLanes().map(laneRow)),
       roomRow(),
@@ -953,7 +953,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       let footer: m.Children = null;
       if (current === null) {
         body = renderChooser();
-        if (isLoadFailureScreen()) footer = [reportBugButton(loadError), loadAgainButton()];
+        if (isLoadFailureScreen()) footer = [failureRemedies(loadError), loadAgainButton()];
       } else if (isSuccess) {
         body = statusScreen(
           "success",
@@ -973,7 +973,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             : error;
         body = statusScreen("error", "That didn't work", failure?.message ?? null, failureMark(failure));
         footer = [
-          reportBugButton(failure),
+          failureRemedies(failure),
           hasOtherWays(current)
             ? m(
                 Button,
@@ -1153,12 +1153,15 @@ function failureMark(failure: ChooserFailure | null): m.Children {
   return failure === null ? null : m(SeeDetails, { details: failure.details });
 }
 
-function reportBugButton(failure: ChooserFailure | null): m.Children {
-  return failure?.isReportable === true
-    ? m(ReportBugButton, {
+/** What a failure on the chooser offers when it asks for a bug report: "Ask an agent to fix this", then "Report a
+ *  bug". No agent while nothing is signed in, since an agent needs an account to run on. */
+function failureRemedies(failure: ChooserFailure | null): m.Children {
+  return failure === null
+    ? null
+    : m(FailureRemedies, {
         connection: getShellConnection(),
-        failure: { message: failure.message, details: failure.details },
+        failure,
         variant: "secondary",
-      })
-    : null;
+        isAgentWithheld: getAccounts().length === 0,
+      });
 }

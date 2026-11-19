@@ -2081,9 +2081,9 @@ def test_a_create_that_fails_can_ask_an_agent_that_is_already_running_to_fix_it(
         wait_for(lambda: len(messenger.sent) > 0, timeout=15.0, error_message="the ask never reached an agent")
         ((asked_agent_id, task),) = messenger.sent
         assert asked_agent_id == FIXTURE_AGENT_ID
+        assert task.startswith("/assist Imbue Studio showed the user this failure: ")
         assert "couldn't be started." in task
         assert "exited with code 3" in task
-        assert "Find out why this failed and fix it." in task
         _wait_for_chat_window_path(server, lambda path: path == _FIXTURE_ROOT_PATH, "the chat that was asked")
         expect(_chat(page).locator(".message-list").first).to_be_visible(timeout=15000)
 
