@@ -1510,6 +1510,53 @@ def test_a_secret_request_notice_still_reaches_a_chat_whose_account_was_signed_o
     assert messenger.sent == [(agent_id, "The secret you asked for is ready.")]
 
 
+def test_the_cloud_connections_bridge_sends_through_the_ordinary_send_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The notice answers the agent's own permission request, so it reaches the agent whatever became of its account."""
+    agent_id = "agent-00000000000000000000000000000738"
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, "signed-out-account-8816")
+    bridge = state_of(client.application).cloud_connections_bridge
+    assert bridge is not None
+
+    with client.application.app_context():
+        bridge.send(agent_id, "The user chose to enable cloud MCP connections instead.")
+
+    assert messenger.sent == [(agent_id, "The user chose to enable cloud MCP connections instead.")]
+
+
+def test_the_cloud_connections_bridge_restarts_the_agent_and_hands_back_what_was_queued(client: FlaskClient) -> None:
+    agent_info = _agent_info()
+    fake_watcher = _fake_queue_watcher("queued text")
+    bridge = state_of(client.application).cloud_connections_bridge
+    assert bridge is not None
+
+    with (
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch.object(AgentManager, "reset_activity_state"),
+        client.application.app_context(),
+    ):
+        assert bridge.refuse_restart(agent_info.id, agent_info) is None
+        block = bridge.restart(agent_info.id, agent_info)
+
+    assert block == "queued text"
+    assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "claude-agent", "--restart", "--no-resume"]
+    assert fake_watcher.clear_calls == [True]
+
+
+def test_the_cloud_connections_bridge_refuses_to_restart_the_services_agent(client: FlaskClient) -> None:
+    primary = _agent_info(agent_id="services-1", name="system-services", labels={"is_primary": "true"})
+    bridge = state_of(client.application).cloud_connections_bridge
+    assert bridge is not None
+
+    with client.application.app_context():
+        refusal = bridge.refuse_restart(primary.id, primary)
+
+    assert refusal is not None
+    assert refusal.status_code == 400
+
+
 def test_a_rooms_mention_is_refused_by_a_chat_whose_account_was_signed_out(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

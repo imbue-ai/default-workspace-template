@@ -31,6 +31,7 @@ from imbue.chat.chat_records import CHAT_RECORDS_DIRNAME
 from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.chat_settings import SETTINGS_FILENAME
+from imbue.chat.cloud_connections import record_connected_in_background
 from imbue.chat.config import Config
 from imbue.chat.config import load_config
 from imbue.chat.event_queues import AgentEventQueues
@@ -198,7 +199,11 @@ def build_production_state(
         # One long-lived service per app: it holds the in-flight sign-in PTY between the
         # start call and the polls that advance it. A successful re-auth restarts the live agents
         # bound to that account -- they do not pick up a swapped credential until they next start.
-        auth_flows=AuthFlowService.create(restart_bound_agents=agent_manager.restart_agents_on_account_in_background),
+        # A sign-in also has the account's cloud connections read, once, on a thread of its own.
+        auth_flows=AuthFlowService.create(
+            restart_bound_agents=agent_manager.restart_agents_on_account_in_background,
+            on_signed_in=record_connected_in_background,
+        ),
         # Read-only: it reports claude's auth state and writes and restarts nothing, so it
         # needs no collaborators.
         claude_auth_service=ClaudeAuthService(),

@@ -2,7 +2,9 @@
  * The agent permission-request card: a self-contained component that renders a
  * latchkey permission request as a human-readable card (what's being requested,
  * the agent's reason, a review button or the user's verdict, and a raw-request
- * disclosure) rather than a generic "Tool: Bash" block.
+ * disclosure) rather than a generic "Tool: Bash" block. A pending request for a
+ * service the user's provider account already has connected also carries a
+ * quiet offer to turn those connections on instead (`cloud-connections-offer.ts`).
  *
  * The card has one seam: `PermissionCard` is the live component (it parses the
  * request once and looks up the gateway catalog so a scope like `slack-api`
@@ -17,6 +19,12 @@ import type { ContractMessage } from "@minds/embed-contract";
 import { PERMISSION_RESOLUTIONS, sendToEmbedder, setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import { getEventDetailState, requestEventDetail } from "../models/Response";
+import type { CloudConnectionsOffer } from "./cloud-connections-offer";
+import {
+  enableCloudConnections,
+  getCloudConnectionsOffer,
+  isCloudConnectionsOfferTaken,
+} from "./cloud-connections-offer";
 import type { ScopeInfo } from "./latchkey-scope-info";
 import { getScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
@@ -228,11 +236,29 @@ const CARD_CLASS = "permission-request max-w-[560px] rounded-lg border bg-compos
 const BADGE_BASE = "flex shrink-0 items-center justify-center bg-fill-hover text-secondary";
 
 /** The verdict's color says the outcome: approved reads in the accent green;
- *  denied reads neutral (a decision, not an error); couldn't-complete warns. */
+ *  denied reads neutral (a decision, not an error), as does a request set aside
+ *  for the account's own connections; couldn't-complete warns. */
 const VERDICT_COLOR: Record<PermissionResolution, string> = {
   granted: "text-accent",
   denied: "text-secondary",
   error: "text-warning",
+  cloud_connections: "text-secondary",
+};
+
+const VERDICT_ICON: Record<PermissionResolution, IconName> = {
+  granted: "check",
+  denied: "close",
+  error: "alert",
+  cloud_connections: "zap",
+};
+
+/** "error" reads as "Couldn't complete" -- the request didn't finish, distinct
+ *  from a deny decision. */
+const VERDICT_LABEL: Record<PermissionResolution, string> = {
+  granted: "Approved",
+  denied: "Denied",
+  error: "Couldn't complete",
+  cloud_connections: "Cloud connections enabled instead",
 };
 
 /** The key that heads every card state's eyebrow. 13px is the size of the
@@ -287,19 +313,9 @@ function permissionTitle(details: PermissionRequestDetails | null, scopeInfo: Sc
   return null;
 }
 
-/** A small glyph for the resolved-request verdict: a check (approved), a cross
- *  (denied), or an exclamation (error / couldn't complete). */
+/** A small glyph for the resolved-request verdict. */
 function renderVerdictIcon(resolution: PermissionResolution): m.Vnode {
-  const name: IconName = resolution === "granted" ? "check" : resolution === "denied" ? "close" : "alert";
-  return m.trust(icon(name, { size: 13, className: "permission-request-verdict-icon shrink-0" }));
-}
-
-/** The label shown beside the verdict icon. "error" reads as "Couldn't
- *  complete" -- the request didn't finish, distinct from a deny decision. */
-function verdictLabel(resolution: PermissionResolution): string {
-  if (resolution === "granted") return "Approved";
-  if (resolution === "denied") return "Denied";
-  return "Couldn't complete";
+  return m.trust(icon(VERDICT_ICON[resolution], { size: 13, className: "permission-request-verdict-icon shrink-0" }));
 }
 
 /** The resolved verdict shown at the right of the receipt row (approved,
@@ -315,7 +331,7 @@ function renderPermissionVerdict(resolution: PermissionResolution): m.Vnode {
         `inline-flex shrink-0 items-center gap-[5px] text-(length:--font-size-helper) font-semibold ` +
         VERDICT_COLOR[resolution],
     },
-    [renderVerdictIcon(resolution), m("span", verdictLabel(resolution))],
+    [renderVerdictIcon(resolution), m("span", VERDICT_LABEL[resolution])],
   );
 }
 
@@ -366,14 +382,91 @@ function renderRawBlock(rawText: string, rawOpen: boolean): m.Vnode | null {
   );
 }
 
+/** The offer of the account's own cloud connections, as the live component
+ *  hands it to the renderer: whose account, whether the warning is showing,
+ *  and the enable request's progress. */
+export interface CloudConnectionsOfferView {
+  providerName: string;
+  isOpen: boolean;
+  isBusy: boolean;
+  error: string | null;
+  onToggle: () => void;
+  onEnable: () => void;
+}
+
+/** The offer under a pending card's actions: one quiet line, which opens onto
+ *  a warning and the button that takes it. */
+function renderCloudConnectionsOffer(offer: CloudConnectionsOfferView): m.Vnode {
+  return m("div", { class: "permission-request-cloud-offer mt-2.5" }, [
+    m(
+      "button",
+      {
+        class:
+          "permission-request-cloud-offer-toggle cursor-pointer border-none bg-transparent p-0 text-left " +
+          "text-(length:--font-size-helper) text-faint transition-[color] duration-(--dur-base) hover:text-secondary",
+        type: "button",
+        "aria-expanded": offer.isOpen ? "true" : "false",
+        onclick(e: Event) {
+          e.preventDefault();
+          e.stopPropagation();
+          offer.onToggle();
+        },
+      },
+      `Alternatively, you could enable the existing connections associated with your ${offer.providerName} account.`,
+    ),
+    offer.isOpen
+      ? m("div", { class: "permission-request-cloud-offer-detail mt-2 flex flex-col items-start gap-2" }, [
+          m(
+            "div",
+            {
+              class:
+                "permission-request-cloud-offer-warning flex items-start gap-1.5 " +
+                "text-(length:--font-size-helper) leading-[1.45] text-warning",
+            },
+            [
+              m.trust(icon("alert", { size: 13, className: "mt-0.5 shrink-0" })),
+              m(
+                "span",
+                "This circumvents Imbue Studio's permission guarantees: the agent in this chat will be able to use " +
+                  `every service connected on your ${offer.providerName} account, without the permissions you grant ` +
+                  "here. The chat restarts to apply it.",
+              ),
+            ],
+          ),
+          m(
+            Button,
+            {
+              variant: "secondary",
+              disabled: offer.isBusy,
+              onclick(e: Event) {
+                e.preventDefault();
+                e.stopPropagation();
+                offer.onEnable();
+              },
+            },
+            offer.isBusy ? "Restarting the chat\u2026" : "Enable existing cloud connections",
+          ),
+          offer.error !== null
+            ? m(
+                "div",
+                { class: "permission-request-cloud-offer-error text-(length:--font-size-helper) text-warning" },
+                offer.error,
+              )
+            : null,
+        ])
+      : null,
+  ]);
+}
+
 /**
  * Pure renderer for the permission card, given the already-parsed request
  * `details`, the resolved gateway `scopeInfo` (or null before it lands), the
  * user's `resolution` (or null while pending), the `rawText` for the raw
- * disclosure, and the disclosure's open state (`rawOpen` + `onToggleRaw`,
- * owned by the live component). The live `PermissionCard` component computes
- * these once and calls here; tests call it directly with an injected
- * `scopeInfo`.
+ * disclosure, the disclosure's open state (`rawOpen` + `onToggleRaw`,
+ * owned by the live component), and the offer of the account's own cloud
+ * connections when the backend makes one (`cloudOffer`, drawn only on a
+ * pending, parsed card). The live `PermissionCard` component computes these
+ * once and calls here; tests call it directly with an injected `scopeInfo`.
  *
  * Three states, all under the same eyebrow row:
  *   - Resolved (`resolution` non-null): a compact one-line receipt -- badge,
@@ -393,6 +486,7 @@ export function renderPermissionCard(
   hasResult: boolean,
   rawOpen: boolean,
   onToggleRaw: () => void,
+  cloudOffer: CloudConnectionsOfferView | null = null,
 ): m.Vnode {
   const title = permissionTitle(details, scopeInfo);
   const rawToggle = renderRawToggle(rawText, rawOpen, onToggleRaw);
@@ -471,6 +565,7 @@ export function renderPermissionCard(
       ),
       rawToggle,
     ]),
+    cloudOffer !== null ? renderCloudConnectionsOffer(cloudOffer) : null,
     rawBlock,
   ]);
 }
@@ -482,6 +577,8 @@ export function renderPermissionCard(
  * the raw scope and updates once the catalog resolves -- holds the raw
  * disclosure's open/closed state, and delegates to `renderPermissionCard`.
  * Predefined requests have a scope to resolve; file-sharing requests don't.
+ * It also asks whether the backend offers the account's own cloud connections
+ * for that scope, and owns the offer's open state and its enable request.
  */
 export function PermissionCard(): m.Component<{
   toolCall: ToolCall;
@@ -492,6 +589,39 @@ export function PermissionCard(): m.Component<{
   assistantEventId: string;
 }> {
   let rawOpen = false;
+  let isOfferOpen = false;
+  let isOfferBusy = false;
+  let offerError: string | null = null;
+
+  async function takeOffer(chatId: string, requestId: string): Promise<void> {
+    isOfferBusy = true;
+    offerError = null;
+    m.redraw();
+    const outcome = await enableCloudConnections(chatId, requestId);
+    isOfferBusy = false;
+    offerError = outcome.ok ? null : outcome.detail;
+    m.redraw();
+  }
+
+  function offerView(
+    chatId: string,
+    details: PermissionRequestDetails,
+    offer: CloudConnectionsOffer,
+  ): CloudConnectionsOfferView {
+    return {
+      providerName: offer.provider_name ?? "provider",
+      isOpen: isOfferOpen,
+      isBusy: isOfferBusy,
+      error: offerError,
+      onToggle: () => {
+        isOfferOpen = !isOfferOpen;
+      },
+      onEnable: () => {
+        void takeOffer(chatId, details.requestId);
+      },
+    };
+  }
+
   return {
     view(vnode) {
       const { toolCall, toolResult, resolution, chatId, assistantEventId } = vnode.attrs;
@@ -520,10 +650,21 @@ export function PermissionCard(): m.Component<{
           : "";
       const rawOutput = outputDetail?.state === "loaded" ? (outputDetail.detail.output ?? "") : fallbackRaw;
       const rawText = rawOutput ? `${rawInput}\n\n${rawOutput}` : rawInput;
-      // The transcript-classified resolution wins; before it lands, a verdict
-      // the shell reported for this request (the user just resolved it in the
-      // review popup) flips the card without waiting for the round trip.
-      const effectiveResolution = resolution ?? (details ? shellPermissionResolutionFor(details.requestId) : null);
+      // The transcript-classified resolution wins; before it lands, an offer
+      // this page took, or a verdict the shell reported for this request (the
+      // user just resolved it in the review popup), flips the card without
+      // waiting for the round trip.
+      const pageResolution =
+        details === null
+          ? null
+          : isCloudConnectionsOfferTaken(details.requestId)
+            ? "cloud_connections"
+            : shellPermissionResolutionFor(details.requestId);
+      const effectiveResolution = resolution ?? pageResolution;
+      // Only a pending request for a service can be set aside for the
+      // account's own connection to that service.
+      const offer =
+        effectiveResolution === null && details?.scope ? getCloudConnectionsOffer(chatId, details.scope) : null;
       return renderPermissionCard(
         details,
         scopeInfo,
@@ -534,6 +675,7 @@ export function PermissionCard(): m.Component<{
         () => {
           rawOpen = !rawOpen;
         },
+        details !== null && offer !== null ? offerView(chatId, details, offer) : null,
       );
     },
   };

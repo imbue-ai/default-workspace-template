@@ -44,6 +44,11 @@ client that holds it, loads only when that client next starts, sits in a store
 Imbue Studio does not manage, and the user repeats it per harness and whenever
 it expires.
 
+The one connection of that kind you may use is one the user turned on
+themselves: the connections of their own Anthropic or OpenAI account, enabled
+for this chat from a permission card (`SKILL.md`, "Connections the user turned
+on themselves"). You never set that up; you only use the tools it gives you.
+
 ## Find the server's endpoints
 
 This is the row's test, and it costs nothing: no credential, no permission

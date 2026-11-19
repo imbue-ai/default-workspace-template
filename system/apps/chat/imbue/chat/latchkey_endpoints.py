@@ -120,16 +120,15 @@ def _to_scope_info(scope: str, entry: dict[str, Any]) -> LatchkeyScopeInfo | Non
     )
 
 
-def resolve_scope_info(
+def _find_scope_entry(
     client: httpx.Client,
     gateway: GatewayAccess,
     scope: str,
     cache: CatalogCache,
-) -> LatchkeyScopeInfo | None:
-    """Resolve a scope to its catalog entry via the gateway, or ``None``.
+) -> tuple[str, dict[str, Any]] | None:
+    """The service whose catalog contains ``scope``, with the scope's entry there, or ``None``.
 
-    Walks the scope's service-name candidates (longest prefix first) and returns
-    the entry from the first service whose catalog contains the scope. Propagates
+    Walks the scope's service-name candidates (longest prefix first). Propagates
     ``httpx.HTTPError`` from the gateway calls.
     """
     for service in candidate_services(scope):
@@ -138,8 +137,40 @@ def resolve_scope_info(
             continue
         for entry in entries:
             if entry.get("scope") == scope:
-                return _to_scope_info(scope, entry)
+                return service, entry
     return None
+
+
+def resolve_scope_info(
+    client: httpx.Client,
+    gateway: GatewayAccess,
+    scope: str,
+    cache: CatalogCache,
+) -> LatchkeyScopeInfo | None:
+    """Resolve a scope to its catalog entry via the gateway, or ``None``.
+
+    Propagates ``httpx.HTTPError`` from the gateway calls.
+    """
+    found = _find_scope_entry(client, gateway, scope, cache)
+    return None if found is None else _to_scope_info(scope, found[1])
+
+
+def resolve_scope_service_names(
+    client: httpx.Client,
+    gateway: GatewayAccess,
+    scope: str,
+    cache: CatalogCache,
+) -> tuple[str, ...]:
+    """What the service behind a scope is called: its catalog key, then the display names its entry carries.
+
+    Empty when the gateway's catalog has no such scope. Propagates ``httpx.HTTPError`` from the gateway calls.
+    """
+    found = _find_scope_entry(client, gateway, scope, cache)
+    if found is None:
+        return ()
+    service, entry = found
+    display_names = (entry.get("service_display_name"), entry.get("display_name"))
+    return (service, *(name for name in display_names if isinstance(name, str) and name))
 
 
 def get_scope_info(scope: str) -> Response:

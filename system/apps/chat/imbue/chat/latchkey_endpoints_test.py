@@ -12,8 +12,11 @@ from typing import Any
 
 import httpx
 import pytest
+from latchkey_access.gateway import GatewayAccess
+from pydantic import SecretStr
 
 from imbue.chat.latchkey_endpoints import candidate_services
+from imbue.chat.latchkey_endpoints import resolve_scope_service_names
 from imbue.chat.server import create_application
 from imbue.chat.testing import build_test_state
 
@@ -61,6 +64,24 @@ def _mock_gateway_client(catalogs: dict[str, list[dict[str, Any]]], calls: list[
 def _configure_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LATCHKEY_GATEWAY", "http://gateway.invalid")
     monkeypatch.setenv("LATCHKEY_GATEWAY_PASSWORD", "secret")
+
+
+def test_a_scopes_service_goes_by_its_catalog_key_and_the_display_names_of_its_entry() -> None:
+    gateway = GatewayAccess(base_url="http://gateway.invalid", password=SecretStr("secret"), permissions_override=None)
+    catalogs = {
+        "github": [{**GITHUB_CATALOG[0], "service_display_name": "GitHub"}, GITHUB_CATALOG[1]],
+        "slack": SLACK_CATALOG,
+    }
+    client = _mock_gateway_client(catalogs, [])
+    cache: dict[str, Any] = {}
+
+    assert resolve_scope_service_names(client, gateway, "github-rest-api", cache) == (
+        "github",
+        "GitHub",
+        "GitHub (REST API)",
+    )
+    assert resolve_scope_service_names(client, gateway, "slack-api", cache) == ("slack", "Slack")
+    assert resolve_scope_service_names(client, gateway, "unknown-api", cache) == ()
 
 
 def test_candidate_services_yields_longest_prefix_first() -> None:

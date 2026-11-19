@@ -39,6 +39,43 @@ carrying the user's key or session. When a site may refuse the row's requests
 anyway (bot challenges, blocked networks), name that as the risk in your
 explanation, try the row, and move to the next one when it actually fails.
 
+## Connections the user turned on themselves
+
+The user may already have a service connected on their Anthropic or OpenAI
+account itself (a claude.ai connector, a ChatGPT app). This workspace keeps
+those away from its agents, because they reach the service without the
+permissions the user grants here. The card of a permission request you send can
+offer the user that way around, and only they can take it. When they do, the
+request is withdrawn, you are restarted, and a message tells you so:
+
+```
+The user chose to enable the cloud MCP connections of their Anthropic account ... (resolution: cloud_connections, request_id: <id>)
+```
+
+From then on the account's connections are tools in your own tool list
+(`mcp__claude_ai_<Service>__...` on Claude, `mcp__codex_apps__...` on Codex),
+in this chat only:
+
+- **Use them for a service they cover, ahead of the table.** Do not send the
+  withdrawn request again, and do not ask for a latchkey permission to a service
+  one of those tools already reaches. Look at your tool list for what is
+  covered; a connector's name may differ from the service's (Gmail, not Google
+  Gmail).
+- **The table still decides everything else**: a service none of those tools
+  reaches, and anything that has to work outside this chat. An app, a scheduled
+  job, another chat and a background agent do not have these tools, so a
+  connection they need goes through rows 1 to 5 as before.
+- **A tool that answers that it needs a sign-in** cannot be signed in from
+  here: say the connection on the user's account needs reconnecting there, or
+  fall back to the table.
+- **Never turn this on yourself, and never ask the user to.** It is not a row.
+  Changing your own environment or your harness's config to load these
+  connections, or steering the user to the offer, takes away a choice that is
+  theirs. Without that message and those tools, the table is all there is.
+
+To the user these are "the Gmail connection on your Anthropic account", never
+MCP or connectors.
+
 ## Rules that apply to every row
 
 - **Decide, then explain.** Pick the first workable row and tell the user which
