@@ -196,6 +196,17 @@ describe("ChatRail main chat", () => {
     expect(keysOf(other)).toContain("stop");
   });
 
+  it("offers a restart, not a stop, on a chat whose agent stopped mid-turn", () => {
+    const interrupted = chatRowFixture("agent-cut-off", { status: "interrupted" });
+    const context = chatRailAttrsFixture({ rows: [interrupted] });
+    const keys = rowMenuRows(context, interrupted).flatMap((menuRow) =>
+      menuRow.kind === "action" && menuRow.key !== undefined ? [menuRow.key] : [],
+    );
+
+    expect(keys).toContain("start");
+    expect(keys).not.toContain("stop");
+  });
+
   it("gives a chat waiting for its first send its verbs, and a chat being created its rename and delete too", () => {
     const waiting = chatRowFixture("agent-waiting", { kind: "provisional", status: "idle" });
     const creating = chatRowFixture("agent-creating", { kind: "provisional", status: "working" });

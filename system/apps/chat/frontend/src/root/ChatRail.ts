@@ -203,7 +203,8 @@ function deleteFromMenu(attrs: RowMenuContext, row: ChatRow): void {
 /** The rows a chat's menu offers, ending with ``referenceRows``: the reference rows for the element right-clicked,
  *  and none for a menu opened from a kebab. */
 export function rowMenuRows(attrs: RowMenuContext, row: ChatRow, referenceRows: readonly MenuRow[] = []): MenuRow[] {
-  const isStopped = row.status === "stopped";
+  // An interrupted chat's agent stopped mid-turn, so it is restarted rather than stopped.
+  const isStopped = row.status === "stopped" || row.status === "interrupted";
   return [
     { kind: "action", key: "rename", label: "Rename", onSelect: () => beginRename(row) },
     // A helper another agent started cannot be the main chat, a room never is, and the main chat needs no offer to
