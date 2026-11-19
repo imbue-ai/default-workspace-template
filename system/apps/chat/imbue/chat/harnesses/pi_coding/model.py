@@ -29,6 +29,7 @@ from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from typing import Final
 
 from loguru import logger
 
@@ -216,7 +217,8 @@ def get_catalog() -> HarnessCatalog:
     return catalog
 
 
-_LOCAL_MODEL_TAG_PREFIX: str = f"{LOCAL_MODEL_PROVIDER_ID}/"
+# How a picker option names a model of the account's own model server.
+LOCAL_MODEL_OPTION_PREFIX: Final[str] = f"{LOCAL_MODEL_PROVIDER_ID}/"
 
 
 def to_local_model_options(account: LocalModelAccount) -> tuple[ModelOption, ...]:
@@ -224,7 +226,7 @@ def to_local_model_options(account: LocalModelAccount) -> tuple[ModelOption, ...
     carrying both apart, so a picker can offer the model once and its sizes beside it."""
     return tuple(
         ModelOption(
-            id=f"{_LOCAL_MODEL_TAG_PREFIX}{record.id}",
+            id=f"{LOCAL_MODEL_OPTION_PREFIX}{record.id}",
             label=f"{record.base_id} ({format_context_window(record.context_window)})",
             efforts=tuple(
                 EffortChoice(level=level) for level in _supported_thinking_levels({"reasoning": record.is_reasoning})
@@ -341,11 +343,11 @@ class PiModelResolver(HarnessModelResolver):
         # intent replaces any unconsumed older one (last wins).
         if ModelAxis.MODEL not in axes and ModelAxis.EFFORT not in axes:
             return SwitchResult(ok=True)
-        if ModelAxis.MODEL in axes and identity.model_id.startswith(_LOCAL_MODEL_TAG_PREFIX):
+        if ModelAxis.MODEL in axes and identity.model_id.startswith(LOCAL_MODEL_OPTION_PREFIX):
             # Before pi hears of it: a model that cannot run a chat leaves the chat where it was.
             try:
                 self._prepare_local_model(
-                    self._state_dir / PI_CONFIG_DIR_RELPATH, identity.model_id.removeprefix(_LOCAL_MODEL_TAG_PREFIX)
+                    self._state_dir / PI_CONFIG_DIR_RELPATH, identity.model_id.removeprefix(LOCAL_MODEL_OPTION_PREFIX)
                 )
             except LocalModelError as e:
                 return SwitchResult(ok=False, detail=str(e))

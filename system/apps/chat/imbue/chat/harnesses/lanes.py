@@ -545,7 +545,11 @@ LANE_LOCAL_MODEL = Lane(
         EndpointMethod(
             id="endpoint",
             label="Connect a model server",
-            description="Pick a model from a server running on your computer, or name another server.",
+            description=(
+                "Pick a model from a server running on your computer, or name another server. A model on your own "
+                "computer answers more slowly than a provider's, so it suits background jobs such as an app's "
+                "refreshes best."
+            ),
         ),
     ),
     key_providers=(KeyProvider(provider_id=LOCAL_MODEL_PROVIDER_ID, display="Local model", env_var="", hint=""),),

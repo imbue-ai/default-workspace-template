@@ -1604,6 +1604,43 @@ def test_a_chat_on_a_local_model_whose_server_does_not_answer_is_told_what_to_ch
     assert messenger.sent == []
 
 
+def test_a_chat_on_a_local_model_is_told_whether_its_server_has_the_model_in_memory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000734"
+    account_id, account_path = mint_account_dir()
+    commit_account(account_id, "local-model", "Local model")
+    write_models_file(
+        account_path,
+        "http://127.0.0.1:11435/v1",
+        {"qwen3:8b": LocalModelProfile(context_window=65_536, is_reasoning=False)},
+    )
+    asked: list[str] = []
+
+    def one_model_loaded(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        return httpx.Response(200, json={"models": [{"name": "qwen3:8b"}]})
+
+    client, _messenger = _client_with_account_labeled_chat(
+        tmp_path,
+        monkeypatch,
+        agent_id,
+        account_id,
+        harness=HarnessType.PI_CODING,
+        http_client=httpx.Client(transport=httpx.MockTransport(one_model_loaded)),
+    )
+
+    loaded = client.get(f"/api/chats/{agent_id}/model-load", query_string={"model": "local-model/qwen3:8b"})
+    on_disk = client.get(f"/api/chats/{agent_id}/model-load", query_string={"model": "local-model/qwen3:4b"})
+    provider_model = client.get(f"/api/chats/{agent_id}/model-load", query_string={"model": "anthropic/claude"})
+
+    assert loaded.get_json() == {"is_load_pending": False}
+    assert on_disk.get_json() == {"is_load_pending": True}
+    assert provider_model.get_json() == {"is_load_pending": False}
+    assert asked == ["http://127.0.0.1:11435/api/ps", "http://127.0.0.1:11435/api/ps"]
+    assert client.get("/api/chats/agent-nope/model-load").status_code == 404
+
+
 def test_a_chat_whose_account_was_signed_out_takes_no_more_messages(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

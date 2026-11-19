@@ -21,6 +21,7 @@ from imbue.chat.harnesses.pi_coding.local_model_catalog import find_context_mode
 from imbue.chat.harnesses.pi_coding.local_model_catalog import format_context_window
 from imbue.chat.harnesses.pi_coding.local_model_catalog import group_model_choices
 from imbue.chat.harnesses.pi_coding.local_model_catalog import offer_context_windows
+from imbue.chat.harnesses.pi_coding.local_model_catalog import read_loaded_model_ids
 from imbue.chat.harnesses.pi_coding.local_model_catalog import read_ollama_models
 
 _OLLAMA = "http://127.0.0.1:11434/v1"
@@ -267,3 +268,24 @@ def test_a_server_that_drops_out_while_making_the_copy_is_reported() -> None:
 
     with pytest.raises(LocalModelCatalogError, match="stopped answering"):
         ensure_context_model(_client(refuse), _OLLAMA, "", (_base("qwen3:8b"),), "qwen3:8b", 65_536)
+
+
+def test_read_loaded_model_ids_names_what_ollama_holds_in_memory() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/ps"
+        return httpx.Response(200, json={"models": [{"name": "qwen3:8b"}, {"name": "qwen3-40k"}, {"size": 1}]})
+
+    loaded_ids = read_loaded_model_ids(_client(handle), "http://127.0.0.1:11434/v1", "")
+
+    assert loaded_ids == frozenset({"qwen3:8b", "qwen3-40k:latest"})
+
+
+def test_read_loaded_model_ids_is_none_for_a_server_that_does_not_say() -> None:
+    def not_ollama(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="not found")
+
+    def unanswered(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    assert read_loaded_model_ids(_client(not_ollama), "http://127.0.0.1:1234/v1", "") is None
+    assert read_loaded_model_ids(_client(unanswered), "http://127.0.0.1:11434/v1", "") is None

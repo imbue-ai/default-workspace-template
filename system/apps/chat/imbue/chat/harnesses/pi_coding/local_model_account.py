@@ -48,7 +48,9 @@ from imbue.chat.harnesses.pi_coding.local_model_catalog import create_context_mo
 from imbue.chat.harnesses.pi_coding.local_model_catalog import ensure_context_model
 from imbue.chat.harnesses.pi_coding.local_model_catalog import find_context_models
 from imbue.chat.harnesses.pi_coding.local_model_catalog import group_model_choices
+from imbue.chat.harnesses.pi_coding.local_model_catalog import read_loaded_model_ids
 from imbue.chat.harnesses.pi_coding.local_model_catalog import read_ollama_models
+from imbue.chat.harnesses.pi_coding.local_model_catalog import with_tag
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.mngr.utils.file_utils import atomic_write
@@ -269,6 +271,19 @@ def _read_api_key(account_dir: Path) -> str:
     entry = auth.get(LOCAL_MODEL_PROVIDER_ID) if isinstance(auth, dict) else None
     key = entry.get("key") if isinstance(entry, dict) else None
     return key if isinstance(key, str) and key != PLACEHOLDER_API_KEY else ""
+
+
+def is_model_load_pending(client: httpx.Client, account_dir: Path, model_id: str) -> bool:
+    """Whether the next reply from ``model_id`` waits for its server to read the model into memory first.
+
+    False for anything that cannot be told: an account on no model server, a server other than
+    Ollama, or one that does not answer.
+    """
+    base_url = read_server_base_url(account_dir)
+    if base_url is None:
+        return False
+    loaded_ids = read_loaded_model_ids(client, base_url, _read_api_key(account_dir))
+    return loaded_ids is not None and with_tag(model_id) not in loaded_ids
 
 
 def _adopt_earlier_account(

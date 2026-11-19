@@ -265,6 +265,27 @@ def read_ollama_models(client: httpx.Client, base_url: str, api_key: str) -> tup
     return tuple(model for model in models if model is not None)
 
 
+def read_loaded_model_ids(client: httpx.Client, base_url: str, api_key: str) -> frozenset[str] | None:
+    """The models an Ollama server holds in memory right now; None for a server that does not say.
+
+    A model outside this set is read off disk before its next reply, which takes from seconds to
+    minutes. Only Ollama reports it, beside its OpenAI-compatible root.
+    """
+    root_url = base_url.removesuffix("/v1")
+    try:
+        response = client.get(f"{root_url}/api/ps", headers=_auth_headers(api_key), timeout=_OLLAMA_TIMEOUT_SECONDS)
+        payload = response.json() if response.status_code == 200 else None
+    except (httpx.HTTPError, ValueError) as e:
+        logger.debug("No list of loaded models from {}: {}", root_url, e)
+        return None
+    entries = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(entries, list):
+        return None
+    return frozenset(
+        with_tag(entry["name"]) for entry in entries if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+    )
+
+
 def create_context_model(
     client: httpx.Client, base_url: str, api_key: str, copy_id: str, base_id: str, context_window: int
 ) -> None:

@@ -7,3 +7,7 @@
 - When your computer runs no model server, the Local model form now says you may need to install Ollama and that Imbue Studio can do it for you, with a link that opens Studio's Settings at Local models. The "Your model server didn't answer" notice a failed send shows says the same and carries an **Open Local models settings** button.
 
 - A local-model account signed in before this change picks all of this up the first time a chat's model menu is opened, with no need to sign in again.
+
+- While a local model's first reply waits for your computer to read the model into memory, the chat's status line says so ("Loading qwen3:8b (40K) on your computer. The first reply can take a minute…") in place of "Thinking…".
+
+- The Local model form says up front that a model on your own computer answers more slowly than a provider's, and suits background jobs such as an app's refreshes best.

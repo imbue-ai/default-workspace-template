@@ -92,6 +92,7 @@ import type { ScreenWakeLock } from "../models/screenWakeLock";
 import { isChatConnecting } from "./ConnectingIndicator";
 import { isAgentProcessDead } from "./agentLiveness";
 import { apiUrl, getBasePath } from "@imbue/workspace-ui/src/base-path";
+import { forgetModelLoad, noteSendToModel } from "../models/LocalModelLoad";
 import { harnessLabel } from "./harness-labels";
 import { LOCAL_MODELS_SETTINGS_LINK_LABEL, openLocalModelsSettings } from "./localModelsSettingsLink";
 import { handoffComposerPlaceholder } from "./handoff-phase";
@@ -1502,6 +1503,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // harness can name it back and the bubble stands down for that rendering.
         const messageId = mintMessageId();
         const outgoingId = addOutgoing(chatId, finalText, messageId);
+        // Asked before the send reaches the agent: the send itself is what makes the server start loading.
+        void noteSendToModel(chatId);
         m.redraw();
         let priorTurnIds: ReadonlySet<string> = new Set();
 
@@ -1583,6 +1586,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             console.error(`Failed to send message to chat ${chatId}: ${detail}`);
           }
           dropOutgoing(chatId, outgoingId);
+          forgetModelLoad(chatId);
           // Back in the composer immediately: the recovery record is closure state, so a reload
           // would take the message with it (contract A1a). A repeat send removes that copy once
           // it has landed.
