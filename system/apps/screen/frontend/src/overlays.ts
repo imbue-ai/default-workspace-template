@@ -5,7 +5,8 @@
  *  A failure says what happened in a sentence of ours, keeps the service's own text behind "See details", and offers
  *  what can help: Start, "Ask an agent to fix this" where a shell frames the page (it sends the ask to the chat about
  *  the Screen), and "Report a bug" where the shell's handshake says Imbue Studio opens one (the workspace's failure
- *  wording, workspace_ui's models/failure.ts and app contract). */
+ *  wording, workspace_ui's models/failure.ts and app contract). Every failure that asks for a bug report offers the
+ *  agent too, as workspace_ui's FailureRemedies does. */
 
 import { askAgentToFix, withAskFailure } from "@imbue/workspace-ui/src/app_contract";
 import type {
@@ -68,7 +69,12 @@ function view(title: string, fields: Partial<Omit<OverlayView, "title">> = {}): 
 /** What the main overlay shows when the page could not load the Screen's state at all. */
 export function describeLoadFailure(failure: Failure): OverlayView {
   const told = failureSentence(failure, LOAD_FAILED_STEM);
-  const fields = { details: told.details, isReloadOffered: true, isReportable: told.isReportable };
+  const fields = {
+    details: told.details,
+    isReloadOffered: true,
+    agentFix: told.isReportable ? { whatFailed: LOAD_FAILED_STEM, details: told.details } : null,
+    isReportable: told.isReportable,
+  };
   // These sentences do not name the Screen, so they go under a title that does.
   if (failure.cause === "not_answered" || failure.cause === "user_facing") {
     return view(`${LOAD_FAILED_STEM}.`, { ...fields, body: told.message });
@@ -111,11 +117,14 @@ function stoppedView(state: ScreenStateDocument, startFailure: FailureMessage | 
   }
   // A Start that was refused or not answered says so under the title, its own details first.
   if (startFailure === null) return stopped;
+  const joined = joinDetails([startFailure.details, details]);
   return {
     ...stopped,
     // A refused Start after a failed start would repeat the title word for word.
     body: startFailure.message === stopped.title ? stopped.body : startFailure.message,
-    details: joinDetails([startFailure.details, details]),
+    details: joined,
+    agentFix:
+      stopped.agentFix ?? (startFailure.isReportable ? { whatFailed: START_FAILED_STEM, details: joined } : null),
     isReportable: stopped.isReportable || startFailure.isReportable,
   };
 }

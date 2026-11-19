@@ -535,7 +535,7 @@ describe("Overlays for the stack's state", () => {
     });
   });
 
-  it("offers Report a bug for a refused Start whose sentence asks for one, over a stop that asks for none", () => {
+  it("offers an agent and Report a bug for a refused Start whose sentence asks for one, over a stop that asks for none", () => {
     const host = fakeHost();
     const overlays = overlaysWith(host);
     overlays.update(
@@ -549,7 +549,11 @@ describe("Overlays for the stack's state", () => {
         isReportable: true,
       },
     );
-    expect(shown(overlays).buttons).toEqual(["Start", "Report a bug"]);
+    expect(shown(overlays).buttons).toEqual(["Start", "Ask an agent to fix this", "Report a bug"]);
+    overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]")?.click();
+    expect(host.started).toHaveLength(1);
+    expect(host.started[0]).toMatch(/^Imbue Studio showed the user this failure: The Screen couldn't start\.\n\n/);
+    expect(host.started[0]).toContain("HTTP 500\nsupervisord refused the start\nQuit from the window menu");
     overlays.element.querySelector<HTMLButtonElement>("[data-screen-report-bug]")?.click();
     expect(host.reports).toEqual([
       {
@@ -595,8 +599,9 @@ describe("Overlays for the stack's state", () => {
     expect(reloads).toBe(1);
   });
 
-  it("asks for a bug report when the service failed to answer its state for no reason it gave", () => {
-    const overlays = overlaysWith(fakeHost());
+  it("asks for a bug report, and offers an agent, when the service failed to answer its state for no reason it gave", () => {
+    const host = fakeHost();
+    const overlays = overlaysWith(host);
     overlays.showLoadFailure(
       readFailure({ status: 500, body: null, rawText: "Internal Server Error", requestKind: "read" }),
     );
@@ -604,8 +609,12 @@ describe("Overlays for the stack's state", () => {
       title: "The Screen couldn't load. Try again. If this persists, report a bug.",
       body: null,
       details: "HTTP 500\nInternal Server Error",
-      buttons: ["Try again", "Report a bug"],
+      buttons: ["Try again", "Ask an agent to fix this", "Report a bug"],
     });
+    overlays.element.querySelector<HTMLButtonElement>("[data-screen-ask-agent]")?.click();
+    expect(host.started[0]).toMatch(/^Imbue Studio showed the user this failure: The Screen couldn't load\.\n\n/);
+    expect(host.started[0]).toContain("HTTP 500\nInternal Server Error");
+    expect(host.showsOutcome).toEqual([true]);
   });
 
   it("offers Report a bug on a load failure once a handshake that came after it says one opens", () => {
@@ -615,12 +624,12 @@ describe("Overlays for the stack's state", () => {
     overlays.showLoadFailure(
       readFailure({ status: 500, body: null, rawText: "Internal Server Error", requestKind: "read" }),
     );
-    expect(shown(overlays).buttons).toEqual(["Try again"]);
+    expect(shown(overlays).buttons).toEqual(["Try again", "Ask an agent to fix this"]);
 
     canReportBug.value = true;
     overlays.syncShellButtons();
 
-    expect(shown(overlays).buttons).toEqual(["Try again", "Report a bug"]);
+    expect(shown(overlays).buttons).toEqual(["Try again", "Ask an agent to fix this", "Report a bug"]);
   });
 
   it("shows no agent dim before any state says an agent drives", () => {
