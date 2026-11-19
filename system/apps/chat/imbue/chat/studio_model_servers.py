@@ -104,7 +104,9 @@ def _request_access(client: httpx.Client, gateway: GatewayAccess, agent_id: str)
     if response.is_success:
         return StudioLink.AWAITING_APPROVAL
     logger.debug(
-        "The gateway answered {} to the model server permission request: {}", response.status_code, response.text[:200]
+        "The gateway answered {} to the model server permission request: {!r}",
+        response.status_code,
+        response.content[:200],
     )
     return StudioLink.UNAVAILABLE if response.status_code in _UNSUPPORTED_STATUSES else StudioLink.UNREACHABLE
 
@@ -139,12 +141,14 @@ def find_studio_model_servers(
     try:
         payload = response.json()
     except ValueError:
-        logger.warning("Received a model servers listing from Imbue Studio that is not JSON: {}", response.text[:200])
+        logger.warning(
+            "Received a model servers listing from Imbue Studio that is not JSON: {!r}", response.content[:200]
+        )
         return StudioModelServers(link=StudioLink.UNREACHABLE)
     entries = payload.get("servers") if isinstance(payload, dict) else None
     if not isinstance(entries, list):
         logger.warning(
-            "Received a model servers listing from Imbue Studio that names no servers: {}", response.text[:200]
+            "Received a model servers listing from Imbue Studio that names no servers: {!r}", response.content[:200]
         )
         return StudioModelServers(link=StudioLink.UNREACHABLE)
     servers = tuple(server for server in map(_to_server, entries) if server is not None)
@@ -184,7 +188,7 @@ def open_studio_tunnel(client: httpx.Client, gateway: GatewayAccess | None, agen
     workspace_port = payload.get("workspace_port") if isinstance(payload, dict) else None
     if not isinstance(workspace_port, int):
         logger.debug(
-            "Imbue Studio answered {} to opening the model tunnel: {}", response.status_code, response.text[:200]
+            "Imbue Studio answered {} to opening the model tunnel: {!r}", response.status_code, response.content[:200]
         )
         raise LocalModelError(
             "Imbue Studio could not connect this workspace to the model server on your computer. "
