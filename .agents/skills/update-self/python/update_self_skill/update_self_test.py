@@ -7503,7 +7503,7 @@ def _recover_over_an_unrestorable_bundle(apply_repo: Path) -> tuple[int, Path]:
     """A boot-path ``recover`` whose one pre-apply copy cannot be put back: the
     destination's own parent is a regular file (``blocked``). Returns its exit code and
     the kept copy."""
-    copy = _snapshots_root(apply_repo) / "bundle"
+    copy = update_apply_contract.snapshots_root(apply_repo) / "bundle"
     copy.mkdir(parents=True)
     (copy / "index.html").write_text("the pre-apply bundle")
     (apply_repo / "blocked").write_text("not a directory")
@@ -7521,14 +7521,6 @@ def _recover_over_an_unrestorable_bundle(apply_repo: Path) -> tuple[int, Path]:
     return _recover(runner, _FakeHttp(_all_healthy), apply_repo, no_restart=True), copy
 
 
-def _snapshots_root(apply_repo: Path) -> Path:
-    return (
-        apply_repo
-        / update_apply_contract.STATE_DIR_REL
-        / update_apply_contract.SNAPSHOTS_DIRNAME
-    )
-
-
 def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
     apply_repo: Path, capsys
 ) -> None:
@@ -7537,7 +7529,7 @@ def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
     Deleting it would destroy the only remaining way back -- a restore that
     failed for anything but a missing copy leaves the copy sitting right there.
     """
-    snapshots_root = _snapshots_root(apply_repo)
+    snapshots_root = update_apply_contract.snapshots_root(apply_repo)
 
     code, copy = _recover_over_an_unrestorable_bundle(apply_repo)
 
@@ -7585,7 +7577,7 @@ def test_finish_restore_puts_back_what_a_boot_rollback_could_not_once_the_cause_
     assert update_self.main(finish_restore) == 0
 
     assert (destination / "index.html").read_text() == "the pre-apply bundle"
-    assert not _snapshots_root(apply_repo).exists()
+    assert not update_apply_contract.snapshots_root(apply_repo).exists()
     # Health is the agent's to confirm, so the record stays, now naming nothing left.
     record = _read_emergency(apply_repo)
     assert record["unrestored"] == []
@@ -7598,7 +7590,7 @@ def test_finish_restore_leaves_a_record_without_an_unrestored_list_to_a_hand_rep
 ) -> None:
     """Every other emergency keeps no list of what to put back; reading that as "every copy
     is back" would have the agent clear the record over copies nobody restored."""
-    copy = _snapshots_root(apply_repo) / "bundle"
+    copy = update_apply_contract.snapshots_root(apply_repo) / "bundle"
     copy.mkdir(parents=True)
     update_apply_contract.write_emergency(
         apply_repo,
