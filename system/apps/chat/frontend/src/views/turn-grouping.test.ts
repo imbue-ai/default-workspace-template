@@ -871,6 +871,20 @@ describe("narration and close-time ejection", () => {
     expect(stepItems(sections[0].items)[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
   });
 
+  // A chained command whose own work failed before tk ran (no hook refused it) is real work.
+  it("still shows a chained tk call whose own work failed", () => {
+    const chained = bashMsg("t2", "uv run pytest && tk close s1 done", "t2");
+    const events = [
+      userMsg("t0", "run the tests"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Run the tests")),
+      { ...chained, tool_calls: [{ ...chained.tool_calls[0], tk_command: "uv run pytest && tk close s1 done" }] },
+      { ...result("t2", "t2", ""), is_error: true, error_snippet: "FAILED test_x.py::test_y", tk_stamp: undefined },
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(stepItems(sections[0].items)[0].events.map((e) => e.event_id)).toEqual(["a-t2"]);
+  });
+
   // Sent after the agent stopped (a Stop, or a turn's end), a message starts a new turn: once the agent
   // takes up a step, its progress lines stay that step's captions.
   it("keeps progress lines in the steps after a message that started a new turn", () => {

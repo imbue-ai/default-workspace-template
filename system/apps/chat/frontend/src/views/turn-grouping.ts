@@ -265,12 +265,14 @@ function isTkLifecycleCall(tc: ToolCall): boolean {
   return tc.display === "hidden";
 }
 
-/** True when a tool call ran a tk lifecycle command that failed before tk printed anything: the
- *  step hooks refused it (a `cd` before a `tk close`), so it did no work and moved no step. Counting
- *  it as work would turn a line the agent said just before closing a step into mid-step narration. */
+/** True when a tool call ran a tk lifecycle command that a step hook refused (a `cd` before a
+ *  `tk close`), so it did no work and moved no step. Counting it as work would turn a line the agent
+ *  said just before closing a step into mid-step narration. A refusal fails with neither tk output
+ *  nor an error snippet (the backend gives a hook's refusal none); a chained command whose own work
+ *  failed (`pytest && tk close s1`) has a snippet and still renders. */
 function isRefusedTkCall(tc: ToolCall, toolResults: Map<string, ToolResultEvent>): boolean {
   const toolResult = toolResults.get(tc.tool_call_id);
-  return tkCommand(tc) !== null && toolResult?.is_error === true && !toolResult.tk_stamp;
+  return tkCommand(tc) !== null && toolResult?.is_error === true && !toolResult.tk_stamp && !toolResult.error_snippet;
 }
 
 /** True when an assistant message FILED a permission request -- one the user can
