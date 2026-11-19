@@ -61,13 +61,13 @@ def compose_rollback_note(rollback: BootRollback) -> str:
     if rollback.release is not None:
         what = f"the workspace update to {rollback.release} ({rollback.merge_ref})"
         guide = (
-            'the update-self skill\'s references/apply-outcomes.md, "After a restart rolled '
+            "the update-self skill's references/apply-outcomes.md, \"After a restart rolled "
             'it back"'
         )
     else:
         what = f"the change {rollback.merge_ref}"
         guide = (
-            'the update-app skill\'s references/critical-app.md, "If a restart interrupts '
+            "the update-app skill's references/critical-app.md, \"If a restart interrupts "
             'the go-live"'
         )
     lines = [
@@ -98,7 +98,11 @@ def compose_rollback_note(rollback: BootRollback) -> str:
         "the user in a line or two how the workspace checked out."
     )
     body = "\n".join(lines)
-    outcome = OUTCOME_ROLLED_BACK if rollback.is_restore_complete else OUTCOME_ROLLBACK_INCOMPLETE
+    outcome = (
+        OUTCOME_ROLLED_BACK
+        if rollback.is_restore_complete
+        else OUTCOME_ROLLBACK_INCOMPLETE
+    )
     return (
         f'<{WORKSPACE_UPDATE_NOTE_TAG} outcome="{outcome}">\n'
         f"<summary>{_summary(rollback)}</summary>\n"

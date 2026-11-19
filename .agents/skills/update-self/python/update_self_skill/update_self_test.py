@@ -7659,7 +7659,9 @@ def test_finish_restore_puts_back_what_a_boot_rollback_could_not_once_the_cause_
     # The cause is still there: the copy stays, and so does its entry in the record.
     assert update_self.main(finish_restore) == 3
     assert (copy / "index.html").exists()
-    assert [entry["name"] for entry in _read_emergency(apply_repo)["unrestored"]] == ["bundle"]
+    assert [entry["name"] for entry in _read_emergency(apply_repo)["unrestored"]] == [
+        "bundle"
+    ]
 
     (apply_repo / "blocked").unlink()
     assert update_self.main(finish_restore) == 0

@@ -12,8 +12,8 @@ import json
 import os
 import sys
 import time
-from dataclasses import dataclass, field
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -862,7 +862,9 @@ def unrestored_snapshots(record: Mapping[str, object]) -> list[SnapshotRecord]:
     if not isinstance(entries, list):
         return []
     return [
-        SnapshotRecord(name=str(e["name"]), source=str(e["source"]), copy=str(e["copy"]))
+        SnapshotRecord(
+            name=str(e["name"]), source=str(e["source"]), copy=str(e["copy"])
+        )
         for e in entries
         if isinstance(e, dict) and {"name", "source", "copy"} <= e.keys()
     ]
