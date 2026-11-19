@@ -7593,6 +7593,26 @@ def test_finish_restore_puts_back_what_a_boot_rollback_could_not_once_the_cause_
     assert "restored: bundle" in capsys.readouterr().err
 
 
+def test_finish_restore_refuses_while_an_apply_is_in_flight(
+    apply_repo: Path, capsys
+) -> None:
+    """A new apply re-takes its copies at the paths the record names, so restoring from
+    them, or discarding them, would undercut that apply's own way back."""
+    _, copy = _recover_over_an_unrestorable_bundle(apply_repo)
+    (apply_repo / "blocked").unlink()
+    _plant_marker(apply_repo, merge_ref="mngr/update-retry")
+
+    code = update_self.main(["finish-restore", "--repo-root", str(apply_repo)])
+
+    assert code == 1
+    assert "an apply is in flight" in capsys.readouterr().err
+    assert (copy / "index.html").exists()
+    assert not (apply_repo / "blocked").exists()
+    assert [entry["name"] for entry in _read_emergency(apply_repo)["unrestored"]] == [
+        "bundle"
+    ]
+
+
 def test_recover_reaches_the_same_end_state_as_the_in_process_rollback(
     tmp_path: Path,
 ) -> None:

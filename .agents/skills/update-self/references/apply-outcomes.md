@@ -135,7 +135,9 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 It exits 0 once every copy is back, and 3 naming the ones that still would
-not restore, which stay listed for another run. A copy that is gone has to be
+not restore, which stay listed for another run. It refuses (1) while an apply
+is in flight, since that apply re-takes its copies at the same paths: let it
+finish, or `recover` it, first. A copy that is gone has to be
 rebuilt instead. Then verify the workspace is healthy and delete
 `emergency.json`, as above.
 

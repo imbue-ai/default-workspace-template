@@ -138,8 +138,9 @@ belong in tested code rather than agent prose:
     Put back the pre-apply copies a boot-time ``recover`` could not, from the
     list the emergency record keeps (the marker that named them is gone). Run
     once what stopped the restore is fixed. Exit codes: 0 every copy is back,
-    or none is recorded / 3 some still would not restore. The record stays
-    until the workspace is confirmed healthy.
+    or none is recorded / 1 refused while an apply is in flight / 3 some still
+    would not restore. The record stays until the workspace is confirmed
+    healthy.
 
 Impact analysis -- which services and skills depend on a changed file -- is
 deliberately NOT scripted here: it requires open-ended exploration (imports,

@@ -52,6 +52,7 @@ from update_self_skill.update_apply_contract import (
     clear_marker,
     clear_provision_incomplete,
     default_is_pid_a_live_apply,
+    marker_path,
     provision_incomplete_path,
     read_emergency,
     read_last_good,
@@ -2438,7 +2439,17 @@ def finish_restore(repo_root: Path, *, now: Callable[[], float] = time.time) -> 
     back too. Health is not probed here, so the record stays: the agent clears it once the
     workspace is confirmed healthy. Returns 0 when every copy is back, or when the record
     names none to put back, and 3 when some still would not restore, which stay named.
+
+    Refused (1) while an apply's marker exists: that apply re-takes its copies at the same
+    paths, so restoring from them would put its pre-apply state over the live tree, and
+    discarding them would take away its own way back.
     """
+    if marker_path(repo_root).exists():
+        sys.stderr.write(
+            "error: an apply is in flight (its marker exists); finish or `recover` it "
+            "before putting back an earlier rollback's copies.\n"
+        )
+        return 1
     record = read_emergency(repo_root)
     snapshots = [] if record is None else unrestored_snapshots(record)
     if record is None or not snapshots:
