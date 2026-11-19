@@ -17,6 +17,7 @@ which is what the persistent marker and ``recover`` are for.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import fcntl
 import json
@@ -61,6 +62,7 @@ from update_self_skill.update_apply_contract import (
     rollback_lock_path,
     snapshots_root,
     write_emergency,
+    write_emergency_record,
     write_last_good,
     write_marker,
     write_provision_incomplete,
@@ -2429,7 +2431,7 @@ def recover(
     return 3
 
 
-def finish_restore(repo_root: Path, *, now: Callable[[], float] = time.time) -> int:
+def finish_restore(repo_root: Path) -> int:
     """Put back the pre-apply copies a boot-time rollback could not, from the emergency record.
 
     The boot path's ``recover`` restores the tree but can fail to put a copy back (a full
@@ -2496,13 +2498,7 @@ def finish_restore(repo_root: Path, *, now: Callable[[], float] = time.time) -> 
         return 1
     failed = set(restore_snapshots(snapshots))
     remaining = [s for s in snapshots if s.name in failed]
-    write_emergency(
-        repo_root,
-        record.reason,
-        record.dri_agent,
-        now,
-        unrestored=remaining,
-    )
+    write_emergency_record(repo_root, dataclasses.replace(record, unrestored=remaining))
     if remaining:
         gone = sorted(s.name for s in remaining if not Path(s.copy).exists())
         kept = sorted(s.name for s in remaining if s.name not in gone)

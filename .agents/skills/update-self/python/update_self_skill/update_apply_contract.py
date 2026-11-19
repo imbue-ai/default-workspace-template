@@ -863,14 +863,22 @@ def write_emergency(
     written to stderr in full, so a filesystem that will not take the record
     must not turn a reported emergency into a traceback.
     """
-    path = emergency_path(repo_root)
-    record = EmergencyRecord(
-        reason=reason,
-        recorded_at=now(),
-        dri_agent=dri_agent,
-        snapshots_dir=str(snapshots_root(repo_root)),
-        unrestored=None if unrestored is None else list(unrestored),
+    write_emergency_record(
+        repo_root,
+        EmergencyRecord(
+            reason=reason,
+            recorded_at=now(),
+            dri_agent=dri_agent,
+            snapshots_dir=str(snapshots_root(repo_root)),
+            unrestored=None if unrestored is None else list(unrestored),
+        ),
     )
+
+
+def write_emergency_record(repo_root: Path, record: EmergencyRecord) -> None:
+    """Write ``record`` as the emergency record, atomically and best-effort, as
+    :func:`write_emergency` does."""
+    path = emergency_path(repo_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         scratch = path.with_suffix(".json.tmp")

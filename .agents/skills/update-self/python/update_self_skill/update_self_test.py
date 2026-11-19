@@ -7576,6 +7576,7 @@ def test_finish_restore_puts_back_what_a_boot_rollback_could_not_once_the_cause_
     code, copy = _recover_over_an_unrestorable_bundle(apply_repo)
     assert code == 3
     destination = apply_repo / "blocked" / "static"
+    recorded_at = _read_emergency(apply_repo)["recorded_at"]
 
     # The cause is still there: the copy stays, and so does its entry in the record.
     assert _finish_restore(apply_repo) == 3
@@ -7591,6 +7592,7 @@ def test_finish_restore_puts_back_what_a_boot_rollback_could_not_once_the_cause_
     record = _read_emergency(apply_repo)
     assert record["unrestored"] == []
     assert "could not restore: bundle" in record["reason"]
+    assert record["recorded_at"] == recorded_at
     assert "restored: bundle" in capsys.readouterr().err
 
 
