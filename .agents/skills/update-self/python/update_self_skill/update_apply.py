@@ -2442,8 +2442,8 @@ def finish_restore(repo_root: Path, *, now: Callable[[], float] = time.time) -> 
     emergency at all), and 3 when some still would not restore, which stay named.
 
     Returns 1, touching nothing, when it cannot tell what to put back: the record is
-    unreadable, or it keeps no list of unrestored copies (an emergency from anything but a
-    boot-time partial restore), which is a repair by hand. Refused (1) too while an apply's
+    unreadable, or it keeps no readable list of unrestored copies (an emergency from anything
+    but a boot-time partial restore), which is a repair by hand. Refused (1) too while an apply's
     marker exists: that apply re-takes its copies at the same paths, so restoring from them
     would put its pre-apply state over the live tree, and discarding them would take away
     its own way back.
@@ -2467,8 +2467,8 @@ def finish_restore(repo_root: Path, *, now: Callable[[], float] = time.time) -> 
     snapshots = unrestored_snapshots(record)
     if snapshots is None:
         sys.stderr.write(
-            "error: the emergency record keeps no list of unrestored copies (it is not "
-            "from a boot-time rollback's partial restore); the copies are at "
+            "error: the emergency record keeps no readable list of unrestored copies (it "
+            "is not from a boot-time rollback's partial restore); the copies are at "
             f"{snapshots_root(repo_root)}: repair by hand.\n"
         )
         return 1

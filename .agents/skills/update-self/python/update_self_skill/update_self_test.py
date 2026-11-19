@@ -7617,6 +7617,26 @@ def test_finish_restore_leaves_a_record_without_an_unrestored_list_to_a_hand_rep
     assert update_self.main(finish_restore) == 1
     assert copy.exists()
 
+    # A list it cannot read whole is no list: restoring the readable entries and discarding
+    # the copies would take away the one the unreadable entry named.
+    update_apply_contract.emergency_path(apply_repo).write_text(
+        json.dumps(
+            {
+                "unrestored": [
+                    {
+                        "name": "bundle",
+                        "source": str(apply_repo / "static"),
+                        "copy": str(copy),
+                    },
+                    {"name": "venv"},
+                ]
+            }
+        )
+    )
+    assert update_self.main(finish_restore) == 1
+    assert copy.exists()
+    assert not (apply_repo / "static").exists()
+
 
 def test_finish_restore_refuses_while_an_apply_is_in_flight(
     apply_repo: Path, capsys

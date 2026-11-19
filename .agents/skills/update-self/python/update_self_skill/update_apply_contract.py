@@ -856,16 +856,23 @@ def read_emergency(repo_root: Path) -> dict[str, object] | None:
 
 def unrestored_snapshots(record: Mapping[str, object]) -> list[SnapshotRecord] | None:
     """The copies an emergency record names as not put back, or ``None`` for a record that
-    keeps no such list (anything but a boot-time partial restore)."""
+    keeps no such list (anything but a boot-time partial restore) or one that cannot be read
+    whole: an entry skipped here would be dropped from the record and its copy discarded."""
     entries = record.get("unrestored")
     if not isinstance(entries, list):
+        return None
+    if not all(
+        isinstance(e, dict) and {"name", "source", "copy"} <= e.keys() for e in entries
+    ):
+        sys.stderr.write(
+            "warning: the emergency record's unrestored list is malformed.\n"
+        )
         return None
     return [
         SnapshotRecord(
             name=str(e["name"]), source=str(e["source"]), copy=str(e["copy"])
         )
         for e in entries
-        if isinstance(e, dict) and {"name", "source", "copy"} <= e.keys()
     ]
 
 
