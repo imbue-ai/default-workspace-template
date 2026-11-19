@@ -22,8 +22,9 @@ calls the service's API with a key, and nothing it adds is worth running a
 stranger's code with this workspace's access: use that API through row 3 or
 row 5 instead, and read the package's source for the endpoints it calls.
 
-MCP is allowed for a service latchkey does not already know. The
-workspace disables claude.ai's own connector sync
+MCP is allowed for a service latchkey does not already know, and for one it
+does when the user asked for the MCP and turned down the direct connection
+(SKILL.md, "When the user asks for a service's MCP"). The workspace disables claude.ai's own connector sync
 (`ENABLE_CLAUDEAI_MCP_SERVERS=false` in `.mngr/settings.toml`) because that is
 an OAuth side channel around the latchkey gateway for services latchkey *does*
 support; a server for a service it does not support bypasses nothing. Many of

@@ -1,0 +1,1 @@
+When a user asks for a service's MCP and latchkey already has its own connection to that service (Figma, for one), the agent now asks whether it may use the direct connection instead, rather than going straight to the MCP server. Some MCP servers, Figma's among them, refuse sign-ins from apps outside a short approved list.
