@@ -67,7 +67,8 @@ is named `<app>-<role>`.
 - `system/apps/` - Everything tab-openable: `system_interface/` (the workspace
   web UI -- the special app that hosts the other tabs), `chat/` (the agent
   chats), `terminal/`, `files/`, `screen/` (the streamed Linux desktop, with the
-  browser as its launch path), `routines/` (Routines), `system_monitor/` (System Monitor),
+  browser as its launch path), `routines/` (Routines), `memory/` (Memory, the agent's notes about the user),
+  `system_monitor/` (System Monitor),
   and every user-built app, each with an `app.toml` manifest; every built-in
   app is a member of the root uv workspace, named in its `members`, and runs
   from the root venv; every user-built app, service or library under `system/`

@@ -1,4 +1,9 @@
-// The Memory app's page: lists the agent's remembered notes and edits them.
+// The Memory app's page: lists the agent's remembered notes and edits them. Framed by the workspace shell, it
+// reports where it is (the open note, as ?note=<id>, and its title) so the shell reopens the window there, and
+// installs the element context menu every page carries.
+import { connectToShell } from "/_static/app_contract.js";
+import { installElementContextMenu } from "/_static/context_menu.js";
+
 const KINDS = {
   user: { label: "About you", help: "Who you are and what you prefer" },
   feedback: { label: "How I should work", help: "Corrections and approaches you confirmed" },
@@ -8,7 +13,7 @@ const KINDS = {
 const HAS_REASONS = new Set(["feedback", "project"]);
 
 let notes = [];
-let outline = { entries: [], unlisted_note_ids: [], raw: "", exists: false };
+let outline = { entries: [], unlisted_note_ids: [], raw: "", is_present: false };
 // What the right side shows: a note ("note"), the raw index ("index"), or a missing file's line ("missing").
 let view = "note";
 let missingEntry = null;
@@ -19,11 +24,24 @@ let query = "";
 let draft = null;
 let original = null;
 let loadError = "";
+// True until the first listing has arrived (or failed), so the panes say they are loading rather than empty.
+let isLoading = true;
 // A link may name a note (?note=<id>, as the chat's memory cards link it).
 const params = new URLSearchParams(location.search);
 const linkedNote = params.get("note");
 
+let handshake = null;
+const connection = connectToShell({
+  onHandshake: (received) => {
+    handshake = received;
+    reportLocation();
+  },
+});
+window.addEventListener("focus", () => connection.focused());
+installElementContextMenu({ connection, handshake: () => handshake });
+
 const $ = (id) => document.getElementById(id);
+const APP_TITLE = "Memory";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const kindLabel = (k) => (KINDS[k] ? KINDS[k].label : k || "Other");
 const kindClass = (k) => (KINDS[k] ? `kind-${k}` : "kind-other");
@@ -53,6 +71,7 @@ async function load(keepSelection = true) {
   } catch (e) {
     loadError = e.message;
   }
+  isLoading = false;
   renderFilters();
   if (keepSelection && view === "index") return showIndex();
   const still = keepSelection && notes.find((n) => n.id === selected);
@@ -67,8 +86,45 @@ function isDirty() {
   return ["title", "summary", "kind", "body", "why", "how"].some((k) => draft[k] !== original[k]);
 }
 
-function confirmLeave() {
-  return !isDirty() || window.confirm("You have unsaved changes to this note. Discard them?");
+// The page's one dialog: asks ``question`` and resolves true for the confirming answer, false for the other one,
+// Escape, or a click outside it. Focus starts on the safe answer.
+function confirmAction(question, confirmLabel, cancelLabel) {
+  const dialog = $("confirm-dialog");
+  $("confirm-question").textContent = question;
+  $("confirm-ok").textContent = confirmLabel;
+  $("confirm-cancel").textContent = cancelLabel;
+  return new Promise((resolve) => {
+    const finish = (answer) => {
+      dialog.removeEventListener("close", onClose);
+      dialog.removeEventListener("click", onClick);
+      if (dialog.open) dialog.close();
+      resolve(answer);
+    };
+    const onClose = () => finish(false);
+    const onClick = (e) => {
+      if (e.target === dialog) finish(false);
+      else if (e.target.id === "confirm-ok") finish(true);
+      else if (e.target.id === "confirm-cancel") finish(false);
+    };
+    dialog.addEventListener("close", onClose);
+    dialog.addEventListener("click", onClick);
+    dialog.showModal();
+    $("confirm-cancel").focus();
+  });
+}
+
+async function confirmLeave() {
+  return !isDirty() || confirmAction("You have unsaved changes to this note. Discard them?", "Discard changes", "Keep editing");
+}
+
+// Where the page is, for the address bar, the tab and the shell: the open note, or the index.
+function reportLocation() {
+  const note = view === "note" ? notes.find((n) => n.id === selected) : null;
+  const path = note ? `/?note=${encodeURIComponent(note.id)}` : "/";
+  const title = view === "index" ? "Your index – Memory" : note ? `${note.title} – Memory` : APP_TITLE;
+  document.title = title;
+  if (location.pathname + location.search !== path) history.replaceState(null, "", path);
+  connection.location(path, title);
 }
 
 function renderFilters() {
@@ -100,7 +156,7 @@ function renderList() {
   // The index line by line, grouped under its headings so a heading with nothing matching can hide.
   const groups = [{ heading: null, items: [] }];
   for (const entry of outline.entries) {
-    if (entry.kind === "heading") groups.push({ heading: entry, items: [] });
+    if (entry.kind === "HEADING") groups.push({ heading: entry, items: [] });
     else groups[groups.length - 1].items.push(entry);
   }
   let rows = 0;
@@ -111,7 +167,7 @@ function renderList() {
       const n = byId.get(entry.note_id);
       if (n) {
         if (noteMatches(n)) { body += noteRow(n, entry); rows++; }
-      } else if (entry.kind === "missing") {
+      } else if (entry.kind === "MISSING") {
         if (!narrowed || entry.text.toLowerCase().includes(query.toLowerCase())) {
           body += `<button class="note-row missing" data-part="list-row" aria-current="${view === "missing" && missingEntry?.line_number === entry.line_number}" id="index-line-${entry.line_number}" data-missing-line="${entry.line_number}">
             <span class="title">${esc(entry.text)}</span><span class="summary">${esc(entry.hook)}</span><span class="flag">Its file is missing</span></button>`;
@@ -130,10 +186,11 @@ function renderList() {
     html += unlisted.map((n) => noteRow(n, null)).join("");
     rows += unlisted.length;
   }
-  if (loadError) html = `<p class="empty-list">Couldn't load your notes: ${esc(loadError)}</p>`;
+  if (isLoading) html = `<p class="empty-list">Loading your notes…</p>`;
+  else if (loadError) html = `<p class="empty-list">Couldn't load your notes: ${esc(loadError)}</p>`;
   else if (!notes.length && !outline.entries.length) html += `<p class="empty-list">I don't remember anything yet. Add a note to tell me something to keep in mind.</p>`;
   else if (narrowed && !rows) html += `<p class="empty-list">No notes match.</p>`;
-  else if (!outline.exists) html += `<p class="empty-list">There is no index yet. Adding a note creates it.</p>`;
+  else if (!outline.is_present) html += `<p class="empty-list">There is no index yet. Adding a note creates it.</p>`;
   $("note-list").innerHTML = html;
 }
 
@@ -144,30 +201,32 @@ function hideIndex() {
   const back = notes.find((n) => n.id === selected) || notes[0];
   view = "note";
   if (back) select(back.id, true);
-  else { draft = null; original = null; renderList(); renderEditor(); }
+  else { draft = null; original = null; renderList(); renderEditor(); reportLocation(); }
 }
 
-function showIndex(force = true) {
-  if (!force && !confirmLeave()) return;
+async function showIndex(force = true) {
+  if (!force && !(await confirmLeave())) return;
   view = "index";
   draft = null;
   original = null;
   renderList();
+  reportLocation();
   $("editor").innerHTML = `<div class="editor-inner raw-view">
     <div class="editor-toolbar"><span class="help">Read only. Press Esc to go back to your notes.</span><button id="hide-index">Back to your notes</button></div>
     <div class="row"><h2>Your index</h2><span class="help">${esc(outline.raw.split("\n").filter((l) => l.trim()).length)} lines, loaded at the start of every chat</span></div>
     <span class="help">Saved as MEMORY.md. The list on the left follows it line by line.</span>
-    <pre id="raw-index">${outline.exists ? esc(outline.raw) : "There is no index yet."}</pre>
+    <pre id="raw-index">${outline.is_present ? esc(outline.raw) : "There is no index yet."}</pre>
   </div>`;
 }
 
-function showMissing(lineNumber) {
-  if (!confirmLeave()) return;
+async function showMissing(lineNumber) {
+  if (!(await confirmLeave())) return;
   view = "missing";
   draft = null;
   original = null;
   missingEntry = outline.entries.find((e) => e.line_number === lineNumber);
   renderList();
+  reportLocation();
   $("editor").innerHTML = `<div class="editor-inner raw-view">
     <h2>${esc(missingEntry.text)}</h2>
     <p class="notice">Your index lists this note, but its file (${esc(missingEntry.file_name)}) doesn't exist. I see the title at the start of a chat but nothing behind it.</p>
@@ -191,7 +250,9 @@ function linkChips(n) {
 
 function renderEditor(status = "", isError = false) {
   if (!draft) {
-    $("editor").innerHTML = `<p class="blank">${notes.length ? "Pick a note on the left, or add a new one." : "Click New note to add the first thing I should remember."}</p>`;
+    if (isLoading) $("editor").innerHTML = `<p class="blank">Loading your notes…</p>`;
+    else if (loadError) $("editor").innerHTML = `<div class="blank"><p>Couldn't load your notes: ${esc(loadError)}</p><button id="retry">Try again</button></div>`;
+    else $("editor").innerHTML = `<p class="blank">${notes.length ? "Pick a note on the left, or add a new one." : "Click New note to add the first thing I should remember."}</p>`;
     return;
   }
   const n = draft;
@@ -223,7 +284,7 @@ function renderEditor(status = "", isError = false) {
       <button id="save" data-variant="primary">${isNew ? "Add note" : "Save changes"}</button>
       <button id="discard">Discard changes</button>
       <span class="status ${isError ? "error" : ""}" id="status">${status}</span>
-      ${isNew ? "" : `<button id="delete" data-variant="ghost" class="delete">Delete note</button>`}
+      ${isNew ? "" : `<button id="delete" data-variant="destructive">Delete note</button>`}
     </div>
     ${original ? `<div class="meta">${original.name ? `<span>Link name: ${esc(original.name)}</span>` : ""}<span>${original.file_name ? `Saved as ${esc(original.file_name)}` : "Saved in the index"}</span><span id="rename-note"></span></div>` : ""}
   </div>`;
@@ -269,8 +330,8 @@ function updateChecks() {
   }
 }
 
-function select(id, force = false) {
-  if (!force && !confirmLeave()) return;
+async function select(id, force = false) {
+  if (!force && !(await confirmLeave())) return;
   if (id !== selected || view !== "note") tab = "edit";
   view = "note";
   selected = id;
@@ -278,6 +339,7 @@ function select(id, force = false) {
   draft = original ? { ...original, kind: KINDS[original.kind] ? original.kind : "user" } : null;
   renderList();
   renderEditor();
+  reportLocation();
 }
 
 function readForm() {
@@ -306,7 +368,7 @@ async function save() {
       ? await api("PUT", `/api/notes/${encodeURIComponent(original.id)}`, { version: original.version, note: content })
       : await api("POST", "/api/notes", content);
     await load(false);
-    select(saved.id, true);
+    await select(saved.id, true);
     renderEditor("Saved. I'll use it from your next chat.");
   } catch (e) {
     showError(e);
@@ -314,6 +376,8 @@ async function save() {
 }
 
 async function remove() {
+  const isConfirmed = await confirmAction(`Delete "${original.title}"? I will stop remembering it.`, "Delete note", "Keep it");
+  if (!isConfirmed) return;
   try {
     await api("POST", `/api/notes/${encodeURIComponent(original.id)}/delete`, { version: original.version });
     selected = null;
@@ -323,9 +387,9 @@ async function remove() {
   }
 }
 
-document.addEventListener("click", (e) => {
+document.addEventListener("click", async (e) => {
   const t = e.target.closest("button");
-  if (!t) return;
+  if (!t || t.closest("#confirm-dialog")) return;
   if (t.dataset.filter) {
     filter = t.dataset.filter;
     renderFilters();
@@ -345,7 +409,7 @@ document.addEventListener("click", (e) => {
     draft.kind = t.dataset.kind;
     renderEditor();
   } else if (t.id === "new-note") {
-    if (!confirmLeave()) return;
+    if (!(await confirmLeave())) return;
     selected = null;
     view = "note";
     tab = "edit";
@@ -353,23 +417,17 @@ document.addEventListener("click", (e) => {
     draft = { title: "", summary: "", kind: "user", body: "", why: "", how: "" };
     renderList();
     renderEditor();
+    reportLocation();
     $("title-input").focus();
   } else if (t.id === "save") save();
   else if (t.id === "discard") select(selected, true);
   else if (t.id === "reload") load(true);
-  else if (t.id === "delete") {
-    const back = document.createElement("div");
-    back.className = "modal-back";
-    back.innerHTML = `<div class="modal"><p>Delete "${esc(original.title)}"? I will stop remembering it.</p><div class="row"><button id="cancel-delete">Keep it</button><button data-variant="destructive" id="confirm-delete">Delete note</button></div></div>`;
-    document.body.append(back);
-  } else if (t.id === "cancel-delete") t.closest(".modal-back").remove();
-  else if (t.id === "confirm-delete") {
-    t.closest(".modal-back").remove();
-    remove();
-  }
+  else if (t.id === "retry") { isLoading = true; renderList(); renderEditor(); load(false); }
+  else if (t.id === "delete") remove();
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key !== "Escape" || document.querySelector(".modal-back")) return;
+  // While the dialog is open, Escape is its own: it closes the dialog with the safe answer.
+  if (e.key !== "Escape" || $("confirm-dialog").open) return;
   if (view === "index") hideIndex();
   else if (view === "note" && tab === "raw") { tab = "edit"; renderEditor(); }
 });
@@ -379,6 +437,10 @@ document.addEventListener("input", (e) => {
 $("search").addEventListener("input", (e) => {
   query = e.target.value;
   renderList();
+});
+// Closing or reloading the window with unsaved edits asks first, as the editor's own navigation does.
+window.addEventListener("beforeunload", (e) => {
+  if (isDirty()) e.preventDefault();
 });
 // Pick up notes the agent wrote while the window was in the background.
 document.addEventListener("visibilitychange", () => {

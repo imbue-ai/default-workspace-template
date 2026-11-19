@@ -627,6 +627,9 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["memory"].program == "memory"
     assert by_name["memory"].priority == "memory"
     assert by_name["memory"].launch_paths == ()
+    assert [(shortcut.launch, shortcut.mode) for shortcut in by_name["memory"].default_shortcuts] == [
+        ("open", "focus")
+    ]
     assert by_name["memory"].preview.copies == {
         "notes": "data/memories",
         "changes": "data/.apps/chat/memory_changes",
@@ -645,6 +648,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         (30, "screen"),
         (40, "terminal"),
         (45, "routines"),
+        (47, "memory"),
         (50, "system-monitor"),
     ]
     # Every seeded shortcut opens a new window of its app; the one Screen is focused instead (the Screen spec D2).

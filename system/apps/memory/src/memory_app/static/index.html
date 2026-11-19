@@ -17,11 +17,19 @@
     </div>
     <input id="search" type="search" placeholder="Search notes">
     <div id="filters" class="filters"></div>
-    <nav id="note-list" class="note-list" aria-label="Your memory index"></nav>
+    <nav id="note-list" class="note-list" aria-label="Your memory index"><p class="empty-list">Loading your notes…</p></nav>
     <p class="hint">Changes apply from your next chat.</p>
   </aside>
-  <main id="editor" class="editor"></main>
+  <main id="editor" class="editor"><p class="blank">Loading your notes…</p></main>
 </div>
+<!-- The page's one confirmation: the question and its two answers are filled in each time it opens. -->
+<dialog id="confirm-dialog" class="modal" aria-labelledby="confirm-question">
+  <p id="confirm-question"></p>
+  <div class="row">
+    <button id="confirm-cancel"></button>
+    <button id="confirm-ok" data-variant="destructive"></button>
+  </div>
+</dialog>
 <script type="module" src="/assets/app.js"></script>
 </body>
 </html>

@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     # The notes and the change log: one library with the chat's memory cards and Claude's change-log hook.
     "agent-memory",
+    "app-manifest",
     "app-schema",
     "flask>=3.0",
     "imbue-common",
@@ -38,7 +39,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build]
 artifacts = [
-    "src/memory_app/assets/**",
+    "src/memory_app/static/**",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -55,7 +56,7 @@ ignore = ["E501"]
 force-single-line = true
 case-sensitive = true
 order-by-type = false
-known-first-party = ["memory_app", "agent_memory", "workspace_themes", "imbue", "app_schema"]
+known-first-party = ["memory_app", "agent_memory", "workspace_themes", "imbue", "app_manifest", "app_schema"]
 
 # Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
 [tool.ty]
