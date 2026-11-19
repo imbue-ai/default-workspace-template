@@ -6,8 +6,8 @@ session's own is raised to ``AGENT_SUBPROCESS``, and Chromium's processes, where
 remapped into the shared-browser band the way the browser app's ``oom_retag`` did: Chromium overwrites the
 inherited ``oom_score_adj`` once per process with its own gradation (browser 0, gpu and utility 200, renderers
 300), and an order-preserving remap into ``[SHARED_BROWSER_FLOOR, SHARED_BROWSER]`` keeps renderers at the ceiling
-where shedding one costs one tab. Under pressure the order is therefore programs on the Screen, then Chromium's
-renderers, then the stack. The sweep only ever raises, so repeating it writes nothing more.
+where shedding one costs one tab. Under pressure the order is therefore Chromium's renderers, then programs on
+the Screen, then the stack. The sweep only ever raises, so repeating it writes nothing more.
 
 Chromium's processes spawn, and self-write their values, over the seconds after a launch or a new tab, so the fleet
 kicks a short burst of sweeps on those events on top of the periodic cadence.

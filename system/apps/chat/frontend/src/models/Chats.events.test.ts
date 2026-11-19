@@ -111,6 +111,21 @@ describe("the provisional chats over the socket", () => {
     expect(manager.getChatById("agent-1")?.chat_id).toBe("agent-1");
   });
 
+  it("tells the held-send listeners which message never reached its agent, and why", () => {
+    const failures: [string, string, string, string][] = [];
+    manager.addHeldSendFailedListener((chatId, messageId, detail, kind) =>
+      failures.push([chatId, messageId, detail, kind]),
+    );
+    push({
+      type: "held_send_failed",
+      chat_id: "agent-1",
+      message_id: "m-1",
+      detail: "Claude is waiting on something in its terminal",
+      kind: "input_blocked",
+    });
+    expect(failures).toEqual([["agent-1", "m-1", "Claude is waiting on something in its terminal", "input_blocked"]]);
+  });
+
   it("tells the active-agent listeners when a chat runs on a different agent than before", () => {
     const changes: [string, string, string][] = [];
     manager.addActiveAgentChangedListener((chatId, previous, current) => changes.push([chatId, previous, current]));

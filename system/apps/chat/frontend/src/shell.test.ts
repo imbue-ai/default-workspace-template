@@ -14,7 +14,12 @@ vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => 
 const createChat = vi.fn();
 const getChatById = vi.fn();
 const addChatsUpdatedListener = vi.fn();
-vi.mock("./models/Chats", () => ({ createChat, getChatById, addChatsUpdatedListener }));
+vi.mock("./models/Chats", () => ({
+  createChat,
+  getChatById,
+  addChatsUpdatedListener,
+  addHeldSendFailedListener: () => undefined,
+}));
 // The composer's module brings in the whole chat page, which every test's fresh import of the shell module would
 // evaluate again; the shell only calls into its composer.
 vi.mock("./views/MessageInput", () => ({

@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("../models/Chats", () => ({
+  addHeldSendFailedListener: () => undefined,
   getQueuedMessagesForChat: () => mocks.queued,
   getShoulderTapAvailableForChat: () => mocks.available,
 }));
