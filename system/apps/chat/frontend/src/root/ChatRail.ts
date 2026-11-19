@@ -462,11 +462,9 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
         // someone else said", per the design), so the rows' hover has to read lighter than it.
         status === "done"
           ? `chat-rail-row--done font-semibold text-success ${isSelected ? "bg-bubble-other" : "hover:bg-fill-faint"}`
-          : status === "interrupted"
-            ? `chat-rail-row--interrupted font-semibold text-danger ${isSelected ? "bg-bubble-other" : "hover:bg-fill-faint"}`
-            : isSelected
-              ? "chat-rail-row--selected bg-bubble-other text-primary"
-              : "text-primary hover:bg-fill-faint",
+          : isSelected
+            ? "chat-rail-row--selected bg-bubble-other text-primary"
+            : "text-primary hover:bg-fill-faint",
         row.status === "stopped" ? "chat-rail-row--stopped opacity-50" : "",
         row.isMain ? "chat-rail-row--main font-medium" : "",
       ].join(" "),
