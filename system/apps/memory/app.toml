@@ -3,8 +3,7 @@
 # cards and Claude's change-log hook use, and keeps nothing of its own. Its page lists the notes as the index
 # (MEMORY.md) does and edits one at a time; the chat's cards link a note here as ``/?note=<id>``, and the page reports
 # the note it shows the same way, so the shell reopens a window on it. The agent's changes to the notes are shown and
-# undone on the chat's cards; the API's /api/changes routes read and undo the same records, but the page does not
-# list them. It declares no launch path, so the desktop offers the synthesized ``open`` at its root; its shortcut
+# undone on the chat's cards, not here. It declares no launch path, so the desktop offers the synthesized ``open`` at its root; its shortcut
 # focuses the one window it is for.
 name = "memory"
 display_name = "Memory"

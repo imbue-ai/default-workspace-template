@@ -1,5 +1,5 @@
-"""Tests for the routes: the page and its files, the notes, the agent's changes and their undo, health, the request
-guard, and the API document, over a memory folder and a change log of each test's own."""
+"""Tests for the routes: the page and its files, the notes, health, the request guard, and the API document, over a
+memory folder and a change log of each test's own."""
 
 from pathlib import Path
 
@@ -126,48 +126,8 @@ def test_a_deleted_note_leaves_the_listing(client: FlaskClient) -> None:
     assert client.post(f"/api/notes/{note['id']}/delete", json={"version": note["version"]}).status_code == 404
 
 
-def test_an_agent_s_change_lists_newest_first_and_undoes(client: FlaskClient, changes: ChangeLog) -> None:
-    changes.start_turn("session-1")
-    _agent_writes(changes, "tea.md", "tea")
-    changes.start_turn("session-1")
-    _agent_writes(changes, "coffee.md", "coffee")
-    listed = client.get("/api/changes").get_json()["changes"]
-    assert [change["summary"] for change in listed] == ['added the note "Coffee"', 'added the note "Tea"']
-    assert listed[0]["files"] == [{"name": "coffee.md", "before": None, "after": "coffee", "is_index_lines": False}]
-    undone = client.post(f"/api/changes/{listed[0]['id']}/undo", json={})
-    assert undone.status_code == 200
-    assert undone.get_json()["undone_at"] is not None
-    assert not (changes.memory_dir / "coffee.md").exists()
-
-
-def test_undo_of_a_note_edited_since_is_refused_unless_forced(client: FlaskClient, changes: ChangeLog) -> None:
-    changes.start_turn("session-1")
-    _agent_writes(changes, "tea.md", "tea")
-    (changes.memory_dir / "tea.md").write_text("edited since")
-    (change,) = client.get("/api/changes").get_json()["changes"]
-    refused = client.post(f"/api/changes/{change['id']}/undo", json={})
-    assert refused.status_code == 409
-    assert (
-        refused.get_json()["detail"] == "Changed again since: tea.md. Undoing now would also lose those later edits."
-    )
-    assert (changes.memory_dir / "tea.md").read_text() == "edited since"
-    assert client.post(f"/api/changes/{change['id']}/undo", json={"is_forced": True}).status_code == 200
-    assert not (changes.memory_dir / "tea.md").exists()
-
-
 def test_a_save_here_mid_turn_is_not_charged_to_the_agent(client: FlaskClient, changes: ChangeLog) -> None:
     changes.start_turn("session-1")
     client.post("/api/notes", json=_DRAFT)
     _agent_writes(changes, "coffee.md", "coffee")
-    listed = client.get("/api/changes").get_json()["changes"]
-    assert [change["note"] for change in listed] == ["coffee.md"]
-
-
-@pytest.mark.parametrize("change_id", ["nope", "%2E%2E", "x%5Cy"])
-def test_an_unknown_or_unsafe_change_is_not_found(client: FlaskClient, change_id: str) -> None:
-    for response in (
-        client.get(f"/api/changes/{change_id}"),
-        client.post(f"/api/changes/{change_id}/undo", json={}),
-    ):
-        assert response.status_code == 404
-        assert response.get_json()["detail"] == "That change is not in the record."
+    assert [change.note for change in changes.list_changes()] == ["coffee.md"]

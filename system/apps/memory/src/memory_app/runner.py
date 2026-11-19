@@ -3,10 +3,8 @@
 Services run from /home/user/workspace (the repo root). The app stores nothing of its own: the notes are the
 agent's memory folder (``data/memories/``, Claude's ``autoMemoryDirectory``), read and written through
 ``agent_memory.notes``. The changes an agent made to them are the records Claude's change-log hook writes for the
-chat (``data/.apps/chat/memory_changes/``); the chat's "Memory changed" cards show and undo them. The app's own
-page does not list them, but the ``/api/changes`` routes read and undo the same records through
-``agent_memory.changes``, so an agent or a script reaching the app has them, and a save in this app moves every
-chat's baseline past it rather than being charged to the agent.
+chat (``data/.apps/chat/memory_changes/``); the chat's "Memory changed" cards show and undo them. A save in this
+app moves every chat's baseline in that log past it, so it is never charged to the agent.
 
 - Listen address: bind ``HOST`` and ``PORT``, which default to the loopback address and this app's assigned
   port but honor ``MEMORY_APP_HOST`` and ``MEMORY_APP_PORT``, so a preview can boot on a spare port beside the
@@ -35,11 +33,6 @@ from loguru import logger
 from werkzeug.serving import run_simple
 
 from agent_memory.changes import ChangeLog
-from agent_memory.changes import ChangeNotFoundError
-from agent_memory.changes import ChangedFile
-from agent_memory.changes import ChangedSinceError
-from agent_memory.changes import MemoryChange
-from agent_memory.changes import changed_since_detail
 from agent_memory.changes import default_log
 from agent_memory.notes import INDEX_LINE_LIMIT
 from agent_memory.notes import InvalidNoteError
@@ -62,13 +55,9 @@ from app_schema.routes import parse_request_body
 from imbue.imbue_common.logging import setup_logging
 from memory_app.data_types import DeletedNote
 from memory_app.data_types import HealthResponse
-from memory_app.data_types import MemoryAppChange
-from memory_app.data_types import MemoryAppChangedFile
-from memory_app.data_types import MemoryAppChangesListing
 from memory_app.data_types import NoteChange
 from memory_app.data_types import NoteDeletion
 from memory_app.data_types import NotesListing
-from memory_app.data_types import UndoRequest
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 from workspace_themes.flask_routes import register_workspace_theme_route
 
@@ -100,7 +89,6 @@ _SHELL_FILES: Final[dict[str, tuple[Path, str]]] = {
 
 _CHANGED_ELSEWHERE: Final[str] = "This note changed since you opened it. Reload to see the latest version."
 _NOTE_NOT_FOUND: Final[str] = "This note no longer exists. Reload to see the current notes."
-_CHANGE_NOT_FOUND: Final[str] = "That change is not in the record."
 
 # What every route exchanges, which the app's API document publishes and every parse and answer
 # is checked against (build-app skill, "The app describes its own API"): a route that reads or
@@ -115,9 +103,6 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("POST", "/api/notes"): RouteModels(request_model=NoteDraft, response_model=Note, success_status=201),
     ("PUT", "/api/notes/{note_id}"): RouteModels(request_model=NoteChange, response_model=Note),
     ("POST", "/api/notes/{note_id}/delete"): RouteModels(request_model=NoteDeletion, response_model=DeletedNote),
-    ("GET", "/api/changes"): RouteModels(response_model=MemoryAppChangesListing),
-    ("GET", "/api/changes/{change_id}"): RouteModels(response_model=MemoryAppChange),
-    ("POST", "/api/changes/{change_id}/undo"): RouteModels(request_model=UndoRequest, response_model=MemoryAppChange),
     **THEME_STATIC_ROUTE_TABLE,
 }
 
@@ -136,25 +121,6 @@ def _error_response(detail: str, status: int) -> Response:
     """Answer a refused request with ``detail``, logging it first: every refusal here is one the page expects."""
     logger.debug("Refused a Memory app request with {}: {}", status, detail)
     return error_response(detail, status)
-
-
-def _file_model(item: ChangedFile) -> MemoryAppChangedFile:
-    return MemoryAppChangedFile(
-        name=item.name, before=item.before, after=item.after, is_index_lines=item.is_index_lines
-    )
-
-
-def _change_model(change: MemoryChange) -> MemoryAppChange:
-    return MemoryAppChange(
-        id=change.id,
-        time=change.time,
-        summary=change.summary,
-        chat_id=change.chat_id,
-        agent_name=change.agent_name,
-        note=change.note,
-        files=tuple(_file_model(item) for item in change.files),
-        undone_at=change.undone_at,
-    )
 
 
 def create_app(changes: ChangeLog, store: NoteStore) -> Flask:
@@ -250,36 +216,6 @@ def create_app(changes: ChangeLog, store: NoteStore) -> Flask:
         except NoteChangedError:
             return _error_response(_CHANGED_ELSEWHERE, 409)
         return model_response(DeletedNote(id=note_id))
-
-    @app.get("/api/changes")
-    def list_memory_app_changes() -> Response:
-        """List every change an agent made to the notes, newest first, with the text before and after."""
-        listed = reversed(changes.list_changes())
-        return model_response(MemoryAppChangesListing(changes=tuple(_change_model(change) for change in listed)))
-
-    @app.get("/api/changes/<change_id>")
-    def get_memory_app_change(change_id: str) -> Response:
-        """One change an agent made to the notes."""
-        try:
-            change = changes.get(change_id)
-        except ChangeNotFoundError:
-            return _error_response(_CHANGE_NOT_FOUND, 404)
-        return model_response(_change_model(change))
-
-    @app.post("/api/changes/<change_id>/undo")
-    def undo_memory_app_change(change_id: str) -> Response:
-        """Undo a change: put back the note and the index lines it touched as they were before it.
-
-        Refused with 409 when one of them was changed again since, unless ``is_forced``.
-        """
-        undo = parse_request_body(UndoRequest)
-        try:
-            change = changes.undo(change_id, is_forced=undo.is_forced)
-        except ChangeNotFoundError:
-            return _error_response(_CHANGE_NOT_FOUND, 404)
-        except ChangedSinceError as e:
-            return _error_response(changed_since_detail(e), 409)
-        return model_response(_change_model(change))
 
     @app.get("/health")
     def health() -> Response:

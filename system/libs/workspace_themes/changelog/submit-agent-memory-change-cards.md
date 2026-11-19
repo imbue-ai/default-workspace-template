@@ -1,0 +1,1 @@
+- The built-in themes (Classic Mac, Windows 2000) carry an icon for the new Memory app, and the built-in themes test expects it.

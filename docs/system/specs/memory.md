@@ -21,7 +21,7 @@ The Memory app lets the user read and edit those notes; the chat shows each chan
 4. A new title renames the note's file and every `[[link]]` to it. A title may not hold square brackets (they would break the index line's link). An index line longer than `INDEX_LINE_LIMIT` (150 characters) is flagged in the list and under the summary field, and still saves.
 5. Each note and the index can be shown as the raw file, read-only; Escape or the toolbar button goes back.
 6. A save or delete made in the app moves every chat's baseline past it (`ChangeLog.absorb_user_edit`), so it is never shown as a change the agent made.
-7. The agent's changes are shown and undone on the chat's cards, not in the app's page. The app's `/api/changes` routes read and undo the same records for an agent or a script. An Undo puts back the note and its own index lines as they were before the change, and is refused with `409` when one of them changed again since, unless forced.
+7. The agent's changes are shown and undone on the chat's cards; the app has no page or route for them. An Undo puts back the note and its own index lines as they were before the change, and is refused with `409` when one of them changed again since, unless forced.
 8. The page reports the note it shows as `/?note=<id>` with the note's title, so the shell reopens the window on it and a chat card's link to that note raises the window already showing it.
 9. The page is a plain HTML page on the page kit (`docs/system/themeable-apps.md`, `theming.mode = "tokens"`), with no build step, like System Monitor's.
 

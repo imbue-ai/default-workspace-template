@@ -1,7 +1,7 @@
 [project]
 name = "memory-app"
 version = "0.1.0"
-description = "The Memory app: the notes the agent remembers about the user across chats, to view and edit, and every change an agent made to them, with Undo"
+description = "The Memory app: the notes the agent remembers about the user across chats, to view and edit"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

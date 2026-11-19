@@ -14,18 +14,16 @@ feedback, projects and references -- to view and edit. Served on port 8070 by th
   line past the ~150 characters Claude Code suggests is flagged (it still saves).
   Each note and the index can be shown as the raw file.
 - **The agent's changes.** Shown and undone on the chat's "Memory changed" cards,
-  not on this page. The app's `/api/changes` routes read and undo the same records
-  for an agent or a script.
+  not here.
 
 It keeps nothing of its own. The notes are `data/memories/` (Claude's
 `autoMemoryDirectory`) and the changes are the records Claude's change-log hook
 (`system/scripts/agent_memory_change_log.py`) writes under
 `data/.apps/chat/memory_changes/`, both through the `agent_memory` library
-(`system/libs/agent_memory/`), which the chat's cards use too: an Undo through
-this app and one on a card are the same Undo. A save here moves every chat's
-baseline past it, so it is never shown as a change the agent made. The chat's
-cards link a note here as `/?note=<id>`, and the page reports the note it shows
-the same way, so the shell reopens a window on it.
+(`system/libs/agent_memory/`), which the chat's cards use too. A save here moves
+every chat's baseline past it, so it is never shown as a change the agent made.
+The chat's cards link a note here as `/?note=<id>`, and the page reports the note
+it shows the same way, so the shell reopens a window on it.
 
 `AGENT_MEMORY_DIR` and `AGENT_MEMORY_CHANGES_DIR` point the app at other folders,
 which a preview (`[preview]` in `app.toml`) sets to copies of both.
