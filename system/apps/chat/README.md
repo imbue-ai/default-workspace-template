@@ -378,7 +378,10 @@ written for the user, which the page shows as is.
 
 A handoff's successor is created silent: its model pick is applied first
 (`POST /api/chats/<chat-id>/handoff` takes `model`), then the handoff prompt
-goes to it through the send path, then the held messages. A rebind's pick is
+goes to it through the send path, then the held messages. A held message the
+agent refuses before anything is typed, for a reason that can clear by itself (an
+input box not drawn yet, a harness not taking messages yet), is tried again for a
+few minutes, since nobody is at a composer to retry it. A rebind's pick is
 applied the same way once the agent is back on the new account, retried for a
 while since `mngr start` does not wait for the harness to come up. A new chat
 created with a pick (`POST /api/chats/create` takes `model` too) is set up the

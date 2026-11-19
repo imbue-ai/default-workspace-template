@@ -53,7 +53,8 @@ export interface DiskReading extends AmountReading {
 
 export interface CpuReading {
   readonly percent: number;
-  readonly recentPercent: number;
+  /** The mean over the warning window; null until the sampler has the whole window. */
+  readonly recentPercent: number | null;
   readonly cores: number;
 }
 
@@ -113,7 +114,7 @@ function cpuFromWire(raw: unknown): CpuReading | null {
   if (percent === null) return null;
   return {
     percent,
-    recentPercent: asNumberOrNull(record.recent_percent) ?? percent,
+    recentPercent: asNumberOrNull(record.recent_percent),
     cores: asNumberOrNull(record.cores) ?? 1,
   };
 }
@@ -203,6 +204,23 @@ export function alertOf(view: ResourceGaugeView, resource: GaugeResource): Resou
 export function levelOf(view: ResourceGaugeView, resource: GaugeResource, isStale: boolean): GaugeLevel {
   if (isStale || shownPercentOf(view.readings, resource) === null) return "unknown";
   return alertOf(view, resource)?.severity ?? "normal";
+}
+
+/** The resources whose warning the tray draws as their bar rather than a pill in words: a busy CPU is a level to
+ *  watch, not a fault to read about. */
+export const BAR_WARNING_RESOURCES: ReadonlySet<GaugeResource> = new Set<GaugeResource>(["cpu"]);
+
+/** The raised warnings the tray draws as pills, the most severe first. */
+export function pillAlertsOf(view: ResourceGaugeView): readonly ResourceAlert[] {
+  return view.alerts.filter((alert) => !BAR_WARNING_RESOURCES.has(alert.resource));
+}
+
+/** The bars the tray draws: all of them when always shown, else those of the warnings drawn as a bar (none once the
+ *  gauge has stopped updating, as no pill is drawn then either). */
+export function shownBarsOf(view: ResourceGaugeView, isStale: boolean): readonly GaugeResource[] {
+  if (view.settings.visibility === "always") return GAUGE_RESOURCES;
+  if (isStale) return [];
+  return GAUGE_RESOURCES.filter((resource) => BAR_WARNING_RESOURCES.has(resource) && alertOf(view, resource) !== null);
 }
 
 /** Whether the tray draws anything: the bars when always shown, a warning whenever one is raised. */

@@ -190,7 +190,7 @@ def _probe_candidate(client: httpx.Client, base_url: str) -> LocalModelServer | 
     try:
         return describe_server(client, base_url, "")
     except LocalModelError as e:
-        logger.debug("No local model server at {}: {}", base_url, e)
+        logger.trace("No local model server at {}: {}", base_url, e)
         return None
 
 
