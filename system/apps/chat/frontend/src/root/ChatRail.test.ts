@@ -196,15 +196,19 @@ describe("ChatRail main chat", () => {
     expect(keysOf(other)).toContain("stop");
   });
 
-  it("offers a restart, not a stop, on a chat whose agent stopped mid-turn", () => {
-    const interrupted = chatRowFixture("agent-cut-off", { status: "interrupted" });
-    const context = chatRailAttrsFixture({ rows: [interrupted] });
-    const keys = rowMenuRows(context, interrupted).flatMap((menuRow) =>
-      menuRow.kind === "action" && menuRow.key !== undefined ? [menuRow.key] : [],
-    );
+  it("offers a restart, not a stop, on a chat whose agent stopped mid-turn, and a stop once it runs again", () => {
+    const interrupted = chatRowFixture("agent-cut-off", { status: "interrupted", isAgentProcessDead: true });
+    const restarted = chatRowFixture("agent-restarted", { status: "interrupted", isAgentProcessDead: false });
+    const context = chatRailAttrsFixture({ rows: [interrupted, restarted] });
+    const keysOf = (row: ChatRow): string[] =>
+      rowMenuRows(context, row).flatMap((menuRow) =>
+        menuRow.kind === "action" && menuRow.key !== undefined ? [menuRow.key] : [],
+      );
 
-    expect(keys).toContain("start");
-    expect(keys).not.toContain("stop");
+    expect(keysOf(interrupted)).toContain("start");
+    expect(keysOf(interrupted)).not.toContain("stop");
+    expect(keysOf(restarted)).toContain("stop");
+    expect(keysOf(restarted)).not.toContain("start");
   });
 
   it("gives a chat waiting for its first send its verbs, and a chat being created its rename and delete too", () => {
