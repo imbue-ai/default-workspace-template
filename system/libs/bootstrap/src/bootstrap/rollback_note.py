@@ -24,6 +24,13 @@ OUTCOME_ROLLBACK_INCOMPLETE = "rollback-incomplete"
 
 EMERGENCY_RECORD = "data/.state/update-apply/emergency.json"
 
+# The pass runs from the target's staged copy of the update-self skill; after the rollback the
+# workspace's own copy is the pre-apply revision, which may predate this note's guidance.
+STAGED_APPLY_OUTCOMES = (
+    "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/references/"
+    "apply-outcomes.md"
+)
+
 
 class BootRollback(NamedTuple):
     """An apply the previous container run left mid-motion, which this boot rolled back.
@@ -61,16 +68,13 @@ def compose_rollback_note(rollback: BootRollback) -> str:
     """The note for the agent that was driving the apply: what the boot did, and what to do now."""
     if rollback.release is not None:
         what = f"the workspace update to {rollback.release} ({rollback.merge_ref})"
-        guide = (
-            "the update-self skill's references/apply-outcomes.md, \"After a restart rolled "
-            'it back"'
-        )
+        guide = f'{STAGED_APPLY_OUTCOMES}, "After a restart rolled it back"'
     else:
         what = f"the change {rollback.merge_ref}"
         guide = (
             "the update-app skill's references/critical-app.md, \"If a restart interrupts "
-            'the go-live" (or, for a revert the update-self skill was landing, its '
-            'references/apply-outcomes.md, "After a restart rolled it back")'
+            'the go-live" (or, for a revert the update-self skill was landing, '
+            f'{STAGED_APPLY_OUTCOMES}, "After a restart rolled it back")'
         )
     lines = [
         f"The workspace restarted while you were applying {what}, and the recovery at boot "
