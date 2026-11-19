@@ -379,6 +379,8 @@ def submit_flow(flow_id: str) -> Response:
 
     A model server this workspace reaches only through the Imbue Studio app (`studio_port`) is
     first connected to it by the app, and the sign-in runs on the address it then answers on here.
+    The app repoints the workspace's one connection to do that, so it is asked only for a flow
+    that is still waiting on a model server.
     """
     submit_request = parse_request_body(SubmitFlowRequest)
     service = get_state().auth_flows
@@ -392,6 +394,7 @@ def submit_flow(flow_id: str) -> Response:
             if endpoint.studio_port is None:
                 base_url = endpoint.base_url
             else:
+                service.require_endpoint_flow(flow_id)
                 base_url = open_studio_tunnel(
                     get_state().http_client, _studio_gateway(), _own_agent_id(), endpoint.studio_port
                 )

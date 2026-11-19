@@ -642,6 +642,13 @@ class AuthFlowService:
             # it away would be the worse mistake.
             return self._commit_locked(session, display)
 
+    def require_endpoint_flow(self, flow_id: str) -> None:
+        """Raise FlowError unless ``flow_id`` is a sign-in still waiting to be handed a model server."""
+        with self._lock:
+            session = self._require_locked(flow_id, must_be_pending=True)
+            if not isinstance(session.method, EndpointMethod):
+                raise FlowError("this sign-in does not take a model server")
+
     def submit_endpoint(
         self, flow_id: str, base_url: str, model_id: str, context_window: int, api_key: str = ""
     ) -> FlowStatus:
@@ -650,10 +657,7 @@ class AuthFlowService:
         The check talks to the server and can wait a minute on a model that is not loaded, so it
         runs outside the lock: the flow stays abortable meanwhile, and is looked up again after.
         """
-        with self._lock:
-            session = self._require_locked(flow_id, must_be_pending=True)
-            if not isinstance(session.method, EndpointMethod):
-                raise FlowError("this sign-in does not take a model server")
+        self.require_endpoint_flow(flow_id)
         try:
             base_url = normalize_base_url(base_url)
             profile = self._verify_local_model(base_url, api_key, model_id, context_window)

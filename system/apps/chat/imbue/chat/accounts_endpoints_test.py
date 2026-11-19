@@ -698,6 +698,28 @@ def test_a_tunnel_the_imbue_studio_app_will_not_open_is_a_400_with_the_reason(
     assert "no longer allowed" in response.get_json()["detail"]
 
 
+def test_a_sign_in_that_is_not_waiting_on_a_model_server_asks_the_imbue_studio_app_for_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opening the tunnel repoints the one the workspace has, which a sign-in that is not there must not do."""
+    _in_a_workspace_with_a_gateway(monkeypatch)
+    studio = _StudioStandIn(
+        {("POST", f"{_STUDIO_ROUTES}/tunnel"): httpx.Response(200, json={"workspace_port": 11435})}
+    )
+    endpoint = {"endpoint": {"base_url": "", "model_id": "qwen3:8b", "context_window": 65536, "studio_port": 11434}}
+    with _client_for(build_test_state(auth_flows=_signed_in_service(tmp_path), http_client=studio.client())) as client:
+        to_no_flow = client.post("/api/accounts/flow/no-such-flow", json=endpoint)
+        key_flow_id = client.post("/api/accounts", json={"lane_id": "opencode-go", "method_id": "api_key"}).get_json()[
+            "flow_id"
+        ]
+        to_a_key_flow = client.post(f"/api/accounts/flow/{key_flow_id}", json=endpoint)
+
+    assert to_no_flow.status_code == 400
+    assert to_a_key_flow.status_code == 400
+    assert "model server" in to_a_key_flow.get_json()["detail"]
+    assert studio.requests == []
+
+
 def test_an_endpoint_with_no_model_is_refused_not_a_500(tmp_path: Path) -> None:
     with _client(_signed_in_service(tmp_path)) as client:
         flow_id = client.post("/api/accounts", json={"lane_id": "local-model", "method_id": "endpoint"}).get_json()[
