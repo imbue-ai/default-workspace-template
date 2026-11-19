@@ -345,6 +345,20 @@ def test_an_edit_the_user_made_between_turns_is_not_charged_to_the_agent(
     assert _record(log, "s1", "t1", {"file_path": str(log.memory_dir / "tea.md")}) == []
 
 
+def test_an_edit_the_user_made_mid_turn_is_not_charged_to_the_agent(
+    log: ChangeLog,
+) -> None:
+    _write(log, "tea.md", "v1")
+    log.start_turn("s1")
+    before = log.snapshot()
+    _write(log, "tea.md", "edited in the Memory app")
+    log.absorb_user_edit(before)
+    assert _record(log, "s1", "t1", _write(log, "coffee.md", "coffee")) == [
+        change for change in log.list_changes() if change.note == "coffee.md"
+    ]
+    assert [change.note for change in log.list_changes()] == ["coffee.md"]
+
+
 def test_another_session_s_change_is_not_folded_into_this_one(log: ChangeLog) -> None:
     log.start_turn("a")
     log.start_turn("b")

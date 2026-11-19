@@ -595,6 +595,14 @@ class ChangeLog:
             if baseline is not None:
                 _write_json(path, _snapshot_with(baseline, files))
 
+    def absorb_user_edit(self, before: Mapping[str, str]) -> None:
+        """Move every session's baseline past what changed since ``before`` (a ``snapshot`` taken
+        just ahead of an edit the user made, e.g. in the Memory app), so no chat's agent is
+        charged with it, even one in the middle of a turn."""
+        self._move_baselines_past(
+            diff_snapshots(before, self.snapshot()), except_session=None
+        )
+
     def start_turn(self, session_id: str) -> None:
         _write_json(self._baseline_path(session_id), self.snapshot())
         _write_json(self._turn_path(session_id), {"change_ids": {}})
@@ -804,9 +812,7 @@ class ChangeLog:
         for item in change.files:
             self._write_memory_file(item.name, _restored_text(item, key, current))
         # The undo is the user's, not any agent's: no session should see it as a change.
-        self._move_baselines_past(
-            diff_snapshots(current, self.snapshot()), except_session=None
-        )
+        self.absorb_user_edit(current)
         undone = change._replace(undone_at=_now().replace(microsecond=0))
         _write_json(self._path(change_id), undone.to_json())
         return undone

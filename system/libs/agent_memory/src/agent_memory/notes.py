@@ -21,7 +21,7 @@ import os
 import re
 import tempfile
 import threading
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -80,6 +80,9 @@ _DEFAULT_NOTE_MODE: Final = 0o644
 # Wide enough that PyYAML never folds a frontmatter value onto a second line.
 _YAML_LINE_WIDTH: Final = 10_000
 _DEFAULT_KIND: Final = NoteKind.USER.value
+# Claude Code's guidance for one line of the index: under about this many characters. A longer
+# line costs the agent's starting overview room, so the editor warns about it (it still saves).
+INDEX_LINE_LIMIT: Final = 150
 
 
 class Note(FrozenModel):
@@ -157,6 +160,10 @@ class IndexEntry(FrozenModel):
         description="The file the line points at; empty when it points at none",
     )
     line_number: int = Field(description="The line's number in the index, from 1")
+    length: int = Field(description="How many characters the line has")
+    is_too_long: bool = Field(
+        description=f"Whether the line is longer than the {INDEX_LINE_LIMIT} characters Claude Code suggests"
+    )
 
 
 class IndexOutline(FrozenModel):
@@ -339,14 +346,28 @@ def _write_atomically(path: Path, text: str) -> None:
 def _check_draft(draft: NoteDraft) -> None:
     if not draft.title.strip():
         raise InvalidNoteError("Give the note a title.")
+    # A bracket would end the index line's link text early, so the line would no longer point at the note.
+    if "[" in draft.title or "]" in draft.title:
+        raise InvalidNoteError(
+            "Titles can't contain square brackets. Remove them to save."
+        )
     if not draft.summary.strip():
         raise InvalidNoteError("Add a one-line summary.")
     if not (draft.body.strip() or draft.why.strip() or draft.how.strip()):
         raise InvalidNoteError("Write what should be remembered.")
 
 
-def _pointer_line(title: str, file_name: str, summary: str) -> str:
-    return f"- [{one_line(title).replace(']', ')')}]({file_name}) — {one_line(summary)}"
+def pointer_line(title: str, file_name: str, summary: str) -> str:
+    """The index line pointing at a note: ``- [Title](file.md) — summary``."""
+    return f"- [{one_line(title)}]({file_name}) — {one_line(summary)}"
+
+
+def _link_rewriter(old_name: str, new_name: str) -> Callable[[str], str]:
+    """A function rewriting every ``[[old_name]]`` link in a text to ``[[new_name]]``."""
+    if not old_name:
+        return lambda text: text
+    old_link = re.compile(r"\[\[\s*" + re.escape(old_name) + r"\s*\]\]")
+    return lambda text: old_link.sub(f"[[{new_name}]]", text)
 
 
 def _set_pointer(
@@ -454,6 +475,8 @@ def _index_entry(
 ) -> IndexEntry:
     """One non-blank index line resolved against the notes."""
     stripped = line.strip()
+    length = len(line)
+    is_too_long = length > INDEX_LINE_LIMIT
     heading = _HEADING_LINE.match(stripped)
     pointer = _POINTER_LINE.match(line)
     if heading:
@@ -462,6 +485,8 @@ def _index_entry(
             text=heading[2].strip(),
             level=len(heading[1]),
             line_number=number,
+            length=length,
+            is_too_long=is_too_long,
         )
     if pointer:
         target = Path(pointer["file"]).name
@@ -474,6 +499,8 @@ def _index_entry(
                 hook=hook,
                 file_name=target,
                 line_number=number,
+                length=length,
+                is_too_long=is_too_long,
             )
         return IndexEntry(
             kind=IndexEntryKind.NOTE,
@@ -482,6 +509,8 @@ def _index_entry(
             note_id=note.id,
             file_name=target,
             line_number=number,
+            length=length,
+            is_too_long=is_too_long,
         )
     if line in loose_note_by_line:
         note = loose_note_by_line[line]
@@ -490,8 +519,16 @@ def _index_entry(
             text=note.title,
             note_id=note.id,
             line_number=number,
+            length=length,
+            is_too_long=is_too_long,
         )
-    return IndexEntry(kind=IndexEntryKind.TEXT, text=stripped, line_number=number)
+    return IndexEntry(
+        kind=IndexEntryKind.TEXT,
+        text=stripped,
+        line_number=number,
+        length=length,
+        is_too_long=is_too_long,
+    )
 
 
 class NoteStore:
@@ -599,9 +636,10 @@ class NoteStore:
 
     # Writing
 
-    def _unused_name(self, title: str) -> str:
+    def _unused_name(self, title: str, own_stem: str) -> str:
+        """A link name for ``title`` no other note file uses (``own_stem``, the note being renamed, may keep its own)."""
         base = slugify(title)
-        taken = {path.stem for path in self._note_files()}
+        taken = {path.stem for path in self._note_files()} - {own_stem}
         candidates = (
             base if suffix == 1 else f"{base}-{suffix}" for suffix in itertools.count(1)
         )
@@ -616,7 +654,7 @@ class NoteStore:
 
     def _write_new_note_file(self, draft: NoteDraft) -> str:
         """Write ``draft`` as a new note under an unused name, and answer that name."""
-        name = self._unused_name(draft.title)
+        name = self._unused_name(draft.title, own_stem="")
         _write_atomically(
             self.folder / f"{name}{NOTE_SUFFIX}", _file_text(name, draft, {})
         )
@@ -627,7 +665,7 @@ class NoteStore:
         with self._lock:
             name = self._write_new_note_file(draft)
             file_name = f"{name}{NOTE_SUFFIX}"
-            pointer = _pointer_line(draft.title, file_name, draft.summary)
+            pointer = pointer_line(draft.title, file_name, draft.summary)
             self._write_index(_set_pointer(self._index_lines(), file_name, pointer))
             return self._find(name)
 
@@ -640,7 +678,7 @@ class NoteStore:
             lines = self._index_lines()
             if note.is_index_only:
                 name = self._write_new_note_file(draft)
-                pointer = _pointer_line(
+                pointer = pointer_line(
                     draft.title, f"{name}{NOTE_SUFFIX}", draft.summary
                 )
                 self._write_index(
@@ -648,6 +686,14 @@ class NoteStore:
                 )
                 return self._find(name)
             existing_frontmatter, _ = _parse_frontmatter(note.raw)
+            # A new title gives the note the link name it would get as a new note, so its file
+            # name keeps reading as its title.
+            if one_line(draft.title) != note.title:
+                new_name = self._unused_name(draft.title, own_stem=note.id)
+                if new_name != note.id:
+                    return self._rename(
+                        note, new_name, draft, existing_frontmatter, lines
+                    )
             _write_atomically(
                 self.folder / note.file_name,
                 _file_text(note.name, draft, existing_frontmatter),
@@ -662,9 +708,38 @@ class NoteStore:
                 or one_line(draft.summary) != note.summary
             )
             if not has_pointer or is_shown_changed:
-                pointer = _pointer_line(draft.title, note.file_name, draft.summary)
+                pointer = pointer_line(draft.title, note.file_name, draft.summary)
                 self._write_index(_set_pointer(lines, note.file_name, pointer))
             return self._find(note_id)
+
+    def _rename(
+        self,
+        note: Note,
+        new_name: str,
+        draft: NoteDraft,
+        existing_frontmatter: Mapping[str, Any],
+        lines: Sequence[str],
+    ) -> Note:
+        """Save ``note`` under ``new_name``: a new file, its index line pointed at it, every ``[[old-name]]`` link rewritten."""
+        relink = _link_rewriter(note.name, new_name)
+        new_file_name = f"{new_name}{NOTE_SUFFIX}"
+        _write_atomically(
+            self.folder / new_file_name,
+            relink(_file_text(new_name, draft, existing_frontmatter)),
+        )
+        for path in self._note_files():
+            if path.name in (note.file_name, new_file_name):
+                continue
+            text = path.read_text()
+            relinked = relink(text)
+            if relinked != text:
+                _write_atomically(path, relinked)
+        pointer = pointer_line(draft.title, new_file_name, draft.summary)
+        self._write_index(
+            _set_pointer([relink(line) for line in lines], note.file_name, pointer)
+        )
+        (self.folder / note.file_name).unlink(missing_ok=True)
+        return self._find(new_name)
 
     def delete(self, note_id: str, version: str) -> None:
         with self._lock:

@@ -8,7 +8,11 @@ them, with undo.
 
 - `notes` -- reading and writing the notes and their index (`MEMORY.md`): the
   `NoteStore`, which keeps the index in step with the files and refuses a write over
-  a note that changed underneath. Needs pydantic and PyYAML.
+  a note that changed underneath. A new title renames the note's file and rewrites
+  every `[[old-name]]` link to it; a title may not hold square brackets (they would
+  end the index line's link early); and each index line says whether it is past the
+  ~150 characters Claude Code suggests (`INDEX_LINE_LIMIT`), which the editor warns
+  about without refusing. Needs pydantic and PyYAML.
 - `changes` -- the change log, stdlib-only (beyond the stdlib it imports only the
   stdlib-only `chat_background_tasks`), and the library's error base
   (`AgentMemoryError`). It is the only module bare code may import:
@@ -37,6 +41,7 @@ them, with undo.
 - The chat app -- shows each change as a card in the conversation, at the last tool
   call that touched it, with the changed lines and an Undo button
   (`imbue/chat/memory_changes_endpoints.py`).
-- An app that views or edits the notes (a user-built Memory app, say) -- through `notes`,
-  as an editable path dependency. When the workspace has an app registered as `memory`,
-  the chat's card links each note to it (`?note=<id>`).
+- The Memory app (`system/apps/memory/`) -- views and edits the notes through
+  `notes`, lists every change through `changes` with an Undo, and moves every chat's
+  baseline past its own saves (`ChangeLog.absorb_user_edit`), so an edit made there is
+  never charged to an agent. The chat's card links each note to it (`?note=<id>`).
