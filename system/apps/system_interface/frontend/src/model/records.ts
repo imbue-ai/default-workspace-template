@@ -99,7 +99,7 @@ export interface Placement {
   readonly state: WindowState;
   readonly is_minimized: boolean;
   /** Whether the window is pulled out into a desktop window of the embedding chrome's own (the pull-out-window
-   *  spec): drawn as a ghost at its frame here, its page shown elsewhere. Orthogonal to the state; a file
+   *  spec): not drawn here, its page shown elsewhere. Orthogonal to the state; a file
    *  without the key reads as attached. */
   readonly is_detached: boolean;
 }

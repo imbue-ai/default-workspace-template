@@ -783,12 +783,12 @@ export class DesktopStore {
 
   /** The chrome reported a step of the drag it watches. "out": the window is detached where it stood, its
    *  frame untouched, and saved at once, so the chrome's own desktop window (which stands in for it under the
-   *  cursor from here) reads a placement that already says so, in this shell's stacking order; the ghost
-   *  stands where the drag began. "in": the chrome dropped that window, and this one is brought back and shown
-   *  again where the drag has it, saved at once too. "released": the button came up while out, and the gesture
-   *  is over; the placement is already what it is to be, so nothing is written. This shell is the one writer
-   *  during a drag; the chrome's window only reads. A word on a watched drag this shell already ended on its own
-   *  release still stands (``takeLateTearOut``). */
+   *  cursor from here) reads a placement that already says so, in this shell's stacking order. "in": the chrome
+   *  dropped that window, and this one is brought back and shown again where the drag has it, saved at once
+   *  too. "released": the button came up while out, and the gesture is over; the placement is already what it
+   *  is to be, so nothing is written. This shell is the one writer during a drag; the chrome's window only
+   *  reads. A word on a watched drag this shell already ended on its own release still stands
+   *  (``takeLateTearOut``). */
   setTearOut(windowId: string, phase: TearOutPhase): void {
     const gesture = this.moveGestureOf(windowId);
     if (gesture === null) {
@@ -810,8 +810,8 @@ export class DesktopStore {
     this.notifyListeners();
   }
 
-  /** Out: the window is detached where it stood, its frame untouched, so the ghost stands where the drag began
-   *  and a return lands there. Saved at once, since the chrome's window reads the placement as soon as it loads. */
+  /** Out: the window is detached where it stood, its frame untouched, so a return lands where the drag began.
+   *  Saved at once, since the chrome's window reads the placement as soon as it loads. */
   private detachDraggedWindow(windowId: string): void {
     this.dispatch({ type: "window_detached", windowId });
     void this.flushPendingSave();
@@ -2932,12 +2932,6 @@ export class DesktopStore {
     this.showDetachedWindow(windowId);
   }
 
-  /** Show the ghost of a pulled-out window again where it stood, after ``minimizeWindow`` hid it (the ghost's
-   *  "Hide"); the window itself stays in the chrome's desktop window. */
-  showWindowGhost(windowId: string): void {
-    this.dispatch({ type: "window_detached", windowId });
-  }
-
   /** Raise (or reopen) the desktop window a pulled-out window is shown in, at the size the window renders here. */
   showDetachedWindow(windowId: string): void {
     if (findWindow(this.state, windowId) === null) return;
@@ -2964,11 +2958,11 @@ export class DesktopStore {
     this.popOut.beginWindowDrag({ ...this.popOutRequestFor(windowId, rect), grabX: grab.x, grabY: grab.y });
   }
 
-  /** Bring a pulled-out window back to the desktop (``minds:reattach-window``, the ghost's "Bring back", the
-   *  entry's menu): shown and raised, at ``frame`` when a drop back onto the desktop named one. The window's own
-   *  desktop is shown first when the client has moved to another meanwhile (the chrome names a window, not a
-   *  desktop). Saved at once, and in a solo shell reported only once saved: the chrome closes that shell's
-   *  desktop window on the report, which would abort a save still on its way. */
+  /** Bring a pulled-out window back to the desktop (``minds:reattach-window``, the entry's menu): shown and
+   *  raised, at ``frame`` when a drop back onto the desktop named one. The window's own desktop is shown first
+   *  when the client has moved to another meanwhile (the chrome names a window, not a desktop). Saved at once,
+   *  and in a solo shell reported only once saved: the chrome closes that shell's desktop window on the report,
+   *  which would abort a save still on its way. */
   async reattachWindow(windowId: string, frame: Frame | null): Promise<void> {
     if (!this.isPopOutVerbOwn(windowId)) return;
     const found = findWindow(this.state, windowId);
@@ -2994,13 +2988,12 @@ export class DesktopStore {
     else this.showWindow(windowId);
   }
 
-  /** Put a window on screen without ever putting it away: for a pulled-out window, show its ghost again when the
-   *  ghost is hidden, else its own desktop window; otherwise restore and raise when minimized, raise otherwise. */
+  /** Put a window on screen without ever putting it away: for a pulled-out window, its own desktop window; otherwise
+   *  restore and raise when minimized, raise otherwise. */
   private showWindow(windowId: string): void {
     const placement = placementOf(this.state.layout, windowId);
     if (placement.is_detached) {
-      if (placement.is_minimized) this.showWindowGhost(windowId);
-      else this.showDetachedWindow(windowId);
+      this.showDetachedWindow(windowId);
       return;
     }
     if (placement.is_minimized) this.restoreWindow(windowId);

@@ -11,7 +11,9 @@ It joins four sources, each read independently so one failing leaves the others 
 - free memory, read where the memory guard reads it (``oom_priority.meminfo``): the headroom file
   earlyoom runs with while it is fresh, else ``/proc/meminfo``. The output names both the file and
   the field (``MemAvailable``, else ``MemFree``), because under a memory cap the two files disagree
-  and only the guard's own figure says when the next heavy command will be shed;
+  and only the guard's own figure says when the next heavy command will be shed. It also says how
+  much of that is left before the guard acts, at the share of ``MemTotal`` its program line passes
+  as ``-m``: the guard stops processes well before free memory reaches zero;
 - agents, from ``mngr list --provider local`` rendered through a ``--format`` template: a chat
   (``user_created``) or worker (``agent_created``) whose state is ``WAITING``, whose chat is not
   busy, and whose latest activity is at least ``IDLE_AFTER_SECONDS`` old. A chat is busy while a
@@ -32,18 +34,20 @@ It joins four sources, each read independently so one failing leaves the others 
 A source that cannot be read is reported as unknown (``null`` candidates plus a note), never as
 "nothing to stop".
 
-``--free-memory`` prints only the free memory and reads nothing else, so it is cheap enough to
-poll while memory is short.
+``--free-memory`` prints only the free memory and reads nothing but the meminfo files and the
+memory guard's program file, so it is cheap enough to poll while memory is short.
 
 Self-contained beyond the stdlib-only ``oom_priority`` and ``chat_background_tasks`` packages
 (imported via ``sys.path`` inserts), so it runs under a plain ``python3``.
 """
 
 import argparse
+import configparser
 import enum
 import http.client
 import json
 import os
+import shlex
 import subprocess
 import sys
 import urllib.error
@@ -147,6 +151,13 @@ INVENTORY_ROUTE: Final[str] = "/api/inventory"
 MEMINFO_PREFERRED_FIELD: Final[str] = "MemAvailable"
 MEMINFO_FALLBACK_FIELD: Final[str] = "MemFree"
 MEMINFO_TOTAL_FIELD: Final[str] = "MemTotal"
+# The memory guard's supervisord program, whose ``-m <term>[,<kill>]`` is the share of MemTotal, in
+# percent, at or below which it starts stopping processes.
+EARLYOOM_PROGRAM_CONF: Final[Path] = (
+    Path(__file__).resolve().parents[3] / "supervisord.conf.d" / "earlyoom.conf"
+)
+EARLYOOM_PROGRAM_SECTION: Final[str] = "program:earlyoom"
+EARLYOOM_THRESHOLD_FLAG: Final[str] = "-m"
 KIB_PER_MIB: Final[int] = 1024
 README_SECTION: Final[str] = (
     'system/services/oom_priority/README.md, "Memory candidates"'
@@ -176,6 +187,20 @@ class FreeMemory(NamedTuple):
     field: str
     free_kib: int
     total_kib: int | None
+    # Where the guard starts stopping processes, in percent of MemTotal; None when its program could not be read.
+    shed_percent: float | None
+
+    @property
+    def shed_line_kib(self) -> int | None:
+        if self.shed_percent is None or self.total_kib is None:
+            return None
+        return int(self.total_kib * self.shed_percent / 100)
+
+    @property
+    def room_kib(self) -> int | None:
+        """Free memory above the guard's line: what a command can take before the guard stops something."""
+        shed_line_kib = self.shed_line_kib
+        return None if shed_line_kib is None else max(self.free_kib - shed_line_kib, 0)
 
 
 class ListedAgent(NamedTuple):
@@ -291,6 +316,7 @@ class Sources(NamedTuple):
 
     proc_dir: Path
     host_meminfo: Path
+    earlyoom_program_conf: Path
     run_command: RunCommand
     fetch_json: FetchJson
     read_supervised_pids: ReadSupervisedPids
@@ -319,8 +345,29 @@ def _parse_meminfo(path: Path) -> dict[str, int]:
     return values_kib
 
 
+def read_shed_percent(program_conf: Path) -> float | None:
+    """The share of MemTotal, in percent, at which earlyoom's program line has it start stopping processes."""
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read(program_conf)
+        command = parser.get(EARLYOOM_PROGRAM_SECTION, "command")
+    except (configparser.Error, OSError):
+        return None
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    if EARLYOOM_THRESHOLD_FLAG not in words[:-1]:
+        return None
+    threshold = words[words.index(EARLYOOM_THRESHOLD_FLAG) + 1]
+    try:
+        return float(threshold.split(",")[0])
+    except ValueError:
+        return None
+
+
 def read_free_memory(
-    proc_meminfo: Path, host_meminfo: Path, now: datetime
+    proc_meminfo: Path, host_meminfo: Path, now: datetime, shed_percent: float | None
 ) -> FreeMemory | None:
     """``MemAvailable`` (else ``MemFree``) and ``MemTotal`` from the file the memory guard acts on.
 
@@ -344,6 +391,7 @@ def read_free_memory(
                     field=field,
                     free_kib=values_kib[field],
                     total_kib=values_kib.get(MEMINFO_TOTAL_FIELD),
+                    shed_percent=shed_percent,
                 )
     return None
 
@@ -838,7 +886,10 @@ def collect_report(sources: Sources) -> Report:
     return Report(
         generated_at=sources.now,
         free_memory=read_free_memory(
-            sources.proc_dir / "meminfo", sources.host_meminfo, sources.now
+            sources.proc_dir / "meminfo",
+            sources.host_meminfo,
+            sources.now,
+            read_shed_percent(sources.earlyoom_program_conf),
         ),
         agents=collect_agent_section(sources),
         apps=collect_app_section(sources, shell),
@@ -865,6 +916,8 @@ def report_to_json(report: Report) -> dict[str, object]:
             "free_kib": free.free_kib,
             "total_kib": free.total_kib,
             "source": free.source,
+            "shed_line_kib": free.shed_line_kib,
+            "room_kib": free.room_kib,
         },
         "agents": {
             "candidates": None
@@ -952,9 +1005,13 @@ def render_free_memory(free: FreeMemory | None) -> str:
         if free.total_kib is None
         else f"; {MEMINFO_TOTAL_FIELD} {_mib(free.total_kib)}"
     )
-    return (
-        f"Free memory: {_mib(free.free_kib)} ({free.field} from {free.source}{total})"
+    room = (
+        ""
+        if free.room_kib is None
+        else f"; {_mib(free.room_kib)} of it before the memory guard starts stopping processes "
+        f"at {free.shed_percent:g}% of {MEMINFO_TOTAL_FIELD}"
     )
+    return f"Free memory: {_mib(free.free_kib)} ({free.field} from {free.source}{total}){room}"
 
 
 def render_table(report: Report) -> str:
@@ -1091,7 +1148,8 @@ def main() -> None:
         action="store_const",
         dest="output_format",
         const=OutputFormat.FREE_MEMORY,
-        help="Print only the free memory line, reading nothing but the meminfo files",
+        help="Print only the free memory line, reading nothing but the meminfo files and the "
+        "memory guard's program file",
     )
     args = parser.parse_args()
     sys.stdout.write(_render_output(args.output_format))
@@ -1103,7 +1161,12 @@ def _render_output(output_format: OutputFormat) -> str:
         case OutputFormat.FREE_MEMORY:
             return (
                 render_free_memory(
-                    read_free_memory(_PROC_DIR / "meminfo", HOST_MEMINFO_PATH, now)
+                    read_free_memory(
+                        _PROC_DIR / "meminfo",
+                        HOST_MEMINFO_PATH,
+                        now,
+                        read_shed_percent(EARLYOOM_PROGRAM_CONF),
+                    )
                 )
                 + "\n"
             )
@@ -1120,6 +1183,7 @@ def _collect_live_report(now: datetime) -> Report:
         Sources(
             proc_dir=_PROC_DIR,
             host_meminfo=HOST_MEMINFO_PATH,
+            earlyoom_program_conf=EARLYOOM_PROGRAM_CONF,
             run_command=_run_command,
             fetch_json=fetch_json_over_http,
             read_supervised_pids=supervised_pids,

@@ -1,1 +1,0 @@
-- The desktop-interface plan now describes the chat root's filled selection: with nothing selected it shows the most recent chat, and with no chats one awaiting its first send.

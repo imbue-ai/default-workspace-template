@@ -117,6 +117,8 @@ def registry_row_toml(
     message_handlers: Sequence[tuple[str, str]] = (),
     # Each ``show`` message handler as ``(type, show, showing)``.
     shown_message_handlers: Sequence[tuple[str, str, Sequence[str]]] = (),
+    # The types of the ``show`` message handlers that declare ``reload_when_raised``.
+    reloaded_when_raised_types: Sequence[str] = (),
     theming_mode: str | None = None,
     # The isolated instance the row's window shows, as ``(app, kind)``, and the chat that booted it.
     isolated_instance: tuple[str, str] | None = None,
@@ -159,7 +161,8 @@ def registry_row_toml(
         handlers = [f'{{ type = "{kind}", path = "{path}" }}' for kind, path in message_handlers]
         for kind, show, showing in shown_message_handlers:
             pages = ", ".join(f'"{page}"' for page in showing)
-            handlers.append(f'{{ type = "{kind}", show = "{show}", showing = [{pages}] }}')
+            reload = ", reload_when_raised = true" if kind in reloaded_when_raised_types else ""
+            handlers.append(f'{{ type = "{kind}", show = "{show}", showing = [{pages}]{reload} }}')
         lines.append(f"message_handlers = [{', '.join(handlers)}]")
     for launch_id, launch_label, launch_path in launch_paths:
         lines.append("[[apps.launch_paths]]")
@@ -710,6 +713,9 @@ def files_registry_row(url: str) -> str:
             (str(handler.type), str(handler.show), [str(page) for page in handler.showing])
             for handler in manifest.message_handlers
             if handler.show is not None
+        ],
+        reloaded_when_raised_types=[
+            str(handler.type) for handler in manifest.message_handlers if handler.reload_when_raised
         ],
     )
 

@@ -96,7 +96,9 @@ class PoppedOutWindow(FrozenModel):
 
     window_id: WindowId = Field(description="The window")
     desktop_id: DesktopId = Field(description="The desktop it is on")
-    is_ghost_hidden: bool = Field(description="Whether the user hid its ghost on the desktop (``is_minimized``)")
+    is_ghost_hidden: bool = Field(
+        description="Whether the placement is also minimized (``is_minimized``), which changes nothing on screen"
+    )
 
 
 class InventoryClient(ClientView):

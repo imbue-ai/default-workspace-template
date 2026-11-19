@@ -887,7 +887,7 @@ def is_placement_shown(placement: WindowPlacement) -> bool:
 @pure
 def is_placement_on_screen(placement: WindowPlacement) -> bool:
     """Whether the window is on the client's screen somewhere: on the desktop, or pulled out (its desktop window is
-    on screen whether or not its ghost is hidden)."""
+    on screen whether or not it is also minimized)."""
     return placement.is_detached or not placement.is_minimized
 
 
@@ -1013,8 +1013,7 @@ def with_window_raised(layout: DesktopLayout, window_id: WindowId) -> DesktopLay
 
 @pure
 def with_window_minimized(layout: DesktopLayout, window_id: WindowId) -> DesktopLayout:
-    """Minimize: the window out of sight where it stands in the stack. A pulled-out window stays out; what goes out
-    of sight is its ghost, which ``with_window_detached`` shows again."""
+    """Minimize: the window out of sight where it stands in the stack. A pulled-out window stays out."""
     current = placement_of(layout, window_id)
     return _with_placement_in_place(
         layout,
@@ -1025,7 +1024,7 @@ def with_window_minimized(layout: DesktopLayout, window_id: WindowId) -> Desktop
 @pure
 def with_window_minimized_on_desktop(layout: DesktopLayout, window_id: WindowId) -> DesktopLayout:
     """Minimize onto the desktop: out of sight where it stands in the stack, and no longer pulled out, so a pulled-out
-    window goes out of sight with its own desktop window rather than keeping it and hiding only the ghost."""
+    window goes out of sight with its own desktop window rather than keeping it."""
     current = placement_of(layout, window_id)
     return _with_placement_in_place(
         layout,
@@ -1095,8 +1094,7 @@ def with_window_frame(layout: DesktopLayout, window_id: WindowId, frame: Frame) 
 @pure
 def with_window_detached(layout: DesktopLayout, window_id: WindowId) -> DesktopLayout:
     """Pull out: the window shown in a desktop window of the chrome's own, where it stands in the stack, its frame
-    kept so the ghost and a later return land where the drag began. On a window already out, the ghost shown again
-    after a minimize hid it."""
+    kept so a later return lands where the drag began."""
     current = placement_of(layout, window_id)
     return _with_placement_in_place(
         layout,

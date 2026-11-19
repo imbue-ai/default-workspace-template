@@ -1,7 +1,7 @@
 ---
 name: datalib
 description: Search and mirror the user's own personal data (chat history, Slack, email, GitHub, Notion, contacts, messages) with datalib, an UNANNOUNCED feature that is off by default. Use ONLY when the user explicitly says "datalib" -- never suggest, mention, or start it proactively, and never reach for it just because a request is about their past messages or mail.
-compatibility: Nothing of datalib is installed until this skill is first used; scripts/install_datalib.sh then downloads the binaries and datalib's own Node runtime (about 195 MB together). Needs curl and the latchkey gateway (present in a default-workspace-template agent).
+compatibility: Nothing of datalib is installed until this skill is first used; scripts/install_datalib.sh then downloads the binaries and datalib's own Node runtime (about 160 MB together). Needs curl and the latchkey gateway (present in a default-workspace-template agent).
 metadata:
   author: imbue
 ---
@@ -37,8 +37,8 @@ DATA_ROOT="$HOME/workspace/data/.skills/datalib/Default"   # the data root holdi
 DATALIB_CONFIG="$DATA_ROOT/config.toml"
 
 # Nothing of datalib is installed until it is first used. This installs the
-# binaries (pinned to datalib v0.54.1), datalib's agent guide, and the Node
-# runtime a sync shells out to, about 195 MB together on the first run, then
+# binaries (pinned to datalib v0.55.0), datalib's agent guide, and the Node
+# runtime a sync shells out to, about 160 MB together on the first run, then
 # adds the Datalib app to the workspace and starts it; from then on the app is
 # listed. After the first run it only checks that all of it is in place and
 # running, so run it every time:
@@ -148,7 +148,7 @@ they always match the tools you have:
 The install script also saved the agent guide as a file beside the binaries:
 
 ```bash
-cat "$HOME/.local/share/datalib/v0.54.1/docs/agent_user.md"
+cat "$HOME/.local/share/datalib/v0.55.0/docs/agent_user.md"
 ```
 
 It is the guide at the same tag the binaries are installed from, so it matches
@@ -156,7 +156,7 @@ the tools you have. Two docs it links are saved with it, at the same relative
 paths: `user/getting_your_data.md` (each source's setup) and
 `user/config_examples/all_sources.toml` (a config naming every source). Its
 other relative links resolve against
-`https://github.com/imbue-ai/datalib/blob/v0.54.1/docs/`, and that is also
+`https://github.com/imbue-ai/datalib/blob/v0.55.0/docs/`, and that is also
 where to read the guide if the local copy is missing. Don't rely on remembered
 command lines or config shapes -- go read it.
 
