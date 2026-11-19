@@ -23,8 +23,9 @@
  * Before the agent's turn starts, the row stands for the user's send (contract A1/A2): a send
  * waiting on the agent to come up says "Connecting to <model> on <provider>…" (the backend's
  * ``is_connecting``), and any other send still in flight shows the row's dot at once, captioned
- * "Sending to <harness>…" only if it is still in flight after `SENDING_LABEL_AFTER_MS`. Both
- * are the Sending state drawn on the agent's side; neither resolves anything, and both give way
+ * "Sending to <harness>…" only if it is still in flight after `SENDING_LABEL_AFTER_MS`, or
+ * "Waiting for <model>…" once the send route has answered that the agent has it. All
+ * are the Sending state drawn on the agent's side; none resolves anything, and all give way
  * as soon as the backend reports the turn. Once the agent's turn ends the row goes, though its
  * harness may still be closing it (Claude's Stop hooks): the reply is in, so the done mark under
  * it (`TurnDoneMark`) takes over at once.
@@ -56,7 +57,7 @@ import { getChatById, getQueuedMessagesForChat } from "../models/Chats";
 import { getEventsForChat, hasMoreAfter } from "../models/Response";
 import { getOutgoingMessages, opensTurnWithHeldSends, sentAtOfArrival } from "../models/OutgoingMessages";
 import { BackgroundTasksLine } from "./BackgroundTasksLine";
-import { connectingLabel, isChatConnecting } from "./ConnectingIndicator";
+import { awaitingReplyLabel, connectingLabel, isChatConnecting } from "./ConnectingIndicator";
 import { harnessLabel } from "./harness-labels";
 import { heldSendsShownElsewhere } from "./HeldSendView";
 import { railNodeAttrs } from "./agent-rail";
@@ -264,6 +265,12 @@ function oldestSendingAt(chatId: string): number | null {
   return outgoing.length === 0 ? null : Math.min(...outgoing.map((message) => message.sentAt));
 }
 
+/** Whether the agent has the oldest send still shown as on its way, so what it waits on is the model. */
+function isOldestSendWithAgent(chatId: string): boolean {
+  const outgoing = getOutgoingMessages(chatId);
+  return outgoing.length > 0 && outgoing.reduce((a, b) => (b.sentAt < a.sentAt ? b : a)).isWithAgent;
+}
+
 /** Where the status row goes at the live end of the transcript: under the user's own sends while it
  *  stands for one (a send on its way, or waiting on the agent to come up) or reports the turn one of
  *  them opens, until that send reaches the transcript; else under the latest turn, ahead of anything
@@ -426,7 +433,13 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
     scheduleTick(sentAt, now, captionAt);
     const harness = getChatById(chatId)?.active_agent.harness;
     const caption =
-      now < captionAt ? null : harness === undefined ? "Sending…" : `Sending to ${harnessLabel(harness)}…`;
+      now < captionAt
+        ? null
+        : isOldestSendWithAgent(chatId)
+          ? awaitingReplyLabel(chatId)
+          : harness === undefined
+            ? "Sending…"
+            : `Sending to ${harnessLabel(harness)}…`;
     return renderStrip(caption, SENDING_STATE, columnClass, elapsedSince(sentAt, now));
   };
 

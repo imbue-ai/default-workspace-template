@@ -12,6 +12,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
+import httpx
 import pytest
 from flask.testing import FlaskClient
 
@@ -21,6 +22,7 @@ from imbue.chat.accounts import read_index
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.codex.model import codex_model_options_path
 from imbue.chat.harnesses.codex.model import write_codex_model_options
+from imbue.chat.harnesses.pi_coding.local_model import LocalModelProfile
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
@@ -471,3 +473,98 @@ def test_an_api_key_account_signs_in_again_with_a_key() -> None:
         key_id: "api_key",
         codex_key_id: "api_key",
     }
+
+
+# a local model server
+
+
+_MODEL_SERVER_ADDRESS = "box.lan:9000"
+
+
+def _network_with_one_model_server() -> httpx.Client:
+    """A network on which one model server answers, at ``_MODEL_SERVER_ADDRESS``, listing one model the way
+    an OpenAI-compatible server does; every other address refuses the connection."""
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.netloc.decode() != _MODEL_SERVER_ADDRESS:
+            raise httpx.ConnectError("connection refused", request=request)
+        if request.url.path != "/v1/models":
+            return httpx.Response(404, json={})
+        return httpx.Response(200, json={"object": "list", "data": [{"id": "qwen2.5:7b"}]})
+
+    return httpx.Client(transport=httpx.MockTransport(answer))
+
+
+def test_a_named_model_server_answers_with_every_key_the_form_reads() -> None:
+    with _client_for(build_test_state(http_client=_network_with_one_model_server())) as client:
+        response = client.post("/api/local-model-servers", json={"base_url": _MODEL_SERVER_ADDRESS})
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert set(body) == {"servers", "default_context_window", "min_context_window"}
+    assert body["servers"] == [
+        {"base_url": f"http://{_MODEL_SERVER_ADDRESS}/v1", "name": _MODEL_SERVER_ADDRESS, "models": ["qwen2.5:7b"]}
+    ]
+    assert body["min_context_window"] <= body["default_context_window"]
+
+
+def test_a_model_server_that_does_not_answer_is_a_400_with_the_reason() -> None:
+    with _client_for(build_test_state(http_client=_network_with_one_model_server())) as client:
+        unanswered = client.post("/api/local-model-servers", json={"base_url": "elsewhere.lan:9000"})
+        malformed = client.post("/api/local-model-servers", json={"base_url": "ftp://nope"})
+
+    assert unanswered.status_code == 400
+    assert "elsewhere.lan:9000" in unanswered.get_json()["detail"]
+    assert malformed.status_code == 400
+
+
+def test_a_visitor_cannot_make_the_workspace_look_for_model_servers() -> None:
+    """The route fetches an address the caller chose, from inside the workspace."""
+    with _client() as client:
+        response = client.post(
+            "/api/local-model-servers", json={"base_url": "localhost:11434"}, headers={"X-Imbue-Identity": _VISITOR}
+        )
+
+    assert response.status_code == 403
+
+
+def _accept_local_model(base_url: str, api_key: str, model_id: str, context_window: int) -> LocalModelProfile:
+    return LocalModelProfile(context_window=context_window, is_reasoning=False)
+
+
+def test_a_local_model_sign_in_mints_an_account_and_lists_it(tmp_path: Path) -> None:
+    service = AuthFlowService.create(
+        home=None,
+        work_dir=tmp_path / "work",
+        probe=lambda *_a: SignedIn.YES,
+        local_model_verifier=_accept_local_model,
+    )
+    with _client(service) as client:
+        started = client.post("/api/accounts", json={"lane_id": "local-model", "method_id": "endpoint"})
+        assert started.status_code == 200
+        assert started.get_json()["shape"] == "endpoint"
+        flow_id = started.get_json()["flow_id"]
+        submitted = client.post(
+            f"/api/accounts/flow/{flow_id}",
+            json={"endpoint": {"base_url": "localhost:11434", "model_id": "qwen2.5:7b", "context_window": 32768}},
+        )
+        listed = client.get("/api/accounts").get_json()["accounts"]
+
+    assert submitted.status_code == 200
+    assert submitted.get_json()["state"] == "ok"
+    (account,) = listed
+    assert (account["lane"], account["label"], account["reauth_method"]) == (
+        "local-model",
+        "Local model (Pi)",
+        "endpoint",
+    )
+
+
+def test_an_endpoint_with_no_model_is_refused_not_a_500(tmp_path: Path) -> None:
+    with _client(_signed_in_service(tmp_path)) as client:
+        flow_id = client.post("/api/accounts", json={"lane_id": "local-model", "method_id": "endpoint"}).get_json()[
+            "flow_id"
+        ]
+        response = client.post(f"/api/accounts/flow/{flow_id}", json={"endpoint": {"base_url": "localhost:11434"}})
+
+    assert response.status_code == 400

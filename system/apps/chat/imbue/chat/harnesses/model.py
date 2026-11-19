@@ -369,9 +369,9 @@ class HarnessModelResolver(ABC):
         Account-scoped rather than agent-scoped, so it has an answer before any agent of that
         account exists -- a classmethod for the same reason: there is no agent to build from. The
         default is None, the honest answer for a harness whose catalog is static and the same on
-        every account of it (claude, pi): the catalog is the offer, and the account changes nothing
-        about it. A harness whose set is account-derived (codex) overrides this and asks the
-        account.
+        every account of it (claude): the catalog is the offer, and the account changes nothing
+        about it. A harness whose set is account-derived overrides this and asks the account:
+        codex for every account, pi for one that brings its own models (a local model server).
         """
         return None
 

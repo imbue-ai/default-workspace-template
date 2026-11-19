@@ -34,6 +34,8 @@ from imbue.chat.harnesses.error_patterns import classify_api_error
 from imbue.chat.harnesses.error_patterns import is_provider_fault
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import stamp_user_message_display
+from imbue.chat.harnesses.pi_coding.local_model import LOCAL_MODEL_PROVIDER_ID
+from imbue.chat.harnesses.pi_coding.local_model import UNREACHABLE_MESSAGE
 from imbue.chat.harnesses.pi_coding.tool_labels import shell_command
 from imbue.chat.harnesses.pi_coding.tool_labels import tool_labels
 from imbue.chat.harnesses.tool_output import classify_tool_call_display
@@ -50,6 +52,18 @@ SOURCE = "pi-coding/common_transcript"
 # pi records always carry a model on the assistant message; surface the same placeholder
 # claude/codex use when it is somehow absent, keeping the non-optional ``model`` populated.
 _UNKNOWN_MODEL = "unknown"
+
+# What pi records, after its own retries, when a request never reached the model server or got
+# no answer from it.
+_UNREACHABLE_ERRORS = frozenset({"Connection error.", "Request timed out."})
+
+# Shown in place of a local model's reply that came back with no text and no tool call. A model
+# server (Ollama) drops a call to a tool that does not exist and reports a normal finish, so the
+# turn ends looking exactly like an agent that said nothing.
+_LOCAL_MODEL_EMPTY_REPLY_MESSAGE = (
+    "The model stopped without answering. Small local models sometimes try to use a tool that doesn't "
+    "exist, and the model server discards that. Try again, or say exactly which step to take."
+)
 
 
 def _text_from_content(content: Any) -> str:
@@ -147,7 +161,23 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
     # quotes an error JSON (asking the agent about one, say) must not be styled as a failure.
     failed = message.get("stopReason") == "error"
     error_text = str(message.get("errorMessage") or "") if failed else ""
-    text = _text_from_content(message.get("content")) or error_text
+    # A local model's server is the user's own, so "Connection error." has a cause they can fix.
+    is_local_model_unreachable = (
+        message.get("provider") == LOCAL_MODEL_PROVIDER_ID and error_text.strip() in _UNREACHABLE_ERRORS
+    )
+    text = _text_from_content(message.get("content")) or (
+        UNREACHABLE_MESSAGE if is_local_model_unreachable else error_text
+    )
+    tool_calls = _tool_calls_from_content(message.get("content"))
+    is_local_model_empty_reply = (
+        message.get("provider") == LOCAL_MODEL_PROVIDER_ID
+        and message.get("stopReason") == "stop"
+        # The page draws nothing for whitespace-only text, so that is no answer either.
+        and not text.strip()
+        and not tool_calls
+    )
+    if is_local_model_empty_reply:
+        text = _LOCAL_MODEL_EMPTY_REPLY_MESSAGE
     api_error_kind = classify_api_error(error_text)
     event: dict[str, Any] = {
         "timestamp": timestamp,
@@ -157,7 +187,7 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
         "role": "assistant",
         "model": model if isinstance(model, str) and model else _UNKNOWN_MODEL,
         "text": text,
-        "tool_calls": _tool_calls_from_content(message.get("content")),
+        "tool_calls": tool_calls,
         "stop_reason": message.get("stopReason"),
         "usage": _usage(message),
         "message_uuid": event_id,

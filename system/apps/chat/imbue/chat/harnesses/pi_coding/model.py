@@ -45,6 +45,7 @@ from imbue.chat.harnesses.model import HarnessCatalog
 from imbue.chat.harnesses.model import HarnessModelResolver
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
+from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import PickerMode
 from imbue.chat.harnesses.model import SwitchMode
 from imbue.chat.harnesses.model import SwitchResult
@@ -53,6 +54,7 @@ from imbue.chat.harnesses.pi_coding.inbox import PI_INBOX_NAME
 from imbue.chat.harnesses.pi_coding.inbox import PI_INTERRUPT_KEY
 from imbue.chat.harnesses.pi_coding.inbox import PI_RETRACT_KEY
 from imbue.chat.harnesses.pi_coding.inbox import append_pi_inbox_sentinel
+from imbue.chat.harnesses.pi_coding.local_model import read_models_file_providers
 from imbue.chat.harnesses.session import AtomicShoulderTap
 from imbue.chat.harnesses.session import ShoulderTapOutcome
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
@@ -206,6 +208,21 @@ def get_catalog() -> HarnessCatalog:
     return catalog
 
 
+def read_custom_model_options(config_dir: Path) -> tuple[ModelOption, ...]:
+    """The models a pi config dir's `models.json` adds, as options tagged the way pi reports them.
+
+    These are in no bundled catalog, so they are what lets the model bar name the model such an
+    account runs on. Empty for a dir with no `models.json`, which is every other pi account.
+    """
+    tags: list[tuple[str, tuple[str, ...]]] = []
+    for provider_id, provider in read_models_file_providers(config_dir).items():
+        models = provider.get("models") if isinstance(provider, dict) else None
+        for model in models if isinstance(models, list) else ():
+            if isinstance(model, dict) and isinstance(model.get("id"), str):
+                tags.append((f"{provider_id}/{model['id']}", _supported_thinking_levels(model)))
+    return to_options(tuple(tags))
+
+
 class PiModelResolver(HarnessModelResolver):
     """Applies a pi agent's switch by writing a single-slot control mailbox the extension
     consumes (waking the agent so it consumes promptly), and reports its auth-gated picker
@@ -222,6 +239,13 @@ class PiModelResolver(HarnessModelResolver):
         self._agent_name = agent_info.name
         self._start_agent = start_agent_fn
         return self
+
+    @classmethod
+    def list_account_options(cls, account_dir: Path) -> tuple[ModelOption, ...] | None:
+        # An account that brings its own models (a local model server) offers those and nothing
+        # from the catalog: its `auth.json` holds no other provider's key. Any other pi account
+        # offers the catalog, which is the base answer.
+        return read_custom_model_options(account_dir) or None
 
     def list_offered_models(self) -> tuple[str, ...] | None:
         # pi's offer set is account-gated and dynamic: exactly the provider/model pairs the

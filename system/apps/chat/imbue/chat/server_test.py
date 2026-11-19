@@ -103,6 +103,8 @@ from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
+from imbue.chat.harnesses.pi_coding.local_model import LocalModelProfile
+from imbue.chat.harnesses.pi_coding.local_model import write_models_file
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_shoulder_tap
@@ -1548,6 +1550,7 @@ def _client_with_account_labeled_chat(
     agent_id: str,
     account_id: str,
     harness: HarnessType = HarnessType.CLAUDE,
+    http_client: httpx.Client | None = None,
 ) -> tuple[FlaskClient, RecordingMngrMessenger]:
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     messenger = RecordingMngrMessenger()
@@ -1561,7 +1564,45 @@ def _client_with_account_labeled_chat(
     # agent whose dir holds no ready marker reads as starting up and a send to it waits.
     if harness is HarnessType.ROOM:
         agent_state_dir(tmp_path, agent_id).mkdir(parents=True, exist_ok=True)
-    return create_application(build_test_state(agent_manager=manager)).test_client(), messenger
+    state = build_test_state(agent_manager=manager, http_client=http_client)
+    return create_application(state).test_client(), messenger
+
+
+def test_a_chat_on_a_local_model_whose_server_does_not_answer_is_told_what_to_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The send would only wait on the server: pi holds a request to one that has stopped answering for minutes."""
+    agent_id = "agent-00000000000000000000000000000733"
+    account_id, account_path = mint_account_dir()
+    commit_account(account_id, "local-model", "Local model")
+    write_models_file(
+        account_path,
+        "http://127.0.0.1:11435/v1",
+        "qwen3:8b",
+        LocalModelProfile(context_window=65_536, is_reasoning=False),
+    )
+    asked: list[str] = []
+
+    def unanswered(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    client, messenger = _client_with_account_labeled_chat(
+        tmp_path,
+        monkeypatch,
+        agent_id,
+        account_id,
+        harness=HarnessType.PI_CODING,
+        http_client=httpx.Client(transport=httpx.MockTransport(unanswered)),
+    )
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": "are you there?"})
+
+    assert response.status_code == 409
+    assert response.get_json()["kind"] == "model_server_unreachable"
+    assert "Check that the computer is awake" in response.get_json()["detail"]
+    assert asked == ["http://127.0.0.1:11435/v1/models"]
+    assert messenger.sent == []
 
 
 def test_a_chat_whose_account_was_signed_out_takes_no_more_messages(

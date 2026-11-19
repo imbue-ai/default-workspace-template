@@ -621,6 +621,38 @@ describe("the combo card", () => {
     expect((picks[0] as unknown[])[1]).toEqual({ model_id: "sonnet", effort: "medium", fast: false });
   });
 
+  it("lists the model in use when no catalog names it, so an account's own model can be seen and kept", () => {
+    const local = { ...OPUS, id: "local-model/qwen2.5:7b", label: "local-model/qwen2.5:7b" };
+    settingsState.choice = {
+      identity: { model_id: "local-model/qwen2.5:7b", effort: null, fast: false },
+      matched: local,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-menu-part="submenu"] button')].map(
+      (button) => button.textContent,
+    );
+    expect(rows).toEqual(["local-model/qwen2.5:7b", "Opus"]);
+  });
+
+  it("does not list a hidden model in use, which a harness matched only to name it", () => {
+    const hidden = { ...OPUS, id: "newer", label: "Newer", in_picker: false };
+    settingsState.choice = {
+      identity: { model_id: "newer", effort: null, fast: false },
+      matched: hidden,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-menu-part="submenu"] button')].map(
+      (button) => button.textContent,
+    );
+    expect(rows).toEqual(["Opus"]);
+  });
+
   it("lands a newly picked model on its default when it does not offer the current effort", () => {
     const current = { ...OPUS, efforts: [...LOW_MEDIUM_HIGH, { level: "xhigh", in_picker: true }] };
     const other = { ...OPUS, id: "sonnet", label: "Sonnet", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };

@@ -12,7 +12,13 @@ import {
   turnStatusPlacement,
   wakeUpSpinnerDeadline,
 } from "./ActivityIndicator";
-import { addOutgoing, clearOutgoing, getOutgoingMessages, noteBackendArrivals } from "../models/OutgoingMessages";
+import {
+  addOutgoing,
+  clearOutgoing,
+  getOutgoingMessages,
+  noteBackendArrivals,
+  settleOutgoing,
+} from "../models/OutgoingMessages";
 import { BackgroundTasksLine } from "./BackgroundTasksLine";
 import { notePermissionResolutions, resetShellPermissionResolutionsForTesting } from "./permission-card";
 import { handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
@@ -479,6 +485,28 @@ describe("ActivityIndicator — the row before, during and after a turn", () => 
   const stateOf = (strip: m.Vnode | null): unknown =>
     (strip?.attrs as Record<string, unknown> | undefined)?.["data-state"];
   const isoAt = (epochMs: number): string => new Date(epochMs).toISOString();
+
+  it("says the reply is waiting on the model once the agent has the message, though no turn shows yet", () => {
+    // pi writes nothing of a session's first turn until the model's first reply.
+    const outgoingId = addOutgoing(CHAT_ID, "hello");
+    now = NOW + SENDING_LABEL_AFTER_MS;
+    expect(partOf(render([]), "label")).toBe("Sending to Claude Code…");
+
+    settleOutgoing(CHAT_ID, outgoingId, "ok");
+
+    expect(stateOf(render([]))).toBe("SENDING");
+    expect(partOf(render([]), "label")).toBe("Waiting for the model…");
+    now = NOW + 90_000;
+    expect(partOf(render([]), "elapsed")).toBe("1m 30s");
+  });
+
+  it("keeps saying a held send is on its way, which the agent does not have", () => {
+    const outgoingId = addOutgoing(CHAT_ID, "hello");
+    settleOutgoing(CHAT_ID, outgoingId, "held");
+
+    now = NOW + SENDING_LABEL_AFTER_MS;
+    expect(partOf(render([]), "label")).toBe("Sending to Claude Code…");
+  });
 
   it("shows a send on its way as the dot at once, names it if it is still going, then counts it", () => {
     addOutgoing(CHAT_ID, "hello");

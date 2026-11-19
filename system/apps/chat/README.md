@@ -95,7 +95,7 @@ observe`, its own supervised service) writes, and serves:
   `/api/chats/create`, `/api/chats/awaiting` (the chat an empty chat list opens on), `/api/chats`,
   `/api/harnesses`, `/api/uploads` (and a chat's own uploads under
   `/api/chats/<chat-id>/uploads`),
-  `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/latchkey`, and
+  `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/local-model-servers`, `/api/latchkey`, and
   `/api/secret-requests` (an agent's `request_secret.py` files a secret request;
   the transcript's secret card submits, declines, and re-reads it).
   `/api/agents` is the plain listing of every mngr agent (the loopback callers'
@@ -919,6 +919,38 @@ account the index no longer has (a send held for a chat already switching is
 still held), and the composer shows "Choose a provider" in place of the input
 until a switch to another account is armed. A notice the chat app delivers for
 the agent's own secret request still goes through.
+
+The "Local model" lane runs a chat on a model the user hosts themselves, through
+any OpenAI-compatible server (`harnesses/pi_coding/local_model.py`). Its form
+asks `POST /api/local-model-servers` (owner-only) which servers answer: with no
+body, Ollama, LM Studio and llama.cpp on their usual ports, on the workspace's
+own loopback and on the names Docker and Lima give the machine that runs the
+container; with a `base_url`, that server alone. A workspace on another machine
+than the model reaches no such server unless something carries the port to it.
+The sign-in submits `{endpoint: {base_url, model_id, context_window, api_key}}`
+to the flow.
+Before anything is kept the model is asked for one tool call, since a model that
+prints its tool calls as text runs nothing and still reports a finished turn,
+and Ollama is asked what context it loaded the model with, since
+it keeps its own (4,096 tokens unless configured) whatever pi is told; a context
+under 40,960 tokens fails the sign-in with the setting that raises it, since a
+new chat's first request alone measured 29,280 (the workspace's instructions,
+the output-style rules, its skills and pi's tools, with the sub-agent and
+web-access packages) and the window has to hold a reply as well. The account then holds pi's
+custom provider in `models.json` (id `local-model`, one model, the smaller of
+the context asked for and the one loaded) beside the server's key in
+`auth.json`, and an agent's pi config dir links both. A model whose check answer
+carries reasoning apart from its content is declared a reasoning model there, so
+pi records its thinking as thinking and the chat offers its thinking levels; the
+declaration turns off the `developer` role, which Ollama drops silently, and for
+Ollama names the effort that stops the reasoning. The model bar matches a
+pi agent's live model against the catalog plus the models of its own
+`models.json`, and its picker lists the model in use when no catalog names it.
+A send to a chat on a local-model account first asks the account's server for its
+model list (`is_server_answering`, five seconds): pi would otherwise wait minutes
+on a server that has stopped answering. A server
+that does not answer refuses the send with 409 `kind: model_server_unreachable`,
+and the composer keeps the text beside what to check.
 
 A Claude or ChatGPT sign-in finishes in the user's own browser. The CLI (`claude
 auth login`, or a short-lived `codex app-server` for ChatGPT) runs with

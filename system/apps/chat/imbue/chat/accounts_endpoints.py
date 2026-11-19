@@ -1,4 +1,4 @@
-"""HTTP endpoints for the provider chooser: `/api/lanes` and `/api/accounts/*`.
+"""HTTP endpoints for the provider chooser: `/api/lanes`, `/api/accounts/*` and `/api/local-model-servers`.
 
 Kept out of server.py for the same reason the claude-auth handlers are: the modal's logic
 does not belong in the router.
@@ -42,6 +42,13 @@ from imbue.chat.harnesses.lanes import LaneNotFoundError
 from imbue.chat.harnesses.lanes import PasteMethod
 from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.lanes import numbered_provider
+from imbue.chat.harnesses.pi_coding.local_model import DEFAULT_CONTEXT_WINDOW
+from imbue.chat.harnesses.pi_coding.local_model import LocalModelError
+from imbue.chat.harnesses.pi_coding.local_model import LocalModelServer
+from imbue.chat.harnesses.pi_coding.local_model import MIN_CONTEXT_WINDOW
+from imbue.chat.harnesses.pi_coding.local_model import describe_server
+from imbue.chat.harnesses.pi_coding.local_model import discover_servers
+from imbue.chat.harnesses.pi_coding.local_model import normalize_base_url
 from imbue.chat.harnesses.registry import list_account_options
 from imbue.chat.identity import forbid_unless_owner
 from imbue.chat.models import ModelOptionsResponse
@@ -130,12 +137,37 @@ class StartFlowRequest(FrozenModel):
     account_id: str | None = Field(default=None, description="The account to sign in again; None for a new one")
 
 
+class EndpointSubmission(FrozenModel):
+    """A model server and the model of it to run on, as an endpoint flow's form hands them over."""
+
+    base_url: str = Field(description="The server's address")
+    model_id: str = Field(description="The model to run on, as the server lists it")
+    context_window: int = Field(default=DEFAULT_CONTEXT_WINDOW, description="The model's context window, in tokens")
+    api_key: str = Field(default="", description="The server's key; '' for a server that asks for none")
+
+
 class SubmitFlowRequest(FrozenModel):
     """Request body for POST /api/accounts/flow/{flow_id}: what the flow's shape asked the user for."""
 
     code: str | None = Field(default=None, description="The code pasted back from the sign-in page")
     api_key: str | None = Field(default=None, description="The key pasted in")
     key_provider: str | None = Field(default=None, description="Which provider the key is for, on a lane that asks")
+    endpoint: EndpointSubmission | None = Field(default=None, description="The model server an endpoint flow names")
+
+
+class LocalModelServersRequest(FrozenModel):
+    """Request body for POST /api/local-model-servers; empty to look on the usual ports."""
+
+    base_url: str | None = Field(default=None, description="One server to ask, in place of looking for any")
+    api_key: str | None = Field(default=None, description="That server's key, when it asks for one")
+
+
+class LocalModelServersResponse(FrozenModel):
+    """Response from POST /api/local-model-servers."""
+
+    servers: tuple[LocalModelServer, ...] = Field(description="The servers that answered, with their models")
+    default_context_window: int = Field(description="The context window the form starts on, in tokens")
+    min_context_window: int = Field(description="The smallest context window a chat here can run with, in tokens")
 
 
 class RelayCallbackRequest(FrozenModel):
@@ -324,7 +356,7 @@ def poll_flow(flow_id: str) -> Response:
 
 
 def submit_flow(flow_id: str) -> Response:
-    """Accept whatever the flow's shape asks the user for: a pasted code, or a key."""
+    """Accept whatever the flow's shape asks the user for: a pasted code, a key, or a model server."""
     submit_request = parse_request_body(SubmitFlowRequest)
     service = get_state().auth_flows
     try:
@@ -332,8 +364,17 @@ def submit_flow(flow_id: str) -> Response:
             status = service.submit_code(flow_id, submit_request.code.strip())
         elif submit_request.api_key is not None:
             status = service.submit_key(flow_id, submit_request.api_key.strip(), submit_request.key_provider or None)
+        elif submit_request.endpoint is not None:
+            endpoint = submit_request.endpoint
+            status = service.submit_endpoint(
+                flow_id,
+                endpoint.base_url,
+                endpoint.model_id.strip(),
+                endpoint.context_window,
+                endpoint.api_key.strip(),
+            )
         else:
-            return _error_response("expected a code or an api_key")
+            return _error_response("expected a code, an api_key or an endpoint")
     except (FlowError, ClaudeAuthError) as e:
         # ClaudeAuthError too: a paste that fails claude's strict env-block parse raises
         # CredentialPasteError, which is a sibling of FlowError rather than a subclass. Escaping
@@ -341,6 +382,34 @@ def submit_flow(flow_id: str) -> Response:
         # wrong -- the user saw a generic failure instead of "Unsupported keys in paste: ...".
         return _error_response(str(e))
     return model_response(status)
+
+
+def find_local_model_servers() -> Response:
+    """The model servers a local-model sign-in can pick from: the ones answering on the usual ports of
+    the user's own machine, or the one server the request names.
+
+    Owner-only: it makes this workspace fetch an address the caller chose.
+    """
+    refusal = forbid_unless_owner()
+    if refusal is not None:
+        return refusal
+    servers_request = parse_request_body(LocalModelServersRequest)
+    client = get_state().http_client
+    if servers_request.base_url is None:
+        servers = discover_servers(client)
+    else:
+        try:
+            base_url = normalize_base_url(servers_request.base_url)
+            servers = (describe_server(client, base_url, (servers_request.api_key or "").strip()),)
+        except LocalModelError as e:
+            return _error_response(str(e))
+    return model_response(
+        LocalModelServersResponse(
+            servers=servers,
+            default_context_window=DEFAULT_CONTEXT_WINDOW,
+            min_context_window=MIN_CONTEXT_WINDOW,
+        )
+    )
 
 
 def relay_flow_callback(flow_id: str) -> Response:
@@ -417,6 +486,9 @@ ROUTE_TABLE: Final[RouteTable] = {
     ("POST", "/api/accounts/flow/{flow_id}/callback"): RouteModels(
         request_model=RelayCallbackRequest, response_model=FlowCallbackResponse
     ),
+    ("POST", "/api/local-model-servers"): RouteModels(
+        request_model=LocalModelServersRequest, response_model=LocalModelServersResponse
+    ),
     ("DELETE", "/api/accounts/{account_id}"): RouteModels(response_model=OkResponse),
     ("PATCH", "/api/accounts/{account_id}"): RouteModels(
         request_model=UpdateAccountRequest, response_model=OkResponse
@@ -438,6 +510,7 @@ def register_routes(application: Flask) -> None:
     application.add_url_rule("/api/accounts/flow/<flow_id>", view_func=submit_flow, methods=["POST"])
     application.add_url_rule("/api/accounts/flow/<flow_id>", view_func=abort_flow, methods=["DELETE"])
     application.add_url_rule("/api/accounts/flow/<flow_id>/callback", view_func=relay_flow_callback, methods=["POST"])
+    application.add_url_rule("/api/local-model-servers", view_func=find_local_model_servers, methods=["POST"])
     application.add_url_rule("/api/accounts/<account_id>", view_func=delete_account, methods=["DELETE"])
     application.add_url_rule("/api/accounts/<account_id>", view_func=update_account, methods=["PATCH"])
     application.add_url_rule(

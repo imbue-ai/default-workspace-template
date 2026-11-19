@@ -301,3 +301,44 @@ def test_rebinding_the_others_repoints_the_credential_link_whatever_was_there(
         _link_binding(harness).rebind_agent(tmp_path / "account", state)
         assert dest.is_symlink() and os.readlink(dest) == str(source)
     assert not dest.with_name(f"{dest.name}.rebind-tmp").exists()
+
+
+def test_pi_links_its_models_file_beside_its_credential(tmp_path: Path) -> None:
+    """A local model's provider lives in the account's `models.json`, which pi reads from the same
+    config dir as `auth.json`: an agent linked to only the credential would list no such model."""
+    account, state = tmp_path / "account", tmp_path / "state"
+    binding = _link_binding(HarnessType.PI_CODING)
+
+    assert binding.linked_paths(account, state) == (
+        (account / "auth.json", state / "plugin/pi_coding/auth.json"),
+        (account / "models.json", state / "plugin/pi_coding/models.json"),
+    )
+    _, command = binding.create_args(account, state)
+    (default_command,) = binding.default_create_binding(account).provision_commands
+    for link in (
+        f"ln -sfn {account / 'auth.json'} {state / 'plugin/pi_coding/auth.json'}",
+        f"ln -sfn {account / 'models.json'} {state / 'plugin/pi_coding/models.json'}",
+    ):
+        assert link in command
+    assert f'ln -sfn {account / "auth.json"} "$MNGR_AGENT_STATE_DIR"/plugin/pi_coding/auth.json' in default_command
+    assert f'ln -sfn {account / "models.json"} "$MNGR_AGENT_STATE_DIR"/plugin/pi_coding/models.json' in default_command
+
+
+def test_rebinding_pi_off_a_local_model_account_drops_its_models_file(tmp_path: Path) -> None:
+    """The link is repointed for every account, and one with no `models.json` leaves it dangling,
+    which pi reads as no file: the provider of the account left behind does not follow the agent."""
+    state = tmp_path / "state"
+    local, keyed = tmp_path / "local", tmp_path / "keyed"
+    for account in (local, keyed):
+        account.mkdir()
+        (account / "auth.json").write_text("{}")
+    (local / "models.json").write_text('{"providers": {}}')
+    binding = _link_binding(HarnessType.PI_CODING)
+    models_link = state / "plugin/pi_coding/models.json"
+
+    binding.rebind_agent(local, state)
+    assert models_link.read_text() == '{"providers": {}}'
+
+    binding.rebind_agent(keyed, state)
+    assert os.readlink(models_link) == str(keyed / "models.json")
+    assert not models_link.exists()

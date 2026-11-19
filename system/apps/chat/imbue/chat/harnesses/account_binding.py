@@ -136,7 +136,8 @@ class AccountBinding(ABC):
 
 class CredentialLinkAccountBinding(AccountBinding, ABC):
     """A harness bound by a credential file mngr links into the agent's state dir at provisioning: binding
-    repoints that link at the account's copy, and the sessions stay in the agent's state dir."""
+    repoints that link at the account's copy, and the sessions stay in the agent's state dir. A harness
+    that reads further files of an account links those the same way (``linked_paths``)."""
 
     @abstractmethod
     def account_credential_path(self, account_dir: Path) -> Path:
@@ -149,32 +150,35 @@ class CredentialLinkAccountBinding(AccountBinding, ABC):
     def agent_credential_path(self, agent_state_dir: Path) -> Path:
         """The per-agent path provisioning writes, and that binding then repoints."""
 
+    def linked_paths(self, account_dir: Path, agent_state_dir: Path) -> tuple[tuple[Path, Path], ...]:
+        """Every (account file, agent path) pair binding links: the credential, and for a harness
+        that reads more than one file of an account, the rest."""
+        return ((self.account_credential_path(account_dir), self.agent_credential_path(agent_state_dir)),)
+
     def create_args(self, account_dir: Path, agent_state_dir: Path) -> list[str]:
         # The extra-provision command IS shell-evaluated on the host, which is why its paths
         # are quoted. `ln -sfn` replaces whatever provisioning just linked, which is exactly what
         # mngr's own helper does -- the same operation, one step later.
-        source = self.account_credential_path(account_dir)
-        dest = self.agent_credential_path(agent_state_dir)
-        link = (
+        links = [
             f"mkdir -p {shlex.quote(str(dest.parent))} && ln -sfn {shlex.quote(str(source))} {shlex.quote(str(dest))}"
-        )
-        return ["--extra-provision-command", link]
+            for source, dest in self.linked_paths(account_dir, agent_state_dir)
+        ]
+        return ["--extra-provision-command", " && ".join(links)]
 
     def default_create_binding(self, account_dir: Path) -> DefaultCreateBinding:
         # The same `mkdir -p` and `ln -sfn` as `create_args`, with the agent side written over
         # `$MNGR_AGENT_STATE_DIR` -- unquoted so the shell expands it -- since the agent does not exist yet.
-        source = self.account_credential_path(account_dir)
-        relative = self.agent_credential_path(Path())
-        link = (
+        links = [
             f"mkdir -p {_STATE_DIR_SHELL_VAR}/{shlex.quote(str(relative.parent))}"
             f" && ln -sfn {shlex.quote(str(source))} {_STATE_DIR_SHELL_VAR}/{shlex.quote(str(relative))}"
-        )
-        return DefaultCreateBinding(env=(), provision_commands=(link,))
+            for source, relative in self.linked_paths(account_dir, Path())
+        ]
+        return DefaultCreateBinding(env=(), provision_commands=(" && ".join(links),))
 
     def rebind_agent(self, account_dir: Path, agent_state_dir: Path) -> None:
-        dest = self.agent_credential_path(agent_state_dir)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        _replace_symlink(self.account_credential_path(account_dir), dest)
+        for source, dest in self.linked_paths(account_dir, agent_state_dir):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            _replace_symlink(source, dest)
 
 
 def _replace_symlink(source: Path, dest: Path) -> None:

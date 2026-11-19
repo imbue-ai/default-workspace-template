@@ -25,7 +25,7 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import { endProviderRelay } from "./providerRelay";
 
-export type FlowShape = "url_then_code" | "code_then_wait" | "paste" | "browser";
+export type FlowShape = "url_then_code" | "code_then_wait" | "paste" | "browser" | "endpoint";
 export type FlowState = "pending" | "ok" | "failed";
 
 export interface LaneMethod {
@@ -78,6 +78,30 @@ export interface ProviderAccount {
   reauth_method: string;
   /** When the account last finished a sign-in (ISO 8601), or null for one signed in before this was kept. */
   signed_in_at: string | null;
+}
+
+/** A model server that answered, and the models it lists. */
+export interface LocalModelServer {
+  /** The server's OpenAI-compatible root, as a sign-in hands it back. */
+  base_url: string;
+  /** What the server is: the product on a known port ("Ollama"), else its address. */
+  name: string;
+  models: string[];
+}
+
+export interface LocalModelServers {
+  servers: LocalModelServer[];
+  /** The context window the form starts on, and the smallest a chat can run with, in tokens. */
+  default_context_window: number;
+  min_context_window: number;
+}
+
+/** What an endpoint sign-in hands over: a server, one of its models, and how much it holds. */
+export interface EndpointSubmission {
+  base_url: string;
+  model_id: string;
+  context_window: number;
+  api_key: string;
 }
 
 interface FlowStart {
@@ -288,8 +312,8 @@ export async function startFlow(laneId: string, methodId: string, accountId?: st
   // no reference to it, GETting a flow id the server had already forgotten every two seconds
   // for the life of the page.
   stopPolling();
-  // A paste flow is waiting on the user, not on a terminal, so there is nothing to poll.
-  if (started.shape !== "paste") startPolling();
+  // A paste or endpoint flow is waiting on the user, not on a terminal, so there is nothing to poll.
+  if (started.shape !== "paste" && started.shape !== "endpoint") startPolling();
   m.redraw();
 }
 
@@ -301,6 +325,24 @@ export async function submitCode(code: string): Promise<void> {
 export async function submitKey(apiKey: string, keyProvider: string | null): Promise<void> {
   if (flow === null) return;
   await advance({ api_key: apiKey, key_provider: keyProvider });
+}
+
+export async function submitEndpoint(endpoint: EndpointSubmission): Promise<void> {
+  if (flow === null) return;
+  await advance({ endpoint });
+}
+
+/**
+ * The model servers a local-model sign-in can pick from: with no address, the ones answering on
+ * the usual ports of the user's own machine; with one, that server alone (rejecting when it does
+ * not answer).
+ */
+export function findLocalModelServers(baseUrl: string | null = null, apiKey = ""): Promise<LocalModelServers> {
+  return m.request<LocalModelServers>({
+    method: "POST",
+    url: apiUrl("/api/local-model-servers"),
+    body: baseUrl === null ? {} : { base_url: baseUrl, api_key: apiKey },
+  });
 }
 
 async function advance(body: Record<string, unknown>): Promise<void> {

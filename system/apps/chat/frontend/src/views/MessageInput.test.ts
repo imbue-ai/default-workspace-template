@@ -1932,6 +1932,28 @@ describe("MessageInput send failure notice", () => {
     },
   );
 
+  it("says what to check when a local model's server does not answer, keeping the typed text", async () => {
+    const detail = "The model server on your computer did not answer. Check that the computer is awake.";
+    mocks.sendMessage.mockRejectedValueOnce({
+      response: { detail, kind: "model_server_unreachable" },
+      toString: () => detail,
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const component = MessageInput();
+
+    const after = await typeAndSend(component, "agent-1", "build me an app");
+
+    const text = renderedText(after);
+    expect(text).toContain("Your model server didn't answer");
+    expect(text).toContain(detail);
+    expect(text).not.toContain("Couldn't send your message");
+    expect(text).not.toContain("Restart");
+    expect(text).not.toContain("terminal");
+    expect(findByTag(after, "textarea")?.attrs?.value).toBe("build me an app");
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
+
   it("drops the Sending bubble of a /compact the server ran as a compaction, which no turn will echo", async () => {
     mocks.sendMessage.mockResolvedValueOnce("compaction_requested");
 

@@ -24,7 +24,7 @@ import {
 } from "@imbue/workspace-ui/src/models/request-error";
 import { getChatById } from "../models/Chats";
 import { withoutDictationNotes } from "../models/dictationNote";
-import { addOutgoing, dropOutgoing, dropOutgoingNoTurnWillRetire } from "../models/OutgoingMessages";
+import { addOutgoing, dropOutgoing, settleOutgoing } from "../models/OutgoingMessages";
 import { accountForAgent } from "../models/Providers";
 import { mintMessageId, sendMessage } from "../models/Response";
 import type { AssistantMessageEvent, TranscriptEvent, UserMessageEvent } from "../models/Response";
@@ -252,7 +252,7 @@ export async function sendAgain(chatId: string, failedEventId: string, prompts: 
     m.redraw();
     try {
       const status = await sendMessage(chatId, prompt.content, messageId);
-      dropOutgoingNoTurnWillRetire(chatId, outgoingId, status);
+      settleOutgoing(chatId, outgoingId, status);
       // Stop took it back while the agent came up: the user stopped the resend, so the rest stay unsent.
       if (status === "withdrawn") break;
     } catch (err) {

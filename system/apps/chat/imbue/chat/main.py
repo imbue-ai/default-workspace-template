@@ -52,6 +52,7 @@ from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
 from imbue.chat.shell_client import build_live_chat_shell_client
 from imbue.chat.state import ChatAppState
+from imbue.chat.state import build_local_services_http_client
 from imbue.chat.state import state_of
 from imbue.chat.tray_feed import TrayFeed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -204,7 +205,7 @@ def build_production_state(
         claude_auth_service=ClaudeAuthService(),
         # One shared synchronous httpx client for server-side calls to local services; a
         # separate one for the latchkey catalog proxy.
-        http_client=httpx.Client(follow_redirects=False, timeout=30.0),
+        http_client=build_local_services_http_client(None),
         latchkey_http_client=httpx.Client(timeout=30.0),
         shell=shell,
         secret_requests=SecretRequestStore(
