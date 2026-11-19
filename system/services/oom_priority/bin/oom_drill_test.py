@@ -48,7 +48,8 @@ _WORKSPACE = [
 
 def test_the_default_bands_are_the_scores_the_shed_policy_assigns() -> None:
     stages = list(bands.CHAT_STAGES.values())
-    # What Chromium writes for its GPU and utility processes, between its main process's 0 and a renderer's 300.
+    # What Chromium writes for its GPU and utility processes, between its main
+    # process's 0 and a renderer's 300.
     chromium_gpu_self_assigned = 200
     policy_scores = {
         stages[-1].adj,
@@ -65,7 +66,7 @@ def test_the_default_bands_are_the_scores_the_shed_policy_assigns() -> None:
     assert oom_drill.DEFAULT_BANDS == tuple(sorted(policy_scores, reverse=True))
 
 
-def test_every_built_in_service_counts_as_protected_and_an_agents_commands_as_expendable() -> None:
+def test_built_in_services_are_protected_and_an_agents_commands_expendable() -> None:
     builtin_service_bands = [
         adj for adj in bands.SERVICE_BANDS.values() if adj < bands.USER_SERVICE
     ]
