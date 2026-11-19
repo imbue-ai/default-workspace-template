@@ -5,7 +5,7 @@ The first release is given in file-level detail; later areas are outlined and ge
 
 ## Overview
 
-- **Why size matters.** After a compaction Claude Code re-attaches only the first 5,000 tokens of each invoked skill (25,000 combined) and never re-reads the file. A reference that was merely read is not re-attached at all.
+- **Why size matters.** After a compaction Claude Code re-attaches only the first 5,000 tokens of each invoked skill (25,000 combined) and never re-reads the file. A reference that was merely read may not come back: at most five files of the session's are re-read, and one over 5,000 tokens only as a path.
 - **What 5,000 tokens is here.** Measured with `count_tokens` over all 111 markdown files under `.agents/`: tokens are bytes / 2.8 (5% spread). 5,000 tokens is 14 KB, about 250 lines of this prose. A 500-line skill is about 10,000 tokens.
 - **Where we are.** 13 of 42 SKILL.md files are over 14 KB. `build-app` is 18,689 tokens and `update-self` 18,247.
 - **One guide, two enforcers.** A skill authoring guide lives in mngr and is vendored into dwt. Deterministic rules go into `validate_skill.py`; judgment rules go into a `skill_hygiene` code-guardian category that defers to the guide.
@@ -14,7 +14,8 @@ The first release is given in file-level detail; later areas are outlined and ge
 - **`update-self` becomes self-contained for prose.** Its staged copy extracts the shared files it follows from the target release. No version floor is set now.
 - **Users' existing skills are never restructured by a flow.** The update, migration and adoption stamp them and move on.
 - **First release.** Foundations, the cheap cross-cutting PR, the staging change, `update-self`, `build-app` with `update-app`, and the lifecycle trio with the shared-layer tiering.
-- **Deferred.** The template family, `migrate-workspace`, the medium skills, `imbue-studio` and the remaining scripts. Tracked in the Linear MIND backlog.
+- **Deferred.** The template family, `migrate-workspace`, the medium skills, `imbue-studio`, the remaining scripts, and a pass that cuts the model round trips a skill asks for. Tracked in the Linear MIND backlog.
+- **The verification measures round trips.** Every tool call a skill asks for costs a model turn. The runs that verify this release record what each skill costs in turns, as a regression check now and as the baseline for that later pass.
 - **Decided against**, so nobody re-opens them by accident:
   - A size limit on reference files. The contents-list rule and the review category cover them.
   - A length cap on descriptions beyond the spec's 1,024 characters. Today's listing fits its budget.
@@ -38,7 +39,7 @@ The first release is given in file-level detail; later areas are outlined and ge
 - Every file under a skill's directory, and every file under `.agents/shared/`, is reached from something.
 - `dealing-with-the-unexpected` is gone; AGENTS.md points at `check-app-errors` and `assist`.
 - The browser skill is `use-browser` and its command is `use-browser`. The old command name does not exist.
-- A harden worker invokes the `harden-worker` skill. On a harness with no skill invocation it reads `.agents/skills/harden-worker/SKILL.md`.
+- A harden worker invokes the `harden-worker` skill: every harness a worker runs on loads skills.
 - The catalog gains one short line for `harden-worker` and loses one for the deleted skill.
 
 ### An agent creating or editing a skill
@@ -236,6 +237,7 @@ Paths are in dwt unless marked (mngr).
 - **Medium skills.** `manage-desktop`, `caretaker`, `file-sharing`, `github-sync`, `data-pipeline-builder`, `datalib`, and `use-browser`'s own restructure.
 - **`imbue-studio`.** Restructured at its source in mngr.
 - **Remaining scripts.** `submit-upstream-changes`' cherry-pick flow, `check-app-errors`' scan, `manage-routines`' timezone repair. Each scripted procedure, here and in the template family, is its own PR.
+- **Round trips.** A pass over the skills a user waits on, starting with `build-app` and `update-app`'s live loop. It folds every turn that carries no decision into a script, as `verify_app.py` did for verifying an app, and keeps one turn for each step the user sees. It starts from the baseline the verification below records. A rule in the guide, and any check, wait for that measurement.
 - Each area's acceptance: its skills pass every check with no exemption, the load report is in the PR, and its verification below has run.
 
 ## Implementation phases
@@ -245,7 +247,7 @@ Paths are in dwt unless marked (mngr).
 3. **The cheap PR.** Built here, on the foundations.
 4. **The staging change.** Built here, on the cheap PR. After it, the three areas are independent of each other.
 5. **The three first-release areas, in parallel.** Each agent works in its own dwt worktree checked out in this workspace, branching from phase 4. Each stops at a pushed PR with green CI.
-6. **Review and verification.** The user looks at each PR. Then the manual exercises and the eval run happen, possibly in parallel.
+6. **Review and verification.** The user looks at each PR. The round-trip script is written. Then the manual exercises and the eval run happen, possibly in parallel.
 7. **The rename PR.** Stacked on the `update-self` area, merged with it.
 8. **First release.** Phases 2 to 7 ship together.
 9. **Deferred areas.** One at a time or in parallel, each removing its own exemptions, in later releases.
@@ -281,11 +283,30 @@ Paths are in dwt unless marked (mngr).
 
 **Behavioural verification, on demand**
 
-- minds-evals: the existing `build-app` family at dwt main and at the branch, default Claude arm, comparing outcome and its skill gates. Covers `build-app` and `update-app`.
+- minds-evals: the existing `build-app` and `time-to-mock` families at dwt main and at the branch, default Claude arm, comparing outcome and its skill gates. Covers `build-app` and `update-app`. `time-to-mock` is the family that scores latency: it requires `build-app` and forbids a worker.
+  - Several trials per cell on each side, enough to read a median. A count of turns varies from run to run, so one trial a side compares nothing.
+  - Every trial's `trajectory_source` is `workspace`. The hand-built fallback carries no tool calls, so such a trial is rerun or left out.
+  - The job directories of both sides are kept past the 14 days CI holds them, since they hold the trajectories.
 - A real `update-self` on a dev workspace from the current stable (0.9.5) to the first-release branch. Seed it with one user skill that fails a check and one that calls `agentic-browser-fleet`. Expect the first stamped and the second rewritten.
 - Crystallize, update and heal one small skill on that workspace. Expect the worker to invoke `harden-worker` and the new skill to pass with no exemption.
+- These two exercises run outside the evals, so their transcripts are pulled before the workspace is destroyed: `mngr transcript --format atif` for the chat and for each worker.
 - Deferred with the template family: publish and update against a throwaway repository, then adopt that template in a second workspace.
 - `migrate-workspace` gets no behavioural check.
+
+**What the verification records about round trips**
+
+Every tool call a skill asks for costs a model turn: the model takes in its whole context again, thinks, and emits the call. A turn late in a long task is slower than an early one, and each adds to the context, so round trips also bring a compaction closer.
+
+- One read-only script over trajectories, in `<mngr>/apps/minds_evals`. It scores nothing and gates nothing.
+- It reads the eval trials' `trajectory.json` and the transcripts pulled from the workspace exercises, which have the same shape.
+- Per run and per skill invoked, it reports:
+  - model inferences;
+  - tool calls, and calls per inference;
+  - the skill files read, in order;
+  - runs of consecutive tool-only inferences, which is where a script could replace turns;
+  - time in tools against time in the model, from the step timestamps.
+- A skill's span runs from its invocation, found as the evals' `process` gate finds it, to the next skill's invocation or the reply.
+- The comparison of main and the branch reports these beside the outcome and the skill gates. This release splits large files into more references, which adds reads. More reads per run on the branch is the price of smaller files: it is weighed, not failed.
 
 ## Open questions
 
@@ -299,3 +320,7 @@ Paths are in dwt unless marked (mngr).
 - **Retired names for templates published before the publish crawl.** They record no dwt commit, so adoption has no base to diff from.
 - **The version floor.** Deferred until 0.10.0 is stable. The choice then is a two-hop update or staging the target's launcher.
 - **`migrate-workspace` has no behavioural check.** Accepted for now.
+- **What a transcript step's timestamp marks.** Whether it is the start or the end of an inference decides how a reply's time splits between the model and the tools. Not yet checked.
+- **Per-request durations.** Whether the eval proxy's records carry them. If they do, they are the better source for model time on a proxied trial.
+- **Trials per cell.** Unknown until the spread of turn counts across trials is seen.
+- **Whether the results archive keeps trajectories.** If it does not, the job directories are kept by hand.

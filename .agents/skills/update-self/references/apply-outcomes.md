@@ -5,8 +5,8 @@ user, and which verdict ends the pass. What each exit means for any caller of
 the apply (the closing stderr lines and their follow-ups, the
 `provision-incomplete` and `emergency.json` records, an interrupted apply, the
 phase timings line) is in
-`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`:
-read its section for the exit you got before the one here.
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`.
+Each exit's section below opens by naming the part of it to read first.
 `applying-the-update.md` runs the command and sends you here with the code.
 
 ## Contents
@@ -23,13 +23,21 @@ read its section for the exit you got before the one here.
 
 ## Exit 0 -- applied
 
+First read "Exit 0: applied" in
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`:
+three closing lines change what this exit means, and each names a follow-up.
+
 The update is landed and recorded in `docs/VERSION_HISTORY.md`, and the
 environment advanced to the merged apt snapshot (summarize the env-converge
 delta in plain language). A warning that the ledger could not be committed, or
-that `env-converge upgrade` failed, is one of the non-fatal warnings the
-shared file describes: carry out its follow-up or surface it.
+that `env-converge upgrade` failed, is one of the non-fatal warnings that
+section describes: carry out its follow-up or surface it.
 
 ## Exit 2 -- automatically rolled back
+
+First read "Exit 2: automatically rolled back" and "The phase timings line"
+in
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`.
 
 The update did not land.
 
@@ -86,11 +94,20 @@ nothing changed), naming the commits to revert.
 
 ## Exit 3 -- emergency
 
+First read "Exit 3: emergency" in
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`:
+it says where the pre-apply copies are, and that clearing `emergency.json` is
+part of the repair.
+
 Escalate immediately, and record `run-status verdict STUCK --detail "<what
 failed, one plain line>"`. The repair, and clearing `emergency.json` once the
-workspace is healthy again, are as the shared file says.
+workspace is healthy again, are as that section says.
 
 ## Exit 1 -- precondition; nothing changed
+
+First read "Exit 1: precondition, nothing changed" in
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`:
+the stderr says which precondition failed.
 
 With the other chats paused, a dirty tree or a refused fast-forward means
 something wrote after the pause (the user, or a chat they woke). Neither makes
@@ -136,7 +153,10 @@ its branch), and the decision is then that update's to ask again.
 
 ## An interrupted apply
 
-Re-run the exact same `apply` command, as the shared file says. When the
+First read "An interrupted apply" in
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`.
+
+Re-run the exact same `apply` command, as that section says. When the
 workspace healed itself instead, the rollback it made is a forward revert, so
 a retry goes back to the worker as after exit 2.
 

@@ -110,6 +110,9 @@ belong in tested code rather than agent prose:
     staged skill did (the target ref, or the local tree when the ref predates the
     skill), so the staged flow never reads a shared file from a workspace tree
     older than itself.
+    It is a command of its own, run from the staged copy, and not a part of
+    ``bootstrap-skill``: that one runs from the workspace's own copy of this
+    skill, which on a workspace older than this command stages the skill alone.
 
 ``bridge-history``
     Give ``HEAD`` a merge base with the target when the workspace predates the
