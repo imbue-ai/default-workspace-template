@@ -874,6 +874,45 @@ describe("a local model", () => {
     m.render(root, null);
   });
 
+  it("keeps waiting for the user's approval after a named server fails to answer", async () => {
+    vi.useFakeTimers();
+    try {
+      findLocalModelServers.mockResolvedValueOnce(found([], "AWAITING_APPROVAL"));
+      findLocalModelServers.mockRejectedValueOnce({
+        response: { detail: "No server answered at http://box.lan:9000/v1." },
+      });
+      findLocalModelServers.mockResolvedValueOnce(found([STUDIO_OLLAMA], "CONNECTED"));
+      const root = document.createElement("div");
+      const draw = (): void => m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+      draw();
+      (root.querySelector('[data-e2e="lane-local-model"]') as HTMLElement).click();
+      await vi.advanceTimersByTimeAsync(0);
+      draw();
+      press(root, "local-model-name-server");
+      draw();
+      type(root, "local-model-address", "box.lan:9000");
+      draw();
+      press(root, "local-model-find");
+      await vi.advanceTimersByTimeAsync(0);
+      draw();
+
+      expect(findLocalModelServers).toHaveBeenLastCalledWith("box.lan:9000", "");
+      expect(root.querySelector('[data-e2e="local-model-error"]')?.textContent).toBe(
+        "No server answered at http://box.lan:9000/v1.",
+      );
+      expect(root.querySelector('[data-e2e="local-model-awaiting-approval"]')).not.toBeNull();
+
+      await vi.advanceTimersByTimeAsync(2000);
+      draw();
+
+      expect(findLocalModelServers).toHaveBeenLastCalledWith(null, "", "never");
+      expect(root.querySelector('[data-e2e="local-model-awaiting-approval"]')).toBeNull();
+      expect(root.textContent).toContain("qwen2.5:7b");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("says so when Imbue Studio on the user's computer does not answer", async () => {
     findLocalModelServers.mockResolvedValue(found([], "UNREACHABLE"));
 

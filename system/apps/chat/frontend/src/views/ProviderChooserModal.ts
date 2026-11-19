@@ -191,6 +191,10 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     approvalCheck = null;
   }
 
+  function scheduleApprovalCheck(): void {
+    approvalCheck = setTimeout(() => void lookForServers(null, true), APPROVAL_CHECK_INTERVAL_MS);
+  }
+
   function isPaste(candidate: LaneMethod): boolean {
     return candidate.shape === "paste";
   }
@@ -239,7 +243,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       if (contextWindow === "") contextWindow = String(found.default_context_window);
       if (studioLink === "AWAITING_APPROVAL") {
         if (servers === null) servers = [];
-        approvalCheck = setTimeout(() => void lookForServers(null, true), APPROVAL_CHECK_INTERVAL_MS);
+        scheduleApprovalCheck();
         return;
       }
       servers = found.servers;
@@ -258,12 +262,14 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     } catch (e) {
       if (look !== serverLook) return;
       if (isApprovalCheck) {
-        approvalCheck = setTimeout(() => void lookForServers(null, true), APPROVAL_CHECK_INTERVAL_MS);
+        scheduleApprovalCheck();
         return;
       }
       if (servers === null) servers = [];
       isNamingServer = true;
       serverError = errorText(e);
+      // This look took the place of the wait on the user's approval, which it did not settle.
+      if (studioLink === "AWAITING_APPROVAL") scheduleApprovalCheck();
     } finally {
       if (look === serverLook) {
         isLookingForServers = false;
