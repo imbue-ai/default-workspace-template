@@ -2,8 +2,9 @@
 
 The whole note reaches the agent; the chat shows the user only its ``<summary>`` line, as a
 notice labelled by the outcome the opening tag carries. The tag and the ``not-landed`` outcome
-are the update-self skill's resume note's (``update_resume_note.py``), which every chat app
-already shows: the chat app that reads this note is the rolled-back one, which may predate it.
+are the update-self skill's resume note's (``update_resume_note.py``), which the chat app has
+shown since minds-v0.9.0: the chat app that reads this note is the rolled-back one, which may
+predate it.
 ``harnesses/message_display.py`` keeps its own copy of both, and a test there pins them equal by
 classifying notes this module composed.
 
