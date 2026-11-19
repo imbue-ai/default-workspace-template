@@ -245,6 +245,13 @@ function stepItems(items: TimelineItem[]): StepNode[] {
   return items.filter((i): i is { kind: "step"; step: StepNode } => i.kind === "step").map((i) => i.step);
 }
 
+/** The event ids of every inline (ungrouped) part, in order. */
+function ungroupedIds(items: TimelineItem[]): string[] {
+  return items.flatMap((item) =>
+    item.kind === "ungrouped" ? item.events.flatMap((part) => ("event_id" in part ? [part.event_id] : [])) : [],
+  );
+}
+
 describe("bug fixes", () => {
   // Work done before the first step must not vanish.
   it("renders tool calls done before the first step in an ungrouped item", () => {
@@ -682,9 +689,7 @@ describe("narration and close-time ejection", () => {
       ],
       /* idle */ false,
     );
-    const inlineIds = working[1].items.flatMap((item) =>
-      item.kind === "ungrouped" ? item.events.flatMap((part) => ("event_id" in part ? [part.event_id] : [])) : [],
-    );
+    const inlineIds = ungroupedIds(working[1].items);
     expect(inlineIds).toContain("ans");
     expect(working[1].live_step_id).toBe("s1");
     expect(stepItems(working[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
@@ -708,9 +713,7 @@ describe("narration and close-time ejection", () => {
       result("t7", "w3", "ok"),
     ];
     const sections = run(events, /* idle */ false);
-    const inlineIds = sections[1].items.flatMap((item) =>
-      item.kind === "ungrouped" ? item.events.flatMap((part) => ("event_id" in part ? [part.event_id] : [])) : [],
-    );
+    const inlineIds = ungroupedIds(sections[1].items);
     expect(inlineIds).toEqual(["ans"]);
     const step = stepItems(sections[1].items)[0];
     expect(step.events.map((e) => e.event_id)).toEqual(["a-w2", "narr", "a-w3"]);
@@ -766,9 +769,7 @@ describe("narration and close-time ejection", () => {
       result("t9", "w4", "ok"),
     ];
     const sections = run(events, /* idle */ false);
-    const inlineIds = sections[1].items.flatMap((item) =>
-      item.kind === "ungrouped" ? item.events.flatMap((part) => ("event_id" in part ? [part.event_id] : [])) : [],
-    );
+    const inlineIds = ungroupedIds(sections[1].items);
     expect(inlineIds).toEqual(["ans", "narr"]);
     const step = stepItems(sections[1].items).find((s) => s.ticket_id === "s2")!;
     expect(step.events.map((e) => e.event_id)).toEqual(["a-w2", "a-w3", "a-w4"]);
@@ -798,12 +799,7 @@ describe("narration and close-time ejection", () => {
       result("t8", "w3", "ok"),
     ];
     const sections = run(events, /* idle */ true);
-    const visibleIds = [
-      ...sections[1].items.flatMap((item) =>
-        item.kind === "ungrouped" ? item.events.flatMap((part) => ("event_id" in part ? [part.event_id] : [])) : [],
-      ),
-      ...sections[1].trailing_reply.map((e) => e.event_id),
-    ];
+    const visibleIds = [...ungroupedIds(sections[1].items), ...sections[1].trailing_reply.map((e) => e.event_id)];
     expect(visibleIds).toEqual(["old", "ans"]);
     expect(stepItems(sections[1].items).flatMap((s) => s.events.map((e) => e.event_id))).not.toContain("ans");
   });
@@ -829,9 +825,7 @@ describe("narration and close-time ejection", () => {
     const sections = run(events, /* idle */ false);
     const afterNotice = sections[2];
     expect(afterNotice.user_event?.event_id).toBe("n1");
-    const inlineIds = afterNotice.items.flatMap((item) =>
-      item.kind === "ungrouped" ? item.events.flatMap((part) => ("event_id" in part ? [part.event_id] : [])) : [],
-    );
+    const inlineIds = ungroupedIds(afterNotice.items);
     expect(inlineIds).toEqual(["ans"]);
     expect(stepItems(afterNotice.items).flatMap((s) => s.events.map((e) => e.event_id))).not.toContain("ans");
     expect(afterNotice.live_step_id).toBeNull();
@@ -868,9 +862,7 @@ describe("narration and close-time ejection", () => {
       result("t6", "w2", "ok"),
     ];
     const sections = run(events, /* idle */ false);
-    const inlineIds = sections[0].items.flatMap((item) =>
-      item.kind === "ungrouped" ? item.events.flatMap((part) => ("event_id" in part ? [part.event_id] : [])) : [],
-    );
+    const inlineIds = ungroupedIds(sections[0].items);
     expect(inlineIds).toEqual(["finding"]);
     expect(stepItems(sections[0].items)[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
   });
