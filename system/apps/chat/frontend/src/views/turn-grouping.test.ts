@@ -740,7 +740,7 @@ describe("narration and close-time ejection", () => {
   });
 
   // A message sent while the agent works reaches it inside the turn it is running. Its answer can
-  // come after a step move and a lookup (seen with real Opus runs), so every line it writes from
+  // come after a step move and a lookup, so every line it writes from
   // there to the turn's end is a reply; its work still groups under the steps.
   it("shows every line after a message sent mid-task, when the answer follows a step move", () => {
     const events = [
@@ -834,8 +834,7 @@ describe("narration and close-time ejection", () => {
   });
 
   // Agents often write `cd x && tk close s1`, which the step hooks refuse before it runs. The refused
-  // call did no work, so a finding said just before it is still the step's closing remark (seen in a
-  // real Opus run that followed the instruction to say findings before closing the step).
+  // call did no work, so a finding said just before it is still the step's closing remark.
   it("shows a line said before a refused tk call and the close that follows as the step's closing remark", () => {
     const refusedClose: AssistantMessageEvent = {
       ...bashMsg("t4", "cd /repo && tk close s1 done", "t4"),

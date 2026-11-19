@@ -439,11 +439,9 @@ function parseMessage(e: AssistantMessageEvent, toolResults: Map<string, ToolRes
     }
   }
 
-  // Only a recognised, pure tk lifecycle call is hidden from the rendered
-  // output, and a tk call that failed without tk printing a line (refused before
-  // it ran, as the step hooks refuse `cd x && tk close s1`): it did no work. Anything
-  // else (including a command that merely mentions a tk verb) renders as normal
-  // work, so real work is never silently dropped.
+  // Only a recognised, pure tk lifecycle call or a refused one is hidden from the
+  // rendered output. Anything else (including a command that merely mentions a tk
+  // verb) renders as normal work, so real work is never silently dropped.
   const realCalls = e.tool_calls.filter((tc) => !isTkLifecycleCall(tc) && !isRefusedTkCall(tc, toolResults));
   if (realCalls.length === e.tool_calls.length) {
     return { transitions, render: e };
