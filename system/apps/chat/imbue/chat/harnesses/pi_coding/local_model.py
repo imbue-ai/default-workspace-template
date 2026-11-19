@@ -10,7 +10,7 @@ pi 0.87.1, are checked here before an account is committed:
 * a model that lists tool support may still print its tool calls as text, which pi runs none of
   and reports as a finished turn;
 * Ollama loads a model with its own context length (4096 unless configured), whatever window pi
-  is told, and silently drops what does not fit -- a sixth of a new chat's first request.
+  is told, and silently drops what does not fit -- a seventh of a new chat's first request.
 
 A model that reasons before it answers sends that reasoning apart from its answer, and pi records
 it as thinking, which a chat shows folded away above the reply like any other provider's. Such a
