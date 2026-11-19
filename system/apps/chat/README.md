@@ -378,7 +378,10 @@ written for the user, which the page shows as is.
 
 A handoff's successor is created silent: its model pick is applied first
 (`POST /api/chats/<chat-id>/handoff` takes `model`), then the handoff prompt
-goes to it through the send path, then the held messages. A rebind's pick is
+goes to it through the send path, then the held messages. A held message the
+agent refuses before anything is typed, for a reason that can clear by itself (an
+input box not drawn yet, a harness not taking messages yet), is tried again for a
+few minutes, since nobody is at a composer to retry it. A rebind's pick is
 applied the same way once the agent is back on the new account, retried for a
 while since `mngr start` does not wait for the harness to come up. A new chat
 created with a pick (`POST /api/chats/create` takes `model` too) is set up the
@@ -936,6 +939,10 @@ on "Ask again". A server the app lists carries a `studio_port`. The sign-in
 submits `{endpoint: {base_url, model_id, context_window, api_key, studio_port}}`
 to the flow; with a `studio_port` the app is first asked to open its tunnel, and
 the account runs on the loopback address the tunnel answers on in the workspace.
+A workspace has one such tunnel, so every account signed in through the app
+shares that address and runs on the server picked last: a sign-in to another
+server on the computer moves them all to it, and that is not undone when its
+model fails the check or the sign-in is abandoned.
 Before anything is kept the model is asked for one tool call, since a model that
 prints its tool calls as text runs nothing and still reports a finished turn,
 and Ollama is asked what context it loaded the model with, since

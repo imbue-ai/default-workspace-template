@@ -1,1 +1,0 @@
-The composer drops NUL characters from a message before sending it. They arrive invisibly when binary content is pasted (a devtools "Copy response" of a binary reply, for instance), and the agent's terminal cannot take them, so such a message used to fail to send.

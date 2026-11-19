@@ -1,1 +1,0 @@
-The scaling design's memory-lifetime section now says what releases a stopped chat's transcript after someone reads it: after every observe event, chat-app drops it unless a stream of the chat is open or a send is reviving the chat.
