@@ -65,6 +65,15 @@ def test_the_default_bands_are_the_scores_the_shed_policy_assigns() -> None:
     assert oom_drill.DEFAULT_BANDS == tuple(sorted(policy_scores, reverse=True))
 
 
+def test_every_built_in_service_counts_as_protected_and_an_agents_commands_as_expendable() -> None:
+    builtin_service_bands = [
+        adj for adj in bands.SERVICE_BANDS.values() if adj < bands.USER_SERVICE
+    ]
+
+    assert oom_drill.PROTECTED_MAX_ADJ == max(builtin_service_bands)
+    assert oom_drill.EXPENDABLE_MIN_ADJ == bands.AGENT_SUBPROCESS
+
+
 def test_prediction_follows_the_bands_and_skips_what_earlyoom_cannot_pick() -> None:
     ranking = oom_drill.predict_ranking(
         _WORKSPACE, _TOTAL_KIB, _AVOID, excluded_pids={20}

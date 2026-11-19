@@ -16,7 +16,7 @@ with ``--avoid`` names 300 points lower -- the imbue-ai earlyoom fork's
 scoring, which on a Linux kernel is also the kernel's own. Under gVisor, whose
 status has no RssAnon line, the fork counts the sum of the Anonymous lines in
 /proc/<pid>/smaps in place of VmRSS, and so does the drill. A wrong victim, or
-a built-in service (adj <= 80) shed while something at adj >= 900 remained,
+a built-in service (adj <= 86) shed while something at adj >= 900 remained,
 stops the drill at once and frees the hog's memory.
 
 Stdlib-only and self-contained, so it can be sent into a workspace inside the
@@ -47,7 +47,7 @@ DEFAULT_EARLYOOM_LOG: Final[Path] = Path("/var/log/supervisor/earlyoom-stderr.lo
 AVOID_ADJ: Final[int] = -300
 UNKILLABLE_ADJ: Final[int] = -1000
 # A built-in service, the primary agent or never-kill infrastructure.
-PROTECTED_MAX_ADJ: Final[int] = 80
+PROTECTED_MAX_ADJ: Final[int] = 86
 # Agent subprocesses and Chromium.
 EXPENDABLE_MIN_ADJ: Final[int] = 900
 # One sleeper at each score the shed policy assigns, highest first: an aged chat,
