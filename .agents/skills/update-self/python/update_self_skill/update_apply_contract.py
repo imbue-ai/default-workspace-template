@@ -134,6 +134,15 @@ class SnapshotRecord:
     source: str
     copy: str
 
+    def to_payload(self) -> dict[str, str]:
+        return {"name": self.name, "source": self.source, "copy": self.copy}
+
+    @classmethod
+    def from_payload(cls, raw: Mapping[str, object]) -> SnapshotRecord:
+        return cls(
+            name=str(raw["name"]), source=str(raw["source"]), copy=str(raw["copy"])
+        )
+
 
 @dataclass
 class VenvSwap:
@@ -223,10 +232,7 @@ class ApplyMarker:
             "venv_swap": None
             if self.venv_swap is None
             else self.venv_swap.to_payload(),
-            "snapshots": [
-                {"name": s.name, "source": s.source, "copy": s.copy}
-                for s in self.snapshots
-            ],
+            "snapshots": [s.to_payload() for s in self.snapshots],
         }
         return json.dumps(payload, indent=2)
 
@@ -254,10 +260,7 @@ class ApplyMarker:
                 for phase, at in (raw.get("phase_timings") or {}).items()
             },
             snapshots=[
-                SnapshotRecord(
-                    name=str(s["name"]), source=str(s["source"]), copy=str(s["copy"])
-                )
-                for s in raw.get("snapshots", [])
+                SnapshotRecord.from_payload(s) for s in raw.get("snapshots", [])
             ],
             venv_swap=VenvSwap.from_payload(raw.get("venv_swap")),
         )
@@ -299,10 +302,7 @@ class LastGoodRecord:
                 "rollback_to": self.rollback_to,
                 "applied_at": self.applied_at,
                 "driven_by": self.driven_by,
-                "snapshots": [
-                    {"name": s.name, "source": s.source, "copy": s.copy}
-                    for s in self.snapshots
-                ],
+                "snapshots": [s.to_payload() for s in self.snapshots],
                 "programs": list(self.programs),
                 "apps": list(self.apps),
                 "needs_system_services_restart": self.needs_system_services_restart,
@@ -326,10 +326,7 @@ class LastGoodRecord:
             applied_at=float(raw.get("applied_at", 0.0)),
             driven_by=str(raw.get("driven_by", "")),
             snapshots=[
-                SnapshotRecord(
-                    name=str(s["name"]), source=str(s["source"]), copy=str(s["copy"])
-                )
-                for s in raw.get("snapshots", [])
+                SnapshotRecord.from_payload(s) for s in raw.get("snapshots", [])
             ],
             programs=[str(p) for p in raw.get("programs", [])],
             apps=[str(a) for a in raw.get("apps", [])],
@@ -827,9 +824,7 @@ def write_emergency(
             "snapshots_dir": str(snapshots_root(repo_root)),
         }
         if unrestored is not None:
-            record["unrestored"] = [
-                {"name": s.name, "source": s.source, "copy": s.copy} for s in unrestored
-            ]
+            record["unrestored"] = [s.to_payload() for s in unrestored]
         scratch.write_text(json.dumps(record, indent=2))
         scratch.replace(path)
     except OSError as exc:
@@ -868,12 +863,7 @@ def unrestored_snapshots(record: Mapping[str, object]) -> list[SnapshotRecord] |
             "warning: the emergency record's unrestored list is malformed.\n"
         )
         return None
-    return [
-        SnapshotRecord(
-            name=str(e["name"]), source=str(e["source"]), copy=str(e["copy"])
-        )
-        for e in entries
-    ]
+    return [SnapshotRecord.from_payload(e) for e in entries]
 
 
 def clear_emergency(repo_root: Path) -> None:
