@@ -602,7 +602,7 @@ def build_app(service: ScreenService, static_directory: Path, proxy: NekoProxy) 
         body = parse_request_body(StoppedNotification)
         member = body.member.strip() or "a member"
         reason = body.reason.strip() or f"{member} stopped"
-        if not service.notify_stopped(member, reason):
+        if not service.notify_stopped(member, reason, body.pid):
             return _error("the group is still running", HTTP_CONFLICT)
         return Response(status=HTTP_NO_CONTENT)
 
