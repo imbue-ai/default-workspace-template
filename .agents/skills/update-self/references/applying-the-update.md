@@ -183,6 +183,10 @@ refusal at exit 1). This step takes them again right before the next apply.
 
 ## 5. Run the apply
 
+Before the first apply of a pass, check whether an interrupted apply could
+heal itself here: `older-workspaces.md` ("The first apply that lands the
+recovery machinery") has the test.
+
 From the staged copy, in the **foreground**: its output (refusal and resume
 messages, any provisioner warning, the `apply phase timings:` line) is what
 you read before recording a verdict. The apply first stops the worker the run

@@ -8,7 +8,9 @@ that has a difference points at its section here in one line.
 
 Each item opens with the test for whether it applies. Its `CLEANUP:` line
 names what to remove, and the floor at which that can go: the floor is the
-oldest release a workspace updates from in one pass.
+oldest release a workspace updates from in one pass. Its value, and the
+release at which every item goes, are in the lead's
+`references/older-workspaces.md`.
 
 ## Contents
 
@@ -17,6 +19,7 @@ oldest release a workspace updates from in one pass.
 - Cron entries from before routines
 - Apps from before the app model
 - Python from before the packaged layout
+- A user app on the Screen's ports
 
 ## A shallow clone
 
@@ -39,7 +42,7 @@ CLEANUP: remove this section and the guarded fetch in the worker guide's Step
 
 **Applies when:** on every pass, since the launcher in your checkout is the
 workspace's own whatever its release. `LEAD_WORK_DIR` coming back unset from
-the task file is its second sign.
+the task file means that launcher stamps no `lead_work_dir` either.
 
 The shared reporting reference delivers a report with the
 launcher's `report` subcommand, which a launcher from before minds-v0.6.2
@@ -55,7 +58,8 @@ worker guide's Step 4a, and its Step 6) can go.
 
 ## Cron entries from before routines
 
-**Applies when:** `ls "$LEAD_WORK_DIR/data/.state/cron.d"` lists an entry.
+**Applies when:** the listing of the lead's `data/.state/cron.d` in the worker
+guide's Step 4a shows an entry.
 
 From minds-v0.9.0 a scheduled task is a routine, a tracked
 `system/routines/<id>.toml`. `routines migrate-cron` moved the cron drop-ins
@@ -124,7 +128,22 @@ is the guide to converting them:
   user service whose program line runs under `uv run`, a type error in a
   user skill or app.
 
-CLEANUP: this section, the `user-package-migration` command and the item
-that names them in `worker/validation.md` go when
+CLEANUP: this section, the `user-package-migration` command, the item that
+names them in `worker/validation.md` and the sentence naming them in the
+worker guide's Step 4b go when
 `user_package_migration.py`'s own marker says that module can. The guide is a shared file other skills read, so
 it goes when the last of them stops naming it.
+
+## A user app on the Screen's ports
+
+**Applies when:** a workspace-added app's program line (`--url`) or its
+runner's `PORT` default uses port 8090 or 8091.
+
+Those are the Screen's service and neko ports, which older scaffolds could
+hand out, breaking the Screen. Move the app to a free port in your branch
+(its program line's `--url` and its runner's `PORT` default), and name the
+move under **Impact analysis**.
+
+CLEANUP: remove this section and its pointer in `worker/impact-analysis.md`
+once the floor reaches the first release whose pass carries this item: every
+workspace has then been through one.

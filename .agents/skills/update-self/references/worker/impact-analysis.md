@@ -122,11 +122,14 @@ git diff --name-status --diff-filter=DR "$BASE" "$TARGET_REF"
   are the directories under `.agents/skills/` that are gone, the renamed ones
   with their new names. Read by hand any manifest it lists under
   `unreadable_pyprojects`.
-- **The template's own changelog** for each release the update crosses, which
-  `changelog-entries` writes to `data/.tasks/update-self/whats-new.md`. Read
-  it for what it says was removed, renamed or replaced: a command, a flag, an
-  environment variable, a port, a route, a skill, a file. Note the
-  replacement a section states.
+- **The template's own changelog** for each release the update crosses.
+  `changelog-entries` names them (`sections` in the JSON it prints) and
+  writes their summaries to `data/.tasks/update-self/whats-new.md`. A summary
+  drops the detail this search is for, so read the same releases' sections
+  of the full text, `git show "$TARGET_REF":UNABRIDGED_CHANGELOG.md`, in
+  parts. Read them for what they say was removed, renamed or replaced: a
+  command, a flag, an environment variable, a port, a route, a skill, a file.
+  Note the replacement a section states.
 - **mngr's changelog entries**, when the update moves the mngr pin
   (`pyproject.toml`, `[tool.uv.sources]`). That pin is the largest surface an
   update moves, and mngr's entries between the two commits announce removed
@@ -151,8 +154,8 @@ read each hit before you count it.
 **Dispose** of each hit:
 
 - **The release states a replacement**: a command `retired-names` pairs with
-  a `same_target`, a skill in `renamed_skills`, or a replacement a changelog
-  entry names. Fix it in your branch: rewrite the use to the new name and
+  a `same_target`, a skill in `renamed_skills`, or a replacement the changelog
+  names. Fix it in your branch: rewrite the use to the new name and
   commit. That commit is an edit of your own, so it selects the creation's
   suite in 4b and is merge work for 4c.
 - **Any other hit**: a name removed with no replacement, or a replacement
@@ -211,11 +214,8 @@ chains, `.mngr/**`) and **global-dependency bumps** always count as impacted
 even though nothing imports them. Work them per
 `worker/provisioning-changes.md` and report each there.
 
-**A user app on port 8090 or 8091 is moved.** Those are the Screen's service
-and neko ports, which older scaffolds could hand out, breaking the Screen. Move
-any workspace-added app on either to a free port in your branch (its program
-line's `--url` and its runner's `PORT` default), and name the move under
-**Impact analysis**.
+A workspace-added app whose program line or runner uses port 8090 or 8091 is
+moved: `worker/older-workspaces.md` ("A user app on the Screen's ports").
 
 ## 5. Record what you found
 
