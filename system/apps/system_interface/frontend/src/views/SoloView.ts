@@ -8,7 +8,7 @@
 import m from "mithril";
 import { findWindow } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
-import { BootFailureNotice } from "./FailureLine";
+import { BootFailureNotice, bootSpinner } from "./FailureLine";
 
 export interface SoloViewAttrs {
   readonly store: DesktopStore;
@@ -39,18 +39,20 @@ export const SoloView: m.Component<SoloViewAttrs> = {
           ? m(
               "div",
               { class: "flex h-full items-center justify-center" },
-              m(BootFailureNotice, { notice: bootFailure, onReportBug: store.reportBugAction() }),
+              m(BootFailureNotice, { failure: bootFailure, onReportBug: store.reportBugAction() }),
             )
-          : isKnown || !state.isDesktopsLoaded
-            ? null
-            : m(
-                "div",
-                {
-                  "data-solo-window-gone": "",
-                  class: "flex h-full items-center justify-center text-(length:--font-size-row) text-faint",
-                },
-                "This window is no longer open.",
-              ),
+          : !state.isDesktopsLoaded
+            ? m("div", { class: "flex h-full items-center justify-center" }, bootSpinner())
+            : isKnown
+              ? null
+              : m(
+                  "div",
+                  {
+                    "data-solo-window-gone": "",
+                    class: "flex h-full items-center justify-center text-(length:--font-size-row) text-faint",
+                  },
+                  "This window is no longer open.",
+                ),
       ],
     );
   },

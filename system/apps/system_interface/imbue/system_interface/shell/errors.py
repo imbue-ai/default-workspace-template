@@ -24,9 +24,14 @@ class RefusalKind(LowerCaseStrEnum):
     # frontend offers an agent to free up space), or another write failed.
     LAUNCHED_NOT_OPENED_OUT_OF_SPACE = auto()
     LAUNCHED_NOT_OPENED = auto()
+    # The desktop a request named was deleted (by another window, as a rule): the frontend reads its desktops again,
+    # which moves it off that desktop, and says where it is now.
+    DESKTOP_GONE = auto()
 
 
-APP_UNAVAILABLE_SENTENCE: Final[str] = "This app isn't available in this workspace right now, so nothing was changed."
+# The app list drops an app taken out of the workspace and one whose registry row could not be read alike, so the
+# sentence claims neither.
+APP_UNAVAILABLE_SENTENCE: Final[str] = "This app couldn't be found in this workspace, so nothing was changed."
 WINDOW_GONE_SENTENCE: Final[str] = "That window is no longer here, so nothing was changed. Try again."
 DESKTOP_GONE_SENTENCE: Final[str] = "That desktop was just deleted, so nothing was changed."
 LAST_DESKTOP_SENTENCE: Final[str] = "You can't delete your only desktop. Add another one first."
@@ -98,7 +103,9 @@ class DesktopNotFoundError(ShellError, LookupError):
 
     def __init__(self, desktop: str) -> None:
         self.desktop = desktop
-        super().__init__(f"Desktop '{desktop}' not found", user_facing_message=DESKTOP_GONE_SENTENCE)
+        super().__init__(
+            f"Desktop '{desktop}' not found", user_facing_message=DESKTOP_GONE_SENTENCE, kind=RefusalKind.DESKTOP_GONE
+        )
 
 
 class DesktopConflictError(ShellError, ValueError):

@@ -6,7 +6,7 @@
  */
 
 import type { Failure } from "@imbue/workspace-ui/src/models/failure";
-import type { AppRecord } from "./records";
+import type { AppRecord, LaunchPath } from "./records";
 import type { ToastAction } from "@imbue/workspace-ui/src/models/toasts";
 
 /** Why the only desktop cannot be deleted, on its disabled Delete. */
@@ -38,6 +38,7 @@ const REFUSAL_KIND_VALUES = [
   "app_still_starting",
   "launched_not_opened_out_of_space",
   "launched_not_opened",
+  "desktop_gone",
 ] as const;
 
 /** What the shell's refusals name with ``kind`` (desktop contracts.md, the error body), for the desktop to word
@@ -52,12 +53,44 @@ export function stoppedSentence(app: AppRecord): string {
   return app.program === "" ? `${app.display_name} isn't running.` : `${app.display_name} is not running right now.`;
 }
 
-/** What an agent asked to look at an app that could not start is told (the could-not-start page asks the same). */
+/** What an agent asked to start a stopped app is told, as Imbue Studio about the user. */
+export function stoppedRequest(app: AppRecord): string {
+  return (
+    `Imbue Studio showed the user that ${app.display_name} (the ${app.name} app) isn't running in this workspace. ` +
+    "Find out why it stopped and start it again, then tell the user what was wrong."
+  );
+}
+
+/** What an agent asked to look at an app that could not start is told, as Imbue Studio about the user (the
+ *  could-not-start page asks the same, ``port_parking.could_not_start_request``). */
 export function couldNotStartRequest(app: AppRecord): string {
   return (
-    `${app.display_name} couldn't start in this workspace. Its program's log may say why ` +
-    `(supervisorctl tail ${app.program} stderr). Please find out why and get it running again.`
+    `Imbue Studio showed the user that ${app.display_name} couldn't start in this workspace. Its program's log may ` +
+    `say why (supervisorctl tail ${app.program} stderr). Find out why and get it running again, then tell the user ` +
+    "what was wrong and what you changed."
   );
+}
+
+/** How a note about a launch the app took names it: a message sent ("Your message was sent to Chat"), text drafted
+ *  into the app, or else the launch path by its label ("“New doc” went through in Docs"). The shell's
+ *  ``_launch_lead`` says the same of a launch whose window it could not open. */
+export function tookLaunchLead(displayName: string, launchPath: LaunchPath | null): string {
+  if (launchPath === null) return `${displayName} took that`;
+  if (launchPath.text_param !== null || (launchPath.app_params !== null && launchPath.app_params.text !== null)) {
+    return `Your message was sent to ${displayName}`;
+  }
+  if (launchPath.draft_param !== null) return `Your text was put into ${displayName}`;
+  return `“${launchPath.label}” went through in ${displayName}`;
+}
+
+/** What a window, a shortcut, or a refusal says of an app the workspace has no record of: its app list has none by
+ *  that name, which is so of an app taken out and of one whose record could not be read alike. ``outcome`` is what
+ *  the request then did not do ("nothing was opened"), or null for a window, which did nothing. */
+export function appNotFoundSentence(displayName: string | null, outcome: string | null): string {
+  const subject = displayName ?? "This app";
+  return outcome === null
+    ? `${subject} couldn't be found in this workspace.`
+    : `${subject} couldn't be found in this workspace, so ${outcome}.`;
 }
 
 /** The kind of refusal the shell answered ``failure`` with, or null for any other failure. */

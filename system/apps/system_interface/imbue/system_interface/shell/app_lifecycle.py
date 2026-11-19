@@ -54,9 +54,11 @@ from imbue.system_interface.shell.liveness import fetch_supervisor_programs
 from imbue.system_interface.shell.liveness import start_supervisor_program
 from imbue.system_interface.shell.liveness import stop_supervisor_program
 from imbue.system_interface.shell.liveness import supervisor_socket_path
+from imbue.system_interface.shell.liveness import tail_supervisor_program_stderr
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.port_parking import ParkedPort
 from imbue.system_interface.shell.port_parking import ParkingTarget
+from imbue.system_interface.shell.port_parking import STDERR_TAIL_BYTES
 from imbue.system_interface.shell.port_parking import parked_page_html
 from imbue.system_interface.shell.port_parking import parking_target_of
 from imbue.system_interface.shell.share_grants import GrantedAppsReader
@@ -76,6 +78,8 @@ _WAKE_WAIT_CONNECT_TIMEOUT_SECONDS: Final[float] = 0.5
 
 ProgramStatesReader = Callable[[], dict[str, SupervisorProgramState] | None]
 ProgramAction = Callable[[str], None]
+# The end of a program's stderr log, or None when supervisord cannot say.
+StderrTailReader = Callable[[str], str | None]
 # How many windows across every desktop show each app, by app name; an app with none may be absent.
 WindowCountsReader = Callable[[], Mapping[str, int]]
 
@@ -90,6 +94,10 @@ def start_supervisor_program_by_name(program: str) -> None:
 
 def stop_supervisor_program_by_name(program: str) -> None:
     stop_supervisor_program(program, supervisor_socket_path())
+
+
+def read_supervisor_stderr_tail(program: str) -> str | None:
+    return tail_supervisor_program_stderr(program, STDERR_TAIL_BYTES, supervisor_socket_path())
 
 
 @pure
@@ -161,6 +169,11 @@ class AppLifecycleManager(MutableModel):
     )
     start_program: ProgramAction = Field(default=start_supervisor_program_by_name, frozen=True)
     stop_program: ProgramAction = Field(default=stop_supervisor_program_by_name, frozen=True)
+    read_stderr_tail: StderrTailReader = Field(
+        default=read_supervisor_stderr_tail,
+        frozen=True,
+        description="The end of a program's stderr log, which the could-not-start page shows; None when unreadable",
+    )
     clock: Callable[[], float] = Field(default=time.monotonic, frozen=True, description="A monotonic clock")
 
     _lock: threading.RLock = PrivateAttr(default_factory=threading.RLock)
@@ -542,7 +555,12 @@ class AppLifecycleManager(MutableModel):
             app=app,
             target=target,
             on_first_connection=lambda: self._wake_from_parked_port(app),
-            page_for=lambda kind: parked_page_html(kind, display_name, program),
+            page_for=lambda kind: parked_page_html(
+                kind,
+                display_name,
+                program,
+                None if kind is ParkedPageKind.STARTING else self.read_stderr_tail(program),
+            ),
         )
         # The parker is recorded under the lock its first connection's wake pops it with, so a connection that
         # arrives the moment the port binds cannot find no parker and leave a woken one on the books.

@@ -251,9 +251,13 @@ describe("UpdateNoticeBanner", () => {
     deliverNotice(noticeWire(["chat"], { outcome: "Rolled back to the previous version." }));
     expect(root.querySelector(".update-notice-finish")).toBeNull();
 
-    const restored =
-      "The previous version is restored, but ... Ask your agent to run `mngr start --restart system-services`.";
+    // The outcome update-self writes for such an update says what is left in words; the command that does it is
+    // behind See details.
+    const restored = "The previous version is restored. To finish, the workspace needs to restart.";
     deliverNotice(noticeWire(["chat"], { outcome: restored, needs_system_services_restart: true }));
+    const text = root.querySelector(".update-notice-banner-text");
+    expect(text?.firstChild?.textContent).toBe(restored);
+    expect(text?.querySelector("details")?.textContent).toContain("mngr start --restart system-services");
     click(root, ".update-notice-finish");
     // While the chat's window is not up yet the button says so and takes no second press.
     m.redraw.sync();
@@ -269,11 +273,14 @@ describe("UpdateNoticeBanner", () => {
     deliverNotice(noticeWire(["chat"], { outcome: failed, needs_system_services_restart: true }));
     click(root, ".update-notice-finish");
     await settled();
+    // Behind the assist command, the outcome as the notice showed it and the command that finishes such a rollback.
     expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual(
       [restored, failed].map(
-        (outcome) => `launch:home:chat:main:${JSON.stringify({ message: finishRollbackRequest(outcome) })}:new`,
+        (outcome) =>
+          `launch:home:chat:main:${JSON.stringify({ message: `/assist ${finishRollbackRequest(outcome)}` })}:new`,
       ),
     );
+    expect(finishRollbackRequest(restored)).toContain("`mngr start --restart system-services`");
   });
 
   it("shows a running rollback's progress with no verbs, then the outcome with Close", async () => {

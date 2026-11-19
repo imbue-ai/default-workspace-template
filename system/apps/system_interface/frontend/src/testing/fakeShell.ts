@@ -86,6 +86,8 @@ export class FakeDesktopApi implements DesktopApi {
   hasNoDesktopWindow = false;
   /** A refusal every route raises while set: the reason of a 400 the shell answers, or the error itself. */
   refusal: string | Error | null = null;
+  /** A refusal only the next route called raises, after which the routes answer again. */
+  nextRefusal: Error | null = null;
   /** The page a POST launch path answers (as the app would); a GET launch path's page is built from its path. */
   postLaunchAnswer = "/launched";
   /** What every launch answers of why the shell could not record where its window is (null: it could). */
@@ -126,6 +128,11 @@ export class FakeDesktopApi implements DesktopApi {
   private windowCounter = 0;
 
   private refuse(): void {
+    const once = this.nextRefusal;
+    if (once !== null) {
+      this.nextRefusal = null;
+      throw once;
+    }
     if (this.refusal === null) return;
     if (typeof this.refusal !== "string") throw this.refusal;
     throw new HttpError(

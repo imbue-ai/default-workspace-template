@@ -28,6 +28,7 @@ from workspace_themes.primitives import ThemeId
 
 from imbue.imbue_common.model_update import to_update
 from imbue.system_interface.shell.data_types import AppPin
+from imbue.system_interface.shell.data_types import ShortcutNames
 from imbue.system_interface.shell.data_types import ThemeChoices
 from imbue.system_interface.shell.desktop_document import next_shortcut_cell
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
@@ -35,6 +36,7 @@ from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILE
 from imbue.system_interface.shell.desktops import DESKTOP_GLYPH_COLORS
 from imbue.system_interface.shell.desktops import DesktopStore
 from imbue.system_interface.shell.desktops import FALLBACK_USER_DESKTOP_NAME
+from imbue.system_interface.shell.desktops import SHORTCUT_NAMES_FILENAME
 from imbue.system_interface.shell.desktops import default_desktop
 from imbue.system_interface.shell.desktops import desktop_kept_by_returning_client
 from imbue.system_interface.shell.desktops import desktop_name_for_user
@@ -90,6 +92,35 @@ def test_the_default_desktop_is_created_once_on_the_first_read_that_may_seed(tmp
     assert json.loads((tmp_path / "desktops.json").read_text())["version"] == 1
     # The targets of the seeded shortcuts are recorded as offered.
     assert offered_targets_recorded(tmp_path) == [("chat", "new")]
+
+
+def test_shortcut_names_are_kept_while_a_desktop_holds_the_shortcut_and_follow_the_app_while_it_is_registered(
+    tmp_path: Path,
+) -> None:
+    store = DesktopStore(state_directory=tmp_path)
+    docs_target = ShortcutTarget(app=AppName("docs"), launch=LaunchPathId("new"))
+    files_target = ShortcutTarget(app=AppName("files"), launch=LaunchPathId("open"))
+    docs = ShortcutNames(app=AppName("docs"), launch=LaunchPathId("new"), app_display_name="Docs", launch_label="New")
+    files = ShortcutNames(
+        app=AppName("files"), launch=LaunchPathId("open"), app_display_name="Files", launch_label="Files"
+    )
+    assert store.read_shortcut_names() == {}
+
+    store.record_shortcut_names([docs, files], {docs_target, files_target})
+    assert store.read_shortcut_names() == {docs_target: docs, files_target: files}
+
+    # Docs left the app list while a desktop still holds its shortcut: its names stay. Files' shortcut is on no
+    # desktop any more: its names go.
+    store.record_shortcut_names([], {docs_target})
+    assert store.read_shortcut_names() == {docs_target: docs}
+
+    renamed = docs.model_copy_update(to_update(docs.field_ref().app_display_name, "Documents"))
+    store.record_shortcut_names([renamed], {docs_target})
+    assert store.read_shortcut_names() == {docs_target: renamed}
+    names_file = tmp_path / SHORTCUT_NAMES_FILENAME
+    stamp = names_file.stat().st_mtime_ns
+    store.record_shortcut_names([renamed], {docs_target})
+    assert names_file.stat().st_mtime_ns == stamp
 
 
 def test_a_late_apps_default_shortcut_is_offered_once_on_every_desktop_and_a_removal_sticks(tmp_path: Path) -> None:

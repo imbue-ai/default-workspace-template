@@ -10,7 +10,9 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { REPORT_A_BUG_LABEL } from "@imbue/workspace-ui/src/models/failure";
 import type { ToastAction } from "@imbue/workspace-ui/src/models/toasts";
+import { spinnerIcon } from "@imbue/workspace-ui/src/components/icons";
 import type { FailureNotice } from "../model/failures";
+import type { BootFailure } from "../store/DesktopStore";
 
 /** Open the bug report about a failure; null where none can be opened now (the store's ``reportBugAction``). */
 export type ReportBug = ((failure: ReportedFailure) => void) | null;
@@ -56,26 +58,41 @@ export const FailureLine: m.Component<FailureLineAttrs> = {
   },
 };
 
+/** The spinner the desktop shows while the startup read of the desktops and apps has not answered. */
+export function bootSpinner(): m.Vnode {
+  return m("span", { "data-boot-spinner": "", class: "boot-spinner text-faint", "aria-label": "Loading" }, [
+    m.trust(spinnerIcon(28)),
+  ]);
+}
+
 export interface BootFailureNoticeAttrs {
-  readonly notice: FailureNotice;
+  readonly failure: BootFailure;
   readonly onReportBug: ReportBug;
 }
 
-/** Why the startup read of the desktops and apps failed, where the desktop would be, until a read succeeds. */
+/** Why the startup read of the desktops and apps has not answered, where the desktop would be, until a read does:
+ *  over a spinner while the read is being tried again. */
 export const BootFailureNotice: m.Component<BootFailureNoticeAttrs> = {
   view(vnode) {
+    const { failure, onReportBug } = vnode.attrs;
     return m(
       "div",
       {
         "data-boot-failure": "",
-        class: "boot-failure mx-4 max-w-md rounded-lg bg-surface px-5 py-4 text-left shadow-raised",
+        "data-retrying": failure.isRetrying ? "true" : null,
+        class:
+          "boot-failure mx-4 flex max-w-md flex-col items-center gap-3 rounded-lg bg-surface px-5 py-4 text-left " +
+          "shadow-raised",
       },
-      m(FailureLine, {
-        notice: vnode.attrs.notice,
-        onReportBug: vnode.attrs.onReportBug,
-        marker: "boot-failure-line",
-        messageClass: "text-(length:--font-size-body) text-primary",
-      }),
+      [
+        failure.isRetrying ? bootSpinner() : null,
+        m(FailureLine, {
+          notice: failure.notice,
+          onReportBug,
+          marker: "boot-failure-line",
+          messageClass: "text-(length:--font-size-body) text-primary",
+        }),
+      ],
     );
   },
 };

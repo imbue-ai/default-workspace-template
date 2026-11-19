@@ -24,4 +24,15 @@ describe("ReplacedDesktopNotice", () => {
     (card?.querySelector(".replaced-desktop-dismiss") as HTMLButtonElement).click();
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
+
+  it("names the desktop once when the one seeded in its place has the same name", () => {
+    const root = mountView(() =>
+      m(ReplacedDesktopNotice, { replacedDesktopName: "Alice", seededDesktopName: "Alice", onDismiss: vi.fn() }),
+    );
+    const text = root.querySelector('[data-replaced-desktop-notice="Alice"] p')?.textContent ?? "";
+    expect(text).toBe(
+      "Your desktop Alice is no longer in this workspace, so a fresh copy of the workspace's first desktop was set " +
+        "up for you.",
+    );
+  });
 });

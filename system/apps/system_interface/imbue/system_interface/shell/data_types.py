@@ -29,8 +29,10 @@ from workspace_layout.records import ClientRecord
 from workspace_layout.records import Desktop
 from workspace_layout.records import DesktopLayout
 from workspace_layout.records import DesktopLayoutView
+from workspace_layout.records import DesktopShortcut
 from workspace_layout.records import DesktopView
 from workspace_layout.records import ShortcutTarget
+from workspace_layout.records import ShortcutView
 from workspace_layout.records import StoredWindowPath
 from workspace_layout.records import Window
 from workspace_layout.records import WindowPlacement
@@ -246,6 +248,24 @@ class ThemeChoices(FrozenModel):
 
     default: ThemeId | None = Field(description="The workspace's default theme; none wears the standard one")
     theme_by_desktop_id: dict[DesktopId, ThemeId] = Field(description="Each desktop that wears its own theme")
+
+
+class ShortcutNames(FrozenModel):
+    """What a shortcut's app and launch path were called while the app was registered."""
+
+    app: AppName = Field(description="The app the shortcut runs")
+    launch: LaunchPathId = Field(description="The launch path it runs")
+    app_display_name: str = Field(description="The app's display name")
+    launch_label: str = Field(description="The launch path's label")
+
+
+class ShortcutNamesDocument(FrozenModel):
+    """The whole of ``shortcut_names.json``: what each shortcut on a desktop was called while its app was
+    registered. Kept beside ``desktops.json`` rather than in it: a shell from before these names still reads that file,
+    and its records refuse a key they do not know."""
+
+    version: int = Field(description="The file format version")
+    shortcuts: tuple[ShortcutNames, ...] = Field(description="One entry per shortcut target, sorted by app and launch")
 
 
 class DefaultShortcutsOfferedDocument(FrozenModel):
@@ -475,15 +495,31 @@ def window_view(window: Window, client_paths: Mapping[ClientId, WindowPath]) -> 
 
 @pure
 def desktop_view(
-    desktop: Desktop, client_paths: Mapping[WindowId, Mapping[ClientId, WindowPath]], theme: ThemeId | None
+    desktop: Desktop,
+    client_paths: Mapping[WindowId, Mapping[ClientId, WindowPath]],
+    theme: ThemeId | None,
+    names_by_target: Mapping[ShortcutTarget, ShortcutNames],
 ) -> DesktopView:
     """The ``desktop`` object of desktop contracts.md section 5.2: the record of section 4.1 with each window
     carrying ``client_paths``, the path each client's page of an independent window is at (empty for a linked
-    window, and for a client at the home path), so a reader of the shell's windows sees what every client shows; and
-    ``theme``, the desktop's own theme, or None when it wears the workspace's default."""
+    window, and for a client at the home path), so a reader of the shell's windows sees what every client shows;
+    each shortcut carrying what its app and launch path were called (``names_by_target``); and ``theme``, the
+    desktop's own theme, or None when it wears the workspace's default."""
     windows = tuple(window_view(window, client_paths.get(window.id, {})) for window in desktop.windows)
+    shortcuts = tuple(_shortcut_view(shortcut, names_by_target.get(shortcut.target)) for shortcut in desktop.shortcuts)
     return DesktopView.model_validate(
-        {**dict(desktop), "windows": windows, "theme": None if theme is None else str(theme)}
+        {**dict(desktop), "shortcuts": shortcuts, "windows": windows, "theme": None if theme is None else str(theme)}
+    )
+
+
+@pure
+def _shortcut_view(shortcut: DesktopShortcut, names: ShortcutNames | None) -> ShortcutView:
+    return ShortcutView(
+        target=shortcut.target,
+        mode=shortcut.mode,
+        cell=shortcut.cell,
+        app_display_name=None if names is None else names.app_display_name,
+        launch_label=None if names is None else names.launch_label,
     )
 
 

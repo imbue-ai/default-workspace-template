@@ -46,6 +46,8 @@ _LISTEN_BACKLOG: Final[int] = 8
 # the person's Try again. Its answer still asks a client that retries on its own to wait longer between attempts.
 STARTING_REFRESH_SECONDS: Final[int] = 2
 FAILED_REFRESH_SECONDS: Final[int] = 15
+# How much of the end of a program's stderr log the could-not-start page shows behind "See details".
+STDERR_TAIL_BYTES: Final[int] = 4096
 
 
 class ParkedPageKind(LowerCaseStrEnum):
@@ -79,7 +81,8 @@ _PAGE_STYLE: Final[str] = (
     "height:100vh;margin:0;color:#334155}div{text-align:center;max-width:32rem}code{font-size:0.9em}\n"
     "button{font:inherit;padding:0.4rem 1rem;border:1px solid #cbd5e1;border-radius:6px;background:#fff;"
     "color:inherit;\ncursor:pointer}button:hover{background:#f1f5f9}details{margin-top:1.5rem;font-size:0.85em;"
-    "color:#64748b}\nsummary{cursor:pointer}"
+    "color:#64748b}\nsummary{cursor:pointer}pre{text-align:left;white-space:pre-wrap;word-break:break-word;"
+    "max-height:16rem;overflow:auto;\nbackground:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:0.5rem}"
 )
 
 _PAGE_TEMPLATE: Final[str] = """<!DOCTYPE html>
@@ -101,7 +104,8 @@ CHANGE_NOT_ANSWERED_SENTENCE: Final[str] = (
 )
 
 # What a page that could not start offers: a Try again that asks once more (left out when the wake budget is spent:
-# the budget refuses the next wake too, so a press could not help), an agent asked to look at it (shown once
+# the budget refuses the next wake too, so a press could not help), the end of the program's error log and the
+# command that shows the rest behind "See details", an agent asked to look at it (shown once
 # a shell that frames the page has greeted it, since only a shell can ask one; while the shell has not answered the
 # ask it reads "Asking an agent...", and a failed ask is told under it, its details at the top of the page's one "See
 # details"), and the log's command for whoever wants it. A handshake from a shell with another ``shellId`` means the
@@ -119,6 +123,7 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     '<p><button type="button" id="ask-agent-report" hidden>Report a bug</button></p>'
     "<details><summary>See details</summary>"
     '<pre id="ask-agent-failure-details" hidden></pre>'
+    "{stderr_tail}"
     "<p>The program's log may say why: "
     "<code>supervisorctl tail {program} stderr</code></p></details>"
     "<script>(function () {"
@@ -199,11 +204,22 @@ def _script_literal(value: str) -> str:
 
 @pure
 def could_not_start_request(display_name: str, program: str) -> str:
-    """What an agent asked to look at an app that could not start is told: the app, and where its log is."""
+    """What an agent asked to look at an app that could not start is told, as Imbue Studio about the user: the app,
+    and where its log is (the desktop's ``couldNotStartRequest`` asks the same)."""
     return (
-        f"{display_name} couldn't start in this workspace. Its program's log may say why "
-        f"(supervisorctl tail {program} stderr). Please find out why and get it running again."
+        f"Imbue Studio showed the user that {display_name} couldn't start in this workspace. Its program's log may "
+        f"say why (supervisorctl tail {program} stderr). Find out why and get it running again, then tell the user "
+        "what was wrong and what you changed."
     )
+
+
+@pure
+def _stderr_tail_html(stderr_tail: str | None) -> str:
+    """The end of the program's error log as the page shows it, escaped; nothing when it could not be read or is
+    empty."""
+    if stderr_tail is None or stderr_tail.strip() == "":
+        return ""
+    return f'<p>The end of its error log:</p><pre class="stderr-tail">{html.escape(stderr_tail)}</pre>'
 
 
 @pure
@@ -233,10 +249,10 @@ def parked_refresh_seconds(kind: ParkedPageKind) -> int:
 
 
 @pure
-def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> str:
+def parked_page_html(kind: ParkedPageKind, display_name: str, program: str, stderr_tail: str | None) -> str:
     """The page the parker answers with: starting (reloading every few seconds until the app answers), or could not
-    start (with a Try again unless the wake budget is spent, an agent to look at it, and the program's log behind
-    "See details")."""
+    start (with a Try again unless the wake budget is spent, an agent to look at it, and behind "See details" the end
+    of the program's error log, ``stderr_tail`` when it could be read, and the command that shows its log)."""
     name = html.escape(display_name)
     failed_body = (
         _FAILED_BODY_TEMPLATE.replace("{program}", html.escape(program))
@@ -265,7 +281,9 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
                 heading=html.escape(could_not_start_sentence(display_name), quote=False),
                 body=failed_body.replace("{try_again_button}", _TRY_AGAIN_BUTTON)
                 .replace("{try_again_binding}", _TRY_AGAIN_BINDING)
-                .replace("{sentence}", ""),
+                .replace("{sentence}", "")
+                # The log last, so nothing in it is read as a placeholder.
+                .replace("{stderr_tail}", _stderr_tail_html(stderr_tail)),
             )
         case ParkedPageKind.BUDGET_SPENT:
             return _PAGE_TEMPLATE.format(
@@ -275,9 +293,8 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
                 heading=html.escape(could_not_start_sentence(display_name), quote=False),
                 body=failed_body.replace("{try_again_button}", "")
                 .replace("{try_again_binding}", "")
-                .replace(
-                    "{sentence}", f"<p>{html.escape(start_budget_spent_sentence(display_name), quote=False)}</p>"
-                ),
+                .replace("{sentence}", f"<p>{html.escape(start_budget_spent_sentence(display_name), quote=False)}</p>")
+                .replace("{stderr_tail}", _stderr_tail_html(stderr_tail)),
             )
         case _ as unreachable:
             assert_never(unreachable)

@@ -457,23 +457,22 @@ def test_not_built_placeholder_renders_without_a_terminal_to_offer(
     assert _NOT_BUILT_REPAIR_COMMAND == "env -u TMUX " + _NOT_BUILT_REPAIR_MNGR_COMMAND
 
 
-def test_not_built_repair_message_quotes_the_heading_the_reader_is_looking_at() -> None:
-    """What the message quotes has to be what the page says, or it quotes nothing.
+def test_not_built_repair_message_names_the_heading_the_reader_is_looking_at_behind_the_assist_command() -> None:
+    """What the message names has to be what the page says, or it names nothing.
 
-    The message's whole claim on the agent's attention is that it repeats the
-    line the reader is looking at, so the two are one statement written twice.
-    Nothing else notices when they part: reword the heading and the message still
-    parses, still validates against the CLI, and still reads as a quotation --
-    of a sentence that now appears nowhere. The comparison is case-insensitive
-    because the message is in the reader's voice and the heading is a title.
+    The message's whole claim on the agent's attention is that it repeats the line the reader is looking at, so the
+    two are one statement written twice. Nothing else notices when they part: reword the heading and the message
+    still parses and still validates against the CLI, naming a sentence that now appears nowhere. It is worded as
+    every ask of the desktop's is, Imbue Studio telling the agent what the user was shown, and it starts with the
+    assist command, which a chat runs only at the start of its first message.
     """
     message = _NOT_BUILT_REPAIR_ARGV[_NOT_BUILT_REPAIR_ARGV.index("--message") + 1]
-    quoted = re.search(r'"(.*?)[,.?!]?"', message)
-    assert quoted is not None, f"the message no longer quotes anything: {message}"
-
     heading = re.search(r"<h1>(.*?)</h1>", render_frontend_not_built_page(None, True, ""), re.DOTALL)
     assert heading is not None, "the page no longer carries a heading"
-    assert quoted.group(1).lower().startswith(heading.group(1).strip().lower())
+
+    assert message.startswith("/assist ")
+    assert f"Imbue Studio showed the user this failure: {heading.group(1).strip()}." in message
+    assert message == _NOT_BUILT_REPAIR_MESSAGE
 
 
 def _repair_line_shown_on(page: str) -> str:

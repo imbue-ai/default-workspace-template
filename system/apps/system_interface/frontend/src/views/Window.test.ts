@@ -258,12 +258,12 @@ describe("Window", () => {
     expect(reportBug).toHaveBeenCalledWith({ message: stopped.message, details: null });
   });
 
-  it("says a window's app is no longer part of the workspace, offers to close it, and drops Refresh", () => {
+  it("says a window's app couldn't be found in the workspace, offers to close it, and drops Refresh", () => {
     const onClose = vi.fn();
     const element = render({ app: undefined, isAppGone: true, onClose });
     const placeholder = element.querySelector("[data-gone-app]") as HTMLElement;
     expect(placeholder.querySelector(".gone-app-notice-message")?.textContent).toBe(
-      "This app is no longer part of this workspace.",
+      "This app couldn't be found in this workspace.",
     );
     (placeholder.querySelector("button") as HTMLButtonElement).click();
     expect(onClose).toHaveBeenCalledTimes(1);

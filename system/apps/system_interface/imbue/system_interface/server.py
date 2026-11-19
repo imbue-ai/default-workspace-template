@@ -148,10 +148,13 @@ _NOT_BUILT_POLL_SECONDS = 10
 # reader's sake: the workspace's own ``[commands.create] connect = false`` is
 # the default this overrides.
 #
-# ``--message`` so the agent opens already knowing what the reader is looking at.
-# It quotes the page's own heading, which is the one detail a reader on this page
-# can be certain of and the one the agent can act on without being told anything
-# else.
+# ``--message`` so the agent opens already knowing what the reader is looking at:
+# the page's own heading, which is the one detail a reader on this page can be
+# certain of and the one the agent can act on without being told anything else,
+# worded as every ask of the desktop's is (workspace_ui's ``agentFixTask``):
+# Imbue Studio telling the agent what the user was shown, never the user
+# speaking, behind ``/assist`` (``assistRequest``), so the agent runs the
+# workspace's assist flow, which also reports a fault in built-in code to Imbue.
 #
 # No name, so mngr mints one. A reload, a second tab, or a first attempt that did
 # not finish therefore starts a fresh conversation rather than rejoining an
@@ -160,7 +163,7 @@ _NOT_BUILT_POLL_SECONDS = 10
 # Written as the shell line a reader sees and copies, because that string is the
 # artifact; the argv is derived from it by the same parse a shell performs, so
 # what is offered cannot drift from what runs. Quoted with ``"`` rather than as
-# ``shlex.join`` would (``'i'"'"'m ...``): the message carries apostrophes, and
+# ``shlex.join`` would (``'workspace'"'"'s ...``): the message carries apostrophes, and
 # this is the one line on the page a reader has to be able to read in full.
 #
 # Kept in sync with that builder by ``test_chat_system.py``, which also validates it
@@ -170,7 +173,8 @@ _NOT_BUILT_POLL_SECONDS = 10
 # presses it.
 _NOT_BUILT_REPAIR_MNGR_COMMAND: Final[str] = (
     "mngr create --connect --template chat --label user_created=true "
-    '--message "i\'m seeing \\"this workspace\'s interface needs to be rebuilt, can you fix it?\\""'
+    "--message \"/assist Imbue Studio showed the user this failure: This workspace's interface needs to be rebuilt. "
+    'Find out why it failed and fix it, then tell the user what was wrong and what you changed."'
 )
 
 _NOT_BUILT_REPAIR_ARGV: Final[tuple[str, ...]] = tuple(shlex.split(_NOT_BUILT_REPAIR_MNGR_COMMAND))
@@ -272,6 +276,8 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
     <p>If it isn't back in a few minutes, an agent can fix it.</p>
     <p><button id="ask-agent-button" class="action" type="button">Ask an agent to fix this</button></p>
     <p id="ask-agent-failure-message" hidden></p>
+    <!-- Once an ask failed, the way out the reader is left with: the command, and the terminal to run it in. -->
+    <div id="ask-agent-fallback" hidden></div>
     <p id="agent-started" hidden></p>
     <div id="agent-chat-slot" hidden>
       <iframe id="agent-chat" title="The chat the agent was asked in"></iframe>
@@ -281,10 +287,11 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
     <summary>See details</summary>
     <div id="ask-agent-failure-reason" hidden>
       <p>Why the agent couldn't be asked:</p>
+      <p id="ask-agent-failure-sentence"></p>
       <pre id="ask-agent-failure-details"></pre>
     </div>
-    <p>Run in a terminal, this starts a new chat with an agent and tells it what you are looking at, for when
-       an agent can't be asked from this page:</p>
+    <p id="repair-intro">Run in a terminal, this starts a new chat with an agent and tells it what you are looking
+       at, for when an agent can't be asked from this page:</p>
     <div id="repair">
       <pre id="repair-command">__REPAIR_COMMAND__</pre>
       <!-- Hidden until the script confirms it can actually copy, so the page
@@ -399,39 +406,6 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
     return origin ? origin + String(answer.path).replace(/^\\//, "") : null;
   }
 
-  var askButton = document.getElementById("ask-agent-button");
-  if (isAgentOffered) {
-    document.getElementById("ask-agent").hidden = false;
-    var askLabel = askButton.textContent;
-    askButton.addEventListener("click", function () {
-      askButton.disabled = true;
-      askButton.textContent = "Asking an agent\u2026";
-      document.getElementById("ask-agent-failure-message").hidden = true;
-      document.getElementById("ask-agent-failure-reason").hidden = true;
-      launch("repair_agent", "Couldn't ask an agent").then(function (answer) {
-        var page = pageAt(answer);
-        askButton.hidden = true;
-        var started = document.getElementById("agent-started");
-        started.textContent = page
-          ? "An agent is on it. Follow along below."
-          : "An agent is on it. Follow along in " + answer.display_name + ".";
-        started.hidden = false;
-        if (page) {
-          document.getElementById("agent-chat").src = page;
-          document.getElementById("agent-chat-slot").hidden = false;
-        }
-      }, function (failure) {
-        askButton.disabled = false;
-        askButton.textContent = askLabel;
-        var message = document.getElementById("ask-agent-failure-message");
-        message.textContent = failure.sentence;
-        message.hidden = false;
-        document.getElementById("ask-agent-failure-details").textContent = failure.message;
-        document.getElementById("ask-agent-failure-reason").hidden = false;
-      });
-    });
-  }
-
   // The terminal is a session of its own, made when the reader first opens its section rather than on every load
   // of this page or every look at the details, so a page left open or reloaded does not pile up sessions nobody
   // looks at.
@@ -458,6 +432,54 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
       line.hidden = false;
     });
   });
+  // A failed ask leaves the reader the command and the terminal in the open, rather than behind "See details",
+  // which keeps only why the ask failed.
+  function showFallback() {
+    var fallback = document.getElementById("ask-agent-fallback");
+    fallback.appendChild(document.getElementById("repair"));
+    fallback.appendChild(document.getElementById("no-terminal"));
+    fallback.appendChild(terminalDetails);
+    document.getElementById("repair-intro").hidden = true;
+    fallback.hidden = false;
+    if (isTerminalOffered) terminalDetails.open = true;
+  }
+
+  var askButton = document.getElementById("ask-agent-button");
+  if (isAgentOffered) {
+    document.getElementById("ask-agent").hidden = false;
+    var askLabel = askButton.textContent;
+    askButton.addEventListener("click", function () {
+      askButton.disabled = true;
+      askButton.textContent = "Asking an agent\u2026";
+      document.getElementById("ask-agent-failure-message").hidden = true;
+      document.getElementById("ask-agent-failure-reason").hidden = true;
+      launch("repair_agent", "Couldn't ask an agent").then(function (answer) {
+        var page = pageAt(answer);
+        askButton.hidden = true;
+        var started = document.getElementById("agent-started");
+        started.textContent = page
+          ? "An agent is on it. Follow along below."
+          : "An agent is on it. Follow along in " + answer.display_name + ".";
+        started.hidden = false;
+        if (page) {
+          document.getElementById("agent-chat").src = page;
+          document.getElementById("agent-chat-slot").hidden = false;
+        }
+      }, function (failure) {
+        askButton.disabled = false;
+        askButton.textContent = askLabel;
+        var message = document.getElementById("ask-agent-failure-message");
+        message.textContent = "Couldn't ask an agent. You can start one yourself: run this command in " +
+          (isTerminalOffered ? "the terminal below." : "a terminal.");
+        message.hidden = false;
+        document.getElementById("ask-agent-failure-sentence").textContent = failure.sentence;
+        document.getElementById("ask-agent-failure-details").textContent = failure.message;
+        document.getElementById("ask-agent-failure-reason").hidden = false;
+        showFallback();
+      });
+    });
+  }
+
   // With no agent to offer, what is behind the details is the only way out, so it starts open, the terminal too.
   if (!isAgentOffered) {
     details.open = true;

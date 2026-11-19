@@ -34,21 +34,31 @@ interface Rendered {
   readonly started: string[];
   readonly retries: number[];
   readonly bugReports: ReportedFailure[];
+  readonly asks: string[];
 }
 
 function render(catalog: TemplateCatalogState = LOADED, canReportBug = true): Rendered {
   const started: string[] = [];
   const retries: number[] = [];
   const bugReports: ReportedFailure[] = [];
+  const asks: string[] = [];
   const root = mountView(() =>
     m(GettingStartedPage, {
       catalog,
       onStartWithText: (text) => started.push(text),
       onRetryTemplates: () => retries.push(retries.length + 1),
-      connection: { canReportBug: () => canReportBug, reportBug: (failure) => bugReports.push(failure) },
+      connection: {
+        hasShell: () => true,
+        askAgent: (text) => {
+          asks.push(text);
+          return Promise.resolve({ isOpened: true });
+        },
+        canReportBug: () => canReportBug,
+        reportBug: (failure) => bugReports.push(failure),
+      },
     }),
   );
-  return { root, started, retries, bugReports };
+  return { root, started, retries, bugReports, asks };
 }
 
 function typeQuery(root: HTMLElement, query: string): void {
@@ -150,16 +160,27 @@ describe("the Getting Started page", () => {
     // Its next step is on the line: Try again fetches again, in place.
     failed.root.querySelector<HTMLElement>(".getting-started-templates-retry")!.click();
     expect(failed.retries).toEqual([1]);
-    const report = failed.root.querySelector<HTMLElement>(".getting-started-templates-report")!;
-    expect(report.textContent).toBe("Report a bug");
+    // Then an agent, asked in the chat about this page's app with the failure, and Report a bug.
+    const remedies = [...failed.root.querySelectorAll<HTMLElement>(".getting-started-templates-remedy")];
+    expect(remedies.map((button) => button.textContent)).toEqual(["Ask an agent to fix this", "Report a bug"]);
+    remedies[0].click();
+    expect(failed.asks).toHaveLength(1);
+    expect(failed.asks[0]).toContain(
+      "Imbue Studio showed the user this failure: Templates couldn't be loaded. Try again. If this persists, " +
+        "report a bug.",
+    );
+    expect(failed.asks[0]).toContain("HTTP 502");
+    const report = remedies[1];
     report.click();
     expect(failed.bugReports).toEqual([
       { message: "Templates couldn't be loaded. Try again. If this persists, report a bug.", details: "HTTP 502" },
     ]);
     unmountViews();
-    // Where the shell says Imbue Studio opens no bug report, the line offers none.
+    // Where the shell says Imbue Studio opens no bug report, the line offers none, and still offers the agent.
     const unreportable = render({ kind: "failed", details: "HTTP 502" }, false);
-    expect(unreportable.root.querySelector(".getting-started-templates-report")).toBeNull();
+    expect(
+      [...unreportable.root.querySelectorAll(".getting-started-templates-remedy")].map((button) => button.textContent),
+    ).toEqual(["Ask an agent to fix this"]);
     unmountViews();
     const disabled = render({ kind: "disabled" });
     expect(disabled.root.querySelector('[data-section="templates"]')).toBeNull();

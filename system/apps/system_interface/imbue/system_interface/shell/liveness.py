@@ -135,6 +135,23 @@ def stop_supervisor_program(program: str, socket_path: Path) -> None:
         raise SupervisorProgramActionError(f"could not reach supervisord to stop {program!r}: {e}") from e
 
 
+def tail_supervisor_program_stderr(program: str, length: int, socket_path: Path) -> str | None:
+    """The last ``length`` bytes of ``program``'s stderr log, as supervisord's ``tailProcessStderrLog`` answers them
+    (``[bytes, offset, overflow]``; an offset of 0 with a log longer than ``length`` moves to the log's end); None
+    when supervisord refuses (an unknown program) or cannot be reached."""
+    try:
+        answer: object = _supervisor_proxy(socket_path).supervisor.tailProcessStderrLog(program, 0, length)
+    except xmlrpc.client.Fault as e:
+        _loguru_logger.debug("Supervisord refused the stderr tail of {!r}: {}", program, e.faultString)
+        return None
+    except (OSError, xmlrpc.client.ProtocolError, xmlrpc.client.ResponseError) as e:
+        _loguru_logger.debug("Failed to reach supervisord for the stderr tail of {!r}: {}", program, e)
+        return None
+    if not isinstance(answer, list) or not answer or not isinstance(answer[0], str):
+        return None
+    return answer[0]
+
+
 def fetch_supervisor_program_states(socket_path: Path) -> dict[str, bool] | None:
     """Every supervised program's up/down state in one getAllProcessInfo RPC; None when supervisord cannot be
     reached, so the caller keeps what it last knew rather than presenting a guess as supervisord's answer."""

@@ -46,6 +46,7 @@ class FakeSupervisor:
         self.started: list[str] = []
         self.stopped: list[str] = []
         self.is_reachable = True
+        self.stderr_by_program: dict[str, str] = {}
 
     def states(self) -> dict[str, SupervisorProgramState] | None:
         if not self.is_reachable:
@@ -71,6 +72,9 @@ class FakeSupervisor:
     def stop(self, program: str) -> None:
         self.stopped.append(program)
         self.statename_by_program[program] = "STOPPED"
+
+    def stderr_tail(self, program: str) -> str | None:
+        return self.stderr_by_program.get(program) if self.is_reachable else None
 
 
 class FakeClock:
@@ -140,6 +144,7 @@ def _manager_over(
         program_states=program_states if program_states is not None else supervisor.states,
         start_program=start_program if start_program is not None else supervisor.start,
         stop_program=supervisor.stop,
+        read_stderr_tail=supervisor.stderr_tail,
         clock=clock if clock is not None else FakeClock(),
     )
 
@@ -494,13 +499,16 @@ def test_a_wake_that_ends_in_fatal_re_parks_with_the_failure_page(
     manager.sweep_once()
     send_raw_get_over_socket(closed_port)
     supervisor.statename_by_program["docs"] = "FATAL"
+    supervisor.stderr_by_program["docs"] = "ImportError: cannot import name 'serve' <docs>\n"
 
     manager.sweep_once()
 
     assert manager.is_app_parked("docs")
-    # The next request wakes it again (within the budget) and is told where to look while it waits.
+    # The next request wakes it again (within the budget) and is told where to look while it waits: the end of the
+    # program's error log as supervisord reads it, then the command that shows the rest.
     answer = send_raw_get_over_socket(closed_port)
     assert b"Docs couldn't start." in answer and b"supervisorctl tail docs stderr" in answer
+    assert b"ImportError: cannot import name &#x27;serve&#x27; &lt;docs&gt;" in answer
     assert supervisor.started == ["docs", "docs"]
     # Once the app has run again, a later stop is an ordinary one and its request is answered as starting.
     supervisor.statename_by_program["docs"] = "RUNNING"

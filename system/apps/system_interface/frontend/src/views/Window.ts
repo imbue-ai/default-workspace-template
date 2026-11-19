@@ -25,6 +25,7 @@ import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import type { PixelRect, ResizeEdge } from "../geometry/frames";
 import { RESIZE_EDGES } from "../geometry/frames";
 import { windowChromeZIndex } from "../geometry/stacking";
+import { appNotFoundSentence } from "../model/failures";
 import type { FailureNotice } from "../model/failures";
 import type { AppRecord, WindowRecord, WindowState } from "../model/records";
 import { FailureLine } from "./FailureLine";
@@ -120,10 +121,11 @@ export function windowPlaceholder(marker: string, notice: FailureNotice, onRepor
   );
 }
 
-/** What a window of an app that is no longer part of the workspace shows. */
+/** What a window of an app the workspace's app list no longer has shows. The list drops an app taken out and one
+ *  whose record could not be read alike, so it says only that the app couldn't be found. */
 export function appGoneNotice(onClose: () => void): FailureNotice {
   return {
-    message: "This app is no longer part of this workspace.",
+    message: appNotFoundSentence("This app", null),
     details: null,
     actions: [{ label: "Close window", run: onClose }],
     isReportable: false,

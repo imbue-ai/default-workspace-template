@@ -49,7 +49,7 @@ def _parked_page(kind: ParkedPageKind, port: int) -> ParkedPort:
         app="docs",
         target=ParkingTarget(host="127.0.0.1", port=port),
         on_first_connection=lambda: kind,
-        page_for=lambda answered: parked_page_html(answered, "Docs", "docs"),
+        page_for=lambda answered: parked_page_html(answered, "Docs", "docs", None),
     )
 
 
@@ -87,6 +87,21 @@ def test_the_not_built_page_asks_an_agent_and_frames_the_main_chat_and_a_termina
         expect(page.locator("#repair-command")).not_to_be_visible()
         ask = page.locator("#ask-agent-button")
         expect(ask).to_have_text("Ask an agent to fix this")
+        see_details = page.get_by_text("See details", exact=True)
+        see_details.click()
+        expect(page.locator("#repair-command")).to_be_visible()
+        # The button asks in the main chat; the command is another way in, and the page says which.
+        expect(
+            page.get_by_text(
+                "Run in a terminal, this starts a new chat with an agent and tells it what you are looking at, "
+                "for when an agent can't be asked from this page:",
+                exact=True,
+            )
+        ).to_be_visible()
+        # Looking at the details opens no terminal session: that waits for the terminal's own section.
+        page.wait_for_timeout(500)
+        assert terminal_launches == []
+        see_details.click()
 
         # While the launch is out the button says so and takes no second press; it comes back with the failure.
         held: list[Route] = []
@@ -105,20 +120,27 @@ def test_the_not_built_page_asks_an_agent_and_frames_the_main_chat_and_a_termina
         page.unroute("**/api/not-built/launch")
         expect(ask).to_have_text("Ask an agent to fix this")
         expect(ask).to_be_enabled()
+        # Once the ask failed, the way out is in the open: the command, and the terminal to run it in, opened.
         expect(page.locator("#ask-agent-failure-message")).to_have_text(
-            "Couldn't ask an agent. Try again. If this persists, report a bug."
+            "Couldn't ask an agent. You can start one yourself: run this command in the terminal below."
         )
-        # The failure's reason is in the page's one "See details", at its top.
-        see_details = page.get_by_text("See details", exact=True)
+        expect(page.locator("#repair-command")).to_be_visible()
+        expect(page.locator("#terminal")).to_have_attribute(
+            "src", f"http://terminal-x1.{_COORDINATE}:{served.port}/new"
+        )
+        expect(page.locator("#no-terminal")).to_be_hidden()
+        assert len(terminal_launches) == 1
+        # The page's one "See details" keeps only why the ask failed.
         expect(see_details).to_have_count(1)
         expect(page.locator("#ask-agent-failure-details")).not_to_be_visible()
         see_details.click()
         expect(page.locator("#ask-agent-failure-reason")).to_contain_text("Why the agent couldn't be asked:")
+        expect(page.locator("#ask-agent-failure-sentence")).to_have_text(
+            "Couldn't ask an agent. Try again. If this persists, report a bug."
+        )
         expect(page.locator("#ask-agent-failure-details")).to_contain_text("HTTP 502")
         expect(page.locator("#ask-agent-failure-details")).to_contain_text("boom")
-        # Reading the reason opens no terminal session: that waits for the terminal's own section.
-        page.wait_for_timeout(500)
-        assert terminal_launches == []
+        expect(page.locator("#repair-intro")).to_be_hidden()
         see_details.click()
 
         ask.click()
@@ -129,24 +151,24 @@ def test_the_not_built_page_asks_an_agent_and_frames_the_main_chat_and_a_termina
         expect(ask).to_be_hidden()
         expect(page.locator("#ask-agent-failure-reason")).to_be_hidden()
         assert [post.body for post in posts] == [{"target": "main_chat", "message": _NOT_BUILT_REPAIR_MESSAGE}] * 2
-
-        page.get_by_text("See details", exact=True).click()
-        expect(page.locator("#repair-command")).to_be_visible()
-        # The button asked in the main chat; the command is another way in, and the page says which.
-        expect(
-            page.get_by_text(
-                "Run in a terminal, this starts a new chat with an agent and tells it what you are looking at, "
-                "for when an agent can't be asked from this page:",
-                exact=True,
-            )
-        ).to_be_visible()
-        assert terminal_launches == []
-        page.get_by_text("Open this workspace's terminal", exact=True).click()
-        expect(page.locator("#terminal")).to_have_attribute(
-            "src", f"http://terminal-x1.{_COORDINATE}:{served.port}/new"
-        )
-        expect(page.locator("#no-terminal")).to_be_hidden()
         assert len(terminal_launches) == 1
+
+
+def test_the_not_built_page_says_there_is_no_terminal_beside_the_command_once_an_ask_failed(
+    tmp_path: Path, page: Page
+) -> None:
+    app, _posts = not_built_shell(tmp_path, [LaunchPostOutcome(status_code=500, body={"detail": "boom"})])
+    with serve_app(app) as served:
+        page.set_extra_http_headers(identity_headers(ANONYMOUS_OWNER))
+        # A direct hit on the loopback port names no workspace, so no terminal can be framed.
+        page.goto(f"http://127.0.0.1:{served.port}/")
+        page.locator("#ask-agent-button").click()
+        expect(page.locator("#ask-agent-failure-message")).to_have_text(
+            "Couldn't ask an agent. You can start one yourself: run this command in a terminal."
+        )
+        expect(page.locator("#repair-command")).to_be_visible()
+        expect(page.locator("#no-terminal")).to_be_visible()
+        expect(page.locator("#terminal-details")).to_be_hidden()
 
 
 def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(closed_port: int, page: Page) -> None:

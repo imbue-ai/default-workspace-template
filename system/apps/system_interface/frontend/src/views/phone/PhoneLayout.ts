@@ -30,7 +30,7 @@ import type { DesktopStore } from "../../store/DesktopStore";
 import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { UpdateNoticeBanner } from "../UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "../UpdateStalenessBanner";
-import { BootFailureNotice } from "../FailureLine";
+import { BootFailureNotice, bootSpinner } from "../FailureLine";
 import { appGoneNotice, windowPlaceholder } from "../Window";
 import { MENU_MIN_WIDTH, openShareSettings, phoneWindowMenuRows } from "../WindowMenu";
 import { HomeGrid } from "./HomeGrid";
@@ -299,9 +299,11 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
                 ? m(
                     "div",
                     { class: "absolute inset-0 flex items-center justify-center" },
-                    m(BootFailureNotice, { notice: bootFailure, onReportBug: store.reportBugAction() }),
+                    m(BootFailureNotice, { failure: bootFailure, onReportBug: store.reportBugAction() }),
                   )
-                : null,
+                : !state.isDesktopsLoaded
+                  ? m("div", { class: "absolute inset-0 flex items-center justify-center bg-page" }, bootSpinner())
+                  : null,
               isHome
                 ? m(HomeGrid, {
                     apps: homeGridApps(state),

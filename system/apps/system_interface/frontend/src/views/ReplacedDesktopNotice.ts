@@ -28,13 +28,23 @@ export const ReplacedDesktopNotice: m.Component<ReplacedDesktopNoticeAttrs> = {
         card: { "data-replaced-desktop-notice": attrs.replacedDesktopName },
         actions: m(Button, { variant: "primary", extra: "replaced-desktop-dismiss", onclick: attrs.onDismiss }, "OK"),
       },
-      m("p", { class: MODAL_MESSAGE_CLASS }, [
-        "Your desktop ",
-        m("strong", attrs.replacedDesktopName),
-        " is no longer in this workspace, so a fresh one, ",
-        m("strong", attrs.seededDesktopName),
-        ", was set up for you from the workspace's first desktop.",
-      ]),
+      m(
+        "p",
+        { class: MODAL_MESSAGE_CLASS },
+        attrs.seededDesktopName === attrs.replacedDesktopName
+          ? [
+              "Your desktop ",
+              m("strong", attrs.replacedDesktopName),
+              " is no longer in this workspace, so a fresh copy of the workspace's first desktop was set up for you.",
+            ]
+          : [
+              "Your desktop ",
+              m("strong", attrs.replacedDesktopName),
+              " is no longer in this workspace, so a fresh one, ",
+              m("strong", attrs.seededDesktopName),
+              ", was set up for you from the workspace's first desktop.",
+            ],
+      ),
     );
   },
 };

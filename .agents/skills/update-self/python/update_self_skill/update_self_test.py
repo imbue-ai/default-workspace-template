@@ -8883,11 +8883,12 @@ def test_a_failed_snapshot_restore_keeps_recovery_copies_even_when_health_would_
     assert update_apply_contract.emergency_path(apply_repo).exists()
 
 
-def test_a_rollback_that_needs_the_services_agent_restores_the_files_and_names_the_command(
+def test_a_rollback_that_needs_the_services_agent_restores_the_files_and_says_the_workspace_needs_a_restart(
     apply_repo: Path,
 ) -> None:
-    """The outcome names the command, and a pass creation with no program to restart,
-    which the services restart does not reach either."""
+    """The outcome says the workspace needs a restart, in words rather than the command
+    (the notice shows that behind "See details"), and names a pass creation with no
+    program to restart, which the services restart does not reach either."""
     assert (
         _apply_keeping_the_rollback_point(
             _apply_runner("M\tsystem/scripts/bootstrap.sh\n", apply_repo),
@@ -8910,11 +8911,10 @@ def test_a_rollback_that_needs_the_services_agent_restores_the_files_and_names_t
     assert not runner.ran(*_RESTART)
     record = _rollback_point(apply_repo)
     assert record is not None
-    assert (
-        record.outcome is not None
-        and update_apply.SERVICES_RESTART_COMMAND in record.outcome
-        and "oom_priority did not restart with it" in record.outcome
-    )
+    assert record.outcome is not None
+    assert record.outcome.startswith(update_apply.SERVICES_RESTART_OUTCOME)
+    assert "oom_priority did not restart with it" in record.outcome
+    assert update_apply.SERVICES_RESTART_COMMAND not in record.outcome
 
 
 def test_a_rollback_whose_workspace_does_not_settle_records_an_emergency(

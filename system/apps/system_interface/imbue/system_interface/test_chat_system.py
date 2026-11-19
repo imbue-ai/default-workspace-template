@@ -318,5 +318,6 @@ def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
     # plain prose -- an escape dropped from the line above splits it into several
     # words, or leaves the escapes themselves in what the agent is told.
     assert argv[argv.index("--message") + 1] == (
-        "i'm seeing \"this workspace's interface needs to be rebuilt, can you fix it?\""
+        "/assist Imbue Studio showed the user this failure: This workspace's interface needs to be rebuilt. Find out "
+        "why it failed and fix it, then tell the user what was wrong and what you changed."
     )

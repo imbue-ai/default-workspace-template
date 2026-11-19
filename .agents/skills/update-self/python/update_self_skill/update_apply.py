@@ -1846,6 +1846,13 @@ _ROLLBACK_PROGRESS_RESTORING = "Restoring the previous version"
 _ROLLBACK_PROGRESS_RESTARTING = "Restarting"
 _ROLLBACK_PROGRESS_CHECKING = "Checking that everything came back"
 SERVICES_RESTART_COMMAND = "mngr start --restart system-services"
+# What the notice says of a rollback that restored the files of an update that changed
+# how the workspace starts, which a restart of the workspace's system services finishes.
+# The command stays out of it: the shell's notice shows it behind "See details" and hands
+# it to the agent it asks to finish.
+SERVICES_RESTART_OUTCOME = (
+    "The previous version is restored. To finish, the workspace needs to restart."
+)
 
 
 def _record_rollback_progress(
@@ -2083,10 +2090,7 @@ def _run_rollback(
         _finish_rollback(
             record,
             repo_root,
-            "The previous version is restored, but this update also changed how the workspace "
-            "starts, which only a restart of the workspace's system services finishes. Ask your "
-            "agent to run "
-            f"`{SERVICES_RESTART_COMMAND}`.{unrestarted_note}",
+            f"{SERVICES_RESTART_OUTCOME}{unrestarted_note}",
         )
         sys.stderr.write(
             "rolled back: the files are restored; the workspace's system services must be restarted "

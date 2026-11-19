@@ -54,9 +54,9 @@ export interface ShortcutIconAttrs {
 
 /** What a shortcut reads: its app's name, whatever its mode ("Terminal"), as the launcher tile reads the launch
  *  path's label; a default shortcut after the app's first reads its launch path's label ("Browser" beside "Screen"),
- *  so an app's own shortcuts can be told apart. */
+ *  so an app's own shortcuts can be told apart. One whose app is gone reads the name it was made with. */
 export function shortcutLabel(shortcut: DesktopShortcut, app: AppRecord | undefined): string {
-  if (app === undefined) return shortcut.target.app;
+  if (app === undefined) return shortcut.app_display_name ?? shortcut.target.app;
   const declaredIndex = appShortcutsOf(app).findIndex((own) => own.launch === shortcut.target.launch);
   if (declaredIndex <= 0) return app.display_name;
   return launchPathOf(app, shortcut.target.launch)?.label ?? app.display_name;

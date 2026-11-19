@@ -1,5 +1,6 @@
 """Tests for the shell's HTTP routes (desktop contracts.md sections 5, 6, and 8) over a test state and the two-app registry."""
 
+import json
 import queue
 import shutil
 from pathlib import Path
@@ -1177,7 +1178,7 @@ def test_the_default_desktop_is_seeded_from_the_registry_on_the_first_read(clien
     (home,) = desktops
     assert home["name"] == "Home" and home["wallpaper"] is None and "sharing" not in home
     assert home["windows"] == []
-    assert home["shortcuts"] == [
+    assert [{key: shortcut[key] for key in ("target", "mode", "cell")} for shortcut in home["shortcuts"]] == [
         {
             "target": {"kind": "launch", "app": "terminal", "launch": "new"},
             "mode": "new",
@@ -1615,6 +1616,40 @@ def test_an_op_targets_the_named_desktop_and_load_switches_the_client(client: Fl
     assert loaded.status_code == 200 and loaded.get_json()["desktop_id"] == "home"
     assert _op(client, "load", {"desktop": "Nowhere"}, requester).status_code == 404
     assert _op(client, "load", {}, requester).status_code == 400
+
+
+def test_a_shortcut_is_answered_with_what_its_app_and_launch_path_are_called_kept_beside_the_desktops(
+    client: FlaskClient, tmp_path: Path
+) -> None:
+    """A window still showing a shortcut whose app has since left the app list names it by these; they live in a
+    file of their own, since a shell from before them still reads the desktops file and refuses a key it does not
+    know."""
+    # The seeded shortcuts carry their names from the first read.
+    (home,) = client.get("/api/desktops").get_json()["desktops"]
+    assert [(shortcut["app_display_name"], shortcut["launch_label"]) for shortcut in home["shortcuts"]] == [
+        ("Terminal", "New terminal"),
+        ("Files", "Files"),
+    ]
+    answer = client.post(
+        "/api/desktops/home/shortcuts",
+        json={
+            "target": {"kind": "launch", "app": "terminal", "launch": "new"},
+            "mode": "new",
+            "cell": {"column": 3, "row": 0},
+        },
+    )
+    assert answer.status_code == 200
+    (terminal,) = [shortcut for shortcut in answer.get_json()["shortcuts"] if shortcut["target"]["app"] == "terminal"]
+    assert (terminal["app_display_name"], terminal["launch_label"], terminal["cell"]) == (
+        "Terminal",
+        "New terminal",
+        {"column": 3, "row": 0},
+    )
+
+    (desktops_file,) = tmp_path.rglob("desktops.json")
+    for desktop in json.loads(desktops_file.read_text())["desktops"]:
+        for shortcut in desktop["shortcuts"]:
+            assert set(shortcut) == {"target", "mode", "cell"}
 
 
 def test_shortcut_and_wallpaper_ops_edit_the_target_desktop(client: FlaskClient, app: Flask) -> None:
@@ -3436,6 +3471,7 @@ def test_a_refusal_for_something_this_window_held_says_it_is_gone_and_that_nothi
     assert deleted.get_json() == {
         "detail": "Desktop 'research' not found",
         "user_facing_message": DESKTOP_GONE_SENTENCE,
+        "kind": "desktop_gone",
     }
 
     only = client.post("/api/desktops/home/delete")

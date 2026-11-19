@@ -13,7 +13,8 @@ import { themeRefOf } from "../model/themes";
 import { afterPageLoad } from "../theme/pageLoad";
 import { setIconTheme } from "../views/themeIcons";
 import { FailureLine } from "../views/FailureLine";
-import { ThemeGallery, galleryFailureNotice, galleryStateOf } from "../views/ThemeGallery";
+import { FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { ThemeGallery, galleryFailureNotice, galleryStateOf, isGalleryFailureReportable } from "../views/ThemeGallery";
 
 async function start(): Promise<void> {
   const root = document.getElementById("app");
@@ -38,16 +39,29 @@ void start().catch((error: unknown) => {
   console.error("[gallery] could not load the themes or the apps", error);
   const root = document.getElementById("app");
   if (root === null) return;
-  // A shell that frames the gallery says whether Imbue Studio opens bug reports, which can arrive after the failure.
+  // A shell that frames the gallery says whether Imbue Studio opens bug reports, which can arrive after the failure,
+  // and asks an agent for it.
   const connection = connectToShell({ onHandshake: () => m.redraw() });
   const reload = (): void => window.location.reload();
   m.mount(root, {
-    view: () =>
-      m(FailureLine, {
-        notice: galleryFailureNotice(error, reload, connection.canReportBug()),
-        onReportBug: connection.canReportBug() ? (failure) => connection.reportBug(failure) : null,
-        marker: "theme-gallery-failure",
-        messageClass: "text-primary",
-      }),
+    view: () => {
+      const notice = galleryFailureNotice(error, reload, connection.canReportBug());
+      return m("div", { class: "flex flex-col items-start gap-1" }, [
+        m(FailureLine, { notice, onReportBug: null, marker: "theme-gallery-failure", messageClass: "text-primary" }),
+        m(
+          "div",
+          { class: "flex flex-wrap gap-1" },
+          m(FailureRemedies, {
+            connection,
+            failure: {
+              message: notice.message,
+              details: notice.details,
+              isReportable: isGalleryFailureReportable(error),
+            },
+            sm: true,
+          }),
+        ),
+      ]);
+    },
   });
 });

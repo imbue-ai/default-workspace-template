@@ -139,6 +139,69 @@ afterEach(() => {
   gestureListener = null;
 });
 
+describe("the startup read", () => {
+  /** A store over a fake shell whose startup read is held open (or refused with ``refusal``), with the App mounted
+   *  over it before it answers. */
+  async function mountBeforeTheRead(refusal: Error | null): Promise<() => void> {
+    unmountViews();
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    );
+    api = new FakeDesktopApi();
+    socket = new FakeDesktopSocket();
+    api.desktops = [desktopRecord("home")];
+    store = new DesktopStore({
+      clientId: CLIENT,
+      api,
+      socket,
+      metrics: themeMetricsRecord(),
+      modes: { isPhone: false, isTouch: false },
+      redraw: () => m.redraw(),
+      reloadInterface: () => undefined,
+    });
+    const answer = refusal === null ? api.holdReads() : () => undefined;
+    api.refusal = refusal;
+    void store.start(NO_LINK);
+    mountView(() => m(App, { store, gestures, tour, host: "127.0.0.1:8000", protocol: "http:" }));
+    await settle();
+    m.redraw.sync();
+    return answer;
+  }
+
+  it("shows a spinner in the backdrop until it answers", async () => {
+    const answer = await mountBeforeTheRead(null);
+    expect(document.querySelector("[data-boot-spinner]")).not.toBeNull();
+    expect(document.querySelector("[data-boot-failure]")).toBeNull();
+    answer();
+    await settle();
+    m.redraw.sync();
+    expect(document.querySelector("[data-boot-spinner]")).toBeNull();
+    expect(store.getState().activeDesktopId).toBe("home");
+  });
+
+  it("shows the spinner beside its line, with no button, while nothing answers it, and lands once a try does", async () => {
+    await mountBeforeTheRead(
+      new HttpError(readFailure({ status: 504, body: null, rawText: "Gateway Timeout", requestKind: "read" })),
+    );
+    const failure = document.querySelector("[data-boot-failure]") as HTMLElement;
+    expect(failure.getAttribute("data-retrying")).toBe("true");
+    expect(failure.querySelector("[data-boot-spinner]")).not.toBeNull();
+    expect(failure.querySelector(".boot-failure-line-message")?.textContent).toBe(
+      "The workspace didn't answer. Still trying\u2026",
+    );
+    expect(failure.querySelectorAll(".boot-failure-line-action")).toHaveLength(0);
+
+    // The socket connecting is the workspace answering again: the read is tried at once.
+    api.refusal = null;
+    socket.deliver().onConnected();
+    await settle();
+    m.redraw.sync();
+    expect(document.querySelector("[data-boot-failure]")).toBeNull();
+    expect(store.getState().activeDesktopId).toBe("home");
+  });
+});
+
 describe("the startup read's Report a bug", () => {
   it("appears on the backdrop's failure once the embedder says it opens a bug report, and files that failure", async () => {
     unmountViews();
@@ -1423,7 +1486,9 @@ describe("a stopped app's window", () => {
     const ask = `launch:home:chat:app-ask:${JSON.stringify({
       app: "docs",
       app_display_name: "Docs",
-      message: "Docs (docs) isn't running in this workspace. Please start it again.",
+      message:
+        "Imbue Studio showed the user that Docs (the docs app) isn't running in this workspace. Find out why it " +
+        "stopped and start it again, then tell the user what was wrong.",
     })}:show:beside:win-1`;
 
     await pressAsk("[data-stopped-app]");

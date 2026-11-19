@@ -430,18 +430,28 @@ class _DesktopStoreWhoseWindowWriteFails(DesktopStore):
 
 
 @pytest.mark.parametrize(
-    ("write_errno", "expected_kind", "expected_message", "is_reportable"),
+    ("write_errno", "is_text_path", "expected_kind", "expected_message", "is_reportable"),
     [
         (
             errno.ENOSPC,
+            False,
             RefusalKind.LAUNCHED_NOT_OPENED_OUT_OF_SPACE,
-            "Docs got it, but this workspace is out of space, so its window couldn't be opened.",
+            "\u201cNew doc\u201d went through in Docs, but this workspace is out of space, so its window couldn't be "
+            "opened.",
             False,
         ),
         (
             errno.EIO,
+            False,
             RefusalKind.LAUNCHED_NOT_OPENED,
-            "Docs got it, but its window couldn't be opened. If this persists, report a bug.",
+            "\u201cNew doc\u201d went through in Docs, but its window couldn't be opened.",
+            True,
+        ),
+        (
+            errno.EIO,
+            True,
+            RefusalKind.LAUNCHED_NOT_OPENED,
+            "Your message was sent to Docs, but its window couldn't be opened.",
             True,
         ),
     ],
@@ -450,13 +460,15 @@ def test_a_launch_the_app_took_whose_window_cannot_be_written_is_refused_as_laun
     tmp_path: Path,
     broadcaster: WebSocketBroadcaster,
     write_errno: int,
+    is_text_path: bool,
     expected_kind: RefusalKind,
     expected_message: str,
     is_reportable: bool,
 ) -> None:
     """The app acted on the launch, so a new window the shell then cannot write is not answered as a failed launch
-    to try again (which would ask the app a second time) but as launched and not opened, saying a full disk is
-    one and asking for a bug report for any other failed write; nothing opens."""
+    to try again (which would ask the app a second time) but as launched and not opened, naming the launch (a
+    message sent, else the launch path by its label), saying a full disk is one, and asking for a bug report for
+    any other failed write; nothing opens."""
     registry_path = write_registry(
         tmp_path / "apps.toml",
         registry_row_toml(
@@ -466,6 +478,8 @@ def test_a_launch_the_app_took_whose_window_cannot_be_written_is_refused_as_laun
             display_name="Docs",
             launch_paths=(("new", "New doc", "/api/intake"),),
             launch_methods={"new": "POST"},
+            launch_params={"new": ["message"]} if is_text_path else None,
+            launch_text_params={"new": "message"} if is_text_path else None,
         ),
     )
     posts: list[LaunchPost] = []
@@ -491,6 +505,7 @@ def test_a_launch_the_app_took_whose_window_cannot_be_written_is_refused_as_laun
     request = LaunchRequest(
         app=AppName("docs"),
         launch=LaunchPathId("new"),
+        params={"message": "hi"} if is_text_path else {},
         client_id=ClientId("c1"),
         target=LaunchTarget(kind=LaunchTargetKind.NEW),
     )

@@ -85,7 +85,7 @@ import type { DesktopStore } from "../store/DesktopStore";
 import type { TourController } from "../model/tour";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog, designOwnDisabledReason } from "./AvatarChooserDialog";
 import { Backdrop } from "./Backdrop";
-import { BootFailureNotice } from "./FailureLine";
+import { BootFailureNotice, bootSpinner } from "./FailureLine";
 import type { BackdropLetterbox } from "./Backdrop";
 import { THEME_DESIGN_PROMPT, THEME_PREVIEW_APP, ThemeChooserDialog } from "./ThemeChooserDialog";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
@@ -1247,18 +1247,18 @@ export function App(): m.Component<AppAttrs> {
     });
   }
 
-  /** The backdrop with no desktop to draw: why the startup read failed (until a read succeeds), else that the
-   *  desktops are loading or that there is none. */
+  /** The backdrop with no desktop to draw: why the startup read failed (until a read succeeds), else a spinner while
+   *  the desktops are loading, or that there is none. */
   function emptyBackdrop(current: DesktopStore): m.Vnode {
     const bootFailure = current.getBootFailure();
     return m(
       "div",
       { class: "flex h-full items-center justify-center text-(length:--font-size-row) text-faint" },
       bootFailure !== null
-        ? m(BootFailureNotice, { notice: bootFailure, onReportBug: current.reportBugAction() })
+        ? m(BootFailureNotice, { failure: bootFailure, onReportBug: current.reportBugAction() })
         : current.getState().isDesktopsLoaded
           ? "No desktop yet."
-          : "Loading…",
+          : bootSpinner(),
     );
   }
 

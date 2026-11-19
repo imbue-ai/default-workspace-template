@@ -44,7 +44,7 @@ def _parked_port(port: int, on_first_connection: Callable[[], ParkedPageKind]) -
         app="docs",
         target=ParkingTarget(host="127.0.0.1", port=port),
         on_first_connection=on_first_connection,
-        page_for=lambda kind: parked_page_html(kind, "Docs", "docs"),
+        page_for=lambda kind: parked_page_html(kind, "Docs", "docs", None),
     )
 
 
@@ -162,8 +162,28 @@ def test_release_before_any_connection_frees_the_port(parked_port: ParkedPort) -
     assert parked_port.is_woken is False
 
 
+@pytest.mark.parametrize("kind", [ParkedPageKind.FAILED, ParkedPageKind.BUDGET_SPENT])
+def test_a_could_not_start_page_shows_the_end_of_the_error_log_escaped_above_the_log_command(
+    kind: ParkedPageKind,
+) -> None:
+    tail = 'Traceback (most recent call last):\n  File "<app>", line 3\nModuleNotFoundError: {request} & <b>x</b>\n'
+    page = parked_page_html(kind, "Docs", "docs", tail)
+    shown = page.split("<details>", 1)[1].split("</details>", 1)[0]
+    escaped = "ModuleNotFoundError: {request} &amp; &lt;b&gt;x&lt;/b&gt;"
+    assert escaped in shown
+    assert shown.index(escaped) < shown.index("supervisorctl tail docs stderr")
+    # Nothing in the log is markup or a placeholder of the page's.
+    assert "<b>x</b>" not in page
+    assert "{request}" in shown
+
+    for unreadable in (None, "", "  \n"):
+        bare = parked_page_html(kind, "Docs", "docs", unreadable)
+        assert "stderr-tail" not in bare
+        assert "supervisorctl tail docs stderr" in bare
+
+
 def test_the_response_bytes_carry_the_page_length() -> None:
-    page = parked_page_html(ParkedPageKind.STARTING, "A <b>Name</b>", "prog")
+    page = parked_page_html(ParkedPageKind.STARTING, "A <b>Name</b>", "prog", None)
     response = parked_response_bytes(ParkedPageKind.STARTING, page)
     head, _, body = response.partition(b"\r\n\r\n")
     assert f"Content-Length: {len(page.encode())}".encode() in head
@@ -195,7 +215,7 @@ def _sha256_source(text: str) -> str:
 
 
 def test_the_response_bytes_carry_a_policy_admitting_exactly_the_pages_stylesheet_and_script() -> None:
-    page = parked_page_html(ParkedPageKind.FAILED, "Docs", "docs")
+    page = parked_page_html(ParkedPageKind.FAILED, "Docs", "docs", None)
     head, _, _ = parked_response_bytes(ParkedPageKind.FAILED, page).partition(b"\r\n\r\n")
     style = page.split("<style>", 1)[1].split("</style>", 1)[0]
     script = page.split("<script>", 1)[1].split("</script>", 1)[0]
@@ -207,7 +227,7 @@ def test_the_response_bytes_carry_a_policy_admitting_exactly_the_pages_styleshee
     # The page's own buttons run from that script alone: no inline handler, which no hash admits.
     assert "onclick=" not in page
 
-    starting = parked_page_html(ParkedPageKind.STARTING, "Docs", "docs")
+    starting = parked_page_html(ParkedPageKind.STARTING, "Docs", "docs", None)
     starting_head, _, _ = parked_response_bytes(ParkedPageKind.STARTING, starting).partition(b"\r\n\r\n")
     starting_policy = f"default-src 'none'; style-src {_sha256_source(style)}; base-uri 'none'; form-action 'none'"
     assert f"Content-Security-Policy: {starting_policy}".encode() in starting_head

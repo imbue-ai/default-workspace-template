@@ -12,11 +12,13 @@
 import m from "mithril";
 import { ASKING_AN_AGENT_LABEL } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { bannerClass } from "@imbue/workspace-ui/src/components/banner";
 import { DestroyConfirmDialog } from "@imbue/workspace-ui/src/DestroyConfirmDialog";
 import type { FailureNotice } from "../model/failures";
 import {
   SHELL_APP_NAME,
+  SYSTEM_SERVICES_RESTART_COMMAND,
   confirmUpdate,
   isNoticeSettled,
   isRollbackRunning,
@@ -37,12 +39,16 @@ export const SYSTEM_SERVICES_RESTART_DETAILS =
   "the workspace to finish. This notice then offers to ask one.";
 const ROLLBACK_FAILED = "Couldn't roll back";
 const NOTICE_NOT_CLOSED = "Couldn't close this notice";
-/** What an agent asked to finish a rollback is told: how the rollback ended, as the notice shows it, which names what
- *  is left to do (the restart that finishes it, or that a failed one needs looking at). */
+/** What a settled notice of such an update holds behind "See details": the command that finishes the rollback. */
+export const SYSTEM_SERVICES_RESTART_SETTLED_DETAILS = `The workspace's system services restart with: ${SYSTEM_SERVICES_RESTART_COMMAND}`;
+/** What an agent asked to finish a rollback is told, as Imbue Studio about the user: how the rollback ended, as the
+ *  notice shows it, and the command that finishes one (a failed one may need looking at first). */
 export function finishRollbackRequest(outcome: string): string {
   return (
-    "The rollback of the last workspace update, which had changed the workspace's own setup, ended with this " +
-    `note: "${outcome}" Please finish what it leaves to do.`
+    "Imbue Studio showed the user how the rollback of the last workspace update, which had changed how the " +
+    `workspace starts, ended: "${outcome}" Finish what it leaves to do; restarting the workspace's system ` +
+    `services (\`${SYSTEM_SERVICES_RESTART_COMMAND}\`) is what finishes such a rollback. Then tell the user what ` +
+    "you did."
   );
 }
 
@@ -247,6 +253,9 @@ export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
         m("div", { class: bannerClass(marker, tone) }, [
           m("div", { class: `${marker}-text min-w-0` }, [
             text(state, notice),
+            isNoticeSettled(notice) && notice.needsSystemServicesRestart
+              ? m(SeeDetails, { details: SYSTEM_SERVICES_RESTART_SETTLED_DETAILS })
+              : null,
             error === null
               ? null
               : m(FailureLine, {

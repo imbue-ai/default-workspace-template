@@ -14,7 +14,7 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
-import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
 import type { CatalogTemplate, TemplateCatalogState } from "../models/TemplateCatalog";
@@ -52,8 +52,9 @@ export interface GettingStartedPageAttrs {
   readonly onStartWithText: (text: string) => void;
   /** Fetch the template catalog again, after it could not be loaded. */
   readonly onRetryTemplates: () => void;
-  /** The page's connection to the shell that frames it, through which "Report a bug" asks for the bug report. */
-  readonly connection: Pick<ShellConnection, "canReportBug" | "reportBug"> | null;
+  /** The page's connection to the shell that frames it, through which "Ask an agent to fix this" asks an agent and
+   *  "Report a bug" asks for the bug report. */
+  readonly connection: Pick<ShellConnection, "hasShell" | "askAgent" | "canReportBug" | "reportBug"> | null;
 }
 
 export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
@@ -158,8 +159,9 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
     section.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  /** The failure line, with the next steps in it: Try again (a fresh fetch) and Report a bug (where the shell says
-   *  Imbue Studio opens one), and the reason under it behind "See details". */
+  /** The failure line, with the next steps in it: Try again (a fresh fetch), then an agent (where a shell frames
+   *  the page) and Report a bug (where the shell says Imbue Studio opens one), and the reason under it behind "See
+   *  details". */
   function templatesFailure(attrs: GettingStartedPageAttrs, details: string): m.Vnode {
     const action = (label: string, extra: string, onclick: () => void): m.Vnode =>
       m(Button, { variant: "ghost", sm: true, extra, onclick }, label);
@@ -168,12 +170,12 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
         TEMPLATES_FAILED_MESSAGE,
       ]),
       action("Try again", "getting-started-templates-retry", attrs.onRetryTemplates),
-      m(ReportBugButton, {
+      m(FailureRemedies, {
         connection: attrs.connection,
-        failure: { message: TEMPLATES_FAILED_MESSAGE, details },
+        failure: { message: TEMPLATES_FAILED_MESSAGE, details, isReportable: true },
         variant: "ghost",
         sm: true,
-        extra: "getting-started-templates-report",
+        extra: "getting-started-templates-remedy",
       }),
       m("div", { class: "basis-full" }, m(SeeDetails, { details })),
     ]);

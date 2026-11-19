@@ -1246,7 +1246,9 @@ def test_a_send_the_app_took_shows_its_page_once_though_the_window_s_place_could
         frame = _page_frame(page, pinned["id"])
         expect(frame.locator("#where")).to_have_text(new_page_path, timeout=15000)
         expect(page.locator("[data-toast]")).to_contain_text(
-            "Buddy got it, but its window's place wasn't saved.", timeout=10000
+            "Your message was sent to Buddy, but its window's position couldn't be saved, so it may move back after a "
+            "reload.",
+            timeout=10000,
         )
         expect(field).to_have_value("")
         page.wait_for_timeout(_NEGATIVE_SETTLE_MS)

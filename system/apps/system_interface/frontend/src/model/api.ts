@@ -176,7 +176,8 @@ export async function deleteDesktop(desktopId: string): Promise<string> {
 }
 
 export async function setDesktopShortcut(desktopId: string, shortcut: DesktopShortcut): Promise<Desktop> {
-  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/shortcuts"), shortcut));
+  const { target, mode, cell } = shortcut;
+  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/shortcuts"), { target, mode, cell }));
 }
 
 export async function moveDesktopShortcut(

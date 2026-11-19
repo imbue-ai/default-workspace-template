@@ -56,10 +56,10 @@ _TEMPLATES_UNAVAILABLE_DETAIL: Final[str] = "failed to load templates"
 # How often the not-built page asks whether the page has been built since, so a rebuild by any route brings it back.
 NOT_BUILT_POLL_SECONDS: Final[int] = 10
 
-# What an agent asked to rebuild the page is told.
+# What an agent asked to rebuild the page is told, as Imbue Studio about the user.
 _REBUILD_REQUEST: Final[str] = (
-    "The Getting Started page isn't available: its built files are missing. Please rebuild it (npm run build in "
-    "system/) so it comes back."
+    "Imbue Studio showed the user that the Getting Started page isn't available: its built files are missing. "
+    "Rebuild it (npm run build in system/) so it comes back, then tell the user what was wrong and what you changed."
 )
 
 # Served in place of the page while the frontend has not been built (``static/`` is build output): it checks again

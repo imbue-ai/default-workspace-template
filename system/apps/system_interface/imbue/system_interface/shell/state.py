@@ -87,6 +87,7 @@ from imbue.system_interface.shell.data_types import LaunchOutcome
 from imbue.system_interface.shell.data_types import LaunchRequest
 from imbue.system_interface.shell.data_types import PlacementsEditOutcome
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
+from imbue.system_interface.shell.data_types import ShortcutNames
 from imbue.system_interface.shell.data_types import ShownWindow
 from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.data_types import WindowInputReport
@@ -107,6 +108,7 @@ from imbue.system_interface.shell.desktop_document import pinned_window
 from imbue.system_interface.shell.desktop_document import placement_of
 from imbue.system_interface.shell.desktop_document import require_window
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
+from imbue.system_interface.shell.desktop_document import shortcut_targets_on
 from imbue.system_interface.shell.desktop_document import with_pinned_windows_placed
 from imbue.system_interface.shell.desktop_document import with_window_placed_on_open
 from imbue.system_interface.shell.desktop_document import with_window_raised
@@ -389,9 +391,35 @@ class ShellState(MutableModel):
         the state lock and read ``rows`` under it."""
         shortcuts_outcome = self.desktops.reconcile_shortcuts_with(rows)
         pinned_outcome = self.desktops.ensure_pinned_windows(pinned_apps(rows), datetime.now(timezone.utc))
+        self._record_shortcut_names(pinned_outcome.desktops)
         if shortcuts_outcome.is_written or pinned_outcome.is_written:
             self.broadcaster.broadcast_desktops_updated(self.desktop_views(pinned_outcome.desktops))
         return pinned_outcome.desktops
+
+    def _record_shortcut_names(self, desktops: Sequence[Desktop]) -> None:
+        """Keep what each shortcut's app and launch path are called while the app is registered, so a window still
+        showing a shortcut whose app has left the app list can name it. A record that cannot be written is logged:
+        the names are a courtesy, and the next reconcile records them again."""
+        entry_by_name = {str(entry.row.name): entry for entry in self.inventory.entries()}
+        known: list[ShortcutNames] = []
+        targets = shortcut_targets_on(desktops)
+        for target in targets:
+            entry = entry_by_name.get(str(target.app))
+            label = (
+                None
+                if entry is None
+                else next((path.label for path in effective_launch_paths(entry.row) if path.id == target.launch), None)
+            )
+            if entry is not None and label is not None:
+                known.append(
+                    ShortcutNames(
+                        app=target.app, launch=target.launch, app_display_name=entry.display_name, launch_label=label
+                    )
+                )
+        try:
+            self.desktops.record_shortcut_names(known, targets)
+        except ShellStateError as e:
+            logger.warning("Could not record the names of the desktops' shortcuts: {}", e)
 
     def create_desktop(self, name: str, color: str | None, glyph: int | None, identity: RequestIdentity) -> Desktop:
         """Register a desktop born with its seeded shortcuts and one pinned window per pinned app, owned by the
@@ -580,7 +608,7 @@ class ShellState(MutableModel):
             )
             window = self._window_showing_launch(desktop.id, request, path, aimed, windows_before)
             if window is None:
-                raise _launched_not_opened(entry, e) from e
+                raise _launched_not_opened(entry, launch_path, e) from e
             is_new = window.id not in windows_before
             if is_new:
                 self.broadcast_desktops_updated()
@@ -727,7 +755,11 @@ class ShellState(MutableModel):
             for window_id, stored in paths.items():
                 by_window.setdefault(window_id, {})[client_id] = stored.path
         theme_by_desktop_id = self.desktops.read_theme_choices().theme_by_desktop_id
-        return [desktop_view(desktop, by_window, theme_by_desktop_id.get(desktop.id)) for desktop in desktops]
+        names_by_target = self.desktops.read_shortcut_names()
+        return [
+            desktop_view(desktop, by_window, theme_by_desktop_id.get(desktop.id), names_by_target)
+            for desktop in desktops
+        ]
 
     def desktop_view(self, desktop: Desktop) -> DesktopView:
         (view,) = self.desktop_views((desktop,))
@@ -1211,17 +1243,33 @@ class ShellState(MutableModel):
 
 
 @pure
-def _launched_not_opened(entry: AppInventoryEntry, error: ShellStateError) -> LaunchedNotOpenedError:
+def _launch_lead(entry: AppInventoryEntry, launch_path: RegistryLaunchPath) -> str:
+    """How a note about a launch the app took names it: a message sent ("Your message was sent to Chat"), text drafted
+    into the app, or else the launch path by its label. The desktop's ``tookLaunchLead`` says the same."""
+    name = entry.display_name
+    if launch_path.text_param is not None or (
+        launch_path.app_params is not None and launch_path.app_params.text is not None
+    ):
+        return f"Your message was sent to {name}"
+    if launch_path.draft_param is not None:
+        return f"Your text was put into {name}"
+    return f"\u201c{launch_path.label}\u201d went through in {name}"
+
+
+@pure
+def _launched_not_opened(
+    entry: AppInventoryEntry, launch_path: RegistryLaunchPath, error: ShellStateError
+) -> LaunchedNotOpenedError:
     """The refusal of a launch the app took when no window could be written to show it: a full disk named as such,
     anything else asking for a bug report."""
-    name = entry.display_name
+    lead = _launch_lead(entry, launch_path)
     is_out_of_space = error.kind is RefusalKind.OUT_OF_SPACE
     return LaunchedNotOpenedError(
         f"{entry.row.name} took the launch, but its window could not be recorded: {error}",
         user_facing_message=(
-            f"{name} got it, but this workspace is out of space, so its window couldn't be opened."
+            f"{lead}, but this workspace is out of space, so its window couldn't be opened."
             if is_out_of_space
-            else f"{name} got it, but its window couldn't be opened. If this persists, report a bug."
+            else f"{lead}, but its window couldn't be opened."
         ),
         kind=RefusalKind.LAUNCHED_NOT_OPENED_OUT_OF_SPACE if is_out_of_space else RefusalKind.LAUNCHED_NOT_OPENED,
         reportable=not is_out_of_space,
