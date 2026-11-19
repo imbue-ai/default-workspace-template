@@ -52,6 +52,7 @@ from update_self_skill.update_apply_contract import (
     clear_marker,
     clear_provision_incomplete,
     default_is_pid_a_live_apply,
+    emergency_path,
     marker_path,
     provision_incomplete_path,
     read_emergency,
@@ -2437,12 +2438,15 @@ def finish_restore(repo_root: Path, *, now: Callable[[], float] = time.time) -> 
     then; the emergency record keeps that list. Run once what stopped the restore is fixed.
     The restore is the one ``recover`` attempted, so a tool environment gets its entrypoints
     back too. Health is not probed here, so the record stays: the agent clears it once the
-    workspace is confirmed healthy. Returns 0 when every copy is back, or when the record
-    names none to put back, and 3 when some still would not restore, which stay named.
+    workspace is confirmed healthy. Returns 0 when every copy is back (or there is no
+    emergency at all), and 3 when some still would not restore, which stay named.
 
-    Refused (1) while an apply's marker exists: that apply re-takes its copies at the same
-    paths, so restoring from them would put its pre-apply state over the live tree, and
-    discarding them would take away its own way back.
+    Returns 1, touching nothing, when it cannot tell what to put back: the record is
+    unreadable, or it keeps no list of unrestored copies (an emergency from anything but a
+    boot-time partial restore), which is a repair by hand. Refused (1) too while an apply's
+    marker exists: that apply re-takes its copies at the same paths, so restoring from them
+    would put its pre-apply state over the live tree, and discarding them would take away
+    its own way back.
     """
     if marker_path(repo_root).exists():
         sys.stderr.write(
@@ -2451,12 +2455,25 @@ def finish_restore(repo_root: Path, *, now: Callable[[], float] = time.time) -> 
         )
         return 1
     record = read_emergency(repo_root)
-    snapshots = [] if record is None else unrestored_snapshots(record)
-    if record is None or not snapshots:
+    if record is None:
+        if emergency_path(repo_root).exists():
+            sys.stderr.write(
+                "error: the emergency record cannot be read, so what to put back is "
+                f"unknown; the copies are at {snapshots_root(repo_root)}: repair by hand.\n"
+            )
+            return 1
+        sys.stderr.write("no emergency is recorded; nothing to put back.\n")
+        return 0
+    snapshots = unrestored_snapshots(record)
+    if snapshots is None:
         sys.stderr.write(
-            "no unrestored copies are recorded; nothing to put back. A record from "
-            "anything but a boot-time rollback names none: repair it by hand.\n"
+            "error: the emergency record keeps no list of unrestored copies (it is not "
+            "from a boot-time rollback's partial restore); the copies are at "
+            f"{snapshots_root(repo_root)}: repair by hand.\n"
         )
+        return 1
+    if not snapshots:
+        sys.stderr.write("every recorded copy is already back; nothing to put back.\n")
         return 0
     failed = set(restore_snapshots(snapshots))
     remaining = [s for s in snapshots if s.name in failed]

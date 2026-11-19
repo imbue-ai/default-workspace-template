@@ -7593,6 +7593,31 @@ def test_finish_restore_puts_back_what_a_boot_rollback_could_not_once_the_cause_
     assert "restored: bundle" in capsys.readouterr().err
 
 
+def test_finish_restore_leaves_a_record_without_an_unrestored_list_to_a_hand_repair(
+    apply_repo: Path, capsys
+) -> None:
+    """Every other emergency keeps no list of what to put back; reading that as "every copy
+    is back" would have the agent clear the record over copies nobody restored."""
+    copy = _snapshots_root(apply_repo) / "bundle"
+    copy.mkdir(parents=True)
+    update_apply_contract.write_emergency(
+        apply_repo,
+        "the live workspace could not be confirmed healthy",
+        "the-lead",
+        time.time,
+    )
+    finish_restore = ["finish-restore", "--repo-root", str(apply_repo)]
+
+    assert "unrestored" not in _read_emergency(apply_repo)
+    assert update_self.main(finish_restore) == 1
+    assert "repair by hand" in capsys.readouterr().err
+    assert copy.exists()
+
+    update_apply_contract.emergency_path(apply_repo).write_text("not json {")
+    assert update_self.main(finish_restore) == 1
+    assert copy.exists()
+
+
 def test_finish_restore_refuses_while_an_apply_is_in_flight(
     apply_repo: Path, capsys
 ) -> None:

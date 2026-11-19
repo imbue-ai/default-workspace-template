@@ -795,7 +795,7 @@ def write_emergency(
     reason: str,
     dri_agent: str,
     now: Callable[[], float],
-    unrestored: Sequence[SnapshotRecord] = (),
+    unrestored: Sequence[SnapshotRecord] | None = None,
 ) -> None:
     """Record that a rollback left the workspace unhealthy, atomically.
 
@@ -808,7 +808,9 @@ def write_emergency(
 
     ``unrestored`` are the pre-apply copies a boot-time rollback could not put
     back, each with the path it belongs at: the marker that named those paths
-    is gone, and ``finish-restore`` puts them back from this record.
+    is gone, and ``finish-restore`` puts them back from this record. ``None``
+    (every other emergency) leaves the field out, so a record that never had
+    such a list is not read as one whose copies are all back.
 
     Best-effort: this runs on the way out of a failure that has already been
     written to stderr in full, so a filesystem that will not take the record
@@ -818,21 +820,17 @@ def write_emergency(
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         scratch = path.with_suffix(".json.tmp")
-        scratch.write_text(
-            json.dumps(
-                {
-                    "reason": reason,
-                    "recorded_at": now(),
-                    "dri_agent": dri_agent,
-                    "snapshots_dir": str(snapshots_root(repo_root)),
-                    "unrestored": [
-                        {"name": s.name, "source": s.source, "copy": s.copy}
-                        for s in unrestored
-                    ],
-                },
-                indent=2,
-            )
-        )
+        record: dict[str, object] = {
+            "reason": reason,
+            "recorded_at": now(),
+            "dri_agent": dri_agent,
+            "snapshots_dir": str(snapshots_root(repo_root)),
+        }
+        if unrestored is not None:
+            record["unrestored"] = [
+                {"name": s.name, "source": s.source, "copy": s.copy} for s in unrestored
+            ]
+        scratch.write_text(json.dumps(record, indent=2))
         scratch.replace(path)
     except OSError as exc:
         sys.stderr.write(
@@ -856,11 +854,12 @@ def read_emergency(repo_root: Path) -> dict[str, object] | None:
     return raw
 
 
-def unrestored_snapshots(record: Mapping[str, object]) -> list[SnapshotRecord]:
-    """The copies an emergency record names as not put back; empty for a record that names none."""
+def unrestored_snapshots(record: Mapping[str, object]) -> list[SnapshotRecord] | None:
+    """The copies an emergency record names as not put back, or ``None`` for a record that
+    keeps no such list (anything but a boot-time partial restore)."""
     entries = record.get("unrestored")
     if not isinstance(entries, list):
-        return []
+        return None
     return [
         SnapshotRecord(
             name=str(e["name"]), source=str(e["source"]), copy=str(e["copy"])

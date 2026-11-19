@@ -138,7 +138,8 @@ belong in tested code rather than agent prose:
     Put back the pre-apply copies a boot-time ``recover`` could not, from the
     list the emergency record keeps (the marker that named them is gone). Run
     once what stopped the restore is fixed. Exit codes: 0 every copy is back,
-    or none is recorded / 1 refused while an apply is in flight / 3 some still
+    or no emergency is recorded / 1 nothing done: an apply is in flight, or the
+    record is unreadable or keeps no such list (repair by hand) / 3 some still
     would not restore. The record stays until the workspace is confirmed
     healthy.
 
