@@ -190,7 +190,7 @@ handle_errors 5xx {
 ```
 
 A registered service whose backend caddy cannot reach (the moment between the app stopping and the parker binding, or between the parker releasing and the app binding) then shows the gateway's not-responding page instead of a bare error status.
-It is a path of its own, apart from the loading page for an origin caddy has no route for yet, because the gateway counts how long each address has gone unanswered, across every visitor: the page reloads every 3 seconds for the first minute, then stops on "This page isn't responding right now" with a Try again button (for an app the shell does not start on demand, "The workspace owner may need to restart it"), and the minute starts over after 30 seconds with no such request.
+It is a path of its own, apart from the loading page for an origin caddy has no route for yet, so the gateway can tell the two apart and word each. The gateway counts how long each address has gone unanswered, across every visitor: the page reloads every 3 seconds for the first minute, then stops on "This page isn't responding right now" with a Try again button (for an app the shell does not start on demand, "The workspace owner may need to restart it"), and the minute starts over after 30 seconds with no such request.
 The parker's own 503 is a backend answer, not a caddy error, and passes through as it does locally.
 The visitor's next request wakes the app through the parker exactly as the owner's does, so a shared app is stoppable too.
 
