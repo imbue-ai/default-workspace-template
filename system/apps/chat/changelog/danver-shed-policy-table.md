@@ -1,0 +1,1 @@
+A chat left untouched for eight hours is now the first thing shed under memory pressure, ahead of a browser tab: the band the prioritizer writes for it rises in one line from the fresh band to the top of the scale, where it used to stop at 800 after a day. The schedule lives in `oom_priority.bands`; in the chat app only the prioritizer's tests and docstring changed.
