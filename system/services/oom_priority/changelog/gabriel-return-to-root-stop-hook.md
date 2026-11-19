@@ -1,1 +1,0 @@
-The revival-notice SessionStart hook finds the shed ledger from `CLAUDE_PROJECT_DIR` before the folder it runs in, and hands that location to its Python half. Claude Code runs hooks in whatever folder the agent last `cd`ed to, so a session resumed with its shell in a subfolder could miss the notice when neither `OOM_PRIORITY_RUNTIME_DIR` nor `MNGR_AGENT_WORK_DIR` was set.

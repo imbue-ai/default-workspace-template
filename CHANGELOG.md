@@ -6,6 +6,39 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 
 ## [Unreleased]
 
+### Added
+
+- Added: A paste of at least 4,000 characters or 80 lines into the chat composer becomes a `pasted-text-N.txt` attachment, stored in the chat's own folder, with "Paste as text" to undo it.
+- Added: A message holding dictated words carries a `<dictation-note>` telling the model that parts may be misheard; the chat's bubbles, notifications and titles leave it out.
+- Added: The template has a root `CHANGELOG.md` and `UNABRIDGED_CHANGELOG.md`, with one `## [minds-v<version>] - <date>` section per release; update-self's what's new shows the target's sections newer than the workspace's release, plus `[Unreleased]`.
+
+### Changed
+
+- Changed: Dictation's mic shows whether the speech model must load first, shows the load with a progress label, and starts dictating when it ends; a loaded model is shared across the workspace's pages.
+- Changed: `workspace_voice`'s `Dictation` no longer loads the speech model (its `loading` state and `onProgress` are gone); the new `speechModel.ts` (`getSpeechModels()`) manages loads, and `probeEngineDownload` says whether the model is already on the device.
+- Changed: Dictation on a phone or tablet runs Moonshine Tiny on WebAssembly instead of Moonshine Base, and holds the screen wake lock (granted with `uses_microphone`) so the screen stays on.
+- Changed: Clicking or scrolling a background window reaches its page directly and raises it in the same press (touch screens still raise first), and a window comes forward whenever focus lands in its page.
+- Changed: A window pulled out into its own Imbue Studio window no longer leaves a ghost on the desktop; its taskbar entry offers "Show" and "Bring back to desktop", and `is_ghost_hidden` now only says the placement is minimized.
+- Changed: Switching a chat to another provider is faster, as the old agent stops while the new one is created. The switch reports its progress on one line in the conversation, and the chat reads as the new agent once the switch has landed.
+- Changed: Deleting or renaming a chat updates the chat list and window title at once.
+- Changed: Files and Routines are declared system apps (`system = true`).
+- Changed: `AGENTS.md` tells chats to reply before the background test gate finishes, and to run long commands in the background and carry on with other work.
+- Changed: Claude hooks name their scripts from `${CLAUDE_PROJECT_DIR}` rather than the shell's current folder.
+- Changed: The `datalib` skill installs datalib v0.55.0, which drops qmd for datalib's own search index, adds Cowork tasks and a Baby Connect source, and lets a person mute problem rows.
+
+### Removed
+
+- Removed: The Claude Stop hook that made the agent `cd` back to the repo root before ending its turn.
+- Removed: Imbue Studio notifications when the memory guard stops a program; the tray's resource card still lists the stopped programs.
+
+### Fixed
+
+- Fixed: Claude chats show the progress updates Claude 5 models write between tool calls, which were dropped as thinking and sometimes held the turn's reply.
+- Fixed: Committing an input-method (IME) composition with Enter no longer sends a half-composed message or saves a half-typed name; `workspace_ui` exports `isHandledByInputMethod`.
+- Fixed: Automatic chat titles longer than 40 characters are no longer thrown away, leaving "Chat N"; the model is asked for a shorter title, and a long one is cut at a word.
+- Fixed: Hovering the floating chat avatar shows "Chat" instead of the open chat's name.
+- Fixed: The oom_priority revival notice is no longer missed when a session resumes with its shell in a subfolder.
+
 ## [minds-v0.10.5] - 2026-11-17
 
 This release carries two fixes. `build-app` no longer gives a new app port 8091, the Screen's video server port, and an update moves an existing app off 8090 or 8091. Installing frontend dependencies on Linux x64 no longer fails when onnxruntime-node's CUDA download answers 404.
