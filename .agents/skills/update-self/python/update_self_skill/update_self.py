@@ -140,9 +140,8 @@ belong in tested code rather than agent prose:
     once what stopped the restore is fixed. Exit codes: 0 every copy is back,
     or no emergency is recorded / 1 nothing done: an apply is in flight or a
     later one kept its rollback point, or the record is unreadable or keeps no
-    such list (repair by hand) / 3 some still
-    would not restore. The record stays until the workspace is confirmed
-    healthy.
+    such list (repair by hand) / 3 some still would not restore. The record
+    stays until the workspace is confirmed healthy.
 
 Impact analysis -- which services and skills depend on a changed file -- is
 deliberately NOT scripted here: it requires open-ended exploration (imports,
