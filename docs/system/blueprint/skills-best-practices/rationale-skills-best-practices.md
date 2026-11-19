@@ -93,17 +93,13 @@ The link-direction rule, the one-reader rule and the checks that enforce them ar
 
 | Rule | Rests on |
 |---|---|
-| SKILL.md body at most 500 lines | Anthropic, Academy, agentskills.io, Claude Code skills, skill-creator. The validator already had it. |
-| SKILL.md at most 14,000 bytes | 5,000 tokens, the budget in the first observation below, at the measured 2.82 bytes per token. agentskills.io and skill-lint also say about 5,000 tokens. 14 KB was chosen over 20 KB and over no byte cap (2026-11-09). |
-
-The guide gives two observations as the reason for both limits. They are not rules.
-
-- **A compaction keeps only the start of a skill.** Claude Code skills: after a compaction it keeps "the first 5,000 tokens" of each invoked skill, 25,000 combined, and does not re-read the file. Claude Code compaction: of the files a session merely read or edited it re-reads up to five, most recently modified first, and one over 5,000 tokens comes back as a path only, so a reference may not come back at all.
-- **An agent reads a long file in portions and may stop early.** Not from a published source. It was raised in review of #1108: the limit is not only about compaction, it is also so an agent reads the whole file. The validator's failure text states that goal and leaves the compaction mechanism to the guide.
+| SKILL.md body at most 500 lines | The published limit: Anthropic, Academy, agentskills.io, Claude Code skills, skill-creator. The validator already had it. Behind it, the observation that an agent reads a long file in portions and may stop early, so only a short file is read whole. That one has no published source; it was raised in review of #1108, where the point was that the limit is not only about compaction. |
+| SKILL.md at most 14,000 bytes | The observation that a compaction keeps only the start of a skill. Claude Code skills: it keeps "the first 5,000 tokens" of each invoked skill, 25,000 combined, and does not re-read the file. Claude Code compaction: of the files a session merely read or edited it re-reads up to five, most recently modified first, and one over 5,000 tokens comes back as a path only, so moving detail to a reference does not protect it. agentskills.io and skill-lint also say about 5,000 tokens. At the measured 2.82 bytes per token that is 14 KB, chosen over 20 KB and over no byte cap (2026-11-09). |
 
 The byte figure is measured: `count_tokens` over 111 markdown files gave 2.82 bytes per token with a 5% spread, so a 500-line skill here is about 10,000 tokens, twice the budget.
 Bytes were chosen as the unit because they were the steadiest proxy: tokens per word spread 11.5% and tokens per line 17%, and words times 1.35 was low by 1.8 times for this prose.
 The docs do not say which tokenizer the 5,000 is counted on; on the older one the budget is about 18.7 KB.
+The validator's failure text states the goal, that an agent reads and keeps the whole file, and leaves the compaction mechanism to the guide.
 
 A reference has no size limit. That was decided against: the contents-list rule and the review category cover references.
 
