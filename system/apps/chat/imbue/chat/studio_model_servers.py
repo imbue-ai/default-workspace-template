@@ -80,7 +80,7 @@ def _to_described_models(entries: Any) -> tuple[LocalModel, ...] | None:
     try:
         return tuple(LocalModel.model_validate(entry) for entry in entries)
     except ValidationError as e:
-        logger.debug("Imbue Studio described a server's models in a form this workspace cannot read: {}", e)
+        logger.warning("Imbue Studio described a server's models in a form this workspace cannot read: {}", e)
         return None
 
 
@@ -93,7 +93,7 @@ def _to_server(entry: Any) -> LocalModelServer | None:
         )
         return None
     model_ids = tuple(model for model in models if isinstance(model, str))
-    described = _to_described_models(entry.get("described_models"))
+    described = _to_described_models(fields.get("described_models"))
     return LocalModelServer(
         base_url=f"http://127.0.0.1:{port}/v1",
         name=name,
