@@ -2431,6 +2431,25 @@ def recover(
     return 3
 
 
+def _report_still_unrestored(
+    repo_root: Path, remaining: Sequence[SnapshotRecord]
+) -> None:
+    """Name what finish-restore still could not put back: a kept copy waits for another run,
+    and one whose copy is gone has to be rebuilt."""
+    gone = sorted(s.name for s in remaining if not Path(s.copy).exists())
+    kept = sorted(s.name for s in remaining if s.name not in gone)
+    if kept:
+        sys.stderr.write(
+            f"still could not restore: {', '.join(kept)}; the copies stay at "
+            f"{snapshots_root(repo_root)}, and the emergency record still names them.\n"
+        )
+    if gone:
+        sys.stderr.write(
+            f"no copy is left of: {', '.join(gone)}, so another run cannot put it "
+            "back; rebuild it instead.\n"
+        )
+
+
 def finish_restore(repo_root: Path) -> int:
     """Put back the pre-apply copies a boot-time rollback could not, from the emergency record.
 
@@ -2500,18 +2519,7 @@ def finish_restore(repo_root: Path) -> int:
     remaining = [s for s in snapshots if s.name in failed]
     write_emergency_record(repo_root, dataclasses.replace(record, unrestored=remaining))
     if remaining:
-        gone = sorted(s.name for s in remaining if not Path(s.copy).exists())
-        kept = sorted(s.name for s in remaining if s.name not in gone)
-        if kept:
-            sys.stderr.write(
-                f"still could not restore: {', '.join(kept)}; the copies stay at "
-                f"{snapshots_root(repo_root)}, and the emergency record still names them.\n"
-            )
-        if gone:
-            sys.stderr.write(
-                f"no copy is left of: {', '.join(gone)}, so another run cannot put it "
-                "back; rebuild it instead.\n"
-            )
+        _report_still_unrestored(repo_root, remaining)
         return 3
     discard_snapshots(repo_root)
     sys.stderr.write(
