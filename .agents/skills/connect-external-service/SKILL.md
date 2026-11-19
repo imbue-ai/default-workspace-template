@@ -44,29 +44,22 @@ explanation, try the row, and move to the next one when it actually fails.
 
 ## When the user asks for a service's MCP
 
-When the user asks for a service's MCP by name ("connect to my Figma MCP") and
-`latchkey services list` names a service for that product that is not itself
-its MCP server (`figma` is one; `notion-mcp` is Notion's MCP server, so it is
-plainly row 1 and there is nothing to ask), ask before connecting anything:
+If `latchkey services list` has its own non-MCP service for it (`figma`, not
+`notion-mcp`), ask and end the turn:
 
 > "Figma has an MCP, but I can also set up a more direct connection that might
 > work better. Is it okay if I use that instead?"
 
-End the turn after asking. If they agree, take row 1. If they would rather
-have the MCP, take row 2, whose test still applies. The user named a
-mechanism, so switching to another without asking would ignore what they
-said, while the connection latchkey already knows is usually the more reliable
-one: some MCP servers accept sign-ins only from a short list of approved apps
-and refuse Imbue Studio's (Figma's is one).
+Yes means row 1, no means row 2. Some MCP servers, Figma's among them, refuse
+Imbue Studio's sign-in.
 
 ## Rules that apply to every row
 
 - **Decide, then explain.** Pick the first workable row and tell the user which
   and why in plain terms. At the one fork that is genuinely their preference
   (registering an OAuth app for row 5 versus driving the browser for row 6),
-  default to the browser and mention the OAuth alternative in one line. The one
-  question you do ask is the one above, for a user who asked for a service's
-  MCP when latchkey already knows the service.
+  default to the browser and mention the OAuth alternative in one line. The MCP
+  question above is the other exception.
 - **A credential value never enters a command, a file you write, or your prose.**
   Rows 1 to 4 keep the value in Imbue Studio's credential store and inject it
   at the gateway. Row 5 takes a key through the **secret card**: you run
@@ -99,5 +92,4 @@ and refuse Imbue Studio's (Figma's is one).
   you land on, and prefer official endpoints to bot-only ones.
 - **Never discuss the mechanism unless asked.** "Your connected Slack account",
   "a key you paste into the card", "a browser you can watch" are the user's
-  terms; latchkey, MCP, gateways, and env files are not. A user who said "MCP"
-  first can hear it back.
+  terms; latchkey, MCP, gateways, and env files are not.
