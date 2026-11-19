@@ -1,0 +1,3 @@
+A refused chat rename, delete or New chat from the chat list now says why in one dialog over the list, in place of the browser alert. It gives a fixed line saying what did not happen with the chat app's reason under it (for example `"Beta" was not renamed to "Alpha".` and `A chat named 'Alpha' already exists; pick another name`), or says the workspace didn't answer, so it isn't known whether it happened. Rename again reopens the name field on what you typed; Try again repeats the delete.
+
+Before, a refused rename showed its reason only as a tooltip on a red-ringed field, and showed nothing at all when another chat's name field was open. A notice that comes while a chat's name is being typed now waits until that field closes, so it never interrupts the typing.

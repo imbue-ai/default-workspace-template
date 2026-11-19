@@ -2987,6 +2987,9 @@ def _expect_window_title_to_follow_a_refused_rename(page: Page, row: Locator, ti
     expect(page).to_have_title("Typed name")
     _refuse_held_verb(page, held, "the name is taken")
     expect(page).to_have_title(title)
+    notice = page.locator(".modal-card")
+    expect(notice).to_contain_text(f'"{title}" was not renamed to "Typed name".')
+    expect(notice).to_contain_text("the name is taken")
 
 
 @pytest.mark.timeout(60, func_only=False)
@@ -3019,12 +3022,12 @@ def test_deleting_the_last_chat_empties_the_list_at_once_and_a_refusal_brings_th
 ) -> None:
     """The last chat leaves the list and the selection the moment its delete is confirmed, and no new chat is asked
     for while the delete is on its way, since the chat could yet come back. A refusal puts it back on screen and says
-    why."""
+    why in a notice rather than a browser alert."""
     dialogs: list[str] = []
     awaiting_requests: list[str] = []
 
     def record_and_accept(dialog: Dialog) -> None:
-        dialogs.append(dialog.message)
+        dialogs.append(dialog.type)
         dialog.accept()
 
     page.on("dialog", record_and_accept)
@@ -3049,7 +3052,10 @@ def test_deleting_the_last_chat_empties_the_list_at_once_and_a_refusal_brings_th
     expect(rows).to_have_count(1)
     expect(page.locator(".chat-root-empty")).to_have_count(0)
     assert _selection_of(page.url) == FIXTURE_AGENT_ID
-    assert "mngr failed" in dialogs[-1]
+    notice = page.locator(".modal-card")
+    expect(notice).to_contain_text("Couldn't delete the chat")
+    expect(notice).to_contain_text("mngr failed")
+    assert dialogs == ["confirm"]
     assert awaiting_requests == []
 
 
