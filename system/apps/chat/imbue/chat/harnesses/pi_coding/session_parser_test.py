@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.pi_coding.session_parser import parse_record
 from imbue.chat.harnesses.pi_coding.session_parser import parse_record_detail
@@ -220,6 +222,18 @@ def test_a_local_model_turn_that_ends_with_no_answer_and_no_action_says_so() -> 
     assert event["has_thinking"] is True
     assert event["is_api_error"] is False
     assert event["is_auth_error"] is False
+
+
+@pytest.mark.parametrize("blank", ["\n\n", "   ", "\n \t"])
+def test_a_local_model_reply_of_only_whitespace_is_no_answer_either(blank: str) -> None:
+    """The page draws nothing for whitespace-only text, so such a reply shows as empty like one with no text."""
+    message = _reply_with_only_thinking("local-model")
+    message["content"] = [
+        {"type": "thinking", "thinking": "I should use the build-app tool."},
+        {"type": "text", "text": blank},
+    ]
+    event = parse_record(_message_record("m", message))[0]
+    assert event["text"].startswith("The model stopped without answering.")
 
 
 def test_a_local_model_turn_that_calls_a_tool_keeps_its_empty_text() -> None:

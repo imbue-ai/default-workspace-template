@@ -172,7 +172,8 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
     is_local_model_empty_reply = (
         message.get("provider") == LOCAL_MODEL_PROVIDER_ID
         and message.get("stopReason") == "stop"
-        and not text
+        # The page draws nothing for whitespace-only text, so that is no answer either.
+        and not text.strip()
         and not tool_calls
     )
     if is_local_model_empty_reply:
