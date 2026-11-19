@@ -156,10 +156,14 @@ def _auth_headers(api_key: str) -> dict[str, str]:
 
 def list_models(client: httpx.Client, base_url: str, api_key: str) -> tuple[str, ...]:
     """The model ids the server at ``base_url`` lists."""
+    # httpx builds the request a redirect leads to even though it does not follow it, and for a Location it
+    # cannot build one from it raises an InvalidURL, which is not an HTTPError.
     try:
         response = client.get(f"{base_url}/models", headers=_auth_headers(api_key), timeout=_PROBE_TIMEOUT_SECONDS)
     except httpx.HTTPError as e:
         raise LocalModelError(f"No server answered at {base_url}.") from e
+    except httpx.InvalidURL as e:
+        raise LocalModelError(f"The server at {base_url} did not answer like an OpenAI-compatible server.") from e
     if response.status_code in (401, 403):
         raise LocalModelError(f"The server at {base_url} refused the request. Check its API key.")
     if response.status_code != 200:

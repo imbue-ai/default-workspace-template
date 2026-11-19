@@ -130,6 +130,7 @@ def test_the_key_is_sent_as_a_bearer_token() -> None:
         (httpx.Response(500, text="boom"), "500"),
         (httpx.Response(200, text="<html>not json</html>"), "OpenAI-compatible"),
         (httpx.Response(200, json={"models": []}), "OpenAI-compatible"),
+        (httpx.Response(302, headers={"Location": "about:blank"}), "OpenAI-compatible"),
     ],
 )
 def test_an_answer_that_is_not_a_model_list_says_why(response: httpx.Response, fragment: str) -> None:
@@ -162,6 +163,17 @@ def test_discovery_offers_a_port_once_and_prefers_the_workspace_s_own_loopback()
 
     assert server.name == "LM Studio"
     assert server.base_url == "http://127.0.0.1:1234/v1"
+
+
+def test_discovery_passes_over_a_port_that_holds_some_other_web_server() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.port == 8080:
+            return httpx.Response(302, headers={"Location": "about:blank"})
+        if request.url.host == "127.0.0.1" and request.url.port == 11434:
+            return httpx.Response(200, json={"data": [{"id": "qwen2.5:7b"}]})
+        raise httpx.ConnectError("connection refused", request=request)
+
+    assert [server.name for server in discover_servers(_client(handle))] == ["Ollama"]
 
 
 def test_discovery_with_nothing_running_finds_nothing() -> None:
