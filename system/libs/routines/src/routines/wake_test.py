@@ -163,6 +163,16 @@ def test_a_stopped_agent_is_a_failed_run(chat_app: ScriptedChatApp, clock: FakeC
     assert outcome.summary == "The agent stopped before it finished."
 
 
+def test_an_agent_whose_process_died_mid_turn_is_a_failed_run_not_a_timeout(
+    chat_app: ScriptedChatApp, clock: FakeClock
+) -> None:
+    chat_app.script("agent-1", (ChatStatusWord.IDLE, ChatStatusWord.WORKING, ChatStatusWord.INTERRUPTED), None)
+    outcome, _, _ = _wake(chat_app, clock, "agent-1", timeout=timedelta(hours=2))
+    assert outcome.outcome is RunOutcome.FAILED
+    assert outcome.summary == "The agent stopped before it finished."
+    assert sum(clock.pauses) < 600, "the run ends when the agent stops, not at its deadline"
+
+
 def test_an_agent_waiting_on_the_user_is_reported_once_and_the_run_can_still_succeed(
     chat_app: ScriptedChatApp, clock: FakeClock
 ) -> None:
