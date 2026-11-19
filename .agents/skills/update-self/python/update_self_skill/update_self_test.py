@@ -7562,23 +7562,28 @@ def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
     ]
 
 
+def _finish_restore(apply_repo: Path) -> int:
+    return update_self.main(["finish-restore", "--repo-root", str(apply_repo)])
+
+
+def _unrestored_names(apply_repo: Path) -> list[str]:
+    return [entry["name"] for entry in _read_emergency(apply_repo)["unrestored"]]
+
+
 def test_finish_restore_puts_back_what_a_boot_rollback_could_not_once_the_cause_is_fixed(
     apply_repo: Path, capsys
 ) -> None:
     code, copy = _recover_over_an_unrestorable_bundle(apply_repo)
     assert code == 3
     destination = apply_repo / "blocked" / "static"
-    finish_restore = ["finish-restore", "--repo-root", str(apply_repo)]
 
     # The cause is still there: the copy stays, and so does its entry in the record.
-    assert update_self.main(finish_restore) == 3
+    assert _finish_restore(apply_repo) == 3
     assert (copy / "index.html").exists()
-    assert [entry["name"] for entry in _read_emergency(apply_repo)["unrestored"]] == [
-        "bundle"
-    ]
+    assert _unrestored_names(apply_repo) == ["bundle"]
 
     (apply_repo / "blocked").unlink()
-    assert update_self.main(finish_restore) == 0
+    assert _finish_restore(apply_repo) == 0
 
     assert (destination / "index.html").read_text() == "the pre-apply bundle"
     assert not update_apply_contract.snapshots_root(apply_repo).exists()
@@ -7597,14 +7602,12 @@ def test_finish_restore_names_a_copy_that_is_gone_as_one_to_rebuild(
     shutil.rmtree(copy)
     capsys.readouterr()
 
-    assert update_self.main(["finish-restore", "--repo-root", str(apply_repo)]) == 3
+    assert _finish_restore(apply_repo) == 3
 
     err = capsys.readouterr().err
     assert "no copy is left of: bundle" in err
     assert "the copies stay at" not in err
-    assert [entry["name"] for entry in _read_emergency(apply_repo)["unrestored"]] == [
-        "bundle"
-    ]
+    assert _unrestored_names(apply_repo) == ["bundle"]
 
 
 def test_finish_restore_leaves_a_record_without_an_unrestored_list_to_a_hand_repair(
@@ -7620,15 +7623,14 @@ def test_finish_restore_leaves_a_record_without_an_unrestored_list_to_a_hand_rep
         "the-lead",
         time.time,
     )
-    finish_restore = ["finish-restore", "--repo-root", str(apply_repo)]
 
     assert "unrestored" not in _read_emergency(apply_repo)
-    assert update_self.main(finish_restore) == 1
+    assert _finish_restore(apply_repo) == 1
     assert "repair by hand" in capsys.readouterr().err
     assert copy.exists()
 
     update_apply_contract.emergency_path(apply_repo).write_text("not json {")
-    assert update_self.main(finish_restore) == 1
+    assert _finish_restore(apply_repo) == 1
     assert copy.exists()
 
     # A list it cannot read whole is no list: restoring the readable entries and discarding
@@ -7647,7 +7649,7 @@ def test_finish_restore_leaves_a_record_without_an_unrestored_list_to_a_hand_rep
             }
         )
     )
-    assert update_self.main(finish_restore) == 1
+    assert _finish_restore(apply_repo) == 1
     assert copy.exists()
     assert not (apply_repo / "static").exists()
 
@@ -7691,15 +7693,13 @@ def test_finish_restore_refuses_once_a_later_apply_holds_the_copy_paths(
     (apply_repo / "blocked").unlink()
     later_apply(apply_repo)
 
-    code = update_self.main(["finish-restore", "--repo-root", str(apply_repo)])
+    code = _finish_restore(apply_repo)
 
     assert code == 1
     assert refusal in capsys.readouterr().err
     assert (copy / "index.html").exists()
     assert not (apply_repo / "blocked").exists()
-    assert [entry["name"] for entry in _read_emergency(apply_repo)["unrestored"]] == [
-        "bundle"
-    ]
+    assert _unrestored_names(apply_repo) == ["bundle"]
 
 
 def test_recover_reaches_the_same_end_state_as_the_in_process_rollback(
