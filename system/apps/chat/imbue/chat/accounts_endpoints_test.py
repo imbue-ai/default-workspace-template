@@ -9,11 +9,8 @@ about the WIRE -- the key sets and the status codes -- which is the part nothing
 from __future__ import annotations
 
 import json
-import threading
 from collections.abc import Generator
 from contextlib import contextmanager
-from http.server import BaseHTTPRequestHandler
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import httpx
@@ -482,58 +479,49 @@ def test_an_api_key_account_signs_in_again_with_a_key() -> None:
 # a local model server
 
 
-class _ModelListHandler(BaseHTTPRequestHandler):
-    """A model server that lists one model, the way an OpenAI-compatible one does."""
-
-    def do_GET(self) -> None:
-        body = json.dumps({"object": "list", "data": [{"id": "qwen2.5:7b"}]}).encode()
-        self.send_response(200 if self.path == "/v1/models" else 404)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, format: str, *args: object) -> None:
-        return
+_MODEL_SERVER_ADDRESS = "box.lan:9000"
 
 
-@contextmanager
-def _model_server() -> Generator[str, None, None]:
-    """A model server on a loopback port of its own, yielding its address."""
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _ModelListHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"127.0.0.1:{server.server_address[1]}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
+def _network_with_one_model_server() -> httpx.Client:
+    """A network on which one model server answers, at ``_MODEL_SERVER_ADDRESS``, listing one model the way
+    an OpenAI-compatible server does; every other address refuses the connection."""
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.netloc.decode() != _MODEL_SERVER_ADDRESS:
+            raise httpx.ConnectError("connection refused", request=request)
+        if request.url.path != "/v1/models":
+            return httpx.Response(404, json={})
+        return httpx.Response(200, json={"object": "list", "data": [{"id": "qwen2.5:7b"}]})
+
+    return httpx.Client(transport=httpx.MockTransport(answer))
 
 
 def test_a_named_model_server_answers_with_every_key_the_form_reads() -> None:
-    with _model_server() as address, _client() as client:
-        response = client.post("/api/local-model-servers", json={"base_url": address})
+    with _client_for(build_test_state(http_client=_network_with_one_model_server())) as client:
+        response = client.post("/api/local-model-servers", json={"base_url": _MODEL_SERVER_ADDRESS})
 
     assert response.status_code == 200
     body = response.get_json()
     assert set(body) == {"servers", "studio_link", "default_context_window", "min_context_window"}
     assert body["servers"] == [
-        {"base_url": f"http://{address}/v1", "name": address, "models": ["qwen2.5:7b"], "studio_port": None}
+        {
+            "base_url": f"http://{_MODEL_SERVER_ADDRESS}/v1",
+            "name": _MODEL_SERVER_ADDRESS,
+            "models": ["qwen2.5:7b"],
+            "studio_port": None,
+        }
     ]
     assert body["studio_link"] == "UNAVAILABLE"
     assert body["min_context_window"] <= body["default_context_window"]
 
 
 def test_a_model_server_that_does_not_answer_is_a_400_with_the_reason() -> None:
-    with _model_server() as address:
-        pass
-    with _client() as client:
-        unanswered = client.post("/api/local-model-servers", json={"base_url": address})
+    with _client_for(build_test_state(http_client=_network_with_one_model_server())) as client:
+        unanswered = client.post("/api/local-model-servers", json={"base_url": "elsewhere.lan:9000"})
         malformed = client.post("/api/local-model-servers", json={"base_url": "ftp://nope"})
 
     assert unanswered.status_code == 400
-    assert address in unanswered.get_json()["detail"]
+    assert "elsewhere.lan:9000" in unanswered.get_json()["detail"]
     assert malformed.status_code == 400
 
 
