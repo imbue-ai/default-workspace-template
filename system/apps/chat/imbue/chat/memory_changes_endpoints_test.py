@@ -1,4 +1,5 @@
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from agent_memory.changes import ChangeLog
@@ -9,6 +10,9 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from imbue.chat import memory_changes_endpoints
+
+_CHAT_ID = f"chat-{uuid4().hex}"
+_OTHER_CHAT_ID = f"chat-{uuid4().hex}"
 
 
 @pytest.fixture
@@ -32,7 +36,7 @@ def client() -> FlaskClient:
 
 
 def _record(log: ChangeLog, session_id: str, tool_use_id: str, tool_input: object) -> list[MemoryChange]:
-    return log.record_tool_call(session_id, tool_use_id, tool_input, chat_id="chat-1", agent_name="Chat-1")
+    return log.record_tool_call(session_id, tool_use_id, tool_input, chat_id=_CHAT_ID, agent_name="Chat-1")
 
 
 def _add_note(log: ChangeLog, chat_id: str, session_id: str, name: str) -> MemoryChange:
@@ -47,9 +51,9 @@ def _add_note(log: ChangeLog, chat_id: str, session_id: str, name: str) -> Memor
 def test_a_chat_lists_only_its_own_changes_with_the_tool_calls_that_made_them(
     log: ChangeLog, client: FlaskClient
 ) -> None:
-    mine = _add_note(log, "chat-1", "s1", "tea.md")
-    _add_note(log, "chat-2", "s2", "coffee.md")
-    body = client.get("/api/chats/chat-1/memory-changes").get_json()
+    mine = _add_note(log, _CHAT_ID, "s1", "tea.md")
+    _add_note(log, _OTHER_CHAT_ID, "s2", "coffee.md")
+    body = client.get(f"/api/chats/{_CHAT_ID}/memory-changes").get_json()
     assert [change["id"] for change in body["changes"]] == [mine.id]
     [change] = body["changes"]
     assert change["summary"] == 'added the note "Tea"'
@@ -60,7 +64,7 @@ def test_a_chat_lists_only_its_own_changes_with_the_tool_calls_that_made_them(
 
 
 def test_undo_removes_the_added_note_and_marks_the_change_undone(log: ChangeLog, client: FlaskClient) -> None:
-    change = _add_note(log, "chat-1", "s1", "tea.md")
+    change = _add_note(log, _CHAT_ID, "s1", "tea.md")
     response = client.post(f"/api/memory-changes/{change.id}/undo", json={})
     assert response.status_code == 200
     assert response.get_json()["undone_at"] is not None
@@ -68,7 +72,7 @@ def test_undo_removes_the_added_note_and_marks_the_change_undone(log: ChangeLog,
 
 
 def test_undo_over_a_later_edit_is_refused_until_forced(log: ChangeLog, client: FlaskClient) -> None:
-    change = _add_note(log, "chat-1", "s1", "tea.md")
+    change = _add_note(log, _CHAT_ID, "s1", "tea.md")
     (log.memory_dir / "tea.md").write_text("edited later")
     refused = client.post(f"/api/memory-changes/{change.id}/undo", json={})
     assert refused.status_code == 409
@@ -79,7 +83,7 @@ def test_undo_over_a_later_edit_is_refused_until_forced(log: ChangeLog, client: 
 
 
 def test_one_change_reads_back_by_id(log: ChangeLog, client: FlaskClient) -> None:
-    change = _add_note(log, "chat-1", "s1", "tea.md")
+    change = _add_note(log, _CHAT_ID, "s1", "tea.md")
     assert client.get(f"/api/memory-changes/{change.id}").get_json()["summary"] == 'added the note "Tea"'
 
 
@@ -151,7 +155,7 @@ def test_undo_over_a_later_edit_of_the_note_s_index_line_is_a_409(log: ChangeLog
 
 
 def test_a_change_s_times_read_as_iso_8601(log: ChangeLog, client: FlaskClient) -> None:
-    change = _add_note(log, "chat-1", "s1", "tea.md")
+    change = _add_note(log, _CHAT_ID, "s1", "tea.md")
     body = client.get(f"/api/memory-changes/{change.id}").get_json()
     assert body["time"].startswith(change.time.strftime("%Y-%m-%dT%H:%M:%S"))
     assert body["undone_at"] is None

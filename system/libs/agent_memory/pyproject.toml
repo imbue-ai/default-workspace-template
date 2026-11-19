@@ -9,6 +9,7 @@ dependencies = [
     "chat-background-tasks",
     # notes.py only: the notes' YAML frontmatter and the models the Memory app serves.
     "imbue-common",
+    "loguru>=0.7",
     "pydantic>=2.0",
     "pyyaml>=6.0",
 ]

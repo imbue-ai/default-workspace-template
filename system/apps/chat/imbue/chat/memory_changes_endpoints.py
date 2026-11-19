@@ -24,12 +24,14 @@ from agent_memory.changes import ChangeNotFoundError
 from agent_memory.changes import ChangedFile
 from agent_memory.changes import ChangedSinceError
 from agent_memory.changes import INDEX_FILE_NAME
-from agent_memory.changes import MemoryChange as MemoryChangeRecord
+from agent_memory.changes import MemoryChange
 from agent_memory.changes import NOTE_SUFFIX
+from agent_memory.changes import changed_since_detail
 from agent_memory.changes import default_log
 from agent_memory.changes import note_title
 from agent_memory.notes import index_titles
 from agent_memory.notes import readable_text
+from agent_memory.primitives import MemoryChangeId
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_origin_label
 from app_manifest.registry_location import registry_path
@@ -43,6 +45,7 @@ from chat_background_tasks.markers import own_repo_root
 from flask import Flask
 from flask import Response
 from loguru import logger as _loguru_logger
+from pydantic import AnyUrl
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -55,7 +58,7 @@ _INDEX_LABEL: Final = "Your index (the list of notes I read at the start of ever
 _NOT_FOUND_DETAIL: Final = "That memory change is not in the record."
 
 
-class ChangedMemoryFile(FrozenModel):
+class ChatMemoryChangedFile(FrozenModel):
     """One file a memory change touched, as saved and as a person reads it."""
 
     name: str = Field(description="The file's name in the memory folder")
@@ -67,34 +70,34 @@ class ChangedMemoryFile(FrozenModel):
     )
     after_text: str | None = Field(description="The text after, read the same way")
     note_id: str = Field(description="The note's id in the Memory app (its file's stem), or empty for the index")
-    details_url: str | None = Field(
+    details_url: AnyUrl | None = Field(
         description="Where the Memory app shows this note in full, or null (the index, a deleted note)"
     )
 
 
-class MemoryChange(FrozenModel):
+class ChatMemoryChange(FrozenModel):
     """What one agent turn changed in one note (with its index line), or in the index's other lines, undone as one."""
 
-    id: str = Field(description="The change's id")
+    id: MemoryChangeId = Field(description="The change's id")
     time: datetime = Field(description="When the turn first changed memory (ISO 8601, UTC)")
     summary: str = Field(description="What changed, in one line, e.g. 'added the note \"Tea\" and its index line'")
     chat_id: str = Field(description="The chat whose agent made it")
     tool_use_ids: tuple[str, ...] = Field(
         description="The tool calls that made it, in order; the card sits at the last"
     )
-    files: tuple[ChangedMemoryFile, ...] = Field(
+    files: tuple[ChatMemoryChangedFile, ...] = Field(
         description="Every file it changed; for the index, only this change's own lines (the whole index in a record from before changes were split per note)"
     )
     undone_at: datetime | None = Field(description="When it was undone, or null")
-    details_url: str | None = Field(
+    details_url: AnyUrl | None = Field(
         description="Where the Memory app shows the change's (first) note in full, or the app itself"
     )
 
 
-class MemoryChangesListing(FrozenModel):
+class ChatMemoryChangesListing(FrozenModel):
     """A chat's memory changes, oldest first."""
 
-    changes: tuple[MemoryChange, ...] = Field(description="The changes")
+    changes: tuple[ChatMemoryChange, ...] = Field(description="The changes")
 
 
 class UndoMemoryChangeBody(FrozenModel):
@@ -136,11 +139,11 @@ def _file_label(item: ChangedFile, title: str) -> str:
     return f"Changed note: {title}"
 
 
-def _file_model(item: ChangedFile, title_by_file: Mapping[str, str], app_url: str | None) -> ChangedMemoryFile:
+def _file_model(item: ChangedFile, title_by_file: Mapping[str, str], app_url: str | None) -> ChatMemoryChangedFile:
     is_index = item.name == INDEX_FILE_NAME
     note_id = "" if is_index else _note_id(item.name)
     is_linked = app_url is not None and bool(note_id) and item.after is not None
-    return ChangedMemoryFile(
+    return ChatMemoryChangedFile(
         name=item.name,
         before=item.before,
         after=item.after,
@@ -148,7 +151,7 @@ def _file_model(item: ChangedFile, title_by_file: Mapping[str, str], app_url: st
         before_text=readable_text(item.name, item.before),
         after_text=readable_text(item.name, item.after),
         note_id=note_id,
-        details_url=f"{app_url}?note={note_id}" if is_linked else None,
+        details_url=AnyUrl(f"{app_url}?note={note_id}") if is_linked else None,
     )
 
 
@@ -160,35 +163,39 @@ def _index_titles_of(files: Sequence[ChangedFile]) -> dict[str, str]:
     return {**index_titles(index.before), **index_titles(index.after)}
 
 
-def _model(change: MemoryChangeRecord, memory_dir: Path, app_url: str | None) -> MemoryChange:
+def _model(change: MemoryChange, memory_dir: Path, app_url: str | None) -> ChatMemoryChange:
     title_by_file = _index_titles_of(change.files)
     file_models = tuple(_file_model(item, title_by_file, app_url) for item in change.files)
     # A record of one note's index line alone still opens that note, when it is still there.
     is_note_linked = app_url is not None and change.note is not None and (memory_dir / change.note).is_file()
     note_url = f"{app_url}?note={_note_id(change.note)}" if is_note_linked and change.note is not None else None
-    return MemoryChange(
-        id=change.id,
+    fallback_url = note_url or app_url
+    return ChatMemoryChange(
+        id=MemoryChangeId(change.id),
         time=change.time,
         summary=change.summary,
         chat_id=change.chat_id,
         tool_use_ids=change.tool_use_ids,
         files=file_models,
         undone_at=change.undone_at,
-        details_url=next((item.details_url for item in file_models if item.details_url), note_url or app_url),
+        details_url=next(
+            (item.details_url for item in file_models if item.details_url),
+            AnyUrl(fallback_url) if fallback_url else None,
+        ),
     )
 
 
-def list_changes(chat_id: str) -> Response:
+def list_chat_memory_changes(chat_id: str) -> Response:
     """The memory changes this chat's agent made, oldest first, each with the text before and after."""
     log = _log()
     app_url = _memory_app_url()
     changes = tuple(
         _model(change, log.memory_dir, app_url) for change in log.list_changes() if change.chat_id == chat_id
     )
-    return model_response(MemoryChangesListing(changes=changes))
+    return model_response(ChatMemoryChangesListing(changes=changes))
 
 
-def get_change(change_id: str) -> Response:
+def get_chat_memory_change(change_id: str) -> Response:
     """One memory change, with the text before and after: what its card in the chat shows."""
     log = _log()
     try:
@@ -198,12 +205,7 @@ def get_change(change_id: str) -> Response:
     return model_response(_model(change, log.memory_dir, _memory_app_url()))
 
 
-def _changed_since_detail(error: ChangedSinceError) -> str:
-    names = ", ".join("the index" if name == INDEX_FILE_NAME else name for name in error.names)
-    return f"Changed again since: {names}. Undoing now would also lose those later edits."
-
-
-def undo_change(change_id: str) -> Response:
+def undo_chat_memory_change(change_id: str) -> Response:
     """Undo a memory change: put every file it touched back as it was before.
 
     Refused with 409 when one of those files was changed again since, unless ``is_forced``.
@@ -215,21 +217,25 @@ def undo_change(change_id: str) -> Response:
     except ChangeNotFoundError:
         return _error_response(_NOT_FOUND_DETAIL, 404)
     except ChangedSinceError as e:
-        return _error_response(_changed_since_detail(e), 409)
+        return _error_response(changed_since_detail(e), 409)
     return model_response(_model(change, log.memory_dir, _memory_app_url()))
 
 
 ROUTE_TABLE: Final[RouteTable] = {
-    ("GET", "/api/chats/{chat_id}/memory-changes"): RouteModels(response_model=MemoryChangesListing),
-    ("GET", "/api/memory-changes/{change_id}"): RouteModels(response_model=MemoryChange),
+    ("GET", "/api/chats/{chat_id}/memory-changes"): RouteModels(response_model=ChatMemoryChangesListing),
+    ("GET", "/api/memory-changes/{change_id}"): RouteModels(response_model=ChatMemoryChange),
     ("POST", "/api/memory-changes/{change_id}/undo"): RouteModels(
-        request_model=UndoMemoryChangeBody, response_model=MemoryChange
+        request_model=UndoMemoryChangeBody, response_model=ChatMemoryChange
     ),
 }
 
 
 def register_routes(application: Flask) -> None:
     """Wire the memory-change routes onto the Flask application."""
-    application.add_url_rule("/api/chats/<chat_id>/memory-changes", view_func=list_changes, methods=["GET"])
-    application.add_url_rule("/api/memory-changes/<change_id>", view_func=get_change, methods=["GET"])
-    application.add_url_rule("/api/memory-changes/<change_id>/undo", view_func=undo_change, methods=["POST"])
+    application.add_url_rule(
+        "/api/chats/<chat_id>/memory-changes", view_func=list_chat_memory_changes, methods=["GET"]
+    )
+    application.add_url_rule("/api/memory-changes/<change_id>", view_func=get_chat_memory_change, methods=["GET"])
+    application.add_url_rule(
+        "/api/memory-changes/<change_id>/undo", view_func=undo_chat_memory_change, methods=["POST"]
+    )

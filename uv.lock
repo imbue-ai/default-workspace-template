@@ -86,6 +86,7 @@ source = { editable = "system/libs/agent_memory" }
 dependencies = [
     { name = "chat-background-tasks" },
     { name = "imbue-common" },
+    { name = "loguru" },
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
@@ -99,6 +100,7 @@ dev = [
 requires-dist = [
     { name = "chat-background-tasks", editable = "system/libs/chat_background_tasks" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=c4737c308cb9dc7fc6cb8207c1dcdee76bfccf75" },
+    { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]
@@ -2586,6 +2588,7 @@ version = "0.1.0"
 source = { editable = "system/apps/memory" }
 dependencies = [
     { name = "agent-memory" },
+    { name = "app-manifest" },
     { name = "app-schema" },
     { name = "flask" },
     { name = "imbue-common" },
@@ -2608,6 +2611,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "agent-memory", editable = "system/libs/agent_memory" },
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "flask", specifier = ">=3.0" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=c4737c308cb9dc7fc6cb8207c1dcdee76bfccf75" },

@@ -119,11 +119,19 @@ def main(
     stdin: IO[str] | None = None,
     stdout: IO[str] | None = None,
 ) -> int:
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
     resolved_environ = os.environ if environ is None else environ
     resolved_stdin = sys.stdin if stdin is None else stdin
-    if args.command == "sync":
-        return cmd_sync(resolved_stdin, resolved_environ)
-    return cmd_post(
-        resolved_stdin, sys.stdout if stdout is None else stdout, resolved_environ
-    )
+    match args.command:
+        case "sync":
+            return cmd_sync(resolved_stdin, resolved_environ)
+        case "post":
+            return cmd_post(
+                resolved_stdin,
+                sys.stdout if stdout is None else stdout,
+                resolved_environ,
+            )
+        case _:
+            # argparse already refuses any other command; this keeps the match exhaustive.
+            parser.error(f"unknown command: {args.command}")

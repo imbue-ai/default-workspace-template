@@ -33,6 +33,12 @@ On disk, under the chat app's data (``data/.apps/chat/memory_changes/``):
 Both are bounded: a session's bookkeeping goes once the session has not started a turn for
 ``STALE_SESSION_DAYS`` (its next turn, if it ever has one, writes it afresh), and only the
 newest ``MAX_CHANGE_RECORDS`` change records are kept.
+
+Being stdlib-only is why this module departs from the style guide in three places: its records
+are ``NamedTuple``s rather than frozen pydantic models, it logs through stdlib ``logging`` rather
+than loguru, and it reads JSON with explicit checks rather than pydantic validation. The
+pydantic models the apps serve wrap these records (``notes.py``, the chat's and the Memory app's
+endpoints).
 """
 
 import difflib
@@ -71,7 +77,7 @@ POINTER_LINE_START: Final = re.compile(
 # The key of the index-only record: index lines that point at no note.
 _INDEX_ONLY: Final = ""
 # How a change record marks an index part holding only its own lines, on disk.
-LINES_PART: Final = "lines"
+_LINES_PART: Final = "lines"
 # A change id: when it was made (so ids sort by time), then a random part.
 _CHANGE_ID_TIME_FORMAT: Final = "%Y%m%dT%H%M%S%f"
 _TIMESPEC: Final = "seconds"
@@ -84,9 +90,9 @@ _SAFE_NAME_EXTRA_CHARS: Final = frozenset("-_")
 # What Claude's hook tells the agent after a tool call changed memory. It lands in the agent's
 # transcript as the hook's additional context, which is where the chat reads it back to draw
 # the change's card: format and parse live together here so the two never drift.
-AGENT_NOTE_PREFIX: Final = "MEMORY CHANGED"
+_AGENT_NOTE_PREFIX: Final = "MEMORY CHANGED"
 _AGENT_NOTE_RE: Final = re.compile(
-    rf"^{AGENT_NOTE_PREFIX} \((?P<id>[A-Za-z0-9_-]+)\): so far this reply you (?P<summary>.+?)\. The chat shows"
+    rf"^{_AGENT_NOTE_PREFIX} \((?P<id>[A-Za-z0-9_-]+)\): so far this reply you (?P<summary>.+?)\. The chat shows"
 )
 
 
@@ -110,6 +116,16 @@ class ChangedSinceError(AgentMemoryError, ValueError):
         super().__init__(", ".join(names))
 
 
+def changed_since_detail(error: ChangedSinceError) -> str:
+    """The sentence an app answers a refused Undo with: which files were changed again since."""
+    names = ", ".join(
+        "the index" if name == INDEX_FILE_NAME else name for name in error.names
+    )
+    return (
+        f"Changed again since: {names}. Undoing now would also lose those later edits."
+    )
+
+
 class AgentNote(NamedTuple):
     """One change a hook's note to the agent names, and the note's line itself."""
 
@@ -120,7 +136,7 @@ class AgentNote(NamedTuple):
 
 def format_agent_note(change_id: str, summary: str) -> str:
     return (
-        f"{AGENT_NOTE_PREFIX} ({change_id}): so far this reply you {summary}. The chat shows "
+        f"{_AGENT_NOTE_PREFIX} ({change_id}): so far this reply you {summary}. The chat shows "
         "the user this as one card with the changed lines and an Undo button, so mention it in one "
         "short line; do not repeat the text."
     )
@@ -176,7 +192,7 @@ class ChangedFile(NamedTuple):
     def to_json(self) -> dict[str, Any]:
         data: dict[str, Any] = {"name": self.name}
         if self.is_index_lines:
-            data["part"] = LINES_PART
+            data["part"] = _LINES_PART
         data["before"] = self.before
         data["after"] = self.after
         return data
@@ -200,7 +216,7 @@ class ChangedFile(NamedTuple):
             name=name,
             before=before if isinstance(before, str) else None,
             after=after if isinstance(after, str) else None,
-            is_index_lines=fields.get("part") == LINES_PART,
+            is_index_lines=fields.get("part") == _LINES_PART,
         )
 
 
@@ -309,16 +325,22 @@ def _read_json(path: Path) -> dict[str, object] | None:
     except FileNotFoundError:
         return None
     except OSError as error:
-        logger.warning("Cannot read the memory change file %s: %s", path, error)
+        logger.warning(
+            "Skipped the memory change file %s that cannot be read: %s", path, error
+        )
         return None
     try:
         value = json.loads(text)
     except ValueError as error:
-        logger.warning("The memory change file %s is not JSON: %s", path, error)
+        logger.warning(
+            "Skipped the memory change file %s that is not JSON: %s", path, error
+        )
         return None
     fields = json_object(value)
     if fields is None:
-        logger.warning("The memory change file %s does not hold an object", path)
+        logger.warning(
+            "Skipped the memory change file %s that does not hold an object", path
+        )
     return fields
 
 
@@ -330,7 +352,7 @@ def _read_snapshot(path: Path) -> dict[str, str] | None:
     return {name: text for name, text in fields.items() if isinstance(text, str)}
 
 
-def diff_snapshots(
+def _diff_snapshots(
     before: Mapping[str, str], after: Mapping[str, str]
 ) -> list[ChangedFile]:
     """Every file whose text differs, with its text before and after (``None``: absent)."""
@@ -346,7 +368,7 @@ def diff_snapshots(
     ]
 
 
-def merge_files(
+def _merge_files(
     earlier: Sequence[ChangedFile], later: Sequence[ChangedFile]
 ) -> tuple[ChangedFile, ...]:
     """One turn's changes as a whole: each file's text before the first change and after the last.
@@ -378,7 +400,7 @@ def _joined(lines: Sequence[str]) -> str | None:
     return "\n".join(lines) if lines else None
 
 
-def index_lines_by_key(text: str | None) -> dict[str, list[str]]:
+def _index_lines_by_key(text: str | None) -> dict[str, list[str]]:
     """The index's lines grouped by the note each belongs to (the index-only key for the rest)."""
     grouped: dict[str, list[str]] = {}
     for line in _lines(text):
@@ -425,7 +447,7 @@ def replace_key_lines(
     return _joined(rewritten)
 
 
-def split_by_note(files: Sequence[ChangedFile]) -> dict[str, list[ChangedFile]]:
+def _split_by_note(files: Sequence[ChangedFile]) -> dict[str, list[ChangedFile]]:
     """One tool call's file changes, as each record's part: a note's file and its index lines
     under the note's file name, the rest of the index under the index-only key."""
     parts: dict[str, list[ChangedFile]] = {}
@@ -433,8 +455,8 @@ def split_by_note(files: Sequence[ChangedFile]) -> dict[str, list[ChangedFile]]:
         if item.name != INDEX_FILE_NAME:
             parts.setdefault(item.name, []).append(item)
             continue
-        before = index_lines_by_key(item.before)
-        after = index_lines_by_key(item.after)
+        before = _index_lines_by_key(item.before)
+        after = _index_lines_by_key(item.after)
         for key in sorted(set(before) | set(after)):
             if before.get(key, []) != after.get(key, []):
                 parts.setdefault(key, []).append(
@@ -498,7 +520,7 @@ def describe(files: Sequence[ChangedFile], note: str | None) -> str:
 def _holds_now(current: Mapping[str, str], item: ChangedFile, key: str) -> bool:
     """Whether the folder still holds what ``item`` left there (for an index part, its lines)."""
     if item.is_index_lines:
-        return index_lines_by_key(current.get(item.name)).get(key, []) == _lines(
+        return _index_lines_by_key(current.get(item.name)).get(key, []) == _lines(
             item.after
         )
     return current.get(item.name) == item.after
@@ -513,7 +535,7 @@ def _restored_text(
         return item.before
     now = current.get(item.name)
     return replace_key_lines(
-        now, key, index_lines_by_key(now).get(key, []), _lines(item.before)
+        now, key, _index_lines_by_key(now).get(key, []), _lines(item.before)
     )
 
 
@@ -600,7 +622,7 @@ class ChangeLog:
         just ahead of an edit the user made, e.g. in the Memory app), so no chat's agent is
         charged with it, even one in the middle of a turn."""
         self._move_baselines_past(
-            diff_snapshots(before, self.snapshot()), except_session=None
+            _diff_snapshots(before, self.snapshot()), except_session=None
         )
 
     def start_turn(self, session_id: str) -> None:
@@ -670,13 +692,13 @@ class ChangeLog:
         _write_json(self._baseline_path(session_id), current)
         if before is None:
             return []
-        files = diff_snapshots(before, current)
+        files = _diff_snapshots(before, current)
         if not files:
             return []
         self._move_baselines_past(files, except_session=session_id)
         record_ids = self._turn_record_ids(session_id)
         touched: list[MemoryChange] = []
-        for key, part in split_by_note(files).items():
+        for key, part in _split_by_note(files).items():
             change = self._fold(
                 key=key,
                 part=part,
@@ -714,7 +736,7 @@ class ChangeLog:
                 bool(tool_use_id) and tool_use_id not in existing.tool_use_ids
             )
             unsummarized = existing._replace(
-                files=merge_files(existing.files, part),
+                files=_merge_files(existing.files, part),
                 tool_use_ids=(*existing.tool_use_ids, tool_use_id)
                 if is_new_tool_call
                 else existing.tool_use_ids,
@@ -762,7 +784,9 @@ class ChangeLog:
             return None
         change = MemoryChange.from_json(raw)
         if change is None:
-            logger.warning("The memory change record %s is not well-formed", path)
+            logger.warning(
+                "Skipped the memory change record %s that is not well-formed", path
+            )
         return change
 
     def list_changes(self) -> list[MemoryChange]:

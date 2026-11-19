@@ -16,7 +16,6 @@ and a note that changed underneath since is refused rather than overwritten.
 
 import hashlib
 import itertools
-import logging
 import os
 import re
 import tempfile
@@ -24,12 +23,15 @@ import threading
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from enum import StrEnum
+from enum import auto
 from pathlib import Path
 from typing import Any, Final
 
 import yaml
+from imbue.imbue_common.enums import LowerCaseStrEnum, UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.pure import pure
+from loguru import logger
 from pydantic import Field
 
 from agent_memory.changes import (
@@ -39,24 +41,25 @@ from agent_memory.changes import (
     AgentMemoryError,
     note_title,
 )
-
-logger = logging.getLogger(__name__)
+from agent_memory.primitives import NoteId, NoteVersion
 
 # Files in the folder that are not notes.
-NON_NOTE_FILE_NAMES: Final = frozenset({INDEX_FILE_NAME, "README.md"})
-LOOSE_ID_PREFIX: Final = "index-"
+_NON_NOTE_FILE_NAMES: Final = frozenset({INDEX_FILE_NAME, "README.md"})
+_LOOSE_ID_PREFIX: Final = "index-"
 
 
-class NoteKind(StrEnum):
-    """What a note is about, as its frontmatter's ``metadata.type`` names it."""
+class NoteKind(LowerCaseStrEnum):
+    """What a note is about, as its frontmatter's ``metadata.type`` names it.
 
-    USER = "user"
-    FEEDBACK = "feedback"
-    PROJECT = "project"
-    REFERENCE = "reference"
+    Lowercase, unlike the codebase's other enums: the values are Claude Code's own on-disk
+    ``metadata.type`` words, which the files and the editor share as they are.
+    """
 
+    USER = auto()
+    FEEDBACK = auto()
+    PROJECT = auto()
+    REFERENCE = auto()
 
-NOTE_KINDS: Final[tuple[str, ...]] = tuple(kind.value for kind in NoteKind)
 
 _POINTER_LINE: Final = re.compile(
     POINTER_LINE_START.pattern + r"\s*(?:[—–-]+\s*(?P<hook>.*))?$"
@@ -88,7 +91,7 @@ INDEX_LINE_LIMIT: Final = 150
 class Note(FrozenModel):
     """One remembered note, as the editor shows it."""
 
-    id: str = Field(
+    id: NoteId = Field(
         description="Stable id: the note's name, or 'index-<hash>' for a note written straight into the index"
     )
     name: str = Field(
@@ -101,6 +104,7 @@ class Note(FrozenModel):
     summary: str = Field(
         description="The one-line summary the agent reads to judge relevance"
     )
+    # Plain text, not NoteKind: a file may name a kind of its own, and the editor shows it as it is.
     kind: str = Field(
         description="One of user, feedback, project, reference (or whatever the file says)"
     )
@@ -117,7 +121,7 @@ class Note(FrozenModel):
     raw: str = Field(
         description="The note exactly as saved: the file's text, or the index line"
     )
-    version: str = Field(
+    version: NoteVersion = Field(
         description="A hash of the saved text; changes name it so a note edited elsewhere is not overwritten"
     )
     is_index_only: bool = Field(
@@ -125,22 +129,22 @@ class Note(FrozenModel):
     )
 
 
-class IndexEntryKind(StrEnum):
+class IndexEntryKind(UpperCaseStrEnum):
     """What one line of the index is."""
 
-    HEADING = "heading"
-    NOTE = "note"
-    MISSING = "missing"
-    LOOSE = "loose"
-    TEXT = "text"
+    HEADING = auto()
+    NOTE = auto()
+    MISSING = auto()
+    LOOSE = auto()
+    TEXT = auto()
 
 
 class IndexEntry(FrozenModel):
     """One line of the index, as the navigation mirrors it."""
 
     kind: IndexEntryKind = Field(
-        description="heading; note (points at a note file); missing (points at a file that does not exist); "
-        "loose (a note written straight into the index); text (any other line)"
+        description="HEADING; NOTE (points at a note file); MISSING (points at a file that does not exist); "
+        "LOOSE (a note written straight into the index); TEXT (any other line)"
     )
     text: str = Field(
         description="What the line shows: the heading, the note's title, or the line's text"
@@ -172,11 +176,11 @@ class IndexOutline(FrozenModel):
     entries: tuple[IndexEntry, ...] = Field(
         description="The index's non-blank lines, in order"
     )
-    unlisted_note_ids: tuple[str, ...] = Field(
+    unlisted_note_ids: tuple[NoteId, ...] = Field(
         description="Notes with a file but no line in the index"
     )
     raw: str = Field(description="The index exactly as saved")
-    exists: bool = Field(description="Whether the index file exists")
+    is_present: bool = Field(description="Whether the index file exists")
 
 
 class NoteDraft(FrozenModel):
@@ -202,15 +206,18 @@ class InvalidNoteError(AgentMemoryError, ValueError):
     """The submitted note cannot be saved as it is."""
 
 
-def text_version(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()[:_VERSION_LENGTH]
+@pure
+def _text_version(text: str) -> NoteVersion:
+    return NoteVersion(hashlib.sha256(text.encode()).hexdigest()[:_VERSION_LENGTH])
 
 
-def slugify(title: str) -> str:
+@pure
+def _slugify(title: str) -> str:
     slug = _SLUG_JUNK.sub("-", title.lower()).strip("-")
     return "-".join(slug.split("-")[:_MAX_SLUG_WORDS]) or _DEFAULT_SLUG
 
 
+@pure
 def _section_end(start: re.Match[str], other: re.Match[str] | None, text: str) -> int:
     """Where the section opened by ``start`` ends: at ``other``'s marker when that comes after it."""
     if other is not None and other.start() > start.start():
@@ -218,7 +225,8 @@ def _section_end(start: re.Match[str], other: re.Match[str] | None, text: str) -
     return len(text)
 
 
-def split_body(text: str) -> tuple[str, str, str]:
+@pure
+def _split_body(text: str) -> tuple[str, str, str]:
     """A note's text after the frontmatter as (body, why, how)."""
     why_match = _WHY_MARKER.search(text)
     how_match = _HOW_MARKER.search(text)
@@ -239,7 +247,8 @@ def split_body(text: str) -> tuple[str, str, str]:
     return text[:body_end].strip(), why, how
 
 
-def join_body(body: str, why: str, how: str) -> str:
+@pure
+def _join_body(body: str, why: str, how: str) -> str:
     text = body.strip()
     reasons = [
         f"{label} {value.strip()}"
@@ -250,7 +259,8 @@ def join_body(body: str, why: str, how: str) -> str:
     return "\n\n".join(parts) + "\n"
 
 
-def one_line(text: str) -> str:
+@pure
+def _one_line(text: str) -> str:
     return " ".join(text.split())
 
 
@@ -262,13 +272,16 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     try:
         loaded = yaml.safe_load(match["yaml"])
     except yaml.YAMLError as error:
-        logger.warning("A memory note's frontmatter is not valid YAML: %s", error)
+        logger.warning(
+            "Skipped a memory note's frontmatter that is not valid YAML: {}", error
+        )
         return {}, text
     if not isinstance(loaded, dict):
         return {}, text
     return loaded, text[match.end() :]
 
 
+@pure
 def _readable_index_line(line: str) -> str:
     pointer = _POINTER_LINE.match(line)
     if pointer is not None:
@@ -297,8 +310,8 @@ def readable_text(file_name: str, text: str | None) -> str | None:
             _readable_index_line(line) for line in text.splitlines()
         ).strip()
     frontmatter, rest = _parse_frontmatter(text)
-    body, why, how = split_body(rest)
-    description = one_line(str(frontmatter.get("description") or ""))
+    body, why, how = _split_body(rest)
+    description = _one_line(str(frontmatter.get("description") or ""))
     parts = (
         f"Summary: {description}" if description else "",
         body,
@@ -308,6 +321,7 @@ def readable_text(file_name: str, text: str | None) -> str | None:
     return "\n\n".join(part for part in parts if part)
 
 
+@pure
 def index_titles(index_text: str | None) -> dict[str, str]:
     """The title the index gives each note file it points at, by file name."""
     title_by_file: dict[str, str] = {}
@@ -344,6 +358,11 @@ def _write_atomically(path: Path, text: str) -> None:
 
 
 def _check_draft(draft: NoteDraft) -> None:
+    """Refuse a draft the editor cannot save, in the sentence the editor shows.
+
+    Not pydantic validators on ``NoteDraft``: the shared request parser reports a failed field as
+    "field 'title': Value error, ...", and the editor shows these sentences to the person as they are.
+    """
     if not draft.title.strip():
         raise InvalidNoteError("Give the note a title.")
     # A bracket would end the index line's link text early, so the line would no longer point at the note.
@@ -357,11 +376,13 @@ def _check_draft(draft: NoteDraft) -> None:
         raise InvalidNoteError("Write what should be remembered.")
 
 
+@pure
 def pointer_line(title: str, file_name: str, summary: str) -> str:
     """The index line pointing at a note: ``- [Title](file.md) — summary``."""
-    return f"- [{one_line(title)}]({file_name}) — {one_line(summary)}"
+    return f"- [{_one_line(title)}]({file_name}) — {_one_line(summary)}"
 
 
+@pure
 def _link_rewriter(old_name: str, new_name: str) -> Callable[[str], str]:
     """A function rewriting every ``[[old_name]]`` link in a text to ``[[new_name]]``."""
     if not old_name:
@@ -370,6 +391,7 @@ def _link_rewriter(old_name: str, new_name: str) -> Callable[[str], str]:
     return lambda text: old_link.sub(f"[[{new_name}]]", text)
 
 
+@pure
 def _set_pointer(
     lines: Sequence[str], file_name: str, pointer: str | None
 ) -> list[str]:
@@ -389,6 +411,7 @@ def _set_pointer(
     return updated
 
 
+@pure
 def _without_first(lines: Sequence[str], removed_line: str) -> list[str]:
     """``lines`` without the first one that reads ``removed_line``."""
     if removed_line not in lines:
@@ -417,31 +440,35 @@ def _file_text(
     frontmatter = {
         **kept,
         "name": name,
-        "description": one_line(draft.summary),
+        "description": _one_line(draft.summary),
         "metadata": metadata,
     }
     header = yaml.safe_dump(
         frontmatter, sort_keys=False, allow_unicode=True, width=_YAML_LINE_WIDTH
     ).strip()
-    return f"---\n{header}\n---\n\n{join_body(draft.body, draft.why, draft.how)}"
+    return f"---\n{header}\n---\n\n{_join_body(draft.body, draft.why, draft.how)}"
 
 
+@pure
 def _note_kind(frontmatter: Mapping[str, Any]) -> str:
     metadata = frontmatter.get("metadata")
     kind = str(metadata.get("type", "")) if isinstance(metadata, dict) else ""
     return kind or str(frontmatter.get("type") or _DEFAULT_KIND)
 
 
+@pure
 def _links(text: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(link.strip() for link in _LINK.findall(text)))
 
 
+@pure
 def _loose_title(text: str) -> str:
     if len(text) <= _MAX_LOOSE_TITLE_LENGTH:
         return text
     return text[: _MAX_LOOSE_TITLE_LENGTH - len(_ELLIPSIS)].rstrip() + _ELLIPSIS
 
 
+@pure
 def _loose_note(line: str) -> Note | None:
     """The note a line written straight into the index stands for, or None for any other line."""
     if _POINTER_LINE.match(line):
@@ -451,22 +478,23 @@ def _loose_note(line: str) -> Note | None:
         return None
     text = match["text"].strip()
     return Note(
-        id=LOOSE_ID_PREFIX + text_version(line),
+        id=NoteId(_LOOSE_ID_PREFIX + _text_version(line)),
         name="",
         file_name="",
         title=_loose_title(text),
-        summary=one_line(text),
+        summary=_one_line(text),
         kind=_DEFAULT_KIND,
         body=text,
         why="",
         how="",
         links=_links(text),
         raw=line,
-        version=text_version(line),
+        version=_text_version(line),
         is_index_only=True,
     )
 
 
+@pure
 def _index_entry(
     line: str,
     number: int,
@@ -555,7 +583,7 @@ class NoteStore:
         return sorted(
             path
             for path in self.folder.glob(f"*{NOTE_SUFFIX}")
-            if path.is_file() and path.name not in NON_NOTE_FILE_NAMES
+            if path.is_file() and path.name not in _NON_NOTE_FILE_NAMES
         )
 
     def list_notes(self) -> list[Note]:
@@ -582,7 +610,7 @@ class NoteStore:
         ordered = sorted([*file_notes, *loose_notes], key=lambda pair: pair[0])
         return [note for _, note in ordered]
 
-    def outline(self, notes: list[Note]) -> IndexOutline:
+    def outline(self, notes: Sequence[Note]) -> IndexOutline:
         """The index line by line, each line resolved against ``notes`` (as ``list_notes`` returned them)."""
         raw = self.index_path.read_text() if self.index_path.is_file() else ""
         note_by_file = {note.file_name: note for note in notes if note.file_name}
@@ -604,27 +632,27 @@ class NoteStore:
             entries=entries,
             unlisted_note_ids=unlisted,
             raw=raw,
-            exists=self.index_path.is_file(),
+            is_present=self.index_path.is_file(),
         )
 
     def _read_file_note(self, path: Path, index_title: str) -> Note:
         text = path.read_text()
         frontmatter, rest = _parse_frontmatter(text)
         name = str(frontmatter.get("name") or path.stem)
-        body, why, how = split_body(rest)
+        body, why, how = _split_body(rest)
         return Note(
-            id=path.stem,
+            id=NoteId(path.stem),
             name=name,
             file_name=path.name,
             title=index_title or note_title(name),
-            summary=one_line(str(frontmatter.get("description") or "")),
+            summary=_one_line(str(frontmatter.get("description") or "")),
             kind=_note_kind(frontmatter),
             body=body,
             why=why,
             how=how,
             links=_links(rest),
             raw=text,
-            version=text_version(text),
+            version=_text_version(text),
             is_index_only=False,
         )
 
@@ -638,7 +666,7 @@ class NoteStore:
 
     def _unused_name(self, title: str, own_stem: str) -> str:
         """A link name for ``title`` no other note file uses (``own_stem``, the note being renamed, may keep its own)."""
-        base = slugify(title)
+        base = _slugify(title)
         taken = {path.stem for path in self._note_files()} - {own_stem}
         candidates = (
             base if suffix == 1 else f"{base}-{suffix}" for suffix in itertools.count(1)
@@ -646,7 +674,7 @@ class NoteStore:
         return next(
             name
             for name in candidates
-            if name not in taken and f"{name}{NOTE_SUFFIX}" not in NON_NOTE_FILE_NAMES
+            if name not in taken and f"{name}{NOTE_SUFFIX}" not in _NON_NOTE_FILE_NAMES
         )
 
     def _write_index(self, lines: Sequence[str]) -> None:
@@ -688,7 +716,7 @@ class NoteStore:
             existing_frontmatter, _ = _parse_frontmatter(note.raw)
             # A new title gives the note the link name it would get as a new note, so its file
             # name keeps reading as its title.
-            if one_line(draft.title) != note.title:
+            if _one_line(draft.title) != note.title:
                 new_name = self._unused_name(draft.title, own_stem=note.id)
                 if new_name != note.id:
                     return self._rename(
@@ -704,8 +732,8 @@ class NoteStore:
                 for line in lines
             )
             is_shown_changed = (
-                one_line(draft.title) != note.title
-                or one_line(draft.summary) != note.summary
+                _one_line(draft.title) != note.title
+                or _one_line(draft.summary) != note.summary
             )
             if not has_pointer or is_shown_changed:
                 pointer = pointer_line(draft.title, note.file_name, draft.summary)
