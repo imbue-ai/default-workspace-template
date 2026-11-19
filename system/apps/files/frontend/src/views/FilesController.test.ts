@@ -164,9 +164,10 @@ describe("a folder that cannot be listed", () => {
 
     root.querySelector<HTMLButtonElement>(".files-empty .report-bug")?.click();
 
+    // The report names the folder, which the window shows rather than says in its sentence.
     expect(connection.reportBug).toHaveBeenCalledWith({
       message: LISTING_FAILED,
-      details: "HTTP 500\nGET /home/: [Errno 5] Input/output error",
+      details: "/home/\nHTTP 500\nGET /home/: [Errno 5] Input/output error",
     });
   });
 
@@ -194,8 +195,8 @@ describe("a folder that cannot be listed", () => {
     expect([ask.textContent, ask.disabled]).toEqual(["Asking an agent…", true]);
     expect(connection.startWithText).not.toHaveBeenCalled();
     const [task, options] = askAgent.mock.calls[0];
-    expect(task).toContain("Couldn't open this folder (/home/).");
-    expect(task).toContain(`HTTP 500\n${LISTING_REASON}`);
+    expect(task).toMatch(/^Imbue Studio showed the user this failure: Couldn't open this folder\./);
+    expect(task).toContain(`/home/\nHTTP 500\n${LISTING_REASON}`);
     expect(options?.showsOutcome).toBe(true);
 
     answer({
@@ -212,7 +213,7 @@ describe("a folder that cannot be listed", () => {
     root.querySelector<HTMLButtonElement>(".files-empty .report-bug")?.click();
     expect(connection.reportBug).toHaveBeenCalledWith({
       message: LISTING_FAILED,
-      details: `HTTP 500\n${LISTING_REASON}\n\nAsking an agent to fix this failed too:\nChat couldn't open that.`,
+      details: `/home/\nHTTP 500\n${LISTING_REASON}\n\nAsking an agent to fix this failed too:\nChat couldn't open that.`,
     });
   });
 
@@ -264,7 +265,7 @@ describe("a folder that cannot be listed", () => {
     root.querySelector<HTMLButtonElement>(".files-empty .report-bug")?.click();
     expect(connection.reportBug).toHaveBeenCalledWith({
       message: LISTING_FAILED,
-      details: `HTTP 500\n${otherReason}`,
+      details: `/home/\nHTTP 500\n${otherReason}`,
     });
   });
 
@@ -301,5 +302,43 @@ describe("a folder that cannot be listed", () => {
       expect(root.querySelector(".files-empty")?.textContent).toContain("You don't have permission to open it."),
     );
     expect(buttonsIn(root, ".files-empty")).toEqual(["Try again"]);
+  });
+});
+
+describe("what your computers share, when it cannot be read", () => {
+  it("offers an agent, then Report a bug, under a failure that asks for one", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.includes("/__files/api/connections")
+          ? new Response(JSON.stringify({ detail: "gateway: [Errno 5] Input/output error" }), { status: 500 })
+          : answered(url),
+      ),
+    );
+    const askAgent = vi.fn(async (_text: string, _options?: StartOptions): Promise<StartOutcome> => ({
+      isOpened: true,
+    }));
+    const connection = { ...framedConnection(), canReportBug: () => true, askAgent };
+    const app = new FilesController(HOME, undefined, connection);
+    app.model.start();
+    const root = mountView(() => m(FilesApp, { app }));
+    const said = "Couldn't read what your computers share. Try again. If this persists, report a bug.";
+
+    await vi.waitFor(() => {
+      m.redraw.sync();
+      expect(root.querySelector(".files-connected-empty")?.textContent).toContain(said);
+    });
+    const buttons = Array.from(root.querySelectorAll(".files-connected-empty button"), (button) => button.textContent);
+    expect(buttons).toEqual(["Ask an agent to fix this", "Report a bug"]);
+
+    root.querySelector<HTMLButtonElement>(".files-connected-empty .ask-agent-to-fix")?.click();
+    const [task] = askAgent.mock.calls[0];
+    expect(task).toMatch(/^Imbue Studio showed the user this failure: Couldn't read what your computers share\./);
+    expect(task).toContain("HTTP 500\ngateway: [Errno 5] Input/output error");
+    root.querySelector<HTMLButtonElement>(".files-connected-empty .report-bug")?.click();
+    expect(connection.reportBug).toHaveBeenCalledWith({
+      message: said,
+      details: "HTTP 500\ngateway: [Errno 5] Input/output error",
+    });
   });
 });

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { StartOutcome } from "@imbue/workspace-ui/src/app_contract";
+import { askAgentFromToasts } from "@imbue/workspace-ui/src/components/toasts";
 
 import { fileEntry, folderEntry, httpFailure, memoryStorage } from "../testing/records";
 import * as server from "./server";
@@ -522,10 +523,16 @@ describe("telling a failed change", () => {
     expect(toast.isLasting).toBe(true);
     expect(toast.actions.map((action) => action.label)).toEqual(["Ask an agent to free up space"]);
     toast.actions[0].run();
+    // The main chat runs it through the assist flow, told as Imbue Studio what the user saw.
     expect(host.startWithText).toHaveBeenCalledWith(
-      expect.stringContaining("out of disk space"),
+      expect.stringMatching(
+        /^\/assist Imbue Studio showed the user this failure: Couldn't create "untitled folder"\. This workspace is out of disk space\.\n\n/,
+      ),
       expect.objectContaining({ showsOutcome: true }),
     );
+    const [task] = vi.mocked(host.startWithText).mock.calls[0];
+    expect(task).toContain("MKCOL: [Errno 28]");
+    expect(task).toContain("tell the user what was wrong");
   });
 
   it("reads Asking an agent… on the free-up-space button until the chat opens, and says why when it could not", async () => {
@@ -552,16 +559,23 @@ describe("telling a failed change", () => {
 
     answers[0]({
       isOpened: false,
-      failure: { message: "The workspace didn't answer.", details: null, isReportable: false },
+      failure: { message: "Chat couldn't open that.", details: "HTTP 400", isReportable: true },
     });
     await Promise.resolve();
     await Promise.resolve();
     expect(freeUpSpace.pending?.isPending()).toBe(false);
-    expect(model.toasts.current().map((toast) => toast.message)).toContain("The workspace didn't answer.");
+    const refused = model.toasts.current().find((toast) => toast.message === "Chat couldn't open that.");
+    // The refused ask asks for a bug report of its own, and offers no agent to fix the asking.
+    expect([refused?.details, refused?.isReportable, refused?.isAgentOffered, refused?.actions]).toEqual([
+      "HTTP 400",
+      true,
+      false,
+      [],
+    ]);
 
     // The shell's real answer, after a restart settled the ask, replaces what was said.
     lateAnswers[0]({ isOpened: true });
-    expect(model.toasts.current().map((toast) => toast.message)).not.toContain("The workspace didn't answer.");
+    expect(model.toasts.current().map((toast) => toast.message)).not.toContain("Chat couldn't open that.");
     expect(host.redraw).toHaveBeenCalled();
   });
 
@@ -598,88 +612,41 @@ describe("telling a failed change", () => {
     expect(toast.details).toBe("HTTP 500\nMOVE /home/b.txt: [Errno 5] Input/output error");
   });
 
-  it("offers to ask an agent to fix a change nothing explained, in the chat about Files, and keeps its toast up", async () => {
+  it("leaves a change nothing explained to the toasts' own agent, which asks the chat about Files as Imbue Studio", async () => {
     const { model, host } = harness();
     vi.mocked(server.movePath).mockRejectedValueOnce(
       httpFailure(500, { detail: "MOVE /home/b.txt: [Errno 5] Input/output error" }),
     );
     await model.moveInto(["/home/b.txt"], "/home/zeta/");
     const [toast] = model.toasts.current();
-    expect(toast.actions.map((action) => [action.label, action.keepsToast])).toEqual([
-      ["Ask an agent to fix this", true],
-    ]);
+    // No button of Files' own: the page's toasts draw "Ask an agent to fix this" on a toast that offers one.
+    expect([toast.isLasting, toast.isReportable, toast.isAgentOffered, toast.actions]).toEqual([true, true, true, []]);
 
-    toast.actions[0].run();
+    await askAgentFromToasts(host)?.({ message: toast.message, details: toast.details });
 
     expect(host.startWithText).not.toHaveBeenCalled();
     expect(host.askAgent).toHaveBeenCalledTimes(1);
-    const [task, options] = vi.mocked(host.askAgent).mock.calls[0];
-    expect(task).toContain('Couldn\'t move "b.txt" into "zeta".');
+    const [task] = vi.mocked(host.askAgent).mock.calls[0];
+    expect(task).toMatch(/^Imbue Studio showed the user this failure: Couldn't move "b\.txt" into "zeta"\./);
     expect(task).toContain("HTTP 500\nMOVE /home/b.txt: [Errno 5] Input/output error");
-    expect(task).not.toContain("report a bug");
-    expect(options?.showsOutcome).toBe(true);
   });
 
-  it("asks an agent once about several items one change failed on, naming each", async () => {
+  it("offers one agent for several items one change failed on, its task naming each", async () => {
     const { model, host } = harness();
     vi.mocked(server.deletePath)
       .mockRejectedValueOnce(httpFailure(500, { detail: "DELETE /home/b.txt: [Errno 5]" }))
       .mockRejectedValueOnce(httpFailure(500, { detail: "DELETE /home/a.png: [Errno 5]" }));
     await model.deleteEntries(["/home/b.txt", "/home/a.png"]);
-    const [toast] = model.toasts.current();
-    expect(toast.actions.map((action) => action.label)).toEqual(["Ask an agent to fix this"]);
+    const toasts = model.toasts.current();
+    expect(toasts.map((toast) => toast.isAgentOffered)).toEqual([true]);
 
-    toast.actions[0].run();
+    await askAgentFromToasts(host)?.({ message: toasts[0].message, details: toasts[0].details });
 
     const [task] = vi.mocked(host.askAgent).mock.calls[0];
-    expect(task).toContain('Couldn\'t delete "b.txt". Couldn\'t delete "a.png".');
+    expect(task).toContain('Couldn\'t delete "b.txt".');
+    expect(task).toContain('Couldn\'t delete "a.png".');
     expect(task).toContain("DELETE /home/b.txt: [Errno 5]");
     expect(task).toContain("DELETE /home/a.png: [Errno 5]");
-  });
-
-  it("reads Asking an agent… on the fix button until the chat opens, and says why when it could not", async () => {
-    const { model, host } = harness();
-    const answers: ((outcome: StartOutcome) => void)[] = [];
-    const lateAnswers: ((outcome: StartOutcome) => void)[] = [];
-    vi.mocked(host.askAgent).mockImplementation((_text, options) => {
-      lateAnswers.push(options?.onLateAnswer ?? (() => undefined));
-      return new Promise((resolve) => answers.push(resolve));
-    });
-    vi.mocked(server.movePath).mockRejectedValueOnce(httpFailure(500, { detail: "MOVE /home/b.txt: [Errno 5]" }));
-    await model.moveInto(["/home/b.txt"], "/home/zeta/");
-    const failed = model.toasts.current()[0];
-    const [fix] = failed.actions;
-
-    fix.run();
-    expect(fix.pending?.isPending()).toBe(true);
-    expect(fix.pending?.label).toBe("Asking an agent…");
-
-    answers[0]({
-      isOpened: false,
-      failure: { message: "Chat couldn't open that.", details: "HTTP 400", isReportable: true },
-    });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(fix.pending?.isPending()).toBe(false);
-    const refused = model.toasts.current().find((toast) => toast.message === "Chat couldn't open that.");
-    // The refused ask asks for a bug report of its own, and offers no agent to fix the asking.
-    expect([refused?.details, refused?.isReportable, refused?.actions]).toEqual(["HTTP 400", true, []]);
-    expect(model.toasts.current()).toContain(failed);
-
-    // The shell's real answer, after a restart settled the ask, replaces what was said.
-    lateAnswers[0]({ isOpened: true });
-    expect(model.toasts.current().map((toast) => toast.message)).toEqual([failed.message]);
-  });
-
-  it("offers no agent for a change nothing explained on a page no shell frames", async () => {
-    const { model, shell } = harness();
-    shell.isFraming = false;
-    vi.mocked(server.movePath).mockRejectedValueOnce(httpFailure(500, { detail: "MOVE /home/b.txt: [Errno 5]" }));
-
-    await model.moveInto(["/home/b.txt"], "/home/zeta/");
-
-    const [toast] = model.toasts.current();
-    expect([toast.isReportable, toast.actions]).toEqual([true, []]);
   });
 
   it.each([
@@ -695,8 +662,7 @@ describe("telling a failed change", () => {
 
     await model.moveInto(["/home/b.txt"], "/home/zeta/");
 
-    const labels = model.toasts.current().flatMap((toast) => toast.actions.map((action) => action.label));
-    expect(labels).not.toContain("Ask an agent to fix this");
+    expect(model.toasts.current().map((toast) => toast.isAgentOffered)).toEqual([false]);
     for (const action of model.toasts.current().flatMap((toast) => toast.actions)) action.run();
     expect(host.askAgent).not.toHaveBeenCalled();
   });

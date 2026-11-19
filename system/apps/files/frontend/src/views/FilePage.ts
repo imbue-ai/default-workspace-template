@@ -11,7 +11,7 @@ import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverToolt
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { createMenu, type Menu } from "@imbue/workspace-ui/src/components/menu";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
+import { Toasts, askAgentFromToasts } from "@imbue/workspace-ui/src/components/toasts";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import { startDownload } from "@imbue/workspace-ui/src/download";
@@ -47,7 +47,6 @@ function loadFailureOf(error: unknown): FilesFailure {
       details: error.failure.details,
       isReportable: false,
       isOutOfSpace: false,
-      agentFix: null,
     };
   }
   return toldFailure(error, "This file couldn't be opened", "open");
@@ -360,6 +359,7 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
           onDismiss: (id: number) => page.toasts.dismiss(id),
           closesPlainToasts: true,
           onReportBug: reportBugAction(page.reporter),
+          onAskAgent: askAgentFromToasts(page.reporter),
           onHold: (id: number) => page.toasts.hold(id),
         }),
         page.dialogs.view(),

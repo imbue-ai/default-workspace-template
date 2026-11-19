@@ -83,9 +83,10 @@ describe("a file whose text could not be loaded", () => {
     expect(failureText(root)).toBe("This file couldn't be opened. Try again. If this persists, report a bug.");
     expect(root.querySelector(".see-details pre")?.textContent).toBe("HTTP 500\nInput/output error");
     (root.querySelector(".report-bug") as HTMLButtonElement).click();
+    // The report names the file, which the page shows in its title rather than says in its sentence.
     expect(page.reporter.reportBug).toHaveBeenCalledWith({
       message: "This file couldn't be opened. Try again. If this persists, report a bug.",
-      details: "HTTP 500\nInput/output error",
+      details: `${PATH}\nHTTP 500\nInput/output error`,
     });
 
     vi.mocked(server.readText).mockResolvedValueOnce("# Notes");
@@ -120,8 +121,8 @@ describe("a file whose text could not be loaded", () => {
 
     expect([ask.textContent, ask.disabled]).toEqual(["Asking an agent…", true]);
     const [task, options] = host.askAgent.mock.calls[0];
-    expect(task).toContain(`This file couldn't be opened (${PATH}).`);
-    expect(task).toContain("HTTP 500\nInput/output error");
+    expect(task).toMatch(/^Imbue Studio showed the user this failure: This file couldn't be opened\./);
+    expect(task).toContain(`${PATH}\nHTTP 500\nInput/output error`);
     expect(options?.showsOutcome).toBe(true);
 
     answer({
@@ -136,8 +137,7 @@ describe("a file whose text could not be loaded", () => {
     (root.querySelector(".report-bug") as HTMLButtonElement).click();
     expect(host.reportBug).toHaveBeenCalledWith({
       message: "This file couldn't be opened. Try again. If this persists, report a bug.",
-      details:
-        "HTTP 500\nInput/output error\n\nAsking an agent to fix this failed too:\nChat couldn't open that.\nHTTP 400\nbad launch",
+      details: `${PATH}\nHTTP 500\nInput/output error\n\nAsking an agent to fix this failed too:\nChat couldn't open that.\nHTTP 400\nbad launch`,
     });
   });
 

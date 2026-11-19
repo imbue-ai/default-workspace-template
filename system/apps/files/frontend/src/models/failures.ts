@@ -3,21 +3,21 @@
  * status and the server's own text behind "See details". The sentence says what failed ("Couldn't move "notes.txt"
  * into "reports"") and then, when the server explained the refusal, why: in Files' own words for the refusals that
  * depend on which folder refused (the server's ``kind``), else in the server's sentence, which names only the cause.
- * A failure whose sentence asks for a bug report leaves a toast that stays, with "See details", "Ask an agent to fix
- * this" under a shell and, where the shell says Imbue Studio opens one when the toast is drawn, "Report a bug"; a full
- * disk leaves one that stays with "Ask an agent to free up space"; any other leaves a plain note, its retry being the
- * control just used, with its details behind "See details" (opening them keeps the note up).
+ * A failure whose sentence asks for a bug report leaves a toast that stays, with "See details" and the remedies the
+ * page's ``Toasts`` draws on a reportable toast ("Ask an agent to fix this" under a shell, then "Report a bug" where the
+ * shell says Imbue Studio opens one); a full disk leaves one that stays with "Ask an agent to free up space"; any other
+ * leaves a plain note, its retry being the control just used, with its details behind "See details" (opening them
+ * keeps the note up).
  */
 
-import { askAgentToFix } from "@imbue/workspace-ui/src/app_contract";
+import { agentFixTask, assistRequest } from "@imbue/workspace-ui/src/app_contract";
 import type {
-  AgentFixRequest,
   ReportedFailure,
   ShellConnection,
   StartOptions,
   StartOutcome,
 } from "@imbue/workspace-ui/src/app_contract";
-import { ASK_AGENT_TO_FIX_LABEL, ASKING_AN_AGENT_LABEL } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { ASKING_AN_AGENT_LABEL } from "@imbue/workspace-ui/src/components/FailureButtons";
 import { failureSentence, type Failure, type FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import type { ToastAction, ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
@@ -33,9 +33,6 @@ export type FailureHost = Pick<
 export interface FilesFailure extends FailureMessage {
   /** The workspace's disk is full, so the toast offers to ask an agent to free up space. */
   readonly isOutOfSpace: boolean;
-  /** What "Ask an agent to fix this" hands the agent, for a failure nothing explained (its sentence asks for a bug
-   *  report); null for a refusal with a known cause, which an agent is not offered for. */
-  readonly agentFix: AgentFixRequest | null;
 }
 
 /**
@@ -60,10 +57,6 @@ const NOT_WRITABLE_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 const FREE_SPACE_LABEL = "Ask an agent to free up space";
-/** What an agent asked to free up space is told; it goes to the main chat, which is already running, as a chat made
- *  for the ask would need disk. */
-const FREE_SPACE_REQUEST =
-  "This workspace is out of disk space, so files can't be saved in it. Please free up some space.";
 
 /** Whether a refusal's kind says the place could not be written: these, or a computer that shares it only to read. */
 export function isNotWritable(kind: string | null): boolean {
@@ -82,75 +75,48 @@ function causeOf(failure: Failure & { cause: "user_facing" }, operation: FailedO
 export function toldFailure(error: unknown, whatFailed: string, operation: FailedOperation): FilesFailure {
   const failure = describeRequestFailure(error);
   if (failure.cause !== "user_facing") {
-    const told = failureSentence(failure, whatFailed);
-    return {
-      ...told,
-      isOutOfSpace: false,
-      agentFix: told.isReportable ? { whatFailed, details: told.details } : null,
-    };
+    return { ...failureSentence(failure, whatFailed), isOutOfSpace: false };
   }
-  const explained = `${whatFailed}. ${causeOf(failure, operation)}`;
   return {
-    message: explained,
+    message: `${whatFailed}. ${causeOf(failure, operation)}`,
     details: failure.details,
     isReportable: failure.isReportable,
     isOutOfSpace: failure.kind === "out_of_space",
-    agentFix: failure.isReportable ? { whatFailed: explained, details: failure.details } : null,
   };
 }
 
 /** A refusal Files words itself before asking the server (a name already taken, a move it cannot make). */
 export function plainFailure(message: string): FilesFailure {
-  return { message, details: null, isReportable: false, isOutOfSpace: false, agentFix: null };
+  return { message, details: null, isReportable: false, isOutOfSpace: false };
 }
 
-/** One task for an agent about every failure of an operation that it is offered for: what failed in each, and their
- *  details; null when it is offered for none. */
-function agentFixOf(failures: readonly FilesFailure[]): AgentFixRequest | null {
-  const requests = failures.map((failure) => failure.agentFix).filter((request) => request !== null);
-  if (requests.length === 0) return null;
-  const detailLines = requests.map((request) => request.details).filter((details) => details !== null);
-  return {
-    whatFailed: [...new Set(requests.map((request) => request.whatFailed))].join(". "),
-    details: detailLines.length === 0 ? null : detailLines.join("\n\n"),
-  };
-}
-
-/** One operation's failures, of one item or many, as one toast. */
+/** One operation's failures, of one item or many, as one toast. ``isAgentWithheld`` keeps the page's toasts from
+ *  offering "Ask an agent to fix this" on it (a failed ask's own note). */
 export function toastFailures(
   toasts: ToastQueue,
   failures: readonly FilesFailure[],
   host: FailureHost,
   redraw: () => void,
+  isAgentWithheld = false,
 ): void {
   if (failures.length === 0) return;
   const message = [...new Set(failures.map((failure) => failure.message))].join("\n");
   const detailLines = failures.map((failure) => failure.details).filter((details) => details !== null);
   const details = detailLines.length === 0 ? null : detailLines.join("\n\n");
   const actions: ToastAction[] = [];
-  const agentFix = agentFixOf(failures);
-  if (host.hasShell()) {
-    if (failures.some((failure) => failure.isOutOfSpace)) {
-      actions.push(
-        askAgentAction(toasts, host, redraw, FREE_SPACE_LABEL, (options) =>
-          host.startWithText(FREE_SPACE_REQUEST, options),
-        ),
-      );
-    }
-    if (agentFix !== null) {
-      actions.push(
-        askAgentAction(toasts, host, redraw, ASK_AGENT_TO_FIX_LABEL, (options) =>
-          askAgentToFix(host, agentFix, options),
-        ),
-      );
-    }
+  // The main chat, which is already running: a chat made for the ask would need disk.
+  if (host.hasShell() && failures.some((failure) => failure.isOutOfSpace)) {
+    const task = assistRequest(agentFixTask({ whatFailed: message, details }));
+    actions.push(
+      askAgentAction(toasts, host, redraw, FREE_SPACE_LABEL, (options) => host.startWithText(task, options)),
+    );
   }
   const isReportable = failures.some((failure) => failure.isReportable);
   if (!isReportable && actions.length === 0) {
     toasts.show(message, { isLasting: false, details });
     return;
   }
-  toasts.show(message, { isLasting: true, details, actions, isReportable });
+  toasts.show(message, { isLasting: true, details, actions, isReportable, isAgentWithheld });
 }
 
 /** What a toast's "Report a bug" does, decided as the toasts are drawn: null while the shell says Imbue Studio opens no
@@ -160,10 +126,10 @@ export function reportBugAction(host: FailureHost): ((failure: ReportedFailure) 
 }
 
 /**
- * A toast's button that asks an agent through the shell ("Ask an agent to free up space" in the main chat, "Ask an
- * agent to fix this" in the chat about Files): "Asking an agent…" until the shell says the chat opened, and a note
- * saying why when it could not, which offers no agent in turn. An answer the shell sends after a restart settled the
- * ask as not answered replaces that note, unless the button was pressed again since.
+ * A toast's button that asks an agent in the main chat ("Ask an agent to free up space"): "Asking an agent…" until the
+ * shell says the chat opened, and a note saying why when it could not, which offers no agent in turn. An answer the
+ * shell sends after a restart settled the ask as not answered replaces that note, unless the button was pressed again
+ * since.
  */
 function askAgentAction(
   toasts: ToastQueue,
@@ -180,7 +146,7 @@ function askAgentAction(
     if (toldId !== null) toasts.dismiss(toldId);
     toldId = null;
     if (!outcome.isOpened) {
-      toastFailures(toasts, [{ ...outcome.failure, isOutOfSpace: false, agentFix: null }], host, redraw);
+      toastFailures(toasts, [{ ...outcome.failure, isOutOfSpace: false }], host, redraw, true);
       const shown = toasts.current();
       toldId = shown.length === 0 ? null : shown[shown.length - 1].id;
     }

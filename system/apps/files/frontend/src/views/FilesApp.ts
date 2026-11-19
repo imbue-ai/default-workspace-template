@@ -13,7 +13,7 @@ import { alertDotIcon, icon, type IconName } from "@imbue/workspace-ui/src/compo
 import { createMenu, type Menu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { SegmentedControl } from "@imbue/workspace-ui/src/components/segmentedControl";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
+import { Toasts, askAgentFromToasts } from "@imbue/workspace-ui/src/components/toasts";
 
 import { formatItemCount, formatSize } from "../models/format";
 import { DEFAULT_PREFERENCES } from "../models/preferences";
@@ -238,6 +238,15 @@ function Sidebar(): m.Component<{ app: FilesController; floating: boolean }> {
             : m("div.files-connected-empty", { class: "px-2 py-1 type-helper text-faint" }, [
                 empty,
                 m(SeeDetails, { details: failure?.details ?? null }),
+                failure === null
+                  ? null
+                  : m(FailureActions, {
+                      host: app.failureHost,
+                      failure,
+                      path: null,
+                      isCentred: false,
+                      extra: "mt-2",
+                    }),
               ]);
       }
       return m(
@@ -748,6 +757,7 @@ export function FilesApp(): m.Component<{ app: FilesController }> {
           onDismiss: (id: number) => app.model.toasts.dismiss(id),
           closesPlainToasts: true,
           onReportBug: app.reportBugAction(),
+          onAskAgent: askAgentFromToasts(app.failureHost),
           onHold: (id: number) => app.model.toasts.hold(id),
         }),
         app.dialogs.view(),

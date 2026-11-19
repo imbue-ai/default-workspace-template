@@ -182,25 +182,30 @@ a sentence naming what failed, then the cause the server gave (`Couldn't move
 depends on which folder refused, with the status and the server's text behind
 "See details". A request nothing answered says only that. One whose sentence asks
 for a bug report (nothing explained it) leaves a toast that stays, with "See
-details", "Ask an agent to fix this" where a shell frames the page and, where the
-shell says Imbue Studio opens one, "Report a bug". The ask is the app contract's
-`askAgentToFix`: the shell sends what failed and the details to the chat about
-Files, opened beside the window, or to the main chat where there is none to take
-it. A refusal with a known cause (a read-only folder, a name already taken, no
-permission, a full disk) offers no agent to fix it; a full disk leaves a toast
-that stays with "Ask an agent to free up space", which asks in the main chat
-(`startWithText`: it is already running, and a chat made for the ask would need
-disk). Either button reads "Asking an agent…" until the shell says the chat
-opened and leaves its toast up, and a note says why when it could not. Any other
+details" and what the page's `Toasts` draws on a reportable toast: "Ask an agent
+to fix this" where a shell frames the page (`askAgentFromToasts`, the app
+contract's `askAgentToFix`: the shell sends what failed and the details to the
+chat about Files, opened beside the window, or to the main chat where there is
+none to take it, and toasts a refused ask itself) and, where the shell says
+Imbue Studio opens one, "Report a bug". A refusal with a known cause (a
+read-only folder, a name already taken, no permission, a full disk) offers no
+agent to fix it; a full disk leaves a toast that stays with "Ask an agent to
+free up space", which asks in the main chat (`startWithText`: it is already
+running, and a chat made for the ask would need disk), as Imbue Studio about
+the failure (`agentFixTask`) behind `/assist` (`assistRequest`). That button
+reads "Asking an agent…" until the shell says the chat opened and leaves its
+toast up, and a note says why when it could not, offering no agent of its own. Any other
 failure leaves a note that goes, its details behind "See details" (opening them
 keeps it up). A rename says it in the name field (one that asks for a bug
 report ends the rename and leaves the toast that stays), and a folder that cannot be
 listed says it in place of the listing, with Try again and, for a sentence that
 asks for a bug report, "Ask an agent to fix this" and "Report a bug"
-(`views/FailureActions.ts`: the ask names the folder or file, an ask the shell
+(`views/FailureActions.ts`, on `workspace_ui`'s `FailureRemedies`: the ask and
+the report carry the folder or file's path above the details, an ask the shell
 refused is said under the buttons, and the one Report a bug files it with the
-failure). A file whose text cannot
-be loaded says so in place of the editor, with the same buttons; an upload that failed
+failure). A file whose text cannot be loaded says so in place of the editor, and
+a failed read of what your computers share says so in the sidebar, each with the
+same buttons; an upload that failed
 says why in its row (interrupted, a read-only folder, out of disk space, or
 failed), with the details on hover; and a file whose location is too long for a
 window of its own is told rather than asked of the shell.
