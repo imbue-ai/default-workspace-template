@@ -49,7 +49,9 @@ or manual, is refused once a few tries over half a second have found it held),
 records itself in the state, writes `run_started` to the ledger, streams the
 command's output to `data/.state/routines/<id>/runs/<run id>/log`, and writes
 `run_finished` with the outcome (`SUCCEEDED`, `FAILED`, `TIMED_OUT` or
-`INTERRUPTED`). A command may leave `$ROUTINES_RUN_DIR/result.json` with a
+`INTERRUPTED`). A command runs with `ROUTINES_ROUTINE_ID`, `ROUTINES_RUN_ID`,
+`ROUTINES_RUN_DIR` and `ROUTINES_TRIGGER` (`scheduled` or `manual`) in its
+environment. A command may leave `$ROUTINES_RUN_DIR/result.json` with a
 one-line `summary`, `links` for the run page, the `chat_id` of a chat it
 used, an `outcome` that says how a failed run ended better than its exit code
 (`TIMED_OUT`; a non-zero exit is never a success), and `warnings`
@@ -62,7 +64,10 @@ A skill run asks the chat app for the routine's chat (creating it from the
 still going (and says so as a warning on the new run), sends `/clear` and
 `/<skill>`, and waits until the chat is idle with an agent reply, which
 becomes the run's summary. A chat waiting on the user marks the run blocked
-and tells the feed; past the timeout the chat is interrupted.
+and tells the feed; past the timeout the chat is interrupted. The run is in the
+ledger before the skill's command is sent, so the agent finds what started it
+as the newest record of `routines runs <id> --limit 1 --format json`: its
+`outcome` is null and its `trigger` is `SCHEDULED` or `MANUAL`.
 
 The due moment is the last success plus the cadence, moved to `at` on that day
 (the day the successful run started, so a run that crosses midnight claims no

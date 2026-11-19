@@ -185,7 +185,7 @@ The tick's own output is a line per spawned run and a line per reaped run, nothi
 5. Writes `run_finished` with the outcome, updates the state, and applies the notification rules (section 8).
 6. Exits with 0 for a success and 1 otherwise, so a caller with `--wait` can read it.
 
-The run directory is passed to the routine as `ROUTINES_RUN_DIR`, with `ROUTINES_ROUTINE_ID` and `ROUTINES_RUN_ID` beside it.
+The run directory is passed to the routine as `ROUTINES_RUN_DIR`, with `ROUTINES_ROUTINE_ID`, `ROUTINES_RUN_ID` and `ROUTINES_TRIGGER` (`scheduled` or `manual`) beside it.
 
 ### 6.3 A command run
 
