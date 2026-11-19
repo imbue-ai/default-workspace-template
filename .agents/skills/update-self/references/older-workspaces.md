@@ -280,9 +280,10 @@ carry on" line in `teardown.md` stays for a shell that is not up.
 
 ## The first apply that lands the recovery machinery
 
-**Applies when:** the workspace's own copy of the script has no `recover`
-subcommand (`python3 .agents/skills/update-self/scripts/update_self.py recover
---help` fails) before the apply.
+**Applies when:** before the apply, the workspace's own copy of the script has
+no `recover` subcommand (`python3
+.agents/skills/update-self/scripts/update_self.py recover --help` fails). Test
+it then: the apply replaces that copy.
 
 An interrupted apply heals itself through two triggers that live in the
 running container: bootstrap's rollback of a stale marker, and the
@@ -291,8 +292,8 @@ workspace (an update from before minds-v0.4.3), neither exists yet, and an
 interruption before the restart is only recoverable by re-running the apply
 by hand. Say so to the user if that is the update you are running.
 
-CLEANUP: remove this section and its pointer in `apply-outcomes.md` at a
-floor of minds-v0.4.3.
+CLEANUP: remove this section and its pointers in `applying-the-update.md` and
+`apply-outcomes.md` at a floor of minds-v0.4.3.
 
 ## A user program still in the old Python layout
 

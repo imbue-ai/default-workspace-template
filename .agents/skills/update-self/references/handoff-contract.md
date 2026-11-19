@@ -13,6 +13,7 @@ What follows from that for one old release or another is in
 - What must stay stable
 - The scheduled entry: a pinned target and ceiling
 - What the apply must tolerate
+- What the what's-new listing assumes of each release
 - Trust
 
 ## What must stay stable

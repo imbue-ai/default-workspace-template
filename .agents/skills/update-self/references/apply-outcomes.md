@@ -162,8 +162,9 @@ workspace healed itself instead, the rollback it made is a forward revert, so
 a retry goes back to the worker as after exit 2.
 
 Both unattended triggers live in the *running* container, not in the merge
-being applied. A workspace that does not have them yet is the one carve-out:
-`older-workspaces.md` ("The first apply that lands the recovery machinery").
+being applied. A workspace that did not have them before the apply is the one
+carve-out: `older-workspaces.md` ("The first apply that lands the recovery
+machinery").
 
 ## Rolling back on request
 
