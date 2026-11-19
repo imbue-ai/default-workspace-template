@@ -159,6 +159,12 @@ def test_an_empty_progress_update_adds_no_text() -> None:
     assert events[0]["text"] == ""
 
 
+def test_a_thinking_block_whose_kind_cannot_be_read_shows_its_text() -> None:
+    block = {"type": "thinking", "thinking": "Checking the skills next.", "signature": "not base64 !!"}
+    events = parse_lines([_make_content_block_line("uuid-1", "2026-01-01T00:00:01Z", block)])
+    assert events[0]["text"] == "Checking the skills next."
+
+
 def test_a_progress_update_line_carries_no_deferred_payload() -> None:
     line = _make_content_block_line(
         "uuid-1", "2026-01-01T00:00:01Z", _thinking_block("Reading the data next.", "narration")
