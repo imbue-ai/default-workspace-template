@@ -375,7 +375,11 @@ def poll_flow(flow_id: str) -> Response:
 
 
 def submit_flow(flow_id: str) -> Response:
-    """Accept whatever the flow's shape asks the user for: a pasted code, or a key."""
+    """Accept whatever the flow's shape asks the user for: a pasted code, a key, or a model server.
+
+    A model server on the user's own computer is first connected to this workspace by the Imbue
+    Studio app, and the sign-in runs on the address it then answers on here.
+    """
     submit_request = parse_request_body(SubmitFlowRequest)
     service = get_state().auth_flows
     try:
