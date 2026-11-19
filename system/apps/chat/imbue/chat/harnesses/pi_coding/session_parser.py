@@ -57,6 +57,14 @@ _UNKNOWN_MODEL = "unknown"
 # no answer from it.
 _UNREACHABLE_ERRORS = frozenset({"Connection error.", "Request timed out."})
 
+# Shown in place of a local model's reply that came back with no text and no tool call. A model
+# server (Ollama) drops a call to a tool that does not exist and reports a normal finish, so the
+# turn ends looking exactly like an agent that said nothing.
+_LOCAL_MODEL_EMPTY_REPLY_MESSAGE = (
+    "The model stopped without answering. Small local models sometimes try to use a tool that doesn't "
+    "exist, and the model server discards that. Try again, or say exactly which step to take."
+)
+
 
 def _text_from_content(content: Any) -> str:
     """Join the ``text`` of ``text`` content blocks. Thinking/tool blocks are skipped.
@@ -160,6 +168,15 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
     text = _text_from_content(message.get("content")) or (
         UNREACHABLE_MESSAGE if is_local_model_unreachable else error_text
     )
+    tool_calls = _tool_calls_from_content(message.get("content"))
+    is_local_model_empty_reply = (
+        message.get("provider") == LOCAL_MODEL_PROVIDER_ID
+        and message.get("stopReason") == "stop"
+        and not text
+        and not tool_calls
+    )
+    if is_local_model_empty_reply:
+        text = _LOCAL_MODEL_EMPTY_REPLY_MESSAGE
     api_error_kind = classify_api_error(error_text)
     event: dict[str, Any] = {
         "timestamp": timestamp,
@@ -169,7 +186,7 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
         "role": "assistant",
         "model": model if isinstance(model, str) and model else _UNKNOWN_MODEL,
         "text": text,
-        "tool_calls": _tool_calls_from_content(message.get("content")),
+        "tool_calls": tool_calls,
         "stop_reason": message.get("stopReason"),
         "usage": _usage(message),
         "message_uuid": event_id,

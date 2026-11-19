@@ -202,6 +202,43 @@ def test_a_local_model_that_cannot_be_reached_says_what_to_check() -> None:
     assert event["is_auth_error"] is False
 
 
+def _reply_with_only_thinking(provider: str) -> dict[str, object]:
+    return {
+        "role": "assistant",
+        "content": [{"type": "thinking", "thinking": "I should use the build-app tool."}],
+        "stopReason": "stop",
+        "provider": provider,
+        "model": "qwen3:8b",
+    }
+
+
+def test_a_local_model_turn_that_ends_with_no_answer_and_no_action_says_so() -> None:
+    """A model server drops a call to a tool that does not exist and reports a normal finish, which
+    left the chat showing an empty reply."""
+    event = parse_record(_message_record("m", _reply_with_only_thinking("local-model")))[0]
+    assert event["text"].startswith("The model stopped without answering.")
+    assert event["has_thinking"] is True
+    assert event["is_api_error"] is False
+    assert event["is_auth_error"] is False
+
+
+def test_a_local_model_turn_that_calls_a_tool_keeps_its_empty_text() -> None:
+    message = _reply_with_only_thinking("local-model")
+    message["stopReason"] = "toolUse"
+    message["content"] = [
+        {"type": "thinking", "thinking": "List the folders."},
+        {"type": "toolCall", "id": "toolu_1", "name": "bash", "arguments": {"command": "ls"}},
+    ]
+    event = parse_record(_message_record("m", message))[0]
+    assert event["text"] == ""
+    assert [call["tool_name"] for call in event["tool_calls"]] == ["bash"]
+
+
+def test_another_providers_empty_reply_is_left_empty() -> None:
+    event = parse_record(_message_record("m", _reply_with_only_thinking("anthropic")))[0]
+    assert event["text"] == ""
+
+
 def test_another_providers_connection_error_keeps_its_own_words() -> None:
     message = {
         "role": "assistant",

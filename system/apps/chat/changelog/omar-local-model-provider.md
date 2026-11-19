@@ -11,3 +11,5 @@
 - A workspace that does not run on your computer can use a model server there too. When the Local model form finds no server it can call directly, it asks the Imbue Studio app, which shows one approval dialog for the workspace, lists the model servers on your computer once you allow it, and connects the workspace to the one you pick. The form waits on that dialog and carries on by itself when you approve, asking once per page and again only on "Ask again"; it says so when Imbue Studio does not answer, or when your computer runs no model server.
 
 - A message sent to a chat on a local model is first checked against its model server. When the server does not answer within five seconds (the computer is asleep, Imbue Studio is closed, or the model server is not running) the message is not sent: a notice says what to check and the text stays in the composer. A server that drops out mid-reply ends the turn with the same words in place of pi's "Connection error."
+
+- A local model's turn that ends with no answer and no action now says so in the chat, with what to try, in place of an empty reply.
