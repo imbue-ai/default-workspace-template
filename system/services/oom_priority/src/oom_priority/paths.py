@@ -8,7 +8,9 @@ their paths through this module, so the layout can't drift between producer and
 consumers. The one exception is the revival-notice hook's shell front
 (``bin/claude_shed_notice_hook.sh``), which recomputes ``shed_ledger_path`` in bash
 to decide whether to start Python at all, so a change to the layout here must be
-made there too.
+made there too. It also tries ``CLAUDE_PROJECT_DIR`` before the current directory
+and hands the directory it resolved to the Python half as
+``OOM_PRIORITY_RUNTIME_DIR``.
 
 Everything lives under ``runtime/`` so it rides the runtime-backup branch and
 survives container loss. The base resolves from ``OOM_PRIORITY_RUNTIME_DIR``

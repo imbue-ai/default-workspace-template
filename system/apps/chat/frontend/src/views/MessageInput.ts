@@ -8,9 +8,12 @@ import {
   hasReadyAttachments,
   removeComposerAttachment,
   restoreComposerAttachments,
+  stagePastedText,
+  unstagePastedText,
   uploadFilesToComposer,
   waitForComposerUploads,
 } from "../models/ComposerAttachments";
+import { isLongPaste, isPastedTextFileName } from "../models/pastedText";
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { matchesKeybinding } from "../models/keybindings";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
@@ -97,7 +100,7 @@ import { icon, spinnerIcon, stopIcon } from "@imbue/workspace-ui/src/components/
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";
-import { keydownMatchesChords } from "@imbue/workspace-ui/src/keybindings";
+import { isHandledByInputMethod, keydownMatchesChords } from "@imbue/workspace-ui/src/keybindings";
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { QueryObserver, skipToken } from "@tanstack/query-core";
 import {
@@ -684,6 +687,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   let isSendPendingAfterDictation = false;
   // Whether the composer took input at the last render, for the shortcut, which arrives outside a render.
   let isComposerDisabledNow = false;
+  // The pasted-text chips whose text is being read back, so a second click does not put it back twice.
+  const pastedTextPutBacksInFlight = new Set<string>();
   // The page's speech model, which dictation needs loaded and every composer of the page shares: its load and
   // the load's progress as the page's cache holds them, observed for as long as the composer is on the page.
   let speechModelLoad: QueryObserver<SpeechModel, Error> | null = null;
@@ -1112,9 +1117,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
    * One attachment chip, 40px tall: an image is its thumbnail alone; anything else is an icon beside
    * its name and its size, or what it points at for a file the chat made for the user (an element
    * reference). While uploading, a spinner sits over the thumbnail on a dark wash, or where the icon
-   * would be. The remove button rides the top-right corner, shown on hover.
+   * would be. The remove button rides the top-right corner, shown on hover, and a long paste's
+   * "Paste as text" button sits beside it.
    */
-  function renderComposerAttachment(chatId: string, attachment: ComposerAttachment): m.Vnode {
+  function renderComposerAttachment(
+    chatId: string,
+    attachment: ComposerAttachment,
+    putPastedTextBack: (localId: string) => void,
+  ): m.Vnode {
     const isUploading = attachment.status === "uploading";
     const isError = attachment.status === "error";
     // The local pixels while uploading, then the uploaded copy.
@@ -1123,6 +1133,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     const size = attachment.uploaded?.size ?? attachment.localSize;
     const spinner = m.trust(spinnerIcon(16));
     const isDescribed = attachment.summary !== undefined;
+    // A picked file of the same name has no summary, so it stays an ordinary file.
+    const isPastedText = isDescribed && isPastedTextFileName(attachment.fileName);
     const remove = isUploading
       ? null
       : m(
@@ -1141,6 +1153,23 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           },
           m.trust(icon("close", { size: 12, strokeWidth: 2.5 })),
         );
+    const putBack =
+      isUploading || !isPastedText
+        ? null
+        : m(
+            "button",
+            {
+              type: "button",
+              class:
+                "composer-attachment-put-back absolute -top-[9px] right-[17px] z-10 inline-flex h-5 w-5 cursor-pointer " +
+                "items-center justify-center rounded-full bg-inverse text-on-accent opacity-0 shadow-sm " +
+                "transition-opacity group-hover/chip:opacity-100 focus-visible:opacity-100",
+              "aria-label": "Paste as text",
+              ...hoverTooltipAttrs("Paste as text", "above"),
+              onclick: () => putPastedTextBack(attachment.localId),
+            },
+            m.trust(icon("edit", { size: 11, strokeWidth: 2.5 })),
+          );
     // The status modifier is an interpolated marker; the one status the look distinguishes (a
     // failed upload's red border) rides beside it.
     const chipMarker = `composer-attachment composer-attachment--${attachment.status}`;
@@ -1203,7 +1232,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           },
           isUploading
             ? m("span", { class: "composer-attachment-uploading", "aria-label": "Uploading", role: "img" }, spinner)
-            : m.trust(icon(isDescribed ? "pointer" : "file", { size: 16, strokeWidth: 1.8 })),
+            : m.trust(icon(isDescribed && !isPastedText ? "pointer" : "file", { size: 16, strokeWidth: 1.8 })),
         ),
         m("span", { class: "composer-attachment-info flex min-w-0 flex-col" }, [
           m(
@@ -1215,6 +1244,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           ),
           detail,
         ]),
+        putBack,
         remove,
       ],
     );
@@ -1722,6 +1752,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       function handleKeydown(event: KeyboardEvent): void {
+        if (isHandledByInputMethod(event)) return;
         // Escape while dictating drops the words that are not yet final; the final ones stay (spec D5).
         if (dictation !== null && dictation.state !== "idle" && event.key === "Escape") {
           event.preventDefault();
@@ -1749,7 +1780,58 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         if (files.length > 0) {
           event.preventDefault();
           uploadFilesToComposer(chatId, files);
+          return;
         }
+        const text = event.clipboardData?.getData("text/plain") ?? "";
+        if (isLongPaste(text)) {
+          event.preventDefault();
+          stagePastedText(chatId, text);
+          warmUpStoppedChat(chatId);
+        }
+      }
+
+      /** Put a long paste's text back into the box where the caret is, in place of its attachment. */
+      async function putPastedTextBack(forChatId: string, localId: string): Promise<void> {
+        if (pastedTextPutBacksInFlight.has(localId)) return;
+        pastedTextPutBacksInFlight.add(localId);
+        let text: string | null;
+        try {
+          text = await unstagePastedText(forChatId, localId);
+        } catch (error) {
+          console.warn(`The pasted text of chat ${forChatId} could not be put back`, error);
+          if (currentChatId !== forChatId) return;
+          clearActionFailureNotice();
+          actionFailureTitle = "Couldn't paste the text back";
+          actionFailureDetail = "The attachment is still there, and will be sent as it is. Try again, or remove it.";
+          m.redraw();
+          return;
+        } finally {
+          pastedTextPutBacksInFlight.delete(localId);
+        }
+        if (text === null) return;
+        if (currentChatId !== forChatId) {
+          // The user moved to another chat while the text was read back: it joins that chat's saved draft.
+          const savedDraft = localStorage.getItem(messageTextKey(forChatId)) ?? "";
+          const merged = savedDraft.trim().length === 0 ? text : `${savedDraft}\n\n${text}`;
+          localStorage.setItem(messageTextKey(forChatId), merged);
+          // A hand-back waiting for that chat is taken in verbatim when it is shown, so it carries the text too.
+          if (pendingComposerPrepends.has(forChatId)) {
+            pendingComposerPrepends.set(forChatId, merged);
+          }
+          return;
+        }
+        const textarea = messageTextareaElement;
+        const start = textarea?.selectionStart ?? messageText.length;
+        const end = textarea?.selectionEnd ?? messageText.length;
+        messageText = messageText.slice(0, start) + text + messageText.slice(end);
+        localStorage.setItem(messageTextKey(forChatId), messageText);
+        if (textarea !== null) {
+          textarea.value = messageText;
+          textarea.setSelectionRange(start + text.length, start + text.length);
+          refitAfterEdit();
+        }
+        focusMessageTextarea();
+        m.redraw();
       }
 
       function openFilePicker(): void {
@@ -2259,8 +2341,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       const isUninterruptibleCompaction =
         activityState === COMPACTING_STATE &&
         getHarnessCatalog(chat?.active_agent.harness)?.can_interrupt_compaction === false;
+      // A handoff that has landed runs on its successor already: that agent's turn is stoppable like any other.
+      const isSwitchInTheWay = handoff !== null && !handoff.has_landed;
       const isStopButtonVisible =
-        (isAgentWorking || isConnecting) && !isInterruptInFlight && handoff === null && !isUninterruptibleCompaction;
+        (isAgentWorking || isConnecting) && !isInterruptInFlight && !isSwitchInTheWay && !isUninterruptibleCompaction;
       const isCancelSwitchVisible = handoff !== null && isHandoffCancellable(handoff);
       // Read straight off the backend's queue snapshot -- the frontend holds no queued state.
       const hasQueuedMessages = (chat?.active_agent.queued_messages ?? []).length > 0;
@@ -2331,7 +2415,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                       "disabled:cursor-not-allowed disabled:opacity-60",
                     // A switch off a room holds the message like any switch, so its wording comes first.
                     placeholder:
-                      handoff !== null
+                      isSwitchInTheWay && handoff !== null
                         ? handoffComposerPlaceholder(handoff)
                         : composerHint !== null
                           ? composerHint
@@ -2401,7 +2485,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                         "div",
                         { class: "col-span-3 col-start-1 row-start-2 min-w-0 pt-1" },
                         m(AttachmentStrip, {
-                          children: attachments.map((attachment) => renderComposerAttachment(chatId, attachment)),
+                          children: attachments.map((attachment) =>
+                            renderComposerAttachment(chatId, attachment, (localId) => {
+                              void putPastedTextBack(chatId, localId);
+                            }),
+                          ),
                         }),
                       )
                     : null,
