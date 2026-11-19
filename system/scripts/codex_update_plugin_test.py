@@ -99,7 +99,10 @@ _REFUSED_MARKER = "error: codex-plugin-install-refused: "
 def test_refuses_install_before_mngr_writes_config(tmp_path: Path) -> None:
     result, calls, _ = _run(tmp_path, provisioned=False)
     assert result.returncode == 1
-    assert result.stderr == f"{_REFUSED_MARKER}Codex must be provisioned before installing its plugins\n"
+    assert (
+        result.stderr
+        == f"{_REFUSED_MARKER}Codex must be provisioned before installing its plugins\n"
+    )
     assert calls == []
 
 
@@ -111,7 +114,10 @@ def test_refuses_install_without_agent_state(tmp_path: Path) -> None:
         ["bash", str(_SCRIPT)], env=env, capture_output=True, text=True, check=False
     )
     assert result.returncode == 1
-    assert result.stderr == f"{_REFUSED_MARKER}MNGR_AGENT_STATE_DIR is required; refusing a shared-home install\n"
+    assert (
+        result.stderr
+        == f"{_REFUSED_MARKER}MNGR_AGENT_STATE_DIR is required; refusing a shared-home install\n"
+    )
 
 
 @pytest.mark.parametrize("args", [("--unknown",), ("--strict", "extra")])

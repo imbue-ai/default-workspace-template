@@ -83,9 +83,9 @@ from imbue.chat.chat_handoffs import SuccessorCreateSpec
 from imbue.chat.chat_handoffs import cancel_refused_detail
 from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_handoffs import create_command_env
+from imbue.chat.chat_handoffs import create_failure_kind
 from imbue.chat.chat_handoffs import created_chat_agent_labels
 from imbue.chat.chat_handoffs import deliver_held_send
-from imbue.chat.chat_handoffs import create_failure_kind
 from imbue.chat.chat_handoffs import failure_notice
 from imbue.chat.chat_handoffs import has_user_turn
 from imbue.chat.chat_handoffs import is_genuine_user_turn
