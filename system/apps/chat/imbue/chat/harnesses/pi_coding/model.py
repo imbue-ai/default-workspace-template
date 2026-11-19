@@ -54,7 +54,7 @@ from imbue.chat.harnesses.pi_coding.inbox import PI_INBOX_NAME
 from imbue.chat.harnesses.pi_coding.inbox import PI_INTERRUPT_KEY
 from imbue.chat.harnesses.pi_coding.inbox import PI_RETRACT_KEY
 from imbue.chat.harnesses.pi_coding.inbox import append_pi_inbox_sentinel
-from imbue.chat.harnesses.pi_coding.local_model import MODELS_FILENAME
+from imbue.chat.harnesses.pi_coding.local_model import read_models_file_providers
 from imbue.chat.harnesses.session import AtomicShoulderTap
 from imbue.chat.harnesses.session import ShoulderTapOutcome
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
@@ -214,19 +214,8 @@ def read_custom_model_options(config_dir: Path) -> tuple[ModelOption, ...]:
     These are in no bundled catalog, so they are what lets the model bar name the model such an
     account runs on. Empty for a dir with no `models.json`, which is every other pi account.
     """
-    path = config_dir / MODELS_FILENAME
-    try:
-        config = json.loads(path.read_text())
-    except FileNotFoundError:
-        return ()
-    except (OSError, json.JSONDecodeError) as e:
-        logger.warning("Could not read pi's {}: {}", path, e)
-        return ()
-    providers = config.get("providers") if isinstance(config, dict) else None
-    if not isinstance(providers, dict):
-        return ()
     tags: list[tuple[str, tuple[str, ...]]] = []
-    for provider_id, provider in providers.items():
+    for provider_id, provider in read_models_file_providers(config_dir).items():
         models = provider.get("models") if isinstance(provider, dict) else None
         for model in models if isinstance(models, list) else ():
             if isinstance(model, dict) and isinstance(model.get("id"), str):

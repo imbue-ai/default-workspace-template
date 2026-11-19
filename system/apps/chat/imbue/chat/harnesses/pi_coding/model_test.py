@@ -208,11 +208,19 @@ def test_custom_models_are_tagged_the_way_pi_reports_them(tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize(
-    "content", [None, "not json", "[]", '{"providers": []}', '{"providers": {"p": {"models": 3}}}']
+    "content",
+    [
+        None,
+        b"not json",
+        b"[]",
+        b'{"providers": []}',
+        b'{"providers": {"p": {"models": 3}}}',
+        pytest.param(b'{"providers": {"p": {"models": [{"id": "caf\xe9"}]}}}', id="not-text"),
+    ],
 )
-def test_a_missing_or_unreadable_models_file_adds_no_models(tmp_path: Path, content: str | None) -> None:
+def test_a_missing_or_unreadable_models_file_adds_no_models(tmp_path: Path, content: bytes | None) -> None:
     if content is not None:
-        (tmp_path / "models.json").write_text(content)
+        (tmp_path / "models.json").write_bytes(content)
 
     assert read_custom_model_options(tmp_path) == ()
 

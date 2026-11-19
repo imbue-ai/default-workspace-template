@@ -320,18 +320,27 @@ def verify_model(
     )
 
 
-def read_server_base_url(account_dir: Path) -> str | None:
-    """The address of the model server a local-model account runs on; None for any other account."""
-    path = account_dir / MODELS_FILENAME
+def read_models_file_providers(config_dir: Path) -> dict[str, Any]:
+    """The providers the `models.json` of a pi config dir declares, by id.
+
+    Empty for a dir without the file, which is every account that brings no model of its own, and
+    for a file that cannot be read, which is logged.
+    """
+    path = config_dir / MODELS_FILENAME
     try:
         config = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return None
+        return {}
     except (OSError, ValueError) as e:
-        logger.warning("Could not read the model server address from {}: {}", path, e)
-        return None
+        logger.warning("Could not read pi's {}: {}", path, e)
+        return {}
     providers = config.get("providers") if isinstance(config, dict) else None
-    provider = providers.get(LOCAL_MODEL_PROVIDER_ID) if isinstance(providers, dict) else None
+    return providers if isinstance(providers, dict) else {}
+
+
+def read_server_base_url(account_dir: Path) -> str | None:
+    """The address of the model server a local-model account runs on; None for any other account."""
+    provider = read_models_file_providers(account_dir).get(LOCAL_MODEL_PROVIDER_ID)
     base_url = provider.get("baseUrl") if isinstance(provider, dict) else None
     return base_url if isinstance(base_url, str) and base_url else None
 
