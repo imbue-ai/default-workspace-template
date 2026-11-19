@@ -1,19 +1,21 @@
+# The Memory app: the notes the agent remembers about the user (data/memories/, Claude's autoMemoryDirectory), to
+# view and edit, and every change an agent made to them, with Undo. It reads and writes them through the
+# agent_memory library, the same one the chat's "Memory changed" cards and Claude's change-log hook use, and keeps
+# nothing of its own. The chat's cards link a note here as ``/?note=<id>``.
 name = "memory"
 display_name = "Memory"
 # What the app is for, in the person's terms: what an agent reads to decide whether this app
 # does what it needs. The app's API document (served at api_schema_path) carries it too.
-description = "View and edit the notes the agent remembers about you across chats: preferences, feedback, projects and references."
+description = "View and edit the notes the agent remembers about you across chats: preferences, feedback, projects and references, and undo any change an agent made to them."
 api_schema_path = "/api/schema"
 icon = "icon.svg"
-priority = "user"
+critical = false
+# A page over files that are saved on every edit, so a shed costs one reload; its own band sits among the other
+# built-in pages, before Getting Started's.
+priority = "memory"
 program = "memory"
-# The shell stops the app once no window shows it (a minute after the last one
-# closes) and starts it again on the next request; false keeps it running for
-# the life of the workspace. Set false if the app does work between requests
-# (a background thread, a poller, a subscription to an outside service, a job
-# that outlives the window): a stop loses that work. Periodic work (a refresh
-# every N minutes, a nightly sync) is a routine, not a loop in the service:
-# see the manage-routines skill.
+# The shell stops it a minute after no window shows it and starts it again on the next request: it does no work
+# between requests.
 stop_when_no_windows = true
 
 # The page wears the workspace's look and follows its theme through the shared design tokens
@@ -21,8 +23,8 @@ stop_when_no_windows = true
 [theming]
 mode = "tokens"
 
-# How update-app boots a throwaway preview of this app: on a free port, over a
-# scratch copy of its data (see .agents/skills/update-app/python/update_app_skill/preview_app.py).
+# A preview serves the page on a free port over copies of the notes and of the change log, never the real ones.
 [preview]
-env = {MEMORY_PORT = "{port:main}", MEMORY_HOST = "{host}", MEMORY_DATA_DIR = "{copy:data}", MEMORY_NOTES_DIR = "{copy:notes}"}
-copies = {data = "data/.apps/memory", notes = "data/memories"}
+command = ["memory-app"]
+env = {MEMORY_APP_PORT = "{port:main}", MEMORY_APP_HOST = "{host}", AGENT_MEMORY_DIR = "{copy:notes}", AGENT_MEMORY_CHANGES_DIR = "{copy:changes}"}
+copies = {notes = "data/memories", changes = "data/.apps/chat/memory_changes"}

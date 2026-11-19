@@ -1,8 +1,9 @@
 from pathlib import Path
 
+from inline_snapshot import snapshot
+
 from imbue.imbue_common.ratchet_testing import standard_ratchet_checks as rc
 from imbue.imbue_common.ratchet_testing.ratchets import check_no_type_errors
-from inline_snapshot import snapshot
 
 _DIR = Path(__file__).parent
 

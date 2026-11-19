@@ -21,7 +21,10 @@ let original = null;
 let loadError = "";
 // The agent's recorded changes, for the "changes" view, and the one a link asked to see.
 let changes = [];
-let focusChange = new URLSearchParams(location.search).get("change");
+// A link may name a change (?change=<id>) or a note (?note=<id>, as the chat's memory cards link it).
+const params = new URLSearchParams(location.search);
+let focusChange = params.get("change");
+const linkedNote = params.get("note");
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -48,6 +51,7 @@ async function load(keepSelection = true) {
     const data = await api("GET", "/api/notes");
     notes = data.notes;
     outline = data.index;
+    LINE_LIMIT = data.index_line_limit;
     loadError = "";
   } catch (e) {
     loadError = e.message;
@@ -56,7 +60,8 @@ async function load(keepSelection = true) {
   if (keepSelection && view === "index") return showIndex();
   if (keepSelection && view === "changes") return showChanges();
   const still = keepSelection && notes.find((n) => n.id === selected);
-  select(still ? still.id : notes[0]?.id ?? null, true);
+  const linked = !keepSelection && linkedNote && notes.find((n) => n.id === linkedNote);
+  select(still ? still.id : linked ? linked.id : notes[0]?.id ?? null, true);
 }
 
 function isDirty() {
@@ -83,9 +88,8 @@ function noteMatches(n) {
 }
 
 function noteRow(n, entry) {
-  const lineLength = entry ? (outline.raw.split("\n")[entry.line_number - 1] || "").length : 0;
   const flag = (n.is_index_only ? `<span class="flag">Written straight into the index</span>` : "")
-    + (lineLength > LINE_LIMIT ? `<span class="flag warn">Long index line (${lineLength} characters)</span>` : "");
+    + (entry && entry.is_too_long ? `<span class="flag warn">Long index line (${entry.length} characters)</span>` : "");
   const title = entry && entry.text ? entry.text : n.title;
   const hook = entry && entry.hook ? entry.hook : n.summary;
   return `<button class="note-row" data-part="list-row" aria-current="${view === "note" && n.id === selected}" id="note-${esc(n.id)}" data-note-id="${esc(n.id)}">
@@ -173,7 +177,7 @@ function fileChange(f) {
     html += `<span class="diff-${k}">${marks[k]} ${esc(l) || " "}</span>`;
   });
   if (folded) html += `<span class="diff-fold">${folded} unchanged line${folded === 1 ? "" : "s"}</span>`;
-  const label = f.name === "MEMORY.md" ? "the index (MEMORY.md)" : f.name;
+  const label = f.name !== "MEMORY.md" ? f.name : f.is_index_lines ? "its lines in the index (MEMORY.md)" : "the index (MEMORY.md)";
   return `<div class="change-file"><span class="help">${what} ${esc(label)}</span><pre class="diff">${html}</pre></div>`;
 }
 
@@ -219,7 +223,7 @@ function hideChanges() {
 
 async function undoChange(id, force = false) {
   try {
-    await api("POST", `/api/changes/${encodeURIComponent(id)}/undo`, { force });
+    await api("POST", `/api/changes/${encodeURIComponent(id)}/undo`, { is_forced: force });
   } catch (e) {
     if (e.status === 409 && window.confirm(`${e.message} Undo anyway?`)) return undoChange(id, true);
     const status = $(`undo-status-${id}`);
@@ -329,7 +333,8 @@ function renderEditor(status = "", isError = false) {
 // Mirrors the store's slugify: lowercase words joined by hyphens, at most eight.
 const slugify = (title) => title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").split("-").slice(0, 8).join("-") || "note";
 const oneLine = (text) => text.split(/\s+/).filter(Boolean).join(" ");
-const LINE_LIMIT = 150;
+// The index line length past which Claude Code's guidance says to shorten it (the store's INDEX_LINE_LIMIT).
+let LINE_LIMIT = 150;
 
 // The link name a save would give the note: a new title renames it, an unchanged one keeps it.
 function plannedName(title) {

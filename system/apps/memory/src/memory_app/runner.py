@@ -1,100 +1,88 @@
-"""View and edit the notes the agent remembers about you across chats: preferences, feedback, projects and references.
+"""The Memory app: the notes the agent remembers about the user across chats, and every change an agent made to them.
 
-Services run from /home/user/workspace (the repo root). Conventions:
+Services run from /home/user/workspace (the repo root). The app stores nothing of its own: the notes are the
+agent's memory folder (``data/memories/``, Claude's ``autoMemoryDirectory``), read and written through
+``agent_memory.notes``, and the changes are the records Claude's change-log hook writes for the chat
+(``data/.apps/chat/memory_changes/``), read and undone through ``agent_memory.changes`` -- the same library and
+the same records the chat's "Memory changed" cards use, so an Undo here and one in the chat are one Undo.
 
-- Persistent state (anything written and read across runs -- cursors,
-  caches, snapshots, user records): read and write it under ``DATA_DIR``
-  (defined below), never a hardcoded ``data/.apps/memory/`` at the
-  call site. ``DATA_DIR`` defaults to ``data/.apps/memory/`` but
-  honors the ``MEMORY_DATA_DIR`` env var, so an editing agent can point a
-  throwaway instance at a *copy* of the data instead of the live store
-  (see the update-app skill). Do NOT use ``Path(__file__)``-based
-  paths for state -- the bug to avoid is one process writing to
-  ``/home/user/workspace/data/.apps/...`` while another reads from
-  ``/home/user/workspace/system/apps/<pkg>/data/...``.
-- Static assets shipped alongside this file (templates, default
-  configs, bundled JSON): ``Path(__file__).parent / "assets/..."`` is
-  fine and is the right pattern.
-- Listen port: bind ``PORT`` (defined below), which defaults to this
-  app's assigned port but honors the ``MEMORY_PORT`` env var, so
-  an editing agent can boot a throwaway instance on a *spare* port
-  alongside the live one (see the update-app skill). Never hardcode
-  the port at the ``run_simple`` call.
+- Listen address: bind ``HOST`` and ``PORT``, which default to the loopback address and this app's assigned
+  port but honor ``MEMORY_APP_HOST`` and ``MEMORY_APP_PORT``, so a preview can boot on a spare port beside the
+  live one.
+- The folders: ``agent_memory.changes.default_log`` resolves both against the main checkout and honors
+  ``AGENT_MEMORY_DIR`` and ``AGENT_MEMORY_CHANGES_DIR``, which a preview points at copies (``[preview]`` in
+  ``app.toml``), never at the user's real notes.
+- Static assets shipped alongside this file: ``Path(__file__).parent / "assets"``.
 
-This is a synchronous Flask app served by the threaded Werkzeug server.
-The app owns its own browser origin (the forwarder routes
-``http://memory.<workspace-host>/`` straight to this port), so it serves
-at ``/`` and root-absolute URLs, cookies, and service workers all work
-unmodified -- nothing rewrites anything. Use ``flask_sock`` if you need
-WebSockets.
+This is a synchronous Flask app served by the threaded Werkzeug server. The app owns its own browser origin
+(the forwarder routes ``http://memory.<workspace-host>/`` straight to this port), so it serves at ``/`` and
+root-absolute URLs work unmodified.
 """
 
 import base64
 import hashlib
 import os
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
+from typing import Final
+from typing import TypeVar
 
-from app_schema.api_schema import (
-    DEFAULT_API_SCHEMA_PATH,
-    RouteModels,
-    RouteTable,
-    SchemalessRoute,
-    register_api_schema_route,
-)
-from app_schema.routes import error_response
-from app_schema.routes import model_response
-from app_schema.routes import parse_request_body
-from memory.changes import ChangeLog
-from memory.changes import ChangeNotFoundError
-from memory.changes import ChangedSinceError
-from memory.changes import MemoryChange
-from memory.notes import IndexOutline
-from memory.notes import InvalidNoteError
-from memory.notes import Note
-from memory.notes import NoteChangedError
-from memory.notes import NoteDraft
-from memory.notes import NoteNotFoundError
-from memory.notes import NoteStore
-from flask import Flask, Response, abort, request, send_file
-from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.imbue_common.logging import setup_logging
+from flask import Flask
+from flask import Response
+from flask import abort
+from flask import request
+from flask import send_file
 from loguru import logger
 from pydantic import Field
 from werkzeug.serving import run_simple
+
+from agent_memory.changes import ChangeNotFoundError
+from agent_memory.changes import ChangedFile
+from agent_memory.changes import ChangedSinceError
+from agent_memory.changes import INDEX_FILE_NAME
+from agent_memory.changes import MemoryChange as MemoryChangeRecord
+from agent_memory.changes import default_log
+from agent_memory.notes import INDEX_LINE_LIMIT
+from agent_memory.notes import IndexOutline
+from agent_memory.notes import InvalidNoteError
+from agent_memory.notes import Note
+from agent_memory.notes import NoteChangedError
+from agent_memory.notes import NoteDraft
+from agent_memory.notes import NoteNotFoundError
+from agent_memory.notes import NoteStore
+from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
+from app_schema.api_schema import RouteModels
+from app_schema.api_schema import RouteTable
+from app_schema.api_schema import SchemalessRoute
+from app_schema.api_schema import register_api_schema_route
+from app_schema.request_guard import install_request_guard
+from app_schema.routes import error_response
+from app_schema.routes import model_response
+from app_schema.routes import parse_request_body
+from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.logging import setup_logging
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 from workspace_themes.flask_routes import register_workspace_theme_route
 
-# Persistent state for this app lives under DATA_DIR. It defaults to
-# ``data/.apps/memory/`` but is overridable via the ``MEMORY_DATA_DIR`` env var
-# so a throwaway instance can run against a *copy* of the data while editing --
-# see the update-app skill. Always read/write state through DATA_DIR;
-# never hardcode ``data/.apps/memory/`` at a call site, or the override is
-# bypassed. A writing call site should ``DATA_DIR.mkdir(parents=True,
-# exist_ok=True)`` before writing.
-DATA_DIR = Path(os.environ.get("MEMORY_DATA_DIR", "data/.apps/memory"))
+APP_DISPLAY_NAME: Final = "Memory"
+APP_DESCRIPTION: Final = (
+    "View and edit the notes the agent remembers about you across chats: preferences, feedback, projects and "
+    "references, and undo any change an agent made to them."
+)
+HOST: Final = os.environ.get("MEMORY_APP_HOST", "127.0.0.1")
+PORT: Final = int(os.environ.get("MEMORY_APP_PORT", "8070"))
 
-# Listen port. Defaults to this app's assigned port but is overridable via
-# the ``MEMORY_PORT`` env var so an editing agent can boot a throwaway
-# instance on a spare port next to the live one (see the update-app skill).
-# Never hardcode the port at the ``run_simple`` call, or the override is bypassed.
-PORT = int(os.environ.get("MEMORY_PORT", "8081"))
-
-# The agent's memory folder, the notes this app shows and edits. It is the folder
-# the agent's own memory reads (``autoMemoryDirectory`` in .claude/settings.json),
-# so it is not under DATA_DIR; ``MEMORY_NOTES_DIR`` points a throwaway instance at
-# a copy of it instead.
-NOTES_DIR = Path(os.environ.get("MEMORY_NOTES_DIR", "data/memories"))
-STORE = NoteStore(NOTES_DIR)
-# Every change an agent made to the notes, recorded by the agent's change-log hook
-# (system/scripts/agent_memory_change_log.py) for review and undo.
-CHANGES = ChangeLog(DATA_DIR / "changes", NOTES_DIR)
+# The change log Claude's hook writes and the memory folder it watches; the notes are that same folder.
+CHANGES = default_log(os.environ)
+STORE = NoteStore(CHANGES.memory_dir)
 
 # The browser-side modules the workspace shell builds and every app serves from
 # its own origin: the app contract (how a page talks to the shell framing it) and
 # the element context menu (the right-click menu whose last rows hand the
 # clicked element to a chat). A module import is a fetch without cookies, which
 # the forwarder refuses across origins, so they are served here rather than from
-# the shell. Relative to the repo root the service runs from, like DATA_DIR.
+# the shell. Relative to the repo root the service runs from.
 SHELL_STATIC_MODULES_DIR = Path("system/apps/system_interface/imbue/system_interface/static/_static")
 # The page's own static files, shipped beside this module.
 ASSETS_DIR = Path(__file__).parent / "assets"
@@ -103,7 +91,7 @@ ASSET_TYPES = {"app.js": "text/javascript", "app.css": "text/css"}
 # The page kit (workspace_theme.css and .js) is part of it: the stylesheet gives the
 # page the workspace's standard look and the script follows the theme the shell names,
 # the way the built-in apps do (docs/system/themeable-apps.md).
-SHELL_STATIC_MODULE_TYPES = {
+SHELL_STATIC_MODULE_TYPES: Final = {
     "app_contract.js": "text/javascript",
     "context_menu.js": "text/javascript",
     "workspace_theme.js": "text/javascript",
@@ -169,6 +157,7 @@ class NotesListing(FrozenModel):
     notes: tuple[Note, ...] = Field(description="The notes")
     folder: str = Field(description="The memory folder the notes are read from")
     index: IndexOutline = Field(description="The index (MEMORY.md) line by line, as the navigation mirrors it")
+    index_line_limit: int = Field(description="How long an index line may be before the editor warns about it")
 
 
 class NoteChange(FrozenModel):
@@ -184,6 +173,31 @@ class NoteDeletion(FrozenModel):
     version: str = Field(description="The note's version when the editor loaded it")
 
 
+class ChangedMemoryFile(FrozenModel):
+    """One file a change touched: its text before and after."""
+
+    name: str = Field(description="The file's name in the memory folder")
+    before: str | None = Field(description="Its text before the change, or null if the change created it")
+    after: str | None = Field(description="Its text after the change, or null if the change deleted it")
+    is_index_lines: bool = Field(
+        description="Whether this is the index holding only the change's own lines (a note's pointer line, say), "
+        "rather than the whole file"
+    )
+
+
+class MemoryChange(FrozenModel):
+    """What one agent turn changed in one note (with its index line), or in the index's other lines, undone as one."""
+
+    id: str = Field(description="The change's id; ids sort by time")
+    time: datetime = Field(description="When the turn first changed memory (ISO 8601, UTC)")
+    summary: str = Field(description="What changed, in one line, e.g. 'added the note \"Tea\" and its index line'")
+    chat_id: str = Field(description="The chat whose agent made it")
+    agent_name: str = Field(description="The name of the agent that made it")
+    note: str | None = Field(description="The note file the change belongs to; null for the index's other lines")
+    files: tuple[ChangedMemoryFile, ...] = Field(description="Every file it changed")
+    undone_at: datetime | None = Field(description="When it was undone, or null")
+
+
 class ChangesListing(FrozenModel):
     """Every change an agent made to the notes, newest first."""
 
@@ -193,7 +207,7 @@ class ChangesListing(FrozenModel):
 class UndoRequest(FrozenModel):
     """How to undo a change."""
 
-    force: bool = Field(default=False, description="Undo even if a file was changed again since")
+    is_forced: bool = Field(default=False, description="Undo even if a file was changed again since")
 
 
 class DeletedNote(FrozenModel):
@@ -222,11 +236,13 @@ ROUTE_TABLE: RouteTable = {
     **THEME_STATIC_ROUTE_TABLE,
 }
 
-app = Flask("memory", static_folder=None)
+app = Flask("memory_app", static_folder=None)
+# Every built-in installs the provenance check ahead of its routes (system/apps/README.md).
+install_request_guard(app, exempt_rules=frozenset())
 # The app describes its own API: an OpenAPI document of every route below, served at the
 # manifest's api_schema_path.
 register_api_schema_route(
-    app, DEFAULT_API_SCHEMA_PATH, title='Memory', description='View and edit the notes the agent remembers about you across chats: preferences, feedback, projects and references.', route_table=ROUTE_TABLE
+    app, DEFAULT_API_SCHEMA_PATH, title=APP_DISPLAY_NAME, description=APP_DESCRIPTION, route_table=ROUTE_TABLE
 )
 # The workspace's themes, from this app's own origin, so the page can wear the one the shell names.
 register_workspace_theme_route(app)
@@ -263,7 +279,14 @@ def content_security_policy_report() -> Response:
         return Response(status=204)
     blocked, page, source, directive, line, sample = (
         str(report.get(key, ""))[:500]
-        for key in ("blocked-uri", "document-uri", "source-file", "effective-directive", "line-number", "script-sample")
+        for key in (
+            "blocked-uri",
+            "document-uri",
+            "source-file",
+            "effective-directive",
+            "line-number",
+            "script-sample",
+        )
     )
     # A block caused by a browser extension is the policy doing its job and is not logged.
     if blocked.startswith(BROWSER_EXTENSION_SCHEMES) or source.startswith(BROWSER_EXTENSION_SCHEMES):
@@ -296,6 +319,18 @@ def shell_module(basename: str) -> Response:
     return send_file(module_path.absolute(), mimetype=SHELL_STATIC_MODULE_TYPES[basename])
 
 
+_T = TypeVar("_T")
+
+
+def _as_user_edit(write: Callable[[], _T]) -> _T:
+    """Run ``write`` (a save or delete in this app) so that no chat's agent is charged with it."""
+    before = CHANGES.snapshot()
+    try:
+        return write()
+    finally:
+        CHANGES.absorb_user_edit(before)
+
+
 CHANGED_ELSEWHERE = "This note changed since you opened it. Reload to see the latest version."
 NOT_FOUND = "This note no longer exists. Reload to see the current notes."
 
@@ -304,7 +339,14 @@ NOT_FOUND = "This note no longer exists. Reload to see the current notes."
 def list_notes() -> Response:
     """List every remembered note, in the order the index lists them, with the index itself line by line."""
     notes = STORE.list_notes()
-    return model_response(NotesListing(notes=tuple(notes), folder=str(NOTES_DIR), index=STORE.outline(notes)))
+    return model_response(
+        NotesListing(
+            notes=tuple(notes),
+            folder=str(STORE.folder),
+            index=STORE.outline(notes),
+            index_line_limit=INDEX_LINE_LIMIT,
+        )
+    )
 
 
 @app.route("/api/notes", methods=["POST"])
@@ -312,7 +354,7 @@ def create_note() -> Response:
     """Add a new note, and list it in the index."""
     draft = parse_request_body(NoteDraft)
     try:
-        return model_response(STORE.create(draft), 201)
+        return model_response(_as_user_edit(lambda: STORE.create(draft)), 201)
     except InvalidNoteError as e:
         return error_response(str(e), 400)
 
@@ -327,7 +369,7 @@ def update_note(note_id: str) -> Response:
     """
     change = parse_request_body(NoteChange)
     try:
-        return model_response(STORE.update(note_id, change.version, change.note))
+        return model_response(_as_user_edit(lambda: STORE.update(note_id, change.version, change.note)))
     except InvalidNoteError as e:
         return error_response(str(e), 400)
     except NoteNotFoundError:
@@ -341,7 +383,7 @@ def delete_note(note_id: str) -> Response:
     """Delete a note and its line in the index."""
     deletion = parse_request_body(NoteDeletion)
     try:
-        STORE.delete(note_id, deletion.version)
+        _as_user_edit(lambda: STORE.delete(note_id, deletion.version))
     except NoteNotFoundError:
         return error_response(NOT_FOUND, 404)
     except NoteChangedError:
@@ -349,34 +391,56 @@ def delete_note(note_id: str) -> Response:
     return model_response(DeletedNote(id=note_id))
 
 
+def _file_model(item: ChangedFile) -> ChangedMemoryFile:
+    return ChangedMemoryFile(name=item.name, before=item.before, after=item.after, is_index_lines=item.is_index_lines)
+
+
+def _change_model(change: MemoryChangeRecord) -> MemoryChange:
+    return MemoryChange(
+        id=change.id,
+        time=change.time,
+        summary=change.summary,
+        chat_id=change.chat_id,
+        agent_name=change.agent_name,
+        note=change.note,
+        files=tuple(_file_model(item) for item in change.files),
+        undone_at=change.undone_at,
+    )
+
+
+CHANGE_NOT_FOUND = "That change is not in the record."
+
+
 @app.route("/api/changes")
 def list_changes() -> Response:
     """List every change an agent made to the notes, newest first, with the text before and after."""
-    return model_response(ChangesListing(changes=tuple(CHANGES.list_changes())))
+    changes = reversed(CHANGES.list_changes())
+    return model_response(ChangesListing(changes=tuple(_change_model(change) for change in changes)))
 
 
 @app.route("/api/changes/<change_id>")
 def get_change(change_id: str) -> Response:
     """One change an agent made to the notes."""
     try:
-        return model_response(CHANGES.get(change_id))
+        return model_response(_change_model(CHANGES.get(change_id)))
     except ChangeNotFoundError:
-        return error_response("That change is not in the record.", 404)
+        return error_response(CHANGE_NOT_FOUND, 404)
 
 
 @app.route("/api/changes/<change_id>/undo", methods=["POST"])
 def undo_change(change_id: str) -> Response:
-    """Undo a change: put every file it touched back as it was before.
+    """Undo a change: put back the note and the index lines it touched as they were before it.
 
-    Refused with 409 when one of those files was changed again since, unless ``force``.
+    Refused with 409 when one of them was changed again since, unless ``is_forced``.
     """
     undo = parse_request_body(UndoRequest)
     try:
-        return model_response(CHANGES.undo(change_id, undo.force))
+        return model_response(_change_model(CHANGES.undo(change_id, is_forced=undo.is_forced)))
     except ChangeNotFoundError:
-        return error_response("That change is not in the record.", 404)
+        return error_response(CHANGE_NOT_FOUND, 404)
     except ChangedSinceError as e:
-        return error_response(f"Changed again since: {', '.join(e.names)}. Undoing would lose those later edits.", 409)
+        names = ", ".join("the index" if name == INDEX_FILE_NAME else name for name in e.names)
+        return error_response(f"Changed again since: {names}. Undoing would lose those later edits.", 409)
 
 
 @app.route("/health")
@@ -387,9 +451,8 @@ def health() -> Response:
 
 def main() -> None:
     setup_logging()
-    run_simple(
-        "127.0.0.1", PORT, app, threaded=True, use_reloader=False, use_debugger=False
-    )
+    logger.info("Serving the Memory app at http://{}:{}/ over {}", HOST, PORT, STORE.folder)
+    run_simple(HOST, PORT, app, threaded=True, use_reloader=False, use_debugger=False)
 
 
 if __name__ == "__main__":
