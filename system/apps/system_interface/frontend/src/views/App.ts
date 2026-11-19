@@ -315,10 +315,10 @@ export function App(): m.Component<AppAttrs> {
     if (event.key !== "Escape") return;
     // A window drag in progress is cancelled first of all: the window returns to where the drag began, and a
     // tear-out drops the desktop window the chrome was dragging.
-    const gesture = store?.getGesture() ?? null;
-    if (store !== null && gesture !== null && gesture.kind === "move") {
+    const movingWindowId = store?.movingWindowId() ?? null;
+    if (store !== null && movingWindowId !== null) {
       store.cancelGesture();
-      paintWindow(store, gesture.windowId);
+      paintWindow(store, movingWindowId);
       m.redraw();
       return;
     }
