@@ -194,7 +194,6 @@ def plan_local_model_sign_in(
         run_id = ensure_context_model(client, base_url, api_key, described, model_id, size)
     except LocalModelCatalogError as e:
         raise LocalModelError(str(e)) from e
-    # The copy is planned under the id it was just found or made under.
     records = _order_records(plan_ollama_records(described), (), run_id)
     return LocalModelSignIn(
         model_id=run_id,

@@ -141,15 +141,6 @@ def test_prevent_functools_partial() -> None:
 
 
 def test_prevent_num_prefix() -> None:
-    # Every hit is a misfire of the same kind, another program's own name quoted as text:
-    # tool_labels.py's module docstring quotes codex's tool signatures verbatim, and two
-    # of ITS optional parameters are num-prefixed (`num_last_images_to_include`,
-    # `num_games`); local_model_catalog.py names Ollama's context-length parameter once,
-    # as the value of OLLAMA_CONTEXT_PARAMETER. No identifier in our code is num-prefixed.
-    # The rule's regex (`\bnum_\w+`) scans raw source and cannot tell a docstring or a
-    # string from a declaration; it lives in imbue_common, which this repo does not edit,
-    # so it cannot be narrowed here. Should a real violation ever land, it will push this
-    # past 3 and be caught.
     rc.check_num_prefix(_DIR, snapshot(3))
 
 
