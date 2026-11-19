@@ -199,6 +199,12 @@ pre-update revision with the worker branch intact; as above, that is a forward
 revert, so a retry after the cron's rollback goes back to the worker as after
 exit 2. A restart's rollback is different (below).
 
+One carve-out, exactly once per workspace: both unattended triggers live in the
+*running* container, not in the merge being applied. On the very first apply
+that lands this machinery into a workspace, neither exists yet, and an
+interruption before it restarts is only recoverable by re-running the apply
+by hand. Say so to the user if that is the update you are running.
+
 ### After a restart rolled it back
 
 When bootstrap rolls an apply back at boot, it starts the agent that was
@@ -232,12 +238,6 @@ Instead:
 When the user asks to try again, run the update as a fresh pass from Step 1:
 it sets the stopped worker aside, and the new worker reverts the rollback as
 the worker reference says.
-
-One carve-out, exactly once per workspace: both unattended triggers live in the
-*running* container, not in the merge being applied. On the very first apply
-that lands this machinery into a workspace, neither exists yet, and an
-interruption before it restarts is only recoverable by re-running the apply
-by hand. Say so to the user if that is the update you are running.
 
 ## Rolling back on request
 
