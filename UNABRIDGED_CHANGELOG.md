@@ -8,6 +8,90 @@ For a concise summary, see [CHANGELOG.md](CHANGELOG.md).
 
 ### .agents
 
+The `crystallize-creation`, `heal-creation` and `update-creation` skills now start their tracking ticket in a separate command. Their old ticket block ran `tk start` together with `mkdir` and the ticket creation, which the tk-standalone hook always rejected, so agents had to resend it.
+
+An update no longer starts up and messages chats it paused only to free memory while they sat idle. `run-status stop-chats --agent <name>` records whether each named chat or background agent was busy (mid-turn, or waiting on a background command) when paused; `resume-chats` brings back and tells only the busy ones, and leaves an idle one stopped and untold, so the memory its pause freed stays free and no chat gets a "carry on" note with nothing to carry on. The next message to it starts it. A run record written before this change reads every paused agent as busy, as before.
+
+The update's own apply now stops its worker (the one the run record names) before it merges: the worker has reported `done`, and its idle session held memory the apply's pre-flight boots needed. An apply from another chat, such as a critical-app pass, leaves it alone. It is stopped, not destroyed, so a retry or catch-up message starts it again with its branch and conversation intact; a stop that fails is reported and the apply carries on.
+
+When the memory guard stops one of the apply's pre-flight boots, the apply's failure line now says so, with when and how much the boot held, and that memory must be freed before a retry, instead of only "(the pre-flight boot wrote nothing at all)". It reads the guard's own kill record for the boot's pid.
+
+The update memory guide tells the lead to judge free memory by the room the memory listing now reports above the guard's line.
+
+- An isolated instance booted from a git worktree now runs over copies of the user's live data. Before, `serve_isolated_instance.py --copy` and `preview_app.py` looked for an app's data, its secrets and the registry a shell preview copies inside the worktree, which has none of them, so a worker's instance silently started on an empty store with no secrets.
+
+- `preview_app.py up`, `mock_frame.py up` and `serve_isolated_instance.py` refuse to register a window from a git worktree, rather than writing it into the worktree's own registry, which the workspace never reads, so the user never saw it. `preview_app.py up --private` boots the instance with no window, for an agent to drive on its loopback port; it takes no `--with` siblings and will not replace a preview that has a window. The worker guide now uses it.
+
+- A preview window's default title is now `<App> (preview)` instead of the app name followed by the worktree's directory name.
+
+- A refusal from `preview_app.py` run as a script prints its one-line reason instead of a Python traceback.
+
+### system
+
+The earlyoom program's comment and the Screen spec describe the shed order with a chat left for hours at the top, above Chromium's processes, which now reach 960 rather than 1000.
+
+`models/request-error.ts` exports `sendFailureKindOf`, which reads a kind the chat app reported as a `SendFailureKind` (anything unrecognised is `"unknown"`). `describeRequestErrorKind` now uses it.
+
+The critical-app manual test plan (`docs/system/blueprint/critical-app-editing/test-plan.md`, C12) expects a preview's default banner to read `<display name> (preview)`, the title `preview_app.py up` now gives a preview with no `--title`.
+
+The desktop-interface and workspace-app-model contracts document a message handler's `reload_when_raised` and the `refresh` layout op the shell sends when such a handler's show raises an existing window at its `show` page.
+
+### system/apps/chat
+
+A chat left untouched for eight hours is now the first thing shed under memory pressure, ahead of a browser tab: the band the prioritizer writes for it rises in one line from the fresh band to the top of the scale, where it used to stop at 800 after a day. The schedule lives in `oom_priority.bands`; in the chat app only the prioritizer's tests and docstring changed.
+
+A new chat's first message is no longer lost when Claude is still starting.
+
+- A message held while its agent comes up used to get one try. That covers a new chat's first message, messages sent during a provider switch, and the ones a cancelled switch hands back. If mngr refused it, the chat app only logged the refusal: the agent never saw the message and the page kept showing the agent as thinking. A common case is Claude taking longer than mngr's 30-second readiness window to draw its input box on a first start.
+
+- A refusal that typed nothing and can clear by itself (a blocked input, a harness not ready yet, a host too loaded to answer) is now tried again after 5, 10, 20 and 30 seconds. A send the agent may already hold, such as one a dialog blocked after Claude took it, is still never sent twice.
+
+- A held message that still doesn't reach the agent is reported to the pages as a new `held_send_failed` socket message. The page whose composer sent it takes the message's bubble down, puts its words back in the composer and shows "Couldn't send your message" with the reason, the same way a refused send is shown.
+
+### system/apps/files
+
+Clicking a link to a file that is already open in a Files window reloads that window, so a file rewritten under the same name (an image an agent re-renders, say) shows its new content instead of the old one. A link to a folder that is already open still only raises its window, so an upload or selection in it is kept. The `open:file` handler declares `reload_when_raised = true`.
+
+### system/apps/screen
+
+Chromium's processes now land at 910 to 960 rather than 910 to 1000, with renderers at 960, so that a chat left for eight hours is shed before a tab holding the same memory. A chat left for about five and a half hours also climbs past the Screen's stack in the shed order, where every chat used to sit below it. The band sweep reads the range from `oom_priority.bands` and its code is unchanged; here only the README and the sweep's description of the order changed.
+
+### system/apps/system_interface
+
+A `show` message handler can declare `reload_when_raised`: when the `show` op for a relayed message raises a window already at the handler's `show` page, the shell then sends that client a `refresh` layout op for the window, so its page reloads. A window raised at one of the handler's `showing` pages is only raised, as is any window for a handler without the flag.
+
+The resource gauge now warns about sustained CPU load by default: when the workspace's CPU averages 90% or more over five minutes, the taskbar shows the CPU bar in the warning colour (labelled "CPU !"; hovering opens the card, clicking opens System Monitor on CPU). It sends no Imbue Studio notification, since a busy CPU usually clears by itself; agents are still told at their next message. Short bursts no longer count: the warning waits for a full five minutes of readings. The level can be changed or turned off in the gauge's settings.
+
+### system/libs/app_manifest
+
+A message handler takes `reload_when_raised` (boolean, default false, only beside `show`): a window the handler's show raises at its `show` page itself has its page reloaded.
+
+### system/libs/app_registration
+
+App registration copies a message handler's `reload_when_raised` onto the registry row, and refuses one that is not a boolean or that is given beside `path`.
+
+### system/libs/workspace_ui
+
+`models/request-error.ts` exports `sendFailureKindOf`, which reads a kind the chat app reported as a `SendFailureKind` (anything unrecognised is `"unknown"`). `describeRequestErrorKind` now uses it.
+
+### system/services/oom_priority
+
+A chat left alone for eight hours is now shed before anything else, a browser tab included. A chat used to stop climbing at 800 a day after it was last used, so under memory pressure a workspace lost its browser, then the commands its agents were running, then the Screen, and only then a chat nobody had opened in weeks. It now climbs in one line from 560 at an hour idle to 1000 at eight: past a worker agent at about an hour and forty minutes, the Screen's stack at about five and a half hours, an agent's subprocesses at about six and a half, and Chromium's renderers at about seven and a half. What an open tab, a visible tab and a recent message take off a chat's score fades out over those same hours, where it used to take a day. A chat that is mid-turn, or waiting on one of its harness's own background tasks, still does not age.
+
+Chromium's processes are remapped into 910 to 960, where they used to reach 1000: renderers sit at 960 and the GPU and utility processes at 943, so that of an aged chat and a tab holding the same memory the chat goes first. A Chromium that is already running keeps the scores it has until it restarts, since the Screen's sweep only raises.
+
+`bands` is laid out as its types, the tables that fill them in, and the functions that read the tables. The chat policy's separate tunables become two tables: `CHAT_STAGES`, the stages a chat left alone passes through (for each, the idle time it is reached at, its band, and how much engagement still counts), and `CHAT_ENGAGEMENT`, what each engagement signal is worth. The browser band's three constants become `BROWSER`. Of the names other code reads, `SHARED_BROWSER` is now 960 and `CHAT_AGENT_STALE_CEILING` is gone with the stage it named; the rest (`CHAT_AGENT_BASE`, `SHARED_BROWSER_FLOOR`, `SERVICE_BANDS`, and so on) keep their values.
+
+How long a chat must be left to count as aged is the one idle time on the `aged` row of `CHAT_STAGES`. `chat_agent_oom_score_adj` takes the stage table as an optional argument, so a schedule can be tried without editing the module.
+
+`memory_candidates.py` now says how much of the free memory is left before the memory guard starts stopping processes, on its free memory line and as `shed_line_kib` / `room_kib` in its JSON. The guard acts at the share of `MemTotal` its `earlyoom.conf` program line passes as `-m`, not at zero, so "1051 MiB free" on a 6.4 GiB workspace is about 410 MiB of room; an update's lead read the first figure as room for an apply and had its pre-flight boot stopped. The threshold is read from the program line itself, and the clause is left out when it cannot be read.
+
+The shed ledger's path documentation names update-self's pre-flight boot as a second place that recomputes it.
+
+## 2026-11-18
+
+### .agents
+
 The `datalib` skill now installs datalib v0.55.0. Search runs on datalib's own index, with qmd gone from the Node runtime, so the first-use download drops from about 195 MB to about 160 MB. The Claude source also downloads Cowork tasks, Baby Connect is a new source, and a person can mute a problem row they have already seen. Raw stores only gain columns and tables (each `problems` table, Claude's Cowork tables), so a reader of an existing store keeps working.
 
 Address user feedback and internal inconsistencies in Latchkey-related skills.

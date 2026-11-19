@@ -1,1 +1,0 @@
-The `crystallize-creation`, `heal-creation` and `update-creation` skills now start their tracking ticket in a separate command. Their old ticket block ran `tk start` together with `mkdir` and the ticket creation, which the tk-standalone hook always rejected, so agents had to resend it.
