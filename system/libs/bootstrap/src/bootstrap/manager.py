@@ -869,8 +869,8 @@ def _rollback_to_report(
     """The rollback to hand the marker's DRI agent, or None when it named none."""
     if not marker.dri_agent:
         logger.warning(
-            "That apply's marker named no agent to re-engage, so nothing will tell "
-            "the user the update was undone"
+            "That apply's marker named no agent to re-engage, so no agent will tell "
+            "the user the apply was rolled back"
         )
         return None
     return BootRollback(
