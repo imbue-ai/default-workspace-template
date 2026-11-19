@@ -5,7 +5,7 @@
 
 import m from "mithril";
 
-import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
+import type { ReportedFailure, ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 import {
   EMBEDDER_CAPABILITIES,
   OPEN_LOCAL_FILES,
@@ -22,6 +22,7 @@ import { isTextLike } from "../models/fileKinds";
 import { decodePathname, titleOf } from "../models/paths";
 import { sourcesFromFileList } from "../models/uploads";
 import { isAnySyncMoving, isLiveShared } from "../models/connections";
+import { reportBugAction, type FailureHost } from "../models/failures";
 import { Dialogs } from "./dialogs";
 
 /** How often the shares, and the folders on screen, are read again while the window is on screen: often while a sync
@@ -34,6 +35,11 @@ const IDLE_POLL_MS = 15000;
  *  file a sync brings in shows within a couple of seconds. One stat a folder on the server; a folder is fetched again
  *  only when it changed. */
 const FOLDER_CHECK_MS = 2000;
+/** The longest path a window can be at (workspace_layout's ``MAX_WINDOW_PATH_LENGTH``): the shell refuses a longer
+ *  one. */
+const MAX_WINDOW_PATH_LENGTH = 2048;
+const TOO_LONG_FOR_A_WINDOW =
+  "This file's location is too long to open in a window of its own. Download it from the folder instead.";
 
 /** Below this width the window lays itself out for a phone: the sidebar floats over the folder, and one tap opens. A
  *  desktop window this narrow is rare; one a little wider keeps its sidebar beside the folder. */
@@ -115,6 +121,11 @@ export class FilesController {
         confirmDelete: (entries) => this.dialogs.confirmDelete(entries),
         confirmReplace: (names) => this.dialogs.confirmReplace(names),
         askNewName: (suggested, isFolder) => this.dialogs.askNewName(suggested, isFolder),
+        hasShell: () => connection.hasShell(),
+        startWithText: (text, options) => connection.startWithText(text, options),
+        askAgent: (text, options) => connection.askAgent(text, options),
+        canReportBug: () => connection.canReportBug(),
+        reportBug: (failure) => connection.reportBug(failure),
       },
       folder,
       initial,
@@ -137,6 +148,16 @@ export class FilesController {
     setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) =>
       this.setOpensLocalFiles(message.opensLocalFiles === true),
     );
+  }
+
+  /** The shell connection a failure's buttons go through. */
+  get failureHost(): FailureHost {
+    return this.connection;
+  }
+
+  /** What the toasts' "Report a bug" does as they are drawn; null while Imbue Studio opens no bug report here. */
+  reportBugAction(): ((failure: ReportedFailure) => void) | null {
+    return reportBugAction(this.connection);
   }
 
   /** The shell showed or hid the window: a hidden one stops reading, and one shown again reads now. */
@@ -218,11 +239,19 @@ export class FilesController {
     this.reportLocation(folder);
   }
 
-  /** A file's page, in a window of its own that is closed when done with; in place only outside the workspace. */
+  /** A file's page, in a window of its own that is closed when done with; in place only outside the workspace. A
+   *  path longer than a window can be at is told here rather than refused by the shell. */
   openPage(path: string, page: "view" | "edit"): void {
     const url = pageUrlOf(path, page);
-    if (this.connection.isFramed) this.connection.openPath(url, "focus");
-    else this.win.location.assign(url);
+    if (!this.connection.isFramed) {
+      this.win.location.assign(url);
+      return;
+    }
+    if (url.length > MAX_WINDOW_PATH_LENGTH) {
+      this.model.toasts.show(TOO_LONG_FOR_A_WINDOW);
+      return;
+    }
+    this.connection.openPath(url, "focus");
   }
 
   openInNewWindow(folder: string): void {
