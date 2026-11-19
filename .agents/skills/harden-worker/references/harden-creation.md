@@ -146,8 +146,8 @@ a pass over two apps edited to work together is one job (the seam between them
 is what most needs testing, and only a worker holding both sides can test it),
 while a pass over two creations changed for unrelated reasons may be two.
 
-Launch each sibling with the launch-task skill exactly as a chat agent would
-(`.agents/skills/launch-task/SKILL.md`). Name each sibling with your own worker
+Launch each sibling with the `launch-task` skill exactly as a chat agent would.
+Name each sibling with your own worker
 name as the prefix (`update-roadmap-ingest`, `update-roadmap-frontend`): names
 are unique across the host in every state, so a re-run of the same pass reaches
 the same names only after the old pass has been superseded and destroyed. You
