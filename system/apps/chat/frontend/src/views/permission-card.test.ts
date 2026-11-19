@@ -1,10 +1,21 @@
 import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as embedContract from "@minds/embed-contract";
+
+// apiUrl reads the base path from a <meta> tag, which vitest's node environment
+// has no document for; identity keeps the fetched URLs the bare /api paths.
+vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
+
 import { resetEmbedEndpointForTesting } from "@imbue/workspace-ui/src/embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
+import {
+  enableCloudConnections,
+  resetCloudConnectionsOffersForTesting,
+  seedCloudConnectionsOffer,
+} from "./cloud-connections-offer";
 import type { ScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
+import type { CloudConnectionsOfferView } from "./permission-card";
 import {
   PermissionCard,
   isFiledPermissionRequest,
@@ -682,6 +693,130 @@ describe("renderPermissionCard", () => {
     const badge = findByClass(vnode, "permission-request-badge--sm");
     expect(trustedHtmlIn(badge)).toContain(CUBE_PATH);
     expect(textOf(findByClass(vnode, "permission-request-receipt-title"))).toBe("Permission request");
+  });
+});
+
+/** A pending Slack request's card carrying the offer of the account's own connections. */
+function renderCardWithOffer(
+  offer: Partial<CloudConnectionsOfferView>,
+  resolution: PermissionResolution | null = null,
+): m.Vnode {
+  const toolResult = makeResult(PERMISSION_OUTPUT);
+  const details = parsePermissionRequest(makeToolCall(PERMISSION_INPUT.length, "permission_request"), toolResult);
+  const view: CloudConnectionsOfferView = {
+    providerName: "Anthropic",
+    isOpen: false,
+    isBusy: false,
+    error: null,
+    onToggle: () => {},
+    onEnable: () => {},
+    ...offer,
+  };
+  return renderPermissionCard(details, null, resolution, "", true, false, () => {}, view);
+}
+
+const CLICK = { preventDefault() {}, stopPropagation() {} } as unknown as Event;
+
+describe("the cloud-connections offer on the card", () => {
+  beforeEach(() => {
+    resetCloudConnectionsOffersForTesting();
+  });
+
+  afterEach(() => {
+    resetCloudConnectionsOffersForTesting();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("is one quiet line under the review button until it is opened", () => {
+    const onToggle = vi.fn();
+    const vnode = renderCardWithOffer({ onToggle });
+
+    const toggle = findByClass(vnode, "permission-request-cloud-offer-toggle");
+    expect(textOf(toggle)).toBe(
+      "Alternatively, you could enable the existing connections associated with your Anthropic account.",
+    );
+    expect(findByClass(vnode, "permission-request-cloud-offer-warning")).toBeNull();
+    expect(findByClass(vnode, "btn--secondary")).toBeNull();
+    // The request itself is still there to review.
+    expect(findReviewButton(vnode)).not.toBeNull();
+
+    (toggle?.attrs?.onclick as (e: Event) => void)(CLICK);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens onto a warning and the button that takes the offer", () => {
+    const onEnable = vi.fn();
+    const vnode = renderCardWithOffer({ isOpen: true, providerName: "OpenAI", onEnable });
+
+    const warning = findByClass(vnode, "permission-request-cloud-offer-warning");
+    expect(textOf(warning)).toContain("This circumvents Imbue Studio's permission guarantees");
+    expect(textOf(warning)).toContain("your OpenAI account");
+    expect(trustedHtmlIn(warning)).toContain("<svg");
+    const button = findByClass(vnode, "btn--secondary");
+    expect(textOf(button)).toBe("Enable existing cloud connections");
+
+    (button?.attrs?.onclick as (e: Event) => void)(CLICK);
+    expect(onEnable).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the chat is restarting while the offer is being taken, and shows why it failed", () => {
+    const busy = renderCardWithOffer({ isOpen: true, isBusy: true });
+    const button = findByClass(busy, "btn--secondary");
+    expect(textOf(button)).toBe("Restarting the chat\u2026");
+    expect(button?.attrs?.disabled).toBe(true);
+
+    const failed = renderCardWithOffer({
+      isOpen: true,
+      error: "The chat's cloud connections could not be turned on.",
+    });
+    expect(textOf(findByClass(failed, "permission-request-cloud-offer-error"))).toBe(
+      "The chat's cloud connections could not be turned on.",
+    );
+  });
+
+  it("is gone from a resolved card, whose receipt says the connections were enabled instead", () => {
+    const vnode = renderCardWithOffer({ isOpen: true }, "cloud_connections");
+
+    expect(findByClass(vnode, "permission-request-cloud-offer")).toBeNull();
+    const verdict = findByClass(vnode, "permission-request-verdict");
+    expect(textOf(verdict)).toBe("Cloud connections enabled instead");
+    expect(findByClass(vnode, "permission-request-verdict--cloud_connections")).not.toBeNull();
+    expect(findReviewButton(vnode)).toBeNull();
+  });
+
+  it("is drawn by the live card when the backend offers it, and replaced by the receipt once taken", async () => {
+    vi.spyOn(m, "redraw").mockImplementation(() => undefined);
+    seedCloudConnectionsOffer("chat-1", "slack-api", { is_offered: true, provider_name: "Anthropic" });
+    seedCloudConnectionsOffer("chat-2", "slack-api", { is_offered: false, provider_name: null });
+    const card = PermissionCard();
+    const attrsFor = (chatId: string): Parameters<typeof card.view>[0] =>
+      ({
+        attrs: {
+          toolCall: makeToolCall(PERMISSION_INPUT.length, "permission_request"),
+          toolResult: makeResult(PERMISSION_OUTPUT),
+          resolution: null,
+          chatId,
+          assistantEventId: "evt-1",
+        },
+      }) as unknown as Parameters<typeof card.view>[0];
+
+    expect(findByClass(card.view(attrsFor("chat-2")), "permission-request-cloud-offer")).toBeNull();
+    const pending = card.view(attrsFor("chat-1"));
+    const toggle = findByClass(pending, "permission-request-cloud-offer-toggle");
+    expect(toggle).not.toBeNull();
+    (toggle?.attrs?.onclick as (e: Event) => void)(CLICK);
+    expect(findByClass(card.view(attrsFor("chat-1")), "permission-request-cloud-offer-warning")).not.toBeNull();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) })),
+    );
+    await enableCloudConnections("chat-1", "885711ec07bf47239d71294e1534330b");
+
+    const taken = card.view(attrsFor("chat-1"));
+    expect(textOf(findByClass(taken, "permission-request-verdict"))).toBe("Cloud connections enabled instead");
+    expect(findByClass(taken, "permission-request-cloud-offer")).toBeNull();
   });
 });
 

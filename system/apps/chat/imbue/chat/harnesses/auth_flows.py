@@ -285,6 +285,9 @@ class AuthFlowService:
     # Returns nothing: the restart runs on its own thread, because it is serial subprocesses
     # with a 60s timeout each and this service holds one lock across every route.
     _restart_bound_agents: Callable[[str], None]
+    # Told of every account a flow signs in, new or signed in again, once its row is committed.
+    # Injected for the same reasons, and must return at once: it is called under this service's lock.
+    _on_signed_in: Callable[[accounts.Account], None]
     _lock: threading.Lock
     _session: _Session | None
     _spawner: Callable[..., Any]
@@ -301,6 +304,7 @@ class AuthFlowService:
         spawner: Callable[..., Any] | None = None,
         probe: Callable[[HarnessType, Path], SignedIn] | None = None,
         restart_bound_agents: Callable[[str], None] | None = None,
+        on_signed_in: Callable[[accounts.Account], None] | None = None,
         fetch_callback: CallbackFetcher | None = None,
         clock: Callable[[], float] | None = None,
         login_client_connector: Callable[[Path], CodexLoginClient] | None = None,
@@ -320,6 +324,7 @@ class AuthFlowService:
         service._spawner = spawner or spawn_pty
         service._probe = probe or is_signed_in
         service._restart_bound_agents = restart_bound_agents or (lambda _account_id: None)
+        service._on_signed_in = on_signed_in or (lambda _account: None)
         service._fetch_callback = fetch_callback or fetch_loopback_callback
         service._clock = clock or time.monotonic
         service._connect_login_client = login_client_connector or connect_login_client
@@ -840,6 +845,7 @@ class AuthFlowService:
         if isinstance(method, PtyMethod) and method.result_sink is None and session.lane.harness is HarnessType.CLAUDE:
             _drop_claude_env_credential(accounts.account_dir(session.account_id, self._home))
         account = accounts.commit_account(session.account_id, session.lane.id, display, self._home)
+        self._on_signed_in(account)
         # A re-auth is only worth doing if the chats on that account come back. They do not on
         # their own: claude reads its settings env at process start, and nothing shows codex's
         # daemon re-reading a swapped credential either. One rule for every harness rather than

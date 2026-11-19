@@ -97,7 +97,9 @@ observe`, its own supervised service) writes, and serves:
   `/api/chats/<chat-id>/uploads`),
   `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/latchkey`, and
   `/api/secret-requests` (an agent's `request_secret.py` files a secret request;
-  the transcript's secret card submits, declines, and re-reads it).
+  the transcript's secret card submits, declines, and re-reads it). The per-chat
+  `cloud-connections` routes are the permission card's offer of the account's own
+  connections ("Cloud connections" below).
   `/api/agents` is the plain listing of every mngr agent (the loopback callers'
   view of background agents too); the older `/api/agents/<id>/...` spellings of
   the per-chat routes are gone.
@@ -1001,6 +1003,49 @@ was connected still gets its window whenever someone finally connects. The one
 exception is a workspace with no ledger to read (its chats predate this app
 keeping one, or the file was lost): every labeled chat it already has is adopted
 as shown, since a window for each is worse than missing one.
+
+## Cloud connections
+
+A Claude subscription or a ChatGPT account can have third-party services connected on the
+provider's own side (claude.ai connectors, ChatGPT apps), which claude and codex load as MCP
+servers the provider hosts. The workspace turns that off for every agent (`.mngr/settings.toml`:
+`ENABLE_CLAUDEAI_MCP_SERVERS=false` in the host's env file, `features.apps = false` in each codex
+agent's config), because those connections reach a service without the latchkey gateway and the
+permissions granted there. A permission card can offer the way around
+(`cloud_connections.py`, `harnesses/cloud_connections.py`).
+
+When an account signs in, the chat app asks its provider once, on a thread of its own, which
+connectors the account has connected, and keeps the names in the account's folder
+(`.cloud_connections.json`): claude's from the endpoint Claude Code itself reads, with the token a
+subscription sign-in leaves there, and codex's from `app/list` on a short-lived `codex app-server`
+bound to the account. The list is never read again, and a read that fails keeps nothing, so no
+offer is ever made for that account. An account signed in before this existed has no list until
+it signs in again.
+
+The card of a pending request for a service asks `GET /api/chats/<chat-id>/cloud-connections?scope=<scope>`.
+The offer is made when the chat's agent runs claude or codex, does not load its account's
+connections yet, the workspace is not shared (nobody is granted it or one of its apps, and no
+visiting agent is admitted), the request comes from the owner, and one of the account's
+connectors is named like the service: its name contains the service's catalog key read as words
+and without a trailing `-mcp` (`google-gmail` as "google gmail"), or the catalog's display name
+without a parenthesized transport ("Notion (MCP)" as "notion"), whatever the case. Whether an
+agent loads the connections is read off the agent itself each time (the `ENABLE_CLAUDEAI_MCP_SERVERS`
+line its env file or its host's leaves it with; `features.apps` in its `config.toml`), so nothing
+else records it.
+
+The offer is one line under the card's button; opening it shows that it circumvents Imbue
+Studio's permission guarantees and a button that takes it,
+`POST /api/chats/<chat-id>/cloud-connections/enable` with the request's id. That sets the agent's
+own switch (which only that agent reads, so other chats and new ones are unaffected), removes the
+permission request from the gateway (`DELETE /permission-requests/<id>`, which Imbue Studio hears
+of), restarts the agent, since both harnesses read the switch as they start, and sends it a
+notice saying what happened. The notice carries the permission-resolution tag with a verdict of
+its own (`cloud_connections`), so the page draws no row for it and the card reads "Cloud
+connections enabled instead". Messages queued for the agent are sent again after the notice. The
+route answers 403 to a visitor and in a shared workspace, 409 for a chat that already loads the
+connections, is switching agents, or is a preview, and 500 when the switch cannot be written or
+the agent will not restart; the switch is written before the restart, so a failed restart still
+takes effect on the agent's next start.
 
 ## Dictation
 

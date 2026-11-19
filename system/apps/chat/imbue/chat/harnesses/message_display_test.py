@@ -24,6 +24,7 @@ from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_NOTE_TAG
 from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_OUTCOME_LANDED
 from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_OUTCOME_NOT_LANDED
 from imbue.chat.harnesses.message_display import classify_user_message
+from imbue.chat.harnesses.message_display import format_cloud_connections_notice
 from imbue.chat.harnesses.message_display import format_secret_resolution_notice
 from imbue.chat.harnesses.message_display import is_non_turn_tail
 from imbue.chat.harnesses.message_display import split_background_task_reports
@@ -342,6 +343,31 @@ def test_permission_resolution_reads_the_machine_tag_first() -> None:
     assert display.display == DisplayKind.PERMISSION_RESOLUTION
     assert display.resolution == "denied"
     assert display.request_id == "evt-9"
+
+
+def test_the_cloud_connections_notice_is_a_resolution_of_the_request_it_names() -> None:
+    """The chat app's own notice draws no row and marks the card of the request it was offered on, as a verdict of
+    its own rather than a grant or a denial."""
+    notice = format_cloud_connections_notice("OpenAI", "evt-9")
+    assert "cloud MCP connections of their OpenAI account" in notice
+    display = classify_user_message(notice)
+    assert display is not None
+    assert display.display == DisplayKind.PERMISSION_RESOLUTION
+    assert display.resolution == "cloud_connections"
+    assert display.request_id == "evt-9"
+
+
+def test_the_skill_tells_the_agent_what_the_cloud_connections_notice_means() -> None:
+    """The notice sends the agent to a section of the connect-external-service skill, which quotes the notice's
+    opening words and its tag; an edit to either side has to keep the other."""
+    skill = (Path(__file__).resolve().parents[6] / ".agents/skills/connect-external-service/SKILL.md").read_text()
+    notice = format_cloud_connections_notice("Anthropic", "<id>")
+    opening = "The user chose to enable the cloud MCP connections of their Anthropic account"
+    tag = "(resolution: cloud_connections, request_id: <id>)"
+    section = "Connections the user turned on themselves"
+    assert notice.startswith(opening) and notice.endswith(tag) and f'("{section}")' in notice
+    assert f"{opening} ... {tag}" in skill
+    assert f"## {section}\n" in skill
 
 
 def test_the_messaging_scripts_browser_fleet_tag_is_the_one_this_classifier_strips() -> None:
