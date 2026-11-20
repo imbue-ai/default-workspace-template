@@ -11,6 +11,7 @@ the workspace behaves as asked at once while the delivery to the account runs
 """
 
 import threading
+from collections.abc import Mapping
 from collections.abc import Sequence
 from functools import cache
 from pathlib import Path
@@ -104,8 +105,10 @@ def resolve_assignment_source(
     snapshot: WorkspaceProfileSnapshot | None,
     identity: RequestIdentity,
     workspace_root: Path,
+    delivered: Mapping[str, Mapping[str, Sequence[str]]],
 ) -> str:
-    """Which layer answers the action for this identity, by the resolution's own order."""
+    """Which layer answers the action for this identity, by the resolution's own order; an unsent save the account
+    has taken (``delivered``) reads as the account's, which it is."""
     user_id = resolve_request_user_id(identity, snapshot)
     if user_id is not None:
         if (
@@ -114,8 +117,10 @@ def resolve_assignment_source(
         ):
             return SOURCE_WORKSPACE
     if identity.owner:
-        if effective_keybinding_assignment(load_unsent_change_values(workspace_root), app_name, action_id) is not None:
-            return SOURCE_UNSENT
+        unsent_chords = effective_keybinding_assignment(load_unsent_change_values(workspace_root), app_name, action_id)
+        if unsent_chords is not None:
+            is_delivered = list(delivered.get(app_name, {}).get(action_id, ())) == unsent_chords
+            return SOURCE_ACCOUNT if is_delivered else SOURCE_UNSENT
         if (
             snapshot is not None
             and effective_keybinding_assignment(snapshot.value_by_key, app_name, action_id) is not None
@@ -167,20 +172,28 @@ def discard_unsent_keybinding(workspace_root: Path, owner_user_id: str, app_name
         )
 
 
-def clear_delivered_keybindings(
+def clear_delivered_override_copies(
     workspace_root: Path, owner_user_id: str, delivered: dict[str, dict[str, list[str]]]
 ) -> None:
-    """Drop the delivered assignments from the unsent file, and from the owner's override file where the
-    override still carries exactly the delivered value (a different value there is a deliberate
-    "only in this workspace" choice made since, and stays)."""
+    """Drop the owner's override copies of the delivered assignments, where the override still carries exactly the
+    delivered value (a different value there is a deliberate "only in this workspace" choice made since, and stays).
+    The unsent copies stay until the snapshot carries them (``settle_delivered_keybindings``)."""
     with PROFILE_FILES_LOCK:
-        unsent = load_unsent_change_values(workspace_root)
         overrides = load_user_override_values(workspace_root, owner_user_id)
         for app_name, chords_by_action in delivered.items():
             for action_id, chords in chords_by_action.items():
-                if keybinding_assignment(unsent, app_name, action_id) == list(chords):
-                    unsent = without_keybinding_assignment(unsent, app_name, action_id)
                 if keybinding_assignment(overrides, app_name, action_id) == list(chords):
                     overrides = without_keybinding_assignment(overrides, app_name, action_id)
-        write_unsent_change_values(workspace_root, unsent)
         write_user_override_values(workspace_root, owner_user_id, overrides)
+
+
+def drop_settled_unsent_keybindings(workspace_root: Path, settled: dict[str, dict[str, list[str]]]) -> None:
+    """Drop the unsent copies of delivered assignments the snapshot now answers for, where the unsent file still
+    carries exactly the delivered value (a different one is a newer save, still to deliver)."""
+    with PROFILE_FILES_LOCK:
+        unsent = load_unsent_change_values(workspace_root)
+        for app_name, chords_by_action in settled.items():
+            for action_id, chords in chords_by_action.items():
+                if keybinding_assignment(unsent, app_name, action_id) == list(chords):
+                    unsent = without_keybinding_assignment(unsent, app_name, action_id)
+        write_unsent_change_values(workspace_root, unsent)

@@ -113,7 +113,7 @@ export const HIGHLIGHT_CHROME: "minds:highlight-chrome" =
 export const OPEN_LOCAL_FILES: "minds:open-local-files" =
   "OPEN_LOCAL_FILES" in embedContract ? embedContract.OPEN_LOCAL_FILES : "minds:open-local-files";
 
-// Workspace -> embedder (contract v15): the state of the keyboard shortcuts page Imbue Studio's Workspace settings
+// Workspace -> embedder (contract v16): the state of the keyboard shortcuts page Imbue Studio's Workspace settings
 // frames. Payload: { height, isRecording }: the page's height in CSS px, which the frame takes, and whether its
 // recorder is listening for a new shortcut, while which Imbue Studio closes nothing on Escape, runs no shortcut, and
 // hands the recorder every key (RECORD_CHORD). The first one says the page has loaded; until then the settings pane
@@ -121,13 +121,13 @@ export const OPEN_LOCAL_FILES: "minds:open-local-files" =
 export const KEYBOARD_SHORTCUTS_PAGE: "minds:keyboard-shortcuts-page" =
   "KEYBOARD_SHORTCUTS_PAGE" in embedContract ? embedContract.KEYBOARD_SHORTCUTS_PAGE : "minds:keyboard-shortcuts-page";
 
-// Workspace -> embedder (contract v15): open the chrome's Workspace settings at its Keyboard shortcuts group. Payload:
+// Workspace -> embedder (contract v16): open the chrome's Workspace settings at its Keyboard shortcuts group. Payload:
 // {}. Sent only to an embedder that said ``opensKeyboardShortcuts`` with EMBEDDER_CAPABILITIES; without one the shell
 // opens its own keyboard shortcuts dialog.
 export const OPEN_KEYBOARD_SHORTCUTS: "minds:open-keyboard-shortcuts" =
   "OPEN_KEYBOARD_SHORTCUTS" in embedContract ? embedContract.OPEN_KEYBOARD_SHORTCUTS : "minds:open-keyboard-shortcuts";
 
-// The keyboard shortcuts relays (contract v15, the keyboard-shortcuts spec in the mngr repo, section 6), probed the same
+// The keyboard shortcuts relays (contract v16, the keyboard-shortcuts spec in the mngr repo, section 6), probed the same
 // way. Workspace -> embedder: the workspace-wide actions' active chords and every app's, filtered for where the
 // workspace runs, after WORKSPACE_READY and on every keybindings change, so the desktop app can run them where the
 // shell hears no key (the terminal, the Screen, a pulled-out window). Payload: { chords_by_action, claimed_chords }.
@@ -152,7 +152,7 @@ export const CHROME_SHORTCUTS: "minds:chrome-shortcuts" =
 // answers with CHROME_SHORTCUTS. Payload: { id, chords }.
 export const SAVE_CHROME_SHORTCUT: "minds:save-chrome-shortcut" =
   "SAVE_CHROME_SHORTCUT" in embedContract ? embedContract.SAVE_CHROME_SHORTCUT : "minds:save-chrome-shortcut";
-// The most chords one action may hold (contract v15): a receiver drops a shortcuts message carrying more, so no save
+// The most chords one action may hold (contract v16): a receiver drops a shortcuts message carrying more, so no save
 // may hold more.
 export const MAX_CHORDS_PER_ACTION: number =
   "MAX_CHORDS_PER_ACTION" in embedContract ? embedContract.MAX_CHORDS_PER_ACTION : 16;

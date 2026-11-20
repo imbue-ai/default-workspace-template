@@ -3,6 +3,9 @@
 import json
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +21,11 @@ from workspace_profile.overrides import load_user_override_values
 from workspace_profile.overrides import write_user_override_values
 from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 
+from imbue.system_interface.shell.keybindings import save_unsent_keybinding
 from imbue.system_interface.shell.keybindings import shell_keybinding_actions
 from imbue.system_interface.shell.keybindings_delivery import ENV_AGENT_ID
+from imbue.system_interface.shell.keybindings_delivery import KeybindingsDeliveryStore
+from imbue.system_interface.shell.keybindings_delivery import settle_delivered_keybindings
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import shell_application
@@ -84,7 +90,7 @@ def _repo_root(tmp_path: Path) -> Path:
     return tmp_path / "repo"
 
 
-def _write_snapshot(tmp_path: Path, keybindings: dict[str, Any]) -> None:
+def _write_snapshot(tmp_path: Path, keybindings: dict[str, Any], written_at: str = "2026-10-28T00:00:00Z") -> None:
     path = _repo_root(tmp_path) / SNAPSHOT_RELATIVE_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -93,7 +99,7 @@ def _write_snapshot(tmp_path: Path, keybindings: dict[str, Any]) -> None:
                 "snapshot_format": 1,
                 "account_id": "account-1",
                 "owner_user_id": "owner-1",
-                "written_at": "2026-10-28T00:00:00Z",
+                "written_at": written_at,
                 "written_by": "web",
                 "keybindings": keybindings,
             }
@@ -418,6 +424,8 @@ def _fake_gateway_app(record: dict[str, Any]) -> Flask:
     @gateway.put("/minds-api-proxy/api/v1/workspaces/<workspace_id>/account-settings/keybindings")
     def put_keybindings(workspace_id: str) -> Any:
         record["puts"].append({"workspace_id": workspace_id, "body": flask_request.get_json(force=True)})
+        if record["during_put"] is not None:
+            record["during_put"]()
         if not record["is_granted"]:
             return {"detail": "not permitted"}, 403
         return {"account_id": "account-1", "keybindings": flask_request.get_json(force=True)["keybindings"]}, 200
@@ -433,7 +441,7 @@ def _fake_gateway_app(record: dict[str, Any]) -> Flask:
 @contextmanager
 def _served_fake_gateway(monkeypatch: pytest.MonkeyPatch) -> Generator[dict[str, Any], None, None]:
     """Serve the stand-in gateway and point the shell's environment at it; yields the gateway's record."""
-    record: dict[str, Any] = {"puts": [], "requests": [], "is_granted": False}
+    record: dict[str, Any] = {"puts": [], "requests": [], "is_granted": False, "during_put": None}
     with serve_app(_fake_gateway_app(record)) as served:
         monkeypatch.setenv(ENV_GATEWAY, f"http://{served.host}:{served.port}")
         monkeypatch.setenv(ENV_GATEWAY_PASSWORD, "pw")
@@ -473,7 +481,7 @@ def test_the_everywhere_save_files_one_permission_request_and_delivers_once_gran
         assert len(record["requests"]) == 1
 
         # Once granted, the delivery lands the merged account value (the snapshot's
-        # other assignment rides along) and clears the optimistic layers.
+        # other assignment rides along).
         record["is_granted"] = True
         delivered = client.post("/api/keybindings/deliver", json={"resolution": "granted"})
         assert delivered.get_json()["status"] == "DELIVERED"
@@ -484,9 +492,8 @@ def test_the_everywhere_save_files_one_permission_request_and_delivers_once_gran
                 "system_interface": {"launcher-secondary-send": ["alt+enter"]},
             }
         }
+        # The owner's override copy goes: the account holds the value now.
         repo_root = _repo_root(tmp_path)
-        assert load_unsent_change_values(repo_root) == {}
-        # The owner's override copy of the delivered value goes too: the account answers now.
         assert load_user_override_values(repo_root, "owner-1") == {}
 
 
@@ -523,3 +530,183 @@ def test_a_denied_resolution_keeps_the_saves_and_allows_a_later_refiling(
             },
         )
         assert len(record["requests"]) == 2
+
+
+def _launcher_send(client: FlaskClient) -> dict[str, Any]:
+    catalog = client.get("/api/keybindings/catalog").get_json()
+    shell_app = next(app for app in catalog["apps"] if app["app"] == "system_interface")
+    return next(action for action in shell_app["actions"] if action["id"] == "launcher-secondary-send")
+
+
+def _save_everywhere(client: FlaskClient, chords: list[str]) -> dict[str, Any]:
+    answered = client.post(
+        "/api/keybindings",
+        json={"app": "system_interface", "action": "launcher-secondary-send", "chords": chords, "scope": "account"},
+    )
+    return answered.get_json()
+
+
+def _after_the_delivery() -> str:
+    """A written_at the desktop would stamp on a snapshot it worked out after taking a delivery sent just now."""
+    return (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
+
+
+def _settle(tmp_path: Path) -> None:
+    """What the shell's snapshot watch runs when the desktop rewrites the snapshot."""
+    settle_delivered_keybindings(_repo_root(tmp_path), KeybindingsDeliveryStore(state_directory=tmp_path / "state"))
+
+
+def test_a_delivered_save_keeps_applying_until_the_snapshot_carries_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _served_fake_gateway(monkeypatch) as record:
+        record["is_granted"] = True
+        client = _client(tmp_path)
+        _write_snapshot(tmp_path, {})
+
+        assert _save_everywhere(client, ["alt+enter"])["delivery"]["status"] == "DELIVERED"
+
+        # The desktop has not rewritten the snapshot yet: the save still resolves, reads as the
+        # account's, and is not offered as undelivered.
+        me = client.get("/api/keybindings/me").get_json()
+        assert me["chords_by_action"]["launcher-secondary-send"] == ["alt+enter"]
+        action = _launcher_send(client)
+        assert (action["chords"], action["reset_chords"], action["source"]) == (
+            ["alt+enter"],
+            ["alt+enter"],
+            "account",
+        )
+        assert client.get("/api/keybindings/catalog").get_json()["unsent"] == []
+        # A retry has nothing to send.
+        assert client.post("/api/keybindings/deliver", json={}).get_json()["status"] == "NOTHING_TO_DELIVER"
+        assert len(record["puts"]) == 1
+
+        # A snapshot the desktop worked out before it took the save can land after it: the save still applies.
+        _write_snapshot(tmp_path, {"files": {"rename": ["f3"]}}, "2026-10-28T00:00:05Z")
+        _settle(tmp_path)
+        assert client.get("/api/keybindings/me").get_json()["chords_by_action"]["launcher-secondary-send"] == [
+            "alt+enter"
+        ]
+
+        # The first snapshot written after the delivery settles it: the unsent copy goes, the snapshot answers.
+        _write_snapshot(
+            tmp_path, {"system_interface": {"launcher-secondary-send": ["alt+enter"]}}, _after_the_delivery()
+        )
+        _settle(tmp_path)
+        assert load_unsent_change_values(_repo_root(tmp_path)) == {}
+        assert _launcher_send(client)["chords"] == ["alt+enter"]
+
+
+def test_a_newer_snapshot_with_another_value_settles_a_delivered_save(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _served_fake_gateway(monkeypatch) as record:
+        record["is_granted"] = True
+        client = _client(tmp_path)
+        _write_snapshot(tmp_path, {})
+        _save_everywhere(client, ["alt+enter"])
+
+        # Another computer changed the action after this delivery: the account's newer value wins.
+        _write_snapshot(
+            tmp_path, {"system_interface": {"launcher-secondary-send": ["ctrl+enter"]}}, _after_the_delivery()
+        )
+        _settle(tmp_path)
+
+        assert load_unsent_change_values(_repo_root(tmp_path)) == {}
+        assert _launcher_send(client)["chords"] == ["ctrl+enter"]
+
+
+def test_saving_a_delivered_value_everywhere_again_delivers_it_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _served_fake_gateway(monkeypatch) as record:
+        record["is_granted"] = True
+        client = _client(tmp_path)
+        _write_snapshot(tmp_path, {})
+        _save_everywhere(client, ["alt+enter"])
+
+        again = _save_everywhere(client, ["alt+enter"])
+
+        assert again["delivery"]["status"] == "DELIVERED"
+        assert len(record["puts"]) == 2
+        # The owner's override copy is cleared again, so nothing reads as changed only here.
+        assert _launcher_send(client)["source"] == "account"
+
+
+def test_a_save_made_while_a_delivery_is_out_is_left_to_deliver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _served_fake_gateway(monkeypatch) as record:
+        record["is_granted"] = True
+        client = _client(tmp_path)
+        _write_snapshot(tmp_path, {})
+        repo_root = _repo_root(tmp_path)
+        record["during_put"] = lambda: save_unsent_keybinding(
+            repo_root, "owner-1", "system_interface", "launcher-secondary-send", ["ctrl+enter"]
+        )
+
+        _save_everywhere(client, ["alt+enter"])
+
+        # The account took alt+enter, but ctrl+enter came after it: that one still waits to be delivered.
+        catalog = client.get("/api/keybindings/catalog").get_json()
+        assert [(entry["action"], entry["chords"]) for entry in catalog["unsent"]] == [
+            ("launcher-secondary-send", ["ctrl+enter"])
+        ]
+        assert _launcher_send(client)["chords"] == ["ctrl+enter"]
+
+
+def _me_launcher_send(client: FlaskClient) -> list[str]:
+    return client.get("/api/keybindings/me").get_json()["chords_by_action"]["launcher-secondary-send"]
+
+
+def test_a_snapshot_carrying_the_delivered_chords_settles_it_whatever_its_clock_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _served_fake_gateway(monkeypatch) as record:
+        record["is_granted"] = True
+        client = _client(tmp_path)
+        _write_snapshot(tmp_path, {})
+        _save_everywhere(client, ["alt+enter"])
+
+        # A desktop clock running behind this machine's stamps the rewrite before the delivery.
+        _write_snapshot(
+            tmp_path, {"system_interface": {"launcher-secondary-send": ["alt+enter"]}}, "2026-10-28T00:00:03Z"
+        )
+        _settle(tmp_path)
+
+        assert load_unsent_change_values(_repo_root(tmp_path)) == {}
+
+
+def test_the_snapshot_a_delivery_was_built_on_never_settles_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _served_fake_gateway(monkeypatch) as record:
+        record["is_granted"] = True
+        client = _client(tmp_path)
+        # The snapshot already carries the chords saved: a pass already under way may still land another value.
+        _write_snapshot(tmp_path, {"system_interface": {"launcher-secondary-send": ["alt+enter"]}})
+        _save_everywhere(client, ["alt+enter"])
+        assert load_unsent_change_values(_repo_root(tmp_path)) != {}
+
+        _write_snapshot(
+            tmp_path, {"system_interface": {"launcher-secondary-send": ["ctrl+enter"]}}, "2026-10-28T00:00:05Z"
+        )
+        _settle(tmp_path)
+
+        assert _me_launcher_send(client) == ["alt+enter"]
+
+
+def test_a_snapshot_built_while_the_delivery_was_on_its_way_does_not_settle_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _served_fake_gateway(monkeypatch) as record:
+        record["is_granted"] = True
+        client = _client(tmp_path)
+        _write_snapshot(tmp_path, {})
+        # The desktop works a snapshot out (without the save) before it answers the delivery.
+        record["during_put"] = lambda: _write_snapshot(tmp_path, {}, datetime.now(timezone.utc).isoformat())
+
+        _save_everywhere(client, ["alt+enter"])
+
+        assert _me_launcher_send(client) == ["alt+enter"]
+        assert load_unsent_change_values(_repo_root(tmp_path)) != {}

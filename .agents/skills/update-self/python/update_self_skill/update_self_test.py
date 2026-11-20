@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 import pytest
+from oom_priority.ledger import append_shed_record
 
 from update_self_skill import (
     tool_env,
@@ -616,6 +617,8 @@ def test_classify_path_reveal_classes() -> None:
         ".mngr/settings.toml": update_classification.CLASS_PROVISIONER,
         "system/Dockerfile": update_classification.CLASS_DOCKERFILE,
         "CLAUDE.md": update_classification.CLASS_DOCS,
+        "CHANGELOG.md": update_classification.CLASS_DOCS,
+        "UNABRIDGED_CHANGELOG.md": update_classification.CLASS_DOCS,
         "changelog/some-entry.md": update_classification.CLASS_DOCS,
         "system/config/parent.toml": update_classification.CLASS_OTHER,
         # A README is docs even under a prefix with its own reveal class --
@@ -871,90 +874,6 @@ def test_repo_root_flag_accepted_before_and_after_subcommand(tmp_path, capsys) -
     ):
         assert update_self.main(argv) == 0, argv
         assert '"minds-v0.1.0"' in capsys.readouterr().out, argv
-
-
-def test_changelog_entries_collects_every_bucket_not_just_top_level(
-    tmp_path, capsys
-) -> None:
-    # Per-PR changelog entries live in a ``changelog/`` dir under each project
-    # bucket, not only the legacy top-level ``changelog/``. The command must
-    # surface entries from every bucket -- else the update-self "what's new"
-    # digest silently drops everything on the current (bucketed) convention --
-    # while ignoring system/vendor's separate changelog system and files that
-    # only happen to sit next to a changelog dir.
-    def _git(*args: str) -> None:
-        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
-
-    def _write(rel: str, text: str = "entry\n") -> None:
-        path = tmp_path / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
-
-    _git("init", "-q")
-    _git("config", "user.email", "test@example.com")
-    _git("config", "user.name", "test")
-    # Base commit: one pre-existing top-level entry (must NOT be reported as
-    # newly added), plus a source file the target will leave untouched.
-    _write("changelog/old-entry.md")
-    _write("system/apps/screen/src/screen/service.py", "print('hi')\n")
-    _git("add", "-A")
-    _git("commit", "-q", "-m", "base")
-    _git("tag", "base")
-
-    # Target commit: newly-added entries across every bucket, a system/vendor
-    # entry (excluded), and a non-changelog source change (ignored).
-    _write(".agents/changelog/my-branch.md")
-    _write("system/changelog/my-branch.md")
-    _write("system/apps/screen/changelog/my-branch.md")
-    _write("system/apps/system_interface/changelog/my-branch.md")
-    _write("system/services/gamma/changelog/my-branch.md")
-    _write("system/apps/screen/src/screen/service.py", "print('bye')\n")
-    _git("add", "-A")
-    _git("commit", "-q", "-m", "target")
-    _git("tag", "target")
-
-    assert (
-        update_self.main(
-            [
-                "changelog-entries",
-                "--base",
-                "base",
-                "--target",
-                "target",
-                "--repo-root",
-                str(tmp_path),
-            ]
-        )
-        == 0
-    )
-    added = json.loads(capsys.readouterr().out)["added"]
-    assert sorted(added) == [
-        ".agents/changelog/my-branch.md",
-        "system/apps/screen/changelog/my-branch.md",
-        "system/apps/system_interface/changelog/my-branch.md",
-        "system/changelog/my-branch.md",
-        "system/services/gamma/changelog/my-branch.md",
-    ]
-
-    # The worker guide has the tool run from the staged skill's scripts
-    # directory. A git pathspec is cwd-relative, so from a subdirectory the
-    # changelog glob matched nothing and the digest was silently empty.
-    subdir = tmp_path / "system" / "apps" / "screen"
-    assert (
-        update_self.main(
-            [
-                "changelog-entries",
-                "--base",
-                "base",
-                "--target",
-                "target",
-                "--repo-root",
-                str(subdir),
-            ]
-        )
-        == 0
-    )
-    assert json.loads(capsys.readouterr().out)["added"] == added
 
 
 def test_classify_merge_refuses_a_local_that_already_contains_the_target(
@@ -2193,6 +2112,7 @@ class _FakeSpawned:
     output: str = ""
     exited: bool = False
     terminated: bool = False
+    pid: int = 0
 
     def terminate(self) -> None:
         self.terminated = True
@@ -2231,7 +2151,9 @@ class _FakeSpawner(update_runtime.Spawner):
         is_exited = self.exited
         if self.exited_argv0 is not None:
             is_exited = unwrapped[0] == self.exited_argv0
-        self.last = _FakeSpawned(output=self.output, exited=is_exited)
+        self.last = _FakeSpawned(
+            output=self.output, exited=is_exited, pid=40000 + len(self.spawns)
+        )
         return self.last
 
 
@@ -3907,6 +3829,100 @@ def test_a_failed_preflight_that_produced_no_output_says_so(
     )
 
     assert "wrote nothing at all" in capsys.readouterr().err
+
+
+def _append_shed_record(pid: int) -> None:
+    """Record the memory guard stopping ``pid`` through its after-kill hook's own writer."""
+    append_shed_record(
+        pid=pid,
+        comm="system-interface",
+        agent_name=None,
+        is_worker=None,
+        vm_rss_kib=156744,
+    )
+
+
+@dataclass
+class _ShedBootSpawner(_FakeSpawner):
+    """Every boot dies at once, and the memory guard's ledger records stopping the one with ``shed_pid_offset``."""
+
+    shed_pid_offset: int = 0
+
+    def spawn(
+        self, argv: Sequence[str], cwd: str, env: dict, output_path: Path
+    ) -> _FakeSpawned:
+        spawned = super().spawn(argv, cwd, env, output_path)
+        _append_shed_record(spawned.pid + self.shed_pid_offset)
+        return spawned
+
+
+def test_a_preflight_boot_the_memory_guard_stopped_is_named_as_a_memory_failure(
+    apply_repo: Path, capsys
+) -> None:
+    # A boot the guard stops writes nothing, so without the guard's own record the lead
+    # has only "wrote nothing at all" to judge the retry by.
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    spawner = _ShedBootSpawner(exited=True, shed_pid_offset=0)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert (
+        "merged backend failed to boot in a pre-flight check: the memory guard stopped it for "
+        "lack of memory" in err
+    )
+    assert "(it held 153 MiB), so free memory before a retry" in err
+
+
+def test_a_preflight_boot_that_died_while_the_guard_stopped_something_else_is_not_blamed_on_memory(
+    apply_repo: Path, capsys
+) -> None:
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    spawner = _ShedBootSpawner(exited=True, shed_pid_offset=1)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "memory guard" not in err
+    assert "wrote nothing at all" in err
+
+
+def test_a_preflight_boot_waits_for_a_guard_record_that_lands_after_it_is_seen_exiting() -> (
+    None
+):
+    # The guard's after-kill hook runs only once the boot is gone, so its record can
+    # land after the pre-flight has already seen the boot exit.
+    ledger_path = update_probes.shed_ledger_path(_WORKSPACE_ROOT)
+    spawner = _FakeSpawner(exited=True)
+
+    def record_the_shed_once(_seconds: float) -> None:
+        assert spawner.last is not None
+        if not ledger_path.exists():
+            _append_shed_record(spawner.last.pid)
+
+    failure = update_probes.preflight(
+        _WORKSPACE_ROOT,
+        _FakeHttp(lambda url: None),
+        spawner,
+        record_the_shed_once,
+        expend=list,
+    )
+
+    assert failure is not None
+    assert failure.shed is not None
+    assert failure.shed.resident_mib == 153
 
 
 def test_preflight_output_is_tailed_to_the_interesting_end() -> None:
@@ -8325,6 +8341,104 @@ def test_a_rolled_back_apply_records_no_landing(apply_repo: Path, monkeypatch) -
     assert status.applied_at is None
 
 
+def _record_delegated_run(repo_root: Path, monkeypatch) -> None:
+    """Record a run whose lead, ``update-lead``, has handed the merge to the worker ``update-self``."""
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    root = ["--repo-root", str(repo_root)]
+    assert update_self.main(["run-status", "start", *root]) == 0
+    assert update_self.main(["run-status", "delegate", "update-self", *root]) == 0
+
+
+def test_an_apply_stops_the_runs_worker_before_it_merges_or_boots_anything(
+    apply_repo: Path, monkeypatch
+) -> None:
+    """The worker's idle session holds memory the pre-flight boots need, and its work is done."""
+    _record_delegated_run(apply_repo, monkeypatch)
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    spawner = _FakeSpawner()
+    seen_at_stop: list[tuple[bool, int]] = []
+
+    def observe(argv: list[str]) -> None:
+        if argv[:2] == ["mngr", "stop"]:
+            seen_at_stop.append((runner.ran("git", "merge"), len(spawner.spawns)))
+
+    runner.on_command = observe
+
+    code = _apply(
+        runner, _FakeHttp(_all_healthy), spawner, apply_repo, target_ref="minds-v0.4.2"
+    )
+
+    assert code == 0
+    assert runner.argvs_starting("mngr", "stop") == [["mngr", "stop", "update-self"]]
+    assert seen_at_stop == [(False, 0)]
+    assert spawner.spawns, "the backend change should have been pre-flighted"
+
+
+@pytest.mark.parametrize("has_run_record", [False, True])
+def test_an_apply_with_no_worker_on_record_stops_nothing(
+    apply_repo: Path, monkeypatch, has_run_record: bool
+) -> None:
+    # Without a run record (an apply run by hand) or with a run that never delegated, or whose
+    # verdict already cleared the worker, there is nobody to stop.
+    if has_run_record:
+        _record_delegated_run(apply_repo, monkeypatch)
+        root = ["--repo-root", str(apply_repo)]
+        assert (
+            update_self.main(["run-status", "verdict", "STUCK", "--detail", "x", *root])
+            == 0
+        )
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert runner.argvs_starting("mngr", "stop") == []
+
+
+def test_another_chats_apply_leaves_a_running_updates_worker_alone(
+    apply_repo: Path, monkeypatch
+) -> None:
+    """A critical-app pass lands through the same apply, maybe while the update's worker is mid-work."""
+    _record_delegated_run(apply_repo, monkeypatch)
+    monkeypatch.setenv("MNGR_AGENT_NAME", "critical-app-chat")
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert runner.argvs_starting("mngr", "stop") == []
+
+
+@pytest.mark.parametrize(
+    ("stop_outcome", "expected_warning"),
+    [
+        (
+            _Result(returncode=1, stderr="no such agent"),
+            "could not stop the update worker update-self: `mngr stop` exited 1: no such agent",
+        ),
+        (
+            subprocess.TimeoutExpired(cmd="mngr stop update-self", timeout=120),
+            "could not stop the update worker update-self (TimeoutExpired: ",
+        ),
+    ],
+)
+def test_an_apply_whose_worker_will_not_stop_lands_anyway(
+    apply_repo: Path,
+    monkeypatch,
+    capsys,
+    stop_outcome: object,
+    expected_warning: str,
+) -> None:
+    _record_delegated_run(apply_repo, monkeypatch)
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+    runner.respond(("mngr", "stop"), stop_outcome)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert expected_warning in capsys.readouterr().err
+
+
 def test_run_status_start_clears_the_previous_runs_landing(
     tmp_path, monkeypatch
 ) -> None:
@@ -9376,6 +9490,132 @@ def test_a_rollback_whose_restored_app_serves_no_page_is_an_emergency_that_keeps
     assert "copies are still kept" in settled.outcome
     assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
     assert not _refreshed_the_view(runner, apply_repo)
+
+
+# agent_restart_verdict
+
+_SETUP_BEFORE = ': "${TTYD_VERSION:=1.7.7}"\n: "${CLAUDE_CODE_VERSION:=2.1.269}"\n: "${PI_VERSION:=0.87.1}"\n'
+_SETTINGS_BEFORE = '[agent_types.claude]\nparent_type = "claude"\nversion = "2.1.269"\n\n[agent_types.chat]\nparent_type = "claude"\n'
+_AGY_INSTALLER_BEFORE = '#!/usr/bin/env bash\nAGY_VERSION="1.4.3"\n'
+_PINS_BEFORE = update_classification.HarnessPinFiles(
+    setup_system=_SETUP_BEFORE,
+    mngr_settings=_SETTINGS_BEFORE,
+    agy_installer=_AGY_INSTALLER_BEFORE,
+)
+
+
+@pytest.mark.parametrize(
+    "changed_paths, pins_after, expected_triggers",
+    [
+        (
+            ["system/scripts/setup_system.sh", ".mngr/settings.toml"],
+            _PINS_BEFORE._replace(
+                setup_system=_SETUP_BEFORE.replace("2.1.269", "2.1.280"),
+                mngr_settings=_SETTINGS_BEFORE.replace("2.1.269", "2.1.280"),
+            ),
+            (
+                "CLAUDE_CODE_VERSION: 2.1.269 -> 2.1.280",
+                "agent_types.claude.version: 2.1.269 -> 2.1.280",
+            ),
+        ),
+        (
+            ["system/scripts/agy_install.sh"],
+            _PINS_BEFORE._replace(
+                agy_installer=_AGY_INSTALLER_BEFORE.replace("1.4.3", "1.4.7")
+            ),
+            ("AGY_VERSION: 1.4.3 -> 1.4.7",),
+        ),
+        (
+            [".pi/extensions/policy_guards.ts", ".pi/extensions/pi_extensions_test.py"],
+            _PINS_BEFORE,
+            ("harness extension: .pi/extensions/policy_guards.ts",),
+        ),
+        # A pin that is not a harness's, hook scripts run fresh on every call, and an installer
+        # edit that keeps its pin installs the same binary.
+        (
+            [
+                "system/scripts/setup_system.sh",
+                "system/scripts/agent_block_pipe_tail_head.sh",
+                "system/scripts/agy_install.sh",
+            ],
+            _PINS_BEFORE._replace(
+                setup_system=_SETUP_BEFORE.replace("1.7.7", "1.7.8"),
+                agy_installer=_AGY_INSTALLER_BEFORE + "# a comment\n",
+            ),
+            (),
+        ),
+    ],
+    ids=["claude-bump", "agy-bump", "pi-extension", "unrelated"],
+)
+def test_agent_restart_verdict_names_what_a_running_harness_would_miss(
+    changed_paths: list[str],
+    pins_after: update_classification.HarnessPinFiles,
+    expected_triggers: tuple[str, ...],
+) -> None:
+    verdict = update_classification.agent_restart_verdict(
+        changed_paths, _PINS_BEFORE, pins_after
+    )
+
+    assert verdict.triggers == expected_triggers
+    assert verdict.is_needed is bool(expected_triggers)
+
+
+def test_agent_restart_verdict_cli_reads_both_trees_from_git(tmp_path, capsys) -> None:
+    # The settings file is absent from the tree the agents started from, so its pin reads as
+    # unset; that tree still names its Antigravity installer by version, as before its rename.
+    def _write(rel: str, text: str) -> None:
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    _git_in(tmp_path, "init", "-q")
+    _git_in(tmp_path, "config", "user.email", "test@example.com")
+    _git_in(tmp_path, "config", "user.name", "test")
+    _write(update_layout.PROVISIONER_SCRIPT, _SETUP_BEFORE)
+    _write("system/scripts/agy_install-1.4.3.sh", _AGY_INSTALLER_BEFORE)
+    _git_in(tmp_path, "add", "-A")
+    _git_in(tmp_path, "commit", "-q", "-m", "before")
+    _git_in(
+        tmp_path,
+        "mv",
+        "system/scripts/agy_install-1.4.3.sh",
+        "system/scripts/agy_install.sh",
+    )
+    _write(
+        "system/scripts/agy_install.sh",
+        _AGY_INSTALLER_BEFORE.replace("1.4.3", "1.4.7"),
+    )
+    _write(
+        update_layout.PROVISIONER_SCRIPT,
+        _SETUP_BEFORE.replace("2.1.269", "2.1.280"),
+    )
+    _write(update_classification.MNGR_SETTINGS_PATH, _SETTINGS_BEFORE)
+    _write(".pi/extensions/policy_guards.ts", "export default () => {};\n")
+    _git_in(tmp_path, "add", "-A")
+    _git_in(tmp_path, "commit", "-q", "-m", "after")
+
+    code = update_self.main(
+        [
+            "agent-restart-verdict",
+            "--before",
+            "HEAD^1",
+            "--after",
+            "HEAD",
+            "--repo-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert code == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "needed": True,
+        "triggers": [
+            "AGY_VERSION: 1.4.3 -> 1.4.7",
+            "CLAUDE_CODE_VERSION: 2.1.269 -> 2.1.280",
+            "agent_types.claude.version: unset -> 2.1.269",
+            "harness extension: .pi/extensions/policy_guards.ts",
+        ],
+    }
 
 
 # The root venv's fresh-target swap

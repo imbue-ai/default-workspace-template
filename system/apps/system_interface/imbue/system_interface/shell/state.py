@@ -46,6 +46,7 @@ from workspace_layout.records import StoredWindowPath
 from workspace_layout.records import Viewport
 from workspace_layout.records import Window
 from workspace_layout.records import WindowView
+from workspace_profile.errors import ProfileWriteError
 from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 from workspace_themes.catalog import CachingThemeCatalogLoader
 from workspace_themes.interfaces import ThemeCatalogLoaderInterface
@@ -126,6 +127,8 @@ from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import DEFAULT_SHARE_DOMAIN_PATH
+from imbue.system_interface.shell.keybindings_delivery import KeybindingsDeliveryStore
+from imbue.system_interface.shell.keybindings_delivery import settle_delivered_keybindings
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.launches import post_launch
 from imbue.system_interface.shell.launches import resolve_launch_destination
@@ -138,6 +141,13 @@ from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import WindowInputKind
 from imbue.system_interface.shell.primitives import mint_save_id
 from imbue.system_interface.shell.primitives import mint_window_id
+from imbue.system_interface.shell.resource_gauge import AGENT_NOTICE_FILENAME
+from imbue.system_interface.shell.resource_gauge import DeliveryStore
+from imbue.system_interface.shell.resource_gauge import ResourceGaugeMonitor
+from imbue.system_interface.shell.resource_gauge import ResourceGaugeSettingsStore
+from imbue.system_interface.shell.resource_gauge import ResourceNotifierInterface
+from imbue.system_interface.shell.resource_gauge import read_resource_readings
+from imbue.system_interface.shell.resource_gauge import read_shed_ledger_stops
 from imbue.system_interface.shell.share_grants import AgentGrantsReader
 from imbue.system_interface.shell.share_grants import DEFAULT_AGENT_GRANTS_PATH
 from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
@@ -202,6 +212,9 @@ class ShellState(MutableModel):
     )
     avatar_selection: AvatarSelectionStore = Field(frozen=True, description="avatar_selection.json")
     tour: TourStore = Field(frozen=True, description="tour.json: whether the show-around tour has run")
+    resource_gauge: ResourceGaugeMonitor = Field(
+        frozen=True, description="The tray's resource gauge: its readings, its settings, and the warnings it raises"
+    )
     avatar_status: AvatarStatusReader = Field(
         frozen=True, description="The avatar's mood, read from mngr's event file"
     )
@@ -256,6 +269,7 @@ class ShellState(MutableModel):
         self.inventory.start()
         self.lifecycle.start()
         self.update_notice.start()
+        self.resource_gauge.start()
         self.avatar_status.start()
         theme_watch = ThemeCatalogWatch(
             repo_root=self.repo_root, loader=self.themes, on_catalog_changed=self.broadcast_themes_changed
@@ -272,10 +286,13 @@ class ShellState(MutableModel):
         except OSError as e:
             logger.warning("Could not prepare the profile snapshot directory: {}", e)
         else:
-            self._snapshot_watch = start_file_watch(snapshot_path, self.broadcast_keybindings_changed)
+            self._snapshot_watch = start_file_watch(snapshot_path, self._on_profile_snapshot_changed)
+        # A delivery the snapshot caught up with while the shell was down settles now; the watch only sees changes.
+        self._settle_delivered_keybindings()
 
     def stop(self) -> None:
         self.update_notice.stop()
+        self.resource_gauge.stop()
         self._prune_stop.set()
         if self._prune_thread is not None:
             self._prune_thread.join(timeout=5)
@@ -481,6 +498,7 @@ class ShellState(MutableModel):
         choice = choose_show_target(self._client_desktop_view(desktop, client_id), others, app, path, showing, repoint)
         shown_on = self.get_desktop(choice.desktop_id)
         is_raised_in_own_window = False
+        raised_at: WindowPath | None = None
         if choice.window is None:
             request = WindowOpenRequest(
                 app=app, path=path, client_id=client_id, if_present=IfPresent.NEW, minimized=is_minimized
@@ -488,7 +506,9 @@ class ShellState(MutableModel):
             window_id = self.open_window(shown_on.id, request, requester).window.id
         else:
             window_id = choice.window.id
-            if choice.outcome is not ShowOutcome.RAISED:
+            if choice.outcome is ShowOutcome.RAISED:
+                raised_at = choice.window.path
+            else:
                 # As a ``navigate`` does: an independent window moves for this client alone, a linked one for everyone.
                 self.report_window_location(shown_on.id, window_id, client_id, path, choice.window.title)
             is_raised_in_own_window = placement_of(
@@ -501,6 +521,7 @@ class ShellState(MutableModel):
             window_id=window_id,
             outcome=choice.outcome,
             is_raised_in_own_window=is_raised_in_own_window,
+            raised_at=raised_at,
         )
 
     def launch(self, desktop_id: str, request: LaunchRequest) -> LaunchOutcome:
@@ -590,6 +611,19 @@ class ShellState(MutableModel):
         self.broadcaster.broadcast_themes_changed(
             theme_catalog_wire_json(self.themes.load(), self.desktops.read_theme_choices())
         )
+
+    def _settle_delivered_keybindings(self) -> None:
+        try:
+            settle_delivered_keybindings(
+                self.repo_root, KeybindingsDeliveryStore(state_directory=self.state_directory)
+            )
+        except (ProfileWriteError, ShellStateError) as e:
+            logger.warning("Could not settle the delivered keybinding saves: {}", e)
+
+    def _on_profile_snapshot_changed(self) -> None:
+        """Settle the delivered saves the new snapshot carries, then tell every window."""
+        self._settle_delivered_keybindings()
+        self.broadcast_keybindings_changed()
 
     def broadcast_keybindings_changed(self) -> None:
         """Tell every window somebody changed a keybinding; each page re-fetches its resolved chords."""
@@ -1118,6 +1152,7 @@ def build_shell_state(
     launch_poster: LaunchPoster | None = None,
     on_registry_read: Callable[[Sequence[RegistryRow]], None] | None = None,
     is_lifecycle_enabled: bool = False,
+    resource_notifier: ResourceNotifierInterface | None = None,
     no_windows_grace_seconds: float = NO_WINDOWS_GRACE_SECONDS,
     idle_sweep_interval_seconds: float = IDLE_SWEEP_INTERVAL_SECONDS,
 ) -> ShellState:
@@ -1134,8 +1169,12 @@ def build_shell_state(
     is asked for its page) defaults to the loopback POST; ``is_lifecycle_enabled`` is whether the lifecycle
     manager owns the live workspace's apps, sweeping them and waking one for a POST launch (the production shell's
     yes; a preview's and a test's no, so neither starts a live app or parks a port by accident), and the two
-    timings are the manager's grace period and idle sweep interval, which a test shortens."""
+    timings are the manager's grace period and idle sweep interval, which a test shortens;
+    ``resource_notifier`` is where the resource gauge tells the user of a warning or a stopped program (the
+    production shell's Imbue Studio feed; None in a preview or a test, which tell nobody and leave no notice for
+    the agents either)."""
     app_theming = AppThemingStore(state_directory=state_directory)
+    stop_ledger = read_shed_ledger_stops()
     resolved_inventory = (
         inventory
         if inventory is not None
@@ -1187,6 +1226,15 @@ def build_shell_state(
         avatar_catalog=AvatarCatalogStore(directory=_under_repo_root(avatar_catalog_directory, repo_root)),
         avatar_selection=AvatarSelectionStore(state_directory=state_directory),
         tour=TourStore(state_directory=state_directory),
+        resource_gauge=ResourceGaugeMonitor(
+            settings_store=ResourceGaugeSettingsStore(state_directory=state_directory),
+            delivery_store=DeliveryStore(state_directory=state_directory),
+            read_readings=lambda: read_resource_readings(repo_root.resolve()),
+            read_stops=stop_ledger.read,
+            notifier=resource_notifier,
+            push=lambda view: broadcaster.broadcast_resource_gauge_changed(view.model_dump(mode="json")),
+            agent_notice_path=state_directory / AGENT_NOTICE_FILENAME if resource_notifier is not None else None,
+        ),
         avatar_status=AvatarStatusReader(
             events_path=agent_events_path if agent_events_path is not None else agent_events_path_from_environment(),
             background_tasks_root=background_tasks_root

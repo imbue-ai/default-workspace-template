@@ -1,1 +1,0 @@
-The manifest declares its `new` launch path and names it in `default_shortcut.launch`, for the desktop interface (phase 2 of `docs/system/blueprint/desktop-interface/plan-desktop-interface.md`). The route itself lands in phase 3; nothing changes for the tabbed shell.
