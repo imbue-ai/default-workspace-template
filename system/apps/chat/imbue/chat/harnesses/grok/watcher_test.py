@@ -840,3 +840,18 @@ def test_a_control_command_whose_send_raises_is_charged_an_attempt(tmp_path: Pat
 
     assert send.sent == ["/effort low"] * MAX_DELIVERY_ATTEMPTS
     assert watcher._queue.has_control_commands() is False
+
+
+def test_after_a_restart_a_held_pick_is_typed_ahead_of_the_block_a_flush_was_typing(tmp_path: Path) -> None:
+    agent_state_dir = _plain_agent_state_dir(tmp_path, is_launched=True)
+    stopped_app_queue = GrokQueueTracker.build(agent_state_dir / OUTBOX_FILENAME, session_token(agent_state_dir))
+    stopped_app_queue.enqueue("held", "t0", is_turn_open=False)
+    _block, claimed, _generation = stopped_app_queue.begin_flush()
+    stopped_app_queue.note_flush_began(claimed, time.time())
+
+    watcher, send, _log = _watcher_flushing_into(agent_state_dir)
+    watcher._queue.hold_control_command(model_command("grok-4.5"))
+    _attempt_flush_until_idle(watcher)
+
+    assert send.sent == ["/model grok-4.5", "held"]
+    assert watcher.get_queued_messages() == []
