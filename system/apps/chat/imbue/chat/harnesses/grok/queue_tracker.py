@@ -2,8 +2,9 @@
 
 grok parks a message typed during a turn in its own queue, which leaves nothing on disk until the message runs, so
 the chat holds every message itself: it waits here, and the watcher's flush worker, the only typist, types the held
-block once mngr reports no turn in flight. Entries are journalled under the current grok process's session token, so
-they survive a chat app restart and are dropped when grok relaunches (contract Part B).
+block once mngr reports no turn in flight. Entries are journalled, with the delivery attempts they spent, under the
+current grok process's session token, so they survive a chat app restart and are dropped when grok relaunches
+(contract Part B); one mngr confirmed typing leaves the journal at once.
 """
 
 import json
@@ -72,6 +73,8 @@ class GrokQueueTracker:
     _tap_claimed_ids: set[str]
     # Flush-claimed ids a stop passed over; one whose flush then settles undelivered is never typed again.
     _stopped_claim_ids: set[str]
+    # Claimed ids mngr confirmed typing, left out of the journal so a restart does not type them again.
+    _typed_ids: set[str]
     # Bumped when claimed work becomes void: grok relaunched, or its session is gone.
     _generation: int
     # How many stops are running; while any is, nothing may be claimed for a flush.
@@ -98,6 +101,7 @@ class GrokQueueTracker:
         self._sending_ids = set()
         self._tap_claimed_ids = set()
         self._stopped_claim_ids = set()
+        self._typed_ids = set()
         self._generation = 0
         self._flush_pause_count = 0
         self._pending_send = set()
@@ -152,15 +156,24 @@ class GrokQueueTracker:
             queued_id = entry.get("queued_id")
             content = entry.get("content")
             timestamp = entry.get("timestamp")
+            attempts = entry.get("attempts")
             if isinstance(queued_id, str) and isinstance(content, str) and isinstance(timestamp, str):
                 self._queued.add(queued_id, content, timestamp, False)
+                if isinstance(attempts, int) and attempts > 0:
+                    self._attempts[queued_id] = attempts
 
     def _write_journal_locked(self) -> None:
-        entries = self._queued.snapshot()
+        entries = [entry for entry in self._queued.snapshot() if entry["queued_id"] not in self._typed_ids]
         if not self._session_token or not entries:
             self._outbox_path.unlink(missing_ok=True)
             return
-        payload = "".join(json.dumps({"session": self._session_token, **entry}) + "\n" for entry in entries)
+        payload = "".join(
+            json.dumps(
+                {"session": self._session_token, **entry, "attempts": self._attempts.get(entry["queued_id"], 0)}
+            )
+            + "\n"
+            for entry in entries
+        )
         tmp_path = self._outbox_path.with_suffix(self._outbox_path.suffix + ".tmp")
         try:
             tmp_path.write_text(payload)
@@ -195,6 +208,7 @@ class GrokQueueTracker:
         self._sending_ids.clear()
         self._tap_claimed_ids.clear()
         self._stopped_claim_ids.clear()
+        self._typed_ids.clear()
         self._pending_send.clear()
         self._attempts.clear()
         self._first_flushed_at.clear()
@@ -206,6 +220,7 @@ class GrokQueueTracker:
             self._sending_ids.discard(queued_id)
             self._tap_claimed_ids.discard(queued_id)
             self._stopped_claim_ids.discard(queued_id)
+            self._typed_ids.discard(queued_id)
             self._pending_send.discard(queued_id)
             self._attempts.pop(queued_id, None)
             self._first_flushed_at.pop(queued_id, None)
@@ -302,6 +317,15 @@ class GrokQueueTracker:
                 self._first_flushed_at.setdefault(queued_id, began_at)
             return min(earlier, default=None)
 
+    def note_typed(self, claimed: tuple[str, ...], generation: int) -> None:
+        """Take the claimed entries mngr confirmed typing out of the journal; they show as Sending until the flush
+        settles."""
+        with self._lock:
+            if generation != self._generation:
+                return
+            self._typed_ids.update(claimed)
+            self._write_journal_locked()
+
     def finish_flush(self, claimed: tuple[str, ...], generation: int, *, delivered: tuple[str, ...]) -> None:
         """Settle a claimed flush: ``delivered`` leave, and the rest wait on as Queued with one more attempt spent, or
         every attempt when a stop passed them over.
@@ -325,6 +349,7 @@ class GrokQueueTracker:
                 else:
                     self._attempts[queued_id] = self._attempts.get(queued_id, 0) + 1
                 self._stopped_claim_ids.discard(queued_id)
+                self._typed_ids.discard(queued_id)
             self._settled_locked()
 
     def take_unclaimed(self) -> tuple[str, tuple[str, ...]]:

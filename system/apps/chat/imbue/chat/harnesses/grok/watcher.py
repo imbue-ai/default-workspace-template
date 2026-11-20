@@ -448,6 +448,7 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         try:
             if send(block):
                 delivered = claimed
+                self._queue.note_typed(claimed, generation)
                 if not is_slash_command_message(block):
                     self._await_turn_holding(witness_start, block)
             else:

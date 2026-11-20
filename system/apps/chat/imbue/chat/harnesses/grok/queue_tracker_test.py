@@ -222,6 +222,37 @@ def test_every_held_message_survives_a_chat_app_restart(tmp_path: Path) -> None:
     assert _contents(_tracker(tmp_path)) == texts
 
 
+def test_an_entry_mngr_typed_shows_as_sending_until_its_flush_settles_but_a_restart_does_not_replay_it(
+    tmp_path: Path,
+) -> None:
+    tracker = _tracker(tmp_path)
+    _hold(tracker, "typed")
+    _block, claimed, generation = tracker.begin_flush()
+    _hold(tracker, "held during the flush")
+
+    tracker.note_typed(claimed, generation)
+
+    assert [(entry["content"], entry["is_sending"]) for entry in tracker.snapshot()] == [
+        ("typed", True),
+        ("held during the flush", False),
+    ]
+    assert _contents(_tracker(tmp_path)) == ["held during the flush"]
+
+
+def test_spent_delivery_attempts_survive_a_chat_app_restart(tmp_path: Path) -> None:
+    tracker = _tracker(tmp_path)
+    _hold(tracker, "never seen")
+    for _attempt in range(MAX_DELIVERY_ATTEMPTS):
+        _block, claimed, generation = tracker.begin_flush()
+        tracker.finish_flush(claimed, generation, delivered=())
+
+    restarted = _tracker(tmp_path)
+
+    assert _contents(restarted) == ["never seen"]
+    assert restarted.has_deliverable_entries() is False
+    assert restarted.begin_flush()[1] == ()
+
+
 def test_a_torn_journal_line_is_skipped(tmp_path: Path) -> None:
     _hold(_tracker(tmp_path), "kept")
     with (tmp_path / OUTBOX_FILENAME).open("a") as outbox:

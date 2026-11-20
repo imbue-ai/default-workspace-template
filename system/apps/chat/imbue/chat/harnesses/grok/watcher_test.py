@@ -1,6 +1,7 @@
 """Tests for the grok transcript loader and session watcher, over grok 1.0.62's own session logs."""
 
 import json
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -9,7 +10,10 @@ from typing import Any
 import pytest
 
 from imbue.chat.activity_state import ACTIVE_MARKER_FILENAME
+from imbue.chat.harnesses.grok.queue_tracker import GrokQueueTracker
 from imbue.chat.harnesses.grok.queue_tracker import MAX_DELIVERY_ATTEMPTS
+from imbue.chat.harnesses.grok.queue_tracker import OUTBOX_FILENAME
+from imbue.chat.harnesses.grok.queue_tracker import session_token
 from imbue.chat.harnesses.grok.testing import ROOTS_RELATIVE_PATH
 from imbue.chat.harnesses.grok.testing import add_grok_session
 from imbue.chat.harnesses.grok.testing import append_grok_updates
@@ -407,16 +411,24 @@ class _ScriptedSend:
 
 
 def _flushing_watcher(
-    tmp_path: Path, *, lifecycle_state: str | None = "WAITING", is_confirmed: bool = True, is_logged: bool = True
+    tmp_path: Path,
+    *,
+    lifecycle_state: str | None = "WAITING",
+    is_confirmed: bool = True,
+    is_logged: bool = True,
+    is_launched: bool = False,
 ) -> tuple[GrokSessionWatcher, _ScriptedSend, list[tuple[str, Any]]]:
     """A grok agent with one finished turn and a primed, unstarted watcher whose flush types into a scripted grok.
 
-    The log records each queue snapshot the watcher publishes and each event batch it broadcasts, in order.
+    A launched agent has grok's launch marker, so its queue is journalled. The log records each queue snapshot the
+    watcher publishes and each event batch it broadcasts, in order.
     """
     agent_state_dir = make_grok_agent_state_dir(tmp_path)
     add_grok_session(
         agent_state_dir, _PLAIN_ROOT, read_fixture_updates(find_fixture_scenario("plain"), _PLAIN_ROOT), is_root=True
     )
+    if is_launched:
+        (agent_state_dir / PROCESS_STARTED_MARKER_FILENAME).touch()
     log: list[tuple[str, Any]] = []
     watcher = GrokSessionWatcher.build(
         make_grok_agent_info(agent_state_dir, agent_state_dir.name, "grok-flush"),
@@ -436,6 +448,12 @@ def _flushing_watcher(
 def _hold(watcher: GrokSessionWatcher, *texts: str) -> None:
     for text in texts:
         watcher._queue.enqueue(text, "t0", is_turn_open=False)
+
+
+def _replayed_after_a_restart(agent_state_dir: Path) -> list[str]:
+    """What a chat app started now would hold for the agent, read from its journal."""
+    restarted = GrokQueueTracker.build(agent_state_dir / OUTBOX_FILENAME, session_token(agent_state_dir))
+    return [str(entry["content"]) for entry in restarted.snapshot()]
 
 
 def test_the_flush_types_the_held_block_once_and_its_chip_leaves_before_its_turn_shows(tmp_path: Path) -> None:
@@ -523,6 +541,26 @@ def test_a_held_slash_command_is_typed_on_its_own_between_the_messages_around_it
 
     assert send.sent == ["summarize what you did", "/new", "go on\nand then this"]
     assert watcher.get_queued_messages() == []
+
+
+def test_a_restart_while_the_flush_looks_for_a_block_mngr_confirmed_does_not_type_it_again(tmp_path: Path) -> None:
+    watcher, send, _log = _flushing_watcher(tmp_path, is_logged=False, is_launched=True)
+    watcher.delivery_witness_seconds = _LONG_WITNESS_SECONDS
+    _hold(watcher, "held")
+    flush = threading.Thread(target=watcher._attempt_flush, daemon=True)
+
+    flush.start()
+    try:
+        wait_for(
+            lambda: bool(send.sent) and _replayed_after_a_restart(send.agent_state_dir) == [],
+            timeout=_LONG_WITNESS_SECONDS / 2,
+            poll_interval=0.05,
+            error_message="a restart would replay the block mngr confirmed",
+        )
+        assert [(entry["content"], entry["is_sending"]) for entry in watcher.get_queued_messages()] == [("held", True)]
+    finally:
+        watcher._flush_stopping.set()
+        flush.join()
 
 
 def test_a_block_mngr_confirmed_stays_delivered_when_grok_logs_cannot_be_read_after_the_send(tmp_path: Path) -> None:
