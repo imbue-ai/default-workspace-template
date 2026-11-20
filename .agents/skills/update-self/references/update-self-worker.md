@@ -351,6 +351,31 @@ in your report.
   import, a user service whose program line runs under `uv run`, or a type
   error in a user skill or app) is fixed by following
   `references/python-packaging-migration.md`.
+  The workspace's own apps are brought to the layout this template expects in
+  the same gate, once the venv is synced (below), and each command here prints
+  one JSON line whose `result` says what happened:
+  - An app the workspace's agent built before apps had records (a directory
+    under `system/apps/` that holds an `app.toml`, has no
+    `system/config/apps/<name>.toml`, and is absent from the target template's
+    tree: `git cat-file -e "$TARGET_REF:system/apps/<package>/app.toml"` fails)
+    is converted with `uv run --no-sync app-install migrate <package>`, after
+    its `--dry-run`, whose output goes in your report. `migrated` moved the
+    skills and routines the app owns into its directory and wrote its record;
+    commit what it changed (`update-self: convert the <name> app`).
+    `unconverted` changed nothing and lists why under `problems`; the app keeps
+    running as it was, so report it under the update's follow-ups with those
+    problems for the lead to hand to a repair worker, and do not hold the
+    update for it.
+  - Then `uv run --no-sync app-install regenerate`, so a change this template
+    made to what is generated reaches every app; commit any file it lists under
+    `changed_paths` (`update-self: regenerate the apps' program files`).
+  - Then `uv run --no-sync app-install check`. `inconsistent` names each
+    problem; one in an app's own files is that app's follow-up, reported the
+    same way.
+  These commits are part of the environment gate, like a relock: they are
+  mechanical, they are not edits of your own for the review gates of 4c, and
+  an app they changed gets this step's suites and its isolated boot as any
+  converted package does.
   Separately, before any suite or boot below runs, sync the venv
   (`uv sync --all-packages --frozen`) whenever the merge changed a
   `pyproject.toml` or `uv.lock` at all, merged or pulled in
