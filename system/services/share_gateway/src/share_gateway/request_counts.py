@@ -57,6 +57,7 @@ DENIED_AGENT_TOKEN: Final[str] = "denied:agent_token"
 DENIED_NO_SESSION: Final[str] = "denied:no_session"
 DENIED_GRANTS_MISCONFIGURED: Final[str] = "denied:grants_misconfigured"
 DENIED_NO_GRANT: Final[str] = "denied:no_grant"
+DENIED_REGISTRY_UNAVAILABLE: Final[str] = "denied:registry_unavailable"
 
 # (service, requester_kind, requester_id, method_class, outcome)
 RequestKey = tuple[str, str, str, str, str]

@@ -68,6 +68,7 @@ from share_gateway.agent_workspace import HOST_KEY_PUBLIC_PATH
 from share_gateway.agent_workspace import app_origins_for
 from share_gateway.agent_workspace import read_workspace_coordinates
 from share_gateway.caddyfile import APPS_TOML_PATH
+from share_gateway.caddyfile import RegistryReadError
 from share_gateway.caddyfile import build_grantable_service_names
 from share_gateway.caddyfile import read_registered_apps
 from share_gateway.materials import load_or_create_auth_label
@@ -115,7 +116,10 @@ def _fail(args: argparse.Namespace, message: str, kind: str) -> int:
 
 def _command_invite(args: argparse.Namespace) -> int:
     paths = default_agent_access_paths(events_dir_from_environ(os.environ))
-    apps = read_registered_apps(APPS_TOML_PATH)
+    try:
+        apps = read_registered_apps(APPS_TOML_PATH)
+    except RegistryReadError as exc:
+        return _fail(args, f"the app registry {APPS_TOML_PATH} {exc}", "misconfigured")
     try:
         scope = validate_scope(
             _parse_scope_argument(args.scope),
@@ -202,6 +206,10 @@ def _command_primer(args: argparse.Namespace) -> int:
     workspace_domain, _ = _workspace_domain()
     coordinates = read_workspace_coordinates(os.environ, HOST_KEY_PUBLIC_PATH, workspace_domain.split(".", 1)[0])
     scope = _parse_scope_argument(args.scope)
+    try:
+        apps = read_registered_apps(APPS_TOML_PATH)
+    except RegistryReadError as exc:
+        return _fail(args, f"the app registry {APPS_TOML_PATH} {exc}", "misconfigured")
     now = utc_now()
     text = render_primer(
         repo_root=repo_root,
@@ -209,7 +217,7 @@ def _command_primer(args: argparse.Namespace) -> int:
         workspace_display_name=coordinates.display_name,
         workspace_id=coordinates.workspace_id,
         skills_index=cached_skills_index(repo_root, SKILLS_INDEX_CACHE_PATH, template_ref(repo_root)),
-        apps=read_registered_apps(APPS_TOML_PATH),
+        apps=apps,
         workspace_domain=workspace_domain,
         connected_accounts=summarize_connected_accounts(os.environ) if scope == WORKSPACE_SCOPE else "Not applicable.",
         changes=build_changes_feed(repo_root, default_changes_since(now)),

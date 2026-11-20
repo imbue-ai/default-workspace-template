@@ -21,6 +21,7 @@ loopback port caddy never routes a visitor to (caddy reaches this app only for
 
 import base64
 import hashlib
+import html
 import json
 import secrets
 import threading
@@ -30,6 +31,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import urlencode
+from urllib.parse import urlsplit
 
 from flask import Flask
 from flask import Response
@@ -43,15 +45,18 @@ from werkzeug.datastructures import Headers
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_grantable_service_names
 from share_gateway.caddyfile import build_label_to_name
+from share_gateway.caddyfile import is_started_on_demand
 from share_gateway.handoff import HandoffVerificationError
 from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.handoff import verify_handoff_token
 from share_gateway.hostnames import service_for_host
+from share_gateway.hostnames import workspace_origins_allow
 from share_gateway.identity import AgentIdentity
 from share_gateway.identity import IDENTITY_HEADER
 from share_gateway.identity import RequesterIdentity
 from share_gateway.identity import bearer_token_from_headers
+from share_gateway.identity import parse_requester_identity_header
 from share_gateway.identity import render_agent_identity_header
 from share_gateway.identity import render_identity_header
 from share_gateway.log import log
@@ -64,6 +69,7 @@ from share_gateway.request_counts import DENIED_GRANTS_MISCONFIGURED
 from share_gateway.request_counts import DENIED_NO_GRANT
 from share_gateway.request_counts import DENIED_NO_SESSION
 from share_gateway.request_counts import DENIED_ORIGIN
+from share_gateway.request_counts import DENIED_REGISTRY_UNAVAILABLE
 from share_gateway.request_counts import OUTCOME_ALLOWED
 from share_gateway.request_counts import REQUESTER_KIND_AGENT
 from share_gateway.request_counts import REQUESTER_KIND_NONE
@@ -71,6 +77,7 @@ from share_gateway.request_counts import REQUESTER_KIND_OWNER
 from share_gateway.request_counts import REQUESTER_KIND_USER
 from share_gateway.request_counts import RequestCounter
 from share_gateway.request_counts import classify_method
+from share_gateway.session_cookie import clear_session_cookie
 from share_gateway.session_cookie import mint_session_cookie_value
 from share_gateway.session_cookie import set_session_cookie
 from share_gateway.session_cookie import strip_session_cookie
@@ -89,53 +96,167 @@ _SHELL_SERVICE_NAME = "system_interface"
 
 # The stylesheet the gateway's own pages inline; the page policy admits it by hash.
 _PAGE_STYLE = (
-    "body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;\n"
-    "height:100vh;margin:0;color:#334155}div{text-align:center}"
+    "body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;"
+    "height:100vh;margin:0;color:#334155}div{text-align:center;max-width:32rem;padding:0 1rem}"
+    ".button{display:inline-block;margin-top:0.5rem;padding:0.5rem 1rem;border-radius:0.375rem;"
+    "background:#334155;color:#fff;text-decoration:none;border:1px solid #334155;font:inherit;cursor:pointer}"
+    ".button.secondary{background:#fff;color:#334155;margin-left:0.5rem}form{display:inline}"
+    ".spinner{display:block;width:1.5rem;height:1.5rem;margin:0 auto 1rem;border:3px solid #e2e8f0;"
+    "border-top-color:#334155;border-radius:50%;animation:spin 0.8s linear infinite}"
+    "@keyframes spin{to{transform:rotate(360deg)}}"
 )
 _PAGE_STYLE_HASH = base64.b64encode(hashlib.sha256(_PAGE_STYLE.encode("utf-8")).digest()).decode("ascii")
 
-# The gateway's own pages load nothing but their inline stylesheet. Stated in
-# full here because the frame-ancestors policy caddy adds governs embedding
-# only; the two headers compose by intersection.
-PAGE_CONTENT_SECURITY_POLICY = (
-    f"default-src 'none'; style-src 'sha256-{_PAGE_STYLE_HASH}'; base-uri 'none'; form-action 'none'"
+
+def page_content_security_policy(workspace_domain: str, broker_origin: str) -> str:
+    """The gateway's own pages load nothing but their inline stylesheet, and their one form (switching account)
+    posts to the auth origin. A browser holds every redirect after that post to form-action too: to the broker, and
+    when the broker signs the visitor straight back in, through the callback to the app being opened, so the
+    workspace's own origins are admitted with the broker. Stated in full because the frame-ancestors policy caddy
+    adds governs embedding only; the two headers compose by intersection."""
+    return (
+        f"default-src 'none'; style-src 'sha256-{_PAGE_STYLE_HASH}'; base-uri 'none'; "
+        f"form-action https://*.{workspace_domain} {broker_origin}"
+    )
+
+
+def _render_page(
+    title: str, body_html: str, refresh_seconds: int | None = None, referrer_policy: str | None = None
+) -> str:
+    """One of the gateway's own full-page answers: a heading and a few lines, centred. A page that reloads itself
+    shows a spinner above them. ``referrer_policy`` replaces the one caddy's header gives the page."""
+    refresh = f'<meta http-equiv="refresh" content="{refresh_seconds}">' if refresh_seconds is not None else ""
+    referrer = f'<meta name="referrer" content="{referrer_policy}">' if referrer_policy is not None else ""
+    spinner = '<span class="spinner" aria-hidden="true"></span>' if refresh_seconds is not None else ""
+    return (
+        f'<!DOCTYPE html>\n<html><head><meta charset="utf-8">{refresh}{referrer}\n'
+        f"<title>{html.escape(title)}</title>\n<style>{_PAGE_STYLE}</style></head>\n"
+        f"<body><div>{spinner}{body_html}</div></body></html>\n"
+    )
+
+
+_LOADING_PAGE = _render_page(
+    "Starting up...",
+    "<h1>Starting up&hellip;</h1>\n<p>This page isn't ready yet. It will open as soon as it is.</p>",
+    refresh_seconds=3,
 )
 
-_LOADING_PAGE = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="3">
-<title>Loading...</title>
-<style>{_PAGE_STYLE}</style></head>
-<body><div><h1>Starting up&hellip;</h1>
-<p>This service is not ready yet. The page retries automatically.</p></div></body></html>
-"""
+# A press reloads the address the visitor was opening: the gateway's pages are served in place of
+# an app's own page, at that page's address.
+_TRY_AGAIN_BUTTON = '<a class="button" href="">Try again</a>'
 
-_FORBIDDEN_PAGE = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Not shared with you</title>
-<style>{_PAGE_STYLE}</style></head>
-<body><div><h1>Not shared with you</h1>
-<p>This workspace exists, but your account has not been granted access to this page.</p></div></body></html>
-"""
-
-_EXPIRED_LOGIN_PAGE = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Sign-in link expired</title>
-<style>{_PAGE_STYLE}</style></head>
-<body><div><h1>Sign-in link expired</h1>
-<p>This sign-in link was already used or has expired. Open the workspace link again.</p></div></body></html>
-"""
-
-_MISCONFIGURED_PAGE = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Sharing is misconfigured</title>
-<style>{_PAGE_STYLE}</style></head>
-<body><div><h1>Sharing is misconfigured</h1>
-<p>This workspace's sharing settings could not be read, so nobody can be let in right now.
-The workspace owner needs to fix the workspace's sharing settings.</p></div></body></html>
-"""
+_UNRESPONSIVE_WAITING_PAGE = _render_page(
+    "Waiting for this page",
+    "<h1>Waiting for this page</h1>\n<p>This page isn't responding yet. It will open as soon as it answers.</p>",
+    refresh_seconds=3,
+)
 
 
-def _html_page(page: str, status: int) -> Response:
-    """One of the gateway's own pages, under the policy that admits exactly its contents."""
-    return Response(
-        page, status=status, mimetype="text/html", headers={"Content-Security-Policy": PAGE_CONTENT_SECURITY_POLICY}
+class _GivenUpPage:
+    """What a page that stopped waiting for an address says: a heading and a sentence for the workspace's owner, and
+    another pair for anyone else."""
+
+    def __init__(self, owner_heading: str, owner_sentence: str, visitor_heading: str, visitor_sentence: str) -> None:
+        self.owner_heading = owner_heading
+        self.owner_sentence = owner_sentence
+        self.visitor_heading = visitor_heading
+        self.visitor_sentence = visitor_sentence
+
+    def render(self, is_owner: bool, workspace_url: str | None) -> str:
+        """The page; ``workspace_url`` adds a way to open the workspace itself beside "Try again"."""
+        heading = self.owner_heading if is_owner else self.visitor_heading
+        sentence = self.owner_sentence if is_owner else self.visitor_sentence
+        open_workspace = (
+            f'<a class="button secondary" href="{html.escape(workspace_url)}">Open the workspace</a>'
+            if workspace_url is not None
+            else ""
+        )
+        return _render_page(heading, f"<h1>{heading}</h1>\n<p>{sentence}</p>\n{_TRY_AGAIN_BUTTON}{open_workspace}")
+
+
+_UNRESPONSIVE = _GivenUpPage(
+    owner_heading="This app isn't responding",
+    owner_sentence="This app isn't responding right now. Try again in a moment.",
+    visitor_heading="This page isn't responding",
+    visitor_sentence="This page isn't responding right now. Let the person who shared it know, then try again.",
+)
+
+_UNRESPONSIVE_NOT_RESTARTED = _GivenUpPage(
+    owner_heading="This app isn't responding",
+    owner_sentence="This app isn't responding. You may need to restart it from the workspace.",
+    visitor_heading="This app isn't responding",
+    visitor_sentence="This app isn't responding. The workspace owner may need to restart it.",
+)
+
+_STILL_NOT_AVAILABLE = _GivenUpPage(
+    owner_heading="This page still isn't available",
+    owner_sentence="This page still isn't available. Try again in a moment.",
+    visitor_heading="This page still isn't available",
+    visitor_sentence="This page still isn't available. Let the person who shared it know.",
+)
+
+_REGISTRY_UNAVAILABLE_PAGE = _render_page(
+    "This page isn't available right now",
+    "<h1>This page isn't available right now</h1>\n"
+    f"<p>This page isn't available right now. Try again in a moment.</p>\n{_TRY_AGAIN_BUTTON}",
+)
+
+_NOTHING_SHARED_HERE_PAGE = _render_page(
+    "Nothing shared here",
+    "<h1>Nothing shared here</h1>\n"
+    "<p>Nothing is shared at this address right now. Check the link with the person who sent it.</p>",
+)
+
+
+def _origin_refused_page(open_url: str) -> str:
+    """A request sent from another site; ``open_url`` opens the page itself with a plain GET, which is always
+    allowed ("" when this page is served at that page's own address)."""
+    return _render_page(
+        "This page can't be opened from another site",
+        "<h1>This page can't be opened from another site</h1>\n"
+        "<p>For your security, this workspace doesn't accept requests sent from other websites. "
+        "Open the page directly instead.</p>\n"
+        f'<a class="button" href="{html.escape(open_url)}">Open this page</a>',
+    )
+
+
+_EXPIRED_LOGIN_PAGE = _render_page(
+    "Sign-in link expired",
+    "<h1>Sign-in link expired</h1>\n"
+    "<p>This sign-in link was already used or has expired. Open the workspace link again.</p>",
+)
+
+_MISCONFIGURED_PAGE = _render_page(
+    "Sharing is misconfigured",
+    "<h1>Sharing is misconfigured</h1>\n"
+    "<p>This workspace's sharing settings could not be read, so nobody can be let in right now.\n"
+    "The workspace owner needs to fix the workspace's sharing settings.</p>",
+)
+
+# How long an address may go unanswered before the waiting pages stop retrying, and how
+# long a pause between its requests ends one wait and starts the next. The pause outlasts both the
+# page's own 3-second reload and the shell's 15-second could-not-start page, which a visitor
+# alternates with while the shell tries to start an app.
+_UNRESPONSIVE_GIVE_UP_SECONDS = 60.0
+_UNRESPONSIVE_WAIT_GAP_SECONDS = 30.0
+
+
+def _not_shared_with_account_page(reload_url: str, switch_account_url: str, next_url: str) -> str:
+    """The refusal of a signed-in account; ``reload_url`` is the page the visitor was opening ("" when this page is
+    served at that page's own address)."""
+    return _render_page(
+        "Not shared with you",
+        "<h1>Not shared with you</h1>\n"
+        "<p>This page hasn't been shared with your account. "
+        "Ask the person who shared it to give you access, then reload this page.</p>\n"
+        f'<a class="button" href="{html.escape(reload_url)}">Reload</a>'
+        # A form, so only a press on this page can end the session: a link could be followed from any site.
+        f'<form method="post" action="{html.escape(switch_account_url)}">'
+        f'<input type="hidden" name="next" value="{html.escape(next_url)}">'
+        '<button class="button secondary" type="submit">Sign in with a different account</button></form>',
+        # Served at an app's origin, the form posts to the auth origin: under caddy's same-origin policy the browser
+        # would send that post with "Origin: null", which switch-account refuses.
+        referrer_policy="strict-origin",
     )
 
 
@@ -178,6 +299,43 @@ class PendingLoginRegistry:
         return pending_login
 
 
+class UnansweredAddressWaits:
+    """How long each shared address has gone without its app answering, across every visitor.
+
+    Each request caddy hands the gateway because it could not reach the app (its route not loaded
+    yet, or its backend not taking the connection) counts as one more moment of the same wait,
+    unless the last one was long enough ago that the app may have answered in between, which
+    starts a new wait.
+    """
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._first_and_last_by_address: dict[str, tuple[float, float]] = {}
+        self._lock = threading.Lock()
+
+    def record_unanswered_request(self, address: str) -> float:
+        """Record one unanswered request for ``address``; answer how long its current wait has lasted."""
+        now = self._clock()
+        with self._lock:
+            first, last = self._first_and_last_by_address.get(address, (now, now))
+            if now - last > _UNRESPONSIVE_WAIT_GAP_SECONDS:
+                first = now
+            # A wait whose address has gone quiet is over, so it is dropped rather than kept for good.
+            self._first_and_last_by_address = {
+                other: times
+                for other, times in self._first_and_last_by_address.items()
+                if now - times[1] <= _UNRESPONSIVE_WAIT_GAP_SECONDS
+            }
+            self._first_and_last_by_address[address] = (first, now)
+        return now - first
+
+
+# Caddy rewrites the path of whatever request it could not serve and keeps its method, so a page's POST to an app
+# that is down or not routed yet is answered with the waiting page too, rather than as a method the route does not
+# take (Files sends the WebDAV ones).
+_REWRITTEN_REQUEST_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "MOVE", "MKCOL", "PROPFIND"]
+
+
 def _is_html_navigation(method: str, accept_header: str, is_websocket_upgrade: bool) -> bool:
     return method.upper() == "GET" and not is_websocket_upgrade and "text/html" in accept_header.lower()
 
@@ -206,11 +364,13 @@ def build_gateway_app(
     jwks_cache: JwksCache,
     jti_registry: SingleUseJtiRegistry,
     pending_logins: PendingLoginRegistry,
+    unanswered_waits: UnansweredAddressWaits,
     auth_label: str,
     # Reads the registered services (from apps.toml) fresh on each call, so a
-    # service registered while shared is recognized without rebuilding the app.
-    # Grants are keyed by service name, not label.
-    get_registered_apps: Callable[[], Sequence[RegisteredApp]],
+    # service registered while shared is recognized without rebuilding the app;
+    # None while the registry has never been read. Grants are keyed by service
+    # name, not label.
+    get_registered_apps: Callable[[], Sequence[RegisteredApp] | None],
     # The current relay credential and media candidates for the Screen service (share_gateway.connect_info),
     # read fresh on each call so an assignment re-poll or a credential refresh shows at once.
     get_connect_info: Callable[[], dict[str, object]],
@@ -228,15 +388,81 @@ def build_gateway_app(
     chrome_origin = materials.chrome_origin
 
     auth_host = f"{auth_label}.{workspace_domain}"
+    broker_parts = urlsplit(materials.broker_url)
+    page_policy = page_content_security_policy(workspace_domain, f"{broker_parts.scheme}://{broker_parts.netloc}")
 
-    def _forbidden() -> Response:
-        return _html_page(_FORBIDDEN_PAGE, status=403)
+    def _registered_apps() -> Sequence[RegisteredApp]:
+        return get_registered_apps() or ()
+
+    def _html_page(page: str, status: int) -> Response:
+        """One of the gateway's own pages, under the policy that admits exactly its contents."""
+        return Response(page, status=status, mimetype="text/html", headers={"Content-Security-Policy": page_policy})
+
+    def _nothing_shared_here() -> Response:
+        return _html_page(_NOTHING_SHARED_HERE_PAGE, status=403)
+
+    def _origin_refused(open_url: str) -> Response:
+        return _html_page(_origin_refused_page(open_url), status=403)
+
+    def _not_shared_with_account(requested_url: str, reload_url: str) -> Response:
+        next_url = requested_url if _is_workspace_url(requested_url) else ""
+        switch_account_url = f"{auth_origin}/_auth/switch-account"
+        return _html_page(_not_shared_with_account_page(reload_url, switch_account_url, next_url), status=403)
 
     def _expired_login() -> Response:
         return _html_page(_EXPIRED_LOGIN_PAGE, status=403)
 
     def _misconfigured() -> Response:
         return _html_page(_MISCONFIGURED_PAGE, status=503)
+
+    def _registry_unavailable() -> Response:
+        return _html_page(_REGISTRY_UNAVAILABLE_PAGE, status=503)
+
+    def _shell_url(registered_apps: Sequence[RegisteredApp]) -> str | None:
+        shell = next((entry for entry in registered_apps if entry.name == _SHELL_SERVICE_NAME), None)
+        return f"https://{shell.label}.{workspace_domain}/" if shell is not None else None
+
+    def _may_open_workspace(identity: RequesterIdentity, registered_apps: Sequence[RegisteredApp]) -> bool:
+        if identity.is_owner:
+            return True
+        try:
+            grants = load_grants(grants_path)
+        except GrantsError as exc:
+            log(f"Not offering {identity.user_id} the workspace: the grants file is missing or malformed: {exc}")
+            return False
+        return grants.allows(identity.user_id, identity.email, None, build_grantable_service_names(registered_apps))
+
+    def _given_up(page: _GivenUpPage, service_name: str | None, registered_apps: Sequence[RegisteredApp]) -> Response:
+        """``page`` for whoever is asking. The identity caddy verified for the request it could not serve is still on
+        it, so the owner reads the owner's sentence. Anyone who may open the whole workspace also gets a way there,
+        when the page fills the tab (inside one of the workspace's own windows they are there already) and the
+        address is not the workspace itself."""
+        identity = parse_requester_identity_header(request.headers.get(IDENTITY_HEADER, ""))
+        workspace_url = (
+            _shell_url(registered_apps)
+            if identity is not None
+            and service_name not in (None, _SHELL_SERVICE_NAME)
+            and request.headers.get("Sec-Fetch-Dest", "") == "document"
+            and _may_open_workspace(identity, registered_apps)
+            else None
+        )
+        is_owner = identity is not None and identity.is_owner
+        return _html_page(page.render(is_owner, workspace_url), status=503)
+
+    def _unanswered_request() -> tuple[float, str | None, Sequence[RegisteredApp]]:
+        """Record one more request caddy could not hand to the app at this request's address: how long the address
+        has gone unanswered, the service it names, and the registry it was read against."""
+        # Caddy rewrites the path but keeps the Host, so the address the visitor was opening is
+        # still known here. Read raw: werkzeug's parsed host is empty for a label with an
+        # underscore, which the shell's has.
+        host = request.headers.get("Host", "")
+        registered_apps = _registered_apps()
+        _is_ours, service_name = service_for_host(
+            host, workspace_domain, build_label_to_name(registered_apps), auth_label
+        )
+        # Counted per service rather than per spelling of its host (case, a port), which caddy passes on as sent.
+        address = service_name if service_name is not None else host.strip().lower()
+        return unanswered_waits.record_unanswered_request(address), service_name, registered_apps
 
     def _apply_health_cors(response: Response) -> Response:
         """Echo the hosted-chrome origin so it can probe /_health with credentials.
@@ -279,7 +505,7 @@ def build_gateway_app(
             # without a session -- the workspace host id is a capability, but
             # backend/service state is not leaked to an unauthenticated probe.
             return _apply_health_cors(Response(status=204))
-        label_to_name = build_label_to_name(get_registered_apps())
+        label_to_name = build_label_to_name(_registered_apps())
         is_backend_registered = _SYSTEM_INTERFACE_SERVICE_NAME in label_to_name.values()
         detail = {
             "gateway": "ok",
@@ -300,16 +526,52 @@ def build_gateway_app(
             _json_body(get_connect_info()), mimetype="application/json", headers={"Cache-Control": "no-store"}
         )
 
-    @app.get("/_auth/loading")
+    # A registered app whose route caddy has not loaded yet (a registration it has not picked up, or a reload it
+    # refused).
+    @app.route("/_auth/loading", methods=_REWRITTEN_REQUEST_METHODS)
     def loading() -> Response:
-        return _html_page(_LOADING_PAGE, status=503)
+        waited_seconds, service_name, registered_apps = _unanswered_request()
+        if waited_seconds < _UNRESPONSIVE_GIVE_UP_SECONDS:
+            return _html_page(_LOADING_PAGE, status=503)
+        return _given_up(_STILL_NOT_AVAILABLE, service_name, registered_apps)
+
+    # A registered app whose backend caddy could not reach.
+    @app.route("/_auth/unresponsive", methods=_REWRITTEN_REQUEST_METHODS)
+    def unresponsive() -> Response:
+        waited_seconds, service_name, registered_apps = _unanswered_request()
+        if waited_seconds < _UNRESPONSIVE_GIVE_UP_SECONDS:
+            return _html_page(_UNRESPONSIVE_WAITING_PAGE, status=503)
+        app_entry = next((entry for entry in registered_apps if entry.name == service_name), None)
+        if app_entry is not None and not is_started_on_demand(app_entry, registered_apps):
+            return _given_up(_UNRESPONSIVE_NOT_RESTARTED, service_name, registered_apps)
+        return _given_up(_UNRESPONSIVE, service_name, registered_apps)
+
+    @app.post("/_auth/switch-account")
+    def switch_account() -> Response:
+        # Ending the gateway's session alone would sign the visitor straight back in as the same
+        # account: the broker remembers it. Sending them through the broker unconfirmed makes it
+        # ask which account to continue as, with a way to use a different one.
+        next_url = request.form.get("next", "")
+        safe_next = next_url if _is_workspace_url(next_url) else ""
+        # Only the not-granted page, on one of this workspace's origins, may end the session.
+        origin_header = request.headers.get("Origin", "")
+        if not origin_header or not workspace_origins_allow(
+            origin_header, workspace_domain, build_label_to_name(_registered_apps()), auth_label
+        ):
+            _log_denied("switch-account posted without one of this workspace's origins", auth_host)
+            return _origin_refused(_post_login_redirect_target(safe_next))
+        response = _redirect_to_broker(safe_next, is_confirmed=False, is_retry=False, is_account_choice=True)
+        response.status_code = 303
+        clear_session_cookie(response, workspace_domain)
+        return response
 
     @app.get("/_auth/verify")
     def verify() -> Response:
         host = request.headers.get("X-Forwarded-Host", "")
         method = request.headers.get("X-Forwarded-Method", "GET")
         forwarded_uri = request.headers.get("X-Forwarded-Uri", "/")
-        registered_apps = get_registered_apps()
+        read_apps = get_registered_apps()
+        registered_apps = read_apps or ()
         label_to_name = build_label_to_name(registered_apps)
         is_ours, service_name = service_for_host(host, workspace_domain, label_to_name, auth_label)
 
@@ -323,9 +585,14 @@ def build_gateway_app(
                 request_counter.record(service_name or "", requester_kind, requester_id, method_class, outcome)
             return response
 
+        # Without a registry no address can be told apart from one that was never shared, the owner's included.
+        if read_apps is None:
+            _log_denied("the app registry has not been read yet", host)
+            return _counted(_registry_unavailable(), REQUESTER_KIND_NONE, "", DENIED_REGISTRY_UNAVAILABLE)
+
         if not is_ours:
             _log_denied("hostname is not one of this workspace's origins", host)
-            return _counted(_forbidden(), REQUESTER_KIND_NONE, "", DENIED_FOREIGN_HOST)
+            return _counted(_nothing_shared_here(), REQUESTER_KIND_NONE, "", DENIED_FOREIGN_HOST)
 
         origin_header = request.headers.get("Origin")
         bearer_token = bearer_token_from_headers(request.headers.get("Authorization"))
@@ -339,7 +606,7 @@ def build_gateway_app(
             chrome_origin,
         ):
             _log_denied("request Origin is not allowed", host)
-            return _counted(_forbidden(), REQUESTER_KIND_NONE, "", DENIED_ORIGIN)
+            return _counted(_origin_refused(""), REQUESTER_KIND_NONE, "", DENIED_ORIGIN)
 
         # A CORS preflight from the hosted chrome must reach the service so it
         # can answer with its CORS headers -- and preflights never carry
@@ -392,7 +659,12 @@ def build_gateway_app(
             accept_header = request.headers.get("Accept", "")
             if _is_html_navigation(method, accept_header, is_websocket_upgrade):
                 return _counted(
-                    _redirect_to_broker(_requested_url(host, forwarded_uri), is_confirmed=False, is_retry=False),
+                    _redirect_to_broker(
+                        _requested_url(host, forwarded_uri),
+                        is_confirmed=False,
+                        is_retry=False,
+                        is_account_choice=False,
+                    ),
                     REQUESTER_KIND_NONE,
                     "",
                     DENIED_NO_SESSION,
@@ -421,7 +693,13 @@ def build_gateway_app(
                 identity.user_id, identity.email, service_name, build_grantable_service_names(registered_apps)
             ):
                 _log_denied("session identity has no grant admitting it to this service", host)
-                return _counted(_forbidden(), requester_kind, requester_id, DENIED_NO_GRANT)
+                return _counted(
+                    # Caddy answers the visitor with this page at the address they were opening.
+                    _not_shared_with_account(_requested_url(host, forwarded_uri), reload_url=""),
+                    requester_kind,
+                    requester_id,
+                    DENIED_NO_GRANT,
+                )
             _upgrade_invite(grants, identity)
 
         # Expose the caller's identity so caddy can copy it to the backend. It is
@@ -457,6 +735,11 @@ def build_gateway_app(
             )
         except HandoffVerificationError as exc:
             return _recover_from_failed_handoff(f"handoff token failed verification: {exc}", next_url, is_retry)
+        # Without a registry neither the grants nor the visitor's next address can be checked. Reloading this spent
+        # callback sends the visitor through the broker once more, by when the registry may read again.
+        if get_registered_apps() is None:
+            _log_denied("the app registry has not been read yet", auth_host)
+            return _registry_unavailable()
         try:
             grants = load_grants(grants_path)
         except GrantsError as exc:
@@ -466,12 +749,13 @@ def build_gateway_app(
         # vouched for ownership by user id, so an owner never needs an explicit
         # grant to reach their own workspace). Non-owners still need a grant.
         if not handoff.is_owner and not grants.allows_any(
-            handoff.user_id, handoff.email, build_grantable_service_names(get_registered_apps())
+            handoff.user_id, handoff.email, build_grantable_service_names(_registered_apps())
         ):
             _log_denied(
                 f"signed-in account {handoff.user_id} has no grant admitting it anywhere on this workspace", auth_host
             )
-            return _forbidden()
+            # Served at the single-use callback address, so Reload goes to the page the visitor was opening.
+            return _not_shared_with_account(next_url, reload_url=_post_login_redirect_target(next_url))
         _upgrade_invite(grants, handoff)
 
         response = Response(status=302, headers={"Location": _post_login_redirect_target(next_url)})
@@ -491,7 +775,9 @@ def build_gateway_app(
             return Response(status=302, headers={"Location": _post_login_redirect_target(next_url)})
         if is_retry:
             return _expired_login()
-        return _redirect_to_broker(next_url if _is_workspace_url(next_url) else "", is_confirmed=True, is_retry=True)
+        return _redirect_to_broker(
+            next_url if _is_workspace_url(next_url) else "", is_confirmed=True, is_retry=True, is_account_choice=False
+        )
 
     def _post_login_redirect_target(next_url: str) -> str:
         # Bounce onward to the origin the visitor was reaching, but only if it
@@ -501,11 +787,10 @@ def build_gateway_app(
         # is not registered and there is nowhere sensible to land.
         if _is_workspace_url(next_url):
             return next_url
-        label_to_name = build_label_to_name(get_registered_apps())
-        shell_label = next((label for label, name in label_to_name.items() if name == _SHELL_SERVICE_NAME), None)
-        return f"https://{shell_label}.{workspace_domain}/" if shell_label else auth_origin
+        shell_url = _shell_url(_registered_apps())
+        return shell_url if shell_url is not None else auth_origin
 
-    def _redirect_to_broker(next_url: str, is_confirmed: bool, is_retry: bool) -> Response:
+    def _redirect_to_broker(next_url: str, is_confirmed: bool, is_retry: bool, is_account_choice: bool) -> Response:
         nonce = pending_logins.mint(is_retry=is_retry)
         # The broker delivers its post-login callback to the dedicated auth
         # origin (the only label serving /_auth/callback), then bounces to
@@ -518,6 +803,10 @@ def build_gateway_app(
         }
         if is_confirmed:
             query["confirmed"] = "1"
+        # Asks the broker for its "Continue as / Use a different account" choice even where it would otherwise sign
+        # the visitor straight back in as the account they are leaving.
+        if is_account_choice:
+            query["prompt"] = "select_account"
         return Response(status=302, headers={"Location": f"{materials.broker_url}/share/authorize?{urlencode(query)}"})
 
     def _is_workspace_url(url: str) -> bool:
@@ -525,7 +814,7 @@ def build_gateway_app(
             return False
         next_host = url.removeprefix("https://").split("/", 1)[0]
         is_ours, _service = service_for_host(
-            next_host, workspace_domain, build_label_to_name(get_registered_apps()), auth_label
+            next_host, workspace_domain, build_label_to_name(_registered_apps()), auth_label
         )
         return is_ours
 

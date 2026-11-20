@@ -61,8 +61,8 @@ from share_gateway.assignment import RelayAssignment
 from share_gateway.assignment import load_assignment
 from share_gateway.caddyfile import APPS_TOML_PATH
 from share_gateway.caddyfile import RegisteredApp
+from share_gateway.caddyfile import RegisteredAppsReader
 from share_gateway.caddyfile import build_grantable_service_names
-from share_gateway.caddyfile import read_registered_apps
 from share_gateway.caddyfile import render_caddyfile
 from share_gateway.certs import CertProvisioningError
 from share_gateway.certs import ensure_share_certificate
@@ -93,6 +93,7 @@ from share_gateway.retry_state import remove_gateway_status
 from share_gateway.retry_state import utc_now
 from share_gateway.retry_state import write_gateway_status
 from share_gateway.server import PendingLoginRegistry
+from share_gateway.server import UnansweredAddressWaits
 from share_gateway.server import build_gateway_app
 from share_gateway.turn import TurnCredentialCache
 
@@ -199,6 +200,8 @@ class ShareStack:
         self.auth_label = auth_label
         self.assignment = assignment
         self.turn = TurnCredentialCache(materials.connector_url, materials.relay_token)
+        # One reader for every part of the stack, so caddy, the relays and the gateway keep the same last good read.
+        self.registry = RegisteredAppsReader(APPS_TOML_PATH)
         self.gateway_server: BaseWSGIServer | None = None
         self.request_count_flusher: RequestCountFlusher | None = None
         self.caddy_process: subprocess.Popen[bytes] | None = None
@@ -215,7 +218,7 @@ class ShareStack:
     def render_current_caddyfile(self) -> str:
         return render_caddyfile(
             workspace_domain=self.materials.workspace_domain,
-            apps=read_registered_apps(APPS_TOML_PATH),
+            apps=self.registry.apps(),
             auth_label=self.auth_label,
             tls_cert_path=materials_module.TLS_CERT_FILE.resolve(),
             tls_key_path=materials_module.TLS_KEY_FILE.resolve(),
@@ -243,7 +246,7 @@ class ShareStack:
             relay_port=relay_port,
             relay_token=self.materials.relay_token,
             workspace_domain=self.materials.workspace_domain,
-            service_labels=[app.label for app in read_registered_apps(APPS_TOML_PATH)],
+            service_labels=[app.label for app in self.registry.apps()],
             auth_label=self.auth_label,
             local_https_port=materials_module.CADDY_HTTPS_PORT,
             admin_port=self.admin_port_for(relay_id),
@@ -327,10 +330,11 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         jwks_cache=JwksCache(f"{materials.broker_url}/share/jwks.json"),
         jti_registry=SingleUseJtiRegistry(),
         pending_logins=PendingLoginRegistry(),
+        unanswered_waits=UnansweredAddressWaits(),
         auth_label=auth_label,
-        get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
+        get_registered_apps=stack.registry.read,
         get_connect_info=stack.connect_info,
-        admit_agent=build_agent_admitter(agent_access, lambda: read_registered_apps(APPS_TOML_PATH)),
+        admit_agent=build_agent_admitter(agent_access, stack.registry.apps),
         request_counter=request_counter,
     )
     stack.request_count_flusher = RequestCountFlusher(request_counter)
@@ -342,7 +346,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         auth_label=auth_label,
         signing_secret=signing_secret,
         share_grants_path=materials_module.GRANTS_FILE,
-        get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
+        get_registered_apps=stack.registry.apps,
     )
     stack.gateway_server = make_server(
         "127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True, request_handler=SilentRequestHandler
