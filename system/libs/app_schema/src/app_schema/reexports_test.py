@@ -34,14 +34,10 @@ def _public_names(module: object) -> set[str]:
 def test_every_name_the_old_module_offers_is_the_sdks_own_object(
     old_module: object, sdk_module: object
 ) -> None:
-    offered = {
-        name: value
-        for name, value in vars(old_module).items()
-        if not name.startswith("_")
-    }
+    offered = _public_names(old_module)
     assert offered, f"{old_module} offers nothing"
-    for name, value in offered.items():
-        assert value is vars(sdk_module)[name], name
+    for name in offered:
+        assert vars(old_module)[name] is vars(sdk_module)[name], name
 
 
 def test_the_old_error_base_is_the_sdks_so_an_app_catching_it_still_catches_the_helpers_errors() -> (
