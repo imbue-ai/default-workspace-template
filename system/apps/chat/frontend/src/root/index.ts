@@ -69,6 +69,7 @@ import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
 import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
 import { ensureParticipants } from "../models/Participants";
+import { pruneCachedTranscripts, touchCachedTranscript } from "../models/transcriptCache";
 import { hasPendingDelete, settlePendingDeletes, withoutPendingDeletes } from "./pendingDeletes";
 import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
 import { groupedRows, provisionalTitle, rowsFromSnapshots } from "./rows";
@@ -174,6 +175,7 @@ function select(chatId: string | null): void {
   isDrawerOpen = shown === null;
   history.replaceState(null, "", `${getBasePath()}${rootPathFor(shown)}`);
   pool?.show(shown);
+  if (shown !== null) touchCachedTranscript(shown);
   if (shown !== null && isRootShown) markRead(shown);
   reportLocation();
   m.redraw();
@@ -369,6 +371,7 @@ function onChatsUpdated(): void {
       if (!isKept(heldId)) pool.destroy(heldId);
     }
   }
+  pruneCachedTranscripts(isKept);
   if (selectedChatId !== null && !isKept(selectedChatId)) {
     select(null);
     return;

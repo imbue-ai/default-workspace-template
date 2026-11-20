@@ -6,6 +6,7 @@
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { postJson } from "@imbue/workspace-ui/src/models/http";
+import { dropCachedTranscript } from "../models/transcriptCache";
 
 function chatRoute(chatId: string, verb: string): string {
   return apiUrl(`/api/chats/${encodeURIComponent(chatId)}/${verb}`);
@@ -28,7 +29,8 @@ export async function startChat(chatId: string): Promise<void> {
   await postJson<unknown>(chatRoute(chatId, "start"), {});
 }
 
-/** End the chat's agent and remove its conversation; it cannot be undone. */
+/** End the chat's agent and remove its conversation, and this window's cached snapshot of it; it cannot be undone. */
 export async function destroyChat(chatId: string): Promise<void> {
   await postJson<unknown>(chatRoute(chatId, "destroy"), {});
+  dropCachedTranscript(chatId);
 }

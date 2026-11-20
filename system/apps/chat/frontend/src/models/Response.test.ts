@@ -40,6 +40,8 @@ import {
   isConversationNotFound,
   isMessageCarriedBySwitch,
   noteLoadedArrivals,
+  hasEarlierThanCachedWindow,
+  placeCachedTranscript,
   sentUserTurnIds,
   userTurnIdsLandedSince,
   whenTranscriptLoadSettles,
@@ -48,6 +50,8 @@ import {
   type TranscriptEvent,
 } from "./Response";
 import { addOutgoing, getOutgoingMessages } from "./OutgoingMessages";
+import { readCachedTranscript, setScreenMeasurer, writeCachedTranscript } from "./transcriptCache";
+import { memoryStorage } from "./storageFixture";
 
 function makeEvent(id: string): TranscriptEvent {
   return {
@@ -1033,5 +1037,136 @@ describe("event detail cache", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("the transcript cache", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal("sessionStorage", memoryStorage());
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("shows a cached tail at once, without counting the chat as loaded, until the snapshot replaces it", async () => {
+    const agent = freshChat();
+    writeCachedTranscript(agent, [makeEvent("old-1"), makeEvent("old-2")], 8, 10);
+
+    expect(placeCachedTranscript(agent)).toBe(true);
+    expect(getEventsForChat(agent).map((event) => event.event_id)).toEqual(["old-1", "old-2"]);
+    // Placed as a transcript of its own, so nothing is drawn above it, with the earlier messages remembered.
+    expect(getFirstOffset(agent)).toBe(0);
+    expect(hasMoreBefore(agent)).toBe(false);
+    expect(hasEarlierThanCachedWindow(agent)).toBe(true);
+    expect(await whenTranscriptLoadSettles(agent)).toBe(false);
+
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("old-2"), makeEvent("new-1")], offset: 9, total: 11 });
+    await fetchEvents(agent);
+
+    expect(getEventsForChat(agent).map((event) => event.event_id)).toEqual(["old-2", "new-1"]);
+    expect(getFirstOffset(agent)).toBe(9);
+    expect(hasEarlierThanCachedWindow(agent)).toBe(false);
+    expect(await whenTranscriptLoadSettles(agent)).toBe(true);
+  });
+
+  it("knows there is nothing earlier than a cached tail that starts the chat", () => {
+    const agent = freshChat();
+    writeCachedTranscript(agent, [makeEvent("first"), makeEvent("second")], 0, 2);
+
+    placeCachedTranscript(agent);
+
+    expect(hasEarlierThanCachedWindow(agent)).toBe(false);
+  });
+
+  it("places nothing over a chat the page already holds or has nothing cached for", async () => {
+    const agent = freshChat();
+    expect(placeCachedTranscript(agent)).toBe(false);
+
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("live")], offset: 0, total: 1 });
+    await fetchEvents(agent);
+    writeCachedTranscript(agent, [makeEvent("stale")], 0, 1);
+
+    expect(placeCachedTranscript(agent)).toBe(false);
+    expect(getEventsForChat(agent).map((event) => event.event_id)).toEqual(["live"]);
+  });
+
+  it("writes the loaded window once it settles, live arrivals included", async () => {
+    const agent = freshChat();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("a")], offset: 4, total: 5 });
+    await fetchEvents(agent);
+    appendEvents(agent, [makeEvent("b")]);
+    expect(readCachedTranscript(agent)).toBeNull();
+
+    vi.advanceTimersByTime(1000);
+
+    const cached = readCachedTranscript(agent);
+    expect(cached?.events.map((event) => event.event_id)).toEqual(["a", "b"]);
+    expect(cached?.offset).toBe(4);
+    expect(cached?.total).toBe(6);
+  });
+
+  it("never writes a window placed from the cache back over it", () => {
+    const agent = freshChat();
+    writeCachedTranscript(agent, [makeEvent("cached")], 0, 1);
+    const spy = vi.spyOn(sessionStorage, "setItem");
+
+    placeCachedTranscript(agent);
+    vi.advanceTimersByTime(1000);
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("does not write a window scrolled off the live end", async () => {
+    const agent = freshChat();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("middle")], offset: 3, total: 10 });
+    await fetchWindowAtOffset(agent, 3, 1);
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("t")], offset: 9, total: 10 });
+    await fetchEvents(agent);
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("middle")], offset: 3, total: 10 });
+    await fetchWindowAtOffset(agent, 3, 1);
+
+    vi.advanceTimersByTime(1000);
+
+    expect(readCachedTranscript(agent)).toBeNull();
+  });
+
+  it("counts a chat whose cached tail it places as the one viewed last", () => {
+    const agent = freshChat();
+    writeCachedTranscript(agent, [makeEvent("mine")], 0, 1);
+    writeCachedTranscript("other-chat", [makeEvent("theirs")], 0, 1);
+
+    placeCachedTranscript(agent);
+
+    const index = JSON.parse(sessionStorage.getItem("transcript-cache-index") ?? "[]") as { id: string }[];
+    expect(index.map((entry) => entry.id)).toEqual([agent, "other-chat"]);
+  });
+
+  it("sizes what it writes by the screen the page measured", async () => {
+    const agent = freshChat();
+    const events = Array.from({ length: 200 }, (_, index) => makeEvent(`e${index}`));
+    mockRequest.mockResolvedValueOnce({ events, offset: 0, total: 200 });
+    await fetchEvents(agent);
+    setScreenMeasurer(() => ({ heightPx: 100, charsPerPx: 1, trailingPx: 0 }));
+
+    vi.advanceTimersByTime(1000);
+    setScreenMeasurer(() => null);
+
+    const cached = readCachedTranscript(agent);
+    expect(cached?.events.length).toBeGreaterThan(0);
+    expect(cached?.events.length).toBeLessThan(10);
+    expect(cached?.events[cached.events.length - 1].event_id).toBe("e199");
+  });
+
+  it("forgets the cached tail of a chat whose transcript is not found", async () => {
+    const agent = freshChat();
+    writeCachedTranscript(agent, [makeEvent("gone")], 0, 1);
+    mockRequest.mockRejectedValueOnce({ code: 404, message: "not found" });
+
+    await expect(fetchEvents(agent)).rejects.toBeDefined();
+
+    expect(readCachedTranscript(agent)).toBeNull();
   });
 });

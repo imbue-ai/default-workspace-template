@@ -6,7 +6,13 @@
 import m from "mithril";
 import { MarkdownContent } from "../markdown";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
-import { getEventDetailState, getEventDetailVersion, getEventsForChat, requestEventDetail } from "../models/Response";
+import {
+  getEventDetailState,
+  getEventDetailVersion,
+  getEventsForChat,
+  isTranscriptLoaded,
+  requestEventDetail,
+} from "../models/Response";
 import { getChatById } from "../models/Chats";
 import { accountForAgent, areAccountsLoaded, openProviderChooser } from "../models/Providers";
 import { openSubagentView } from "../shell";
@@ -162,6 +168,12 @@ function resolvedResultSignature(
     .join("|");
 }
 
+/** The messages a recovered sign-in turn offers to send again; none until the transcript has landed, since a
+ *  window shown from the transcript cache may hold only the tail of a long message. */
+function promptsToSendAgain(chatId: string, event: AssistantMessageEvent): ReturnType<typeof messagesToSendAgain> {
+  return isTranscriptLoaded(chatId) ? messagesToSendAgain(getEventsForChat(chatId), event) : null;
+}
+
 /** The input outside the event that the auth-error note renders from: whether the chat is known
  *  yet, which account it is bound to, and, once that account signed in again, the message offered
  *  again and how its send went. The memo below has to carry it -- the chat list and the account
@@ -172,7 +184,7 @@ function reauthNoteSignature(event: AssistantMessageEvent, chatId: string): stri
   if (chat === undefined) return "unknown";
   const bound = `bound:${chat.active_agent.account_id ?? ""}`;
   if (!isSignedInSince(event, chatId)) return bound;
-  const prompts = messagesToSendAgain(getEventsForChat(chatId), event);
+  const prompts = promptsToSendAgain(chatId, event);
   const resending = isResendingAfterSignIn(chatId) ? "resending" : "-";
   return `${bound}|recovered|${prompts?.map((prompt) => prompt.event_id).join(",") ?? "-"}|${resendStateOf(event.event_id, prompts) ?? "-"}|${resending}`;
 }
@@ -503,7 +515,7 @@ function renderReauthAction(chatId: string): m.Children {
  *  neutral line in place of the red failure, and the message it failed on to send again while the
  *  turn is still the chat's newest. The provider's own text stays one click away. */
 function renderSignedInAgain(event: AssistantMessageEvent, chatId: string, text: string): m.Vnode {
-  const prompts = messagesToSendAgain(getEventsForChat(chatId), event);
+  const prompts = promptsToSendAgain(chatId, event);
   const state = resendStateOf(event.event_id, prompts);
   // An unconfirmed send may already be with the agent, so it gets the composer's unconfirmed
   // wording: check before sending, and a button that says it sends again.

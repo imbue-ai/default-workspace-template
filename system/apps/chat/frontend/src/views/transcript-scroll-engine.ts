@@ -222,6 +222,9 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   // The mirror for the other edge: the user targeted the very top while older
   // history was still unloaded. Once event 0 is loaded, pin scrollTop to 0.
   let pendingTopIntent = false;
+  // Whether the pin has not yet moved this chat's view: the first move lands at once, since a chat
+  // opening at the top and gliding down to its bottom reads as a jerk.
+  let isFirstPinOfChat = true;
 
   // input classification
   let lastInputSource: ScrollInputSource = "wheel";
@@ -796,10 +799,11 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     const anchorIndex = pendingRestore.anchorEventIndex;
     const { firstIndex, endIndex } = extent();
     const totalEvents = dataSource.getTotalEvents();
+    // Without a total the held window has no place in the transcript yet (one shown from the
+    // transcript cache is numbered from 0), so its indices cannot be matched to the anchor's.
     const isTargetLoaded =
       anchorIndex === null ||
-      (anchorIndex >= firstIndex && anchorIndex < endIndex) ||
-      (totalEvents !== null && anchorIndex >= totalEvents);
+      (totalEvents !== null && ((anchorIndex >= firstIndex && anchorIndex < endIndex) || anchorIndex >= totalEvents));
     if (!isTargetLoaded) {
       // Keep steering the fill toward the persisted location.
       pendingJumpIndex = anchorIndex;
@@ -1155,12 +1159,14 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         // gliding back would paint that move and then slide down over several
         // frames -- a bounce at the bottom. All three snap.
         const isSnapRequired =
+          isFirstPinOfChat ||
           didAbsorbClamp ||
           fillInFlight ||
           spacerTopPx > 0 ||
           spacerBottomPx > 0 ||
           (geometry !== null && geometry.unmeasuredCount > 0);
         if (Math.abs(pinDeltaPx) > 0.5) {
+          isFirstPinOfChat = false;
           if (!isSnapRequired && Math.abs(pinDeltaPx) <= element.clientHeight * 1.5) {
             smoothWriteScrollTop(targetPx, "follow-pin");
           } else {
@@ -1472,6 +1478,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       pendingJumpLandIndex = null;
       pendingTailIntent = false;
       pendingTopIntent = false;
+      isFirstPinOfChat = true;
       cancelSmoothScroll();
       freezeRange = null;
       lastPositionedKey = "";
