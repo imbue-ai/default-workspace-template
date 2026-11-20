@@ -4,6 +4,9 @@ Writes the app registry, `data/.state/apps.toml`: one `[[apps]]` row per app, wi
 its URL, icon and the static fields of its `app.toml`. `forward_port` upserts or
 removes a row under the registry's lock and validates what it copies (the name
 rule, the icon markup, the value types); its module docstring describes the rules.
+With `--announce` it also appends the row's `service_registered` event to the
+services stream (`announcement`), which the shell's and the chat app's program
+lines use so both are routable before either app has imported.
 
 ## Consumers
 

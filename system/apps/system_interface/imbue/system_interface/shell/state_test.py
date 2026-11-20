@@ -15,6 +15,7 @@ import httpx
 import pytest
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
+from pydantic import Field
 from pydantic import ValidationError
 from workspace_layout.identity import ANONYMOUS_OWNER
 from workspace_layout.identity import RequestIdentity
@@ -29,6 +30,8 @@ from workspace_layout.records import DesktopShortcut
 from workspace_layout.records import StoredWindowPath
 from workspace_layout.windows import WindowClosedHint
 from workspace_themes.contract import WORKSPACE_THEMES_DIRECTORY
+from workspace_themes.data_types import ThemeCatalog
+from workspace_themes.interfaces import ThemeCatalogLoaderInterface
 from workspace_themes.testing import write_standard_theme
 from workspace_themes.testing import write_test_theme
 
@@ -152,6 +155,45 @@ def test_a_theme_made_while_the_shell_runs_reaches_every_window(
     try:
         write_test_theme(repo_root / WORKSPACE_THEMES_DIRECTORY, "paper", "")
         wait_for(has_heard_of_paper, timeout=10.0, poll_interval=0.05, error_message="no window heard of the theme")
+    finally:
+        shell.stop()
+
+
+class _CountingThemeLoader(ThemeCatalogLoaderInterface):
+    """The real loader, counting its loads."""
+
+    inner: ThemeCatalogLoaderInterface = Field(description="The loader that reads the catalog")
+    load_count: int = Field(default=0, description="How many times the catalog was asked for")
+
+    def load(self) -> ThemeCatalog:
+        self.load_count += 1
+        return self.inner.load()
+
+
+@pytest.mark.timeout(30)
+def test_the_theme_catalog_is_first_loaded_after_the_shell_serves(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """``main`` serves between the two starts, so the first page is not held up loading every theme for the
+    watch; the registry, which the first page and the app announcements need, is read before."""
+    registry_path = write_two_app_registry(tmp_path)
+    repo_root = tmp_path / "repo"
+    write_standard_theme(repo_root)
+    built = build_shell_state(
+        tmp_path / "state",
+        registry_path,
+        broadcaster,
+        inventory=build_inventory(registry_path, broadcaster),
+        repo_root=repo_root,
+    )
+    themes = _CountingThemeLoader(inner=built.themes)
+    shell = built.model_copy_update(to_update(built.field_ref().themes, themes))
+    shell.start_before_serving()
+    try:
+        assert shell.inventory.is_registry_read
+        assert themes.load_count == 0
+        shell.start_after_serving()
+        assert themes.load_count >= 1
     finally:
         shell.stop()
 

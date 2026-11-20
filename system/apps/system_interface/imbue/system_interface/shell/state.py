@@ -255,9 +255,15 @@ class ShellState(MutableModel):
         return value
 
     def start(self) -> None:
-        """Prune stale clients (now, and daily from here on), then start the inventory (registry watch, liveness),
-        the avatar status reader (the event file watch), and the theme watch (the theme folders and app manifests).
-        Each visitor's desktop made before desktops carried an owner is given its visitor first."""
+        """Start everything: ``start_before_serving`` and then ``start_after_serving`` (``main`` serves in between)."""
+        self.start_before_serving()
+        self.start_after_serving()
+
+    def start_before_serving(self) -> None:
+        """What the first request needs: give each visitor's desktop made before desktops carried an owner its
+        visitor, prune stale clients (now, and daily from here on), then start the inventory (the registry read
+        that announces every app, the registry watch, liveness), the lifecycle sweep, the update notice and the
+        avatar status reader (the event file watch)."""
         self.adopt_visitor_desktops()
         self.prune_unseen_clients()
         thread = threading.Thread(target=self._run_client_prune, daemon=True, name="shell-client-prune")
@@ -268,6 +274,11 @@ class ShellState(MutableModel):
         self.update_notice.start()
         self.resource_gauge.start()
         self.avatar_status.start()
+
+    def start_after_serving(self) -> None:
+        """The watches that only tell open windows about later changes, which a page loaded before they start reads
+        fresh anyway: the theme watch (the theme folders and app manifests, which loads the whole catalog to start)
+        and the profile snapshot watch."""
         theme_watch = ThemeCatalogWatch(
             repo_root=self.repo_root, loader=self.themes, on_catalog_changed=self.broadcast_themes_changed
         )

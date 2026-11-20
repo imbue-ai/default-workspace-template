@@ -1,0 +1,1 @@
+The update-self and migrate-workspace tests now read the shell's and the chat's program lines through `listen_then_exec.py`, which binds each app's port before it starts. migrate-workspace's scan finds the chat's port on its program line, where the chat now registers.

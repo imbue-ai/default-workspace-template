@@ -1,5 +1,7 @@
 """Tests for the chat app's entry point: the CLI args and the state they build."""
 
+import subprocess
+import sys
 from pathlib import Path
 
 from imbue.chat.chat_settings import ChatSettings
@@ -77,3 +79,17 @@ def test_chat_writes_land_in_the_configured_data_dir(tmp_path: Path) -> None:
         assert (tmp_path / "scratch" / SECRET_REQUESTS_DIRNAME / f"{filed.request.request_id}.json").exists()
     finally:
         state.shutdown()
+
+
+def test_the_entry_point_does_not_import_mngrs_command_line() -> None:
+    """``imbue.mngr.main`` is mngr's whole command line (every command module, and building the plugin manager as an
+    import side effect); the chat app needs only the plugin manager, which ``main`` builds itself before it serves.
+    Importing the command line again would put all of it back in front of the chat's first answer."""
+    result = subprocess.run(
+        [sys.executable, "-c", "import sys, imbue.chat.main; print('imbue.mngr.main' in sys.modules)"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
+    assert result.stdout.strip() == "False"

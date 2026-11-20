@@ -2602,16 +2602,20 @@ def _shell_preflight_argv(repo_root: Path) -> list[object]:
 
 
 _OOM_TAGGER = "system/services/oom_priority/bin/oom_tag_service.py"
+_LISTEN_THEN_EXEC = "system/scripts/workspace_bare_scripts/listen_then_exec.py"
 
 
 def _supervisord_exec_target(program_conf: Path) -> list[str]:
     """The argv a supervisord program finally execs: what follows the memory tagger's band
-    key, or, when that is a ``bash -c`` script, what follows the script's last ``exec``."""
+    key (and the ``listen_then_exec.py`` address that binds the port ahead of the app), or,
+    when that is a ``bash -c`` script, what follows the script's last ``exec``."""
     parser = configparser.ConfigParser(interpolation=None)
     parser.read(program_conf)
     (section,) = [name for name in parser.sections() if name.startswith("program:")]
     words = shlex.split(parser[section]["command"])
     tagged = words[words.index(_OOM_TAGGER) + 2 :]
+    if tagged[1:2] == [_LISTEN_THEN_EXEC]:
+        tagged = tagged[3:]
     if tagged[:2] != ["bash", "-c"]:
         return tagged
     script = shlex.split(tagged[2])
