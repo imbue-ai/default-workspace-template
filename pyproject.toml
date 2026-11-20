@@ -80,11 +80,10 @@ dev = [
     # root .venv so `uv run --no-sync mngr` parses its agent_types fields instead of
     # rejecting them as "Unknown fields".
     "imbue-mngr-pi-coding",
-    # imbue-mngr-opencode / imbue-mngr-antigravity: same rationale as the three
-    # above -- registering the opencode / antigravity agent types so mngr can parse
-    # their `[agent_types.*]` config blocks.
+    # Same rationale as imbue-mngr-claude above: mngr parses these plugins' `[agent_types.*]` blocks.
     "imbue-mngr-opencode",
     "imbue-mngr-antigravity",
+    "imbue-mngr-grok",
     "imbue-mngr-autocompact",
     # Shared validator that checks mngr CLI argvs against the live mngr command
     # tree; used by the per-feature contract tests (bootstrap's manager_test,
