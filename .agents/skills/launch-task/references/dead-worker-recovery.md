@@ -34,7 +34,7 @@ If the worker was *not* in the ledger, it died for some other reason (e.g. a cla
 
    `reply` reaches the worker's chat through the chat app by the agent id `launch` stamped into the task file (never by the worker's name).
 
-2. From here it's a normal worker again -- finalize via `submit-upstream-changes` when done.
+2. From here it's a normal worker again.
 
 ## Last resort: manual worktree salvage
 
@@ -70,4 +70,4 @@ Only fall back to this path when the default doesn't apply: the reply fails to b
 
    Destroy keeps the branch unless `--delete-branches` is passed, and mngr preserves the transcript, so the WIP commit you just made stays reachable.
 
-5. The branch lives on. Finalize it like any other worker branch: cherry-pick onto your working branch, address ratchet/test fixups in follow-up commits, then push to `submit/<name>` per the `submit-upstream-changes` skill.
+5. The branch lives on. Finalize it like any other worker branch: merge it into your working branch and address ratchet/test fixups in follow-up commits.

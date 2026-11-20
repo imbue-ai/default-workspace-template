@@ -1,6 +1,6 @@
 ---
 name: use-screen
-description: Use when you need a display -- to run a program with a window (a GUI app, a game, an editor, a test that needs X), to see what is on the workspace's desktop, to take a screenshot of it, to type or click into a program there, or to hold the control lease while you drive it. The Screen is the workspace's one streamed Linux desktop, shown to the user as a window; the browser runs on it too (see the agentic-browser-fleet skill for driving Chromium).
+description: Use when a display is needed -- to run a program with a window (a GUI app, a game, an editor, a test that needs X), to see what is on the workspace's desktop, to take a screenshot of it, to type or click into a program there, or to hold the control lease while driving it. The Screen is the workspace's one streamed Linux desktop; for driving Chromium on it, use the agentic-browser-fleet skill.
 metadata:
   author: imbue
 ---

@@ -3,7 +3,7 @@ name: publish-template
 description: Publish a clean, bootable snapshot of what this agent built -- an app or feature, a skill, a chat behavior, a workflow, a service, config or seed data -- to a new GitHub repo on the user's account, as a template another agent can be created from. Use when the user asks to publish, share, or export something they built as a reusable template. For a new version of a template already published, use update-published-template.
 metadata:
   author: imbue
-  exempt-checks: size reachability depth contents
+  exempt-checks: size reachability contents
   exempt-reason: awaiting-restructure
 ---
 

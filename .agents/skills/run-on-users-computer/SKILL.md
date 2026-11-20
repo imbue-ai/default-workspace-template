@@ -1,6 +1,6 @@
 ---
 name: run-on-users-computer
-description: Use only when the user explicitly asks for something to run on their own physical computer, outside this workspace -- "on my laptop", "on my Mac", "on my local machine", "on my desktop computer", "not in the workspace" -- or when a plan would have you tell them to run a command there. Everything else runs in this workspace, so a bare "my computer", "my machine", or "here" means the workspace, as do "the desktop" (the workspace's windowed desktop) and "the screen" (the workspace's Linux desktop). Covers the alternatives to try first, the one sanctioned way to run a command on their computer yourself (and how to ask for one program rather than everything), and the things you must never build.
+description: Use only when the user explicitly asks for something to run on their own physical computer, outside this workspace -- "on my laptop", "on my Mac", "on my local machine", "on my desktop computer", "not in the workspace" -- or when a plan would have them run a command there. Everything else runs in this workspace, so a bare "my computer", "my machine", or "here" means the workspace, as do "the desktop" (the workspace's windowed desktop) and "the screen" (the workspace's Linux desktop). Covers the alternatives to try first and the one sanctioned way to run a command on their computer.
 compatibility: Requires the latchkey gateway env mngr injects into every agent (LATCHKEY_GATEWAY, LATCHKEY_GATEWAY_PASSWORD) and the devices skill.
 metadata:
   author: imbue

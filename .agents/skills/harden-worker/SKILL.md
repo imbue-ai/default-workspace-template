@@ -1,9 +1,11 @@
 ---
 name: harden-worker
-description: Run the background harden pass for a change -- crystallize, update, or heal the skills, apps, and services it covers in an isolated worktree, then report back. Invoke when your task file hands you creations to harden; it names the operation and each creation's type to compose.
+description: The procedure a harden worker follows to crystallize, update or heal the creations its lead dispatched. Not for a chat to invoke; a harden worker's task file invokes it.
 metadata:
   author: imbue
   role: worker-sub-skill
+  exempt-checks: depth contents
+  exempt-reason: awaiting-restructure
 ---
 
 # Hardening a creation (generic worker)
@@ -51,7 +53,7 @@ type's reference once however many creations share it.
 
 Read these top to bottom, then follow them.
 
-Filenames are relative to `.agents/shared/worker/references/`, except the two
+Filenames are relative to `.agents/skills/harden-worker/references/`, except the two
 marked **[shared]**, which live in `.agents/shared/references/`.
 
 | Load when | Reference | What it gives you |

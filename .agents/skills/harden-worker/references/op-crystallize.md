@@ -47,7 +47,7 @@ In the pre-existing/confirmed-live shape, emit no stage gates -- just
 1. Read the task file. The `## What was done` description and the `## Anchors`
    verbatim quotes are your primary guide.
 2. Locate the work in the lead's transcript, per
-   `.agents/shared/worker/references/transcript-exploration.md`.
+   `.agents/skills/harden-worker/references/transcript-exploration.md`.
 3. Research the relevant APIs, libraries, and existing utilities you will need.
    Prefer reusing existing functions over reimplementing.
 4. If anything is unclear, add your question to the list you surface at Gate 1.
@@ -65,7 +65,7 @@ that out explicitly at the outline (Stage 2) and again at the final gate (Stage
 
 The reconstruct shape applies only to skills, so the outline is a skill outline:
 its exact contents are defined in
-`.agents/shared/worker/references/skill-outline-fields.md` (name, description,
+`.agents/skills/harden-worker/references/skill-outline-fields.md` (name, description,
 inputs/outputs, the step-by-step flow with each step tagged `[script]` /
 `[ai-script]` / `[prose]`, subcommand structure, and the 2-3 scenarios you plan
 to hand-craft). Include any edge cases you foresaw but chose not to handle, and

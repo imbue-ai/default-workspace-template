@@ -1,6 +1,6 @@
 ---
 name: blueprint
-description: Start a new plan-writing session. Explores the codebase and asks clarifying questions.
+description: Start a new plan-writing session. Explores the codebase and asks clarifying questions. Use when the user wants help writing an implementation plan.
 metadata:
   author: imbue
 ---
