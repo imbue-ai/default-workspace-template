@@ -344,7 +344,9 @@ holding the block in grok's session log, and when none shows within the witness 
 the block again on a later pass, so a block grok took but logged late runs twice; the chat's
 "Sent again" line marks it. A send mngr refused before typing (a screen other than grok's
 composer) spends an attempt too. After `MAX_DELIVERY_ATTEMPTS` the entry stays Queued until a
-stop returns it, as E14 describes for agy.
+stop returns it, as E14 describes for agy. A stop that lands while the flush is typing a block
+leaves that block to the flush; if grok then shows no sign it took the block, the flush types it no
+more, and it stays Queued for the next stop.
 
 ### E19. grok — a stop mngr cannot press leaves the turn running
 mngr presses Ctrl+C only into a running top-level turn whose composer is empty, so a stop presses
