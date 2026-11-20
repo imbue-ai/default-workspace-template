@@ -368,9 +368,9 @@ def _delete_file(path: Path) -> None:
     path.unlink()
 
 
-def _add_an_unknown_desktop_key(path: Path) -> None:
+def _break_a_desktop_field(path: Path) -> None:
     raw = json.loads(path.read_text())
-    raw["desktops"][0]["unknown_key"] = True
+    raw["desktops"][0]["glyph"] = "not a glyph"
     path.write_text(json.dumps(raw))
 
 
@@ -380,7 +380,7 @@ def _set_another_version(path: Path) -> None:
     path.write_text(json.dumps(raw))
 
 
-@pytest.mark.parametrize("spoil_desktops_file", [_delete_file, _add_an_unknown_desktop_key, _set_another_version])
+@pytest.mark.parametrize("spoil_desktops_file", [_delete_file, _break_a_desktop_field, _set_another_version])
 def test_seeding_the_default_desktop_again_starts_the_offered_record_over(
     tmp_path: Path, spoil_desktops_file: Callable[[Path], None]
 ) -> None:
@@ -474,6 +474,121 @@ def test_a_file_of_another_version_or_shape_is_treated_as_absent(tmp_path: Path)
     (tmp_path / "desktops.json").write_text(json.dumps({"version": 1, "desktops": [{"id": "x"}]}))
     assert store.list_desktops() == []
     assert [desktop.id for desktop in store.ensure_default(lambda: ())] == ["home"]
+
+
+_FIELDS_A_NEWER_SHELL_ADDED: dict[str, object] = {
+    "document": "grid",
+    "desktop": {"dock": True},
+    "shortcut": "New chat",
+    "target": "?fresh",
+    "cell": 2,
+    "wallpaper": "cover",
+    "window": 1.25,
+}
+
+
+def _newer_fields_in(state_directory: Path) -> dict[str, object]:
+    raw = json.loads((state_directory / "desktops.json").read_text())
+    desktop_by_id = {desktop["id"]: desktop for desktop in raw["desktops"]}
+    (shortcut,) = desktop_by_id["home"]["shortcuts"]
+    (window,) = desktop_by_id["work"]["windows"]
+    return {
+        "document": raw.get("layout_hint"),
+        "desktop": desktop_by_id["home"].get("dock_style"),
+        "shortcut": shortcut.get("label"),
+        "target": shortcut["target"].get("query"),
+        "cell": shortcut["cell"].get("span"),
+        "wallpaper": desktop_by_id["work"]["wallpaper"].get("fit"),
+        "window": window.get("zoom"),
+    }
+
+
+def _store_read_by_an_older_shell(state_directory: Path) -> DesktopStore:
+    """Home with a shortcut and Work with a wallpaper and a window, written by a shell that added a field at every
+    level of desktops.json."""
+    store = DesktopStore(state_directory=state_directory)
+    store.ensure_default(lambda: _SEED)
+    store.create_desktop("Work", "#111111", 1, (), (), None, ())
+    store.set_wallpaper("work", Wallpaper(kind=WallpaperKind.BUNDLED, name=WallpaperName("dawn")))
+    store.open_window("work", window_record(_WIN_1, "files", "/"))
+    raw = json.loads((state_directory / "desktops.json").read_text())
+    home, work = raw["desktops"]
+    raw["layout_hint"] = _FIELDS_A_NEWER_SHELL_ADDED["document"]
+    home["dock_style"] = _FIELDS_A_NEWER_SHELL_ADDED["desktop"]
+    home["shortcuts"][0]["label"] = _FIELDS_A_NEWER_SHELL_ADDED["shortcut"]
+    home["shortcuts"][0]["target"]["query"] = _FIELDS_A_NEWER_SHELL_ADDED["target"]
+    home["shortcuts"][0]["cell"]["span"] = _FIELDS_A_NEWER_SHELL_ADDED["cell"]
+    work["wallpaper"]["fit"] = _FIELDS_A_NEWER_SHELL_ADDED["wallpaper"]
+    work["windows"][0]["zoom"] = _FIELDS_A_NEWER_SHELL_ADDED["window"]
+    (state_directory / "desktops.json").write_text(json.dumps(raw))
+    return store
+
+
+def _rename_home(store: DesktopStore) -> None:
+    store.update_settings("home", "Base", None, None)
+
+
+def _move_homes_shortcut(store: DesktopStore) -> None:
+    store.move_shortcut("home", AppName("chat"), LaunchPathId("new"), GridCell(column=3, row=1))
+
+
+def _report_works_window_location(store: DesktopStore) -> None:
+    store.set_window_location("work", _WIN_1, WindowPath("/docs"), WindowTitle("Docs"))
+
+
+def _add_another_desktop(store: DesktopStore) -> None:
+    store.create_desktop("Play", "#222222", 2, (), (), None, ())
+
+
+@pytest.mark.parametrize(
+    "change", [_rename_home, _move_homes_shortcut, _report_works_window_location, _add_another_desktop]
+)
+def test_fields_a_newer_shell_added_are_read_past_and_kept_through_a_change(
+    tmp_path: Path, change: Callable[[DesktopStore], None]
+) -> None:
+    """A rollback puts this shell in front of a desktops.json a newer one wrote: every desktop still reads, and a
+    change writes back every field this shell does not know where it was."""
+    store = _store_read_by_an_older_shell(tmp_path)
+    before = store.list_desktops()
+    assert [desktop.id for desktop in before] == ["home", "work"]
+    assert before[1].windows[0].id == _WIN_1 and before[0].shortcuts == _SEED
+
+    change(store)
+
+    assert store.list_desktops() != before
+    assert _newer_fields_in(tmp_path) == _FIELDS_A_NEWER_SHELL_ADDED
+
+
+_UNREADABLE_DESKTOPS_FILES: dict[str, bytes] = {
+    "not_json": b'{"version": 1, "desktops": [',
+    "not_an_object": b"[]",
+    "another_version": json.dumps({"version": 2, "desktops": [{"id": "home", "layers": []}]}).encode(),
+    "a_desktop_missing_its_fields": json.dumps({"version": 1, "desktops": [{"id": "home"}]}).encode(),
+}
+
+
+@pytest.mark.parametrize("unreadable", list(_UNREADABLE_DESKTOPS_FILES.values()), ids=list(_UNREADABLE_DESKTOPS_FILES))
+@pytest.mark.parametrize(
+    ("make_a_desktop", "made_id"), [(_seed_the_default_desktop, "home"), (_create_a_desktop, "alpha")]
+)
+def test_an_unreadable_desktops_file_is_moved_aside_unchanged_before_a_desktop_is_written(
+    tmp_path: Path, unreadable: bytes, make_a_desktop: Callable[[DesktopStore], None], made_id: str
+) -> None:
+    (tmp_path / "desktops.json").write_bytes(unreadable)
+    store = DesktopStore(state_directory=tmp_path)
+    assert store.list_desktops() == []
+
+    make_a_desktop(store)
+
+    (aside,) = tmp_path.glob("desktops.json.unreadable-*")
+    assert aside.read_bytes() == unreadable
+    assert [desktop.id for desktop in store.list_desktops()] == [made_id]
+
+
+def test_an_absent_desktops_file_is_seeded_with_nothing_moved_aside(tmp_path: Path) -> None:
+    DesktopStore(state_directory=tmp_path).ensure_default(lambda: _SEED)
+
+    assert sorted(path.name for path in tmp_path.iterdir()) == [DEFAULT_SHORTCUTS_OFFERED_FILENAME, "desktops.json"]
 
 
 def test_a_desktop_made_again_never_wears_a_theme_its_id_left_behind(tmp_path: Path) -> None:

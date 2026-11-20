@@ -3,6 +3,7 @@ the default shortcuts offered to them (section 4.1a), in ``default_shortcuts_off
 
 import re
 from collections.abc import Callable
+from collections.abc import Hashable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
@@ -15,6 +16,7 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.registry import RegistryRow
 from loguru import logger
+from pydantic import BaseModel
 from pydantic import Field
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import DesktopId
@@ -43,6 +45,7 @@ from imbue.system_interface.shell.data_types import DesktopDeleteOutcome
 from imbue.system_interface.shell.data_types import DesktopThemesDocument
 from imbue.system_interface.shell.data_types import DesktopsChangeOutcome
 from imbue.system_interface.shell.data_types import DesktopsDocument
+from imbue.system_interface.shell.data_types import StoredDesktops
 from imbue.system_interface.shell.data_types import ThemeChoices
 from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
 from imbue.system_interface.shell.desktop_document import default_shortcut_targets
@@ -66,8 +69,13 @@ from imbue.system_interface.shell.ownership import reordered_desktops
 from imbue.system_interface.shell.ownership import with_visitor_owners
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
+from imbue.system_interface.shell.state_files import UnreadableStateFile
+from imbue.system_interface.shell.state_files import load_json_object
+from imbue.system_interface.shell.state_files import move_unreadable_state_file_aside
 from imbue.system_interface.shell.state_files import parse_versioned_document
 from imbue.system_interface.shell.state_files import read_json_object
+from imbue.system_interface.shell.state_files import validate_versioned_document
+from imbue.system_interface.shell.state_files import with_unknown_fields_kept
 from imbue.system_interface.shell.state_files import write_json_atomic
 
 DESKTOPS_FILENAME: Final[str] = "desktops.json"
@@ -106,7 +114,7 @@ DESKTOP_GLYPH_COLORS: Final[tuple[str, ...]] = (
 FALLBACK_USER_DESKTOP_NAME: Final[str] = "Guest"
 # The key desktops.json carried per desktop before every desktop was shared (the sharing mode); an old file may
 # still hold it.
-# CLEANUP: drop ``_RETIRED_DESKTOP_KEYS`` and the strip in ``_read_unlocked`` around late November 2026, once every
+# CLEANUP: drop ``_RETIRED_DESKTOP_KEYS`` and the strip in ``_read_desktops_file`` around late November 2026, once every
 # workspace has rewritten its desktops.json without the key (the first write after this release does).
 _RETIRED_DESKTOP_KEYS: Final[frozenset[str]] = frozenset({"sharing"})
 # CLEANUP: drop ``_RETIRED_WINDOW_KEYS`` and its strip in ``_without_retired_keys`` around late December 2026, once
@@ -245,6 +253,32 @@ def _without_retired_keys(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _read_desktops_file(path: Path) -> StoredDesktops | UnreadableStateFile | None:
+    """``desktops.json`` at ``path``, with the keys this shell no longer stores dropped and the fields it does not
+    know read past; None when the file is absent, and why not when it cannot be read."""
+    loaded = load_json_object(path)
+    if not isinstance(loaded, dict):
+        return loaded
+    raw = _without_retired_keys(loaded)
+    document = validate_versioned_document(raw, DesktopsDocument, DESKTOPS_FILE_VERSION, "ignore")
+    if isinstance(document, UnreadableStateFile):
+        return document
+    return StoredDesktops(document=document, raw=raw)
+
+
+@pure
+def _stored_record_identity(record: BaseModel) -> Hashable | None:
+    """What makes a stored desktop, shortcut, or window the same one across a write, so the fields this shell does not
+    know stay on it."""
+    match record:
+        case Desktop() | Window():
+            return record.id
+        case DesktopShortcut():
+            return record.target
+        case _:
+            return None
+
+
 @pure
 def resolve_active_desktop(record: ClientRecord | None, desktops: Sequence[Desktop]) -> DesktopId | None:
     """The desktop a client is on (desktop contracts.md section 4.3): its stored active desktop when a desktop of
@@ -300,16 +334,24 @@ class DesktopStore(MutableModel):
 
     def _read_unlocked(self) -> DesktopsDocument | None:
         """The stored document, or None when the file is absent, unreadable, or of another version (logged)."""
-        raw = read_json_object(self._path())
-        return parse_versioned_document(
-            _without_retired_keys(raw) if raw is not None else None,
-            DesktopsDocument,
-            DESKTOPS_FILE_VERSION,
-            self._path(),
-        )
+        stored = _read_desktops_file(self._path())
+        if isinstance(stored, UnreadableStateFile):
+            logger.warning("Ignored the desktops file at {}: it {}", self._path(), stored.reason)
+            return None
+        return stored.document if stored is not None else None
 
     def _write_unlocked(self, document: DesktopsDocument) -> None:
-        write_json_atomic(self._path(), document.model_dump(mode="json"))
+        """Write ``document`` with the fields the stored file holds that this shell does not know put back. A stored
+        file that cannot be read is moved aside rather than written over; something other than a file in its place
+        is left for the write to fail on."""
+        path = self._path()
+        stored = _read_desktops_file(path)
+        written = document.model_dump(mode="json")
+        if isinstance(stored, StoredDesktops):
+            written = with_unknown_fields_kept(written, document, stored.raw, stored.document, _stored_record_identity)
+        elif isinstance(stored, UnreadableStateFile) and path.is_file():
+            move_unreadable_state_file_aside(path, stored.reason)
+        write_json_atomic(path, written)
 
     def _themes_path(self) -> Path:
         return self.state_directory / DESKTOP_THEMES_FILENAME

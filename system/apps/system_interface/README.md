@@ -171,6 +171,10 @@ and the profile cache.
   declares, else, for an app a program runs, its first launch path taking no
   text and no mention, or its first when every one takes one) on the first
   read after the registry has been read.
+  `desktops.json` keeps the fields this shell does not know (a newer shell's,
+  after a rollback) through every write, and one that cannot be read is
+  renamed to `desktops.json.unreadable-<UTC timestamp>` before a desktop is
+  written in its place (desktop contracts.md section 4.1).
   A default shortcut not yet offered (an app that registers later, or a
   further one an app comes to declare) is added to every desktop once, on the
   registry change and on every read; `default_shortcuts_offered.json` lists

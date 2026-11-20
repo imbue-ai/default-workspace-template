@@ -339,7 +339,8 @@ def default_target_pairs(rows: Sequence[RegistryRow]) -> list[tuple[str, str]]:
     return sorted((str(target.app), str(target.launch)) for target in default_shortcut_targets(rows))
 
 
-# The ``desktops.json`` a released shell reads: its version, and its keys at the top and per desktop.
+# The ``desktops.json`` a released shell reads: its version, and its keys at the top and per desktop. This shell
+# reads past a key it does not know, but a shell released before it refuses one, so it still writes none of its own.
 _RELEASED_DESKTOPS_FILE_VERSION: Final[int] = 1
 _RELEASED_DESKTOPS_FILE_KEYS: Final[frozenset[str]] = frozenset({"version", "desktops"})
 _RELEASED_DESKTOP_KEYS: Final[frozenset[str]] = frozenset(
