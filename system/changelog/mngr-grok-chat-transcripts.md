@@ -1,0 +1,1 @@
+`docs/design/grok-transcript-schema.md` records what grok 1.0.62 writes to a session's `updates.jsonl`, as the chat app's grok parser reads it, and how to capture it again. The root `pyproject.toml` and `uv.lock` add `imbue-mngr-grok`, which the chat app now depends on.
