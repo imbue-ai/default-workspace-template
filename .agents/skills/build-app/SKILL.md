@@ -226,8 +226,12 @@ What gets generated:
   editing it). What belongs to the app goes inside `system/apps/<package>/`
   (see "Everything the app owns lives in its directory" below). Anything
   elsewhere in the workspace that uses the app without belonging to it --
-  another creation's skill, a script, a doc -- is registered in the same file
-  under `[[references]]` with a `note` naming the surface it uses.
+  another creation's skill, a script, a doc -- is not registered in this
+  file: the app has a record (`system/config/apps/<name>.toml`), which is
+  where its references are kept, and the manifest check refuses
+  `[[references]]` beside a record. Do not write the record by hand either;
+  the harden pass names such a file in its report
+  (`.agents/shared/worker/references/type-app.md`).
 - `system/apps/<package>/pyproject.toml` -- the app is a **standalone uv
   project**, not a root workspace member: it declares
   `[project.scripts] <name> = "<package>.runner:main"`, the entry point its own
