@@ -90,6 +90,19 @@ def _declared_programs_outside(repo_root: Path, own_derived_paths: set[str]) -> 
     return declared
 
 
+def find_skill_collisions(repo_root: Path, package: str, own_derived_paths: AbstractSet[str]) -> tuple[str, ...]:
+    """The skills the app carries whose entry in the skills directory something else holds: a skill of the
+    workspace's own, or the link to another app's skill. ``own_derived_paths`` are the entries that are the
+    app's already."""
+    problems: list[str] = []
+    for skill in app_skill_names(repo_root, package):
+        link = repo_root / SKILLS_DIRECTORY / skill
+        relative_link = link.relative_to(repo_root).as_posix()
+        if (link.exists() or link.is_symlink()) and relative_link not in own_derived_paths:
+            problems.append(f"the skill {skill!r} already exists at {relative_link}")
+    return tuple(problems)
+
+
 def find_collisions(
     repo_root: Path, package: str, manifest: AppManifest, own_paths: AbstractSet[str]
 ) -> tuple[str, ...]:
@@ -121,11 +134,7 @@ def find_collisions(
                 f"the console script {script!r} is already declared by {other.relative_to(repo_root).as_posix()}"
             )
 
-    for skill in app_skill_names(repo_root, package):
-        link = repo_root / SKILLS_DIRECTORY / skill
-        relative_link = link.relative_to(repo_root).as_posix()
-        if (link.exists() or link.is_symlink()) and relative_link not in own_derived_paths:
-            problems.append(f"the skill {skill!r} already exists at {relative_link}")
+    problems.extend(find_skill_collisions(repo_root, package, own_derived_paths))
 
     own_routines = _names_in(own_directory / APP_ROUTINES_DIRNAME, _ROUTINE_SUFFIX)
     own_units = _names_in(own_directory / APP_ENVIRONMENT_UNITS_DIRNAME, _ENVIRONMENT_UNIT_SUFFIX)

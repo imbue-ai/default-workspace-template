@@ -4,6 +4,7 @@ import fcntl
 import shutil
 from collections.abc import Callable
 from collections.abc import Generator
+from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
@@ -14,6 +15,8 @@ from loguru import logger
 from pydantic import Field
 
 from app_install.collisions import find_collisions
+from app_install.collisions import find_skill_collisions
+from app_install.derived import DerivedFiles
 from app_install.derived import derive_files
 from app_install.derived import describe_differences
 from app_install.derived import existing_derived_paths
@@ -150,8 +153,9 @@ def _first_commit_time(repo_root: Path, relative_path: str) -> int:
 def _resolve_duplicate_ports(
     repo_root: Path, records: tuple[AppRecord, ...], is_bound: Callable[[int], bool]
 ) -> tuple[tuple[AppRecord, ...], dict[str, int]]:
-    """Give a new port to every app that shares one with an app whose record was committed earlier: two branches
-    can each allocate the same port, since each sees only its own worktree."""
+    """The records with a new port for every app that shares one with an app whose record was committed earlier,
+    and each new port by the app's name: two branches can each allocate the same port, since each sees only its
+    own worktree. Nothing is written."""
     ordered = sorted(
         records,
         key=lambda record: (
@@ -166,29 +170,57 @@ def _resolve_duplicate_ports(
             kept.append(record)
             continue
         new_port = allocate_port(repo_root, tuple(kept) + tuple(records), None, is_bound)
-        moved = record.model_copy_update(to_update(record.field_ref().port, new_port))
-        write_record(repo_root, moved)
-        kept.append(moved)
+        kept.append(record.model_copy_update(to_update(record.field_ref().port, new_port)))
         reassigned[str(record.name)] = new_port
     return tuple(sorted(kept, key=lambda record: str(record.name))), reassigned
 
 
+def _skill_link_collisions(repo_root: Path, derived_by_record: Sequence[tuple[AppRecord, DerivedFiles]]) -> list[str]:
+    """Why the skill links of the apps about to be regenerated cannot all be written: one would replace a skill
+    the workspace or another app already holds under that name, or two of the apps carry a skill of one name."""
+    problems: list[str] = []
+    claimant_by_link: dict[str, str] = {}
+    for record, derived in derived_by_record:
+        own_derived_paths = set(existing_derived_paths(repo_root, record.package))
+        problems.extend(
+            f"{record.name}: {problem}"
+            for problem in find_skill_collisions(repo_root, record.package, own_derived_paths)
+        )
+        for relative_link in sorted(derived.link_target_by_path):
+            claimant = claimant_by_link.setdefault(relative_link, str(record.name))
+            # A link that is there already has its one holder, and the other app is refused above.
+            is_link_new = not (repo_root / relative_link).is_symlink() and not (repo_root / relative_link).exists()
+            if is_link_new and claimant != str(record.name):
+                problems.append(f"{record.name}: {relative_link} is also the link to a skill of {claimant}")
+    return problems
+
+
 def regenerate(repo_root: Path, name: str | None, is_bound: Callable[[int], bool]) -> RegenerateOutcome:
     """Rewrite the derived files of the app registered as ``name``, or of every app, after giving a new port to any
-    app that shares one."""
+    app that shares one.
+
+    Raises AppNotFoundError for a name with no record, and CollisionError when a skill an app carries would take
+    the place of one the workspace or another app holds. Nothing is written when it raises.
+    """
     recorded = load_all_records(repo_root)
     if name is not None and all(str(record.name) != name for record in recorded):
         raise AppNotFoundError(f"no app record for {name!r}")
     records, reassigned = _resolve_duplicate_ports(repo_root, recorded, is_bound)
-    changed: list[str] = [
-        record_path(repo_root, reassigned_name).relative_to(repo_root).as_posix()
-        for reassigned_name in sorted(reassigned)
+    derived_by_record = [
+        (record, derive_files(repo_root, record, load_app_manifest(repo_root, record.package, record.origin)))
+        for record in records
+        if name is None or str(record.name) == name or str(record.name) in reassigned
     ]
-    for record in records:
-        if name is not None and str(record.name) != name and str(record.name) not in reassigned:
-            continue
-        manifest = load_app_manifest(repo_root, record.package, record.origin)
-        changed.extend(write_derived_files(repo_root, record.package, derive_files(repo_root, record, manifest)))
+    collisions = _skill_link_collisions(repo_root, derived_by_record)
+    if collisions:
+        raise CollisionError(tuple(collisions))
+    changed: list[str] = [
+        write_record(repo_root, record).relative_to(repo_root).as_posix()
+        for record, _derived in derived_by_record
+        if str(record.name) in reassigned
+    ]
+    for record, derived in derived_by_record:
+        changed.extend(write_derived_files(repo_root, record.package, derived))
     return RegenerateOutcome(changed_paths=tuple(changed), port_by_reassigned_name=reassigned)
 
 

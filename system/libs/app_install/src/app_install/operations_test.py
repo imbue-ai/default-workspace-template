@@ -203,6 +203,51 @@ def test_regenerating_an_app_that_has_no_record_is_refused_before_any_port_is_mo
     assert [load_record(tmp_path, name).port for name in ("alpha", "zebra")] == [8080, 8080]
 
 
+def test_regenerating_an_app_whose_new_skill_the_workspace_already_holds_is_refused_with_nothing_written(
+    tmp_path: Path,
+) -> None:
+    for name in ("alpha", "zebra"):
+        package = write_user_app(tmp_path, name)
+        write_record(tmp_path, AppRecord(name=name, package=package, port=8080, origin=AppOrigin.LOCAL))
+    write_workspace_file(tmp_path, ".agents/skills/weekly-review/SKILL.md", "# The workspace's own\n")
+    write_app_file(tmp_path, "zebra", "skills/weekly-review/SKILL.md", "# The app's\n")
+
+    with pytest.raises(CollisionError) as raised:
+        regenerate(tmp_path, None, never_bound)
+
+    assert raised.value.problems == (
+        "zebra: the skill 'weekly-review' already exists at .agents/skills/weekly-review",
+    )
+    assert (tmp_path / ".agents" / "skills" / "weekly-review" / "SKILL.md").read_text() == "# The workspace's own\n"
+    assert [load_record(tmp_path, name).port for name in ("alpha", "zebra")] == [8080, 8080]
+    assert not (tmp_path / "system" / "supervisord.conf.d").exists()
+
+
+def test_regenerating_never_takes_the_link_to_another_apps_skill(tmp_path: Path) -> None:
+    alpha = write_user_app(tmp_path, "alpha")
+    write_app_file(tmp_path, alpha, "skills/shared-notes/SKILL.md")
+    add_app(tmp_path, alpha, None, never_bound)
+    zebra = write_user_app(tmp_path, "zebra")
+    add_app(tmp_path, zebra, None, never_bound)
+    link = tmp_path / ".agents" / "skills" / "shared-notes"
+
+    write_app_file(tmp_path, zebra, "skills/shared-notes/SKILL.md")
+    with pytest.raises(CollisionError) as raised:
+        regenerate(tmp_path, "zebra", never_bound)
+    (tmp_path / "system" / "apps" / zebra / "skills" / "shared-notes" / "SKILL.md").unlink()
+    write_app_file(tmp_path, alpha, "skills/brand-new/SKILL.md")
+    write_app_file(tmp_path, zebra, "skills/brand-new/SKILL.md")
+    with pytest.raises(CollisionError) as raised_for_a_new_name:
+        regenerate(tmp_path, None, never_bound)
+
+    assert raised.value.problems == ("zebra: the skill 'shared-notes' already exists at .agents/skills/shared-notes",)
+    assert os.readlink(link) == "../../system/apps/alpha/skills/shared-notes"
+    assert raised_for_a_new_name.value.problems == (
+        "zebra: .agents/skills/brand-new is also the link to a skill of alpha",
+    )
+    assert not (tmp_path / ".agents" / "skills" / "brand-new").is_symlink()
+
+
 def test_an_installed_app_with_a_key_this_workspace_does_not_know_still_regenerates(tmp_path: Path) -> None:
     package = write_user_app(tmp_path, "notes", "\nfuture_flag = true\n")
     write_record(tmp_path, AppRecord(name="notes", package=package, port=8084, origin=AppOrigin.INSTALLED))
@@ -288,6 +333,20 @@ def test_a_collision_is_reported_with_every_problem_by_the_command(tmp_path: Pat
         "result": "collision",
         "package": "notes",
         "problems": ["the program 'notes' is already declared in system/supervisord.conf.d/notes.conf"],
+    }
+
+
+def test_a_regenerate_that_would_take_a_skill_something_else_holds_is_reported_as_a_collision(tmp_path: Path) -> None:
+    add_app(tmp_path, write_user_app(tmp_path, "notes"), None, never_bound)
+    write_workspace_file(tmp_path, ".agents/skills/weekly-review/SKILL.md")
+    write_app_file(tmp_path, "notes", "skills/weekly-review/SKILL.md")
+
+    result = CliRunner().invoke(main, ["--repo-root", str(tmp_path), "regenerate", "notes"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.output) == {
+        "result": "collision",
+        "problems": ["notes: the skill 'weekly-review' already exists at .agents/skills/weekly-review"],
     }
 
 

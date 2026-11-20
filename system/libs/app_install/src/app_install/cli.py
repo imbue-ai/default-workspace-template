@@ -195,6 +195,8 @@ def regenerate_command(repo_root: Path, name: str | None) -> None:
     with install_lock(repo_root):
         try:
             outcome = regenerate(repo_root, name, is_port_bound)
+        except CollisionError as e:
+            _refuse("collision", problems=list(e.problems))
         except (AppInstallError, AppManifestError) as e:
             _refuse("refused", detail=str(e))
     _emit(
