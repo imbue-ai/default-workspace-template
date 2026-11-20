@@ -21,8 +21,6 @@ from imbue.mngr_grok.grok_config import PROCESS_STARTED_MARKER_FILENAME
 
 OUTBOX_FILENAME: Final[str] = "grok_outbox.jsonl"
 
-_MAX_REPLAY_LINES: Final[int] = 100
-
 # Sends of one entry that end with no sign grok took it before the worker stops typing it.
 MAX_DELIVERY_ATTEMPTS: Final[int] = 3
 
@@ -126,7 +124,7 @@ class GrokQueueTracker:
         except OSError as error:
             logger.opt(exception=error).warning("grok: could not read the queue journal {}", self._outbox_path)
             return
-        for line in lines[-_MAX_REPLAY_LINES:]:
+        for line in lines:
             try:
                 entry = json.loads(line)
             except json.JSONDecodeError as error:

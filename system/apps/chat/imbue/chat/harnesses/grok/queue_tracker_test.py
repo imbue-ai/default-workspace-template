@@ -13,6 +13,7 @@ from imbue.chat.harnesses.grok.queue_tracker import session_token
 from imbue.mngr_grok.grok_config import PROCESS_STARTED_MARKER_FILENAME
 
 _RENDEZVOUS_SECONDS = 3.0
+_MANY_HELD_MESSAGES = 150
 
 
 def _tracker(tmp_path: Path, token: str = "session-1") -> GrokQueueTracker:
@@ -212,6 +213,13 @@ def test_no_session_journals_nothing(tmp_path: Path) -> None:
 
     assert _contents(tracker) == ["held"]
     assert not (tmp_path / OUTBOX_FILENAME).exists()
+
+
+def test_every_held_message_survives_a_chat_app_restart(tmp_path: Path) -> None:
+    texts = [f"message {index}" for index in range(_MANY_HELD_MESSAGES)]
+    _hold(_tracker(tmp_path), *texts)
+
+    assert _contents(_tracker(tmp_path)) == texts
 
 
 def test_a_torn_journal_line_is_skipped(tmp_path: Path) -> None:
