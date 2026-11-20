@@ -12,6 +12,7 @@ from routines.data_types import RoutineDefinition
 from routines.data_types import ScheduleChange
 from routines.data_types import ScheduleOverride
 from routines.errors import AppOwnedRoutineError
+from routines.errors import BrokenDefinitionError
 from routines.errors import DefinitionCommitError
 from routines.errors import DuplicateRoutineError
 from routines.errors import RunInFlightError
@@ -282,6 +283,28 @@ def test_a_definition_of_an_apps_routine_is_taken_for_its_schedule_alone(
     assert service.row(SYNC).schedule_text == "Every day at 9:00 am"
     assert path.read_bytes() == _DAILY_TOML.encode()
     assert repository.commits == []
+
+
+def test_a_change_to_an_apps_routine_whose_file_does_not_load_says_the_file_is_broken(
+    paths: RoutinesPaths,
+    repository: RecordingRepository,
+    clock: FakeClock,
+    chat_app: ScriptedChatApp,
+    notifier: RecordingNotifier,
+) -> None:
+    write_app_definition(paths, "news_sync", SYNC, "title = [not toml")
+    service = build_test_service(paths, repository, FileStateStore(paths=paths), clock, chat_app, notifier)
+
+    with pytest.raises(BrokenDefinitionError, match=r"nightly-sync is broken \(not valid TOML.*fix its file first"):
+        service.change_schedule(SYNC, _EVERY_TWO_HOURS)
+    with pytest.raises(BrokenDefinitionError, match=r"nightly-sync is broken \(not valid TOML.*fix its file first"):
+        service.replace(
+            SYNC,
+            RoutineDefinition.model_validate({"title": "T", "what": "W", "every": "2h", "command": ["true"]}),
+            "edit",
+        )
+
+    assert service.states.read(SYNC).schedule_override is None
 
 
 def test_a_routine_an_app_owns_cannot_be_removed_and_keeps_its_chat_and_its_state(

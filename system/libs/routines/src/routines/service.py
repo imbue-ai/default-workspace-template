@@ -23,6 +23,7 @@ from routines.data_types import RunStartReceipt
 from routines.data_types import ScheduleChange
 from routines.definitions import FileDefinitionStore
 from routines.errors import AppOwnedRoutineError
+from routines.errors import BrokenDefinitionError
 from routines.errors import ChatAppError
 from routines.errors import DefinitionValidationError
 from routines.errors import DuplicateRoutineError
@@ -160,11 +161,14 @@ class RoutinesService(MutableModel):
     ) -> Path:
         """Make the routine the definition given; answers the file the change went to. The workspace's own file
         is rewritten and committed. An app's file is never rewritten: a definition that differs from it in the
-        schedule alone is kept as the user's schedule in the state, and any other raises AppOwnedRoutineError."""
+        schedule alone is kept as the user's schedule in the state, any other raises AppOwnedRoutineError, and a
+        file that does not load raises BrokenDefinitionError."""
         loaded = self.definitions.load(routine_id)
         if loaded.is_duplicated or loaded.app_package is None:
             return self.definitions.replace(routine_id, definition, change_description)
-        if loaded.definition is None or apply_schedule(loaded.definition, schedule_of(definition)) != definition:
+        if loaded.definition is None:
+            raise BrokenDefinitionError(routine_id, loaded.error)
+        if apply_schedule(loaded.definition, schedule_of(definition)) != definition:
             raise AppOwnedRoutineError(routine_id, loaded.app_package)
         self._keep_user_schedule(routine_id, loaded.definition, definition)
         return self.paths.state_path(routine_id)
@@ -174,7 +178,7 @@ class RoutinesService(MutableModel):
         and committed; for a routine an app owns the schedule goes to the state and the file stays as it is."""
         loaded = self.definitions.load(routine_id)
         if loaded.definition is None:
-            raise DefinitionValidationError(f"{routine_id} is broken ({loaded.error}); fix its file first.")
+            raise BrokenDefinitionError(routine_id, loaded.error)
         rescheduled = apply_schedule(loaded.definition, change)
         if loaded.app_package is None:
             self.definitions.replace(routine_id, rescheduled, "change the schedule")

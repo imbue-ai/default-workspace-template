@@ -18,6 +18,14 @@ class DefinitionValidationError(RoutinesError, ValueError):
     """A definition file that does not say what a routine is."""
 
 
+class BrokenDefinitionError(DefinitionValidationError):
+    """A change to a routine whose definition file does not load, which has to be fixed before anything else."""
+
+    def __init__(self, routine_id: str, reason: str | None) -> None:
+        self.routine_id = routine_id
+        super().__init__(f"{routine_id} is broken ({reason}); fix its file first.")
+
+
 class RoutineNotFoundError(RoutinesError, KeyError):
     """No definition by that id."""
 

@@ -182,7 +182,8 @@ def test_edit_of_a_routine_with_no_definition_it_may_rewrite_says_why_rather_tha
     assert duplicated.exit_code == 1
     assert "defined in more than one file" in duplicated.output
     assert broken.exit_code == 1
-    assert "error: mail-check belongs to the app in system/apps/inbox_status/" in broken.output
+    assert broken.output.startswith("error: mail-check is broken (not valid TOML")
+    assert broken.output.rstrip().endswith("fix its file first.")
     assert "Field required" not in duplicated.output + broken.output
 
 

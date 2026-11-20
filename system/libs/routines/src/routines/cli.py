@@ -30,7 +30,7 @@ from routines.data_types import RunStartReceipt
 from routines.data_types import WakeOutcome
 from routines.definitions import describe_validation_error
 from routines.definitions import once_moment_from_text
-from routines.errors import AppOwnedRoutineError
+from routines.errors import BrokenDefinitionError
 from routines.errors import DefinitionValidationError
 from routines.errors import DuplicateRoutineError
 from routines.errors import RoutineNotFoundError
@@ -365,7 +365,7 @@ def edit_command(routine_id: str, **options: object) -> None:
         if loaded.is_duplicated:
             raise DuplicateRoutineError(f"{routine_id} is {loaded.error}.")
         if loaded.definition is None and loaded.app_package is not None:
-            raise AppOwnedRoutineError(routine_id, loaded.app_package)
+            raise BrokenDefinitionError(routine_id, loaded.error)
         definition = _definition_from_options(loaded.definition, DefinitionOptions.model_validate(options))
         path = service.replace(RoutineId(routine_id), definition, "edit")
     except ValidationError as e:
