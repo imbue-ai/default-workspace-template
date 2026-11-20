@@ -21,6 +21,8 @@ from app_manifest.scope import compute_pass_scope
 from app_manifest.scope import compute_skill_scope
 from app_manifest.scope import find_referencing_manifests
 from app_manifest.scope import find_wiring_sections
+from app_manifest.scope import list_user_app_files
+from app_manifest.scope import load_app_manifests
 from app_manifest.scope import parse_creation_spec
 from app_manifest.scope import reference_kind_for_path
 from app_manifest.scope import render_scope_file
@@ -988,6 +990,43 @@ def test_a_user_app_is_read_from_its_record_and_its_own_directory(tmp_path: Path
         *BUILT_IN_EXCLUDES,
         "system/apps/notes/frontend/build/**",
         "system/apps/notes/**/*.log",
+    ]
+
+
+def test_a_user_app_is_recorded_and_run_by_its_name_and_kept_in_the_directory_its_record_names(
+    tmp_path: Path,
+) -> None:
+    manifest_path = write_app_manifest(
+        tmp_path,
+        "inbox_status",
+        'name = "inbox-status"\ndisplay_name = "Inbox status"\nicon = "icon.svg"\n\n'
+        '[[services]]\nrole = "indexer"\ncommand = "inbox-status-indexer"\n\n'
+        '[scope]\nexclude = ["seed/**"]\n',
+        is_icon_written=True,
+    )
+    write_app_record(tmp_path, "inbox-status", "inbox_status", {})
+    write_app_skill(tmp_path, "inbox_status", "triage-inbox")
+    write_supervisord_dropin(tmp_path, "inbox-status", ("program:inbox-status",))
+    write_supervisord_dropin(tmp_path, "inbox-status-indexer", ("program:inbox-status-indexer",))
+
+    scope = compute_app_scope(tmp_path, manifest_path, load_manifest(manifest_path, repo_root=tmp_path))
+    (loaded,) = load_app_manifests(tmp_path)
+
+    assert list(scope.primary) == [
+        "system/apps/inbox_status/",
+        "system/config/apps/inbox-status.toml",
+        ".agents/skills/triage-inbox",
+    ]
+    assert _wiring_of(scope) == [
+        ("system/supervisord.conf.d/inbox-status-indexer.conf", ["program:inbox-status-indexer"]),
+        ("system/supervisord.conf.d/inbox-status.conf", ["program:inbox-status"]),
+    ]
+    assert list(scope.exclude) == [*BUILT_IN_EXCLUDES, "system/apps/inbox_status/seed/**"]
+    assert loaded.record is not None
+    assert (loaded.record.name, loaded.record.package) == ("inbox-status", "inbox_status")
+    assert list(list_user_app_files(tmp_path, loaded)) == [
+        "system/config/apps/inbox-status.toml",
+        ".agents/skills/triage-inbox",
     ]
 
 
