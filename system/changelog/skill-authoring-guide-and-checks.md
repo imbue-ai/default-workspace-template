@@ -12,7 +12,7 @@
 
 - `AGENTS.md` tells an agent that edits a skill to run `validate_skill.py --edited` on it (`--no-exemptions` for a new skill), and to leave a built-in skill's `awaiting-restructure` exemption, and that skill's structure, alone.
 
-- `AGENTS.md` also tells an agent what to re-read after a compaction: the `SKILL.md` of the skill it is following, then the reference its current step names. The rule is stated there once, where a harness loads it again after every compaction, and not in each skill.
+- `AGENTS.md` also tells an agent what to re-read after a compaction: the reference its current step names, and the skill's `SKILL.md` first unless its whole text is still in context. The rule is stated there once, near the top, where every harness tested still has it after a compaction, and not in each skill.
 
 - `.reviewer/code-issue-categories.md` gains a `skill_hygiene` category, which reviews skill markdown against the guide for what the validator cannot check.
 

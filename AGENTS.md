@@ -17,6 +17,7 @@ IF YOU FAIL TO FOLLOW ONE, YOU MUST EXPLICITLY CALL THAT OUT IN YOUR RESPONSE.
 - When adding a new app, use the `build-app` skill, which sets up a new package under `system/apps/` + a supervisord program entry + `forward_port.py` registration on its own port. Every app icon -- a new one or an edit to an existing one -- is built to `docs/system/app-icons.md`: a 216x216 two-layer tile, one fill-only glyph in a centred 144x144 box, coloured from the pair palette that doc carries. Do NOT edit `system/apps/system_interface/` for this -- that's the top-level workspace UI, not a template for new apps.
 - A user can right-click anything on their screen and attach a description of it to a message as a `REF-<id>.json` file ("Explain what I attached in REF-..."). `.agents/shared/references/element-references.md` says what the file holds and how to find the element it names.
 - **`uv run --no-sync workspace-layout open` puts a window on the user's screen the moment it returns.** It is not setup -- it is the act of showing them something, and it applies to the live workspace they are looking at right now. So open a window only when you are ready for the user to see what's in it; do everything you want to check privately *before* that call, not after; and never tell the user to open a window you opened yourself. The same goes for every other mutating `workspace-layout` op (`close`, `focus`, `place`, `refresh`, ...) -- they all change the user's view live. See the `manage-desktop` skill.
+- **After a compaction, re-read what your current step needs before you go on.** When you are following a skill, re-read the reference its current step names: a compaction may keep none of the files you read. Re-read the skill's `SKILL.md` first unless its whole text is still in front of you.
 
 # Continuing a chat that moved to you
 
@@ -180,8 +181,6 @@ Fixing it locally is *not* an alternative: a fix to a file that is byte-identica
 - **A bare slash-command message invokes the skill of that name.** A user message that is exactly `/name` (possibly with arguments), such as `/assist`, means: read `.agents/skills/<name>/SKILL.md` and follow it as the user's instruction. Do it silently -- read the file without commentary and reply with what the skill says to reply, nothing else. Never narrate the mechanism ("I'm using the assist flow...", "let me look up that skill"): the user typed a command, not a question about how commands work. (Some harnesses expand these commands into the skill's instructions before you see them; if you are reading the raw `/name` text, the expansion is yours to do.)
 
 - **Prefer an applicable skill over reinventing.** Skill descriptions are auto-injected into your context, so match by purpose, not by name.
-
-- **After a compaction, re-read the skill you are following.** A compaction keeps at most the start of a skill and may keep none of the references you read. Before you go on, re-read the skill's `SKILL.md`, then the reference your current step names.
 
 - **Follow a skill without naming it.** Describe the work, not the skill, even when your harness tells you to announce which skills you use. Repeat a skill's name only after the user has used it (`.agents/shared/references/user-facing-language.md`, "Skills in particular").
 
