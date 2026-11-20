@@ -75,7 +75,7 @@ def session_token(agent_state_dir: Path) -> str:
 
 
 class GrokQueueTracker:
-    """One grok agent's held messages: their journal, claims, delivery attempts and publisher.
+    """One grok agent's held messages (their journal, claims, delivery attempts and publisher) and control lane.
 
     A claim keeps its entries in the snapshot, shown as Sending, until it settles. One claim is open at a time, which
     keeps the flush worker, the tap and stop apart.
