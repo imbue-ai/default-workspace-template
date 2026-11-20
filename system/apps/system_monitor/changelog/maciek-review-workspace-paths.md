@@ -1,0 +1,1 @@
+On a host that keeps mngr's host dir somewhere other than `/home/user/.mngr` (a Modal-hosted workspace keeps it at `/mngr`), the System Monitor names chats and attributes their processes to them: it reads the agent records from `MNGR_HOST_DIR` and recognises agent paths under `/mngr/agents/`.
