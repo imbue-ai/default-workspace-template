@@ -200,6 +200,10 @@ class AgentHarnessSession(ABC):
         """The still-in-flight (Sending) messages as one concatenated block ('' = none)."""
         return ""
 
+    def has_held_commands(self) -> bool:
+        """Whether the session holds commands for the agent that no queued message shows. False by default."""
+        return False
+
     def read_streamed_reply(self) -> StreamedReply | None:
         """The reply the harness's live connection is streaming, which its transcript may not hold yet.
 

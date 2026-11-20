@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from imbue.chat.activity_state import ACTIVE_MARKER_FILENAME
+from imbue.chat.agent_manager import AgentManager
 from imbue.chat.harnesses.grok.queue_tracker import GrokQueueTracker
 from imbue.chat.harnesses.grok.queue_tracker import MAX_DELIVERY_ATTEMPTS
 from imbue.chat.harnesses.grok.queue_tracker import OUTBOX_FILENAME
@@ -30,6 +31,9 @@ from imbue.chat.harnesses.grok.testing import user_prompt_line
 from imbue.chat.harnesses.grok.testing import write_grok_agent_state
 from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
 from imbue.chat.harnesses.grok.watcher import GrokTranscriptLoader
+from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.testing import seed_agent_state
+from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_grok.grok_config import PROCESS_STARTED_MARKER_FILENAME
@@ -49,6 +53,8 @@ _SUBAGENT_SPAWNED_OFFSET = 3737
 _LIVE_TAIL_TIMEOUT_SECONDS = 10.0
 _SHORT_WITNESS_SECONDS = 0.3
 _LONG_WITNESS_SECONDS = 6.0
+# Shorter than the flush worker's retry wait, so only a wake types a held pick within it.
+_IDLE_WAKE_SECONDS = 2.0
 # A record time after every captured session's, for the prompts the scripted grok logs.
 _PROMPT_CLOCK_MS = 1_800_000_000_000
 # The (lifecycle state, `active` marker present) pairs under which the flush worker types nothing.
@@ -731,6 +737,50 @@ def test_a_started_watchers_worker_types_a_pick_and_a_held_message_once_mngr_rep
         watcher.stop()
 
     assert send.sent == ["/model grok-4.5", "held"]
+
+
+def test_a_pick_held_through_a_turn_with_no_message_held_is_typed_on_the_chats_idle_wake(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_state_dir = make_grok_agent_state_dir(tmp_path / "agents")
+    agent_id = agent_state_dir.name
+    seed_agent_state(agent_manager, agent_id, name="grok-idle-wake", state="RUNNING", harness=HarnessType.GROK)
+    agent_manager._ensure_activity_tracking(agent_id)
+    watcher = GrokSessionWatcher.build(
+        make_grok_agent_info(agent_state_dir, agent_id, "grok-idle-wake"), lambda _agent_id, _events: None
+    )
+    send = _ScriptedSend(agent_state_dir, is_confirmed=True, is_logged=False)
+    lifecycle_reads: list[str | None] = []
+
+    def read_lifecycle_state() -> str | None:
+        lifecycle_reads.append(agent_manager.get_agent_lifecycle_state(agent_id))
+        return lifecycle_reads[-1]
+
+    watcher.set_flush_hooks(send, read_lifecycle_state, lambda text, sent_after: None)
+    agent_manager.register_queue_idle_handler(agent_id, watcher.notify_idle)
+    watcher.start()
+    try:
+        watcher._queue.hold_control_command(model_command("grok-4.5"))
+        wait_for(
+            lambda: "RUNNING" in lifecycle_reads,
+            timeout=_LIVE_TAIL_TIMEOUT_SECONDS,
+            poll_interval=0.05,
+            error_message="the worker never looked at the running turn",
+        )
+        with agent_manager._lock:
+            agent_state = agent_manager._agents[agent_id]
+            agent_manager._agents[agent_id] = agent_state.model_copy_update(
+                to_update(agent_state.field_ref().state, "WAITING")
+            )
+        agent_manager._recompute_activity_state(agent_id, broadcast_on_change=True)
+
+        is_typed = poll_until(lambda: bool(send.sent), timeout=_IDLE_WAKE_SECONDS, poll_interval=0.05)
+    finally:
+        watcher.stop()
+        agent_manager.stop()
+
+    assert is_typed, "the pick waited for the worker's retry rather than the idle wake"
+    assert send.sent == ["/model grok-4.5"]
 
 
 def _write_model_state(agent_state_dir: Path, model: str, effort: str | None) -> None:
