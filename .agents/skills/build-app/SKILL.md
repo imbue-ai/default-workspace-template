@@ -1,6 +1,6 @@
 ---
 name: build-app
-description: "Create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. Use when the user asks for one, whether scaffolded as a new Flask app (the canonical path) or wrapping a pre-existing third-party server. For changing an existing app use update-app."
+description: "Create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. Use when the user asks for one, or asks to see a mockup, sketch or design of one before it is built, whether scaffolded as a new Flask app (the canonical path) or wrapping a pre-existing third-party server. For changing an existing app use update-app."
 metadata:
   author: imbue
   crystallized: true
