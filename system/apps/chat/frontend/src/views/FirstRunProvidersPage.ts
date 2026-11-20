@@ -85,20 +85,32 @@ export function FirstRunProvidersPage(): m.Component<FirstRunProvidersPageAttrs>
         m("span", { class: "first-run-tile-mark", "aria-hidden": "true" }, m.trust(providerMark(lane.id, MARK_SIZE))),
         m("span", { class: "flex min-w-0 flex-col text-left" }, [
           m("span", { class: "text-[16px] font-semibold leading-tight" }, lane.provider_name),
-          m("span", { class: "first-run-muted text-[13px] leading-snug" }, TILE_LINE_BY_LANE[lane.id] ?? lane.subtitle),
+          m(
+            "span",
+            { class: "first-run-muted text-[13px] leading-snug" },
+            TILE_LINE_BY_LANE[lane.id] ?? lane.subtitle,
+          ),
         ]),
       ],
     );
   }
 
   function accountRow(account: ProviderAccount): m.Children {
-    return m("div", { key: account.id, "data-first-run-account": account.id, class: "flex items-center gap-3 px-4 py-2" }, [
-      m("span", { class: "first-run-tile-mark", "aria-hidden": "true" }, m.trust(providerMark(account.lane, MARK_SIZE))),
-      m("span", { class: "flex min-w-0 flex-col" }, [
-        m("span", { class: "text-[16px] font-semibold leading-tight" }, account.provider),
-        m("span", { class: "first-run-muted text-[13px] leading-snug" }, account.harness_label),
-      ]),
-    ]);
+    return m(
+      "div",
+      { key: account.id, "data-first-run-account": account.id, class: "flex items-center gap-3 px-4 py-2" },
+      [
+        m(
+          "span",
+          { class: "first-run-tile-mark", "aria-hidden": "true" },
+          m.trust(providerMark(account.lane, MARK_SIZE)),
+        ),
+        m("span", { class: "flex min-w-0 flex-col" }, [
+          m("span", { class: "text-[16px] font-semibold leading-tight" }, account.provider),
+          m("span", { class: "first-run-muted text-[13px] leading-snug" }, account.harness_label),
+        ]),
+      ],
+    );
   }
 
   return {

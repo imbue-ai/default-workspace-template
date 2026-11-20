@@ -863,7 +863,9 @@
   background: #ffffff;
   color: var(--first-run-ink);
   cursor: pointer;
-  transition: background-color 120ms ease-out, border-color 120ms ease-out;
+  transition:
+    background-color 120ms ease-out,
+    border-color 120ms ease-out;
 }
 .first-run-tile:hover {
   background: color-mix(in srgb, var(--first-run-ink) 10%, var(--first-run-ground));
