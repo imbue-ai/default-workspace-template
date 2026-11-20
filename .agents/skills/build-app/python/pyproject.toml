@@ -6,9 +6,10 @@ requires-python = ">=3.12"
 dependencies = [
     # mock_frame frames a mock through the shared preview frame.
     "agents-shared",
+    # The scaffold registers the app it wrote through the installer.
+    "app-install",
     "app-manifest",
     "app-registration",
-    "tomlkit>=0.12",
     "workspace-layout",
     "workspace-scripts",
 ]

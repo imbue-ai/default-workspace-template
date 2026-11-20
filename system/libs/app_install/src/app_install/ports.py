@@ -14,8 +14,7 @@ from pathlib import Path
 from typing import Final
 
 from app_install.errors import PortUnavailableError
-from app_install.paths import SUPERVISORD_CONF
-from app_install.paths import SUPERVISORD_DROPIN_DIRECTORY
+from app_install.paths import supervisord_conf_files
 from app_manifest.records import HIGHEST_PORT
 from app_manifest.records import AppRecord
 from app_manifest.registry_location import registry_path
@@ -40,12 +39,9 @@ def is_port_bound(port: int) -> bool:
 def _supervisord_ports(repo_root: Path) -> set[int]:
     """Every port a program registers on: each registers its backend through a ``forward_port.py`` call naming
     ``http://localhost:<port>``."""
-    files = [repo_root / SUPERVISORD_CONF]
-    files.extend(sorted((repo_root / SUPERVISORD_DROPIN_DIRECTORY).glob("*.conf")))
     ports: set[int] = set()
-    for path in files:
-        if path.is_file():
-            ports.update(int(match.group(1)) for match in _LOCALHOST_PORT_PATTERN.finditer(path.read_text()))
+    for path in supervisord_conf_files(repo_root):
+        ports.update(int(match.group(1)) for match in _LOCALHOST_PORT_PATTERN.finditer(path.read_text()))
     return ports
 
 

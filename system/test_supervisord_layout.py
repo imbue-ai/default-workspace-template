@@ -25,8 +25,8 @@ import glob
 import re
 from pathlib import Path
 
+from app_install.paths import supervisord_conf_files
 from app_manifest import scope
-from build_app_skill import scaffold_flask_lib
 from migrate_workspace_skill import migrate_workspace
 from oom_priority.supervisord_testing import supervisord_commands
 
@@ -102,10 +102,8 @@ def test_every_reader_sees_every_program_the_include_glob_reaches() -> None:
         "no programs found at all -- the fixture, not the readers, is wrong"
     )
 
-    assert (
-        _declared_in(scaffold_flask_lib._supervisord_conf_files(_SUPERVISORD_CONF))
-        == canonical
-    )
+    # The installer reads the files to find the ports and the program names already taken.
+    assert _declared_in(supervisord_conf_files(_REPO_ROOT)) == canonical
     # migrate-workspace's REMOTE reader lists the directory over SSH, in shell, so its own suite
     # runs that shell against a local workspace instead.
     assert (

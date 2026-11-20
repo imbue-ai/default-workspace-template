@@ -23,9 +23,8 @@ from app_install.paths import MANIFEST_FILENAME
 from app_install.paths import PYPROJECT_FILENAME
 from app_install.paths import ROUTINES_DIRECTORY
 from app_install.paths import SKILLS_DIRECTORY
-from app_install.paths import SUPERVISORD_CONF
-from app_install.paths import SUPERVISORD_DROPIN_DIRECTORY
 from app_install.paths import app_directory
+from app_install.paths import supervisord_conf_files
 from app_manifest.manifest import AppManifest
 
 _PROGRAM_SECTION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\[(?:program|eventlistener):([^\]]+)\]", re.MULTILINE)
@@ -63,12 +62,10 @@ def _names_in(directory: Path, suffix: str) -> set[str]:
 def _declared_programs_outside(repo_root: Path, own_derived_paths: set[str]) -> dict[str, str]:
     """Every program and event listener the workspace declares in a file not generated for this app, by name,
     with the file that declares it: supervisord holds both kinds in one namespace."""
-    files = [repo_root / SUPERVISORD_CONF]
-    files.extend(sorted((repo_root / SUPERVISORD_DROPIN_DIRECTORY).glob("*.conf")))
     declared: dict[str, str] = {}
-    for path in files:
+    for path in supervisord_conf_files(repo_root):
         relative_path = path.relative_to(repo_root).as_posix()
-        if not path.is_file() or relative_path in own_derived_paths:
+        if relative_path in own_derived_paths:
             continue
         for match in _PROGRAM_SECTION_PATTERN.finditer(path.read_text(encoding="utf-8")):
             declared[match.group(1)] = relative_path
