@@ -355,7 +355,7 @@ DISTRUST_POLICY
 
 # Deny every site the browser's Local Network Access permission: the workspace's services
 # listen on loopback and read a header-less request as the owner's (their own provenance
-# check, workspace_layout.identity, admits it from loopback alone), and Chromium gates a
+# check, imbue.app_sdk.identity, admits it from loopback alone), and Chromium gates a
 # public page's requests to loopback behind a prompt that this policy answers for the user,
 # so no page the Screen's browser shows can ask to be let through. A page on loopback
 # reaching loopback (a user's own app) is not a local network request, so it is untouched.
