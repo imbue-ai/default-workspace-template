@@ -11,6 +11,8 @@ dependencies = [
     "imbue-common",
     "loguru>=0.7",
     "pydantic>=2.0",
+    # The conversion of an older app rewrites its manifest with its comments kept.
+    "tomlkit>=0.12",
 ]
 
 [project.scripts]

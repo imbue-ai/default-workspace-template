@@ -5,6 +5,7 @@ Usage, from the workspace repo's root::
     uv run --no-sync app-install add <package> [--port <n>]
     uv run --no-sync app-install regenerate [<name>]
     uv run --no-sync app-install uninstall <name>
+    uv run --no-sync app-install migrate <package> [--dry-run]
     uv run --no-sync app-install check
     uv run --no-sync app-install list
 
@@ -21,6 +22,8 @@ import click
 
 from app_install.errors import AppInstallError
 from app_install.errors import CollisionError
+from app_install.migration import MigrateOutcome
+from app_install.migration import migrate_app
 from app_install.operations import add_app
 from app_install.operations import check
 from app_install.operations import install_lock
@@ -115,6 +118,36 @@ def uninstall_command(repo_root: Path, name: str) -> None:
         kept_paths=list(outcome.kept_paths),
         problems=list(outcome.problems),
     )
+
+
+def _migration_fields(outcome: MigrateOutcome) -> dict[str, object]:
+    plan = outcome.plan
+    return {
+        "name": plan.name,
+        "package": plan.package,
+        "port": plan.port,
+        "moves": [list(move) for move in plan.moves],
+        "references": [reference.model_dump(mode="json") for reference in plan.references],
+        "notes": list(plan.notes),
+        "problems": list(outcome.problems),
+    }
+
+
+@main.command("migrate")
+@click.argument("package")
+@click.option("--dry-run", is_flag=True, help="Say what the conversion would do and change nothing")
+@click.pass_obj
+def migrate_command(repo_root: Path, package: str, dry_run: bool) -> None:
+    """Convert the app at system/apps/PACKAGE, built before apps kept everything in their directory, into a user
+    app with a record; an app that cannot be converted as it is is left untouched."""
+    with install_lock(repo_root):
+        try:
+            outcome = migrate_app(repo_root, package, is_port_bound, dry_run)
+        except (AppInstallError, AppManifestError) as e:
+            _refuse("refused", package=package, detail=str(e))
+    if outcome.problems:
+        _refuse("unconverted", **_migration_fields(outcome))
+    _emit("would_migrate" if dry_run else "migrated", **_migration_fields(outcome))
 
 
 @main.command("check")

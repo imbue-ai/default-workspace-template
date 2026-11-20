@@ -8,6 +8,7 @@ silently replace the first (a registry row, a program) or be shadowed by it (a s
 
 import re
 import tomllib
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 from typing import Final
 
@@ -74,9 +75,15 @@ def _declared_programs_outside(repo_root: Path, own_derived_paths: set[str]) -> 
     return declared
 
 
-def find_collisions(repo_root: Path, package: str, manifest: AppManifest) -> tuple[str, ...]:
+def find_collisions(
+    repo_root: Path, package: str, manifest: AppManifest, own_paths: AbstractSet[str]
+) -> tuple[str, ...]:
     """Everything already in the workspace that the app at ``system/apps/<package>`` would collide with; empty
-    when it can be added."""
+    when it can be added.
+
+    ``own_paths`` are repo-relative paths that are the app's although nothing generated them: the program file an
+    app built before program files were generated was given by hand.
+    """
     problems: list[str] = []
     own_directory = app_directory(repo_root, package)
     name = str(manifest.name)
@@ -86,7 +93,7 @@ def find_collisions(repo_root: Path, package: str, manifest: AppManifest) -> tup
         if other_name == name:
             problems.append(f"the name {name!r} is already the app at {other.relative_to(repo_root).as_posix()}")
 
-    own_derived_paths = set(existing_derived_paths(repo_root, package))
+    own_derived_paths = set(existing_derived_paths(repo_root, package)) | set(own_paths)
     declared_programs = _declared_programs_outside(repo_root, own_derived_paths)
     for program in program_names(manifest):
         if program in declared_programs:

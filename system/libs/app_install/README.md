@@ -10,6 +10,7 @@ The command is deterministic and asks nothing; every run ends in one JSON line o
 uv run --no-sync app-install add <package> [--port <n>]
 uv run --no-sync app-install regenerate [<name>]
 uv run --no-sync app-install uninstall <name>
+uv run --no-sync app-install migrate <package> [--dry-run]
 uv run --no-sync app-install check
 uv run --no-sync app-install list
 ```
@@ -45,3 +46,16 @@ The result names every collision.
 `app-install uninstall <name>` removes the app's directory, its record, and its derived files, has supervisord drop its programs, removes its registry row, and commits the removal under the installer's own author.
 It keeps the app's stored data (`data/.apps/<name>/`) and its secret files, and names them in its result.
 What it could not do outside the tree, such as reaching a supervisord that is not running, is listed under `problems`; the app is removed from the tree all the same.
+
+## Converting an app built before this layout
+
+`app-install migrate <package>` turns an app that has a manifest and a hand-written program file, and keeps its skills and routines elsewhere in the workspace, into a user app.
+
+- A skill the manifest's `[[references]]` names moves into the app's `skills/`, with a link left where it was, unless another app names it too or it has a Python project of its own; those, and every other reference, are listed in the record's `references`.
+- A routine whose `app` is this app moves into the app's `routines/`.
+- The manifest loses `[[references]]` and `[wiring]`, and its `[scope] exclude` globs become relative to the app's directory.
+- The record keeps the port the app already runs on, and the program file is replaced by the generated one.
+
+A conversion either completes or changes nothing.
+An app whose existing program file is not what its manifest generates (it runs under a secret file the manifest does not declare, say, or with a command of its own) is left exactly as it was, and the result says where the two differ: declare how the app runs in `app.toml` (`[run]`, `[[services]]`, `[[secrets]]`) and convert it again.
+`--dry-run` prints what would happen.

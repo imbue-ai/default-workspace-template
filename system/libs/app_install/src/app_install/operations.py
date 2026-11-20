@@ -126,7 +126,7 @@ def add_app(
     records = load_all_records(repo_root)
     if any(record.package == package for record in records):
         raise AppAlreadyRegisteredError(f"the app at system/apps/{package} already has a record")
-    collisions = find_collisions(repo_root, package, manifest)
+    collisions = find_collisions(repo_root, package, manifest, frozenset())
     if collisions:
         raise CollisionError(collisions)
     port = allocate_port(repo_root, records, requested_port, is_bound)
@@ -221,7 +221,8 @@ def check(repo_root: Path) -> tuple[str, ...]:
             )
             continue
         problems.extend(
-            f"{record.name}: {problem}" for problem in find_collisions(repo_root, record.package, manifest)
+            f"{record.name}: {problem}"
+            for problem in find_collisions(repo_root, record.package, manifest, frozenset())
         )
         derived = derive_files(repo_root, record, manifest)
         problems.extend(
