@@ -1755,6 +1755,16 @@ def test_a_manifest_that_declares_none_of_them_runs_the_scaffolds_way(tmp_path: 
             "one kind of quote",
             id="run-env-value-ending-in-a-quote",
         ),
+        pytest.param(
+            '[run]\nenv = { NOTES_TITLE = "Notes #1" }\n',
+            "start of a comment",
+            id="run-env-value-with-a-hash-after-a-space",
+        ),
+        pytest.param(
+            '[[services]]\nrole = "indexer"\ncommand = "x"\nenv = { NOTES_ORDER = "first ;second" }\n',
+            "start of a comment",
+            id="service-env-value-with-a-semicolon-after-a-space",
+        ),
         pytest.param('[[services]]\nrole = "Indexer"\ncommand = "x"\n', "service role", id="service-role-in-capitals"),
         pytest.param('[[services]]\nrole = "indexer"\n', "command", id="service-with-no-command"),
         pytest.param(

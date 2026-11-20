@@ -82,6 +82,8 @@ RUN_HOST_PLACEHOLDER: Final[str] = "{host}"
 _RUN_PLACEHOLDERS: Final[frozenset[str]] = frozenset({RUN_PORT_PLACEHOLDER, RUN_HOST_PLACEHOLDER})
 # A program's command, its arguments, and its environment are written onto one line of a supervisord file.
 _LINE_BREAKS: Final[tuple[str, ...]] = ("\n", "\r")
+# supervisord's config parser cuts a line at a ";" or "#" that follows whitespace, inside quotes too.
+_INLINE_COMMENT_START_PATTERN: Final[re.Pattern[str]] = re.compile(r"\s[;#]")
 # A service's role names the program ``<app>-<role>``.
 SERVICE_ROLE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 # An app's version: three dot-separated numbers, with an optional pre-release after a hyphen.
@@ -543,13 +545,19 @@ def _check_program_text(table: str, field_name: str, text: str) -> None:
 
 def _check_program_environment_value(table: str, name: str, value: str) -> None:
     """Raises InvalidManifestValueError for a value supervisord's environment line cannot carry: it wraps a value
-    in one kind of quote, has no escape for the other, and strips every quote from both ends of what it reads."""
+    in one kind of quote, has no escape for the other, strips every quote from both ends of what it reads, and
+    reads a ``;`` or ``#`` that follows whitespace as the start of a comment."""
     _check_program_text(table, "env", value)
     has_both_quotes = '"' in value and "'" in value
     if has_both_quotes or value.startswith(("'", '"')) or value.endswith(("'", '"')):
         raise InvalidManifestValueError(
             f"{table}.env.{name} cannot be carried in a program's environment: a value may hold one kind of "
             "quote, and not at either end"
+        )
+    if _INLINE_COMMENT_START_PATTERN.search(value):
+        raise InvalidManifestValueError(
+            f"{table}.env.{name} cannot be carried in a program's environment: supervisord reads a ';' or '#' "
+            "that follows a space as the start of a comment"
         )
 
 

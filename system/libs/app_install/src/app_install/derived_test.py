@@ -1,3 +1,4 @@
+import configparser
 import os
 import shlex
 import subprocess
@@ -181,9 +182,17 @@ def test_a_service_or_skill_the_manifest_dropped_is_removed_and_a_hand_edit_is_r
     assert "startsecs=30" in main_conf.read_text()
 
 
-def _supervisord_environment(line: str) -> dict[str, str]:
-    """An ``environment=`` value as supervisord reads it: quoted tokens with no escapes, percent signs doubled."""
-    lexer = shlex.shlex(line.removeprefix("environment=").replace("%%", "%"))
+def _supervisord_program_options(conf_text: str, program: str) -> dict[str, str]:
+    """A program's options as supervisord's config parser reads them: a ``;`` or ``#`` after whitespace starts a
+    comment that runs to the end of the line."""
+    parser = configparser.RawConfigParser(inline_comment_prefixes=(";", "#"), strict=False)
+    parser.read_string(conf_text)
+    return dict(parser.items(f"program:{program}"))
+
+
+def _supervisord_environment(value: str) -> dict[str, str]:
+    """An ``environment`` value as supervisord reads it: quoted tokens with no escapes, percent signs doubled."""
+    lexer = shlex.shlex(value.replace("%%", "%"))
     lexer.wordchars += "/.+-():"
     tokens = list(lexer)
     return {tokens[index]: tokens[index + 2].strip("'\"") for index in range(0, len(tokens), 4)}
@@ -192,29 +201,37 @@ def _supervisord_environment(line: str) -> dict[str, str]:
 def test_arguments_and_environment_values_reach_the_program_exactly_as_the_manifest_wrote_them(
     tmp_path: Path,
 ) -> None:
-    awkward_arguments = ['It\'s 100% "notes"', "two words", "$HOME", "back\\slash", "semi;colon && more", "`tick`"]
+    awkward_arguments = [
+        'It\'s 100% "notes"',
+        "two words",
+        "$HOME",
+        "back\\slash",
+        "semi;colon && more",
+        "`tick`",
+        "first ; second",
+        "it's issue #5",
+    ]
     arguments_toml = ", ".join(_toml(argument) for argument in awkward_arguments)
     extra = (
         f'\n[run]\ncommand = "printf"\nargs = ["%s|", {arguments_toml}]\n'
-        'env = { SHELF_NOTE = "it\'s 50%, a,b", SHELF_QUOTE = "say \\"hi\\" twice" }\n'
+        'env = { SHELF_NOTE = "it\'s 50%, a,b", SHELF_QUOTE = "say \\"hi\\" twice", SHELF_TAG = "v1;stable#2" }\n'
     )
     _, _, _, derived = _derive(tmp_path, "shelf", 8086, extra, is_python=False)
-    conf_lines = derived.text_by_path["system/supervisord.conf.d/shelf.conf"].splitlines()
-    command_line = next(line for line in conf_lines if line.startswith("command="))
-    environment_line = next(line for line in conf_lines if line.startswith("environment="))
+    options = _supervisord_program_options(derived.text_by_path["system/supervisord.conf.d/shelf.conf"], "shelf")
 
     # supervisord splits the command the way a POSIX shell does, after undoubling percent signs, and runs it
     # with no shell; the step after the registration, in the script it hands to bash, is the program itself.
-    program_argv = shlex.split(command_line.removeprefix("command=").replace("%%", "%"))
+    program_argv = shlex.split(options["command"].replace("%%", "%"))
     script = program_argv[-1]
     last_step = "exec " + script.split(" && exec ", 1)[1]
     printed = subprocess.run(["bash", "-c", last_step], capture_output=True, text=True, check=True).stdout
 
     assert program_argv[-3:-1] == ["bash", "-c"]
     assert printed == "".join(f"{argument}|" for argument in awkward_arguments)
-    assert _supervisord_environment(environment_line) == {
+    assert _supervisord_environment(options["environment"]) == {
         "SHELF_NOTE": "it's 50%, a,b",
         "SHELF_QUOTE": 'say "hi" twice',
+        "SHELF_TAG": "v1;stable#2",
     }
 
 

@@ -74,7 +74,8 @@ what this workspace records about an app its agent built or installed, which
   `role` is lowercase words joined by hyphens and unique within the app; in
   both, a text may carry only the `{port:main}` and `{host}` placeholders,
   and an `env` value may hold one kind of quote, and not at either end,
-  which is all a supervisord environment line can carry; and the guidance
+  and no `;` or `#` after a space, which supervisord reads as the start of
+  a comment: that is all its environment line can carry; and the guidance
   for an adopter: `PermissionNote` (`[[permissions]]`), `LlmNote` (`[llm]`),
   `EnvironmentNote` (`[environment]`: `apt`, `npm_global`, `uv_tools`,
   `cargo_crates`, `cargo_default_toolchain`), `AppDependency`

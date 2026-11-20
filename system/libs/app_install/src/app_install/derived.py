@@ -9,6 +9,7 @@ repository.
 """
 
 import os
+import re
 import shlex
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -37,6 +38,7 @@ LOOPBACK_HOST: Final[str] = "127.0.0.1"
 PORT_PLACEHOLDER: Final[str] = "{port:main}"
 HOST_PLACEHOLDER: Final[str] = "{host}"
 _WORKSPACE_DIRECTORY: Final[str] = "/home/user/workspace"
+_INLINE_COMMENT_START_PATTERN: Final[re.Pattern[str]] = re.compile(r"(\s)([;#])")
 # The scripts below are never run from here: each is a word of the program line this module writes, which
 # supervisord runs to start the app.
 # own-process: wrapper -- tags the program into its memory band and execs it, in the program line supervisord runs
@@ -117,10 +119,17 @@ def _wrapped_in_secrets(argv: Sequence[str], secret_files: Sequence[str]) -> lis
     return wrapped
 
 
+def _quoted_word(word: str) -> str:
+    # supervisord's config parser cuts a line at a ";" or "#" that follows whitespace, quoted or not. Such a pair
+    # only occurs inside a word's single quotes, so the quote is closed and reopened between the two: bash joins
+    # the pieces back into the one word.
+    return _INLINE_COMMENT_START_PATTERN.sub(r"\1''\2", shlex.quote(word))
+
+
 def _command_line(band: str, steps: Sequence[Sequence[str]]) -> str:
     """The ``command=`` value: the steps chained in one ``bash -c``, since supervisord execs a command directly
     and has no ``&&`` of its own, with the last step replacing the shell."""
-    words_by_step = [[shlex.quote(word) for word in step] for step in steps]
+    words_by_step = [[_quoted_word(word) for word in step] for step in steps]
     script = " && ".join(" ".join(words) for words in words_by_step[:-1] + [["exec", *words_by_step[-1]]])
     # Inside the double quotes supervisord's parser unescapes a backslash and a quote; a percent sign is its own
     # expansion character.
@@ -130,8 +139,8 @@ def _command_line(band: str, steps: Sequence[Sequence[str]]) -> str:
 
 def _quoted_environment_value(value: str) -> str:
     # supervisord reads an environment value as one quoted token with no escapes, so the value is wrapped in
-    # whichever quote it does not hold; the manifest refuses a value that holds both. A percent sign is
-    # supervisord's own expansion character.
+    # whichever quote it does not hold; the manifest refuses a value that holds both, and one that holds the
+    # start of a comment. A percent sign is supervisord's own expansion character.
     quote = "'" if '"' in value else '"'
     return quote + value.replace("%", "%%") + quote
 
