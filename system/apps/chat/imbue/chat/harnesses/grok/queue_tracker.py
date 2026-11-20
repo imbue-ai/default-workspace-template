@@ -33,9 +33,14 @@ PublishCallback = Callable[[list[dict[str, Any]]], None]
 
 def session_token(agent_state_dir: Path) -> str:
     """The current grok process's identity, the launch marker's mtime; '' when grok never launched."""
+    marker_path = agent_state_dir / PROCESS_STARTED_MARKER_FILENAME
     try:
-        return str((agent_state_dir / PROCESS_STARTED_MARKER_FILENAME).stat().st_mtime_ns)
-    except OSError:
+        return str(marker_path.stat().st_mtime_ns)
+    except FileNotFoundError:
+        logger.trace("grok: no launch marker at {}", marker_path)
+        return ""
+    except OSError as error:
+        logger.opt(exception=error).warning("grok: could not read the launch marker {}", marker_path)
         return ""
 
 
