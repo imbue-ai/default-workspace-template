@@ -34,9 +34,11 @@ their own conftests point `page` / `context` / `browser` at Fortress, so use
 those there. Where a conftest provides the browser, do not write your own
 launch fixture. Never `playwright install` a managed browser, and never skip
 browser tests on browser presence -- a browser that cannot launch must fail
-the run. Under the repo-root conftest, the only per-suite setup a browser test
-needs is a `pytest.mark.timeout(120, func_only=False)` marker, since the repo-wide
-10-second default does not cover a browser launch. Mark every browser test
+the run. Give every browser test a `pytest.mark.timeout(120, func_only=False)`
+marker: under the repo-root conftest it is the only per-suite setup a browser test
+needs, since the repo-wide 10-second default does not cover a browser launch, and
+a user-built app's suite honours it through the `pytest-timeout` in its own dev
+group (`type-app.md`'s "On a phone"). Mark every browser test
 `pytest.mark.browser`, and every test that reads an app's frontend source
 `pytest.mark.frontend`: when only the chat app's or the shell's frontend
 changed, the test gate runs just those two kinds of its tests (any other app

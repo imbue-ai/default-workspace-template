@@ -550,7 +550,7 @@ or a sanitizer -- so the view can't run scripts or phone home via
 tracking pixels.
 
 This is the surfacing half of the preserve-and-surface principle
-(CLAUDE.md): the derived view inevitably leaves gaps (a field the agent
+(AGENTS.md): the derived view inevitably leaves gaps (a field the agent
 didn't extract, a rendering it didn't anticipate), and the raw/source
 affordance lets the user bridge them without waiting for a rebuild.
 Design it in from the first version -- it depends on the data layer

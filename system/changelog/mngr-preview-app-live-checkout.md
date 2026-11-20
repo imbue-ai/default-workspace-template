@@ -1,1 +1,0 @@
-The critical-app manual test plan (`docs/system/blueprint/critical-app-editing/test-plan.md`, C12) expects a preview's default banner to read `<display name> (preview)`, the title `preview_app.py up` now gives a preview with no `--title`.
