@@ -20,9 +20,6 @@ def _contents(tracker: AntigravityQueueTracker) -> list[str]:
     return [str(entry["content"]) for entry in tracker.snapshot()]
 
 
-# --- ordering and visibility ------------------------------------------------------------
-
-
 def test_enqueue_then_snapshot_preserves_order(tmp_path: Path) -> None:
     tracker = _tracker(tmp_path)
     tracker.enqueue("first", "t0")
@@ -56,9 +53,6 @@ def test_a_claimed_flush_keeps_entries_visible_as_sending(tmp_path: Path) -> Non
     assert claimed
     assert [entry["is_sending"] for entry in tracker.snapshot()] == [True]
     assert _contents(tracker) == ["beep"]
-
-
-# --- the claim is the mutual exclusion ---------------------------------------------------
 
 
 def test_a_second_claim_is_refused_while_one_is_open(tmp_path: Path) -> None:
@@ -117,9 +111,6 @@ def test_a_tap_release_does_not_charge_a_delivery_attempt(tmp_path: Path) -> Non
     assert tracker.deliverable_block() == "beep"
 
 
-# --- the attempt ceiling -----------------------------------------------------------------
-
-
 def test_an_entry_stops_being_retried_after_the_attempt_ceiling(tmp_path: Path) -> None:
     """A delivery we cannot verify, retried forever, duplicates the user's message."""
     tracker = _tracker(tmp_path)
@@ -130,9 +121,6 @@ def test_an_entry_stops_being_retried_after_the_attempt_ceiling(tmp_path: Path) 
     assert tracker.is_exhausted(queued_id) is True
     assert tracker.deliverable_block() == "", "an exhausted entry is not retyped"
     assert _contents(tracker) == ["beep"], "but it stays visible rather than vanishing"
-
-
-# --- generations: stop and session changes void claimed work -----------------------------
 
 
 def test_take_unclaimed_leaves_a_claimed_entry_alone(tmp_path: Path) -> None:
@@ -160,9 +148,6 @@ def test_a_settle_carrying_a_stale_generation_is_dropped(tmp_path: Path) -> None
     # The restart took "beep" and voided its claim, so the dead flush's settle changes nothing.
     assert _contents(tracker) == ["sent-after-the-stop"]
     assert tracker.is_sending() is False
-
-
-# --- journal lifetime (contract Part B) --------------------------------------------------
 
 
 def test_the_queue_survives_a_backend_restart(tmp_path: Path) -> None:
