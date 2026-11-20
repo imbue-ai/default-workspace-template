@@ -213,7 +213,6 @@ export function App(): m.Component<AppAttrs> {
   let wallpaperDialogDesktopId: string | null = null;
   /** The desktop whose theme chooser is up. */
   let themeDialogDesktopId: string | null = null;
-  /** Whether the keyboard shortcuts dialog is up. */
   /** Whether the resource gauge's settings dialog is up. */
   let isResourceGaugeDialogOpen = false;
   /** The overview's tiling as the last redraw computed it, which the pages follow; null while it is closed. */
