@@ -49,10 +49,11 @@ COPY system/scripts/setup_system.sh /usr/local/bin/default-workspace-template-se
 COPY system/scripts/_provision_guard.sh /usr/local/bin/_provision_guard.sh
 COPY system/scripts/install_secret_scanners.sh /usr/local/bin/default-workspace-template-install-secret-scanners
 COPY system/scripts/agy_install.sh /usr/local/bin/default-workspace-template-install-agy
+COPY system/scripts/install_grok.sh /usr/local/bin/default-workspace-template-install-grok
 COPY system/scripts/install_owner_exec.sh /usr/local/bin/default-workspace-template-install-owner-exec
 COPY system/scripts/install_earlyoom.sh /usr/local/bin/default-workspace-template-install-earlyoom
 COPY system/scripts/install_agent_plugins.sh /usr/local/bin/default-workspace-template-install-agent-plugins
-RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners /usr/local/bin/default-workspace-template-install-agy /usr/local/bin/default-workspace-template-install-owner-exec /usr/local/bin/default-workspace-template-install-earlyoom /usr/local/bin/default-workspace-template-install-agent-plugins && default-workspace-template-setup-system
+RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners /usr/local/bin/default-workspace-template-install-agy /usr/local/bin/default-workspace-template-install-grok /usr/local/bin/default-workspace-template-install-owner-exec /usr/local/bin/default-workspace-template-install-earlyoom /usr/local/bin/default-workspace-template-install-agent-plugins && default-workspace-template-setup-system
 
 # /var/cache/user is the off-volume cache target, pinned via ENV so BOTH the
 # build layers below (dependency pre-warm) and the runtime container cache to

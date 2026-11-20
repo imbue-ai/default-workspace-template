@@ -1,0 +1,1 @@
+The workspace image installs xAI's Grok Build CLI (`grok`) 1.0.62 at `/usr/local/bin/grok`. `setup_system.sh` runs the new `system/scripts/install_grok.sh`, which downloads it from xAI, checks it against the per-arch sha256 the script records, and leaves a `grok` already at that version alone, so Docker builds, Lima VMs and an update's re-provision all install it.
