@@ -39,7 +39,6 @@ from app_install.paths import APPS_DIRECTORY
 from app_install.paths import STATE_DIRECTORY
 from app_install.paths import UPSTREAM_REF_PREFIX
 from app_install.paths import manifest_path
-from app_manifest.errors import AppManifestError
 from app_manifest.manifest import AppManifest
 from app_manifest.manifest import ManifestReadMode
 from app_manifest.manifest import load_manifest
@@ -304,7 +303,7 @@ def update_app(
             raise UpdateInProgressError(f"no update of {name} is waiting to be continued")
         try:
             pending = PendingUpdate.model_validate(json.loads(pending_file.read_text(encoding="utf-8")))
-        except (ValueError, AppManifestError) as e:
+        except ValueError as e:
             raise AppInstallError(f"the waiting update of {name} cannot be read: {e}") from e
         return _finish(repo_root, record, pending, runtime)
     if pending_file.exists() or worktree.exists():
