@@ -41,3 +41,4 @@ def running_shell_stand_in() -> Generator[ShellStandIn, None, None]:
     finally:
         server.shutdown()
         thread.join()
+        server.server_close()
