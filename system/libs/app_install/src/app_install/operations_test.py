@@ -381,3 +381,32 @@ def test_the_real_runtime_commits_exactly_the_removal_under_the_installers_own_a
     # No supervisord runs beside a bare repository, which is reported and does not stop the removal; an app
     # with no registry row has none to remove.
     assert [problem.split(":")[0] for problem in outcome.problems] == ["supervisord did not drop the app's programs"]
+
+
+def test_the_real_runtime_commits_a_removal_that_holds_a_file_no_commit_had(tmp_path: Path) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    package = write_user_app(workspace, "notes")
+    add_app(workspace, package, None, never_bound)
+    commit_all(workspace, "a workspace with notes")
+    # The app gained a skill, and its link was generated but never committed.
+    write_app_file(workspace, package, "skills/weekly-review/SKILL.md", "# Weekly review\n")
+    regenerate(workspace, "notes", never_bound)
+
+    outcome = uninstall_app(workspace, "notes", WorkspaceRuntime(repo_root=workspace))
+
+    assert ".agents/skills/weekly-review" in outcome.removed_paths
+    assert not any(problem.startswith("the removal was not committed") for problem in outcome.problems)
+    assert run_git(workspace, ["log", "-1", "--format=%s"]) == "app-install: uninstall notes"
+    assert run_git(workspace, ["status", "--porcelain"]) == ""
+
+
+def test_the_real_runtime_has_nothing_to_commit_for_an_app_no_commit_held(tmp_path: Path) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    add_app(workspace, write_user_app(workspace, "notes"), None, never_bound)
+    before = run_git(workspace, ["rev-parse", "HEAD"])
+
+    outcome = uninstall_app(workspace, "notes", WorkspaceRuntime(repo_root=workspace))
+
+    assert not any(problem.startswith("the removal was not committed") for problem in outcome.problems)
+    assert run_git(workspace, ["rev-parse", "HEAD"]) == before
+    assert run_git(workspace, ["status", "--porcelain"]) == ""

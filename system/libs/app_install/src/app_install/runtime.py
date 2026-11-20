@@ -121,7 +121,19 @@ class WorkspaceRuntime(WorkspaceRuntimeInterface):
             return str(e)
         return None
 
+    def _is_known_to_git(self, relative_path: str) -> bool:
+        """Whether git can stage the path: it is on disk, or the index still holds it."""
+        path = self.repo_root / relative_path
+        if path.exists() or path.is_symlink():
+            return True
+        return self._run(["git", "ls-files", "--error-unmatch", "--", relative_path]) is None
+
     def commit_paths(self, relative_paths: Sequence[str], message: str) -> str | None:
+        # git refuses a whole `add` over one path it has never seen, and a removed file that no commit held is
+        # exactly that.
+        relative_paths = [path for path in relative_paths if self._is_known_to_git(path)]
+        if not relative_paths:
+            return None
         staged = self._run(["git", "add", "--all", "--", *relative_paths])
         if staged is not None:
             return staged
