@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from bootstrap.testing import make_stub_bin
 
 _SCRIPT = Path(__file__).with_name("install_grok.sh")
 (_PINNED_VERSION,) = re.findall(
@@ -34,19 +35,7 @@ def _run(
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Run the installer against stub `curl` and `uname`; returns the result and the curl log."""
     stub_bin = tmp_path / "stub-bin"
-    curl_log = tmp_path / "curl_calls.log"
-    fetch = f'cp "{served}" "$out"' if served is not None else "exit 22"
-    _write_executable(
-        stub_bin / "curl",
-        "#!/bin/bash\n"
-        f'echo "$@" >> "{curl_log}"\n'
-        'out=""\n'
-        'while [ "$#" -gt 0 ]; do\n'
-        '    if [ "$1" = "-o" ]; then out="$2"; shift 2; else shift; fi\n'
-        "done\n"
-        f"{fetch}\n",
-    )
-    _write_executable(stub_bin / "uname", f'#!/bin/sh\necho "{arch}"\n')
+    curl_log = make_stub_bin(stub_bin, served_tarball=served, arch=arch)
     result = subprocess.run(
         ["bash", str(_SCRIPT)],
         env={
