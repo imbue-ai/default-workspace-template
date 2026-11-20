@@ -1,0 +1,1 @@
+The Screen's acceptance test hands Imbue Studio its throwaway roots as `STUDIO_ROOTS_OVERRIDE` instead of the retired `MINDS_DATA_HOME`, which an mngr checkout from after the override's rename no longer honors, so the run's state stays under its own temporary directory.

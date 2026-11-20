@@ -1238,6 +1238,8 @@ def up(
                 name,
                 wrapper_log_path,
                 [
+                    "--apps-file",
+                    str(forward_port.apps_file(repo_root)),
                     "--inner-service",
                     service_name,
                     "--title",
@@ -1474,6 +1476,8 @@ def frame(
     wrapper_log_path = state_dir / WRAPPER_LOG_FILENAME
     state_dir.mkdir(parents=True, exist_ok=True)
     wrapper_args = [
+        "--apps-file",
+        str(forward_port.apps_file(repo_root)),
         "--inner-service",
         inner_service,
         "--title",
