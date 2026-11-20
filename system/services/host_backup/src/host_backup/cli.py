@@ -114,8 +114,8 @@ def backup_now_main(timeout_seconds: float, check: bool) -> None:
     sys.exit(_exit_code_for_completion(completion))
 
 
-def _check_recent_backup(events_path: Path) -> int:
-    """Print the newest tick outcomes and map them to an exit code: 0 when the newest
+def _recent_backup_verdict(events_path: Path) -> tuple[dict[str, object], int]:
+    """The newest tick outcomes and the exit code they map to: 0 when the newest
     `restic_backup_succeeded` is within two backup intervals, 3 when the newest tick
     ended for missing secrets, 4 when it was skipped for lack of backup storage, 1
     otherwise.
@@ -137,26 +137,38 @@ def _check_recent_backup(events_path: Path) -> int:
         if recent.newest_terminal_event is None
         else recent.newest_terminal_event.get("type")
     )
-    click.echo(
-        json.dumps(
-            {
-                "newest_outcome": newest_outcome,
-                "newest_success_at": None
-                if success_at is None
-                else success_at.isoformat(),
-                "age_seconds": age_seconds,
-                "max_age_seconds": max_age_seconds,
-                "inflight_tick_id": recent.inflight_tick_id,
-            }
-        )
-    )
+    report: dict[str, object] = {
+        "newest_outcome": newest_outcome,
+        "newest_success_at": None if success_at is None else success_at.isoformat(),
+        "age_seconds": age_seconds,
+        "max_age_seconds": max_age_seconds,
+        "inflight_tick_id": recent.inflight_tick_id,
+    }
     if newest_outcome == BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS.value:
-        return EXIT_BACKUPS_NOT_CONFIGURED
+        return report, EXIT_BACKUPS_NOT_CONFIGURED
     if age_seconds is not None and age_seconds <= max_age_seconds:
-        return EXIT_BACKUP_SUCCEEDED
+        return report, EXIT_BACKUP_SUCCEEDED
     if newest_outcome == BackupEventType.BACKUP_SKIPPED_OVER_QUOTA.value:
-        return EXIT_BACKUP_SKIPPED_OVER_QUOTA
-    return EXIT_BACKUP_FAILED
+        return report, EXIT_BACKUP_SKIPPED_OVER_QUOTA
+    return report, EXIT_BACKUP_FAILED
+
+
+def _check_recent_backup(events_path: Path) -> int:
+    """Print the newest tick outcomes and return the exit code they map to."""
+    report, exit_code = _recent_backup_verdict(events_path)
+    click.echo(json.dumps(report))
+    return exit_code
+
+
+def has_recent_backup() -> bool:
+    """Whether a recent backup succeeded: what ``host-backup-now --check`` exits 0 for, for a
+    caller in this process that must know there is a way back before it changes something."""
+    events_dir = resolve_service_events_dir()
+    if events_dir is None:
+        return False
+    return (
+        _recent_backup_verdict(events_dir / EVENTS_FILENAME)[1] == EXIT_BACKUP_SUCCEEDED
+    )
 
 
 def _event_time(event: dict[str, object] | None) -> datetime | None:

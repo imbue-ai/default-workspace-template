@@ -13,8 +13,9 @@ from app_install.git import COMMITTER_EMAIL
 from app_install.git import COMMITTER_NAME
 from app_install.interfaces import WorkspaceRuntimeInterface
 from app_manifest.manifest import EnvironmentNote
+from app_registration import forward_port
+from host_backup.cli import has_recent_backup
 
-_FORWARD_PORT: Final[str] = "system/scripts/forward_port.py"
 # Long enough for a system package or a tool to download and build.
 _COMMAND_TIMEOUT_SECONDS: Final[float] = 900.0
 # How long a newly started app is given to answer on its port: it links and syncs its own environment first.
@@ -111,10 +112,14 @@ class WorkspaceRuntime(WorkspaceRuntimeInterface):
         return shutil.disk_usage(directory).free
 
     def has_recent_backup(self) -> bool:
-        return self._run(["uv", "run", "--no-sync", "host-backup-now", "--check"]) is None
+        return has_recent_backup()
 
     def remove_registry_row(self, name: str) -> str | None:
-        return self._run(["python3", _FORWARD_PORT, "--remove", "--name", name])
+        try:
+            forward_port.remove(forward_port.apps_file(self.repo_root), name)
+        except (forward_port.RegistrationError, OSError) as e:
+            return str(e)
+        return None
 
     def commit_paths(self, relative_paths: Sequence[str], message: str) -> str | None:
         staged = self._run(["git", "add", "--all", "--", *relative_paths])

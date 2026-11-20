@@ -35,9 +35,15 @@ LOOPBACK_HOST: Final[str] = "127.0.0.1"
 PORT_PLACEHOLDER: Final[str] = "{port:main}"
 HOST_PLACEHOLDER: Final[str] = "{host}"
 _WORKSPACE_DIRECTORY: Final[str] = "/home/user/workspace"
+# The scripts below are never run from here: each is a word of the program line this module writes, which
+# supervisord runs to start the app.
+# own-process: wrapper -- tags the program into its memory band and execs it, in the program line supervisord runs
 _OOM_TAG_SERVICE: Final[str] = "system/services/oom_priority/bin/oom_tag_service.py"
+# own-process: other-tier -- the program line links the app's venv with the system python, before any venv exists
 _VENV_LINKS: Final[str] = "system/scripts/workspace_bare_scripts/venv_links.py"
+# own-process: other-tier -- the program line registers the app with the system python, before its venv is synced
 _FORWARD_PORT: Final[str] = "system/scripts/forward_port.py"
+# own-process: wrapper -- loads the app's secret file into its environment and execs it, so no value is in a file
 _WITH_SECRETS: Final[str] = "system/scripts/with_secrets.py"
 # ``startsecs`` and ``startretries`` bound a crash loop: an app that dies before it has been up this long counts
 # as a failed start, so supervisord backs off and gives up rather than restarting it at full speed for as long as

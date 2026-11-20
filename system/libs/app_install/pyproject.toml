@@ -7,7 +7,11 @@ requires-python = ">=3.12"
 dependencies = [
     # The manifest every derived file is generated from.
     "app-manifest",
+    # The registry an uninstalled app's row is removed from.
+    "app-registration",
     "click>=8.1",
+    # Whether the workspace has a recent backup to fall back on, before an update runs over an app's data.
+    "host-backup",
     "imbue-common",
     "loguru>=0.7",
     "pydantic>=2.0",
@@ -42,4 +46,4 @@ select = ["F", "I", "UP006", "UP007"]
 
 [tool.ruff.lint.isort]
 force-single-line = true
-known-first-party = ["app_install", "app_manifest"]
+known-first-party = ["app_install", "app_manifest", "app_registration", "host_backup"]

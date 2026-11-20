@@ -10,6 +10,7 @@ from app_install.errors import AppAlreadyRegisteredError
 from app_install.errors import AppNotFoundError
 from app_install.errors import CollisionError
 from app_install.errors import PortUnavailableError
+from app_install.git import run_git
 from app_install.mock_runtime_test import RecordingRuntime
 from app_install.operations import add_app
 from app_install.operations import check
@@ -17,6 +18,8 @@ from app_install.operations import list_apps
 from app_install.operations import regenerate
 from app_install.operations import uninstall_app
 from app_install.runtime import WorkspaceRuntime
+from app_install.testing import commit_all
+from app_install.testing import make_workspace_repository
 from app_install.testing import never_bound
 from app_install.testing import write_app_file
 from app_install.testing import write_user_app
@@ -348,21 +351,16 @@ def test_an_app_that_is_not_registered_cannot_be_uninstalled(tmp_path: Path) -> 
 
 
 def test_the_real_runtime_commits_exactly_the_removal_under_the_installers_own_author(tmp_path: Path) -> None:
-    _git(tmp_path, "init", "-q")
-    package = write_user_app(tmp_path, "notes")
-    add_app(tmp_path, package, None, never_bound)
-    write_workspace_file(tmp_path, "README.md", "the workspace\n")
-    _git(tmp_path, "add", "-A")
-    _git(tmp_path, "commit", "-q", "-m", "a workspace with notes")
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    package = write_user_app(workspace, "notes")
+    add_app(workspace, package, None, never_bound)
+    commit_all(workspace, "a workspace with notes")
     # Someone else's uncommitted work, which the removal must not sweep into its commit.
-    write_workspace_file(tmp_path, "README.md", "the workspace, edited\n")
+    write_workspace_file(workspace, "README.md", "the workspace, edited\n")
 
-    outcome = uninstall_app(tmp_path, "notes", WorkspaceRuntime(repo_root=tmp_path))
+    outcome = uninstall_app(workspace, "notes", WorkspaceRuntime(repo_root=workspace))
 
-    log = subprocess.run(
-        ["git", "log", "-1", "--format=%an <%ae>%n%s", "--name-only"], cwd=tmp_path, capture_output=True, text=True
-    ).stdout.splitlines()
-    status = subprocess.run(["git", "status", "--porcelain"], cwd=tmp_path, capture_output=True, text=True).stdout
+    log = run_git(workspace, ["log", "-1", "--format=%an <%ae>%n%s", "--name-only"]).splitlines()
     assert log[:2] == ["app-install <app-install@workspace.invalid>", "app-install: uninstall notes"]
     assert sorted(line for line in log[2:] if line) == [
         "system/apps/notes/app.toml",
@@ -371,9 +369,7 @@ def test_the_real_runtime_commits_exactly_the_removal_under_the_installers_own_a
         "system/config/apps/notes.toml",
         "system/supervisord.conf.d/notes.conf",
     ]
-    assert status == " M README.md\n"
-    # No supervisord and no registry in a bare tree: both are reported, and neither stops the removal.
-    assert [problem.split(":")[0] for problem in outcome.problems] == [
-        "supervisord did not drop the app's programs",
-        "the app's registry row was not removed",
-    ]
+    assert run_git(workspace, ["status", "--porcelain"]) == "M README.md"
+    # No supervisord runs beside a bare repository, which is reported and does not stop the removal; an app
+    # with no registry row has none to remove.
+    assert [problem.split(":")[0] for problem in outcome.problems] == ["supervisord did not drop the app's programs"]
