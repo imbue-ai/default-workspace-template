@@ -28,6 +28,7 @@ from routines.primitives import RoutineId
 from routines.primitives import RunId
 from routines.primitives import RunTrigger
 from routines.primitives import TimeOfDay
+from routines.service import RoutinesService
 from routines.state import FileStateStore
 from routines.testing import TEST_NOW
 from routines.testing import TEST_ZONE
@@ -66,13 +67,10 @@ def test_a_removal_whose_commit_is_refused_still_stops_the_chat_and_drops_the_st
 
 def test_a_run_record_a_dead_runner_left_is_not_a_run_in_flight(
     paths: RoutinesPaths,
-    repository: RecordingRepository,
     clock: FakeClock,
-    chat_app: ScriptedChatApp,
-    notifier: RecordingNotifier,
+    service: RoutinesService,
 ) -> None:
     """Until the tick reaps it, the state still names the run; neither Run now nor a removal waits on it."""
-    service = build_test_service(paths, repository, FileStateStore(paths=paths), clock, chat_app, notifier)
     service.add(
         SYNC,
         RoutineDefinition.model_validate(
@@ -99,12 +97,8 @@ def test_a_run_record_a_dead_runner_left_is_not_a_run_in_flight(
 
 def test_a_routine_whose_run_lock_is_held_cannot_be_removed(
     paths: RoutinesPaths,
-    repository: RecordingRepository,
-    clock: FakeClock,
-    chat_app: ScriptedChatApp,
-    notifier: RecordingNotifier,
+    service: RoutinesService,
 ) -> None:
-    service = build_test_service(paths, repository, FileStateStore(paths=paths), clock, chat_app, notifier)
     service.add(
         SYNC,
         RoutineDefinition.model_validate(
@@ -217,12 +211,9 @@ def test_rescheduling_a_routine_an_app_owns_keeps_the_schedule_in_its_state_and_
 def test_rescheduling_a_routine_an_app_owns_back_to_its_files_schedule_drops_the_users(
     paths: RoutinesPaths,
     repository: RecordingRepository,
-    clock: FakeClock,
-    chat_app: ScriptedChatApp,
-    notifier: RecordingNotifier,
+    service: RoutinesService,
 ) -> None:
     path = write_app_definition(paths, "news_sync", SYNC, _DAILY_TOML)
-    service = build_test_service(paths, repository, FileStateStore(paths=paths), clock, chat_app, notifier)
     service.change_schedule(SYNC, _EVERY_TWO_HOURS)
 
     service.change_schedule(SYNC, ScheduleChange(every=Duration("1d"), at=TimeOfDay("07:30")))
@@ -234,13 +225,9 @@ def test_rescheduling_a_routine_an_app_owns_back_to_its_files_schedule_drops_the
 
 
 def test_rescheduling_a_routine_the_workspace_owns_rewrites_its_file_and_commits_it(
-    paths: RoutinesPaths,
     repository: RecordingRepository,
-    clock: FakeClock,
-    chat_app: ScriptedChatApp,
-    notifier: RecordingNotifier,
+    service: RoutinesService,
 ) -> None:
-    service = build_test_service(paths, repository, FileStateStore(paths=paths), clock, chat_app, notifier)
     path = service.add(
         SYNC,
         RoutineDefinition.model_validate(
@@ -261,13 +248,10 @@ def test_rescheduling_a_routine_the_workspace_owns_rewrites_its_file_and_commits
 def test_a_definition_of_an_apps_routine_is_taken_for_its_schedule_alone(
     paths: RoutinesPaths,
     repository: RecordingRepository,
-    clock: FakeClock,
-    chat_app: ScriptedChatApp,
-    notifier: RecordingNotifier,
+    service: RoutinesService,
 ) -> None:
     """What `routines edit` hands over: the routine as it runs with the named fields changed."""
     path = write_app_definition(paths, "news_sync", SYNC, _DAILY_TOML)
-    service = build_test_service(paths, repository, FileStateStore(paths=paths), clock, chat_app, notifier)
     as_it_runs = service.effective(SYNC).definition
     assert as_it_runs is not None
     retitled = as_it_runs.model_copy_update(to_update(as_it_runs.field_ref().title, "Morning sync"))
@@ -287,13 +271,9 @@ def test_a_definition_of_an_apps_routine_is_taken_for_its_schedule_alone(
 
 def test_a_change_to_an_apps_routine_whose_file_does_not_load_says_the_file_is_broken(
     paths: RoutinesPaths,
-    repository: RecordingRepository,
-    clock: FakeClock,
-    chat_app: ScriptedChatApp,
-    notifier: RecordingNotifier,
+    service: RoutinesService,
 ) -> None:
     write_app_definition(paths, "news_sync", SYNC, "title = [not toml")
-    service = build_test_service(paths, repository, FileStateStore(paths=paths), clock, chat_app, notifier)
 
     with pytest.raises(BrokenDefinitionError, match=r"nightly-sync is broken \(not valid TOML.*fix its file first"):
         service.change_schedule(SYNC, _EVERY_TWO_HOURS)
@@ -310,12 +290,10 @@ def test_a_change_to_an_apps_routine_whose_file_does_not_load_says_the_file_is_b
 def test_a_routine_an_app_owns_cannot_be_removed_and_keeps_its_chat_and_its_state(
     paths: RoutinesPaths,
     repository: RecordingRepository,
-    clock: FakeClock,
     chat_app: ScriptedChatApp,
-    notifier: RecordingNotifier,
+    service: RoutinesService,
 ) -> None:
     path = write_app_definition(paths, "news_sync", SYNC, _DAILY_TOML)
-    service = build_test_service(paths, repository, FileStateStore(paths=paths), clock, chat_app, notifier)
     service.states.update(SYNC, lambda state: state.model_copy_update(to_update(state.field_ref().chat_id, "agent-1")))
 
     with pytest.raises(AppOwnedRoutineError, match="removing it included"):
@@ -330,14 +308,11 @@ def test_a_routine_an_app_owns_cannot_be_removed_and_keeps_its_chat_and_its_stat
 def test_a_routine_two_files_define_is_broken_and_nothing_of_it_is_changed_or_removed(
     paths: RoutinesPaths,
     repository: RecordingRepository,
-    clock: FakeClock,
-    chat_app: ScriptedChatApp,
-    notifier: RecordingNotifier,
+    service: RoutinesService,
 ) -> None:
     own = paths.workspace_definition_path(SYNC)
     own.write_text(_DAILY_TOML)
     in_app = write_app_definition(paths, "news_sync", SYNC, _DAILY_TOML)
-    service = build_test_service(paths, repository, FileStateStore(paths=paths), clock, chat_app, notifier)
     service.states.update(SYNC, lambda state: state.model_copy_update(to_update(state.field_ref().chat_id, "agent-1")))
 
     row = service.row(SYNC)

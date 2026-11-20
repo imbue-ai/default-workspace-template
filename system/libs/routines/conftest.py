@@ -16,9 +16,11 @@ from routines.mock_repository_test import RecordingRepository
 from routines.paths import RoutinesPaths
 from routines.repository import GitRepository
 from routines.runner import Runner
+from routines.service import RoutinesService
 from routines.state import FileStateStore
 from routines.testing import TEST_NOW
 from routines.testing import TEST_ZONE
+from routines.testing import build_test_service
 from routines.testing import init_git_workspace
 from routines.testing import make_workspace_paths
 
@@ -96,6 +98,20 @@ def chat_app() -> ScriptedChatApp:
 @pytest.fixture
 def notifier() -> RecordingNotifier:
     return RecordingNotifier()
+
+
+@pytest.fixture
+def service(
+    paths: RoutinesPaths,
+    repository: RecordingRepository,
+    states: FileStateStore,
+    clock: FakeClock,
+    chat_app: ScriptedChatApp,
+    notifier: RecordingNotifier,
+) -> RoutinesService:
+    """The service over the workspace's real definition, state and ledger files, with the recording repository,
+    the fake clock, the scripted chat app and the recording notifier the other fixtures give."""
+    return build_test_service(paths, repository, states, clock, chat_app, notifier)
 
 
 @pytest.fixture
