@@ -450,8 +450,8 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
                 delivered = claimed
                 if not is_slash_command_message(block):
                     self._await_turn_holding(witness_start, block)
-            elif self._await_turn_holding(witness_start, block):
-                delivered = claimed
+            else:
+                delivered = claimed if self._await_turn_holding(witness_start, block) else ()
         finally:
             self._queue.finish_flush(claimed, generation, delivered=delivered)
             if delivered and earlier_flush_began_at is not None and self._flush_note_resent is not None:
