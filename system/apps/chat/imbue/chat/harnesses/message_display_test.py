@@ -357,19 +357,6 @@ def test_the_cloud_connections_notice_is_a_resolution_of_the_request_it_names() 
     assert display.request_id == "evt-9"
 
 
-def test_the_skill_tells_the_agent_what_the_cloud_connections_notice_means() -> None:
-    """The notice sends the agent to a section of the connect-external-service skill, which quotes the notice's
-    opening words and its tag; an edit to either side has to keep the other."""
-    skill = (Path(__file__).resolve().parents[6] / ".agents/skills/connect-external-service/SKILL.md").read_text()
-    notice = format_cloud_connections_notice("Anthropic", "<id>")
-    opening = "The user chose to enable the cloud MCP connections of their Anthropic account"
-    tag = "(resolution: cloud_connections, request_id: <id>)"
-    section = "Connections the user turned on themselves"
-    assert notice.startswith(opening) and notice.endswith(tag) and f'("{section}")' in notice
-    assert f"{opening} ... {tag}" in skill
-    assert f"## {section}\n" in skill
-
-
 def test_the_messaging_scripts_browser_fleet_tag_is_the_one_this_classifier_strips() -> None:
     """``system/scripts/message_chat.py --browser-fleet`` wraps a nudge in the tag this module recognises; the script
     is standard-library only and cannot import this package, so its copy of the tag is pinned here."""

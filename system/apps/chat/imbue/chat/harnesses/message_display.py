@@ -211,16 +211,14 @@ def format_cloud_connections_notice(provider_name: str, request_id: str) -> str:
     rather than answering a permission request.
 
     The tag at the end is what :func:`_match_permission_resolution` reads, so the two cannot drift apart. The
-    opening words and the section it names are the connect-external-service skill's
-    (``.agents/skills/connect-external-service/SKILL.md``), which tells the agent what the message means.
+    message says all the agent needs: the connect-external-service skill only tells it to use such tools.
     """
     tag = f"(resolution: {CLOUD_CONNECTIONS_RESOLUTION}, request_id: {request_id})"
     return (
         f"The user chose to enable the cloud MCP connections of their {provider_name} account for this chat instead "
         f"of answering your permission request, which has been withdrawn; do not send it again. You were restarted "
         f"so those connections load: the services connected on that account are now tools in your tool list. Use "
-        f"them for what you needed the permission for, and see the connect-external-service skill "
-        f'("Connections the user turned on themselves") for what they do and do not cover. {tag}'
+        f"them for what you needed the permission for. {tag}"
     )
 
 
