@@ -24,7 +24,6 @@ from loguru import logger as _loguru_logger
 from pydantic import ValidationError
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
-from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.primitives import ParticipantKind
 from workspace_layout.primitives import UserId
 
@@ -578,7 +577,7 @@ def _presence_heartbeat_endpoint() -> Response:
         outcome = get_state().presence.heartbeat(
             identity, now, reported_input_moment(now, heartbeat.input_age_seconds, heartbeat.last_input_at)
         )
-    except (InvalidShellValueError, InvalidLayoutValueError, InvalidIdentityValueError) as e:
+    except (InvalidShellValueError, InvalidIdentityValueError) as e:
         return error_response(str(e), 400)
     _broadcast_presence_if_changed(outcome)
     if heartbeat.client_id is not None:
