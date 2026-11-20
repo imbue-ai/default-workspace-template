@@ -4,7 +4,8 @@ import { resetEmbedEndpointForTesting } from "@imbue/workspace-ui/src/embed";
 import { FakeDesktopApi, FakeDesktopSocket } from "../testing/fakeShell";
 import { themeMetricsRecord } from "../testing/records";
 import { DesktopStore } from "./DesktopStore";
-import { connectEmbedderToStore, immersiveBridge } from "./embedderBridge";
+import { setShortcutRecording } from "../model/shortcutRecording";
+import { closeFocusedWindowUnlessRecording, connectEmbedderToStore, immersiveBridge } from "./embedderBridge";
 
 /** What the fake embedder says: a message from this page's parent, which at the top level is the page itself. */
 function embedderSays(data: Record<string, unknown>): void {
@@ -48,13 +49,20 @@ afterEach(() => {
 describe("connectEmbedderToStore", () => {
   it("takes the chrome's capabilities, immersive included, and ignores a chrome that names none", () => {
     expect(store.getIsEmbedderPresent()).toBe(false);
-    embedderSays({ type: "minds:embedder-capabilities", canPopOut: true, immersive: true });
+    embedderSays({
+      type: "minds:embedder-capabilities",
+      canPopOut: true,
+      immersive: true,
+      opensKeyboardShortcuts: true,
+    });
     expect(store.getCanPopOut()).toBe(true);
     expect(store.getCanImmerse()).toBe(true);
+    expect(store.getOpensKeyboardShortcuts()).toBe(true);
     expect(store.getIsEmbedderPresent()).toBe(true);
     embedderSays({ type: "minds:embedder-capabilities", canPopOut: false });
     expect(store.getCanPopOut()).toBe(false);
     expect(store.getCanImmerse()).toBe(false);
+    expect(store.getOpensKeyboardShortcuts()).toBe(false);
     // The announcement itself is what says a chrome is there, whatever it can do.
     expect(store.getIsEmbedderPresent()).toBe(true);
   });
@@ -77,5 +85,25 @@ describe("connectEmbedderToStore", () => {
     expect(await postedToEmbedder()).toEqual([
       { type: "minds:immersive-request", windowId: "win-0123456789abcdef", on: true },
     ]);
+  });
+});
+
+describe("closeFocusedWindowUnlessRecording", () => {
+  afterEach(() => setShortcutRecording(false));
+
+  it("closes the focused window on the chrome's close-tab chord, but not while a shortcut recorder listens", () => {
+    let closedCount = 0;
+    const close = (): void => {
+      closedCount += 1;
+    };
+
+    setShortcutRecording(true);
+    closeFocusedWindowUnlessRecording(close);
+    const closedWhileRecording = closedCount;
+    setShortcutRecording(false);
+    closeFocusedWindowUnlessRecording(close);
+
+    expect(closedWhileRecording).toBe(0);
+    expect(closedCount).toBe(1);
   });
 });

@@ -1,6 +1,5 @@
 import m from "mithril";
 import { getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
-import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import {
   DETACHED_WINDOWS,
   HIGHLIGHT_CHROME,
@@ -155,7 +154,6 @@ function bootstrap(): void {
   // The child-frame boundary: the minds relay for the framed pages' `minds:` messages, and the
   // shell side of the app contract.
   initEmbedderRelay();
-  setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, () => void desktopStore.closeFocusedWindow());
   // A permission verdict may answer the keybindings delivery's own request: the backend matches
   // the entries against the request it filed and retries the unsent saves (spec section 9.3).
   setEmbedderMessageHandler(PERMISSION_RESOLUTIONS, (message) => {

@@ -16,8 +16,9 @@ const LAYERS: readonly string[] = ["theme", "model", "geometry", "reducers", "st
 
 // Root-level modules every layer may import: the message boundary and the interface reload.
 const FOUNDATION_MODULES: ReadonlySet<string> = new Set(["relay.ts", "reload.ts"]);
-// The wiring at the root, above every layer: the desktop's entry point and the theme gallery's.
-const ROOT_MODULES: ReadonlySet<string> = new Set(["index.ts", "gallery/index.ts"]);
+// The wiring at the root, above every layer: the desktop's entry point, the theme gallery's, and the keyboard
+// shortcuts page's.
+const ROOT_MODULES: ReadonlySet<string> = new Set(["index.ts", "gallery/index.ts", "keyboardShortcutsPage/index.ts"]);
 
 const RELATIVE_IMPORT = /(?<![\w.])(?:from|import)\s*\(?\s*["'](\.{1,2}\/[^"']+)["']/g;
 

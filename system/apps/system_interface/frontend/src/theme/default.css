@@ -58,6 +58,8 @@
   /* The tile's elevation while a drag holds it: the same pair, deeper and further spread, so the icon in
      the hand reads as lifted off the desktop rather than as a bigger icon. */
   --desk-icon-shadow-lifted: 0 8px 20px 0 rgb(0 0 0 / 0.28), 0 3px 4px 0 rgb(0 0 0 / 0.18);
+  /* A shortcut keycap's bottom edge, drawn inside the pill so it reads as a key without growing it. */
+  --desk-shortcut-keycap-shadow: inset 0 -1px 0 var(--c-border);
   /* How much a shortcut grows while it is in the hand: enough to read as picked up, not so much that it
      covers the cells it is being carried over. */
   --desk-shortcut-lift-scale: 1.12;

@@ -67,8 +67,8 @@ export const WINDOW_DRAG_ENDED: "minds:window-drag-ended" =
 export const DETACHED_WINDOWS: "minds:detached-windows" =
   "DETACHED_WINDOWS" in embedContract ? embedContract.DETACHED_WINDOWS : "minds:detached-windows";
 // Embedder -> workspace: what the chrome can do, right after WORKSPACE_READY. Payload: { canPopOut,
-// opensExternalLinks?, opensCustomSchemeLinks?, opensLocalFiles?, immersive? }: whether it takes
-// OPEN_EXTERNAL, custom-scheme links there, OPEN_LOCAL_FILES, and IMMERSIVE_REQUEST.
+// opensExternalLinks?, opensCustomSchemeLinks?, opensLocalFiles?, opensKeyboardShortcuts?, immersive? }: whether it
+// takes OPEN_EXTERNAL, custom-scheme links there, OPEN_LOCAL_FILES, OPEN_KEYBOARD_SHORTCUTS, and IMMERSIVE_REQUEST.
 export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities" =
   "EMBEDDER_CAPABILITIES" in embedContract ? embedContract.EMBEDDER_CAPABILITIES : "minds:embedder-capabilities";
 // Embedder -> workspace: return a pulled-out window to the desktop. Payload: { windowId, frame? }.
@@ -112,6 +112,21 @@ export const HIGHLIGHT_CHROME: "minds:highlight-chrome" =
 // EMBEDDER_CAPABILITIES.
 export const OPEN_LOCAL_FILES: "minds:open-local-files" =
   "OPEN_LOCAL_FILES" in embedContract ? embedContract.OPEN_LOCAL_FILES : "minds:open-local-files";
+
+// Workspace -> embedder (contract v16): the state of the keyboard shortcuts page Imbue Studio's Workspace settings
+// frames. Payload: { height, isRecording }: the page's height in CSS px, which the frame takes, and whether its
+// recorder is listening for a new shortcut, while which Imbue Studio neither closes its settings on Escape nor a
+// window on the close-tab chord. The
+// first one says the page has loaded; until then the settings pane shows no frame, so a workspace too old to serve
+// the page is told apart from one still loading.
+export const KEYBOARD_SHORTCUTS_PAGE: "minds:keyboard-shortcuts-page" =
+  "KEYBOARD_SHORTCUTS_PAGE" in embedContract ? embedContract.KEYBOARD_SHORTCUTS_PAGE : "minds:keyboard-shortcuts-page";
+
+// Workspace -> embedder (contract v16): open the chrome's Workspace settings at its Keyboard shortcuts group. Payload:
+// {}. Sent only to an embedder that said ``opensKeyboardShortcuts`` with EMBEDDER_CAPABILITIES; without one the shell
+// opens its own keyboard shortcuts dialog.
+export const OPEN_KEYBOARD_SHORTCUTS: "minds:open-keyboard-shortcuts" =
+  "OPEN_KEYBOARD_SHORTCUTS" in embedContract ? embedContract.OPEN_KEYBOARD_SHORTCUTS : "minds:open-keyboard-shortcuts";
 
 // The immersive-mode pair (contract v12, the Screen integration spec section 5), probed the same way.
 // Workspace -> embedder: take the app window Fullscreen-API fullscreen with the keyboard locked for this window

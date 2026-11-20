@@ -107,6 +107,8 @@ export interface KeybindingActionView {
   label: string;
   default_chords: string[];
   chords: string[];
+  /** What a reset leaves: the resolution without the requester's own override in this workspace. */
+  reset_chords: string[];
   source: "default" | "account" | "unsent" | "workspace";
 }
 
@@ -120,6 +122,8 @@ export interface UnsentKeybindingView {
   app: string;
   action: string;
   chords: string[];
+  /** What a discard of this save leaves: the resolution without it and without the override it wrote. */
+  restored_chords: string[];
 }
 
 /** Everything the Keyboard settings renders (user-profile-state spec, section 10.3). */

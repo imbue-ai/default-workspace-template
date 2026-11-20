@@ -1,6 +1,14 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { chordFromKeydown, isHandledByInputMethod, keydownMatchesAction, keydownMatchesChords } from "./keybindings";
+import {
+  chordDisplayLabel,
+  chordFromKeydown,
+  chordKeycapLabels,
+  chordSpokenLabel,
+  isHandledByInputMethod,
+  keydownMatchesAction,
+  keydownMatchesChords,
+} from "./keybindings";
 
 function keydown(key: string, modifiers: Partial<KeyboardEventInit> = {}): KeyboardEvent {
   return new KeyboardEvent("keydown", { key, ...modifiers });
@@ -24,6 +32,50 @@ describe("chordFromKeydown", () => {
     expect(chordFromKeydown(keydown("Control", { ctrlKey: true }))).toBeNull();
     expect(chordFromKeydown(keydown("Shift", { shiftKey: true }))).toBeNull();
     expect(chordFromKeydown(keydown("MediaPlayPause"))).toBeNull();
+  });
+});
+
+describe("chordKeycapLabels", () => {
+  it("draws the modifiers as Apple's symbols in the grammar's order on an Apple platform", () => {
+    expect(chordKeycapLabels("ctrl+alt+shift+meta+n", true)).toEqual(["⌃", "⌥", "⇧", "⌘", "N"]);
+    expect(chordKeycapLabels("meta+enter", true)).toEqual(["⌘", "↩"]);
+    expect(chordKeycapLabels("meta+backspace", true)).toEqual(["⌘", "⌫"]);
+  });
+
+  it("spells the modifiers out elsewhere", () => {
+    expect(chordKeycapLabels("ctrl+shift+n", false)).toEqual(["Ctrl", "Shift", "N"]);
+    expect(chordKeycapLabels("meta+enter", false)).toEqual(["Meta", "Enter"]);
+    expect(chordKeycapLabels("ctrl+backspace", false)).toEqual(["Ctrl", "Backspace"]);
+  });
+
+  it("draws function, arrow, punctuation, and named keys on every platform", () => {
+    expect(chordKeycapLabels("f2", false)).toEqual(["F2"]);
+    expect(chordKeycapLabels("alt+arrowup", false)).toEqual(["Alt", "↑"]);
+    expect(chordKeycapLabels("ctrl+[", true)).toEqual(["⌃", "["]);
+    expect(chordKeycapLabels("meta+plus", true)).toEqual(["⌘", "+"]);
+    expect(chordKeycapLabels("escape", true)).toEqual(["Esc"]);
+  });
+});
+
+describe("chordDisplayLabel", () => {
+  it("runs Apple's symbols together, the way a Mac menu writes a shortcut", () => {
+    expect(chordDisplayLabel("shift+meta+n", true)).toBe("⇧⌘N");
+    expect(chordDisplayLabel("meta+enter", true)).toBe("⌘↩");
+    expect(chordDisplayLabel("f2", true)).toBe("F2");
+  });
+
+  it("joins the names with plus signs elsewhere", () => {
+    expect(chordDisplayLabel("ctrl+shift+n", false)).toBe("Ctrl+Shift+N");
+    expect(chordDisplayLabel("alt+arrowup", false)).toBe("Alt+↑");
+  });
+});
+
+describe("chordSpokenLabel", () => {
+  it("names each key in words, joined with plus signs", () => {
+    expect(chordSpokenLabel("shift+meta+n", true)).toBe("Shift+Command+N");
+    expect(chordSpokenLabel("alt+arrowleft", true)).toBe("Option+Left Arrow");
+    expect(chordSpokenLabel("ctrl+enter", false)).toBe("Ctrl+Enter");
+    expect(chordSpokenLabel("delete", false)).toBe("Delete");
   });
 });
 

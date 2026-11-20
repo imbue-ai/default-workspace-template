@@ -852,6 +852,25 @@ describe("the keyboard shortcuts dialog", () => {
     expect(document.querySelector("[data-keyboard-shortcuts-dialog]")).toBeNull();
   });
 
+  it("asks Imbue Studio for its Workspace settings instead, once Imbue Studio says it shows the shortcuts", async () => {
+    const asked: unknown[] = [];
+    const record = (event: MessageEvent): void => {
+      if ((event.data as { type?: string } | null)?.type === "minds:open-keyboard-shortcuts") asked.push(event.data);
+    };
+    window.addEventListener("message", record);
+    store.setOpensKeyboardShortcuts(true);
+
+    const row = backdropMenuRow("keyboard-shortcuts") as HTMLElement;
+    row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    row.click();
+    m.redraw.sync();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    window.removeEventListener("message", record);
+
+    expect(document.querySelector("[data-keyboard-shortcuts-dialog]")).toBeNull();
+    expect(asked).toEqual([{ type: "minds:open-keyboard-shortcuts" }]);
+  });
+
   it("stays offered while viewing somebody else's desktop, where the theme row stands down", async () => {
     // The shortcuts are the viewer's own wherever they are; the theme is the viewed desktop's.
     setOwnIdentityForTesting({ owner: true, user_id: null, email: null, participant: "owner" });

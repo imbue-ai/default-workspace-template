@@ -47,6 +47,8 @@ export default defineConfig({
         index: path.resolve(__dirname, "index.html"),
         // The theme gallery (workspace-themes plan section 8.2), served at /theme-gallery.
         gallery: path.resolve(__dirname, "theme-gallery.html"),
+        // The keyboard shortcuts page, served at /keyboard-shortcuts: Imbue Studio's Workspace settings frames it.
+        keyboardShortcuts: path.resolve(__dirname, "keyboard-shortcuts.html"),
       },
     },
   },
