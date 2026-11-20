@@ -1,0 +1,1 @@
+The earlyoom shed-order plan (`docs/system/blueprint/earlyoom-gvisor-shed-order/plan-earlyoom-gvisor-shed-order.md`) no longer plans a release test of its own for the OOM drill; the drill's recurring run in a real workspace is the Imbue Studio smoke journey's step 3c.

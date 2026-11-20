@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """A live OOM drill: check that earlyoom sheds in the predicted order.
 
-Starts one sleeper per requested band (each holding about ``--sleeper-percent``
-of MemTotal at that ``oom_score_adj``), then a hog at ``oom_score_adj`` -1000
+Starts one sleeper per band, by default at each score the shed policy assigns
+(each holding about ``--sleeper-percent`` of MemTotal at that
+``oom_score_adj``), then a hog at ``oom_score_adj`` -1000
 that grows in small steps until earlyoom has shed the last sleeper. Every
 second it snapshots each process's ``oom_score_adj`` and RSS; each kill (from
 the shed ledger, with earlyoom's own log line for detail) is judged against the
@@ -16,12 +17,16 @@ with ``--avoid`` names 300 points lower -- the imbue-ai earlyoom fork's
 scoring, which on a Linux kernel is also the kernel's own. Under gVisor, whose
 status has no RssAnon line, the fork counts the sum of the Anonymous lines in
 /proc/<pid>/smaps in place of VmRSS, and so does the drill. A wrong victim, or
-a built-in service (adj <= 80) shed while something at adj >= 900 remained,
-stops the drill at once and frees the hog's memory.
+a built-in service shed while something expendable remained, stops the drill at
+once and frees the hog's memory.
+
+Before its sleepers start it stops the Screen's desktop and its watcher, and it
+starts the watcher again when it ends; the desktop starts when something next
+opens it.
 
 Stdlib-only and self-contained, so it can be sent into a workspace inside the
 command (``mngr exec`` does not pass its stdin through):
-``mngr exec <agent> "echo $(base64 < oom_drill.py | tr -d '\\n') | base64 -d | python3 - --bands 1000,900,800,600,300"``.
+``mngr exec <agent> "echo $(base64 < oom_drill.py | tr -d '\\n') | base64 -d | python3 -"``.
 It must run as a process allowed to set -1000 (root under gVisor, or anywhere
 with ``CAP_SYS_RESOURCE``). Prints one JSON verdict on stdout and exits 0 only
 when the drill passed.
@@ -47,9 +52,20 @@ DEFAULT_EARLYOOM_LOG: Final[Path] = Path("/var/log/supervisor/earlyoom-stderr.lo
 AVOID_ADJ: Final[int] = -300
 UNKILLABLE_ADJ: Final[int] = -1000
 # A built-in service, the primary agent or never-kill infrastructure.
-PROTECTED_MAX_ADJ: Final[int] = 80
+PROTECTED_MAX_ADJ: Final[int] = 86
 # Agent subprocesses and Chromium.
 EXPENDABLE_MIN_ADJ: Final[int] = 900
+# One sleeper at each score the shed policy assigns, highest first. Written out
+# because the drill cannot import oom_priority.bands; its test holds the two
+# together.
+DEFAULT_BANDS: Final[tuple[int, ...]] = (1000, 960, 943, 910, 900, 850, 600, 560, 300)
+# The Screen's desktop, which earlyoom would shed during the drill, and its
+# watcher. Shedding one member of the desktop makes the watcher stop the rest
+# within a fraction of a second, sooner than the drill's snapshots can see, so
+# the drill stops them first: the desktop before the watcher, which tells the
+# Screen service the desktop ended.
+SCREEN_DESKTOP_PROGRAMS: Final[str] = "screen-stack:*"
+SCREEN_WATCHER_PROGRAM: Final[str] = "screen-watch"
 MEMINFO_FIELDS: Final[tuple[str, ...]] = (
     "MemTotal",
     "MemFree",
@@ -333,6 +349,28 @@ def find_earlyoom() -> tuple[int, list[str]]:
     raise SystemExit("oom_drill: earlyoom is not running")
 
 
+def stop_the_screen(supervisorctl: str = "supervisorctl") -> None:
+    """Stop the Screen's desktop, then its watcher."""
+    for program in (SCREEN_DESKTOP_PROGRAMS, SCREEN_WATCHER_PROGRAM):
+        _run_supervisorctl(supervisorctl, "stop", program)
+
+
+def start_the_screen_watcher(supervisorctl: str = "supervisorctl") -> None:
+    """Start the watcher again; the desktop starts when something next opens it."""
+    _run_supervisorctl(supervisorctl, "start", SCREEN_WATCHER_PROGRAM)
+
+
+def _run_supervisorctl(supervisorctl: str, action: str, program: str) -> None:
+    finished = subprocess.run(
+        [supervisorctl, action, program], capture_output=True, text=True
+    )
+    if finished.returncode != 0:
+        raise SystemExit(
+            f"oom_drill: supervisorctl {action} {program} exited {finished.returncode}: "
+            f"{(finished.stdout + finished.stderr).strip()}"
+        )
+
+
 def set_own_adj(adj: int) -> None:
     (PROC / "self" / "oom_score_adj").write_text(f"{adj}\n")
     actual = int((PROC / "self" / "oom_score_adj").read_text())
@@ -458,8 +496,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument(
         "--bands",
-        required=True,
-        help="Comma-separated oom_score_adj per sleeper, e.g. 1000,900,800,600,300",
+        default=",".join(str(band) for band in DEFAULT_BANDS),
+        help="Comma-separated oom_score_adj per sleeper (default: %(default)s, the shed policy's own scores)",
     )
     parser.add_argument(
         "--sleeper-percent",
@@ -490,49 +528,51 @@ def main() -> int:
     ledger_offset = file_size(args.ledger)
     log_offset = file_size(args.earlyoom_log)
 
+    stop_the_screen()
     sleepers: dict[int, tuple[subprocess.Popen[str], int]] = {}
-    for band in bands:
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                _SLEEPER_CODE,
-                str(band),
-                str(int(meminfo["MemTotal"] * args.sleeper_percent / 100)),
-            ],
+    hog: subprocess.Popen[str] | None = None
+    try:
+        for band in bands:
+            proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    _SLEEPER_CODE,
+                    str(band),
+                    str(int(meminfo["MemTotal"] * args.sleeper_percent / 100)),
+                ],
+                stdout=subprocess.PIPE,
+                text=True,
+            )
+            assert proc.stdout is not None
+            if proc.stdout.readline().strip() != "ready":
+                raise SystemExit(f"oom_drill: the band-{band} sleeper did not start")
+            sleepers[proc.pid] = (proc, band)
+        hog = subprocess.Popen(
+            [sys.executable, "-c", _HOG_CODE],
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True,
         )
-        assert proc.stdout is not None
-        if proc.stdout.readline().strip() != "ready":
-            raise SystemExit(f"oom_drill: the band-{band} sleeper did not start")
-        sleepers[proc.pid] = (proc, band)
-    hog = subprocess.Popen(
-        [sys.executable, "-c", _HOG_CODE],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        text=True,
-    )
-    assert hog.stdin is not None and hog.stdout is not None
-    if hog.stdout.readline().strip() != "ready":
-        raise SystemExit(
-            "oom_drill: the hog did not start (can this process set oom_score_adj -1000?)"
-        )
-    step_kib = int(meminfo["MemTotal"] * args.step_percent / 100)
-    excluded = {earlyoom_pid, os.getpid(), hog.pid}
-    kill_lines: dict[int, tuple[float, str]] = {}
+        assert hog.stdin is not None and hog.stdout is not None
+        if hog.stdout.readline().strip() != "ready":
+            raise SystemExit(
+                "oom_drill: the hog did not start (can this process set oom_score_adj -1000?)"
+            )
+        step_kib = int(meminfo["MemTotal"] * args.step_percent / 100)
+        excluded = {earlyoom_pid, os.getpid(), hog.pid}
+        kill_lines: dict[int, tuple[float, str]] = {}
 
-    kills: list[dict] = []
-    failure = ""
-    shed_sleepers: set[int] = set()
-    # A kill is judged against the last snapshot before its victim shrank,
-    # which may be a few snapshots back by the time its ledger line is read.
-    snapshots: deque[Snapshot] = deque(
-        [Snapshot(time.time(), snapshot_processes(PROC))], maxlen=30
-    )
-    deadline = time.monotonic() + args.timeout
-    every_sleeper_gone_at: float | None = None
-    try:
+        kills: list[dict] = []
+        failure = ""
+        shed_sleepers: set[int] = set()
+        # A kill is judged against the last snapshot before its victim shrank,
+        # which may be a few snapshots back by the time its ledger line is read.
+        snapshots: deque[Snapshot] = deque(
+            [Snapshot(time.time(), snapshot_processes(PROC))], maxlen=30
+        )
+        deadline = time.monotonic() + args.timeout
+        every_sleeper_gone_at: float | None = None
         while not failure and len(shed_sleepers) < len(sleepers):
             if time.monotonic() > deadline:
                 failure = f"timed out after {args.timeout:.0f}s with sleepers left"
@@ -590,9 +630,11 @@ def main() -> int:
                 snapshots.append(Snapshot(time.time(), snapshot_processes(PROC)))
             time.sleep(0.1)
     finally:
-        hog.kill()
+        if hog is not None:
+            hog.kill()
         for proc, _ in sleepers.values():
             proc.kill()
+        start_the_screen_watcher()
 
     sleeper_bands_in_shed_order = [
         kill["band"] for kill in kills if kill["band"] is not None
