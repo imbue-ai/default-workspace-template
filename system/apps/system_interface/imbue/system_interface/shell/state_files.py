@@ -87,7 +87,7 @@ def parse_versioned_document(
     ``version`` is not the expected one, or when it fails validation (the latter two logged)."""
     if raw is None:
         return None
-    validated = validate_versioned_document(raw, document_type, expected_version, None)
+    validated = validate_versioned_document(raw, document_type, expected_version, extra=None)
     if isinstance(validated, UnreadableStateFile):
         logger.warning("Ignored the shell state file at {}: it {}", path, validated.reason)
         return None

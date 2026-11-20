@@ -114,8 +114,8 @@ DESKTOP_GLYPH_COLORS: Final[tuple[str, ...]] = (
 FALLBACK_USER_DESKTOP_NAME: Final[str] = "Guest"
 # The key desktops.json carried per desktop before every desktop was shared (the sharing mode); an old file may
 # still hold it.
-# CLEANUP: drop ``_RETIRED_DESKTOP_KEYS`` and the strip in ``_read_desktops_file`` around late November 2026, once every
-# workspace has rewritten its desktops.json without the key (the first write after this release does).
+# CLEANUP: drop ``_RETIRED_DESKTOP_KEYS`` and the strip in ``_read_desktops_file`` around late November 2026, once
+# every workspace has rewritten its desktops.json without the key (the first write after this release does).
 _RETIRED_DESKTOP_KEYS: Final[frozenset[str]] = frozenset({"sharing"})
 # CLEANUP: drop ``_RETIRED_WINDOW_KEYS`` and its strip in ``_without_retired_keys`` around late December 2026, once
 # every workspace has rewritten its desktops.json without the key (the first write after this release does).
@@ -260,7 +260,7 @@ def _read_desktops_file(path: Path) -> StoredDesktops | UnreadableStateFile | No
     if not isinstance(loaded, dict):
         return loaded
     raw = _without_retired_keys(loaded)
-    document = validate_versioned_document(raw, DesktopsDocument, DESKTOPS_FILE_VERSION, "ignore")
+    document = validate_versioned_document(raw, DesktopsDocument, DESKTOPS_FILE_VERSION, extra="ignore")
     if isinstance(document, UnreadableStateFile):
         return document
     return StoredDesktops(document=document, raw=raw)
