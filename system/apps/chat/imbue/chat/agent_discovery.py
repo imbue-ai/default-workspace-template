@@ -431,9 +431,8 @@ def _is_worth_waiting_out(result: MessageResult) -> bool:
 def _is_unreached(result: MessageResult) -> bool:
     """Whether a key press reached no agent: the agent was not where it was looked for, or was not running there.
 
-    Only then may the key be pressed at a freshly discovered location. Any other failure found the agent where it was
-    looked for, so a second press would reach it again: a key it refused could cancel a turn it started meanwhile, and
-    a key it may have taken would be pressed twice.
+    Only then may the key be pressed at a freshly discovered location: pressed again at an agent already found, it
+    could cancel a turn the agent started meanwhile.
     """
     return _is_location_miss(result) or _is_every_failure_of_kind(
         result, SendFailureKind.AGENT_NOT_FOUND, SendFailureKind.AGENT_UNREACHABLE

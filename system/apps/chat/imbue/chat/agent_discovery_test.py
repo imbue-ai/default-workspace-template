@@ -603,8 +603,7 @@ def test_a_key_press_that_reached_no_agent_is_pressed_at_a_discovered_location(
 def test_a_key_press_that_failed_at_the_agent_is_not_pressed_again(
     known_location_result: Callable[[], MessageResult],
 ) -> None:
-    """The agent was where it was looked for, so a second press would reach it again: a key it refused could cancel a
-    turn it started meanwhile, and a key it may have taken would be pressed twice."""
+    """The press found the agent, so the chat neither looks it up again nor presses a second time."""
     known = _make_match()
     press_calls: list[tuple[AgentMatch, ...]] = []
     messenger = _scripted_messenger([known_location_result()], press_calls)
