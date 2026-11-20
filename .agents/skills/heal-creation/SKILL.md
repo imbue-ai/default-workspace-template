@@ -82,7 +82,13 @@ single-flight checks (`harden-lead.md`, "The tracking ticket"):
 mkdir -p data/.tasks/harden/heal-$SLUG
 TICKET_ID=$(tk create "heal $CREATIONS" -t bug -d "Worker: heal-$SLUG" \
     --acceptance "task file written; worker launched; worker DONE; branch merged")
-tk start "$TICKET_ID"
+echo "$TICKET_ID"
+```
+
+Then, in its own call:
+
+```bash
+tk start <ticket-id>
 ```
 
 ## Step 2: Write the task file
