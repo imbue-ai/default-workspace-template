@@ -697,8 +697,15 @@ skill or a doc. Find the app by its name:
   time of the call. It raises `AppNotRegisteredError` when the workspace has no
   such app and `ShellUnreachableError` when the shell does not answer (both in
   `imbue.app_sdk.errors`).
-- **A script or a skill** reads the app's `link` from
-  `uv run --no-sync workspace-layout list`.
+- **A script or a skill** calls the same function, from the repo root:
+
+  ```bash
+  uv run --no-sync python -c 'from imbue.app_sdk.apps import resolve_app_url; print(resolve_app_url("<name>"))'
+  ```
+
+  The `link` that `uv run --no-sync workspace-layout list` prints for an app
+  is the address to write for a person (a chat reply, a doc). It opens the
+  app's window; a program cannot request it.
 
 ### The app carries its own data migrations
 

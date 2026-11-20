@@ -37,7 +37,7 @@ Do not edit one: change the manifest and run `app-install regenerate`.
 ## Ports and names
 
 A port is the lowest one at or above 8080 that no supervisord program, no registry row, and no app record uses, that is not one of the two ports the Screen holds without a program line (8083 and 8091), and that nothing is bound to.
-The port reaches the app through its environment, so no file in the app's directory holds it; anything that calls an app finds its URL by name (`uv run --no-sync workspace-layout list`, or the app SDK's `resolve_app_url`).
+The port reaches the app through its environment, so no file in the app's directory holds it; anything that calls an app finds its URL by name, with the app SDK's `resolve_app_url`.
 Two branches can each allocate the same port; `check` reports it and `regenerate` gives a new port to the app whose record was committed later.
 
 An app is refused before anything is written when it would take a name something in the workspace already holds: the app's name, a program, a console script, a skill, a routine id, or an environment unit's file name.
