@@ -8,6 +8,9 @@ README for details.
 - `app_manifest/` - The app manifest (`system/apps/<package>/app.toml`) and
   app registry (`data/.state/apps.toml`) models every app is described by,
   and the `app-manifest validate-manifest` command.
+- `app_install/` - The `app-install` command: registers the apps the workspace's
+  agent builds, keeps each one's record under `system/config/apps/`, and
+  generates its supervisord program files and skill links from its manifest.
 - `app_registration/` - Writes an app's row in the app registry: what
   `system/scripts/forward_port.py` runs, stdlib-only.
 - `app_schema/` - The names of the app SDK (`imbue.app_sdk`, installed from
