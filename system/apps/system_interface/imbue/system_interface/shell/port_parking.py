@@ -104,11 +104,11 @@ CHANGE_NOT_ANSWERED_SENTENCE: Final[str] = (
 )
 
 # What a page that could not start offers: a Try again that asks once more (left out when the wake budget is spent:
-# the budget refuses the next wake too, so a press could not help), the end of the program's error log and the
-# command that shows the rest behind "See details", an agent asked to look at it (shown once
+# the budget refuses the next wake too, so a press could not help), the end of the program's error log behind "See
+# details" (which the page leaves out while it has nothing to show), and an agent asked to look at it (shown once
 # a shell that frames the page has greeted it, since only a shell can ask one; while the shell has not answered the
 # ask it reads "Asking an agent...", and a failed ask is told under it, its details at the top of the page's one "See
-# details"), and the log's command for whoever wants it. A handshake from a shell with another ``shellId`` means the
+# details"). A handshake from a shell with another ``shellId`` means the
 # shell restarted, so an ask still out is settled as not answered (the same shell greets the page again for ordinary
 # reasons); the old shell's answer, if it still comes, replaces that. A failed ask that asks for a bug report offers
 # "Report a bug" while the shell's latest handshake says it can open one.
@@ -121,11 +121,9 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     '<button type="button" id="ask-agent" hidden>Ask an agent to look at it</button></p>'
     '<p id="ask-agent-failure" hidden></p>'
     '<p><button type="button" id="ask-agent-report" hidden>Report a bug</button></p>'
-    "<details><summary>See details</summary>"
+    '<details id="page-details"{details_hidden}><summary>See details</summary>'
     '<pre id="ask-agent-failure-details" hidden></pre>'
-    "{stderr_tail}"
-    "<p>The program's log may say why: "
-    "<code>supervisorctl tail {program} stderr</code></p></details>"
+    "{stderr_tail}</details>"
     "<script>(function () {"
     "{try_again_binding}"
     'var ask = document.getElementById("ask-agent");'
@@ -147,6 +145,7 @@ _FAILED_BODY_TEMPLATE: Final[str] = (
     "showReport();"
     "failure.hidden = told === null;"
     "failureDetails.hidden = told === null || !told.details;"
+    'document.getElementById("page-details").hidden = failureDetails.hidden && {has_log} === false;'
     "if (told === null) return;"
     "failure.textContent = told.message;"
     'failureDetails.textContent = told.details || "";'
@@ -219,7 +218,7 @@ def _stderr_tail_html(stderr_tail: str | None) -> str:
     empty."""
     if stderr_tail is None or stderr_tail.strip() == "":
         return ""
-    return f'<p>The end of its error log:</p><pre class="stderr-tail">{html.escape(stderr_tail)}</pre>'
+    return f'<pre class="stderr-tail">{html.escape(stderr_tail)}</pre>'
 
 
 @pure
@@ -252,10 +251,12 @@ def parked_refresh_seconds(kind: ParkedPageKind) -> int:
 def parked_page_html(kind: ParkedPageKind, display_name: str, program: str, stderr_tail: str | None) -> str:
     """The page the parker answers with: starting (reloading every few seconds until the app answers), or could not
     start (with a Try again unless the wake budget is spent, an agent to look at it, and behind "See details" the end
-    of the program's error log, ``stderr_tail`` when it could be read, and the command that shows its log)."""
+    of the program's error log, ``stderr_tail``, when it could be read)."""
     name = html.escape(display_name)
+    has_log = _stderr_tail_html(stderr_tail) != ""
     failed_body = (
-        _FAILED_BODY_TEMPLATE.replace("{program}", html.escape(program))
+        _FAILED_BODY_TEMPLATE.replace("{details_hidden}", "" if has_log else " hidden")
+        .replace("{has_log}", "true" if has_log else "false")
         .replace("{handshake}", _script_literal(SHELL_HANDSHAKE_TYPE))
         .replace("{ask_agent}", _script_literal(SHELL_ASK_AGENT_TYPE))
         .replace("{result}", _script_literal(SHELL_ASK_AGENT_RESULT_TYPE))

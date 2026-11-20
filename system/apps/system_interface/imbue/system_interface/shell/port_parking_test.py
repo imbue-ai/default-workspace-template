@@ -92,7 +92,6 @@ def test_a_wake_that_fails_is_told_so_and_waits_for_the_persons_try_again(closed
     assert b"<h1>Docs couldn't start.</h1>" in body
     assert b'id="try-again">Try again</button>' in body
     assert b'getElementById("try-again").addEventListener("click", function () { location.reload(); })' in body
-    assert b"<summary>See details</summary>" in body and b"supervisorctl tail docs stderr" in body
     # A reload is a wake, which spends the budget, so the page never reloads itself; a fetch is told to wait.
     assert b"http-equiv" not in body
     assert f"Retry-After: {FAILED_REFRESH_SECONDS}".encode() in head
@@ -109,8 +108,8 @@ def test_a_wake_the_budget_refused_says_the_app_failed_several_times(closed_port
         b"Docs failed to start several times in the last few minutes, so it wasn't started again. "
         b"Try again in a few minutes." in body
     )
-    # The budget refuses the next wake too, so the page offers no Try again; it still names the log.
-    assert b"Try again</button>" not in body and b"supervisorctl tail docs stderr" in body
+    # The budget refuses the next wake too, so the page offers no Try again.
+    assert b"Try again</button>" not in body
     assert b"http-equiv" not in body
 
 
@@ -163,23 +162,23 @@ def test_release_before_any_connection_frees_the_port(parked_port: ParkedPort) -
 
 
 @pytest.mark.parametrize("kind", [ParkedPageKind.FAILED, ParkedPageKind.BUDGET_SPENT])
-def test_a_could_not_start_page_shows_the_end_of_the_error_log_escaped_above_the_log_command(
+def test_a_could_not_start_page_shows_the_end_of_the_error_log_escaped_behind_see_details(
     kind: ParkedPageKind,
 ) -> None:
     tail = 'Traceback (most recent call last):\n  File "<app>", line 3\nModuleNotFoundError: {request} & <b>x</b>\n'
     page = parked_page_html(kind, "Docs", "docs", tail)
-    shown = page.split("<details>", 1)[1].split("</details>", 1)[0]
-    escaped = "ModuleNotFoundError: {request} &amp; &lt;b&gt;x&lt;/b&gt;"
-    assert escaped in shown
-    assert shown.index(escaped) < shown.index("supervisorctl tail docs stderr")
+    opening, shown = page.split('<details id="page-details"', 1)[1].split("</details>", 1)[0].split(">", 1)
+    assert "hidden" not in opening
+    assert '<pre class="stderr-tail">Traceback' in shown
+    assert "ModuleNotFoundError: {request} &amp; &lt;b&gt;x&lt;/b&gt;" in shown
     # Nothing in the log is markup or a placeholder of the page's.
     assert "<b>x</b>" not in page
-    assert "{request}" in shown
 
+    # With no log to show, "See details" waits hidden for a failed ask's details.
     for unreadable in (None, "", "  \n"):
         bare = parked_page_html(kind, "Docs", "docs", unreadable)
         assert "stderr-tail" not in bare
-        assert "supervisorctl tail docs stderr" in bare
+        assert '<details id="page-details" hidden>' in bare
 
 
 def test_the_response_bytes_carry_the_page_length() -> None:

@@ -178,6 +178,8 @@ def test_a_could_not_start_page_asks_the_shell_that_frames_it_for_an_agent(close
         framed = _framed_by_a_stand_in_shell(page, closed_port)
         expect(framed.get_by_role("heading")).to_have_text("Docs couldn't start.")
         expect(framed.get_by_role("button", name="Try again", exact=True)).to_be_visible()
+        # With no error log to show, "See details" waits for something to hold.
+        expect(framed.get_by_text("See details", exact=True)).to_be_hidden()
         # Only a shell can ask an agent, so the button waits for its greeting.
         ask = framed.locator("#ask-agent")
         expect(ask).to_have_text("Ask an agent to look at it")
@@ -288,6 +290,5 @@ def test_a_page_whose_wake_budget_is_spent_offers_the_agent_and_no_try_again(clo
         expect(framed.get_by_role("button", name="Report a bug")).to_be_visible()
         framed.get_by_text("See details", exact=True).click()
         expect(framed.locator("#ask-agent-failure-details")).to_have_text("HTTP 500\nboom")
-        expect(framed.get_by_text("supervisorctl tail docs stderr")).to_be_visible()
     finally:
         parked.release()
