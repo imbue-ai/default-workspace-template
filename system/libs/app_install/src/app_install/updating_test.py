@@ -25,11 +25,6 @@ from app_install.updating import update_worktree_path
 from app_manifest.records import load_record
 
 
-@pytest.fixture(autouse=True)
-def _no_registry_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MINDS_APPS_FILE", raising=False)
-
-
 def _notes_py(greeting: str, limit: int) -> str:
     """The app's one module: a greeting on its first line and a limit on its last, far enough apart that a change
     to each merges."""

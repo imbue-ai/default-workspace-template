@@ -31,11 +31,6 @@ from app_manifest.records import load_record
 from app_manifest.records import write_record
 
 
-@pytest.fixture(autouse=True)
-def _no_registry_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MINDS_APPS_FILE", raising=False)
-
-
 def _git(repo_root: Path, *arguments: str) -> None:
     subprocess.run(
         ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", *arguments],

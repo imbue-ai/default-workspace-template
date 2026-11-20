@@ -41,11 +41,6 @@ summary = "The digest channel is hardcoded"
 """
 
 
-@pytest.fixture(autouse=True)
-def _no_registry_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MINDS_APPS_FILE", raising=False)
-
-
 def _published_notes(tmp_path: Path) -> tuple[Path, str]:
     """A published notes app with two released versions and unreleased work on main; its URL and the commit of
     the newer release."""

@@ -59,11 +59,6 @@ exclude = ["system/apps/notes/fixtures/**", ".agents/skills/weekly-review/sample
 """
 
 
-@pytest.fixture(autouse=True)
-def _no_registry_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MINDS_APPS_FILE", raising=False)
-
-
 def _write_old_layout_app(repo_root: Path, entry_point: str = "system/apps/notes/.venv/bin/notes") -> str:
     """An app as the scaffold and an agent left it before apps kept everything in their directory."""
     package = write_user_app(repo_root, "notes", _OLD_LAYOUT_TABLES)
