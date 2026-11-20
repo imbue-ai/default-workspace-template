@@ -99,7 +99,7 @@ Triage each conflict; the first rule that applies wins:
   file, or its edit to an entry file), first save the workspace's version to a
   new path outside any `changelog/` folder (`git show :2:<path> > <new path>`)
   and name the move in your report.
-- **Mixed files (`CLAUDE.md` and similar) -> merge by judgment.** Keep the
+- **Mixed files (`AGENTS.md`, `CLAUDE.md` and similar) -> merge by judgment.** Keep the
   agent-specific customizations, fold in the upstream additions. Side-picking
   one side of a code file outside the agent-owned rule is a last resort, and
   "ours is a superset" is a claim you must **verify, not assert**: diff the

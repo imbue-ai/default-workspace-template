@@ -11,7 +11,7 @@ metadata:
 
 This repo was created from a template repo and stays connected to it via a git
 remote (`system/config/parent.toml` has the URL and branch). Upstream carries
-the shared infrastructure: skills, scripts, `CLAUDE.md` scaffolding,
+the shared infrastructure: skills, scripts, `AGENTS.md` scaffolding,
 `Dockerfile`, `system/supervisord.conf` and its `supervisord.conf.d/` drop-ins,
 the system interface, `mngr`.
 

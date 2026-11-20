@@ -24,7 +24,7 @@ Do **not** push agent-specific content:
 - `PURPOSE.md`
 - Memory contents
 - Workspace data and runtime state (`data/`)
-- Agent-specific services, settings, or `AGENTS.md` sections
+- Agent-specific services, settings, or `AGENTS.md` / `CLAUDE.md` sections
 
 mngr changes are not template changes: mngr is installed here from the commit
 `pyproject.toml` pins, and a change to it gets its own PR on the mngr repo. See
