@@ -98,7 +98,6 @@ BLOCKING_GUARDS: tuple[Guard, ...] = (
         False,
     ),
     Guard("agent_secrets_guard.sh", re.compile(r"\.secrets|\.mcpc"), True),
-    # `ticket` does not contain `tk`.
     Guard("agent_tk_standalone.sh", re.compile(r"\b(tk|ticket)\b"), False),
 )
 # The quote and escape characters a shell drops from a word before it runs it: `t\k` and `t''k` run `tk`.

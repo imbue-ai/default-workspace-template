@@ -1,6 +1,6 @@
 """Tests that every hook script this repo wires up actually exists.
 
-The `agent_*` scripts here are reached four different ways -- `.claude/settings.json`
+The `agent_*` scripts here are reached a different way per harness -- `.claude/settings.json`
 for claude, `.codex/hooks.json` for codex, `.pi/extensions/policy_guards.ts` for pi, and
 `.grok/hooks/policy.json` with the `agent_grok_policy_guards.py` it runs for grok.
 All of them name the scripts as plain strings, and a name that no longer resolves fails

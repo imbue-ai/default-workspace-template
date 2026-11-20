@@ -10,24 +10,22 @@ MCP servers went through latchkey may still hold mcpc's store at
 ``data/.secrets/mcpc/``, which its ``~/.mcpc`` link also names, so a mention of
 the link counts as a mention of the directory.
 
-* A **shell** command (claude's and codex's ``Bash``, pi's ``bash``, the
-  ``Bash`` payload the agy shim synthesises and the one grok's policy dispatcher
-  builds for its shell tools) is tokenized with the shared
-  ``tk_command_parsing`` parser, so a rationale that happens to mention the
-  directory inside a quoted argument stays inside one token. Any segment whose
-  words mention ``data/.secrets`` passes only when its program is the wrapper or
-  the request script (directly, or through ``python3`` / ``uv run``), or is
+* A **shell** command (each harness's shell call, as its hook, shim or
+  dispatcher hands it over) is tokenized with the shared ``tk_command_parsing``
+  parser, so a rationale that happens to mention the directory inside a quoted
+  argument stays inside one token. Any segment whose words mention
+  ``data/.secrets`` passes only when its program is the wrapper or the request
+  script (directly, or through ``python3`` / ``uv run``), or is
   ``ls`` or ``rm``. A ``bash -c "..."`` string is unwrapped and judged by the
   same rule, which is how a supervisord program command passes, and so is the
   command the wrapper itself runs after its ``--``: the wrapper puts the
   variables in that command's environment, it does not license it to open the
   file.
-* A **file** tool (claude's Read / Grep / Glob / Edit / Write, pi's read / edit /
-  write / grep / find, grok's read_file / search_replace / write / grep, codex's
-  ``apply_patch``) is refused when its path, or the patch's file lines, point
-  under ``data/.secrets/``. The directory's README is not a secret and stays
-  readable, and a listing of the directory (pi's ``ls``, grok's ``list_dir``)
-  passes as the shell's ``ls`` does.
+* A **file** tool (each harness's read, edit, write and search tools, and
+  codex's ``apply_patch``) is refused when its path, or the patch's file lines,
+  point under ``data/.secrets/``. The directory's README is not a secret and
+  stays readable, and a listing of the directory passes as the shell's ``ls``
+  does.
 * A tool that starts work in a directory it names (grok's ``spawn_subagent``,
   by its ``cwd``) is refused when that directory is under ``data/.secrets/``,
   as the shell's ``cd`` there is: inside it a bare file name opens a secret.
@@ -76,10 +74,10 @@ _PYTHON_PASSTHROUGH_FLAGS = frozenset(
 _SHELL_PROGRAMS = frozenset({"bash", "sh", "zsh", "dash"})
 _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_]\w*=")
 
-# Tool names whose payload is a shell command: claude's, codex's and grok's (from its dispatcher) ``Bash``,
-# pi's ``bash``, and the empty name the agy shim's synthesised payload may carry.
+# Tool names whose payload is a shell command, as each harness's hook hands it
+# over; the agy shim's synthesised payload may carry an empty one.
 _SHELL_TOOL_NAMES = frozenset({"Bash", "bash", ""})
-# claude's, pi's and grok's file tools (grok's write and grep share pi's names); codex edits through apply_patch.
+# Every harness's file tools; codex edits through apply_patch.
 _PATH_TOOL_NAMES = frozenset(
     {
         "Read",
@@ -104,7 +102,7 @@ _PATCH_TOOL_NAME = "apply_patch"
 # tools (claude's Glob, pi's find); Grep's ``pattern`` is a regex and is left alone.
 _PATH_FIELDS = ("file_path", "path", "notebook_path", "target_file")
 _GLOB_TOOL_NAMES = frozenset({"Glob", "find"})
-# Tools that start work in the directory a field names: grok's spawn_subagent runs its subagent in `cwd`.
+# Tools that start work in the directory one of their fields names.
 _WORKING_DIRECTORY_FIELD_BY_TOOL_NAME = {"spawn_subagent": "cwd"}
 _PATCH_FILE_LINE_RE = re.compile(
     r"^\*\*\* (?:Add|Update|Delete) File: (.*)$", re.MULTILINE
