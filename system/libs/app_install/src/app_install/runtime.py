@@ -1,5 +1,7 @@
 """The installer's hands on the running workspace: supervisorctl, the registration script, and git."""
 
+import fnmatch
+import os
 import shutil
 import socket
 import subprocess
@@ -22,6 +24,21 @@ _COMMAND_TIMEOUT_SECONDS: Final[float] = 900.0
 _PORT_WAIT_SECONDS: Final[float] = 120.0
 _PORT_POLL_SECONDS: Final[float] = 0.5
 _NOTHING_TO_COMMIT_MARKERS: Final[tuple[str, ...]] = ("nothing to commit", "no changes added to commit")
+# The file names pytest collects by default, which every app in the template keeps to.
+_TEST_FILE_PATTERNS: Final[tuple[str, ...]] = ("test_*.py", "*_test.py")
+_NODE_MODULES_DIRNAME: Final[str] = "node_modules"
+
+
+def has_test_files(directory: Path) -> bool:
+    """Whether the app at ``directory`` carries a test file of its own. Hidden directories (the app's virtual
+    environment) and ``node_modules`` hold other packages' tests and are not looked in."""
+    for _current, directory_names, file_names in os.walk(directory):
+        directory_names[:] = [
+            name for name in directory_names if not name.startswith(".") and name != _NODE_MODULES_DIRNAME
+        ]
+        if any(fnmatch.fnmatch(name, pattern) for name in file_names for pattern in _TEST_FILE_PATTERNS):
+            return True
+    return False
 
 
 class WorkspaceRuntime(WorkspaceRuntimeInterface):
@@ -104,9 +121,10 @@ class WorkspaceRuntime(WorkspaceRuntimeInterface):
         relative = f"system/apps/{package}"
         if not (worktree / relative / "pyproject.toml").is_file():
             return None
-        return self._run_in(worktree, ["uv", "sync", "--locked", "--project", relative]) or self._run_in(
-            worktree / relative, ["uv", "run", "--no-sync", "pytest", "-q", "-p", "no:cacheprovider"]
-        )
+        sync_failure = self._run_in(worktree, ["uv", "sync", "--locked", "--project", relative])
+        if sync_failure is not None or not has_test_files(worktree / relative):
+            return sync_failure
+        return self._run_in(worktree / relative, ["uv", "run", "--no-sync", "pytest", "-q", "-p", "no:cacheprovider"])
 
     def free_disk_bytes(self, directory: Path) -> int:
         return shutil.disk_usage(directory).free
