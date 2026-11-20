@@ -2,7 +2,8 @@
 # marketplace, another repository, a download), each with where it came from. The workspace
 # keeps them as they came: the root suite's checks on skills leave them out, and nothing
 # converts them to the workspace's layout. Every skill not listed here is held to those
-# checks.
+# checks, apart from the skills an installed app carries: the app's record under
+# system/config/apps/ already says where it came from, so they need no entry here.
 
 [skills]
 # pdf = "https://github.com/anthropics/skills/tree/main/skills/pdf"
