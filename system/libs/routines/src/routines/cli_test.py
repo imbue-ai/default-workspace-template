@@ -167,6 +167,25 @@ def test_edit_reschedules_a_routine_an_app_owns_without_touching_its_file_or_com
     assert _commit_subjects(git_paths) == commits_before
 
 
+def test_edit_of_a_routine_with_no_definition_it_may_rewrite_says_why_rather_than_asking_for_every_field(
+    git_paths: RoutinesPaths,
+) -> None:
+    # An id two files share, and an app's file that does not parse: neither has a definition to edit.
+    write_app_definition(git_paths, "inbox_status", RoutineId("inbox-status"), _APP_ROUTINE_TOML)
+    git_paths.workspace_definition_path(RoutineId("inbox-status")).parent.mkdir(parents=True, exist_ok=True)
+    git_paths.workspace_definition_path(RoutineId("inbox-status")).write_text(_APP_ROUTINE_TOML)
+    write_app_definition(git_paths, "inbox_status", RoutineId("mail-check"), "title = [not toml")
+
+    duplicated = _invoke(git_paths, "edit", "inbox-status", "--every", "2h")
+    broken = _invoke(git_paths, "edit", "mail-check", "--every", "2h")
+
+    assert duplicated.exit_code == 1
+    assert "defined in more than one file" in duplicated.output
+    assert broken.exit_code == 1
+    assert "error: mail-check belongs to the app in system/apps/inbox_status/" in broken.output
+    assert "Field required" not in duplicated.output + broken.output
+
+
 def test_edit_of_anything_but_the_schedule_and_remove_are_refused_for_a_routine_an_app_owns(
     git_paths: RoutinesPaths,
 ) -> None:

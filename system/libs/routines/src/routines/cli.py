@@ -30,7 +30,9 @@ from routines.data_types import RunStartReceipt
 from routines.data_types import WakeOutcome
 from routines.definitions import describe_validation_error
 from routines.definitions import once_moment_from_text
+from routines.errors import AppOwnedRoutineError
 from routines.errors import DefinitionValidationError
+from routines.errors import DuplicateRoutineError
 from routines.errors import RoutineNotFoundError
 from routines.errors import RoutinesError
 from routines.errors import RunInFlightError
@@ -357,8 +359,14 @@ def edit_command(routine_id: str, **options: object) -> None:
     changed, and the change is kept in the routine's state rather than in the app's file."""
     service = _service()
     try:
-        base = service.effective(RoutineId(routine_id)).definition
-        definition = _definition_from_options(base, DefinitionOptions.model_validate(options))
+        loaded = service.effective(RoutineId(routine_id))
+        # Neither has a definition for the flags to go over, and neither is a file this command may rewrite
+        # whole, so each is refused as what it is rather than asked for every field.
+        if loaded.is_duplicated:
+            raise DuplicateRoutineError(f"{routine_id} is {loaded.error}.")
+        if loaded.definition is None and loaded.app_package is not None:
+            raise AppOwnedRoutineError(routine_id, loaded.app_package)
+        definition = _definition_from_options(loaded.definition, DefinitionOptions.model_validate(options))
         path = service.replace(RoutineId(routine_id), definition, "edit")
     except ValidationError as e:
         _fail(describe_validation_error(e))
