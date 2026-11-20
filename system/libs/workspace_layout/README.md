@@ -23,7 +23,10 @@ answer shapes live in one place the shell and its callers share.
   `LayoutOp` (every op the op route knows), `WindowState`, `ShowOutcome`,
   `SpecialWindow` (`self`, `pinned`), `IfPresent`, `WallpaperKind`,
   `ShortcutTargetKind`, `ClientActivityKind`, `ParticipantKind` (what a roster
-  entry is). A value off its rule raises `InvalidLayoutValueError`.
+  entry is). A value off its rule raises `InvalidLayoutValueError`, except
+  `UserId` and `ParticipantKey`: they are the app SDK's
+  (`imbue.app_sdk.primitives`), offered here too, and raise its
+  `InvalidIdentityValueError`.
 - `workspace_layout.records`: the desktop's records (contracts section 4), as
   the shell stores them and as its answers carry them: `Frame` and `GridCell`
   (with `parse_frame` and `parse_cell` for their `x,y,width,height` and
@@ -94,6 +97,8 @@ answer shapes live in one place the shell and its callers share.
   suffixed `-2`, `-3`, ...), and `participant_color` (one of
   `PARTICIPANT_COLORS`, by the key's hash).
 - `workspace_layout.errors`: `WorkspaceLayoutError`; `InvalidLayoutValueError`;
+  the app SDK's `InvalidIdentityValueError` and `InvalidIdentityHeaderError`,
+  offered here too and no `WorkspaceLayoutError`;
   and `ShellOpError`, raised by every op that did not happen, as
   `ShellUnreachableError` (down, restarting, timed out), `ShellRefusedOpError`
   (an error status, carrying it; `WindowPoppedOutError` for the shell's refusal
