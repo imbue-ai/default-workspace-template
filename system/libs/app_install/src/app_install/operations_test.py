@@ -30,6 +30,7 @@ from app_manifest.errors import ManifestLoadError
 from app_manifest.records import AppOrigin
 from app_manifest.records import AppRecord
 from app_manifest.records import load_record
+from app_manifest.records import record_path
 from app_manifest.records import write_record
 
 
@@ -214,6 +215,38 @@ def test_two_apps_on_one_port_are_reported_and_the_one_recorded_later_is_moved(t
     assert load_record(tmp_path, "zebra").port == 8080
     assert load_record(tmp_path, "alpha").port == 8081
     assert check(tmp_path) == ()
+
+
+@pytest.mark.parametrize(
+    ("existing_name", "added_name"),
+    [
+        pytest.param("notes", "notes-sync", id="the-new-name-extends-an-existing-one"),
+        pytest.param("notes-sync", "notes", id="an-existing-name-extends-the-new-one"),
+    ],
+)
+def test_an_app_named_as_another_apps_background_program_would_be_is_refused(
+    tmp_path: Path, existing_name: str, added_name: str
+) -> None:
+    existing_package = write_user_app(tmp_path, existing_name)
+    add_app(tmp_path, existing_package, None, never_bound)
+    added_package = write_user_app(tmp_path, added_name)
+
+    with pytest.raises(CollisionError) as raised:
+        add_app(tmp_path, added_package, None, never_bound)
+
+    assert raised.value.problems == (
+        f"the name {added_name!r} and the name {existing_name!r} of the app at system/apps/{existing_package} "
+        "differ only by a hyphenated suffix, which is how an app's background programs are named",
+    )
+    assert not record_path(tmp_path, added_name).exists()
+
+
+def test_two_apps_whose_names_only_begin_alike_are_both_added(tmp_path: Path) -> None:
+    add_app(tmp_path, write_user_app(tmp_path, "notes"), None, never_bound)
+
+    add_app(tmp_path, write_user_app(tmp_path, "notebook"), None, never_bound)
+
+    assert record_path(tmp_path, "notebook").is_file()
 
 
 def test_regenerating_an_app_that_has_no_record_is_refused_before_any_port_is_moved(tmp_path: Path) -> None:

@@ -41,6 +41,7 @@ The port reaches the app through its environment, so no file in the app's direct
 Two branches can each allocate the same port; `check` reports it and `regenerate` gives a new port to the app whose record was committed later.
 
 An app is refused before anything is written when it would take a name something in the workspace already holds: the app's name, a program, a console script, a skill, a routine id, or an environment unit's file name.
+An app's name may not be another app's name followed by a hyphen and more, or the start of one: an app's background programs are named `<app name>-<role>`, so one of the two would be taken for a program of the other.
 The result names every collision.
 `add` also refuses a manifest that carries `[[references]]` or `[wiring]`, which an app with a record does not declare: what else uses the app is listed in its record, and its background programs are `[[services]]`.
 `regenerate` is refused the same way (`collision`) when a skill an app has gained would take the place of a skill the workspace or another app already holds under that name.

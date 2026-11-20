@@ -1,7 +1,8 @@
 """What an app would collide with in the workspace it is being added to.
 
 An app is refused, before anything is changed, when it would take a name something else already
-holds: the app's own name, a supervisord program, a console script, a skill, a routine, or an
+holds: the app's own name (or another app's name with a hyphenated suffix, the names of that app's
+background programs), a supervisord program, a console script, a skill, a routine, or an
 environment unit. Each is one namespace across the whole workspace, so a second holder would
 silently replace the first (a registry row, a program) or be shadowed by it (a skill, a script).
 """
@@ -120,6 +121,14 @@ def find_collisions(
         other_name = _read_toml_or_empty(other / MANIFEST_FILENAME).get("name")
         if other_name == name:
             problems.append(f"the name {name!r} is already the app at {other.relative_to(repo_root).as_posix()}")
+        elif isinstance(other_name, str) and (name.startswith(f"{other_name}-") or other_name.startswith(f"{name}-")):
+            # An app's background programs are named <app name>-<role>, and the footprint finds them by that
+            # prefix, so one of the two apps would be taken for a program of the other.
+            problems.append(
+                f"the name {name!r} and the name {other_name!r} of the app at "
+                f"{other.relative_to(repo_root).as_posix()} differ only by a hyphenated suffix, which is how an "
+                "app's background programs are named"
+            )
 
     own_derived_paths = set(existing_derived_paths(repo_root, package)) | set(own_paths)
     declared_programs = _declared_programs_outside(repo_root, own_derived_paths)
