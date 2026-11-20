@@ -5,16 +5,19 @@ from pathlib import Path
 
 from loguru import logger
 
+from imbue.chat.chat_seed import FIRST_RUN_CONTEXT_FILENAME
 from imbue.chat.chat_seed import INLINE_SEED_MAX_BYTES
 from imbue.chat.chat_seed import SEED_FILENAME
 from imbue.chat.chat_seed import SEED_SOURCE
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_seed import read_first_run_context
 from imbue.chat.chat_seed import read_seed_events
 from imbue.chat.chat_seed import seed_agent_info
 from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_seed import seed_event_id
 from imbue.chat.chat_seed import seed_events
+from imbue.chat.chat_seed import write_first_run_context
 from imbue.chat.chat_seed import write_seed_file
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.harness_type import HarnessType
@@ -168,3 +171,22 @@ def test_the_seed_pseudo_agent_is_the_chat_itself_on_the_seed_harness(tmp_path: 
     assert info.harness is HarnessType.SEED
     assert info.agent_state_dir == tmp_path and info.claude_config_dir == tmp_path
     assert info.state == "STOPPED"
+
+
+def test_the_first_runs_words_ride_the_launch_message_and_nothing_else(tmp_path: Path) -> None:
+    chat_dir = _seeded_chat_dir(tmp_path, _turns())
+    write_first_run_context(chat_dir, "  I want to use Studio for: Music.  ")
+
+    launch = seed_context_message(chat_dir, "hello")
+
+    assert read_first_run_context(chat_dir) == "I want to use Studio for: Music."
+    assert "<about-user>\nI want to use Studio for: Music.\n</about-user>" in launch
+    assert launch.endswith("\nhello")
+
+
+def test_an_empty_first_run_answer_writes_nothing(tmp_path: Path) -> None:
+    chat_dir = _seeded_chat_dir(tmp_path, _turns())
+    write_first_run_context(chat_dir, "   ")
+
+    assert not (chat_dir / FIRST_RUN_CONTEXT_FILENAME).exists()
+    assert "<about-user>" not in seed_context_message(chat_dir, "hello")

@@ -46,6 +46,8 @@ SEED_AGENT_NAME: Final[str] = "welcome"
 # pointed at the seed file instead, the way a long handoff summary is, and for the same
 # delivery limits (measured at ``chat_handoffs.INLINE_SUMMARY_MAX_BYTES``).
 INLINE_SEED_MAX_BYTES: Final[int] = 64 * 1024
+# What the user told Imbue Studio's first run about themselves, beside the seed; read only into the first send.
+FIRST_RUN_CONTEXT_FILENAME: Final[str] = "first_run_context.txt"
 
 
 class SeedRole(LowerCaseStrEnum):
@@ -60,6 +62,33 @@ class SeedTurn(FrozenModel):
 
     role: SeedRole = Field(description="The side of the conversation the turn belongs to")
     text: str = Field(description="The turn's text, as markdown")
+
+
+# The Main chat a first-run workspace opens on (specs/ftue-onboarding-v2 in mngr): the agent introducing itself and
+# Studio, then asking how the user wants to start.
+FIRST_RUN_WELCOME: Final[tuple[SeedTurn, ...]] = (
+    SeedTurn(role=SeedRole.ASSISTANT, text="Hi, I'm your Studio agent. I'll be with you from here on."),
+    SeedTurn(role=SeedRole.ASSISTANT, text="You can chat with me any time by clicking my avatar on the desktop."),
+    SeedTurn(role=SeedRole.ASSISTANT, text="Welcome! Studio is a collaborative space for building your digital life."),
+    SeedTurn(
+        role=SeedRole.ASSISTANT,
+        text="With Studio you can:\n\n- Build apps\n- Run agents\n- Automate workflows\n- Consolidate your data",
+    ),
+    SeedTurn(role=SeedRole.ASSISTANT, text="How would you like to get started?"),
+)
+
+
+def write_first_run_context(chat_dir: Path, context: str) -> None:
+    """Keep what the user told the first run beside the seed, for the first send to carry; nothing when empty."""
+    if context.strip() == "":
+        return
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    (chat_dir / FIRST_RUN_CONTEXT_FILENAME).write_text(context.strip())
+
+
+def read_first_run_context(chat_dir: Path) -> str:
+    path = chat_dir / FIRST_RUN_CONTEXT_FILENAME
+    return path.read_text().strip() if path.is_file() else ""
 
 
 @pure
@@ -218,6 +247,13 @@ def seed_context_message(chat_dir: Path, message: str) -> str:
         )
     else:
         conversation = f"<conversation>\n{transcript}\n</conversation>"
+    first_run_context = read_first_run_context(chat_dir)
+    if first_run_context != "":
+        safe_context = first_run_context.replace(f"</{SEED_CONTEXT_TAG}>", f"</ {SEED_CONTEXT_TAG}>")
+        conversation += (
+            "\n\nBefore the workspace existed, the user told Imbue Studio this about what they want it for "
+            f"(they did not say it in this chat):\n<about-user>\n{safe_context}\n</about-user>"
+        )
     return (
         f"<{SEED_CONTEXT_TAG}>\n"
         "This chat did not begin with you. It opened on the conversation this block carries, "

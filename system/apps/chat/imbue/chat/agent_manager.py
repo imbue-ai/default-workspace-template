@@ -109,6 +109,7 @@ from imbue.chat.chat_seed import is_slash_command
 from imbue.chat.chat_seed import seed_agent_info
 from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_seed import seed_events
+from imbue.chat.chat_seed import write_first_run_context
 from imbue.chat.chat_seed import write_seed_file
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.compaction_status import COMPACTION_CAUSE_FIELD
@@ -4657,7 +4658,7 @@ class AgentManager:
             raise AgentNameConflictError(f"A chat named '{explicit_name}' already exists; pick another name")
         return explicit_name
 
-    def seed_chat(self, title: str, turns: tuple[SeedTurn, ...]) -> CreatedChat:
+    def seed_chat(self, title: str, turns: tuple[SeedTurn, ...], first_run_context: str = "") -> CreatedChat:
         """Open a chat on a conversation that happened before the workspace existed (``chat_seed.py``).
 
         The Imbue Studio app's onboarding continues here as the workspace's first chat: the turns become
@@ -4674,12 +4675,16 @@ class AgentManager:
         no usable characters raises ``AgentCreationError`` and one already taken raises
         ``AgentNameConflictError`` here, rather than at the first send's ``mngr create``; an
         empty title mints the first free "Chat N".
+
+        ``first_run_context`` is what the user told Imbue Studio's first run; it rides the first send with the
+        seed and is never shown.
         """
         explicit_title = explicit_chat_name(title)
         with self._lock:
             provisional = self._seed_chat_locked(
                 explicit_title, turns, is_recorded_as_main_first=self._main_chat.read() is None
             )
+            write_first_run_context(self._chat_files_root / provisional.chat_id, first_run_context)
         self._publish_seeded_chat(provisional)
         return CreatedChat(
             chat_id=provisional.chat_id, name=canonical_agent_name(provisional.name), display_name=provisional.name

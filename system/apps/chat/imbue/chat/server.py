@@ -110,6 +110,7 @@ from imbue.chat.chat_intakes import app_chat_title
 from imbue.chat.chat_intakes import chat_id_selected_by_window_path
 from imbue.chat.chat_intakes import intake_path
 from imbue.chat.chat_intakes import most_recently_messaged_chat_id
+from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
@@ -2299,7 +2300,12 @@ def _seed_chat() -> Response:
         return _agent_list_not_known_response()
     seed_request = parse_request_body(SeedChatRequest)
     try:
-        created = agent_manager.seed_chat(MAIN_CHAT_NAME, seed_request.turns)
+        if seed_request.is_first_run:
+            created = agent_manager.seed_chat(
+                MAIN_CHAT_NAME, FIRST_RUN_WELCOME, first_run_context=seed_request.context
+            )
+        else:
+            created = agent_manager.seed_chat(MAIN_CHAT_NAME, seed_request.turns)
     except AgentNameConflictError as e:
         return error_response(str(e), 409)
     except AgentCreationError as e:
@@ -3172,9 +3178,7 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("POST", "/api/uploads"): RouteModels(response_model=AttachmentUploadResponse, success_status=201),
     ("GET", "/api/uploads/{relative_path}"): SchemalessRoute(reason="The stored attachment itself"),
     ("DELETE", "/api/uploads/{relative_path}"): RouteModels(response_model=OkResponse),
-    ("POST", "/api/chats/{chat_id}/uploads"): RouteModels(
-        response_model=AttachmentUploadResponse, success_status=201
-    ),
+    ("POST", "/api/chats/{chat_id}/uploads"): RouteModels(response_model=AttachmentUploadResponse, success_status=201),
     ("GET", "/api/chats/{chat_id}/uploads/{relative_path}"): SchemalessRoute(reason="The stored attachment itself"),
     ("DELETE", "/api/chats/{chat_id}/uploads/{relative_path}"): RouteModels(response_model=OkResponse),
     ("GET", "/api/settings"): RouteModels(response_model=ChatSettingsResponse),

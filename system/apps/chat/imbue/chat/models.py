@@ -6,6 +6,7 @@ from app_schema.api_schema import ErrorResponse
 from chat_background_tasks.markers import TaskSource
 from pydantic import Field
 from pydantic import SecretStr
+from pydantic import model_validator
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.roster import RosterParticipant
 
@@ -953,7 +954,17 @@ class SeedChatRequest(FrozenModel):
 
     # CLEANUP: drop ``title`` once no Imbue Studio app in use sends it (released ones send "Welcome").
     title: str = Field(default="", description="Ignored: the seeded chat is named ``MAIN_CHAT_NAME``")
-    turns: tuple[SeedTurn, ...] = Field(min_length=1, description="The turns, in order")
+    turns: tuple[SeedTurn, ...] = Field(default=(), description="The turns, in order")
+    is_first_run: bool = Field(
+        default=False, description="A first-run arrival: the chat opens on ``FIRST_RUN_WELCOME`` instead of turns"
+    )
+    context: str = Field(default="", description="What the user told the first run, for the agent; never shown")
+
+    @model_validator(mode="after")
+    def _require_turns_unless_first_run(self) -> "SeedChatRequest":
+        if not self.is_first_run and len(self.turns) == 0:
+            raise ValueError("A seeded chat needs at least one turn unless it is a first-run arrival")
+        return self
 
 
 class IntakeTarget(LowerCaseStrEnum):
