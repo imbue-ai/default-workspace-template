@@ -1,0 +1,5 @@
+grok is a registered chat harness ("Grok Build"), though no sign-in offers it yet, so no chat a user starts runs on it: a grok agent made through mngr now reads as a grok chat, with its transcript, activity, sends, stop and shoulder tap.
+
+A grok chat holds every message itself, as an antigravity chat does, since grok's own queue leaves nothing on disk. One flush worker types the held messages only while mngr reports no turn in flight, by its lifecycle state and its `active` marker. A message mngr confirmed leaves the queue; an unconfirmed one is typed again on a later pass unless grok logged it, at most three times. Stop presses one Ctrl+C through mngr and hands back what is still held; the tap presses it and lets the worker deliver. The composer declines grok's pane-taking commands and `/compact`, since grok chats are not compacted yet.
+
+The flush hooks and the harness session now read the agent's lifecycle state rather than a liveness flag. The message-lifecycle state-of-things page records grok's accepted residuals, among them a turn that starts between the flush's check and mngr's typing.
