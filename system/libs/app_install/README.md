@@ -71,7 +71,7 @@ The app enters the workspace repository with `git subtree add --squash`, so the 
 A refusal, such as a collision with something already in the workspace, leaves the primary checkout untouched, and so does the user's uncommitted work.
 The record keeps the repository's URL, the commit that was taken, that commit's tree, and the app's version, and the ref `refs/app-upstream/<name>` keeps the commit's objects in the repository.
 
-The repository is read anonymously first, and with the workspace's GitHub access when that is refused; `needs_github_access` means neither reached it and the access has to be granted first.
+The repository is read anonymously first, and through the workspace's latchkey gateway when that is refused, whether or not GitHub sync is enabled; `needs_github_access` means neither reached it and the GitHub read permission has to be granted first.
 
 After landing, the command installs the system packages and tools the app's `[environment]` declares, has supervisord start the app's programs, and waits for the app's port to answer.
 Its result lists what the app still needs from the user under `needs`: the permissions and secret files it declares (and whether each file exists yet), whether it calls a model, its adaptation notes, the apps it expects that are not here, and anything of its environment that could not be installed.

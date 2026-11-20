@@ -11,6 +11,7 @@ from loguru import logger
 
 from app_install.errors import GitCommandError
 from app_install.errors import RepositoryUnreachableError
+from github_sync.wiring import gateway_git_config
 
 # The installer's own committer: its commits come from a command, not from any one chat's agent, and the
 # analytics feed tells them from the user's own work by this name.
@@ -31,7 +32,7 @@ _ACCESS_FAILURE_MARKERS: Final[tuple[str, ...]] = (
 )
 
 
-def _environment(is_global_config_read: bool) -> dict[str, str]:
+def _environment(is_global_config_read: bool, is_gateway_used: bool) -> dict[str, str]:
     environment = dict(os.environ)
     # Never wait on a prompt: the installer asks nothing.
     environment["GIT_TERMINAL_PROMPT"] = "0"
@@ -43,21 +44,33 @@ def _environment(is_global_config_read: bool) -> dict[str, str]:
         # With GitHub sync enabled the container's global configuration routes every github.com URL through the
         # latchkey gateway; leaving it out is what makes a fetch anonymous.
         environment["GIT_CONFIG_GLOBAL"] = os.devnull
+    if is_gateway_used:
+        # In the environment and not in the arguments, so the gateway's password is in no process listing.
+        first_index = int(environment.get("GIT_CONFIG_COUNT", "0"))
+        entries = gateway_git_config() or []
+        for index, (key, value) in enumerate(entries, start=first_index):
+            environment[f"GIT_CONFIG_KEY_{index}"] = key
+            environment[f"GIT_CONFIG_VALUE_{index}"] = value
+        environment["GIT_CONFIG_COUNT"] = str(first_index + len(entries))
     return environment
 
 
-def run_git(cwd: Path, arguments: Sequence[str], is_global_config_read: bool = True) -> str:
+def run_git(
+    cwd: Path, arguments: Sequence[str], is_global_config_read: bool = True, is_gateway_used: bool = False
+) -> str:
     """Run one git command in ``cwd`` with hooks off and the installer's identity; its stdout, stripped.
 
     Hooks are off because GitHub sync's post-commit hook would push the branch of every repository the
-    installer commits in, its scratch worktrees included. Raises GitCommandError when the command fails.
+    installer commits in, its scratch worktrees included. With ``is_gateway_used`` every github.com URL the
+    command names goes through the latchkey gateway, when the workspace has one. Raises GitCommandError when
+    the command fails.
     """
     argv = ["git", "-c", f"core.hooksPath={os.devnull}", *arguments]
     try:
         completed = subprocess.run(
             argv,
             cwd=cwd,
-            env=_environment(is_global_config_read),
+            env=_environment(is_global_config_read, is_gateway_used),
             capture_output=True,
             text=True,
             check=False,
@@ -72,13 +85,15 @@ def run_git(cwd: Path, arguments: Sequence[str], is_global_config_read: bool = T
 
 
 def _run_reaching_remote(cwd: Path, arguments: Sequence[str], url: str) -> str:
-    """Run a command that reads ``url``, anonymously first and then through whatever the container's global git
-    configuration provides. Raises RepositoryUnreachableError when neither reaches it."""
+    """Run a command that reads ``url``, anonymously first and then with the workspace's GitHub access: through
+    the latchkey gateway, which holds whatever permission the user has granted, whether or not GitHub sync has
+    wired it into the container's global git configuration. Raises RepositoryUnreachableError when neither
+    reaches it."""
     try:
         return run_git(cwd, arguments, is_global_config_read=False)
     except GitCommandError as anonymous_failure:
         try:
-            return run_git(cwd, arguments, is_global_config_read=True)
+            return run_git(cwd, arguments, is_global_config_read=True, is_gateway_used=True)
         except GitCommandError as e:
             is_access_needed = any(marker in str(e) for marker in _ACCESS_FAILURE_MARKERS)
             raise RepositoryUnreachableError(
