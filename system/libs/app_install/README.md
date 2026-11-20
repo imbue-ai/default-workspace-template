@@ -90,6 +90,7 @@ The live app is untouched until the result lands.
 - Then the result lands as one commit, the record takes the new commit, tree, and version, anything new in `[environment]` is installed, and the app's programs are restarted. A result that does not merge into the primary branch, which changed the same lines while the update waited, is refused with the primary checkout left as it was: merge the primary branch into the waiting worktree, commit, and run the update again with `--continue`.
 
 To give a waiting update up, remove its worktree (`git worktree remove --force data/.state/app_install/worktrees/<name>`): the live app was never touched, and the next `update` starts afresh.
+That is also the way out when the merge was taken back in the worktree (`git merge --abort`): `--continue` then answers `conflict` and records nothing, since the new version is not there to land.
 
 `up_to_date` means the app is already at the version asked for.
 An app this workspace built has nothing to update from.

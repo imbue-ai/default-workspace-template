@@ -195,6 +195,17 @@ def _merge_new_version(
     return ()
 
 
+def _holds_new_version(repo_root: Path, worktree: Path, commit: str) -> bool:
+    """Whether the worktree's history holds the squash of the upstream ``commit`` that ``git subtree`` merges, and
+    the primary checkout's does not yet: a merge that was taken back in the worktree leaves none."""
+    primary_head = run_git(repo_root, ["rev-parse", "HEAD"])
+    squash = run_git(
+        worktree,
+        ["rev-list", "--max-count=1", f"--grep=^git-subtree-split: {commit}$", "HEAD", f"^{primary_head}"],
+    )
+    return bool(squash)
+
+
 def _finish(
     repo_root: Path,
     record: AppRecord,
@@ -227,6 +238,17 @@ def _finish(
             worktree=relative_worktree,
             snapshot=snapshot,
             detail="the resolution in the worktree is not committed yet",
+        )
+    if not _holds_new_version(repo_root, worktree, pending.commit):
+        return UpdateOutcome(
+            result=UpdateResult.CONFLICT,
+            record=record,
+            ref=pending.ref,
+            previous_version=previous_version,
+            worktree=relative_worktree,
+            snapshot=snapshot,
+            detail="the new version is not merged in the worktree, where the merge was taken back: remove the "
+            "worktree and run the update again to start it over",
         )
     manifest = load_manifest(
         manifest_path(worktree, record.package), repo_root=worktree, mode=ManifestReadMode.TOLERANT

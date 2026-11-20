@@ -145,6 +145,28 @@ def test_a_conflict_in_the_apps_code_waits_in_a_worktree_and_is_finished_with_co
     assert check(workspace) == ()
 
 
+def test_continuing_after_the_merge_was_taken_back_does_not_record_the_new_version(tmp_path: Path) -> None:
+    workspace, published = _installed_notes(tmp_path)
+    _app_file(workspace, "notes.py").write_text(_notes_py("hi there", 10))
+    commit_all(workspace, "a friendlier greeting")
+    _publish(published, "0.2.0", _notes_py("good morning", 10), "lock of 0.1.0\n")
+    before = run_git(workspace, ["rev-parse", "HEAD"])
+    installed = load_record(workspace, "notes")
+    runtime = RecordingRuntime(repo_root=workspace)
+    update_app(workspace, "notes", None, False, runtime)
+    worktree = update_worktree_path(workspace, "notes")
+
+    run_git(worktree, ["merge", "--abort"])
+    continued = update_app(workspace, "notes", None, True, runtime)
+
+    assert continued.result is UpdateResult.CONFLICT
+    assert "not merged in the worktree" in continued.detail
+    assert load_record(workspace, "notes") == installed
+    assert run_git(workspace, ["rev-parse", "HEAD"]) == before
+    assert _app_file(workspace, "notes.py").read_text() == _notes_py("hi there", 10)
+    assert runtime.calls == []
+
+
 def test_a_waiting_update_is_given_up_by_removing_its_worktree(tmp_path: Path) -> None:
     workspace, published = _installed_notes(tmp_path)
     _app_file(workspace, "notes.py").write_text(_notes_py("hi there", 10))
