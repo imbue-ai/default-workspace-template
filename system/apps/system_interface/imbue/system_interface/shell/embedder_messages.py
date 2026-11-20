@@ -82,6 +82,9 @@ class ShownPage(FrozenModel):
     app: AppName = Field(description="The app whose row registered the message's type")
     page: WindowPath | None = Field(description="The page to show; None when the message could not fill the template")
     showing: tuple[WindowPath, ...] = Field(description="The app's other pages that count as already showing it")
+    is_reloaded_when_raised: bool = Field(
+        description="Whether a window the show raises at ``page`` itself has its page reloaded, as the handler asks"
+    )
     refusal: str = Field(description="Empty when the pages were built; otherwise why they could not be")
 
 
@@ -130,9 +133,25 @@ def shown_pages(rows: Sequence[RegistryRow], request: EmbedderMessageRelayReques
             try:
                 page, showing = _built_pages(handler.show, handler.showing, request.payload)
             except (PageTemplateFieldError, InvalidShellValueError) as e:
-                pages.append(ShownPage(app=row.name, page=None, showing=(), refusal=str(e)))
+                pages.append(
+                    ShownPage(
+                        app=row.name,
+                        page=None,
+                        showing=(),
+                        is_reloaded_when_raised=handler.reload_when_raised,
+                        refusal=str(e),
+                    )
+                )
                 continue
-            pages.append(ShownPage(app=row.name, page=page, showing=showing, refusal=""))
+            pages.append(
+                ShownPage(
+                    app=row.name,
+                    page=page,
+                    showing=showing,
+                    is_reloaded_when_raised=handler.reload_when_raised,
+                    refusal="",
+                )
+            )
     return pages
 
 

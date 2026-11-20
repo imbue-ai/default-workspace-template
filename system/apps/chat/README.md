@@ -378,7 +378,10 @@ written for the user, which the page shows as is.
 
 A handoff's successor is created silent: its model pick is applied first
 (`POST /api/chats/<chat-id>/handoff` takes `model`), then the handoff prompt
-goes to it through the send path, then the held messages. A rebind's pick is
+goes to it through the send path, then the held messages. A held message the
+agent refuses before anything is typed, for a reason that can clear by itself (an
+input box not drawn yet, a harness not taking messages yet), is tried again for a
+few minutes, since nobody is at a composer to retry it. A rebind's pick is
 applied the same way once the agent is back on the new account, retried for a
 while since `mngr start` does not wait for the harness to come up. A new chat
 created with a pick (`POST /api/chats/create` takes `model` too) is set up the
@@ -931,6 +934,14 @@ into the page the browser ends on. The CLI's own answer is not passed back,
 since claude sends the browser to its success page before its token exchange
 has succeeded. When a flow ends the chooser sends `minds:provider-sign-in-end`,
 so the desktop app frees the port.
+
+Claude's CLI draws its callback port at random, so the desktop app may find
+something on the user's machine already answering there (a Docker container's
+published SSH port, say). It then answers `reason: "port_taken"`, and the
+chooser starts the same sign-in again for a fresh port, trying up to three
+ports in all before it falls back as below. A fresh sign-in that lands on a
+port already found taken falls back at once: ChatGPT's CLI (codex) listens on a
+fixed port, so a ChatGPT sign-in whose port is taken is started only once more.
 
 Every way in stays reachable. With no desktop app to relay, Claude falls back to
 pasting the code its page shows, and ChatGPT to its one-time-code login. While

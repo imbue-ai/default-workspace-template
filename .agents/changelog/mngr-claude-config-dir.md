@@ -1,1 +1,0 @@
-The `use-ai-integration` credential resolver (`claude_p.py`) now falls back to claude's default `~/.claude` when `CLAUDE_CONFIG_DIR` is unset -- which it always is in the new workspace layout -- instead of skipping the shared settings.json entirely. Skill references updated to describe the shared `~/.claude/settings.json` location.

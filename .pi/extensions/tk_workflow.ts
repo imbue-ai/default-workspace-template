@@ -45,7 +45,7 @@ const REQUIRE_STEPS_NONE =
   '  tk create --step "Description of second step"\n' +
   "  ...\n" +
   "Then start the first step with its literal id: tk start <id>\n\n" +
-  "See CLAUDE.md > Task management for the full protocol.\n";
+  "See AGENTS.md > Task management for the full protocol.\n";
 const REQUIRE_STEPS_NOT_STARTED =
   "\n[Step tracking reminder]\n\n" +
   "You have declared step records but none is currently in_progress. Call `tk start <id>` on your next step before doing more work. Steps must be serial -- only one in_progress at a time.\n";
@@ -101,7 +101,7 @@ function carryoverReminder(): string | null {
     'replace it with a fresh step, or close it now with `tk close <id> "<summary>"` (the positional summary is required for steps). ' +
     "The summary is a concise one-line description of the *work done* in this step (the caption a non-technical user sees), not the outcome -- " +
     "the outcome goes in your final assistant message. Steps are sequential: do not start a new step until the previous one is closed.\n\n" +
-    "See CLAUDE.md > Task management for the full protocol.\n"
+    "See AGENTS.md > Task management for the full protocol.\n"
   );
 }
 

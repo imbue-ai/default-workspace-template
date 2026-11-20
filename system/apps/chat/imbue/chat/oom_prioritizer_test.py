@@ -20,6 +20,7 @@ from imbue.chat.primitives import ChatId
 from imbue.mngr.utils.polling import poll_until
 
 _HOUR = 3600.0
+_AGED = bands.CHAT_STAGES["aged"]
 
 
 class _Harness:
@@ -225,25 +226,26 @@ def test_a_closed_report_releases_the_chat() -> None:
 def test_a_chat_left_alone_is_shed_before_a_freshly_spawned_worker() -> None:
     """The whole point of the staleness ramp, end to end.
 
-    ``stale`` was last messaged three days ago and its tab is still open; ``live``
-    was just messaged and spawned the worker the user actually cares about. The
-    stale chat must end up more expendable than the worker band, and the live one
-    less.
+    ``left`` was last messaged long enough ago to have aged, and its tab is still
+    open; ``live`` was just messaged and spawned the worker the user actually cares
+    about. The chat left alone must end up more expendable than the worker band,
+    and the live one less.
     """
-    h = _Harness(chat_ids=["stale", "live"], pids={"stale": 10, "live": 20})
-    h.report("stale", PresenceState.VISIBLE)
-    h.prioritizer.record_message(ChatId("stale"))
-    for _ in range(3 * 24 * 6):
-        h.advance(10 * 60.0)
-        h.report("stale", PresenceState.HIDDEN)
+    h = _Harness(chat_ids=["left", "live"], pids={"left": 10, "live": 20})
+    h.report("left", PresenceState.VISIBLE)
+    h.prioritizer.record_message(ChatId("left"))
+    ten_minutes = 10 * 60.0
+    for _ in range(int(_AGED.idle_seconds // ten_minutes)):
+        h.advance(ten_minutes)
+        h.report("left", PresenceState.HIDDEN)
     h.report("live", PresenceState.VISIBLE)
     h.prioritizer.record_message(ChatId("live"))
 
     latest = h.latest_adj_by_pid()
     assert latest[10] > bands.WORKER_AGENT
     assert latest[20] < bands.WORKER_AGENT
-    # Still never shed before an agent's own subprocesses.
-    assert latest[10] < bands.AGENT_SUBPROCESS
+    # By then it is shed before a browser tab too.
+    assert latest[10] > bands.SHARED_BROWSER
 
 
 def test_idle_time_alone_re_tags_a_chat_with_no_new_reports() -> None:
@@ -252,14 +254,17 @@ def test_idle_time_alone_re_tags_a_chat_with_no_new_reports() -> None:
     h = _Harness(chat_ids=["a"], pids={"a": 10})
     h.prioritizer.record_message(ChatId("a"))
     fresh = h.latest_adj_by_pid()[10]
-    h.advance(6 * _HOUR)
+    h.advance(_AGED.idle_seconds / 2)
+    h.prioritizer.reapply()
+    halfway = h.latest_adj_by_pid()[10]
+    h.advance(_AGED.idle_seconds / 2)
     h.prioritizer.reapply()
     aged = h.latest_adj_by_pid()[10]
-    h.advance(24 * _HOUR)
+    h.advance(_AGED.idle_seconds)
     h.prioritizer.reapply()
-    abandoned = h.latest_adj_by_pid()[10]
-    assert fresh < aged < abandoned
-    assert abandoned == bands.CHAT_AGENT_STALE_CEILING
+    long_after = h.latest_adj_by_pid()[10]
+    assert fresh < halfway < aged
+    assert aged == long_after == _AGED.adj
 
 
 def test_a_mid_turn_chat_does_not_age_out() -> None:
@@ -278,9 +283,9 @@ def test_a_mid_turn_chat_does_not_age_out() -> None:
     # jumping straight to the ceiling.
     h.prioritizer.record_running_chats([])
     assert h.latest_adj_by_pid()[10] == _fresh(is_open=False, is_visible=False, recency_rank=0)
-    h.advance(24 * _HOUR)
+    h.advance(_AGED.idle_seconds)
     h.prioritizer.reapply()
-    assert h.latest_adj_by_pid()[10] == bands.CHAT_AGENT_STALE_CEILING
+    assert h.latest_adj_by_pid()[10] == _AGED.adj
 
 
 def test_entering_a_running_state_counts_as_engagement() -> None:
@@ -295,9 +300,10 @@ def test_entering_a_running_state_counts_as_engagement() -> None:
 
     h.prioritizer.record_running_chats([ChatId("a")])
     h.prioritizer.record_running_chats([])
-    h.advance(2 * _HOUR)
+    fresh = bands.CHAT_STAGES["fresh"]
+    h.advance(fresh.idle_seconds + (_AGED.idle_seconds - fresh.idle_seconds) / 20)
     h.prioritizer.reapply()
-    # Two hours past a turn that ended: aging has started but not gone far.
+    # A little past the fresh stage since the turn ended: aging has started but not gone far.
     assert bands.CHAT_AGENT_BASE < h.latest_adj_by_pid()[10] < bands.WORKER_AGENT
 
 
@@ -312,12 +318,12 @@ def test_process_start_time_keeps_a_revived_chat_fresh() -> None:
 
 
 def test_an_untouched_long_running_process_ages_out() -> None:
-    # The converse: no reported engagement and a process that started days ago is
-    # positive evidence of abandonment, not missing evidence.
+    # The converse: no reported engagement and a process that started long enough
+    # ago to have aged is positive evidence of abandonment, not missing evidence.
     h = _Harness(chat_ids=["a"], pids={"a": 10})
-    h.process_started_at[ChatId("a")] = h.now - 3 * 24 * _HOUR
+    h.process_started_at[ChatId("a")] = h.now - _AGED.idle_seconds
     h.prioritizer.reapply()
-    assert h.latest_adj_by_pid()[10] == bands.CHAT_AGENT_STALE_CEILING
+    assert h.latest_adj_by_pid()[10] == _AGED.adj
 
 
 def test_seeded_message_times_restore_recency_across_a_restart() -> None:
@@ -347,12 +353,12 @@ def test_a_visible_tab_is_only_stamped_when_it_becomes_visible() -> None:
     # heartbeat would make it permanently fresh and defeat the ramp entirely.
     h = _Harness(chat_ids=["a"], pids={"a": 10})
     h.report("a", PresenceState.VISIBLE)
-    for _ in range(24 * 60):
+    for _ in range(int(_AGED.idle_seconds // 60.0)):
         h.advance(60.0)
         h.report("a", PresenceState.VISIBLE)
-    # The heartbeats change nothing, so none re-tags; the sweep is what notices the day passing.
+    # The heartbeats change nothing, so none re-tags; the sweep is what notices the time passing.
     h.prioritizer.reapply()
-    assert h.latest_adj_by_pid()[10] == bands.CHAT_AGENT_STALE_CEILING
+    assert h.latest_adj_by_pid()[10] == _AGED.adj
 
     # Switching back to it does re-engage.
     h.report("a", PresenceState.HIDDEN)
@@ -376,10 +382,10 @@ def test_the_sweep_re_tags_as_time_passes_and_stops_cleanly() -> None:
     # the clock moves.
     h = _Harness(chat_ids=["a"], pids={"a": 10}, sweep_interval_seconds=0.01)
     h.prioritizer.record_message(ChatId("a"))
-    h.advance(24 * _HOUR)
+    h.advance(_AGED.idle_seconds)
     try:
         h.prioritizer.start()
-        swept = poll_until(lambda: h.latest_adj_by_pid()[10] == bands.CHAT_AGENT_STALE_CEILING)
+        swept = poll_until(lambda: h.latest_adj_by_pid()[10] == _AGED.adj)
     finally:
         h.prioritizer.stop()
     assert swept

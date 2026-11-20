@@ -1,1 +1,0 @@
-The workspace UI supports being driven cross-origin by the hosted minds web chrome: restored tabs reopen against the shared workspace's labeled service origin (the routable entry origin) rather than the deliberately-unrouted bare share domain, and the workspace accepts cross-origin navigation/drive requests from the hosted chrome.
