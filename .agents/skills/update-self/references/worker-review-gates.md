@@ -55,7 +55,7 @@ that this branch fired and shows the evidence for all three conditions.
 
 ## Otherwise run the real gates, scoped to the locally-divergent content
 
-Follow `.agents/shared/references/review-gates.md`, with one difference in its
+Follow `data/.tasks/update-self/skill-at-target/.agents/shared/references/review-gates.md`, with one difference in its
 test gate: 4b's suites step already ran it. That step's `select-tests`
 read every path in this scope (the merged set, your own edits, a regenerated
 lockfile) and more, so do not select again with another base. Never run

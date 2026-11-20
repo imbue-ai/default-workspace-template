@@ -13,10 +13,12 @@ from agents_shared.skill_checks import (
     GUIDE_PATH,
     SkillTree,
     outside_links_into_skills,
+    references_reached_outside,
     skill_dirs,
     unreached_shared_files,
 )
 from agents_shared.validate_skill import third_party_skills, validate
+from update_self_skill import update_self
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -55,3 +57,16 @@ def test_no_file_outside_every_skill_links_a_file_inside_one() -> None:
         f"send its own reader on. See {GUIDE_PATH}.\n"
         + "\n".join(f"  - {shared} links {linked}" for shared, linked in reaching)
     )
+
+
+def test_every_reference_the_update_flow_reaches_is_one_it_stages() -> None:
+    """A reference update-self's prose reaches, through any number of links, is staged.
+
+    After its hand-off the flow reads the target release's copy of each file, and a staged
+    file sends its reader on to others. One that ``stage-shared-prose`` does not stage would
+    be read from the workspace's own tree, which may be older than the flow following it.
+    """
+    unstaged = references_reached_outside(
+        _REPO_ROOT / update_self.SKILL_DIR_REL, update_self.STAGED_PROSE_PATHS
+    )
+    assert unstaged == []

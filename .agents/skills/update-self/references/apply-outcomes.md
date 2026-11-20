@@ -4,14 +4,15 @@ What this pass does on each exit of `update_self.py apply`, what to tell the
 user, and which verdict ends the pass. What each exit means for any caller of
 the apply (the closing stderr lines and their follow-ups, the
 `provision-incomplete` and `emergency.json` records, an interrupted apply, the
-phase timings line) is in `.agents/shared/references/apply-exit-codes.md`.
+phase timings line) is in
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`.
 Each exit's section below opens by naming the part of it to read first.
 
 ## Exit 0 -- applied
 
 First read "Exit 0: applied" in
-`.agents/shared/references/apply-exit-codes.md`: three closing lines
-change what this exit means, and each names a follow-up.
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`:
+three closing lines change what this exit means, and each names a follow-up.
 
 The update is landed and recorded in `docs/VERSION_HISTORY.md`, and the
 environment advanced to the merged apt snapshot (summarize the env-converge
@@ -22,7 +23,8 @@ section describes: carry out its follow-up or surface it.
 ## Exit 2 -- automatically rolled back
 
 First read "Exit 2: automatically rolled back" and "The phase timings line"
-in `.agents/shared/references/apply-exit-codes.md`.
+in
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`.
 
 The update did not land.
 
@@ -75,17 +77,17 @@ nothing changed), naming the commits to revert.
 ## Exit 3 -- emergency
 
 First read "Exit 3: emergency" in
-`.agents/shared/references/apply-exit-codes.md`: it says where the
-pre-apply copies are, and that clearing `emergency.json` is part of the
-repair.
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`:
+it says where the pre-apply copies are, and that clearing `emergency.json` is
+part of the repair.
 
 Escalate immediately, and repair as that section says. The pass ends `STUCK`.
 
 ## Exit 1 -- precondition; nothing changed
 
 First read "Exit 1: precondition, nothing changed" in
-`.agents/shared/references/apply-exit-codes.md`: the stderr says which
-precondition failed.
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`:
+the stderr says which precondition failed.
 
 With the other chats paused, a dirty tree or a refused fast-forward means
 something wrote after the pause (the user, or a chat they woke). Neither makes
@@ -123,7 +125,7 @@ its branch), and the decision is then that update's to ask again.
 ## An interrupted apply
 
 First read "An interrupted apply" in
-`.agents/shared/references/apply-exit-codes.md`.
+`data/.tasks/update-self/skill-at-target/.agents/shared/references/apply-exit-codes.md`.
 
 Re-run the exact same `apply` command, as that section says. When the
 workspace healed itself instead, the rollback it made is a forward revert, so
@@ -223,7 +225,7 @@ reports the workspace by it. Choose it by what happened:
   best effort at a retry is spent.
 - `STUCK`: a fault stopped the pass and you could not recover from it. The
   worker reported `stuck` for any other reason, a dead worker did not come
-  back through `.agents/shared/references/lead-proxy/dead-worker-recovery.md`,
+  back through `data/.tasks/update-self/skill-at-target/.agents/shared/references/lead-proxy/dead-worker-recovery.md`,
   a step the update depends on failed, the apply ended in an emergency
   (exit 3), Step 2 reported a fault, or this chat keeps stopping for a reason
   you cannot find or fix (`resuming-after-a-restart.md`). The watchdog
