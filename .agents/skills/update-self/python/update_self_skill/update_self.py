@@ -48,8 +48,9 @@ belong in tested code rather than agent prose:
 
 ``agent-restart-verdict``
     Whether the update changes what a running agent's harness loaded when it started (a
-    harness version pin, Antigravity's in its installer included, or a harness extension
-    tree), so the lead must restart the agents after the apply, and which changes say so.
+    harness version pin, Antigravity's and Grok Build's in their installers included, or a
+    harness extension tree), so the lead must restart the agents after the apply, and which
+    changes say so.
     The worker's §4d rule reads it.
 
 ``footprint-ranges``
@@ -226,6 +227,7 @@ from update_self_skill.update_chat_pause import (
 )
 from update_self_skill.update_classification import (
     AGY_INSTALLER_NAME,
+    GROK_INSTALLER_PATH,
     MNGR_SETTINGS_PATH,
     HarnessPinFiles,
     agent_restart_verdict,
@@ -458,6 +460,7 @@ def _harness_pin_files_at(ref: str, repo_root: Path) -> HarnessPinFiles:
         agy_installer=_file_at(ref, agy_installers[0], repo_root)
         if agy_installers
         else "",
+        grok_installer=_file_at(ref, GROK_INSTALLER_PATH, repo_root),
     )
 
 
