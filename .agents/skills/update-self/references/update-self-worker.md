@@ -157,7 +157,10 @@ docs class; both 4a and 4b read it.
 **When `has_local_footprint` is true, also resolve the user's creations by
 footprint** before 4a. Every app with an `app.toml` has a footprint the
 manifest library computes -- its directory, the supervisord drop-ins that run
-it, and the paths its manifest claims in `[[references]]` -- and reading it
+it, and the paths it claims as references: in its record
+(`system/config/apps/<name>.toml`) for an app that has one, whose footprint
+also holds the record and the links to the skills it carries, and in its
+manifest's `[[references]]` for any other app -- and reading it
 over two ranges answers by rule what 4a and 4b otherwise judge by hand:
 whether the creation carries the workspace's own content, and whether the
 update reached it.
@@ -278,7 +281,8 @@ command).
 2. **Search for dependents of each changed file**: its path, basename, and
    importable module name; follow each service's code into the shared scripts
    and libs it calls; check skills' `SKILL.md` and scripts, and the paths an
-   app's `app.toml` claims in `[[references]]`. For a manifest app with a
+   app claims as references (in its record when it has one, else in its
+   `app.toml`'s `[[references]]`). For a manifest app with a
    Step 4 scope file that last search is already done: its `.update.json`
    lists the update's changes inside its footprint, references included, and
    a hit there is an impacted consumer. If the update adds reference- or
