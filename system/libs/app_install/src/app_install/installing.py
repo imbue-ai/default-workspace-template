@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Final
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from loguru import logger
 from pydantic import Field
 
@@ -154,6 +155,20 @@ def install_app(
                 f"app-install: install {name} from {url}",
             ],
         )
+        # The registry is machine state under the primary checkout's data directory, which a worktree lacks.
+        port = allocate_port(repo_root, load_all_records(worktree), None, is_bound)
+        # Written before the manifest is read: an app with a record is read as someone else's, so tables its
+        # manifest still carries about its publisher's workspace are not held to this one's tree.
+        unversioned_record = AppRecord(
+            name=name,
+            package=package,
+            port=port,
+            origin=AppOrigin.INSTALLED,
+            upstream_url=url,
+            upstream_commit=commit,
+            upstream_tree=run_git(repo_root, ["rev-parse", f"{commit}^{{tree}}"]),
+        )
+        write_record(worktree, unversioned_record)
         try:
             manifest = load_manifest(
                 manifest_path(worktree, package), repo_root=worktree, mode=ManifestReadMode.TOLERANT
@@ -163,17 +178,8 @@ def install_app(
         collisions = find_collisions(worktree, package, manifest, frozenset())
         if collisions:
             raise CollisionError(collisions)
-        # The registry is machine state under the primary checkout's data directory, which a worktree lacks.
-        port = allocate_port(repo_root, load_all_records(worktree), None, is_bound)
-        record = AppRecord(
-            name=name,
-            package=package,
-            port=port,
-            origin=AppOrigin.INSTALLED,
-            upstream_url=url,
-            upstream_commit=commit,
-            upstream_tree=run_git(repo_root, ["rev-parse", f"{commit}^{{tree}}"]),
-            upstream_version=manifest.version or "",
+        record = unversioned_record.model_copy_update(
+            to_update(unversioned_record.field_ref().upstream_version, manifest.version or "")
         )
         write_record(worktree, record)
         write_derived_files(worktree, package, derive_files(worktree, record, manifest))

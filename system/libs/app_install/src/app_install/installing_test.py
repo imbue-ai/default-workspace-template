@@ -142,6 +142,23 @@ def test_the_users_uncommitted_work_is_left_alone(tmp_path: Path) -> None:
     assert (workspace / "system" / "apps" / "shelf" / "app.toml").is_file()
 
 
+def test_what_the_manifest_says_of_its_publishers_workspace_does_not_keep_the_app_out(tmp_path: Path) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    published = make_published_app_repository(
+        tmp_path / "published-notes",
+        "notes",
+        '\nversion = "0.3.0"\n\n[[references]]\npath = ".agents/skills/weekly-review"\nnote = "Reads the notes"\n',
+    )
+
+    outcome = install_app(workspace, f"file://{published}", None, RecordingRuntime(repo_root=workspace), never_bound)
+
+    # The path is one of the publisher's workspace, which this one does not have and is not held to.
+    assert not (workspace / ".agents" / "skills" / "weekly-review").exists()
+    assert load_record(workspace, "notes") == outcome.record
+    assert outcome.record.upstream_version == "0.3.0"
+    assert check(workspace) == ()
+
+
 def test_a_repository_that_holds_no_app_is_refused_and_the_workspace_is_unchanged(tmp_path: Path) -> None:
     workspace = make_workspace_repository(tmp_path / "workspace")
     not_an_app = make_workspace_repository(tmp_path / "just-a-repository")
