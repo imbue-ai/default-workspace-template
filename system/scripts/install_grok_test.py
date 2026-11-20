@@ -1,11 +1,13 @@
-"""install_grok.sh leaves a grok at the pinned version alone and refuses a download that does not
-match the pinned sha256.
+"""install_grok.sh leaves a grok at the pinned version alone, refuses a download that does not
+match the pinned sha256, and installs a matching one only when it reports the pinned version.
 
 A stub `curl` serves a prepared file and logs its calls, and a stub `uname` fixes the
-architecture, so no test reaches the network.
+architecture, so no test reaches the network. The install tests run a copy of the script whose
+pinned sha256s are the served file's.
 """
 
 import gzip
+import hashlib
 import re
 import subprocess
 from pathlib import Path
@@ -17,6 +19,7 @@ _SCRIPT = Path(__file__).with_name("install_grok.sh")
 (_PINNED_VERSION,) = re.findall(
     r'^GROK_VERSION="([^"]+)"$', _SCRIPT.read_text(), re.MULTILINE
 )
+_PINNED_SHA256_LINE = re.compile(r'^(\s*sha256=")[0-9a-f]{64}"$', re.MULTILINE)
 
 
 def _write_executable(path: Path, text: str) -> Path:
@@ -30,14 +33,29 @@ def _fake_grok_script(version: str) -> str:
     return f'#!/bin/sh\necho "grok {version} (0000000)"\n'
 
 
+def _script_pinned_to(tmp_path: Path, served: Path) -> Path:
+    """A copy of the installer whose pinned sha256s are ``served``'s."""
+    digest = hashlib.sha256(served.read_bytes()).hexdigest()
+    text, count = _PINNED_SHA256_LINE.subn(rf'\g<1>{digest}"', _SCRIPT.read_text())
+    assert count == 2
+    copy = tmp_path / _SCRIPT.name
+    copy.write_text(text)
+    return copy
+
+
 def _run(
-    tmp_path: Path, install_path: Path, *, arch: str, served: Path | None
+    tmp_path: Path,
+    install_path: Path,
+    *,
+    arch: str,
+    served: Path | None,
+    script: Path = _SCRIPT,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Run the installer against stub `curl` and `uname`; returns the result and the curl log."""
     stub_bin = tmp_path / "stub-bin"
     curl_log = make_stub_bin(stub_bin, served_tarball=served, arch=arch)
     result = subprocess.run(
-        ["bash", str(_SCRIPT)],
+        ["bash", str(script)],
         env={
             "PATH": f"{stub_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
             "GROK_INSTALL_PATH": str(install_path),
@@ -82,4 +100,30 @@ def test_a_download_that_does_not_match_the_pinned_sha256_is_refused(
         in curl_log.read_text()
     )
     assert install_path.read_text() == _fake_grok_script("0.0.1")
+    assert [path.name for path in install_path.parent.iterdir()] == ["grok"]
+
+
+@pytest.mark.parametrize(
+    ("served_version", "expected_returncode", "expected_version"),
+    [(_PINNED_VERSION, 0, _PINNED_VERSION), ("0.0.2", 1, "0.0.1")],
+)
+def test_a_verified_download_replaces_grok_only_when_it_reports_the_pinned_version(
+    tmp_path: Path, served_version: str, expected_returncode: int, expected_version: str
+) -> None:
+    install_path = _write_executable(
+        tmp_path / "bin" / "grok", _fake_grok_script("0.0.1")
+    )
+    served = tmp_path / "served.gz"
+    served.write_bytes(gzip.compress(_fake_grok_script(served_version).encode()))
+
+    result, _ = _run(
+        tmp_path,
+        install_path,
+        arch="aarch64",
+        served=served,
+        script=_script_pinned_to(tmp_path, served),
+    )
+
+    assert result.returncode == expected_returncode, result.stderr
+    assert install_path.read_text() == _fake_grok_script(expected_version)
     assert [path.name for path in install_path.parent.iterdir()] == ["grok"]
