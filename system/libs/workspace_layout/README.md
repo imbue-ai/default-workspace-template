@@ -65,13 +65,17 @@ answer shapes live in one place the shell and its callers share.
   strict as the shell's files are. The tolerance covers added fields only: a
   value outside an enum or a rule (a new `ShowOutcome`, say) makes the answer
   malformed.
-- `workspace_layout.identity`: the `X-Imbue-Identity` header every request into
+- `workspace_layout.identity`: the names of the app SDK's
+  `imbue.app_sdk.identity`, re-exported for apps written before the SDK; new
+  code imports the SDK. It is the `X-Imbue-Identity` header every request into
   the workspace carries, read the same way by the shell and the apps:
   `RequestIdentity` (the owner flag, the account's `user_id` and `email`, a
   visiting agent's `agent_id`, `agent_name`, and `granter`),
   `parse_identity_header` (a missing or blank header is `ANONYMOUS_OWNER`; a
-  present one that does not parse raises `InvalidIdentityHeaderError`, an
-  `InvalidLayoutValueError`, which the shell and the chat app answer with 400),
+  present one that does not parse raises the SDK's `InvalidIdentityHeaderError`,
+  an `InvalidIdentityValueError`, which the shell and the chat app answer with
+  400; neither is an `InvalidLayoutValueError`, and `UserId` and
+  `ParticipantKey` raise `InvalidIdentityValueError` too),
   `participant_key_of` (the account, else the agent, else `owner`),
   `is_owner_participant` (the owner under either of their keys), and
   `visiting_user_id` (a signed-in requester other than the owner). Also the
@@ -82,7 +86,7 @@ answer shapes live in one place the shell and its callers share.
   read by its header, and a header-less one is admitted from loopback alone,
   under a loopback `Host` (`is_loopback_address`, `is_loopback_host`,
   `is_from_another_origin`), because the workspace's own browser is on loopback
-  too. `app_schema.request_guard` installs it on every app's Flask app.
+  too. `imbue.app_sdk.request_guard` installs it on every app's Flask app.
 - `workspace_layout.roster`: the roster the shell answers at `GET /api/roster`
   and pushes as `roster_updated` (the multiplayer spec, section 4.2):
   `RosterParticipant` and `RosterDocument`, `handle_of_name` and
@@ -126,7 +130,7 @@ answer shapes live in one place the shell and its callers share.
   None when the shell could not be read, never "no windows"),
   `window_query_value`, and the `WindowClosedHint` the
   shell posts when a window closes (an app reads it with
-  `app_schema.routes.parse_request_body`).
+  `imbue.app_sdk.routes.parse_request_body`).
 - `workspace_layout.cli`: the `workspace-layout` console script (below).
 - `workspace_layout.testing`: `FakeShell`, an in-memory `ShellLayoutInterface`
   that records every request and answers or refuses as a test sets it;
