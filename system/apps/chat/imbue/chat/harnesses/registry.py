@@ -376,8 +376,7 @@ _GROK_MODEL_BAR_POPUP: Final[HarnessPopup] = HarnessPopup(
     notice_body=_MODEL_BAR_NOTICE,
 )
 
-# The auth-intercept commands every auth-declaring harness shares: typing either opens
-# the harness's agent-auth surface instead of sending.
+# The auth commands the composer intercepts instead of sending.
 _AUTH_COMMANDS: Final[tuple[str, ...]] = ("/login", "/logout")
 
 # The fast-mode turn limit, declared by the harnesses that can launch fast. Claude Code
@@ -688,7 +687,8 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             }
         ),
         popups=(
-            HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=_AUTH_COMMANDS, action=PopupAction.OPEN_AUTH),
+            # No sign-in lane offers xAI, so /login and /logout point at the agent's terminal.
+            HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=_AUTH_COMMANDS, action=PopupAction.NOTICE),
             HarnessPopup(
                 trigger=PopupTrigger.COMPOSER_COMMAND, commands=_GROK_DECLINED_COMMANDS, action=PopupAction.NOTICE
             ),
