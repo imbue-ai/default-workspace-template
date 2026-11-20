@@ -160,7 +160,14 @@ def user_app_package_of(paths: RoutinesPaths, app_name: str) -> str | None:
     except RecordLoadError as e:
         logger.warning("Not treating {} as a user app, since its record cannot be read: {}", app_name, e)
         return None
-    return app_package if paths.app_dir(app_package).is_dir() else None
+    if not paths.app_dir(app_package).is_dir():
+        logger.warning(
+            "Not treating {} as a user app, since its record names the directory {}, which is not there",
+            app_name,
+            paths.app_dir(app_package),
+        )
+        return None
+    return app_package
 
 
 @pure

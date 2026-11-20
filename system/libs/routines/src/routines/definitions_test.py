@@ -4,6 +4,7 @@ import pytest
 from inline_snapshot import snapshot
 from pydantic import ValidationError
 
+from app_manifest.records import record_path
 from imbue.imbue_common.model_update import to_update
 from routines.data_types import RoutineDefinition
 from routines.data_types import ScheduleChange
@@ -219,6 +220,30 @@ def test_a_routine_added_for_an_app_that_is_no_user_app_stays_under_system_routi
     """A built-in app has a directory under system/apps and no record of an install; the other names have neither."""
     definitions.paths.app_dir("chat").mkdir(parents=True)
     definition = _digest().model_copy_update(to_update(_digest().field_ref().app, app_name))
+
+    path = definitions.add(TEST_ROUTINE_ID, definition)
+
+    assert path == definitions.paths.workspace_definition_path(TEST_ROUTINE_ID)
+    assert definitions.load(TEST_ROUTINE_ID).app_package is None
+
+
+@pytest.mark.parametrize(
+    "record_text",
+    [
+        pytest.param("name = [not toml", id="a-record-that-does-not-load"),
+        pytest.param(
+            'name = "news"\npackage = "news_reader"\nport = 8084\norigin = "local"\n',
+            id="a-record-whose-directory-is-gone",
+        ),
+    ],
+)
+def test_a_routine_added_for_an_app_whose_record_leads_to_no_directory_stays_under_system_routines(
+    definitions: FileDefinitionStore, record_text: str
+) -> None:
+    record = record_path(definitions.paths.repo_root, "news")
+    record.parent.mkdir(parents=True)
+    record.write_text(record_text)
+    definition = _digest().model_copy_update(to_update(_digest().field_ref().app, "news"))
 
     path = definitions.add(TEST_ROUTINE_ID, definition)
 
