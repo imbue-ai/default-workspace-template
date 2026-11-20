@@ -1007,6 +1007,17 @@ def _validate_manifest_data(path: Path, data: dict[str, Any], mode: ManifestRead
     return _validate_manifest_data(path, _without_unknown_keys(data, unknown_key_locations), ManifestReadMode.STRICT)
 
 
+def check_declares_no_record_tables(path: Path, manifest: AppManifest) -> None:
+    """Raises ManifestLoadError for a manifest that carries ``[[references]]`` or ``[wiring]``, which an app
+    with a record does not declare: what else uses the app is listed in its record, and its background
+    programs are ``[[services]]``."""
+    if manifest.references or manifest.wiring.programs:
+        raise ManifestLoadError(
+            f"manifest {path} is invalid: an app with a record declares no [[references]] and no [wiring]; "
+            "what else uses the app is listed in its record, and its background programs are [[services]]"
+        )
+
+
 def load_manifest(
     path: Path, *, repo_root: Path | None = None, mode: ManifestReadMode = ManifestReadMode.TOLERANT
 ) -> AppManifest:
@@ -1046,11 +1057,8 @@ def load_manifest(
     # An app with a record lists what else uses it in the record, and names its programs as services. Tables
     # its manifest still carries are not read, so an installed app's is not held to this workspace's tree; the
     # authoring check refuses them, since a workspace that still writes them means something else by them.
-    if mode is ManifestReadMode.STRICT and (manifest.references or manifest.wiring.programs):
-        raise ManifestLoadError(
-            f"manifest {path} is invalid: an app with a record declares no [[references]] and no [wiring]; "
-            "what else uses the app is listed in its record, and its background programs are [[services]]"
-        )
+    if mode is ManifestReadMode.STRICT:
+        check_declares_no_record_tables(path, manifest)
     return manifest
 
 

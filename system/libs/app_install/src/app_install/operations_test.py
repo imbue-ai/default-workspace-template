@@ -26,6 +26,7 @@ from app_install.testing import write_app_file
 from app_install.testing import write_user_app
 from app_install.testing import write_workspace_file
 from app_manifest.errors import AppRecordNotFoundError
+from app_manifest.errors import ManifestLoadError
 from app_manifest.records import AppOrigin
 from app_manifest.records import AppRecord
 from app_manifest.records import load_record
@@ -93,6 +94,29 @@ def test_a_taken_port_is_refused_and_nothing_is_written(tmp_path: Path) -> None:
 
     assert not (tmp_path / "system" / "config" / "apps" / "digest.toml").exists()
     assert not (tmp_path / "system" / "supervisord.conf.d" / "digest.conf").exists()
+
+
+@pytest.mark.parametrize(
+    "extra_manifest",
+    [
+        pytest.param('\n[[references]]\npath = "docs/notes-guide.md"\nnote = "Describes the app"\n', id="references"),
+        pytest.param('\n[wiring]\nprograms = ["notes-display"]\n', id="wiring"),
+    ],
+)
+def test_a_manifest_with_a_table_a_recorded_app_does_not_declare_is_refused_and_nothing_is_written(
+    tmp_path: Path, extra_manifest: str
+) -> None:
+    write_workspace_file(tmp_path, "docs/notes-guide.md", "# Notes\n")
+    write_workspace_file(
+        tmp_path, "system/supervisord.conf.d/notes-display.conf", "[program:notes-display]\ncommand=display\n"
+    )
+    package = write_user_app(tmp_path, "notes", extra_manifest)
+
+    with pytest.raises(ManifestLoadError, match="an app with a record declares no"):
+        add_app(tmp_path, package, None, never_bound)
+
+    assert not (tmp_path / "system" / "config" / "apps" / "notes.toml").exists()
+    assert not (tmp_path / "system" / "supervisord.conf.d" / "notes.conf").exists()
 
 
 def test_every_collision_is_named_before_anything_is_written(tmp_path: Path) -> None:

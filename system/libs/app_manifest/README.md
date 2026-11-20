@@ -97,6 +97,8 @@ what this workspace records about an app its agent built or installed, which
   manifest this workspace is authoring, and also refuses a `[[references]]`
   or `[wiring]` table beside a record, which `TOLERANT` loads unread
   ("Built-in apps and user apps" below); every other rule holds in both),
+  `check_declares_no_record_tables(path, manifest)` (that refusal on its own,
+  for `app-install add`, which reads a manifest before its app has a record),
   `repo_root_for_manifest`,
   `app_package_directory`, and `manifest_icon_path(manifest_path, manifest)`.
 - `app_manifest.records`: the app record, the file that makes an app a user

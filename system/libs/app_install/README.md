@@ -42,6 +42,7 @@ Two branches can each allocate the same port; `check` reports it and `regenerate
 
 An app is refused before anything is written when it would take a name something in the workspace already holds: the app's name, a program, a console script, a skill, a routine id, or an environment unit's file name.
 The result names every collision.
+`add` also refuses a manifest that carries `[[references]]` or `[wiring]`, which an app with a record does not declare: what else uses the app is listed in its record, and its background programs are `[[services]]`.
 `regenerate` is refused the same way (`collision`) when a skill an app has gained would take the place of a skill the workspace or another app already holds under that name.
 
 ## Removing an app

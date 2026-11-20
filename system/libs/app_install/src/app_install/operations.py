@@ -37,6 +37,7 @@ from app_install.ports import allocate_port
 from app_manifest.errors import AppManifestError
 from app_manifest.manifest import AppManifest
 from app_manifest.manifest import ManifestReadMode
+from app_manifest.manifest import check_declares_no_record_tables
 from app_manifest.manifest import load_manifest
 from app_manifest.records import AppOrigin
 from app_manifest.records import AppRecord
@@ -122,13 +123,16 @@ def add_app(
     write its record, and generate its derived files.
 
     Raises AppNotFoundError for a directory with no manifest, AppAlreadyRegisteredError for an app that has a
-    record, CollisionError when it would take a name something in the workspace holds, and
-    PortUnavailableError for a requested port that is taken. Nothing is written when it raises.
+    record, ManifestLoadError for a manifest that carries the tables an app with a record does not declare,
+    CollisionError when it would take a name something in the workspace holds, and PortUnavailableError for a
+    requested port that is taken. Nothing is written when it raises.
     """
     manifest = load_app_manifest(repo_root, package, AppOrigin.LOCAL)
     records = load_all_records(repo_root)
     if any(record.package == package for record in records):
         raise AppAlreadyRegisteredError(f"the app at system/apps/{package} already has a record")
+    # The app has no record yet, so its manifest was read as a built-in app's, which may carry these tables.
+    check_declares_no_record_tables(manifest_path(repo_root, package), manifest)
     collisions = find_collisions(repo_root, package, manifest, frozenset())
     if collisions:
         raise CollisionError(collisions)
