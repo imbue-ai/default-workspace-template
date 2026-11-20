@@ -44,6 +44,8 @@ from app_install.paths import app_directory
 from app_install.paths import manifest_path
 from app_install.paths import program_conf_path
 from app_install.ports import allocate_port
+from app_install.ports import local_port_of_row
+from app_install.ports import read_registry_rows
 from app_manifest.errors import AppManifestError
 from app_manifest.manifest import AppManifest
 from app_manifest.manifest import ManifestReadMode
@@ -55,10 +57,8 @@ from app_manifest.records import RecordReference
 from app_manifest.records import load_all_records
 from app_manifest.records import record_path
 from app_manifest.records import write_record
-from app_manifest.registry_location import registry_path
 
 _REGISTERED_URL_PATTERN: Final[re.Pattern[str]] = re.compile(r"--url\s+http://(?:localhost|127\.0\.0\.1):(\d+)")
-_LOCALHOST_PORT_PATTERN: Final[re.Pattern[str]] = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
 _COMMENT_PREFIXES: Final[tuple[str, ...]] = ("#", ";")
 _SKILL_PYTHON_PROJECT: Final[Path] = Path("python") / PYPROJECT_FILENAME
 
@@ -109,20 +109,10 @@ def _own_port(repo_root: Path, manifest: AppManifest) -> int | None:
         match = _REGISTERED_URL_PATTERN.search(conf.read_text(encoding="utf-8"))
         if match is not None:
             return int(match.group(1))
-    path = registry_path()
-    registry = path if path.is_absolute() else repo_root / path
-    if not registry.is_file():
-        return None
-    try:
-        rows = tomllib.loads(registry.read_text(encoding="utf-8")).get("apps", [])
-    except tomllib.TOMLDecodeError as e:
-        logger.debug("Reading no port from the registry {}, which does not parse: {}", registry, e)
-        return None
-    for row in rows:
-        if isinstance(row, dict) and row.get("name") == str(manifest.name):
-            match = _LOCALHOST_PORT_PATTERN.search(str(row.get("url", "")))
-            if match is not None:
-                return int(match.group(1))
+    for row in read_registry_rows(repo_root):
+        port = local_port_of_row(row) if row.get("name") == str(manifest.name) else None
+        if port is not None:
+            return port
     return None
 
 

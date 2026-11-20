@@ -9,6 +9,7 @@ import re
 import socket
 import tomllib
 from collections.abc import Callable
+from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
@@ -48,23 +49,30 @@ def _supervisord_ports(repo_root: Path) -> set[int]:
     return ports
 
 
-def _registry_ports(repo_root: Path) -> set[int]:
+def read_registry_rows(repo_root: Path) -> tuple[dict[str, object], ...]:
+    """Every row of the app registry; none when the workspace has no registry or it does not parse."""
     path = registry_path()
     registry = path if path.is_absolute() else repo_root / path
     if not registry.is_file():
-        return set()
+        return ()
     try:
-        rows = tomllib.loads(registry.read_text()).get("apps", [])
+        rows = tomllib.loads(registry.read_text(encoding="utf-8")).get("apps", [])
     except tomllib.TOMLDecodeError as e:
-        # The registry is machine state the shell rebuilds; an unreadable one names no port.
-        logger.debug("Reading no ports from the registry {}, which does not parse: {}", registry, e)
-        return set()
-    ports: set[int] = set()
-    for row in rows:
-        match = _LOCALHOST_PORT_PATTERN.search(str(row.get("url", ""))) if isinstance(row, dict) else None
-        if match is not None:
-            ports.add(int(match.group(1)))
-    return ports
+        # The registry is machine state the shell rebuilds; an unreadable one names nothing.
+        logger.debug("Reading no rows from the registry {}, which does not parse: {}", registry, e)
+        return ()
+    return tuple(row for row in rows if isinstance(row, dict))
+
+
+def local_port_of_row(row: Mapping[str, object]) -> int | None:
+    """The loopback port a registry row's URL names; None for a row that names none."""
+    match = _LOCALHOST_PORT_PATTERN.search(str(row.get("url", "")))
+    return int(match.group(1)) if match is not None else None
+
+
+def _registry_ports(repo_root: Path) -> set[int]:
+    ports = (local_port_of_row(row) for row in read_registry_rows(repo_root))
+    return {port for port in ports if port is not None}
 
 
 def ports_in_use(repo_root: Path, records: Sequence[AppRecord]) -> set[int]:
