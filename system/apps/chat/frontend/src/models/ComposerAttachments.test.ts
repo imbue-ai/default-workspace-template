@@ -12,6 +12,8 @@ import {
   clearComposerAttachments,
   getComposerAttachments,
   removeComposerAttachment,
+  stagePastedText,
+  unstagePastedText,
   uploadDescribedFileToComposer,
   uploadFilesToComposer,
 } from "./ComposerAttachments";
@@ -257,5 +259,106 @@ describe("while uploading", () => {
     await staged.uploadSettled;
     expect(localImageUrl("/w/data/uploads/y/cleared.png")).toBeUndefined();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:preview-5");
+  });
+});
+
+describe("pasted text", () => {
+  const PASTE = "a long line\n".repeat(300) + "the last line";
+
+  it("stages a paste as a numbered text file whose chip says how many lines it holds", async () => {
+    stagePastedText(chatId, PASTE);
+    stagePastedText(chatId, "second\npaste");
+    const [first, second] = getComposerAttachments(chatId);
+    expect(first).toMatchObject({ fileName: "pasted-text-1.txt", summary: "Pasted text, 301 lines", isImage: false });
+    expect(second).toMatchObject({ fileName: "pasted-text-2.txt", summary: "Pasted text, 2 lines" });
+    const [uploadUrl, uploadInit] = vi.mocked(fetch).mock.calls[0];
+    // A paste is stored in its chat's own folder, so it goes with the chat.
+    expect(uploadUrl).toBe(`/api/chats/${chatId}/uploads`);
+    const uploadedFile = (uploadInit!.body as FormData).get("file") as File;
+    expect(await uploadedFile.text()).toBe(PASTE);
+
+    await settle();
+    expect(stored()).toHaveLength(2);
+    // The text itself stays out of storage: only the uploaded copy holds it.
+    expect(JSON.stringify(stored())).not.toContain("the last line");
+    // A picked file stays the workspace's.
+    uploadFilesToComposer(chatId, [new File(["mine"], "notes.txt")]);
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(calls[calls.length - 1][0]).toBe("/api/uploads");
+  });
+
+  it("gives the text back from memory and removes the attachment and its uploaded copy", async () => {
+    stagePastedText(chatId, PASTE);
+    await settle();
+    const [staged] = getComposerAttachments(chatId);
+    vi.mocked(fetch).mockClear();
+    expect(await unstagePastedText(chatId, staged.localId)).toBe(PASTE);
+    expect(getComposerAttachments(chatId)).toEqual([]);
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(expect.stringContaining("pasted-text-1.txt"), { method: "DELETE" });
+  });
+
+  it("reads the text back from the uploaded copy after a reload", async () => {
+    const otherChatId = `chat-${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(
+      `${STORAGE_KEY_PREFIX}${otherChatId}`,
+      JSON.stringify([
+        {
+          localId: "composer-att-77",
+          fileName: "pasted-text-1.txt",
+          isImage: false,
+          summary: "Pasted text, 301 lines",
+          uploaded: { path: "/w/data/uploads/p/pasted-text-1.txt", name: "p", size: 3, isImage: false, url: "/p" },
+        },
+      ]),
+    );
+    uploadAnswers.push(() => Promise.resolve(new Response(PASTE, { status: 200 })));
+    expect(await unstagePastedText(otherChatId, "composer-att-77")).toBe(PASTE);
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith("/p");
+    expect(getComposerAttachments(otherChatId)).toEqual([]);
+  });
+
+  it("answers nothing when the attachment leaves the composer while its text is read back", async () => {
+    const otherChatId = `chat-${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(
+      `${STORAGE_KEY_PREFIX}${otherChatId}`,
+      JSON.stringify([
+        {
+          localId: "composer-att-79",
+          fileName: "pasted-text-1.txt",
+          isImage: false,
+          summary: "Pasted text, 301 lines",
+          uploaded: { path: "/w/data/uploads/r/pasted-text-1.txt", name: "r", size: 3, isImage: false, url: "/r" },
+        },
+      ]),
+    );
+    let answerRead: (response: Response) => void = () => undefined;
+    uploadAnswers.push(() => new Promise<Response>((resolve) => (answerRead = resolve)));
+    const putBack = unstagePastedText(otherChatId, "composer-att-79");
+    clearComposerAttachments(otherChatId);
+    answerRead(new Response(PASTE, { status: 200 }));
+    expect(await putBack).toBeNull();
+  });
+
+  it("answers nothing for a chip already gone from the composer", async () => {
+    expect(await unstagePastedText(chatId, "composer-att-gone")).toBeNull();
+  });
+
+  it("leaves the attachment in place when its text cannot be read back", async () => {
+    const otherChatId = `chat-${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(
+      `${STORAGE_KEY_PREFIX}${otherChatId}`,
+      JSON.stringify([
+        {
+          localId: "composer-att-78",
+          fileName: "pasted-text-1.txt",
+          isImage: false,
+          uploaded: { path: "/w/data/uploads/q/pasted-text-1.txt", name: "q", size: 3, isImage: false, url: "/q" },
+        },
+      ]),
+    );
+    uploadAnswers.push(() => Promise.resolve(new Response("gone", { status: 404 })));
+    await expect(unstagePastedText(otherChatId, "composer-att-78")).rejects.toThrow("HTTP 404");
+    expect(getComposerAttachments(otherChatId).map((attachment) => attachment.localId)).toEqual(["composer-att-78"]);
+    clearComposerAttachments(otherChatId);
   });
 });

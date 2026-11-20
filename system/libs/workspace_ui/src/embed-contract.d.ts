@@ -23,6 +23,8 @@ declare module "@minds/embed-contract" {
   export const FOCUS_CHAT: "minds:focus-chat";
   // The readiness announcement (contract v5). Probed like the two above.
   export const WORKSPACE_READY: "minds:workspace-ready";
+  // The chat-on-screen report (contract v15). Probed like the ones above.
+  export const CHAT_ON_SCREEN: "minds:chat-on-screen";
   // The pull-out window set (contract v6). Probed like the ones above.
   export const POP_OUT_WINDOW: "minds:pop-out-window";
   export const WINDOW_DRAG_STARTED: "minds:window-drag-started";
@@ -48,7 +50,7 @@ declare module "@minds/embed-contract" {
   export const HIGHLIGHT_CHROME: "minds:highlight-chrome";
   // Opening the chrome's settings for files shared from the user's computer (contract v11). Probed like the ones above.
   export const OPEN_LOCAL_FILES: "minds:open-local-files";
-  // The keyboard shortcuts page's state (contract v15). Probed like the ones above.
+  // The keyboard shortcuts page's state (contract v16). Probed like the ones above.
   export const KEYBOARD_SHORTCUTS_PAGE: "minds:keyboard-shortcuts-page";
   export const OPEN_KEYBOARD_SHORTCUTS: "minds:open-keyboard-shortcuts";
 

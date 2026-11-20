@@ -14,6 +14,7 @@ the agent manager.
 
 from __future__ import annotations
 
+import base64
 import fcntl
 import json
 import os
@@ -314,6 +315,23 @@ def _streamed_message_events(model: str, reply: str | StandInToolUse) -> bytes:
         ("message_stop", {"type": "message_stop"}),
     ]
     return "".join(f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events).encode()
+
+
+def _protobuf_bytes_field(field_number: int, value: bytes) -> bytes:
+    # Every length here is under 128, so the length is a single varint byte.
+    assert len(value) < 0x80
+    return bytes([(field_number << 3) | 2, len(value)]) + value
+
+
+def anthropic_thinking_block_signature(block_kind: str) -> str:
+    """A minimal stand-in for an Anthropic Messages API thinking-block signature carrying ``block_kind``.
+
+    Only the nesting the chat reads is real (field 2, then 1, then 8 holds the kind, beside a
+    varint and opaque bytes like a real one); the rest of a real signature is encrypted.
+    """
+    kind_message = bytes([0x08, 19]) + _protobuf_bytes_field(8, block_kind.encode())
+    envelope = _protobuf_bytes_field(1, kind_message) + _protobuf_bytes_field(5, b"\x00" * 16)
+    return base64.b64encode(bytes([0x08, 4]) + _protobuf_bytes_field(2, envelope)).decode()
 
 
 def skip_unless_pinned_claude() -> None:
@@ -872,6 +890,24 @@ class SummaryWritingMngrMessenger(RecordingMngrMessenger):
         is_taken_back: Callable[[], bool] = lambda: False,
     ) -> SendDelivery | SendFailure:
         write_summary_for_request(message)
+        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
+
+
+class HookedSendMngrMessenger(RecordingMngrMessenger):
+    """A recording messenger that runs each of ``during_send`` with the message while its send is in flight."""
+
+    during_send: list[Callable[[str], None]] = []
+
+    def send_to_agent(
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
+        for run in self.during_send:
+            run(message)
         return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
 
 

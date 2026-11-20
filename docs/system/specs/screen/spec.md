@@ -172,6 +172,7 @@ Rules (D4): any human session may `take_control`, which preempts an agent (queue
 `session.implicit_hosting` stays off: with it on, any human's first key would take host from another human, and taking control must be explicit (D4).
 With it off, a request from a non-host while a host exists is refused and the host is notified, which the viewer never provokes since it sends input only while it is the controller.
 The service subscribes to neko's `control/host` and `session/*` events on an admin WebSocket session of its own and keeps its state in step: a host change it did not make is a human taking control of an uncontrolled Screen.
+Its own changes (the `give`, `reset` and locking it makes through the REST API) come back on that socket too, with neko's API session (`id` `API`) as the initiator; those only update its record of neko's host, since reading one as a human's would re-grant a session the lease has already moved past and drop the next human's first input.
 `session.control_protection` stays off, `session.private_mode` off, `session.inactive_cursors` on, `session.merciful_reconnect` on.
 
 ### 6.3 Sessions and identity
@@ -268,7 +269,7 @@ Nothing stops the group for lack of viewers, windows, or apps (D3).
 
 ### 9.4 Bands
 
-`SERVICE_BANDS` gains `screen = 72`, between `system_interface` and `files` (the `browser` and `xvfb` bands go with the browser app), for the service; the four group members and the watcher sit at `SCREEN_STACK` (850), above every agent (an abandoned chat's ceiling is 800) and below `AGENT_SUBPROCESS`, since the desktop is something an agent or the user launched and ending its X server takes every program on it along.
+`SERVICE_BANDS` gains `screen = 72`, between `system_interface` and `files` (the `browser` and `xvfb` bands go with the browser app), for the service; the four group members and the watcher sit at `SCREEN_STACK` (850), above every worker and every fresh chat (such a chat sits at 560 or below; one left for hours climbs past the stack) and below `AGENT_SUBPROCESS`, since the desktop is something an agent or the user launched and ending its X server takes every program on it along.
 Chromium's processes are re-tagged into the shared-browser band by the migrated `oom_retag` sweep as today, and `screen run` launches land in `AGENT_SUBPROCESS` (900).
 Programs started from the Screen itself (the XFCE menu, a terminal on it) inherit the session's band, so the service runs a raise-only sweep every 10 seconds, the shape of the Chromium retag: every descendant of `screen-session` whose executable is not one of the session's own (`xfce4-session`, `xfwm4`, `xfce4-panel`, `xfdesktop`, `xfsettingsd`, `xfconfd`, and the D-Bus daemon they start) is raised to `AGENT_SUBPROCESS`, and Chromium's to the shared-browser band as today.
 Under pressure the order is therefore: programs on the Screen, then Chromium's renderers, then the stack, then the agents, then the services (the Screen service among them, which starts the stack again on the next open).
@@ -511,7 +512,7 @@ What the implementers found and verified where the tree departs from the text ab
 - The pointer-lock control is hidden: neko v3 has no relative-motion event, only absolute `control/move`, so the plumbing waits behind `IS_RELATIVE_MOTION_SUPPORTED` (section 12).
 - The share gateway's loopback route is `GET /connect-info` on its loopback port, as section 15 says, and the desktop's `media-endpoints` spells the protocol upper-case where the connector spells it lower-case; the service lowercases (section 5.2).
 - neko stops the audio pipeline on its own while every session has audio disabled (measured: PulseAudio and the encoder at 0% with a muted viewer), so the null-device fallback of section 8.3 is not needed.
-- The bands as prescribed shed Chromium's renderers before the programs on the Screen: `AGENT_SUBPROCESS` (900) sits below the shared-browser band (910 to 1000), so under pressure the order is Chromium's renderers, then programs on the Screen, then the stack at `SCREEN_STACK` (850), then the agents (section 9.4).
+- The bands as prescribed shed Chromium's renderers before the programs on the Screen: `AGENT_SUBPROCESS` (900) sits below the shared-browser band (910 to 960), so under pressure the order is Chromium's renderers, then programs on the Screen, then the stack at `SCREEN_STACK` (850), then the agents (section 9.4).
 - `GET /json/version` and `/json/list` are served by the CDP proxy on `127.0.0.1:8083`, not by the service on 8090 (section 10.1).
 - The acceptance test of section 20 runs on a developer's machine only (`system/apps/screen/test_screen_acceptance.py`, which needs the mngr monorepo for the Imbue Studio app); CI runs the in-image integration suite.
 - The screencast's rate is 5 fps (section 5.4) because each frame is a full JPEG of the display and the workspace is CPU-bound, and the fallback is for seeing the Screen, not for motion; the strip's "Details" toggle names the path in use from the peer's statistics.

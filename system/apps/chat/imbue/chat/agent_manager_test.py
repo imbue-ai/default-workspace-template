@@ -47,6 +47,7 @@ from imbue.chat.agent_manager import FirstMessage
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import ROOM_CREATE_SETTINGS
+from imbue.chat.agent_manager import UNREADABLE_CHAT_BUSY_REASON
 from imbue.chat.agent_manager import UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import _AwaitedChat
 from imbue.chat.agent_manager import _FINISHED_TASK_TURN_GRACE_PASSES
@@ -62,9 +63,12 @@ from imbue.chat.agent_manager import _ids_of_user_turns_saying
 from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.agent_manager import _sends_the_transcript_does_not_hold
 from imbue.chat.agent_manager import chat_status_for_agent
+from imbue.chat.agent_manager import is_first_message_after_create
 from imbue.chat.agent_manager import is_rebind_target
+from imbue.chat.agent_manager import launch_fast_identity
 from imbue.chat.agent_manager import launch_role_templates
 from imbue.chat.agent_manager import resolve_is_busy
+from imbue.chat.agent_manager import restart_busy_reason
 from imbue.chat.agent_manager import user_turns_refused_for_sign_in
 from imbue.chat.authors import author_prefix
 from imbue.chat.authors import new_author_annotation
@@ -81,6 +85,7 @@ from imbue.chat.chat_fast_mode import read_fast_mode_state
 from imbue.chat.chat_handoffs import ALLOW_SETTINGS_NARROWING_ENV
 from imbue.chat.chat_handoffs import CREATE_WITHOUT_ACCOUNT_ENV
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
+from imbue.chat.chat_handoffs import UNDELIVERED_HELD_SEND_DETAIL
 from imbue.chat.chat_handoffs import create_command_env
 from imbue.chat.chat_rebinds import RebindCancelledError
 from imbue.chat.chat_records import ChatRecord
@@ -112,6 +117,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
+from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
@@ -182,6 +188,7 @@ from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.errors import ConcurrencyGroupError
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
+from imbue.concurrency_group.thread_utils import ObservableThread
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import acquire_observe_lock
@@ -617,6 +624,48 @@ def test_a_handoffs_successor_starts_fast_only_when_the_chats_mode_calls_for_it(
         assert "fast" in manager._build_successor_create_command(spec)
     finally:
         manager.stop()
+
+
+def test_a_chat_that_launches_fast_switches_only_the_fast_axis_on() -> None:
+    """A codex agent's launch speed is set by a switch once it is up: fast on, its own model and effort kept."""
+    live = ModelIdentity(model_id="gpt-6.1-sol", effort="medium", fast=False)
+
+    assert launch_fast_identity(ChatFastModeState(mode=FastModeMode.ON), live) == ModelIdentity(
+        model_id="gpt-6.1-sol", effort="medium", fast=True
+    )
+    assert launch_fast_identity(ChatFastModeState(mode=FastModeMode.AUTO), live) == ModelIdentity(
+        model_id="gpt-6.1-sol", effort="medium", fast=True
+    )
+    # Before the agent has recorded a selection, the fast axis alone is still enough to switch.
+    assert launch_fast_identity(ChatFastModeState(mode=FastModeMode.ON), None) == ModelIdentity(
+        model_id="", effort=None, fast=True
+    )
+
+
+@pytest.mark.parametrize(
+    ("harness", "is_picked", "launches_fast", "expected"),
+    [
+        (HarnessType.CLAUDE, False, False, False),
+        # claude launches fast through the template, so its message can still ride the create.
+        (HarnessType.CLAUDE, False, True, False),
+        (HarnessType.CLAUDE, True, False, True),
+        (HarnessType.CODEX, False, False, False),
+        # codex is switched fast once it is up, which has to land before its first turn.
+        (HarnessType.CODEX, False, True, True),
+        (HarnessType.ROOM, False, False, True),
+    ],
+)
+def test_a_new_chats_first_message_follows_the_create_when_something_must_be_set_before_its_first_turn(
+    harness: HarnessType, is_picked: bool, launches_fast: bool, expected: bool
+) -> None:
+    assert is_first_message_after_create(harness, is_picked, launches_fast) is expected
+
+
+def test_a_chat_that_does_not_launch_fast_is_not_switched() -> None:
+    live = ModelIdentity(model_id="gpt-6.1-sol", effort="medium", fast=False)
+
+    assert launch_fast_identity(ChatFastModeState(mode=FastModeMode.OFF), live) is None
+    assert launch_fast_identity(ChatFastModeState(mode=FastModeMode.AUTO, is_switched=True), live) is None
 
 
 def test_a_handoffs_successor_is_created_and_tracked_with_the_chats_idle_compaction_setting(
@@ -2550,10 +2599,12 @@ def test_run_creation_tells_the_page_the_chat_landed_even_when_settling_it_fails
 
 
 def test_a_first_message_that_landed_is_told_of_under_its_own_id_and_a_refused_one_is_not(
-    agent_manager: AgentManager, tmp_path: Path
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     """The message a create leaves out is handed over under the id the sender's annotation carries, and what a
-    landed message does next (a room's mentions) runs only for one that landed."""
+    landed message does next (a room's mentions) runs only for one that landed. A refused one is told to the pages
+    instead, so the one that sent it can hand it back to its composer."""
+    q = broadcaster.register()
     sent: list[tuple[str, str, str]] = []
     told: list[tuple[ChatId, str]] = []
 
@@ -2587,6 +2638,20 @@ def test_a_first_message_that_landed_is_told_of_under_its_own_id_and_a_refused_o
 
     assert sent == [("test-id", "@agent hello", "m-test-id"), ("test-id-2", "refused", "m-test-id-2")]
     assert told == [(ChatId("test-id"), "m-test-id")]
+    broadcasts: list[dict[str, Any]] = []
+    while not q.empty():
+        raw = q.get_nowait()
+        assert raw is not None
+        broadcasts.append(json.loads(raw))
+    assert [message for message in broadcasts if message["type"] == "held_send_failed"] == [
+        {
+            "type": "held_send_failed",
+            "chat_id": "test-id-2",
+            "message_id": "m-test-id-2",
+            "detail": UNDELIVERED_HELD_SEND_DETAIL,
+            "kind": "not_ready",
+        }
+    ]
 
 
 def test_run_creation_leaves_a_failed_chat_in_the_failed_phase_with_the_output_tail(
@@ -2816,8 +2881,9 @@ def test_every_harness_launches_through_the_oom_band_wrapper() -> None:
 
 def test_chat_create_argv_carries_no_launch_settings() -> None:
     """Plain chats launch at the harness defaults: no `-S` overrides at all. Fast
-    mode rides only the `fast` create template (see .mngr/settings.toml), never
-    the argv, so a chat launched without it starts at standard speed."""
+    mode rides the `fast` create template (see .mngr/settings.toml) or a switch
+    once the agent is up, never the argv, so a chat launched without either
+    starts at standard speed."""
     argv = _chat_create_argv()
     assert "-S" not in argv
     assert not any("fastMode" in token for token in argv)
@@ -7153,7 +7219,7 @@ def test_a_handoff_moves_a_chat_to_a_new_agent_on_another_harness(
         assert archived.labels["chat_seq"] == "1" and archived.labels["chat_id"] == first
 
         verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
-        assert verbs == ["stop", "rename", "create"]
+        assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
         assert sent[0][0] == first and sent[0][1].startswith("/handoff-summary ")
         # The prompt reached the successor through the send path, with the message at its end.
         assert sent[1][0] == successor and sent[1][2].startswith("handoff-prompt-")
@@ -7205,7 +7271,8 @@ def test_a_handoff_off_an_agent_with_no_user_turn_is_a_fresh_start(
         assert [entry.is_fresh_start for entry in record.agents] == [False, True]
         assert sent == []
         assert not (tmp_path / "chats" / first / "summaries").exists()
-        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "rename", "create"]
+        verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
+        assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
         # The snapshot never listed a confirming message, since none was typed.
         assert manager.get_handoff_state(ChatId(first)) is None
     finally:
@@ -7272,21 +7339,23 @@ def test_a_model_pick_the_successor_cannot_take_fails_the_switch_at_the_model_st
         (snapshot,) = manager.get_chat_snapshots()
         assert snapshot.status is ChatStatus.ERROR and snapshot.handoff is not None
         assert snapshot.handoff.failed_step is HandoffFailedStep.MODEL
-        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "rename", "create"]
+        verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
+        assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
         # Only the summary request went out: the prompt waits for the pick.
         assert [message_id for _agent, _text, message_id in sent] == [f"handoff-summary-{record.handoff.handoff_id}"]
 
         # A retry on the same account adopts the successor: no create, the pick fails again the same way.
         assert manager.retry_handoff(chat_id, record.handoff.target_account_id) is HandoffPhase.SWITCHING
         wait_for(is_failed, timeout=15.0)
-        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "rename", "create"]
+        verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
+        assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
 
         # A retry on another account of the same harness keeps the pick, destroys the successor, and
         # creates afresh under the same pre-minted id.
         assert manager.retry_handoff(chat_id, _openai_account()) is HandoffPhase.SWITCHING
         wait_for(is_failed, timeout=15.0)
         verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
-        assert verbs == ["stop", "rename", "create", "destroy", "create"]
+        assert verbs[0] == "rename" and sorted(verbs[1:3]) == ["create", "stop"] and verbs[3:] == ["destroy", "create"]
         assert f"destroy {successor} --force" in argv_log.read_text().splitlines()
         assert argv_log.read_text().splitlines()[-1].split(" ")[3] == successor
         retried = store.read(chat_id)
@@ -7454,6 +7523,61 @@ def _converging_chat(
     return first, successor
 
 
+def test_a_landed_handoff_reads_as_its_successor_and_a_wait_on_it_ends_with_the_delivery(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """Once the successor is the chat's last member, only the deliveries to it remain: the chat's status is the
+    successor's own, and a request waiting on the switch goes ahead the moment the record lets the switch go."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first, successor = _converging_chat(manager, store, phase=HandoffPhase.SWITCHING, is_retiring_archived=True)
+    chat_id = ChatId(first)
+    seed_agent_state(
+        manager,
+        successor,
+        name="Chat-1",
+        labels={"display_name": "Chat 1", "account": "acct-openai"},
+        harness=HarnessType.CODEX,
+        activity_state=ActivityState.IDLE,
+    )
+    try:
+        before = manager.get_handoff_state(chat_id)
+        assert before is not None and before.has_landed is False
+        # Not landed: nothing to wait for, and the chat still converges.
+        assert manager.wait_for_landed_switch(chat_id, timeout=0.0) is False
+
+        record = store.read(chat_id)
+        assert record is not None and record.handoff is not None
+        landed = record.model_copy_update(
+            to_update(
+                record.field_ref().agents,
+                (*record.agents, make_chat_agent_entry(2, successor, is_archived=False, harness=HarnessType.CODEX)),
+            )
+        )
+        store.write(landed)
+        manager.refresh_chat_records()
+        state = manager.get_handoff_state(chat_id)
+        assert state is not None and state.has_landed is True
+        snapshot = manager.get_chat_snapshot(first)
+        assert snapshot is not None and snapshot.active_agent.agent_id == successor
+        assert snapshot.status is ChatStatus.IDLE
+        assert manager.wait_for_landed_switch(chat_id, timeout=0.05) is False
+
+        outcomes: list[bool] = []
+        waiter = ObservableThread(
+            target=lambda: outcomes.append(manager.wait_for_landed_switch(chat_id, timeout=10.0)), name="waiter"
+        )
+        waiter.start()
+        waiter.join(timeout=0.2)
+        assert waiter.is_alive() and outcomes == []
+        store.write(landed.model_copy_update(to_update(landed.field_ref().handoff, None)))
+        manager.refresh_chat_records()
+        waiter.join(timeout=5.0)
+        assert outcomes == [True]
+    finally:
+        manager.stop()
+
+
 def test_a_converging_chat_holds_sends_refuses_the_verbs_and_can_be_cancelled(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
@@ -7491,6 +7615,72 @@ def test_a_converging_chat_holds_sends_refuses_the_verbs_and_can_be_cancelled(
         with pytest.raises(HandoffError):
             manager.cancel_handoff(chat_id)
         assert not argv_log.exists()
+    finally:
+        manager.stop()
+
+
+def test_a_switch_keeps_listing_each_held_send_it_has_delivered_until_it_is_done(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The switch takes each held send off its list as it delivers it, before its turn can reach the transcript, so
+    the page goes on showing it from the snapshot: the snapshot lists it until the switch is done, and is pushed as each
+    send is taken, so the page knows which are delivered. A send that did not land has no turn to wait for, so it stops
+    being listed."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent, has_user_turn=False)
+    first = f"agent-{uuid4().hex}"
+    chat_id = ChatId(first)
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    is_delivering_trigger = threading.Event()
+    is_follow_up_held = threading.Event()
+    is_delivering_last = threading.Event()
+    is_last_retried = threading.Event()
+    listed_while_delivering: dict[str, list[tuple[str, bool]]] = {}
+    q = broadcaster.register()
+    pushed: list[dict[str, Any]] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        latest = _last_chats_updated(_drain(q))
+        if latest is not None:
+            pushed[:] = [latest]
+        [snapshot] = [chat for chat in pushed[0]["chats"] if chat["chat_id"] == chat_id]
+        listed_while_delivering[message_id] = [
+            (held["message_id"], held["is_delivered"]) for held in snapshot["handoff"]["held_sends"]
+        ]
+        if message_id == "m-1":
+            is_delivering_trigger.set()
+            is_follow_up_held.wait(timeout=10.0)
+        if message_id == "m-3":
+            is_delivering_last.set()
+            is_last_retried.wait(timeout=10.0)
+        sent.append((agent_info.id, text, message_id))
+        return SendOutcome.FAILED if message_id == "m-2" else SendOutcome.OK
+
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader(["e-1"]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=deliver,
+        )
+    )
+    try:
+        manager.begin_handoff(chat_id, _openai_account(), "Carry on in Codex", "m-1", HeldSendOrigin.CLIENT)
+        wait_for(is_delivering_trigger.is_set, timeout=15.0)
+        assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.CLIENT) is HandoffPhase.SWITCHING
+        assert manager.hold_send(chat_id, "m-3", "and that", HeldSendOrigin.CLIENT) is HandoffPhase.SWITCHING
+        is_follow_up_held.set()
+        wait_for(is_delivering_last.is_set, timeout=15.0)
+        # A client retrying a send the switch has already taken to deliver does not have it delivered again.
+        assert manager.hold_send(chat_id, "m-3", "and that", HeldSendOrigin.CLIENT) is HandoffPhase.SWITCHING
+        is_last_retried.set()
+        _wait_until_settled(store, chat_id)
+        assert [message_id for _agent, _text, message_id in sent] == ["m-1", "m-2", "m-3"]
+        assert listed_while_delivering == {
+            "m-1": [("m-1", True)],
+            "m-2": [("m-1", True), ("m-2", True), ("m-3", False)],
+            "m-3": [("m-1", True), ("m-3", True)],
+        }
+        assert manager.get_handoff_state(chat_id) is None
     finally:
         manager.stop()
 
@@ -8038,6 +8228,91 @@ def test_status_mapping_follows_the_chat_row(
     expected: ChatStatus,
 ) -> None:
     assert chat_status_for_agent(lifecycle, activity, is_permission_pending, is_busy, is_turn_closing) is expected
+
+
+@pytest.mark.parametrize(
+    (
+        "lifecycle",
+        "activity",
+        "is_marker_present",
+        "is_permission_pending",
+        "is_connecting",
+        "has_queued",
+        "has_harness_task",
+        "expected",
+    ),
+    [
+        ("WAITING", ActivityState.IDLE, False, False, False, False, False, None),
+        ("WAITING", None, False, False, False, False, False, None),
+        # The transcript reads idle between an assistant message and its next tool call.
+        ("RUNNING", ActivityState.IDLE, False, False, False, False, False, "working"),
+        # A turn the observe-reported lifecycle has not caught up with yet.
+        ("WAITING", ActivityState.IDLE, True, False, False, False, False, "working"),
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, True, False, False, False, False, "working"),
+        ("RUNNING", ActivityState.TOOL_RUNNING, True, False, False, False, False, "working"),
+        ("WAITING", ActivityState.COMPACTING, False, False, False, False, False, "working"),
+        ("UNKNOWN", ActivityState.IDLE, False, False, False, False, False, "working"),
+        ("WAITING", ActivityState.IDLE, True, True, False, False, False, "waiting on a dialog"),
+        ("WAITING", ActivityState.IDLE, False, False, True, False, False, "receiving a message"),
+        ("WAITING", ActivityState.IDLE, False, False, False, True, False, "holding queued messages"),
+        # The harness's own background work, which a restart would end unreported: as the lifecycle reports it,
+        # and as an older turn-end hook's chat, which reports WAITING, records it.
+        ("RUNNING_BACKGROUND", ActivityState.IDLE, False, False, False, False, False, "waiting on background work"),
+        ("WAITING", ActivityState.IDLE, False, False, False, False, True, "waiting on background work"),
+    ],
+)
+def test_only_a_chat_whose_harness_ended_its_turn_is_free_to_restart(
+    lifecycle: str,
+    activity: ActivityState | None,
+    is_marker_present: bool,
+    is_permission_pending: bool,
+    is_connecting: bool,
+    has_queued: bool,
+    has_harness_task: bool,
+    expected: str | None,
+) -> None:
+    assert (
+        restart_busy_reason(
+            lifecycle, activity, is_marker_present, is_permission_pending, is_connecting, has_queued, has_harness_task
+        )
+        == expected
+    )
+
+
+def test_a_turn_the_lifecycle_has_not_caught_up_with_is_read_off_the_active_marker(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", state="WAITING")
+    agent_manager._ensure_activity_tracking("agent-1")
+    assert agent_manager.restart_busy_reason_for_chat(ChatId("agent-1")) is None
+
+    (state_dir / "active").touch()
+    assert agent_manager.restart_busy_reason_for_chat(ChatId("agent-1")) == "working"
+
+
+def test_only_a_harness_task_keeps_a_waiting_chat_from_its_restart_and_is_read_without_waiting_for_the_poller(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A ``run_in_background`` command a restart ends is reported by its runner, which outlives the restart; one
+    of the harness's own tasks dies unreported. The check re-reads the markers, so a task recorded since the poller's
+    last pass still counts."""
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING", activity_state=ActivityState.IDLE)
+        write_background_task_marker(reader, "agent-1", "runner-task", os.getpid())
+        assert manager.restart_busy_reason_for_chat(ChatId("agent-1")) is None
+
+        write_background_task_marker(reader, "agent-1", "claude-task", os.getpid(), harness="claude")
+        assert manager.restart_busy_reason_for_chat(ChatId("agent-1")) == "waiting on background work"
+    finally:
+        manager.stop()
+
+
+def test_a_chat_the_manager_cannot_read_is_never_free_to_restart(agent_manager: AgentManager) -> None:
+    """An unattended restart needs positive evidence the turn has ended; not finding the chat is not that."""
+    assert agent_manager.restart_busy_reason_for_chat(ChatId("agent-unknown")) == UNREADABLE_CHAT_BUSY_REASON
 
 
 def test_mint_awaiting_chat_lists_a_provisional_chat_with_a_minted_name_and_no_seed(

@@ -276,6 +276,7 @@ def _bubble_body(speaker: str) -> dict[str, Any]:
         "text": "hi all",
         "message_id": "m-1",
         "mentions": ["user:user-josh-0001"],
+        "kind": "message",
     }
 
 
@@ -302,6 +303,8 @@ def test_a_bubble_reaches_every_window_but_the_speakers_own_clients(
         == 403
     )
     assert client.post("/api/bubbles", json={"speaker": "user:x"}).status_code == 400
+    shouted = {**_bubble_body("user:user-bob-4471"), "kind": "shout"}
+    assert client.post("/api/bubbles", json=shouted).status_code == 400
 
 
 def test_the_chats_activity_is_kept_and_broadcast(
@@ -1890,8 +1893,20 @@ def test_every_app_record_the_browser_reads_carries_the_message_handlers_its_row
         "terminal": [],
         "files": [],
         "buddy": [
-            {"type": "minds:focus-chat", "path": "/api/focus-chat", "show": None, "showing": []},
-            {"type": "open:file", "path": None, "show": "{path}?view", "showing": ["{path}/"]},
+            {
+                "type": "minds:focus-chat",
+                "path": "/api/focus-chat",
+                "show": None,
+                "showing": [],
+                "reload_when_raised": False,
+            },
+            {
+                "type": "open:file",
+                "path": None,
+                "show": "{path}?view",
+                "showing": ["{path}/"],
+                "reload_when_raised": False,
+            },
         ],
     }
     listed = client.get("/api/inventory").get_json()["apps"]
@@ -2820,6 +2835,27 @@ def test_a_visiting_users_deleted_desktop_is_seeded_again_with_the_old_name_repo
     assert record is not None and record.active_desktop == "alice"
 
 
+def test_a_visitor_whose_recorded_desktop_id_now_names_the_owners_desktop_gets_one_of_their_own(
+    client: FlaskClient, app: Flask
+) -> None:
+    # Her record still names "alice" after the owner deletes her desktop, and the owner's next desktop of that name
+    # takes the id: landing her there would leave her viewing the owner's desktop with nowhere to stop viewing to.
+    _arrive(client, "c-alice", _ALICE)
+    assert client.post("/api/desktops/alice/delete").status_code == 200
+    owners = client.post("/api/desktops", json={"name": "alice"})
+    assert owners.status_code == 201 and owners.get_json()["id"] == "alice" and owners.get_json()["owner"] is None
+
+    again = _arrive(client, "c-alice", _ALICE)
+
+    owner_by_id = {desktop["id"]: desktop["owner"] for desktop in client.get("/api/desktops").get_json()["desktops"]}
+    assert owner_by_id[again["desktop_id"]] == "user:user-alice"
+    assert again["created_desktop"]["id"] == again["desktop_id"]
+    assert again["replaced_desktop_name"] == "alice"
+    assert owner_by_id["alice"] is None
+    record = _shell(app).clients.get_client("c-alice")
+    assert record is not None and record.active_desktop == again["desktop_id"]
+
+
 # The update notice
 
 
@@ -3435,3 +3471,30 @@ def test_the_tour_record_round_trips(client: FlaskClient) -> None:
     assert client.post("/api/tour", json={"is_seen": "not a flag"}).status_code == 400
     assert client.post("/api/tour", json={"is_seen": True, "resume_index": "three"}).status_code == 400
     assert client.post("/api/tour", json={"is_seen": True, "resume_index": -1}).status_code == 400
+
+
+def test_the_resource_gauge_settings_round_trip_and_are_the_owners_alone(client: FlaskClient) -> None:
+    view = client.get("/api/resource-gauge").get_json()
+    assert view["settings"] == {
+        "visibility": "when_warning",
+        "disk_warning_free_gb": 5.0,
+        "memory_warning_percent": None,
+        "cpu_warning_percent": 90,
+    }
+    assert set(view["readings"]) == {"cpu", "memory", "disk"}
+    assert view["alerts"] == []
+    assert view["recent_stops"] == []
+    chosen = {
+        "visibility": "always",
+        "disk_warning_free_gb": 2.0,
+        "memory_warning_percent": 95,
+        "cpu_warning_percent": None,
+    }
+    assert client.post("/api/resource-gauge/settings", json=chosen).get_json()["settings"] == chosen
+    assert client.get("/api/resource-gauge").get_json()["settings"] == chosen
+    assert client.post("/api/resource-gauge/settings", json={"disk_warning_free_gb": 0}).status_code == 400
+    assert client.post("/api/resource-gauge/settings", json={"visibility": "sometimes"}).status_code == 400
+    visitor = identity_headers(_BOB_IDENTITY)
+    refused = client.post("/api/resource-gauge/settings", json={"visibility": "when_warning"}, headers=visitor)
+    assert refused.status_code == 403
+    assert client.get("/api/resource-gauge", headers=visitor).get_json()["settings"] == chosen

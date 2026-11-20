@@ -15,7 +15,7 @@ import {
 import { addOutgoing, clearOutgoing, getOutgoingMessages, noteBackendArrivals } from "../models/OutgoingMessages";
 import { BackgroundTasksLine } from "./BackgroundTasksLine";
 import { notePermissionResolutions, resetShellPermissionResolutionsForTesting } from "./permission-card";
-import { handoffStateFixture } from "../models/chatSnapshotFixture";
+import { handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
 
 // The component reads the agent's server-derived state through the chats model; the
 // mock factory is hoisted, so the state it serves lives in a mutable holder.
@@ -38,6 +38,11 @@ const chatState: { status: string } = { status: "idle" };
 vi.mock("../models/Chats", () => ({
   getChatById: () => ({ active_agent: agentState, handoff: handoffState.handoff, status: chatState.status }),
   getQueuedMessagesForChat: () => agentState.queued_messages,
+}));
+// How many of the switching chat's delivered held sends already show in their real form.
+const landedHeldSends = vi.hoisted(() => ({ count: 0 }));
+vi.mock("./HeldSendView", () => ({
+  heldSendsShownElsewhere: () => landedHeldSends.count,
 }));
 vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
@@ -328,16 +333,32 @@ describe("ActivityIndicator — what the strip actually renders", () => {
     });
   };
 
-  it("reports the switch, not the old agent's turn, while the chat moves to another harness", () => {
+  it("leaves a running switch to its line in the conversation, showing neither it nor the old agent's turn", () => {
     agentState.activity_state = "THINKING";
-    handoffState.handoff = handoffStateFixture({ phase: "summarizing" });
-    const strip = render();
-    expect(labelTextOf(strip)).toBe("Claude Code is writing a summary…");
-    expect((strip?.attrs as Record<string, unknown>)["data-state"]).toBe("HANDOFF_summarizing");
+    for (const phase of ["draining", "summarizing", "switching"] as const) {
+      handoffState.handoff = handoffStateFixture({ phase });
+      expect(render()).toBeNull();
+    }
+    handoffState.handoff = rebindStateFixture();
+    expect(render()).toBeNull();
     // The failed phase has its own notice over the composer; the strip goes back to the agent.
     handoffState.handoff = handoffStateFixture({ phase: "failed" });
     agentState.activity_state = "IDLE";
     expect(render()).toBeNull();
+    handoffState.handoff = null;
+  });
+
+  it("reports the successor's own activity once a handoff has landed, though the chat still delivers to it", () => {
+    agentState.activity_state = "THINKING";
+    handoffState.handoff = null;
+    const ordinary = render();
+    handoffState.handoff = handoffStateFixture({ phase: "switching", has_landed: true });
+    const landed = render();
+    expect(labelTextOf(landed)).toBe(labelTextOf(ordinary));
+    expect((landed?.attrs as Record<string, unknown>)["data-state"]).toBe(
+      (ordinary?.attrs as Record<string, unknown>)["data-state"],
+    );
+    expect(String((landed?.attrs as Record<string, unknown>)["data-state"])).not.toMatch(/^HANDOFF_/);
     handoffState.handoff = null;
   });
 
@@ -422,6 +443,7 @@ describe("ActivityIndicator — the row before, during and after a turn", () => 
     agentState.background_tasks = [];
     agentState.queued_messages = [];
     handoffState.handoff = null;
+    landedHeldSends.count = 0;
     chatState.status = "idle";
     now = NOW;
     resetSettledTurnsForTesting();
@@ -566,14 +588,69 @@ describe("ActivityIndicator — the row before, during and after a turn", () => 
     expect(partOf(render([opening]), "elapsed")).toBe("8s");
   });
 
-  it("puts the row under the user's own send while it waits, and under the turn while the agent works", () => {
+  it("keeps the row under a send that opened the turn until the send reaches the transcript", () => {
     expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
 
     addOutgoing(CHAT_ID, "hello");
     expect(turnStatusPlacement(CHAT_ID)).toBe("after-sends");
 
-    // A message sent while the agent works on an earlier turn waits below that turn's row.
+    // The agent reports the turn before its message has reached the transcript.
     agentState.activity_state = "THINKING";
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-sends");
+
+    noteBackendArrivals(CHAT_ID, ["u-hello"]);
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
+  });
+
+  it("keeps the row under every send until the one that opened the turn lands, then above the send behind it", () => {
+    addOutgoing(CHAT_ID, "hello");
+    addOutgoing(CHAT_ID, "and another thing");
+    agentState.activity_state = "THINKING";
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-sends");
+
+    noteBackendArrivals(CHAT_ID, ["u-hello-ahead"]);
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
+  });
+
+  it("puts a send made while the agent works on an earlier turn below that turn's row", () => {
+    agentState.activity_state = "THINKING";
+    addOutgoing(CHAT_ID, "and another thing");
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
+  });
+
+  it("puts the row of a switch that hands its held sends over as the next turn under them", () => {
+    handoffState.handoff = handoffStateFixture({
+      phase: "switching",
+      is_fresh_start: true,
+      held_sends: [{ message_id: "m-1", text: "Find what's using disk space" }],
+    });
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-sends");
+
+    // Once the first held send has landed and opened the turn, the others wait behind it.
+    handoffState.handoff = handoffStateFixture({
+      phase: "switching",
+      is_fresh_start: true,
+      held_sends: [
+        { message_id: "m-1", text: "Find what's using disk space" },
+        { message_id: "m-2", text: "and this" },
+      ],
+    });
+    landedHeldSends.count = 1;
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
+
+    // A rebind hands its confirming message to the same agent as the next turn's own message.
+    handoffState.handoff = rebindStateFixture();
+    landedHeldSends.count = 0;
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-sends");
+    landedHeldSends.count = 1;
+    expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
+
+    // A handoff that carries the conversation over opens the successor's turn with its prompt, which the
+    // held sends wait behind.
+    handoffState.handoff = handoffStateFixture({
+      phase: "switching",
+      held_sends: [{ message_id: "m-2", text: "and this" }],
+    });
     expect(turnStatusPlacement(CHAT_ID)).toBe("after-turn");
   });
 });

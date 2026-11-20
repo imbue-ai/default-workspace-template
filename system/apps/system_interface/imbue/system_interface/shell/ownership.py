@@ -4,6 +4,7 @@ of the owner's keys; any other is its owner's alone. Pure functions, kept apart 
 stays a function of the records alone.
 """
 
+from collections.abc import Mapping
 from collections.abc import Sequence
 
 from workspace_layout.identity import RequestIdentity
@@ -15,7 +16,9 @@ from workspace_layout.primitives import ParticipantKey
 from workspace_layout.records import ClientRecord
 from workspace_layout.records import Desktop
 
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.errors import DesktopValueError
 
 
@@ -54,6 +57,26 @@ def desktop_owner_of(identity: RequestIdentity) -> ParticipantKey | None:
     """The ``owner`` a desktop the requester creates is written with: none for the workspace owner (whose desktops
     carry no key, as every desktop from before the key was kept), else the requester's key."""
     return None if is_owner_participant(identity) else participant_key_of(identity)
+
+
+@pure
+def visitor_desktop_owners(records: Sequence[UserRecord]) -> dict[DesktopId, ParticipantKey]:
+    """Each desktop the shell made for a signed-in visitor, by id, with the key of the visitor it was made for."""
+    return {record.desktop_id: ParticipantKey(f"user:{record.user_id}") for record in records}
+
+
+@pure
+def with_visitor_owners(
+    desktops: Sequence[Desktop], owner_by_desktop_id: Mapping[DesktopId, ParticipantKey]
+) -> tuple[Desktop, ...]:
+    """The desktops, each one with no owner that ``owner_by_desktop_id`` names now carrying that owner: a visitor's
+    desktop seeded before desktops carried an owner would otherwise read as the workspace owner's."""
+    return tuple(
+        desktop.model_copy_update(to_update(desktop.field_ref().owner, owner_by_desktop_id[desktop.id]))
+        if desktop.owner is None and desktop.id in owner_by_desktop_id
+        else desktop
+        for desktop in desktops
+    )
 
 
 @pure

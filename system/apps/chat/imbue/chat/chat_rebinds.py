@@ -32,6 +32,7 @@ from imbue.chat.accounts import AccountError
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.chat_autocompact import ChatAutocompactState
+from imbue.chat.chat_handoffs import HeldSendDelivery
 from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import failure_notice
 from imbue.chat.chat_handoffs import joined_blocks
@@ -126,7 +127,7 @@ class RebindDeps(FrozenModel):
     # Replace the record under the manager's lock, given the current record; raises
     # ``RebindCancelledError`` when the record no longer carries this rebind.
     update_record: Callable[[ChatId, str, Callable[[ChatRecord], ChatRecord]], ChatRecord]
-    # Pop the next held send, or clear the rebind and return None when none remain; atomic with
+    # Move the next held send onto the delivered list, or clear the rebind and return None when none remain; atomic with
     # the message route's hold. Raises ``RebindCancelledError`` for another rebind.
     take_next_held_send: Callable[[ChatId, str], HeldSend | None]
     get_agent_state: Callable[[str], AgentStateItem | None]
@@ -135,6 +136,8 @@ class RebindDeps(FrozenModel):
     account_dir: Callable[[str], Path]
     # The send path the message route takes, revival included; raises ``SendFailedError``.
     deliver: Callable[[AgentInfo, str, str], SendOutcome]
+    # Told of a held send that never landed (``HeldSendDelivery.report_undelivered``).
+    report_undelivered: Callable[[ChatId, str, str, str], None]
     # Apply a model pick to a running agent, validated against its option set as the model bar's own
     # pick is; raises ``ModelPickRejectedError`` for a pick outside that set and ``ModelApplyError`` when
     # the harness refused the switch, each with the reason the failed page shows.
@@ -163,6 +166,14 @@ class RebindRunner:
         runner = cls.__new__(cls)
         runner._deps = deps
         return runner
+
+    def _held_send_delivery(self) -> HeldSendDelivery:
+        return HeldSendDelivery(
+            deliver=self._deps.deliver,
+            sleep=self._deps.sleep,
+            is_stopping=self._deps.shutdown_event.is_set,
+            report_undelivered=self._deps.report_undelivered,
+        )
 
     def _current(self, chat_id: ChatId, rebind_id: str) -> tuple[ChatRecord, ChatRebindRecord]:
         if self._deps.shutdown_event.is_set():
@@ -445,7 +456,8 @@ class RebindRunner:
 
         The rebind entry is cleared only once the held list is empty, inside the same lock the
         message route appends under, so a send that arrives during delivery is delivered by
-        this loop rather than overtaking one still held.
+        this loop rather than overtaking one still held. A send that does not land leaves the
+        delivered list again, so the page stops showing it.
         """
         agent_info = self._deps.get_agent_info(agent_id)
         if agent_info is None:
@@ -453,7 +465,10 @@ class RebindRunner:
                 f"agent {agent_id} of chat {chat_id} is untracked; its held sends stay on the record"
             )
         while (held := self._deps.take_next_held_send(chat_id, rebind_id)) is not None:
-            deliver_held_send(self._deps.deliver, agent_info, held, chat_id)
+            if not deliver_held_send(self._held_send_delivery(), agent_info, held, chat_id):
+                self._update_rebind(
+                    chat_id, rebind_id, lambda current: current.without_delivered_send(held.message_id)
+                )
         logger.info(
             "Rebind of chat {}: agent {} is back on account {}",
             chat_id,
