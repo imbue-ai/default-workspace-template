@@ -2,8 +2,9 @@
 that program's registration line passes, and declares a memory band that exists.
 
 Every manifest in the tree -- user-built apps included -- also validates against the real
-repo root, which is what checks that its declared references still exist where it says,
-and no two of them declare the same name.
+repo root, which is what checks that its declared references (for an app with a record,
+the ones its record lists) still exist where it says, and no two of them declare the same
+name.
 """
 
 import ast
@@ -13,7 +14,7 @@ from pathlib import Path
 
 import pytest
 from app_install.operations import check as app_install_check
-from app_manifest.errors import ManifestLoadError
+from app_manifest.errors import ManifestLoadError, RecordLoadError
 from app_manifest.manifest import (
     MANIFEST_FILENAME,
     AppManifest,
@@ -21,12 +22,19 @@ from app_manifest.manifest import (
     load_manifest,
 )
 from app_manifest.primitives import RESERVED_APP_NAMES
-from app_manifest.records import AppOrigin, AppRecord, load_all_records, write_record
+from app_manifest.records import (
+    AppOrigin,
+    AppRecord,
+    RecordReference,
+    load_all_records,
+    write_record,
+)
 from app_manifest.scope import (
     APP_CONVENTIONS,
     SERVICE_CONVENTIONS,
     SKILL_CONVENTIONS,
     compute_app_scope,
+    resolve_loaded_manifest,
 )
 from app_manifest.testing import write_app_manifest
 from oom_priority import bands
@@ -101,6 +109,14 @@ def _load_manifest(manifest_path: Path, repo_root: Path = _REPO_ROOT) -> AppMani
         repo_root=repo_root,
         mode=_manifest_read_mode(manifest_path, repo_root),
     )
+
+
+def _check_app_loads(manifest_path: Path, repo_root: Path = _REPO_ROOT) -> None:
+    """Raises when the manifest, or what the tree records about its app, does not load
+    against ``repo_root``. An app with a record keeps its references in the record, which
+    loading the manifest does not read."""
+    manifest = _load_manifest(manifest_path, repo_root)
+    resolve_loaded_manifest(repo_root, manifest_path, manifest)
 
 
 def _manifests_sharing_a_name(repo_root: Path) -> list[str]:
@@ -245,7 +261,7 @@ def test_every_manifest_validates_against_the_repo_root(manifest_path: Path) -> 
     # Loading with the real root is what checks the [[references]] location rules and that
     # every referenced artifact still exists, so a deleted skill or doc fails here rather
     # than silently leaving a review pass pointed at nothing.
-    _load_manifest(manifest_path)
+    _check_app_loads(manifest_path)
 
 
 def test_no_two_manifests_declare_the_same_name() -> None:
@@ -302,6 +318,32 @@ def test_only_an_installed_apps_manifest_may_carry_a_key_this_template_does_not_
     for name in ("journal", "news"):
         with pytest.raises(ManifestLoadError, match="future_field"):
             _load_manifest(manifest_paths[name], tmp_path)
+
+
+def test_a_record_reference_that_no_longer_exists_fails_the_check_of_its_app(
+    tmp_path: Path,
+) -> None:
+    manifest_path = write_app_manifest(
+        tmp_path, "notes", _named_manifest("notes"), is_icon_written=True
+    )
+    guide = tmp_path / "docs" / "notes-guide.md"
+    guide.parent.mkdir()
+    guide.write_text("# Notes\n")
+    write_record(
+        tmp_path,
+        AppRecord(
+            name="notes",
+            package="notes",
+            port=8080,
+            origin=AppOrigin.LOCAL,
+            references=(RecordReference(path="docs/notes-guide.md"),),
+        ),
+    )
+
+    _check_app_loads(manifest_path, tmp_path)
+    guide.unlink()
+    with pytest.raises(RecordLoadError, match="docs/notes-guide.md"):
+        _check_app_loads(manifest_path, tmp_path)
 
 
 def test_a_tree_with_no_app_records_has_no_installed_app(tmp_path: Path) -> None:
