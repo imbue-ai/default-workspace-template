@@ -71,6 +71,10 @@ class GrokQueueTracker:
     _first_flushed_at: dict[str, float]
     _publish: PublishCallback | None
     _wake: Callable[[], None] | None
+    # The answers of ``is_sending`` and ``has_deliverable_entries``, read without the lock, since another tracker's
+    # publish reads them while it holds its own.
+    _is_sending_now: bool
+    _has_deliverable_now: bool
 
     @classmethod
     def build(cls, outbox_path: Path, session_token: str) -> "GrokQueueTracker":
@@ -89,6 +93,7 @@ class GrokQueueTracker:
         self._publish = None
         self._wake = None
         self._replay()
+        self._refresh_lock_free_reads()
         return self
 
     def attach(self, *, publish: PublishCallback, wake: Callable[[], None]) -> None:
@@ -150,8 +155,15 @@ class GrokQueueTracker:
         except OSError as error:
             logger.opt(exception=error).warning("grok: could not journal the queue to {}", self._outbox_path)
 
+    def _refresh_lock_free_reads(self) -> None:
+        self._is_sending_now = bool(self._sending_ids or self._pending_send)
+        self._has_deliverable_now = any(
+            self._attempts.get(entry["queued_id"], 0) < MAX_DELIVERY_ATTEMPTS for entry in self._queued.snapshot()
+        )
+
     def _settled_locked(self) -> None:
         """Journal and publish the queue under the lock, so the announcement cannot lag the change."""
+        self._refresh_lock_free_reads()
         self._write_journal_locked()
         if self._publish is not None:
             self._publish(self._snapshot_locked())
@@ -341,15 +353,11 @@ class GrokQueueTracker:
 
     def has_deliverable_entries(self) -> bool:
         """Whether a held message still has delivery attempts left, so a flush or a tap could claim it."""
-        with self._lock:
-            return any(
-                self._attempts.get(entry["queued_id"], 0) < MAX_DELIVERY_ATTEMPTS for entry in self._queued.snapshot()
-            )
+        return self._has_deliverable_now
 
     def is_sending(self) -> bool:
         """Whether an entry is claimed or about to be typed, which withholds the shoulder tap."""
-        with self._lock:
-            return bool(self._sending_ids or self._pending_send)
+        return self._is_sending_now
 
 
 # One tracker per agent for the agent's life, keyed by agent id alone; a grok relaunch is adopted in place by
