@@ -150,7 +150,8 @@ def user_app_package_of(paths: RoutinesPaths, app_name: str) -> str | None:
     record, and its routines stay under system/routines."""
     try:
         name = AppName(app_name)
-    except InvalidManifestValueError:
+    except InvalidManifestValueError as e:
+        logger.debug("Not treating {!r} as a user app, since it is no app's name: {}", app_name, e)
         return None
     if not record_path(paths.repo_root, name).is_file():
         return None
