@@ -45,6 +45,9 @@ client that holds it, loads only when that client next starts, sits in a store
 Imbue Studio does not manage, and the user repeats it per harness and whenever
 it expires.
 
+The one connection of that kind you may use is a tool already in your own
+tool list (`SKILL.md`, row 0). You never set that up; you only use it.
+
 ## Find the server's endpoints
 
 This is the row's test, and it costs nothing: no credential, no permission

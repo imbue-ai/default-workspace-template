@@ -115,9 +115,9 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   // secret_resolution, the notice without the reports a harness flushed with it.
   display_body?: string;
   // permission_resolution / secret_resolution only: the verdict written onto the
-  // earlier card (granted / denied / error for a permission card; stored / declined /
-  // superseded for a secret card).
-  resolution?: "granted" | "denied" | "error" | "stored" | "declined" | "superseded";
+  // earlier card (granted / denied / error / cloud_connections for a permission card;
+  // stored / declined / superseded for a secret card).
+  resolution?: "granted" | "denied" | "error" | "cloud_connections" | "stored" | "declined" | "superseded";
   // permission_resolution / secret_resolution only: the resolved request's own id,
   // when the notice carries one (absent for a permission notice recorded before
   // request-id embedding shipped, which the walk instead correlates by arrival

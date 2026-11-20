@@ -63,6 +63,7 @@ from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 from workspace_themes.flask_routes import register_workspace_theme_route
 
 from imbue.chat import accounts_endpoints
+from imbue.chat import cloud_connections_endpoints
 from imbue.chat import focus_chat
 from imbue.chat import keybindings_endpoints
 from imbue.chat import latchkey_endpoints
@@ -115,6 +116,8 @@ from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
 from imbue.chat.client_activity import is_client_activity_reportable
 from imbue.chat.client_activity import record_client_message_activity
+from imbue.chat.cloud_connections_bridge import ChatSendRefusedError
+from imbue.chat.cloud_connections_bridge import CloudConnectionsChatBridge
 from imbue.chat.compaction_status import compact_command_instructions
 from imbue.chat.compaction_status import is_compact_command
 from imbue.chat.compaction_status import is_context_compacted_event
@@ -819,6 +822,38 @@ class _ServerSecretRequestBridge(SecretRequestChatBridge):
         )
         if isinstance(accepted, _SendRefused):
             raise NoticeDeliveryError(accepted.answer.detail)
+
+
+class _ServerCloudConnectionsBridge(CloudConnectionsChatBridge):
+    """The router's side of the cloud-connection routes: the chat's agent, its restart, and sends through the ordinary send path."""
+
+    def find_agent(self, chat_id: str) -> AgentInfo | None:
+        return _find_active_agent(chat_id)
+
+    def refuse_restart(self, chat_id: str, agent_info: AgentInfo) -> Response | None:
+        converging = _refuse_while_converging(chat_id)
+        if converging is not None:
+            return converging
+        return _refuse_queue_action_on_primary(agent_info, "restart")
+
+    def restart(self, chat_id: str, agent_info: AgentInfo) -> str:
+        watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
+        with get_state().agent_manager.letting_go_of_unrecorded_sends(agent_info.id):
+            return restart_drain(agent_info, watcher, restart_process, settle_activity)
+
+    def send(self, chat_id: str, text: str) -> None:
+        message_id = uuid4().hex
+        accepted = _send_to_chat(
+            get_state(),
+            ChatId(chat_id),
+            SendMessageRequest(message=text, message_id=message_id),
+            message_id,
+            # What is sent answers the agent's own permission request, or was already queued for it.
+            is_refused_on_signed_out_account=False,
+            delivered_text=text,
+        )
+        if isinstance(accepted, _SendRefused):
+            raise ChatSendRefusedError(accepted.answer.detail)
 
 
 def _build_handoff_capabilities(state: ChatAppState) -> HandoffCapabilities:
@@ -3270,6 +3305,7 @@ ROUTE_TABLE: Final[RouteTable] = merge_route_tables(
     focus_chat.ROUTE_TABLE,
     keybindings_endpoints.ROUTE_TABLE,
     secret_requests_endpoints.ROUTE_TABLE,
+    cloud_connections_endpoints.ROUTE_TABLE,
     mentions_endpoints.ROUTE_TABLE,
     THEME_STATIC_ROUTE_TABLE,
 )
@@ -3409,6 +3445,8 @@ def create_application(state: ChatAppState) -> Flask:
     keybindings_endpoints.register_routes(application)
     state.secret_request_bridge = _ServerSecretRequestBridge()
     secret_requests_endpoints.register_routes(application)
+    state.cloud_connections_bridge = _ServerCloudConnectionsBridge()
+    cloud_connections_endpoints.register_routes(application)
     state.mention_handler = MentionHandler(
         agent_manager=state.agent_manager,
         roster=state.roster,

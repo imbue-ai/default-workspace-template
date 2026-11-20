@@ -162,7 +162,15 @@ def _visible_text(content: str) -> str:
 # announcing the outcome, tagged machine-readably by ``format_resolution_notice`` in the
 # mngr repo's ``latchkey/handlers/messaging.py``: "(resolution: granted, request_id: <id>)".
 # The tag is the classification contract -- no reading of the handler-authored English.
-_RESOLUTION_TAG_RE = re.compile(r"\(resolution:\s*(granted|denied|error),\s*request_id:\s*([^)\s]+)\)")
+#
+# The chat app's own notice when the card's offer of the account's cloud connections is taken
+# (``cloud_connections_endpoints`` builds it with ``format_cloud_connections_notice`` below) carries
+# the same tag with a verdict of its own: the request was not answered, and the page shows that.
+CLOUD_CONNECTIONS_RESOLUTION = "cloud_connections"
+_PERMISSION_RESOLUTION_VALUES = ("granted", "denied", "error", CLOUD_CONNECTIONS_RESOLUTION)
+_RESOLUTION_TAG_RE = re.compile(
+    r"\(resolution:\s*(" + "|".join(_PERMISSION_RESOLUTION_VALUES) + r"),\s*request_id:\s*([^)\s]+)\)"
+)
 
 # Legacy notices predating the tag carry only prose (possibly with a bare request_id
 # suffix); recognise them loosely so historical transcripts keep their verdicts hidden
@@ -194,7 +202,24 @@ SECRET_RESOLUTION_VERDICTS = tuple(verdict.value for verdict in SecretResolution
 _SECRET_RESOLUTION_TAG_RE = re.compile(
     r"\(secret:\s*(" + "|".join(SECRET_RESOLUTION_VERDICTS) + r"),\s*request_id:\s*([^)\s]+)\)"
 )
-_RESOLUTION_VALUES = ("granted", "denied", "error", *SECRET_RESOLUTION_VERDICTS)
+_RESOLUTION_VALUES = (*_PERMISSION_RESOLUTION_VALUES, *SECRET_RESOLUTION_VERDICTS)
+
+
+@pure
+def format_cloud_connections_notice(provider_name: str, request_id: str) -> str:
+    """The user message the chat app sends the agent when the user turns on their account's cloud connections
+    rather than answering a permission request.
+
+    The tag at the end is what :func:`_match_permission_resolution` reads, so the two cannot drift apart. The
+    message says all the agent needs: the connect-external-service skill only tells it to use such tools.
+    """
+    tag = f"(resolution: {CLOUD_CONNECTIONS_RESOLUTION}, request_id: {request_id})"
+    return (
+        f"The user chose to enable the cloud MCP connections of their {provider_name} account instead "
+        f"of answering your permission request, which has been withdrawn; do not send it again. You were restarted "
+        f"so those connections load: the services connected on that account are now tools in your tool list. Use "
+        f"them for what you needed the permission for. {tag}"
+    )
 
 
 @pure
@@ -237,8 +262,8 @@ class MessageDisplay(FrozenModel):
     # row, the notice alone when background-task reports were flushed with it: the page reads
     # the declined note from it.
     display_body: str | None = None
-    # PERMISSION_RESOLUTION only: granted / denied / error. SECRET_RESOLUTION only: stored /
-    # declined / superseded.
+    # PERMISSION_RESOLUTION only: granted / denied / error / cloud_connections. SECRET_RESOLUTION
+    # only: stored / declined / superseded.
     resolution: str | None = Field(default=None, pattern="^(" + "|".join(_RESOLUTION_VALUES) + ")$")
     # PERMISSION_RESOLUTION and SECRET_RESOLUTION only: the resolved request's own id, when
     # the notice carries one (see _RESOLUTION_REQUEST_ID_RE). None for a permission notice

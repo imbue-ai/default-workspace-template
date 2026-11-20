@@ -37,6 +37,7 @@ from imbue.chat.harnesses.antigravity.watcher import AntigravitySessionWatcher
 from imbue.chat.harnesses.claude.account_binding import ClaudeAccountBinding
 from imbue.chat.harnesses.claude.activity import CLAUDE_STARTUP_READY_MARKER
 from imbue.chat.harnesses.claude.activity import ClaudeActivityTracker
+from imbue.chat.harnesses.claude.cloud_connections import ClaudeCloudConnections
 from imbue.chat.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.chat.harnesses.claude.model import CLAUDE_STATE_RELATIVE_PATH
 from imbue.chat.harnesses.claude.model import ClaudeModelResolver
@@ -45,8 +46,10 @@ from imbue.chat.harnesses.claude.tap import ClaudeAtomicShoulderTap
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.chat.harnesses.claude.watcher import ClaudeSessionWatcher
 from imbue.chat.harnesses.claude.watcher import ClaudeTranscriptLoader
+from imbue.chat.harnesses.cloud_connections import CloudConnections
 from imbue.chat.harnesses.codex.account_binding import CodexAccountBinding
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
+from imbue.chat.harnesses.codex.cloud_connections import CodexCloudConnections
 from imbue.chat.harnesses.codex.model import CODEX_CATALOG
 from imbue.chat.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.chat.harnesses.codex.model import CodexModelResolver
@@ -364,6 +367,9 @@ class HarnessSpec(FrozenModel):
     # How the chat app asks this harness one question on a chat's account, outside the chat (a new
     # chat's name). None for a harness that cannot yet: its chats keep the name they were minted with.
     one_shot_completion_class: type[OneShotCompletion] | None = None
+    # The connectors kept on the provider account's own side, and the workspace's switch for loading them
+    # (``harnesses/cloud_connections.py``). None for a harness whose provider keeps none.
+    cloud_connections_class: type[CloudConnections] | None = None
     # Whether mngr can compact this harness's context (the autocompact plugin's request), which is
     # what makes the chat's idle compaction setting meaningful for it. Shipped on the catalog.
     supports_compaction: bool = False
@@ -396,6 +402,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         startup_ready_marker=CLAUDE_STARTUP_READY_MARKER,
         binding_class=ClaudeAccountBinding,
         one_shot_completion_class=ClaudeOneShotCompletion,
+        cloud_connections_class=ClaudeCloudConnections,
         resolver_class=ClaudeModelResolver,
         catalog_factory=lambda: CLAUDE_CATALOG,
         model_state_relative_path=CLAUDE_STATE_RELATIVE_PATH,
@@ -436,6 +443,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         process_started_marker_filename=CodexActivityTracker.marker_filename,
         binding_class=CodexAccountBinding,
         one_shot_completion_class=CodexOneShotCompletion,
+        cloud_connections_class=CodexCloudConnections,
         resolver_class=CodexModelResolver,
         catalog_factory=lambda: CODEX_CATALOG,
         model_state_relative_path=CODEX_STATE_RELATIVE_PATH,
@@ -629,6 +637,12 @@ def build_one_shot_completion(harness: HarnessType) -> OneShotCompletion | None:
     """Build the one-shot completion for ``harness``, or None when the harness registers none."""
     completion_class = get_harness_spec(harness).one_shot_completion_class
     return completion_class() if completion_class is not None else None
+
+
+def build_cloud_connections(harness: HarnessType) -> CloudConnections | None:
+    """Build the cloud connections for ``harness``, or None when its provider keeps no connectors."""
+    connections_class = get_harness_spec(harness).cloud_connections_class
+    return connections_class() if connections_class is not None else None
 
 
 def build_resolver(agent_info: AgentInfo) -> HarnessModelResolver:
