@@ -160,9 +160,7 @@ def _run_probe(
     harness: HarnessType, command: tuple[str, ...], account_dir: Path, runner: Callable[..., Any]
 ) -> Any | None:
     """The probe command's finished process, or None when it could not run or timed out."""
-    # The server's environment can still carry ANTHROPIC_API_KEY on a workspace upgraded from the
-    # shared-login era, and claude reports `loggedIn: true` on the strength of that alone, so an
-    # empty account folder would commit as signed in. The question is whether THIS FOLDER is.
+    # claude reports `loggedIn: true` on a server-wide ANTHROPIC_API_KEY alone, whatever the folder holds.
     env = {
         name: value
         for name, value in build_account_binding(harness).account_process_env(account_dir).items()

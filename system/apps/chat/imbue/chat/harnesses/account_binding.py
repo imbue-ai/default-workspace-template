@@ -74,12 +74,10 @@ class AccountBinding(ABC):
 
     @abstractmethod
     def account_env(self, account_dir: Path) -> dict[str, str]:
-        """The environment that scopes the harness's CLI to one account.
+        """The variables that scope the harness's CLI to one account, and nothing else.
 
-        Only the scoping variables. A run layers them over the server's environment, because both
-        `pexpect.spawn` and `Popen` REPLACE the environment rather than merging into it, and a child
-        without `PATH` never starts; a sign-in or probe gets that whole environment from
-        `account_process_env`.
+        `pexpect.spawn` and `Popen` replace the environment rather than merge into it, so a run
+        layers these over a whole one.
         """
 
     def cli_env(self, account_dir: Path) -> dict[str, str]:

@@ -325,11 +325,7 @@ class AuthFlowService:
     ) -> "AuthFlowService":
         """`spawner` stands in for `spawn_pty`, `probe` for `is_signed_in`, `xai_key_probe` for `probe_xai_api_key`.
 
-        All injected rather than patched, matching ClaudeAuthService's `pexpect_spawner`.
-        The probe in particular shells out to a real CLI, so a test that does not inject one
-        is quietly asserting on whatever this machine happens to have installed; the key probe
-        sends the key to xAI; the restart shells out to mngr, which a test has even less
-        business doing.
+        Each is injected so a test runs no real CLI, sends no key to xAI and never shells out to mngr.
         """
         service = cls()
         service._home = home
@@ -661,11 +657,7 @@ class AuthFlowService:
     def _submit_xai_key_locked(
         self, session: _Session, method: PasteMethod, account_path: Path, api_key: str
     ) -> FlowStatus:
-        """Ask xAI about the key itself, and only then make it the account's one credential.
-
-        Nothing lands for a key xAI refuses, so nothing is ever put back over a file every agent on the account
-        shares and refreshes. As with every key, UNKNOWN commits.
-        """
+        """Make the key the account's one credential unless xAI refuses it; an UNKNOWN verdict commits."""
         verdict = self._probe_xai_key(SecretStr(api_key))
         session.last_verdict = verdict
         if verdict is SignedIn.NO:
