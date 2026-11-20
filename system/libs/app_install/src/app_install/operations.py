@@ -2,7 +2,6 @@
 
 import fcntl
 import shutil
-import subprocess
 from collections.abc import Callable
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -22,6 +21,8 @@ from app_install.derived import write_derived_files
 from app_install.errors import AppAlreadyRegisteredError
 from app_install.errors import AppNotFoundError
 from app_install.errors import CollisionError
+from app_install.errors import GitCommandError
+from app_install.git import run_git
 from app_install.interfaces import WorkspaceRuntimeInterface
 from app_install.paths import APP_DATA_DIRECTORY
 from app_install.paths import INSTALL_LOCK_PATH
@@ -41,7 +42,6 @@ from app_manifest.records import load_record
 from app_manifest.records import record_path
 from app_manifest.records import write_record
 
-_GIT_TIMEOUT_SECONDS: Final[float] = 30.0
 # A record no commit holds yet sorts after every committed one, so it is the one a duplicate port is taken from.
 _UNCOMMITTED_SORT_TIME: Final[int] = 2**62
 
@@ -139,18 +139,11 @@ def add_app(
 def _first_commit_time(repo_root: Path, relative_path: str) -> int:
     """When the file was first committed, as a Unix time; a file no commit holds sorts last."""
     try:
-        completed = subprocess.run(
-            ["git", "log", "--diff-filter=A", "--format=%ct", "--", relative_path],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_GIT_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired) as e:
+        listing = run_git(repo_root, ["log", "--diff-filter=A", "--format=%ct", "--", relative_path])
+    except GitCommandError as e:
         logger.warning("Could not read when {} was committed, so it is treated as uncommitted: {}", relative_path, e)
         return _UNCOMMITTED_SORT_TIME
-    times = [int(line) for line in completed.stdout.split() if line.isdigit()]
+    times = [int(line) for line in listing.split() if line.isdigit()]
     return min(times) if times else _UNCOMMITTED_SORT_TIME
 
 
