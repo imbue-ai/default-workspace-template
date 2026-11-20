@@ -354,6 +354,21 @@ so a schedule can be tried without editing the module.
 When earlyoom acts is not in `bands`: its two thresholds are the `-m` argument in
 `system/supervisord.conf.d/earlyoom.conf`.
 
+Whenever the policy changes, run the drill against the change before it lands.
+From an mngr checkout:
+
+```bash
+just dwt-oom-drill /path/to/this/checkout
+```
+
+It builds a throwaway local Docker workspace from the checkout, runs
+`bin/oom_drill.py` there (one memory-holding sleeper at each score the policy
+assigns, shed by the workspace's own earlyoom), prints the verdict, and removes
+the workspace. A changed score fails `bin/oom_drill_test.py` until the drill's
+`DEFAULT_BANDS` matches it, and the Imbue Studio smoke journey runs the drill
+again in a real workspace before a release reaches production
+([OOM_DRILL.md](OOM_DRILL.md)).
+
 ## Outputs
 
 - **Shed ledger** (`data/.state/oom_priority/events/shed.jsonl`): append-only,
