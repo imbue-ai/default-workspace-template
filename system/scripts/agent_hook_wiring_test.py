@@ -40,7 +40,7 @@ _GROK_DEFAULT_TIMEOUT_SECONDS = 5
 _GROK_WORK_DIR_REFERENCE = "${MNGR_AGENT_WORK_DIR:-.}"
 
 # A `system/scripts/<name>` path inside a hook command, however the harness spells the
-# work-dir prefix (`"${CLAUDE_PROJECT_DIR}"/`, `"$MNGR_AGENT_WORK_DIR/`, `${MNGR_AGENT_WORK_DIR:-.}/`).
+# work-dir prefix (`"${CLAUDE_PROJECT_DIR}"/`, `"$MNGR_AGENT_WORK_DIR/`, `${MNGR_AGENT_WORK_DIR:-.}/`, `./`).
 _SCRIPT_REF_RE = re.compile(r"system/scripts/([A-Za-z0-9_]+\.(?:sh|py))")
 # The script paths policy_guards.ts builds, as `join(SCRIPTS, "<name>")`.
 _PI_SCRIPT_RE = re.compile(r'join\(SCRIPTS,\s*"([^"]+)"\)')
