@@ -1,7 +1,10 @@
 import json
 import os
+import stat
+import sys
 import threading
 from pathlib import Path
+from typing import Any
 
 from imbue.chat.harnesses.grok.account_binding import API_KEY_SCOPE
 from imbue.chat.harnesses.grok.account_binding import AUTH_FILENAME
@@ -15,6 +18,32 @@ from imbue.chat.harnesses.grok.testing import take_grok_lock
 from imbue.chat.harnesses.grok.testing import write_grok_auth
 
 _LOGIN = {"key": "access-token", "auth_mode": "oidc", "refresh_token": "refresh-token"}
+
+
+def _record_mode_change(directory: Path, modes: list[tuple[str, int]], event: str, args: tuple[Any, ...]) -> None:
+    """Note a chmod in ``directory`` with the mode it sets, and a rename out of it with the mode its file has then."""
+    if event not in ("os.chmod", "os.rename") or not isinstance(args[0], (str, bytes, os.PathLike)):
+        return
+    path = Path(os.fsdecode(args[0]))
+    if path.parent != directory:
+        return
+    modes.append((event, args[1] if event == "os.chmod" else stat.S_IMODE(path.stat().st_mode)))
+
+
+def test_a_key_is_never_in_a_file_wider_than_owner_only(tmp_path: Path) -> None:
+    """A wider mode on the auth.json the key replaces is not carried onto the file the key is written into."""
+    auth_path = tmp_path / AUTH_FILENAME
+    write_grok_auth(tmp_path, {GROK_SESSION_SCOPE: _LOGIN})
+    auth_path.chmod(0o644)
+    modes: list[tuple[str, int]] = []
+    sys.addaudithook(lambda event, args: _record_mode_change(tmp_path, modes, event, args))
+
+    assert write_api_key(auth_path, "xai-new-key", AUTH_LOCK_WAIT_SECONDS)
+
+    assert modes == [("os.rename", 0o600)]
+    assert stat.S_IMODE(auth_path.stat().st_mode) == 0o600
+    assert json.loads(auth_path.read_text())[API_KEY_SCOPE]["key"] == "xai-new-key"
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["auth.json", "auth.json.lock"]
 
 
 def test_a_key_waits_out_grok_s_own_write_to_the_file(tmp_path: Path) -> None:

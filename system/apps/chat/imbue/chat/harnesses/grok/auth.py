@@ -4,6 +4,7 @@ import contextlib
 import fcntl
 import json
 import os
+import tempfile
 from collections.abc import Generator
 from datetime import datetime
 from datetime import timezone
@@ -50,6 +51,19 @@ def _auth_file_locked(auth_path: Path, wait_seconds: float) -> Generator[bool, N
         os.close(lock_fd)
 
 
+def _replace_owner_only(path: Path, text: str) -> None:
+    """Rename into ``path`` a sibling temp file that holds ``text`` and is 0600 from its creation."""
+    temp_fd, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(temp_fd, "w", encoding="utf-8") as temp_file:
+            temp_file.write(text)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.replace(temp_name, path)
+    finally:
+        Path(temp_name).unlink(missing_ok=True)
+
+
 def write_api_key(auth_path: Path, api_key: str, lock_wait_seconds: float) -> bool:
     """Make grok's auth.json hold the key alone, in its `xai::api_key` scope, or write nothing and say False.
 
@@ -67,8 +81,7 @@ def write_api_key(auth_path: Path, api_key: str, lock_wait_seconds: float) -> bo
             "email": None,
             "coding_data_retention_opt_out": True,
         }
-        atomic_write(auth_path, json.dumps({API_KEY_SCOPE: scope}, indent=2) + "\n")
-        auth_path.chmod(0o600)
+        _replace_owner_only(auth_path, json.dumps({API_KEY_SCOPE: scope}, indent=2) + "\n")
         return True
 
 
