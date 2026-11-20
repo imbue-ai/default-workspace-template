@@ -1052,13 +1052,15 @@ export class DesktopStore {
     for (const window of windows) await this.closeWindow(window.id);
   }
 
-  /** The page came back into sight or went out of it. Back in sight, the shell's word is read again, since a
-   *  phone's page sleeps while hidden and the pushes of the time away may never have arrived. */
+  /** The page came back into sight or went out of it. Back in sight, a socket that dropped while the page slept is
+   *  reopened at once and the shell's word is read again, since the pushes of the time away may never have
+   *  arrived. */
   onVisibilityChange(isVisible: boolean): void {
     if (!isVisible) {
       this.isHiddenSinceConnect = true;
       return;
     }
+    this.deps.socket.reconnectNow();
     void this.refreshInventory();
   }
 
@@ -1262,7 +1264,10 @@ export class DesktopStore {
     // A phone never picks a desktop: its active one is only ever the one the shell assigns on arrival.
     const deepLinkDesktopId = this.isPhoneLayout() ? null : deepLink.desktopId;
     const chosen = chooseInitialDesktopId(inventory.desktops, soloDesktopId ?? deepLinkDesktopId, landing);
-    if (chosen === null) return;
+    if (chosen === null) {
+      this.landPhone();
+      return;
+    }
     await this.switchDesktop(chosen, "landing");
     this.landPhone();
     if (deepLink.open === null && deepLink.launch === null) return;
@@ -2247,6 +2252,8 @@ export class DesktopStore {
         break;
       case "landing":
         this.reportMove("");
+        // Where a phone lands needs the desktop, not its layout: the page starts loading a round trip sooner.
+        this.landPhone();
         break;
       case "follow":
         this.reportFollowedDesktop();

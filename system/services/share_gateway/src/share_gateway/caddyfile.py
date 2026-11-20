@@ -254,6 +254,23 @@ https://*.{workspace_domain}:{https_port} {{
         }}
     }}
 
+    # Compress what the apps serve: none of them does, and a phone on a
+    # mobile link pays for every byte of each page's bundle. Named types
+    # only, so a server-sent event stream (text/event-stream) is never held
+    # back in an encoder's buffer.
+    encode zstd gzip {{
+        match {{
+            header Content-Type text/html*
+            header Content-Type text/css*
+            header Content-Type text/javascript*
+            header Content-Type text/plain*
+            header Content-Type application/javascript*
+            header Content-Type application/json*
+            header Content-Type application/manifest+json*
+            header Content-Type image/svg+xml*
+        }}
+    }}
+
     # Labels are semi-secret (they gate the relay), so never leak one to
     # another site via the Referer of an outbound navigation.
     header Referrer-Policy same-origin

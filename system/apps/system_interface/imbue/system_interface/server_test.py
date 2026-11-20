@@ -606,6 +606,24 @@ def test_assets_serve_a_bundle_that_appeared_after_startup(tmp_path: Path) -> No
     assert "javascript" in response.headers["Content-Type"]
 
 
+def test_assets_named_from_their_content_are_cached_for_good_and_others_are_revalidated(tmp_path: Path) -> None:
+    static_dir = tmp_path / "static"
+    (static_dir / "assets").mkdir(parents=True)
+    (static_dir / "assets" / "index-BScc3eNh.js").write_text("console.log('app');")
+    (static_dir / "assets" / "index.js").write_text("console.log('app');")
+    state = build_test_state()
+    state.static_directory = static_dir
+    test_client = create_application(state).test_client()
+
+    hashed = test_client.get("/assets/index-BScc3eNh.js")
+    unhashed = test_client.get("/assets/index.js")
+
+    assert hashed.cache_control.max_age == 365 * 24 * 60 * 60
+    assert hashed.cache_control.immutable
+    assert unhashed.cache_control.no_cache
+    assert not unhashed.cache_control.immutable
+
+
 def test_http_errors_keep_their_status_codes(client: FlaskClient) -> None:
     """Routing-level HTTP errors pass through the unhandled-exception handler intact.
 

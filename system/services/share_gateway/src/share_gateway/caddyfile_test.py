@@ -307,6 +307,17 @@ def test_caddyfile_writes_a_bounded_access_log_without_headers_or_query_strings(
     assert rendered.index("https://*.") < rendered.index("    log {")
 
 
+def test_caddyfile_compresses_every_origin_but_never_an_event_stream() -> None:
+    rendered = _render()
+
+    encode_block = rendered[rendered.index("    encode zstd gzip {") : rendered.index("    # Labels are semi-secret")]
+    for content_type in ("text/html", "text/javascript", "text/css", "application/json"):
+        assert f"header Content-Type {content_type}*" in encode_block
+    assert "text/*" not in encode_block and "event-stream" not in encode_block
+    # In the site block, ahead of every route, so it covers each app's origin.
+    assert rendered.index("https://*.") < rendered.index("    encode zstd gzip {") < rendered.index("handle @auth")
+
+
 def _caddy_binary() -> str | None:
     configured = os.environ.get("CADDY_BINARY", "")
     if configured and Path(configured).exists():
@@ -341,9 +352,22 @@ def test_the_rendered_caddyfile_adapts_with_the_access_log_filters_in_place(tmp_
         "roll_size_mb": 8,
     }
     assert access_log["encoder"]["format"] == "filter" and access_log["encoder"]["wrap"] == {"format": "json"}
+    (server,) = json.loads(adapted.stdout)["apps"]["http"]["servers"].values()
+    encoders = [handler for route in server["routes"] for handler in _handlers_of(route) if handler["handler"] == "encode"]
+    assert encoders and set(encoders[0]["encodings"]) == {"gzip", "zstd"}
     assert access_log["encoder"]["fields"] == {
         "request>headers": {"filter": "delete"},
         "request>tls": {"filter": "delete"},
         "resp_headers": {"filter": "delete"},
         "request>uri": {"filter": "regexp", "regexp": "\\?.*$"},
     }
+
+
+def _handlers_of(route: dict) -> list[dict]:
+    """Every handler under one adapted route, through the subroutes caddy nests a site block's directives in."""
+    found: list[dict] = []
+    for handler in route.get("handle", []):
+        found.append(handler)
+        for nested in handler.get("routes", []):
+            found.extend(_handlers_of(nested))
+    return found

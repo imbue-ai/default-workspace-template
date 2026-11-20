@@ -281,4 +281,22 @@ describe("ShellSocket", () => {
     current().open();
     expect(handlers.onConnected).toHaveBeenCalledTimes(2);
   });
+
+  it("reopens a dropped socket at once when asked, without waiting out its backoff, and only once", () => {
+    current().open();
+    current().close();
+    expect(StubWebSocket.instances).toHaveLength(1);
+    socket.reconnectNow();
+    expect(StubWebSocket.instances).toHaveLength(2);
+    // The backoff's own retry was called off, so it opens no second socket beside this one.
+    vi.runOnlyPendingTimers();
+    expect(StubWebSocket.instances).toHaveLength(2);
+  });
+
+  it("leaves a socket that is open, or still opening, alone when asked to reopen", () => {
+    socket.reconnectNow();
+    current().open();
+    socket.reconnectNow();
+    expect(StubWebSocket.instances).toHaveLength(1);
+  });
 });

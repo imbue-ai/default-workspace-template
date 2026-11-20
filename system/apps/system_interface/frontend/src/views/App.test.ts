@@ -1272,6 +1272,39 @@ describe("the switch to the phone layout", () => {
     expect(rightClick().defaultPrevented).toBe(true);
   });
 
+  it("draws no home grid before the phone lands, so the window it lands on is not preceded by home", async () => {
+    unmountViews();
+    api = new FakeDesktopApi();
+    socket = new FakeDesktopSocket();
+    api.apps = [appRecord("docs")];
+    api.desktops = [desktopRecord("home")];
+    const answerReads = api.holdReads();
+    store = new DesktopStore({
+      clientId: CLIENT,
+      api,
+      socket,
+      metrics: themeMetricsRecord(),
+      modes: { isPhone: true, isTouch: true },
+      redraw: () => m.redraw(),
+      reloadInterface: () => undefined,
+      soloWindowId: null,
+      outsideLinks: {
+        openInEmbedder: () => undefined,
+        openInBrowser: () => undefined,
+        launchInSystemApp: () => undefined,
+      },
+    });
+    const starting = store.start(NO_LINK);
+    mountView(() => m(App, { store, gestures, tour, host: "127.0.0.1:8000", protocol: "http:" }));
+    expect(document.querySelector("[data-phone-layout]")).not.toBeNull();
+    expect(document.querySelector("[data-phone-home-grid]")).toBeNull();
+    answerReads();
+    await starting;
+    m.redraw.sync();
+    expect(store.getState().phone.shown).toEqual({ kind: "home" });
+    expect(document.querySelector("[data-phone-home-grid]")).not.toBeNull();
+  });
+
   it("creates no page for a window the phone does not show", () => {
     // win-1 is shown on the desktop; the phone lands on its home grid, where no window's page lives.
     const createElement = vi.spyOn(document, "createElement");

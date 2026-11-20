@@ -8,6 +8,7 @@ this app's manifest registers for (``focus_chat.py``).
 
 import json
 import queue
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -2985,17 +2986,29 @@ def _favicon() -> Response:
     return Response(status=404)
 
 
+# A bundle file Vite named from its content, which a browser may keep for good; the rest is checked on every load.
+_HASHED_ASSET: Final[re.Pattern[str]] = re.compile(r"-[A-Za-z0-9_-]{8}\.(js|css)$")
+_A_YEAR_IN_SECONDS: Final[int] = 365 * 24 * 60 * 60
+
+
 def _serve_asset(filename: str) -> Response:
-    """The chat page's built bundle (``static/assets/``), by the hashed name the document links."""
+    """The chat page's built bundle (``static/assets/``), by the hashed name the document links; one named from its
+    content is cached for good, so a load (a phone over a slow link above all) does not ask for it again."""
     assets_directory = get_state().static_directory / "assets"
+    is_hashed = _HASHED_ASSET.search(filename) is not None
     # A missing asset is a plain 404 rather than the HTML error page ``send_from_directory``
     # would raise. Existence and safety are both left to ``send_from_directory``: ``filename``
     # arrives with any ``..`` segments intact, so joining it onto the directory ourselves would
     # stat paths outside it -- an existence oracle for the whole filesystem.
     try:
-        return send_from_directory(assets_directory, filename)
+        response = send_from_directory(
+            assets_directory, filename, max_age=_A_YEAR_IN_SECONDS if is_hashed else None
+        )
     except NotFound:
         return Response(status=404)
+    if is_hashed:
+        response.cache_control.immutable = True
+    return response
 
 
 def _health_endpoint() -> Response:

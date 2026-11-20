@@ -131,6 +131,9 @@ export interface DesktopSocket {
   /** Register this socket as a pulled-out window's, under this client and naming no desktop: the ops aimed at
    *  the client reach it, and the client's active desktop stays its main window's. */
   reportPopOut(): void;
+  /** Reopen a dropped socket now rather than when its backoff says, as a page coming back into sight does: the
+   *  retries made while it slept may have pushed the next one many seconds out. An open socket is left alone. */
+  reconnectNow(): void;
 }
 
 interface RawSocketEvent {
@@ -189,6 +192,16 @@ export class ShellSocket implements DesktopSocket {
   reportPopOut(): void {
     if (this.ws === null || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify({ type: "client_state", client_id: this.clientId, is_pop_out: true }));
+  }
+
+  reconnectNow(): void {
+    if (this.handlers === null || this.ws !== null) return;
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectBackoff.reset();
+    this.open();
   }
 
   private open(): void {

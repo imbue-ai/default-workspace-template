@@ -1,0 +1,1 @@
+A shared workspace now compresses the pages, scripts, styles and JSON its apps serve (zstd or gzip, as the browser accepts), which cuts the workspace's main script to about a third of its size over a phone's connection. Event streams are left uncompressed so nothing holds them back.
