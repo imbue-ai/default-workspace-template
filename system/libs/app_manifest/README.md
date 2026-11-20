@@ -61,12 +61,19 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   table: how far the app takes part in workspace themes, a `ThemingMode` of
   `tokens` (the default), `parts`, or `none`, and for `parts` the `AppPart`s
   a theme may style, each an `AppPartName` unique within the app and a
-  description), `load_manifest(path, repo_root=None)`
+  description), `load_manifest(path, repo_root=None, mode=ManifestReadMode.TOLERANT)`
   (reads, validates, checks the icon file exists beside the manifest, and --
   against the repo root, given or derived from a `system/apps/<package>/app.toml`
   layout -- that every reference exists, sits neither in the app's own
   directory nor in another app's, and goes through no symlinked directory,
-  which git never reports a changed file through), `repo_root_for_manifest`,
+  which git never reports a changed file through), `ManifestReadMode` (what
+  `load_manifest` does with a key the models do not declare, in the manifest
+  or in any table or array entry of it: `TOLERANT`, the default, logs a
+  warning naming the manifest and the key and ignores it, so a reader still
+  reads the manifest of an app installed from a repository whose template is
+  newer than this workspace's; `STRICT` fails the load, for a check of a
+  manifest this workspace is authoring; every other rule holds in both),
+  `repo_root_for_manifest`,
   `app_package_directory`, and `manifest_icon_path(manifest_path, manifest)`.
 - `app_manifest.registry`: `RegistryRow` (absent keys read as the contract's
   defaults; unknown keys are ignored so a newer registration script never hides
@@ -152,7 +159,9 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   the template's following `/` as one slash; it raises `PageTemplateFieldError`
   when a field is missing or not a string or the page is not a rooted path.
 - The `app-manifest validate-manifest <path> [--repo-root DIR]` command, for the
-  build-app scaffold and tests. Without `--repo-root` the reference location
+  build-app scaffold and tests. It is the authoring check, so it loads the
+  manifest in the strict mode: a key the schema does not declare fails it.
+  Without `--repo-root` the reference location
   checks run against the root the `system/apps/<package>/app.toml` layout
   implies, and a manifest anywhere else skips them.
 

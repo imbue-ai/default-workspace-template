@@ -1,0 +1,1 @@
+The checks the workspace runs on its own skills now leave out the skills an installed app carries: an app whose record says it was installed from someone else's repository is kept as it came, without an entry in `.agents/third-party-skills.toml`.

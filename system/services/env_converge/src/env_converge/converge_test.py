@@ -16,6 +16,7 @@ from env_converge.converge import (
     capture_unless_fresh_rootfs,
     read_overlay_paths,
     read_pinned_snapshot_timestamp,
+    run_unit_scripts,
     uv_tools_to_replay,
     workspace_app_package_names,
 )
@@ -485,3 +486,76 @@ def test_workspace_app_package_names_reads_each_apps_project_name(
 
     assert workspace_app_package_names(workspace_dir) == {"chat", "routines-app"}
     assert workspace_app_package_names(tmp_path / "no-workspace") == frozenset()
+
+
+# Units an app carries
+
+
+def _write_unit(directory: Path, name: str, ran_log: Path, exit_code: int = 0) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / name).write_text(
+        f'#!/usr/bin/env bash\necho "{name}" >> "{ran_log}"\nexit {exit_code}\n'
+    )
+
+
+def test_an_apps_units_run_with_the_workspaces_own_in_one_lexical_order(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
+    workspace = tmp_path / "workspace"
+    ran_log = tmp_path / "ran.log"
+    own_units = workspace / "system" / "scripts" / "env.d"
+    _write_unit(own_units, "1100-secret-scanners.sh", ran_log)
+    _write_unit(own_units, "2500-late.sh", ran_log)
+    _write_unit(
+        workspace / "system" / "apps" / "notes" / "env.d",
+        "2100-notes-poppler.sh",
+        ran_log,
+    )
+    _write_unit(
+        workspace / "system" / "apps" / "digest" / "env.d",
+        "2050-digest-fonts.sh",
+        ran_log,
+    )
+    (workspace / "system" / "apps" / "notes" / "env.d" / "README.md").write_text(
+        "not a unit\n"
+    )
+
+    results = run_unit_scripts(workspace, tmp_path / "overlay")
+
+    expected_order = [
+        "1100-secret-scanners.sh",
+        "2050-digest-fonts.sh",
+        "2100-notes-poppler.sh",
+        "2500-late.sh",
+    ]
+    assert ran_log.read_text().splitlines() == expected_order
+    assert [result.unit_name for result in results] == expected_order
+    assert all(result.exit_code == 0 for result in results)
+
+
+def test_an_apps_failing_unit_does_not_stop_the_units_after_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
+    workspace = tmp_path / "workspace"
+    ran_log = tmp_path / "ran.log"
+    _write_unit(
+        workspace / "system" / "apps" / "notes" / "env.d",
+        "2100-notes-broken.sh",
+        ran_log,
+        exit_code=3,
+    )
+    _write_unit(workspace / "system" / "scripts" / "env.d", "2200-after.sh", ran_log)
+
+    results = run_unit_scripts(workspace, tmp_path / "overlay")
+
+    assert [(result.unit_name, result.exit_code) for result in results] == [
+        ("2100-notes-broken.sh", 3),
+        ("2200-after.sh", 0),
+    ]
+    assert ran_log.read_text().splitlines() == ["2100-notes-broken.sh", "2200-after.sh"]
+
+
+def test_a_workspace_with_no_units_anywhere_runs_nothing(tmp_path: Path) -> None:
+    assert run_unit_scripts(tmp_path / "workspace", tmp_path / "overlay") == []

@@ -27,6 +27,7 @@ from app_manifest.scope import split_against_creations
 from app_manifest.scope import with_diff_against_base
 from app_manifest.testing import NEWS_MANIFEST
 from app_manifest.testing import build_news_workspace
+from app_manifest.testing import captured_warnings
 from app_manifest.testing import commit_changes
 from app_manifest.testing import commit_everything
 from app_manifest.testing import init_git_repository
@@ -367,6 +368,18 @@ def test_the_reverse_lookup_skips_a_manifest_it_cannot_load_and_warns(tmp_path: 
     assert len(captured) == 1
     assert "broken" in captured[0]
     assert "display_name" in captured[0]
+
+
+def test_the_reverse_lookup_reads_a_manifest_that_carries_a_key_it_does_not_know(tmp_path: Path) -> None:
+    build_news_workspace(tmp_path)
+    write_app_manifest(tmp_path, "news", f"future_field = true\n{NEWS_MANIFEST}", is_icon_written=True)
+
+    with captured_warnings() as warnings:
+        matches = find_referencing_manifests(tmp_path, RepoRelativePath(".agents/skills/news-refresh"))
+
+    assert [match.manifest.name for match in matches] == ["news"]
+    assert len(warnings) == 1
+    assert "unknown key 'future_field'" in warnings[0]
 
 
 def test_a_skill_scope_is_its_own_directory_plus_the_owning_apps_as_context(

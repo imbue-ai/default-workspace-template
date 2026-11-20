@@ -9,6 +9,7 @@ from app_manifest.manifest import AppManifest
 from app_manifest.manifest import EntryMode
 from app_manifest.manifest import LaunchPathMethod
 from app_manifest.manifest import LocationScope
+from app_manifest.manifest import ManifestReadMode
 from app_manifest.manifest import MessageHandler
 from app_manifest.manifest import PinStyle
 from app_manifest.manifest import PreviewSpec
@@ -20,6 +21,7 @@ from app_manifest.manifest import manifest_icon_path
 from app_manifest.manifest import scaffold_preview_spec
 from app_manifest.primitives import AppName
 from app_manifest.testing import APP_ICON_MARKUP
+from app_manifest.testing import captured_warnings
 from app_manifest.testing import write_app_manifest
 from app_manifest.testing import write_repo_file
 
@@ -73,9 +75,7 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert [(shortcut.launch, shortcut.mode) for shortcut in manifest.default_shortcuts] == [
         ("new", ShortcutMode.FOCUS)
     ]
-    assert [
-        (launch_path.id, launch_path.path) for launch_path in manifest.launch_paths
-    ] == [("new", "/")]
+    assert [(launch_path.id, launch_path.path) for launch_path in manifest.launch_paths] == [("new", "/")]
     assert manifest.launch_paths[0].params[0].name == "path"
     assert manifest.launch_paths[0].text_param == "path"
     assert manifest.launcher_rank == 20
@@ -94,12 +94,8 @@ def test_uses_microphone_defaults_to_false() -> None:
     assert manifest.uses_microphone is False
 
 
-def test_stop_when_no_windows_defaults_to_false_and_is_refused_on_a_critical_app() -> (
-    None
-):
-    manifest = AppManifest.model_validate(
-        {"name": "news", "display_name": "News", "icon": "icon.svg"}
-    )
+def test_stop_when_no_windows_defaults_to_false_and_is_refused_on_a_critical_app() -> None:
+    manifest = AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg"})
     assert manifest.stop_when_no_windows is False
     with pytest.raises(ValidationError, match="critical app cannot declare stop_when_no_windows"):
         AppManifest.model_validate({**_full_manifest_data(), "critical": True, "stop_when_no_windows": True})
@@ -130,9 +126,7 @@ def test_a_pin_takes_the_plain_linked_bar_defaults_and_needs_only_a_path() -> No
         EntryMode.BAR,
     )
     with pytest.raises(ValidationError, match="path"):
-        AppManifest.model_validate(
-            {"name": "news", "display_name": "News", "icon": "icon.svg", "pin": {}}
-        )
+        AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "pin": {}})
 
 
 @pytest.mark.parametrize(
@@ -146,13 +140,9 @@ def test_a_pin_takes_the_plain_linked_bar_defaults_and_needs_only_a_path() -> No
         ({"path": "/", "position": {"x": 0.5, "y": 0.5}}, "position"),
     ],
 )
-def test_a_pin_follows_the_launch_path_rule_and_the_three_vocabularies(
-    pin: dict[str, object], field: str
-) -> None:
+def test_a_pin_follows_the_launch_path_rule_and_the_three_vocabularies(pin: dict[str, object], field: str) -> None:
     with pytest.raises(ValidationError, match=field):
-        AppManifest.model_validate(
-            {"name": "news", "display_name": "News", "icon": "icon.svg", "pin": pin}
-        )
+        AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "pin": pin})
 
 
 @pytest.mark.parametrize("description", ["", "   ", "two\nlines", "x" * 201])
@@ -178,21 +168,15 @@ def test_a_manifest_reads_its_description_and_api_schema_path() -> None:
     with pytest.raises(ValidationError):
         AppManifest.model_validate({**_full_manifest_data(), "api_schema_path": "api/schema?x=1"})
     with pytest.raises(ValidationError, match="also declares description"):
-        AppManifest.model_validate(
-            {**_full_manifest_data(), "api_schema_path": "/api/schema"}
-        )
+        AppManifest.model_validate({**_full_manifest_data(), "api_schema_path": "/api/schema"})
 
 
 def test_window_closed_path_follows_the_launch_path_rule() -> None:
     with pytest.raises(ValidationError, match="no query string"):
-        AppManifest.model_validate(
-            {**_full_manifest_data(), "window_closed_path": "/closed?x=1"}
-        )
+        AppManifest.model_validate({**_full_manifest_data(), "window_closed_path": "/closed?x=1"})
 
 
-def test_message_handlers_name_the_embedder_messages_an_app_takes_and_where_the_shell_posts_them() -> (
-    None
-):
+def test_message_handlers_name_the_embedder_messages_an_app_takes_and_where_the_shell_posts_them() -> None:
     manifest = AppManifest.model_validate(
         {
             **_full_manifest_data(),
@@ -210,9 +194,7 @@ def test_message_handlers_name_the_embedder_messages_an_app_takes_and_where_the_
     assert AppManifest.model_validate(_full_manifest_data()).message_handlers == ()
 
 
-def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pages_that_already_show_it() -> (
-    None
-):
+def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pages_that_already_show_it() -> None:
     manifest = AppManifest.model_validate(
         {
             **_full_manifest_data(),
@@ -346,9 +328,7 @@ def test_a_message_handler_reads_back_from_its_own_dump(handler: dict[str, objec
             "query string is fixed",
             id="query-field",
         ),
-        pytest.param(
-            {"type": "open:file", "show": "{path}#top"}, "no fragment", id="fragment"
-        ),
+        pytest.param({"type": "open:file", "show": "{path}#top"}, "no fragment", id="fragment"),
         pytest.param(
             {"type": "open:file", "show": "view/{path}"},
             "single '/' or a placeholder",
@@ -371,13 +351,9 @@ def test_a_message_handler_reads_back_from_its_own_dump(handler: dict[str, objec
         ),
     ],
 )
-def test_a_malformed_message_handler_fails_to_load_with_its_reason(
-    handler: dict[str, object], match: str
-) -> None:
+def test_a_malformed_message_handler_fails_to_load_with_its_reason(handler: dict[str, object], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
-        AppManifest.model_validate(
-            {**_full_manifest_data(), "message_handlers": [handler]}
-        )
+        AppManifest.model_validate({**_full_manifest_data(), "message_handlers": [handler]})
 
 
 def test_keybindings_declare_the_actions_a_person_may_rebind_in_display_order() -> None:
@@ -404,7 +380,9 @@ def test_keybindings_declare_the_actions_a_person_may_rebind_in_display_order() 
         pytest.param({"id": "Rename", "label": "Rename"}, "invalid keybinding action id", id="uppercase-id"),
         pytest.param({"id": "rename", "label": ""}, "keybinding label must not be empty", id="empty-label"),
         pytest.param({"id": "rename", "label": "two\nlines"}, "is a single line", id="two-line-label"),
-        pytest.param({"id": "rename", "label": "Rename", "default_chords": [""]}, "at least 1 character", id="empty-chord"),
+        pytest.param(
+            {"id": "rename", "label": "Rename", "default_chords": [""]}, "at least 1 character", id="empty-chord"
+        ),
     ],
 )
 def test_a_malformed_keybinding_fails_to_load_with_its_reason(action: dict[str, object], match: str) -> None:
@@ -442,29 +420,18 @@ def test_text_param_must_name_a_declared_param_and_defaults_to_none() -> None:
     data = _full_manifest_data()
     launch_path = _launch_path_data()
     del launch_path["text_param"]
-    assert (
-        AppManifest.model_validate({**data, "launch_paths": [launch_path]})
-        .launch_paths[0]
-        .text_param
-        is None
-    )
+    assert AppManifest.model_validate({**data, "launch_paths": [launch_path]}).launch_paths[0].text_param is None
 
     with pytest.raises(
         ValidationError,
         match="text_param 'message' is not one of the launch path's params",
     ):
-        AppManifest.model_validate(
-            {**data, "launch_paths": [{**launch_path, "text_param": "message"}]}
-        )
+        AppManifest.model_validate({**data, "launch_paths": [{**launch_path, "text_param": "message"}]})
     with pytest.raises(ValidationError, match="at least 1 character"):
-        AppManifest.model_validate(
-            {**data, "launch_paths": [{**launch_path, "text_param": ""}]}
-        )
+        AppManifest.model_validate({**data, "launch_paths": [{**launch_path, "text_param": ""}]})
 
 
-def test_a_launch_path_is_a_get_with_no_presets_and_no_draft_param_unless_it_says_otherwise() -> (
-    None
-):
+def test_a_launch_path_is_a_get_with_no_presets_and_no_draft_param_unless_it_says_otherwise() -> None:
     launch_path = AppManifest.model_validate(_full_manifest_data()).launch_paths[0]
     assert launch_path.method is LaunchPathMethod.GET
     assert launch_path.presets == {}
@@ -499,9 +466,7 @@ def test_a_launch_path_method_is_get_or_post_spelled_in_upper_case(method: str) 
         AppManifest.model_validate({**data, "launch_paths": [launch_path]})
 
 
-def test_a_launch_path_declares_at_most_one_of_text_param_draft_param_and_mention_param() -> (
-    None
-):
+def test_a_launch_path_declares_at_most_one_of_text_param_draft_param_and_mention_param() -> None:
     data = _full_manifest_data()
     launch_path = {**_launch_path_data(), "draft_param": "path"}
     with pytest.raises(
@@ -516,9 +481,7 @@ def test_a_launch_path_declares_at_most_one_of_text_param_draft_param_and_mentio
         AppManifest.model_validate(
             {
                 **data,
-                "launch_paths": [
-                    {**launch_path, "draft_param": None, "mention_param": "path"}
-                ],
+                "launch_paths": [{**launch_path, "draft_param": None, "mention_param": "path"}],
             }
         )
     with pytest.raises(
@@ -528,9 +491,7 @@ def test_a_launch_path_declares_at_most_one_of_text_param_draft_param_and_mentio
         AppManifest.model_validate(
             {
                 **data,
-                "launch_paths": [
-                    {**launch_path, "text_param": None, "draft_param": "message"}
-                ],
+                "launch_paths": [{**launch_path, "text_param": None, "draft_param": "message"}],
             }
         )
     with pytest.raises(
@@ -566,9 +527,7 @@ def test_a_launch_path_declares_at_most_one_of_text_param_draft_param_and_mentio
     assert mentioning.launch_paths[0].mention_param == "path"
 
 
-def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_and_nothing_else() -> (
-    None
-):
+def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_and_nothing_else() -> None:
     """The ``app_params`` pair (the multiplayer spec, section 9.2) names two distinct params of the launch path, and
     stands alone like a text, draft, or mention param."""
     data = _full_manifest_data()
@@ -604,9 +563,7 @@ def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_an
         ValidationError,
         match="at most one of text_param, draft_param, mention_param, and app_params",
     ):
-        AppManifest.model_validate(
-            {**data, "launch_paths": [{**about_an_app, "text_param": "app"}]}
-        )
+        AppManifest.model_validate({**data, "launch_paths": [{**about_an_app, "text_param": "app"}]})
     with pytest.raises(
         ValidationError,
         match="names one param 'app' for both the name and the display name",
@@ -627,9 +584,7 @@ def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_an
 def test_a_preset_may_not_shadow_a_param() -> None:
     data = _full_manifest_data()
     launch_path = {**_launch_path_data(), "presets": {"path": "/notes/"}}
-    with pytest.raises(
-        ValidationError, match="preset 'path' is also one of the launch path's params"
-    ):
+    with pytest.raises(ValidationError, match="preset 'path' is also one of the launch path's params"):
         AppManifest.model_validate({**data, "launch_paths": [launch_path]})
 
 
@@ -643,9 +598,7 @@ def test_the_launch_envelopes_names_are_reserved_for_params_and_presets(
         ValidationError,
         match=f"{reserved!r} is reserved for the shell's launch envelope",
     ):
-        AppManifest.model_validate(
-            {**data, "launch_paths": [{**launch_path, "presets": {reserved: "x"}}]}
-        )
+        AppManifest.model_validate({**data, "launch_paths": [{**launch_path, "presets": {reserved: "x"}}]})
     with pytest.raises(
         ValidationError,
         match=f"{reserved!r} is reserved for the shell's launch envelope",
@@ -693,9 +646,7 @@ def test_the_open_launch_path_id_is_reserved_for_the_synthesized_root() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "launch_path_id", ["New", "-new", "", "a" * 33, "new tab", "new\n"]
-)
+@pytest.mark.parametrize("launch_path_id", ["New", "-new", "", "a" * 33, "new tab", "new\n"])
 def test_launch_path_ids_follow_the_id_rule(launch_path_id: str) -> None:
     with pytest.raises(ValidationError, match="invalid launch path id"):
         AppManifest.model_validate(
@@ -703,9 +654,7 @@ def test_launch_path_ids_follow_the_id_rule(launch_path_id: str) -> None:
                 "name": "news",
                 "display_name": "News",
                 "icon": "icon.svg",
-                "launch_paths": [
-                    {"id": launch_path_id, "label": "New", "path": "/new"}
-                ],
+                "launch_paths": [{"id": launch_path_id, "label": "New", "path": "/new"}],
             }
         )
 
@@ -737,9 +686,7 @@ def test_launch_path_values_are_rooted_query_free_and_unescaped(path: str) -> No
         )
 
 
-@pytest.mark.parametrize(
-    "path", ["/", "/new", "/folders/inbox", "/a-b_c.d~", "/a:b@c!$&'()*+,;="]
-)
+@pytest.mark.parametrize("path", ["/", "/new", "/folders/inbox", "/a-b_c.d~", "/a:b@c!$&'()*+,;="])
 def test_launch_path_values_that_follow_the_rule_are_accepted(path: str) -> None:
     manifest = AppManifest.model_validate(
         {
@@ -765,9 +712,7 @@ def test_default_shortcut_launch_must_name_a_declared_launch_path() -> None:
         )
 
 
-def test_default_shortcut_launch_open_is_allowed_only_without_declared_launch_paths() -> (
-    None
-):
+def test_default_shortcut_launch_open_is_allowed_only_without_declared_launch_paths() -> None:
     rooted = AppManifest.model_validate(
         {
             "name": "news",
@@ -805,9 +750,7 @@ def _two_launch_path_manifest_data(default_shortcut: object) -> dict[str, object
 
 def test_an_array_of_default_shortcuts_seeds_each_in_order() -> None:
     manifest = AppManifest.model_validate(
-        _two_launch_path_manifest_data(
-            [{"launch": "screen", "mode": "focus"}, {"launch": "browser", "mode": "new"}]
-        )
+        _two_launch_path_manifest_data([{"launch": "screen", "mode": "focus"}, {"launch": "browser", "mode": "new"}])
     )
 
     assert [(shortcut.launch, shortcut.mode) for shortcut in manifest.default_shortcuts] == [
@@ -830,9 +773,7 @@ def test_an_array_of_default_shortcuts_seeds_each_in_order() -> None:
         ),
     ],
 )
-def test_an_array_of_default_shortcuts_is_checked_shortcut_by_shortcut(
-    default_shortcut: object, message: str
-) -> None:
+def test_an_array_of_default_shortcuts_is_checked_shortcut_by_shortcut(default_shortcut: object, message: str) -> None:
     with pytest.raises(ValidationError, match=message):
         AppManifest.model_validate(_two_launch_path_manifest_data(default_shortcut))
 
@@ -946,25 +887,197 @@ def test_default_shortcut_mode_must_be_focus_or_new() -> None:
         )
 
 
-def test_a_manifest_that_still_carries_the_retired_handles_table_fails_to_load() -> (
-    None
-):
+def test_a_manifest_that_still_carries_the_retired_handles_table_fails_to_load() -> None:
     with pytest.raises(ValidationError, match="handles"):
-        AppManifest.model_validate(
-            {"name": "news", "display_name": "News", "icon": "icon.svg", "handles": {}}
-        )
+        AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "handles": {}})
 
 
-def test_unknown_keys_are_rejected() -> None:
-    with pytest.raises(ValidationError, match="instance_lifetime"):
-        AppManifest.model_validate(
-            {
-                "name": "news",
-                "display_name": "News",
-                "icon": "icon.svg",
-                "instance_lifetime": "explicit",
-            }
-        )
+_NEWS_MANIFEST_HEAD = 'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n'
+_NEWS_LAUNCH_PATH = '[[launch_paths]]\nid = "new"\nlabel = "News"\npath = "/"\n'
+
+# Each a manifest carrying one key the models do not declare, the line that declares it, and where it sits.
+_UNKNOWN_KEY_MANIFESTS = (
+    pytest.param(
+        _NEWS_MANIFEST_HEAD + 'instance_lifetime = "explicit"\n',
+        'instance_lifetime = "explicit"\n',
+        "instance_lifetime",
+        id="top-level",
+    ),
+    pytest.param(
+        _NEWS_MANIFEST_HEAD + "[handles]\nopen_url = true\n",
+        "[handles]\nopen_url = true\n",
+        "handles",
+        id="retired-handles-table",
+    ),
+    pytest.param(
+        _NEWS_MANIFEST_HEAD + '[scope]\nexclude = ["docs/generated/**"]\nfuture_rule = true\n',
+        "future_rule = true\n",
+        "scope.future_rule",
+        id="table",
+    ),
+    pytest.param(
+        _NEWS_MANIFEST_HEAD + '[default_shortcut]\nlaunch = "open"\nmode = "focus"\nfuture_flag = true\n',
+        "future_flag = true\n",
+        "default_shortcut.0.future_flag",
+        id="one-table-read-as-an-array",
+    ),
+    pytest.param(
+        _NEWS_MANIFEST_HEAD
+        + '[[launch_paths]]\nid = "old"\nlabel = "Old news"\npath = "/old"\n'
+        + _NEWS_LAUNCH_PATH
+        + "future_flag = true\n",
+        "future_flag = true\n",
+        "launch_paths.1.future_flag",
+        id="array-of-tables-entry",
+    ),
+    pytest.param(
+        _NEWS_MANIFEST_HEAD
+        + _NEWS_LAUNCH_PATH
+        + '[[launch_paths.params]]\nname = "topic"\nlabel = "Topic"\nfuture_flag = true\n',
+        "future_flag = true\n",
+        "launch_paths.0.params.0.future_flag",
+        id="nested-array-of-tables-entry",
+    ),
+)
+
+
+def _write_manifest_beside_its_icon(directory: Path, body: str) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "icon.svg").write_text(APP_ICON_MARKUP, encoding="utf-8")
+    manifest_path = directory / "app.toml"
+    manifest_path.write_text(body, encoding="utf-8")
+    return manifest_path
+
+
+@pytest.mark.parametrize(("body", "unknown_key_line", "unknown_key"), _UNKNOWN_KEY_MANIFESTS)
+def test_load_manifest_refuses_an_unknown_key_in_the_strict_mode(
+    tmp_path: Path, body: str, unknown_key_line: str, unknown_key: str
+) -> None:
+    manifest_path = _write_manifest_beside_its_icon(tmp_path / "news", body)
+
+    with captured_warnings() as warnings:
+        with pytest.raises(ManifestLoadError, match=f"field '{unknown_key}': Extra inputs are not permitted"):
+            load_manifest(manifest_path, mode=ManifestReadMode.STRICT)
+
+    assert warnings == []
+
+
+@pytest.mark.parametrize(("body", "unknown_key_line", "unknown_key"), _UNKNOWN_KEY_MANIFESTS)
+def test_load_manifest_warns_about_an_unknown_key_and_ignores_it_by_default(
+    tmp_path: Path, body: str, unknown_key_line: str, unknown_key: str
+) -> None:
+    manifest_path = _write_manifest_beside_its_icon(tmp_path / "news", body)
+    without_the_key = _write_manifest_beside_its_icon(tmp_path / "plain", body.replace(unknown_key_line, ""))
+
+    with captured_warnings() as warnings:
+        manifest = load_manifest(manifest_path)
+
+    # The key alone is dropped: everything the manifest declares beside it reads as it does without the key.
+    assert manifest == load_manifest(without_the_key, mode=ManifestReadMode.STRICT)
+    assert manifest.name == "news"
+    assert len(warnings) == 1
+    assert f"unknown key '{unknown_key}'" in warnings[0]
+    assert str(manifest_path) in warnings[0]
+
+
+def test_load_manifest_reads_the_fields_around_ignored_keys(tmp_path: Path) -> None:
+    manifest_path = _write_manifest_beside_its_icon(
+        tmp_path,
+        _NEWS_MANIFEST_HEAD
+        + 'future_field = "0.3.0"\n'
+        + '[default_shortcut]\nlaunch = "new"\nmode = "focus"\nfuture_flag = true\n'
+        + _NEWS_LAUNCH_PATH
+        + 'future_flag = true\ntext_param = "topic"\n'
+        + '[[launch_paths.params]]\nname = "topic"\nlabel = "Topic"\nfuture_hint = "a subject"\nrequired = true\n'
+        + '[scope]\nfuture_rule = true\nexclude = ["docs/generated/**"]\n'
+        + '[future_table]\nexclude = ["docs/internal/**"]\n',
+    )
+
+    with captured_warnings() as warnings:
+        manifest = load_manifest(manifest_path, mode=ManifestReadMode.TOLERANT)
+
+    assert [(shortcut.launch, shortcut.mode) for shortcut in manifest.default_shortcuts] == [
+        ("new", ShortcutMode.FOCUS)
+    ]
+    assert [(entry.id, entry.label, entry.path, entry.text_param) for entry in manifest.launch_paths] == [
+        ("new", "News", "/", "topic")
+    ]
+    assert [(param.name, param.label, param.required) for param in manifest.launch_paths[0].params] == [
+        ("topic", "Topic", True)
+    ]
+    assert manifest.scope.exclude == ("docs/generated/**",)
+    assert sorted(warning.partition("unknown key ")[2].split()[0] for warning in warnings) == [
+        "'default_shortcut.0.future_flag'",
+        "'future_field'",
+        "'future_table'",
+        "'launch_paths.0.future_flag'",
+        "'launch_paths.0.params.0.future_hint'",
+        "'scope.future_rule'",
+    ]
+
+
+@pytest.mark.parametrize(("body", "unknown_key_line", "unknown_key"), _UNKNOWN_KEY_MANIFESTS)
+def test_load_manifest_still_refuses_an_invalid_value_beside_an_unknown_key(
+    tmp_path: Path, body: str, unknown_key_line: str, unknown_key: str
+) -> None:
+    invalid_body = body.replace('display_name = "News"', 'display_name = ""')
+    manifest_path = _write_manifest_beside_its_icon(tmp_path, invalid_body)
+
+    with pytest.raises(ManifestLoadError, match="field 'display_name'"):
+        load_manifest(manifest_path, mode=ManifestReadMode.TOLERANT)
+
+
+@pytest.mark.parametrize(
+    ("body", "problem"),
+    [
+        pytest.param(
+            _NEWS_MANIFEST_HEAD + _NEWS_LAUNCH_PATH + 'future_flag = true\nmethod = "PUT"\n',
+            "field 'launch_paths.0.method'",
+            id="a-bad-value-in-the-entry-that-carries-the-key",
+        ),
+        pytest.param(
+            'name = "news"\nicon = "icon.svg"\nfuture_flag = true\n',
+            "field 'display_name': Field required",
+            id="a-missing-required-field",
+        ),
+        pytest.param(
+            _NEWS_MANIFEST_HEAD + "future_flag = true\nlauncher_rank = 0\n",
+            "field 'launcher_rank'",
+            id="a-value-out-of-range",
+        ),
+        pytest.param(
+            _NEWS_MANIFEST_HEAD + "future_flag = true\ncritical = true\nstop_when_no_windows = true\n",
+            "a critical app cannot declare stop_when_no_windows",
+            id="a-cross-field-rule",
+        ),
+        pytest.param(
+            _NEWS_MANIFEST_HEAD
+            + '[theming]\nfuture_flag = true\n[[theming.parts]]\nname = "card"\ndescription = "A story"\n',
+            "theming parts are declared only with mode",
+            id="a-cross-field-rule-of-the-table-that-carries-the-key",
+        ),
+    ],
+)
+def test_the_tolerant_mode_applies_every_other_rule(tmp_path: Path, body: str, problem: str) -> None:
+    manifest_path = _write_manifest_beside_its_icon(tmp_path, body)
+
+    with pytest.raises(ManifestLoadError, match=problem):
+        load_manifest(manifest_path, mode=ManifestReadMode.TOLERANT)
+
+
+def test_the_tolerant_mode_still_checks_the_icon_and_the_references(tmp_path: Path) -> None:
+    manifest_path = write_app_manifest(
+        tmp_path,
+        "news",
+        _NEWS_MANIFEST_HEAD + 'future_flag = true\n[[references]]\npath = "docs/system/news.md"\n',
+        is_icon_written=False,
+    )
+
+    with pytest.raises(ManifestLoadError, match="names icon 'icon.svg', which does not exist"):
+        load_manifest(manifest_path, mode=ManifestReadMode.TOLERANT)
+    (manifest_path.parent / "icon.svg").write_text(APP_ICON_MARKUP, encoding="utf-8")
+    with pytest.raises(ManifestLoadError, match="docs/system/news.md"):
+        load_manifest(manifest_path, mode=ManifestReadMode.TOLERANT)
 
 
 def test_load_manifest_reads_a_file_and_resolves_its_icon(tmp_path: Path) -> None:
@@ -1119,9 +1232,7 @@ exclude = ["system/apps/news/frontend/dist/**"]
 def test_wiring_programs_are_unique_and_never_the_apps_own() -> None:
     base = {"name": "news", "display_name": "News", "icon": "icon.svg"}
 
-    assert AppManifest.model_validate(
-        {**base, "wiring": {"programs": ["xvfb"]}}
-    ).wiring.programs == ("xvfb",)
+    assert AppManifest.model_validate({**base, "wiring": {"programs": ["xvfb"]}}).wiring.programs == ("xvfb",)
     with pytest.raises(ValidationError, match="unique"):
         AppManifest.model_validate({**base, "wiring": {"programs": ["xvfb", "xvfb"]}})
     with pytest.raises(ValidationError, match="own program"):
@@ -1230,9 +1341,7 @@ def test_a_reference_path_naming_a_glob_says_so() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "note", ["", "   ", "two\nlines", "a carriage\rreturn", "x" * 201]
-)
+@pytest.mark.parametrize("note", ["", "   ", "two\nlines", "a carriage\rreturn", "x" * 201])
 def test_a_reference_note_must_be_one_non_empty_line(note: str) -> None:
     with pytest.raises(ValidationError, match="note"):
         AppManifest.model_validate(
@@ -1354,9 +1463,7 @@ def test_load_manifest_accepts_a_reference_to_a_file_directly_under_the_apps_dir
 
     manifest = load_manifest(manifest_path, repo_root=tmp_path)
 
-    assert [reference.path for reference in manifest.references] == [
-        "system/apps/README.md"
-    ]
+    assert [reference.path for reference in manifest.references] == ["system/apps/README.md"]
 
 
 def test_load_manifest_rejects_a_reference_that_goes_through_a_symlinked_directory(
@@ -1394,9 +1501,7 @@ def test_load_manifest_off_the_apps_layout_skips_the_location_rules_until_a_root
         load_manifest(manifest_path, repo_root=tmp_path)
 
 
-def test_secret_declarations_round_trip_and_reject_a_repeated_file_or_an_empty_variable_list() -> (
-    None
-):
+def test_secret_declarations_round_trip_and_reject_a_repeated_file_or_an_empty_variable_list() -> None:
     data = {
         **_full_manifest_data(),
         "secrets": [
@@ -1409,9 +1514,7 @@ def test_secret_declarations_round_trip_and_reject_a_repeated_file_or_an_empty_v
         ],
     }
     manifest = AppManifest.model_validate(data)
-    assert [
-        (str(secret.file), tuple(secret.variables)) for secret in manifest.secrets
-    ] == [
+    assert [(str(secret.file), tuple(secret.variables)) for secret in manifest.secrets] == [
         ("widget", ("WIDGET_TOKEN", "WIDGET_ORG")),
         ("mailer", ("SMTP_PASSWORD",)),
     ]
@@ -1471,3 +1574,133 @@ def test_theming_parts_declare_the_elements_a_theme_may_style() -> None:
 def test_theming_refuses_misdeclared_parts_and_unknown_modes(theming: dict[str, object], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
         AppManifest.model_validate({**_full_manifest_data(), "theming": theming})
+
+
+# How an app runs and what it needs: the fields a self-contained app directory declares.
+
+_NOTES_MANIFEST_HEAD = 'name = "notes"\ndisplay_name = "Notes"\nicon = "icon.svg"\n'
+_NOTES_SELF_CONTAINED_MANIFEST = (
+    _NOTES_MANIFEST_HEAD
+    + """
+version = "0.3.0"
+verified_template = "minds-v0.11.0"
+
+[run]
+command = "notes"
+args = ["--listen", "{host}:{port:main}"]
+env = { NOTES_PORT = "{port:main}" }
+
+[[services]]
+role = "indexer"
+command = "notes-indexer"
+env = { NOTES_URL = "http://{host}:{port:main}" }
+
+[[permissions]]
+scope = "slack-api"
+permission = "slack-read-all"
+note = "Reads the channels the digest covers"
+
+[llm]
+method = "keyed"
+
+[environment]
+apt = ["poppler-utils"]
+uv_tools = { ruff = "0.6.9" }
+
+[[dependencies]]
+name = "datalib"
+repo_url = "https://github.com/example/datalib"
+
+[[adaptation]]
+summary = "The digest channel is hardcoded"
+resolution = "Ask which channel to read"
+
+[publish]
+exclude = ["docs/internal/**"]
+"""
+)
+
+
+def test_a_manifest_says_how_its_programs_run_and_what_an_adopter_needs(tmp_path: Path) -> None:
+    manifest_path = _write_manifest_beside_its_icon(tmp_path, _NOTES_SELF_CONTAINED_MANIFEST)
+
+    manifest = load_manifest(manifest_path, mode=ManifestReadMode.STRICT)
+
+    assert manifest.version == "0.3.0"
+    assert manifest.verified_template == "minds-v0.11.0"
+    assert manifest.run is not None
+    assert manifest.run.command == "notes"
+    assert manifest.run.args == ("--listen", "{host}:{port:main}")
+    assert manifest.run.env == {"NOTES_PORT": "{port:main}"}
+    assert [(service.role, service.command) for service in manifest.services] == [("indexer", "notes-indexer")]
+    assert [(note.scope, note.permission) for note in manifest.permissions] == [("slack-api", "slack-read-all")]
+    assert manifest.llm is not None
+    assert manifest.llm.method == "keyed"
+    assert manifest.environment.apt == ("poppler-utils",)
+    assert manifest.environment.uv_tools == {"ruff": "0.6.9"}
+    assert [(dependency.name, dependency.repo_url) for dependency in manifest.dependencies] == [
+        ("datalib", "https://github.com/example/datalib")
+    ]
+    assert [note.summary for note in manifest.adaptation] == ["The digest channel is hardcoded"]
+    assert manifest.publish.exclude == ("docs/internal/**",)
+
+
+def test_a_manifest_that_declares_none_of_them_runs_the_scaffolds_way(tmp_path: Path) -> None:
+    manifest = load_manifest(_write_manifest_beside_its_icon(tmp_path, _NOTES_MANIFEST_HEAD))
+
+    assert manifest.run is None
+    assert manifest.services == ()
+    assert manifest.version is None
+    assert manifest.verified_template is None
+    assert manifest.permissions == ()
+    assert manifest.llm is None
+    assert manifest.environment.apt == ()
+    assert manifest.dependencies == ()
+    assert manifest.adaptation == ()
+    assert manifest.publish.exclude == ()
+
+
+@pytest.mark.parametrize(
+    ("addition", "problem"),
+    [
+        pytest.param('[run]\nargs = ["{copy:data}"]\n', "takes only", id="run-arg-with-a-copy-placeholder"),
+        pytest.param('[run]\nenv = { NOTES_STATE = "{scratch}" }\n', "takes only", id="run-env-with-scratch"),
+        pytest.param('[run]\ncommand = "notes\\n--evil"\n', "single line", id="run-command-with-a-line-break"),
+        pytest.param('[run]\nenv = { "NOT A NAME" = "1" }\n', "env", id="run-env-name-that-is-no-variable"),
+        pytest.param(
+            '[run]\nenv = { NOTES_TITLE = "It\'s \\"notes\\"" }\n',
+            "one kind of quote",
+            id="run-env-value-with-both-quotes",
+        ),
+        pytest.param(
+            '[run]\nenv = { NOTES_TITLE = "say \\"hi\\"" }\n',
+            "one kind of quote",
+            id="run-env-value-ending-in-a-quote",
+        ),
+        pytest.param('[[services]]\nrole = "Indexer"\ncommand = "x"\n', "service role", id="service-role-in-capitals"),
+        pytest.param('[[services]]\nrole = "indexer"\n', "command", id="service-with-no-command"),
+        pytest.param(
+            '[[services]]\nrole = "indexer"\ncommand = "a"\n\n[[services]]\nrole = "indexer"\ncommand = "b"\n',
+            "service roles must be unique",
+            id="two-services-of-one-role",
+        ),
+        pytest.param('version = "1.2"\n', "semantic version", id="version-with-two-parts"),
+        pytest.param('verified_template = "0.11.0"\n', "template release", id="template-version-without-its-prefix"),
+        pytest.param('[publish]\nexclude = ["../other"]\n', "publish exclude", id="publish-exclude-leaving-the-app"),
+        pytest.param('[publish]\nexclude = ["!keep.md"]\n', "publish exclude", id="publish-exclude-negated"),
+        pytest.param(
+            '[[dependencies]]\nname = "datalib"\n\n[[dependencies]]\nname = "datalib"\n',
+            "dependency names must be unique",
+            id="one-dependency-twice",
+        ),
+        pytest.param('[[permissions]]\nscope = "slack-api"\n', "permission", id="permission-with-no-permission"),
+    ],
+)
+def test_a_program_or_publish_declaration_off_its_rule_fails_to_load(
+    tmp_path: Path, addition: str, problem: str
+) -> None:
+    # Top-level keys go before the first table, so an addition that is one is placed ahead of the head's tables.
+    manifest_path = _write_manifest_beside_its_icon(tmp_path, _NOTES_MANIFEST_HEAD + addition)
+
+    with pytest.raises(ManifestLoadError, match=problem):
+        load_manifest(manifest_path, mode=ManifestReadMode.STRICT)

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import tomlkit
 from agents_shared.validate_skill import third_party_skills
+from app_install.records import AppOrigin, load_all_records
 from inline_snapshot import snapshot
 from vendor_testing import resolves_into_vendor
 
@@ -35,6 +36,13 @@ _META_EXEMPT_PROJECTS = frozenset({"system_interface", "chat"})
 def _get_all_project_dirs() -> list[Path]:
     """Return all project directories (system/{libs,services,apps}/*) excluding vendored code."""
     project_dirs: list[Path] = []
+    # An app installed from someone else's repository is kept as it came: its publisher's
+    # template may hold a different set of ratchets than this one.
+    installed_app_directories = {
+        _REPO_ROOT / "system" / "apps" / record.package
+        for record in load_all_records(_REPO_ROOT)
+        if record.origin is AppOrigin.INSTALLED
+    }
     for parent in (
         _REPO_ROOT / "system" / "libs",
         _REPO_ROOT / "system" / "services",
@@ -43,7 +51,10 @@ def _get_all_project_dirs() -> list[Path]:
         if not parent.is_dir():
             continue
         for child in sorted(parent.iterdir()):
-            if child.name in _META_EXEMPT_PROJECTS:
+            if (
+                child.name in _META_EXEMPT_PROJECTS
+                or child in installed_app_directories
+            ):
                 continue
             if child.is_dir() and (child / "pyproject.toml").exists():
                 project_dirs.append(child)

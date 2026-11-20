@@ -5,6 +5,7 @@ import click
 from pydantic import Field
 
 from app_manifest.errors import AppManifestError
+from app_manifest.manifest import ManifestReadMode
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import ReferenceNote
 from app_manifest.primitives import ReferencePath
@@ -68,9 +69,10 @@ def validate_manifest(manifest_path: Path, repo_root: Path | None) -> None:
 
     Without --repo-root the reference location checks run against the root a manifest at
     ``system/apps/<package>/app.toml`` implies, and are skipped for a manifest anywhere else.
+    A key the manifest schema does not declare fails the check.
     """
     try:
-        manifest = load_manifest(manifest_path, repo_root=repo_root)
+        manifest = load_manifest(manifest_path, repo_root=repo_root, mode=ManifestReadMode.STRICT)
     except AppManifestError as e:
         raise click.ClickException(str(e)) from e
     click.echo(f"ok: {manifest.name} ({manifest.display_name})")

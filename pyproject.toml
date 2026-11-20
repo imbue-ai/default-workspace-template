@@ -40,6 +40,10 @@ dependencies = [
     # Agents run `uv run --no-sync disk-headroom` from the repo root where they would run df,
     # so its console script must survive a sync of the root closure too.
     "disk-headroom",
+    # The build-app scaffold, the update pass, the skills and the Imbue Studio app run
+    # `uv run --no-sync app-install` from the repo root, so its console script must survive a
+    # sync of the root closure too.
+    "app-install",
     "imbue-common",
     "tomlkit>=0.12",
     "playwright==1.58.0",
@@ -133,6 +137,7 @@ override-dependencies = ["paramiko==5.0.1"]
 # scripts/ is the standard Agent Skills dir name, so the glob names a dir only this
 # layout uses. The shared skill scripts and system/scripts are a project each too.
 members = [
+    "system/libs/app_install",
     "system/libs/app_manifest",
     "system/libs/app_registration",
     "system/libs/app_schema",
@@ -184,6 +189,7 @@ chat-background-tasks = { workspace = true }
 share-grants = { workspace = true }
 event-streams = { workspace = true }
 oom-priority = { workspace = true }
+app-install = { workspace = true }
 app-manifest = { workspace = true }
 app-registration = { workspace = true }
 workspace-themes = { workspace = true }

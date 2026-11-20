@@ -3,11 +3,14 @@ import hashlib
 import json
 import re
 import subprocess
+from collections.abc import Generator
 from collections.abc import Mapping
 from collections.abc import Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
 
+from loguru import logger
 from werkzeug.test import TestResponse
 
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
@@ -37,6 +40,17 @@ path = "system/scripts/run_news.sh"
 [scope]
 exclude = ["docs/generated/**", "data/**"]
 """
+
+
+@contextmanager
+def captured_warnings() -> Generator[list[str]]:
+    """The messages logged at warning level or above while the block runs."""
+    captured: list[str] = []
+    sink_id = logger.add(lambda message: captured.append(str(message)), level="WARNING")
+    try:
+        yield captured
+    finally:
+        logger.remove(sink_id)
 
 
 def write_app_manifest(repo_root: Path, package: str, body: str, is_icon_written: bool) -> Path:

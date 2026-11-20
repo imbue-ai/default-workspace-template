@@ -2,7 +2,8 @@
 that program's registration line passes, and declares a memory band that exists.
 
 Every manifest in the tree -- user-built apps included -- also validates against the real
-repo root, which is what checks that its declared references still exist where it says.
+repo root, which is what checks that its declared references still exist where it says,
+and no two of them declare the same name.
 """
 
 import ast
@@ -11,7 +12,14 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from app_manifest.manifest import MANIFEST_FILENAME, load_manifest
+from app_install.operations import check as app_install_check
+from app_manifest.errors import ManifestLoadError
+from app_manifest.manifest import (
+    MANIFEST_FILENAME,
+    AppManifest,
+    ManifestReadMode,
+    load_manifest,
+)
 from app_manifest.primitives import RESERVED_APP_NAMES
 from app_manifest.scope import (
     APP_CONVENTIONS,
@@ -19,6 +27,7 @@ from app_manifest.scope import (
     SKILL_CONVENTIONS,
     compute_app_scope,
 )
+from app_manifest.testing import write_app_manifest, write_repo_file
 from oom_priority import bands
 from oom_priority.supervisord_testing import supervisord_commands
 from workspace_bare_scripts import user_packages
@@ -27,6 +36,11 @@ from workspace_profile.manifest import find_off_grammar_default_chords
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _APPS_DIR = _REPO_ROOT / "system" / "apps"
 _SUPERVISORD_CONF = _REPO_ROOT / "system" / "supervisord.conf"
+
+# Where each user app's record sits, as ``<name>.toml``: its ``package`` (its directory
+# under system/apps) and its ``origin``, among other things.
+_APP_RECORDS_DIRECTORY = Path("system") / "config" / "apps"
+_INSTALLED_ORIGIN = "installed"
 
 _MANIFEST_FLAG = re.compile(r"--manifest\s+(\S+)")
 
@@ -58,9 +72,57 @@ def _built_in_manifest_paths() -> list[Path]:
     ]
 
 
-def _every_manifest_path() -> list[Path]:
+def _every_manifest_path(repo_root: Path = _REPO_ROOT) -> list[Path]:
     """Every app.toml in the tree, user-built apps included; the suite runs inside workspaces."""
-    return sorted(_APPS_DIR.glob(f"*/{MANIFEST_FILENAME}"))
+    return sorted((repo_root / "system" / "apps").glob(f"*/{MANIFEST_FILENAME}"))
+
+
+def _installed_app_packages(repo_root: Path) -> frozenset[str]:
+    """The directories under system/apps of the apps installed from someone else's
+    repository: the ``package`` of every app record whose ``origin`` says so. A tree with
+    no record directory has no installed app."""
+    records = [
+        tomllib.loads(record_path.read_text())
+        for record_path in sorted((repo_root / _APP_RECORDS_DIRECTORY).glob("*.toml"))
+    ]
+    return frozenset(
+        record["package"] for record in records if record["origin"] == _INSTALLED_ORIGIN
+    )
+
+
+def _manifest_read_mode(manifest_path: Path, repo_root: Path) -> ManifestReadMode:
+    """Strict for an app this tree authors (a built-in, or one built here), whose manifest
+    this suite is the check of; tolerant for an installed app, whose manifest may carry
+    keys a newer template than this one declares."""
+    if manifest_path.parent.name in _installed_app_packages(repo_root):
+        return ManifestReadMode.TOLERANT
+    return ManifestReadMode.STRICT
+
+
+def _load_manifest(manifest_path: Path, repo_root: Path = _REPO_ROOT) -> AppManifest:
+    """A manifest of the tree at ``repo_root``, validated against that root in the mode
+    its app's origin calls for."""
+    return load_manifest(
+        manifest_path,
+        repo_root=repo_root,
+        mode=_manifest_read_mode(manifest_path, repo_root),
+    )
+
+
+def _manifests_sharing_a_name(repo_root: Path) -> list[str]:
+    """One entry per app name that more than one manifest in the tree declares, with the
+    path of each manifest declaring it."""
+    paths_by_name: dict[str, list[str]] = {}
+    for manifest_path in _every_manifest_path(repo_root):
+        name = str(_load_manifest(manifest_path, repo_root).name)
+        paths_by_name.setdefault(name, []).append(
+            manifest_path.relative_to(repo_root).as_posix()
+        )
+    return sorted(
+        f"{name}: {', '.join(paths)}"
+        for name, paths in paths_by_name.items()
+        if len(paths) > 1
+    )
 
 
 def _program_commands() -> dict[str, str]:
@@ -189,7 +251,78 @@ def test_every_manifest_validates_against_the_repo_root(manifest_path: Path) -> 
     # Loading with the real root is what checks the [[references]] location rules and that
     # every referenced artifact still exists, so a deleted skill or doc fails here rather
     # than silently leaving a review pass pointed at nothing.
-    load_manifest(manifest_path, repo_root=_REPO_ROOT)
+    _load_manifest(manifest_path)
+
+
+def test_no_two_manifests_declare_the_same_name() -> None:
+    # Registration upserts an app's registry row by name alone, so the second of two apps
+    # declaring one name would silently replace the first's row.
+    shared = _manifests_sharing_a_name(_REPO_ROOT)
+
+    assert shared == [], f"app names declared by more than one manifest: {shared}"
+
+
+def _named_manifest(name: str) -> str:
+    return f'name = "{name}"\ndisplay_name = "{name.title()}"\nicon = "icon.svg"\n'
+
+
+def test_manifests_sharing_a_name_are_reported_with_the_name_and_each_path(
+    tmp_path: Path,
+) -> None:
+    write_app_manifest(
+        tmp_path, "notes", _named_manifest("notes"), is_icon_written=True
+    )
+    write_app_manifest(
+        tmp_path, "journal", _named_manifest("notes"), is_icon_written=True
+    )
+    write_app_manifest(tmp_path, "news", _named_manifest("news"), is_icon_written=True)
+
+    assert _manifests_sharing_a_name(tmp_path) == [
+        "notes: system/apps/journal/app.toml, system/apps/notes/app.toml"
+    ]
+
+
+def _write_app_record(repo_root: Path, name: str, origin: str) -> None:
+    write_repo_file(
+        repo_root,
+        (_APP_RECORDS_DIRECTORY / f"{name}.toml").as_posix(),
+        f'name = "{name}"\npackage = "{name}"\norigin = "{origin}"\n',
+    )
+
+
+def test_only_an_installed_apps_manifest_may_carry_a_key_this_template_does_not_know(
+    tmp_path: Path,
+) -> None:
+    manifest_paths = {
+        name: write_app_manifest(
+            tmp_path,
+            name,
+            f"{_named_manifest(name)}future_field = true\n",
+            is_icon_written=True,
+        )
+        for name in ("notes", "journal", "news")
+    }
+    _write_app_record(tmp_path, "notes", _INSTALLED_ORIGIN)
+    _write_app_record(tmp_path, "journal", "local")
+
+    assert _load_manifest(manifest_paths["notes"], tmp_path).name == "notes"
+    # An app built here, and one with no record (a built-in), are checked strictly.
+    for name in ("journal", "news"):
+        with pytest.raises(ManifestLoadError, match="future_field"):
+            _load_manifest(manifest_paths[name], tmp_path)
+
+
+def test_a_tree_with_no_app_records_has_no_installed_app(tmp_path: Path) -> None:
+    manifest_path = write_app_manifest(
+        tmp_path,
+        "notes",
+        f"{_named_manifest('notes')}future_field = true\n",
+        is_icon_written=True,
+    )
+
+    assert _installed_app_packages(tmp_path) == frozenset()
+    with pytest.raises(ManifestLoadError, match="future_field"):
+        _load_manifest(manifest_path, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -212,7 +345,7 @@ def test_built_in_app_footprint_carries_the_drop_ins_that_run_it(
     # The footprint's wiring is read off the real tree here, where every program block
     # is a drop-in: a finder that reads the daemon's config alone finds nothing for any
     # app, and the library's own tests write their own layout, so none of them sees that.
-    manifest = load_manifest(manifest_path, repo_root=_REPO_ROOT)
+    manifest = _load_manifest(manifest_path)
     scope = compute_app_scope(_REPO_ROOT, manifest_path, manifest)
     sections_by_path = {entry.path: list(entry.sections) for entry in scope.wiring}
 
@@ -231,25 +364,40 @@ def test_built_in_app_footprint_carries_the_drop_ins_that_run_it(
 def test_every_declared_wiring_program_has_a_supervisord_block() -> None:
     command_by_program = _program_or_listener_commands()
     for manifest_path in _every_manifest_path():
-        for program in load_manifest(
-            manifest_path, repo_root=_REPO_ROOT
-        ).wiring.programs:
+        for program in _load_manifest(manifest_path).wiring.programs:
             assert program in command_by_program, (
                 f"{manifest_path} declares wiring program {program!r}, which neither "
                 "system/supervisord.conf nor a drop-in beside it defines"
             )
 
 
+def test_every_derived_file_is_what_app_install_generates() -> None:
+    # The program files and skill links of the apps built or installed here are generated from
+    # each app's manifest and record; one edited by hand, or left behind by a manifest that
+    # changed, is put right with `uv run --no-sync app-install regenerate`.
+    problems = app_install_check(_REPO_ROOT)
+
+    assert problems == (), (
+        "run `uv run --no-sync app-install regenerate` (to change what is generated, change "
+        f"the app's manifest): {list(problems)}"
+    )
+
+
 def test_the_first_label_of_every_standalone_program_is_a_reserved_app_name() -> None:
     # An app named after a standalone program's first label would claim that program as
     # its <name>-<role> sidecar when its footprint is computed, so the label is reserved.
-    manifests = [
-        load_manifest(path, repo_root=_REPO_ROOT) for path in _every_manifest_path()
-    ]
-    # A program an app's manifest declares as its wiring (the Screen's stack members) is that app's, not standalone.
-    app_programs = {manifest.program for manifest in manifests} | {
-        program for manifest in manifests for program in manifest.wiring.programs
-    }
+    manifests = [_load_manifest(path) for path in _every_manifest_path()]
+    # A program an app's manifest declares as its wiring (the Screen's stack members) or as one of
+    # its services (run as <name>-<role>) is that app's, not standalone.
+    app_programs = (
+        {manifest.program for manifest in manifests}
+        | {program for manifest in manifests for program in manifest.wiring.programs}
+        | {
+            f"{manifest.name}-{service.role}"
+            for manifest in manifests
+            for service in manifest.services
+        }
+    )
     standalone_labels = {
         program.partition("-")[0]
         for program in _program_commands()
@@ -276,8 +424,7 @@ def test_no_app_claims_another_apps_program_as_a_sidecar() -> None:
     # ``program:terminal-pty`` is the terminal's sidecar in fact as well as by name.
     command_by_program = _program_commands()
     manifest_by_package = {
-        path.parent: load_manifest(path, repo_root=_REPO_ROOT)
-        for path in _every_manifest_path()
+        path.parent: _load_manifest(path) for path in _every_manifest_path()
     }
     collisions = sorted(
         f"{owner.name} would claim {claimed.program!r} (app {claimed.name})"
@@ -353,7 +500,7 @@ def test_every_built_in_app_directory_ships_a_manifest() -> None:
 def test_built_in_manifest_validates_and_matches_its_program(
     manifest_path: Path,
 ) -> None:
-    manifest = load_manifest(manifest_path)
+    manifest = _load_manifest(manifest_path)
     command_by_program = _program_commands()
 
     assert manifest.program in command_by_program, (
@@ -393,7 +540,7 @@ def test_built_in_app_runs_its_entry_point_from_the_workspace_venv(
     # The venv is an app's only install, and the update's pre-flight boots
     # ``.venv/bin/<script>``; a bare entry point is resolved through PATH, which can reach
     # some other install.
-    manifest = load_manifest(manifest_path)
+    manifest = _load_manifest(manifest_path)
     command = _program_commands()[manifest.program]
     script = _entry_point_script(command)
 
@@ -409,7 +556,7 @@ def test_built_in_app_runs_its_entry_point_from_the_workspace_venv(
     "manifest_path", _built_in_manifest_paths(), ids=lambda path: path.parent.name
 )
 def test_built_in_manifest_priority_is_a_band(manifest_path: Path) -> None:
-    manifest = load_manifest(manifest_path)
+    manifest = _load_manifest(manifest_path)
 
     assert manifest.priority in bands.SERVICE_BANDS, (
         f"{manifest_path} declares priority {manifest.priority!r}, which is not a SERVICE_BANDS key"
@@ -427,7 +574,7 @@ def test_built_in_manifest_keybindings_spell_their_default_chords_in_the_grammar
 ) -> None:
     # The shell's Keyboard shortcuts dialog skips a registry row whose default chords are
     # off the grammar, and the app's own resolved-chords route refuses to load them.
-    manifest = load_manifest(manifest_path)
+    manifest = _load_manifest(manifest_path)
 
     assert find_off_grammar_default_chords(manifest.keybindings) == []
 
@@ -448,7 +595,7 @@ def test_every_built_in_preview_boots_its_programs_entry_point(
     # none, with the venv's bin first on PATH; whatever the venv holds under that name is
     # what boots. Anything but the script the app's own program runs previews some other
     # package, or nothing.
-    manifest = load_manifest(manifest_path)
+    manifest = _load_manifest(manifest_path)
     launched = (
         manifest.preview.command[0]
         if manifest.preview.command
@@ -464,7 +611,7 @@ def test_every_built_in_preview_boots_its_programs_entry_point(
 def test_built_in_manifests_agree_with_the_contract_table() -> None:
     by_name = {
         str(manifest.name): manifest
-        for manifest in map(load_manifest, _built_in_manifest_paths())
+        for manifest in map(_load_manifest, _built_in_manifest_paths())
     }
 
     assert by_name["system_interface"].internal is True
