@@ -11,6 +11,10 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 - Added: A paste of at least 4,000 characters or 80 lines into the chat composer becomes a `pasted-text-N.txt` attachment, stored in the chat's own folder, with "Paste as text" to undo it.
 - Added: A message holding dictated words carries a `<dictation-note>` telling the model that parts may be misheard; the chat's bubbles, notifications and titles leave it out.
 - Added: The template has a root `CHANGELOG.md` and `UNABRIDGED_CHANGELOG.md`, with one `## [minds-v<version>] - <date>` section per release; update-self's what's new shows the target's sections newer than the workspace's release, plus `[Unreleased]`.
+- Added: A message handler's `reload_when_raised` flag (beside `show`) makes the shell send a `refresh` layout op when its show raises a window already at the handler's `show` page.
+- Added: `preview_app.py up --private` boots a preview with no window, for an agent to drive on its loopback port.
+- Added: `memory_candidates.py` reports how much free memory is left before the memory guard acts (`shed_line_kib` / `room_kib` in its JSON).
+- Added: `workspace_ui` exports `sendFailureKindOf`, which reads a send-failure kind reported by the chat app.
 
 ### Changed
 
@@ -25,6 +29,11 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 - Changed: `AGENTS.md` tells chats to reply before the background test gate finishes, and to run long commands in the background and carry on with other work.
 - Changed: Claude hooks name their scripts from `${CLAUDE_PROJECT_DIR}` rather than the shell's current folder.
 - Changed: The `datalib` skill installs datalib v0.55.0, which drops qmd for datalib's own search index, adds Cowork tasks and a Baby Connect source, and lets a person mute problem rows.
+- Changed: A chat left idle for eight hours is now shed first under memory pressure, ahead of browser tabs: its band rises linearly from 560 at one hour idle to 1000 at eight, and Chromium's processes are remapped to 910–960.
+- Changed: `oom_priority.bands` keeps the chat policy in the `CHAT_STAGES` and `CHAT_ENGAGEMENT` tables and the browser band in `BROWSER`; `SHARED_BROWSER` is now 960 and `CHAT_AGENT_STALE_CEILING` is removed.
+- Changed: The resource gauge warns by default when CPU averages 90% or more over five minutes, shown on the taskbar's CPU bar with no notification; short bursts no longer count.
+- Changed: update-self's `resume-chats` restarts and messages only chats that were busy when paused, the apply stops its own idle worker before merging, and a pre-flight boot stopped by the memory guard is named in the failure.
+- Changed: `preview_app.py`, `mock_frame.py` and `serve_isolated_instance.py` refuse to register a window from a git worktree, and a preview's default title is `<App> (preview)`.
 
 ### Removed
 
@@ -38,6 +47,10 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 - Fixed: Automatic chat titles longer than 40 characters are no longer thrown away, leaving "Chat N"; the model is asked for a shorter title, and a long one is cut at a word.
 - Fixed: Hovering the floating chat avatar shows "Chat" instead of the open chat's name.
 - Fixed: The oom_priority revival notice is no longer missed when a session resumes with its shell in a subfolder.
+- Fixed: A chat's first message is no longer lost when Claude is slow to start: a held send refused for a reason that can clear is retried, and one that still fails goes back to the composer with "Couldn't send your message".
+- Fixed: An isolated instance or preview booted from a git worktree runs over copies of the user's live app data and secrets instead of an empty store.
+- Fixed: Clicking a link to a file already open in Files reloads its window, so a rewritten file shows its new content.
+- Fixed: The `crystallize-creation`, `heal-creation` and `update-creation` skills start their ticket with a standalone `tk start`, so the tk-standalone hook no longer rejects their ticket block.
 
 ## [minds-v0.10.5] - 2026-11-17
 
