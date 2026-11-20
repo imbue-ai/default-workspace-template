@@ -24,6 +24,8 @@ from app_manifest.manifest import AppManifest
 from app_manifest.manifest import AppReference
 from app_manifest.manifest import MANIFEST_FILENAME
 from app_manifest.manifest import app_package_directory
+from app_manifest.manifest import find_symlinked_component
+from app_manifest.manifest import is_inside_an_app_directory
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import ExcludeGlob
 from app_manifest.primitives import ReferenceNote
@@ -358,27 +360,18 @@ def find_app_record(repo_root: Path, manifest_path: Path, manifest: AppManifest)
 def _describe_reference_location_problem(repo_root: Path, own_package: str, path: ReferencePath) -> str | None:
     """Why a user app's record may not list ``path``, by the rules a manifest's reference is held
     to (``load_manifest``); None when it may."""
-    parts = path.split("/")
-    is_inside_an_app = (
-        tuple(parts[:2]) == APPS_DIRECTORY_PARTS
-        and len(parts) > 2
-        and repo_root.joinpath(*APPS_DIRECTORY_PARTS, parts[2]).is_dir()
-    )
-    if is_inside_an_app and parts[2] == own_package:
-        return "is inside the app's own directory, which is already implicit"
-    if is_inside_an_app:
+    if is_inside_an_app_directory(repo_root, path):
+        if path.split("/")[len(APPS_DIRECTORY_PARTS)] == own_package:
+            return "is inside the app's own directory, which is already implicit"
         return "names another app's directory, and a path inside an app belongs to that app alone"
     if not (repo_root / path).exists():
         return f"does not exist under {repo_root}"
-    walked = repo_root
-    for segment in parts:
-        walked = walked / segment
-        if walked.is_symlink():
-            return (
-                f"goes through the symlink {walked.relative_to(repo_root).as_posix()!r}; git never reports "
-                "a changed file through a symlink, so the reference would cover nothing -- name the real "
-                "path instead"
-            )
+    symlinked_component = find_symlinked_component(repo_root, path)
+    if symlinked_component is not None:
+        return (
+            f"goes through the symlink {symlinked_component!r}; git never reports a changed file through a "
+            "symlink, so the reference would cover nothing -- name the real path instead"
+        )
     return None
 
 

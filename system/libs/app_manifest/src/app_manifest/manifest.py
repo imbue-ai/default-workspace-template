@@ -905,7 +905,7 @@ def app_package_directory(repo_root: Path, manifest_path: Path) -> str | None:
     return f"{app_directory.relative_to(repo_root).as_posix()}/"
 
 
-def _is_inside_another_apps_directory(repo_root: Path, reference_path: ReferencePath) -> bool:
+def is_inside_an_app_directory(repo_root: Path, reference_path: ReferencePath) -> bool:
     """Whether a reference reaches into some app package under system/apps/."""
     parts = reference_path.split("/")
     # A file that sits directly in system/apps/ (its README) is not an app; only a
@@ -917,7 +917,7 @@ def _is_inside_another_apps_directory(repo_root: Path, reference_path: Reference
     )
 
 
-def _find_symlinked_component(repo_root: Path, reference_path: ReferencePath) -> str | None:
+def find_symlinked_component(repo_root: Path, reference_path: ReferencePath) -> str | None:
     """The first component of a reference that is itself a symlink, or None when none is.
 
     Git reports a changed file under the real directory and never under a symlink to it
@@ -941,7 +941,7 @@ def _check_references_against_repo_root(path: Path, manifest: AppManifest, repo_
                 f"manifest {path} is invalid: reference {str(reference.path)!r} is inside the app's "
                 f"own directory {own_app_directory!r}, which is already implicit"
             )
-        if _is_inside_another_apps_directory(repo_root, reference.path):
+        if is_inside_an_app_directory(repo_root, reference.path):
             raise ManifestLoadError(
                 f"manifest {path} is invalid: reference {str(reference.path)!r} names another app's "
                 "directory; an app-to-app dependency belongs in pyproject.toml, where it is already "
@@ -951,7 +951,7 @@ def _check_references_against_repo_root(path: Path, manifest: AppManifest, repo_
             raise ManifestLoadError(
                 f"manifest {path} references {str(reference.path)!r}, which does not exist under {repo_root}"
             )
-        symlinked_component = _find_symlinked_component(repo_root, reference.path)
+        symlinked_component = find_symlinked_component(repo_root, reference.path)
         if symlinked_component is not None:
             raise ManifestLoadError(
                 f"manifest {path} references {str(reference.path)!r}, which goes through the symlink "
