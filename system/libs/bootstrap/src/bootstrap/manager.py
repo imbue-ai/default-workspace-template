@@ -478,7 +478,7 @@ def _write_update_recovery_cron_entry(target_dir: Path = Path("/etc/cron.d")) ->
 def _write_routines_tick_cron_entry(target_dir: Path = Path("/etc/cron.d")) -> None:
     """Install the routines tick into /etc/cron.d, at every boot like the recovery guard.
 
-    One line for the whole workspace: every minute it runs ``routines tick`` through the
+    One entry for the whole workspace: every minute it runs ``routines tick`` through the
     env wrapper, which restores the services agent's environment cron scrubs and runs from
     the repo root. The routines themselves are definition files, never cron entries.
 
