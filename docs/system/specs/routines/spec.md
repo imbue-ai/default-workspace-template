@@ -156,8 +156,11 @@ The library is `system/libs/routines`, a uv workspace member in the root venv, w
 The bootstrap writes one code-owned entry into `/etc/cron.d/routines` at every boot, beside the recovery guard (the `data/.state/cron.d` install keeps running for whatever the migration of section 12 leaves there):
 
 ```
+MNGR_HOST_DIR=/home/user/.mngr
 * * * * *   root   /home/user/workspace/system/libs/routines/with_agent_env.sh uv run --no-sync routines tick >> /var/log/supervisor/routines-tick.log 2>&1
 ```
+
+The first line is the boot's own `MNGR_HOST_DIR`, which cron would otherwise scrub: the wrapper reads the agent environment from files inside that directory, and a host need not keep it at the container's `/home/user/.mngr`.
 
 `routines tick`:
 
