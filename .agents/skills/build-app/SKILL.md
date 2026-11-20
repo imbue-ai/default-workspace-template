@@ -196,7 +196,12 @@ manifest check, the app's `uv lock` or its `uv sync` fails. A registration
 is refused when the app would take a name, a program, a console script or a
 port something in the workspace already holds; the message names every
 problem, and the app's directory is removed again, so fix what it names and
-run the scaffolder again.
+run the scaffolder again. A failure after the registration (the manifest
+check, the lock, the sync) leaves the app registered, with its directory, its
+record and its generated program in place, and a second run is refused
+because the directory exists: remove the app with
+`uv run --no-sync app-install uninstall <name>`, fix what the message names,
+and run the scaffolder again.
 
 What gets generated:
 
