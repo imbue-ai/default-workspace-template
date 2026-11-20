@@ -95,7 +95,7 @@ def test_a_scrape_trigger_matches_what_its_strict_pattern_matches() -> None:
             "https://auth.x.ai/oauth2/device?user_code=ABCD-1234",
             id="issuer-host",
         ),
-        pytest.param("  https://x.ai/legal/terms-of-service", None, id="another-x-ai-link"),
+        pytest.param("  https://x.ai/grok", None, id="another-x-ai-link"),
         pytest.param("  https://accounts.x.ai.example.test/oauth2/device", None, id="a-host-outside-x-ai"),
     ],
 )
