@@ -1,24 +1,6 @@
 """Turn the records of a grok session's ``updates.jsonl`` into the shared web-UI event schema.
 
-Grok Build appends each session's log to ``<GROK_HOME>/sessions/<bucket>/<session id>/updates.jsonl``,
-one ``{"timestamp", "method", "params": {"sessionId", "update": {"sessionUpdate": <kind>, ...},
-"_meta": {...}}}`` record per line (``docs/design/grok-transcript-schema.md``). Its loader keeps a
-:class:`GrokLaneState` per session and hands each record to :func:`parse_record` with its byte
-offset; :func:`detail_for` re-reads an event's payloads from the record it came from.
-
-  user_message_chunk     a user turn (chunks sharing a ``promptIndex`` are one message); a wake
-                         turn grok started itself is a notice
-  agent_message_chunk    a run of assistant text (lines only background reports separate are one run)
-  agent_thought_chunk    readable reasoning, carried by the lane's next assistant event
-  tool_call              a tool call
-  tool_call_update       the call's result, once its status is completed or failed
-  turn_completed         the turn's end: end_turn, cancelled, interrupted or error (its ``agent_result``
-                         becomes an error message); a call it leaves open reads "Interrupted."
-  subagent_spawned       the child session a spawn_subagent call started
-  hook_annotation        a Stop hook sending grok back to work
-  compaction_checkpoint  a compaction of a top-level session, as the "Context was compacted" status
-  anything else          nothing
-
+The record kinds and the event each becomes are in ``docs/design/grok-transcript-schema.md``.
 Event ids are ``grok-<session id>-<byte offset>-<suffix>``: grok's ``eventId`` restarts with each
 launch and a ``toolCallId`` can repeat within a session. A result's id carries its call's offset. A
 root session's turns emit turn_started and their end; a child session's emit only their end.

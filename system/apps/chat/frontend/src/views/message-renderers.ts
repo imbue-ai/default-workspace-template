@@ -268,7 +268,7 @@ export function renderAssistantMessage(
   );
 }
 
-/** The harnesses' tools that delegate to a sub-agent: Claude's `Agent`, grok's `spawn_subagent`. */
+/** Each harness's tool that delegates to a sub-agent. */
 const SUBAGENT_TOOL_NAMES: ReadonlySet<string> = new Set(["Agent", "spawn_subagent"]);
 
 /** Whether this call renders as a sub-agent card. Gated on the description,

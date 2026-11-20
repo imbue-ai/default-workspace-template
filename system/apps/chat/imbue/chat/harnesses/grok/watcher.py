@@ -1,11 +1,11 @@
 """Read a grok agent's session logs into UI events, and tail the live ones.
 
-Built on the shared :mod:`~imbue.chat.harnesses.transcript_store` scaffolding. The top-level
-sessions mngr records for the agent (``list_local_root_session_dirs``) share one lane, merged by
-record time, because ``/new`` and ``--resume`` interleave them; each subagent's child session,
-named by its parent's ``subagent_spawned`` record and found with ``find_local_session_dir``, is a
-lane of its own, kept out of the main stream. :class:`GrokTranscriptLoader` is the read half, which
-an archived chat segment is read through; :class:`GrokSessionWatcher` adds the live tail.
+The top-level sessions mngr records for the agent (``list_local_root_session_dirs``) share one
+lane, merged by record time, because ``/new`` and ``--resume`` interleave them; each subagent's
+child session, named by its parent's ``subagent_spawned`` record and found with
+``find_local_session_dir``, is a lane of its own, kept out of the main stream.
+:class:`GrokTranscriptLoader` is the read half, which an archived chat segment is read through;
+:class:`GrokSessionWatcher` adds the live tail.
 """
 
 import heapq

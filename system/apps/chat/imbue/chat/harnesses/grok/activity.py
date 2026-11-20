@@ -1,4 +1,4 @@
-"""Grok's activity tracker; the pure derivation lives beside it in ``activity_state``."""
+"""Grok's activity tracker."""
 
 from typing import Any
 from typing import ClassVar

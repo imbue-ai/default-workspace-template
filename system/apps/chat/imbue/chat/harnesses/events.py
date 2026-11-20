@@ -58,7 +58,7 @@ class SpecialEventKind(StrEnum):
     Turn boundaries come from the harnesses whose logs record them as they happen, such as
     codex's rollout: ``task_started`` when a user turn begins, ``task_complete`` when it ends,
     and ``turn_aborted`` on a user interrupt. Claude's transcript carries no equivalent, so
-    claude declares an empty set -- that emptiness is the honest statement, not an omission.
+    claude declares an empty set.
     """
 
     TURN_STARTED = "turn_started"

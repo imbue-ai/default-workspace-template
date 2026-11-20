@@ -20,8 +20,8 @@ child session.
   request, a secret request and tk lines echoed by shell calls, and a request echoed after output
   grok truncated), `streaming` (text before a call, a thought, a 600-word run streamed over 33 s),
   `tools` (each workspace tool once, a monitor's event and end wakes, and the session's
-  `tool_definitions.json`), and `guard_refusals` (calls the template's own `.grok/hooks/policy.json`
-  refused, beside ones it let through). Capture paths are rewritten to
+  `tool_definitions.json`), and `guard_refusals` (calls the template's own tool-call guards refused
+  as grok `PreToolUse` hooks, beside ones they let through). Capture paths are rewritten to
   `/tmp/grok-fixtures/headless/<scenario>`, in byte arrays as well as strings, and the agent and
   host ids in `guard_refusals`' commit identity to zeros.
 

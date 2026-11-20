@@ -156,11 +156,7 @@ def tool_labels(tool_name: str, raw_input_json: str, native_label: str) -> tuple
 
 @pure
 def shell_command(tool_name: str, raw_input_json: str) -> str | None:
-    """The shell command this call runs, or None for a call that runs none.
-
-    ``run_terminal_command`` and ``monitor`` both run their ``command``. A ``use_tool`` call runs
-    none: grok refuses a native tool through it.
-    """
+    """The shell command this call runs, or None for a call that runs none."""
     if tool_name not in SHELL_TOOL_NAMES:
         return None
     return first_string_value(parse_input_preview(raw_input_json), SHELL_COMMAND_KEY)
