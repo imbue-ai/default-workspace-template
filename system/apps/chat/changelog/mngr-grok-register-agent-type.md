@@ -1,0 +1,1 @@
+The chat app depends on `imbue-mngr-grok`, so its mngr calls parse the workspace's new `[agent_types.grok]` block rather than rejecting its fields as unknown. grok is not a chat harness yet: no chat can be started on it.
