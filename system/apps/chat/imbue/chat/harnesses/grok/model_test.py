@@ -1,8 +1,6 @@
-"""Unit tests for grok's model bar: its catalog, the models an account lists, and the switch through the control
-lane."""
+"""Unit tests for grok's model bar: its catalog, its offer, and the switch through the control lane."""
 
 import json
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -10,13 +8,9 @@ import pytest
 
 from imbue.chat.harnesses.grok.model import BINARY_DEFAULT_MODELS_PATH
 from imbue.chat.harnesses.grok.model import GROK_CATALOG
-from imbue.chat.harnesses.grok.model import GROK_MODELS_COMMAND
 from imbue.chat.harnesses.grok.model import GrokModelResolver
 from imbue.chat.harnesses.grok.model import build_catalog_options
 from imbue.chat.harnesses.grok.model import is_control_command_in_force
-from imbue.chat.harnesses.grok.model import list_grok_model_ids
-from imbue.chat.harnesses.grok.model import offered_catalog_options
-from imbue.chat.harnesses.grok.model import parse_grok_models_output
 from imbue.chat.harnesses.grok.queue_tracker import GrokControlCommand
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
 from imbue.chat.harnesses.grok.testing import effort_command
@@ -35,48 +29,12 @@ from imbue.chat.harnesses.model import validate_model_pick
 from imbue.chat.harnesses.registry import build_resolver
 from imbue.chat.harnesses.registry import get_catalog
 from imbue.chat.harnesses.registry import get_model_state_path
-from imbue.concurrency_group.subprocess_utils import FinishedProcess
+from imbue.chat.harnesses.registry import list_account_options
 from imbue.mngr_grok.resources.grok_statusline import MODEL_STATE_FILENAME
-
-# What `grok models` printed on grok 1.0.62 against mngr's stub model server.
-_LISTED_FOR_AN_API_KEY = (
-    "You are using XAI_API_KEY.\n\nDefault model: grok-4.6\n\nAvailable models:\n"
-    "  * grok-4.6 (default)\n  - grok-build\n  - stub-model\n"
-)
-_LISTED_FOR_NO_CREDENTIAL = (
-    "You are not authenticated.\n\nDefault model: grok-4.6 (not in the list below)\n\nAvailable models:\n"
-)
-_LISTED_FOR_A_CUSTOM_MODEL = (
-    "Model 'stub' is using its own API key.\n\nDefault model: stub\n\nAvailable models:\n  * stub (default)\n"
-)
-_ACCOUNT_ENVIRONMENT: Mapping[str, str] = {"GROK_HOME": "/accounts/grok-7f3a", "PATH": "/usr/bin:/bin"}
 
 
 def _binary_models() -> list[dict[str, Any]]:
     return json.loads(BINARY_DEFAULT_MODELS_PATH.read_text())["models"]
-
-
-def _finished(stdout: str = "", returncode: int | None = 0, is_timed_out: bool = False) -> FinishedProcess:
-    return FinishedProcess(
-        returncode=returncode,
-        stdout=stdout,
-        stderr="",
-        command=GROK_MODELS_COMMAND,
-        is_timed_out=is_timed_out,
-        is_output_already_logged=False,
-    )
-
-
-class _ScriptedModelsCommand:
-    """`grok models` answering with a fixed result, recording the environment of each run."""
-
-    def __init__(self, finished: FinishedProcess) -> None:
-        self.finished = finished
-        self.environments: list[Mapping[str, str]] = []
-
-    def __call__(self, environment: Mapping[str, str]) -> FinishedProcess:
-        self.environments.append(environment)
-        return self.finished
 
 
 def _unused_send(_line: str) -> bool:
@@ -239,106 +197,11 @@ def test_a_control_command_is_in_force_when_the_model_state_already_records_it(
     assert is_control_command_in_force(command, identity) is is_in_force
 
 
-@pytest.mark.parametrize(
-    ("output", "expected"),
-    [
-        pytest.param(_LISTED_FOR_AN_API_KEY, ("grok-4.6", "grok-build", "stub-model"), id="api_key"),
-        pytest.param(_LISTED_FOR_NO_CREDENTIAL, (), id="no_credential"),
-        pytest.param(_LISTED_FOR_A_CUSTOM_MODEL, ("stub",), id="custom_model"),
-        pytest.param("", (), id="no_output"),
-    ],
-)
-def test_grok_models_output_parses_to_its_model_ids(output: str, expected: tuple[str, ...]) -> None:
-    assert parse_grok_models_output(output) == expected
-
-
-def test_grok_models_runs_with_the_given_environment_as_its_whole_environment(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    fake_grok = bin_dir / "grok"
-    fake_grok.write_text(
-        "#!/bin/sh\n"
-        '[ "$1" = models ] || exit 2\n'
-        'printf "%s|%s" "$GROK_HOME" "${XAI_API_KEY:-unset}" > "$GROK_HOME/seen"\n'
-        "printf 'Available models:\\n  * grok-4.5 (default)\\n'\n"
-    )
-    fake_grok.chmod(0o755)
-    grok_home = tmp_path / "account"
-    grok_home.mkdir()
-
-    listed = list_grok_model_ids({"PATH": f"{bin_dir}:/usr/bin:/bin", "GROK_HOME": str(grok_home)})
-
-    assert listed == ("grok-4.5",)
-    assert (grok_home / "seen").read_text() == f"{grok_home}|unset"
-
-
-def test_grok_models_that_cannot_start_gives_no_answer(tmp_path: Path) -> None:
-    assert list_grok_model_ids({"PATH": str(tmp_path)}) is None
-
-
-@pytest.mark.parametrize(
-    "finished",
-    [
-        pytest.param(_finished(_LISTED_FOR_AN_API_KEY, returncode=1), id="fails"),
-        pytest.param(_finished(returncode=None, is_timed_out=True), id="times_out"),
-    ],
-)
-def test_grok_models_that_fails_gives_no_answer(finished: FinishedProcess) -> None:
-    assert list_grok_model_ids(_ACCOUNT_ENVIRONMENT, _ScriptedModelsCommand(finished)) is None
-
-
-@pytest.mark.parametrize(
-    ("listed", "expected"),
-    [
-        pytest.param(("grok-4.6", "grok-build", "stub-model"), (GROK_CATALOG.options[0],), id="some_catalog_models"),
-        pytest.param(("grok-4.5", "grok-4.6"), GROK_CATALOG.options, id="in_catalog_order"),
-        pytest.param(("stub",), None, id="no_catalog_model"),
-        pytest.param((), None, id="none"),
-        pytest.param(None, None, id="no_answer"),
-    ],
-)
-def test_the_offer_is_the_catalog_models_a_listing_names_else_the_whole_catalog(
-    listed: tuple[str, ...] | None, expected: tuple[Any, ...] | None
-) -> None:
-    assert offered_catalog_options(listed) == expected
-
-
-def test_an_agent_is_offered_the_catalog_models_grok_lists_under_its_accounts_environment(tmp_path: Path) -> None:
+def test_a_grok_agent_and_a_grok_account_are_offered_the_whole_catalog(tmp_path: Path) -> None:
     agent_state_dir = make_grok_agent_state_dir(tmp_path)
-    models_command = _ScriptedModelsCommand(_finished(_LISTED_FOR_AN_API_KEY))
-    resolver = GrokModelResolver.build(
-        make_grok_agent_info(agent_state_dir, agent_state_dir.name, "grok-offer"),
-        read_account_environment=lambda: _ACCOUNT_ENVIRONMENT,
-        run_models_command=models_command,
-    )
 
-    assert resolver.list_offered_models() == ("grok-4.6",)
-    assert models_command.environments == [_ACCOUNT_ENVIRONMENT]
-
-
-def test_an_agent_whose_account_lists_no_catalog_model_is_offered_the_whole_catalog(tmp_path: Path) -> None:
-    agent_state_dir = make_grok_agent_state_dir(tmp_path)
-    resolver = GrokModelResolver.build(
-        make_grok_agent_info(agent_state_dir, agent_state_dir.name, "grok-offer"),
-        read_account_environment=lambda: _ACCOUNT_ENVIRONMENT,
-        run_models_command=_ScriptedModelsCommand(_finished(_LISTED_FOR_NO_CREDENTIAL)),
-    )
+    resolver = build_resolver(make_grok_agent_info(agent_state_dir, agent_state_dir.name, "grok-offer"))
 
     assert resolver.list_offered_models() is None
-
-
-def test_an_agent_with_no_account_environment_is_offered_the_whole_catalog_without_running_grok(
-    tmp_path: Path,
-) -> None:
-    agent_state_dir = make_grok_agent_state_dir(tmp_path)
-    models_command = _ScriptedModelsCommand(_finished(_LISTED_FOR_AN_API_KEY))
-    resolver = GrokModelResolver.build(
-        make_grok_agent_info(agent_state_dir, agent_state_dir.name, "grok-offer"), run_models_command=models_command
-    )
-
-    assert resolver.list_offered_models() is None
-    assert models_command.environments == []
-    assert (
-        build_resolver(make_grok_agent_info(agent_state_dir, agent_state_dir.name, "grok-offer")).list_offered_models()
-        is None
-    )
+    assert resolver.list_offered_options() is None
+    assert list_account_options(HarnessType.GROK, tmp_path / "account") is None
