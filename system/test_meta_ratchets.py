@@ -14,9 +14,6 @@ from vendor_testing import resolves_into_vendor
 
 _REPO_ROOT = Path(__file__).parents[1]
 
-# Directories excluded from scanning (vendored code)
-_VENDORED_DIR = _REPO_ROOT / "system" / "vendor"
-
 # Directory names pruned during filesystem walks: non-source trees (venvs,
 # node_modules, git internals) that can hold tens of thousands of files.
 _PRUNED_DIR_NAMES = frozenset({".git", ".venv", "node_modules", ".test_output"})
@@ -33,16 +30,20 @@ pytestmark = pytest.mark.xdist_group(name="meta_ratchets")
 _META_EXEMPT_PROJECTS = frozenset({"system_interface", "chat"})
 
 
+def _installed_app_directories(repo_root: Path) -> set[Path]:
+    """The directory of every app installed from someone else's repository. Such an app is kept
+    as it came: its publisher's template may hold a different set of ratchets than this one."""
+    return {
+        repo_root / "system" / "apps" / record.package
+        for record in load_all_records(repo_root)
+        if record.origin is AppOrigin.INSTALLED
+    }
+
+
 def _get_all_project_dirs() -> list[Path]:
     """Return all project directories (system/{libs,services,apps}/*) excluding vendored code."""
     project_dirs: list[Path] = []
-    # An app installed from someone else's repository is kept as it came: its publisher's
-    # template may hold a different set of ratchets than this one.
-    installed_app_directories = {
-        _REPO_ROOT / "system" / "apps" / record.package
-        for record in load_all_records(_REPO_ROOT)
-        if record.origin is AppOrigin.INSTALLED
-    }
+    installed_app_directories = _installed_app_directories(_REPO_ROOT)
     for parent in (
         _REPO_ROOT / "system" / "libs",
         _REPO_ROOT / "system" / "services",
@@ -140,8 +141,8 @@ def test_all_test_ratchets_files_have_same_tests() -> None:
 # Repo-wide ratchets.
 
 
-def _find_bash_scripts_without_strict_mode() -> list[str]:
-    """Find bash scripts missing 'set -euo pipefail', excluding vendored code.
+def _find_bash_scripts_without_strict_mode(repo_root: Path = _REPO_ROOT) -> list[str]:
+    """Find bash scripts missing 'set -euo pipefail', excluding vendored code and installed apps.
 
     Only scripts git would consider count (tracked, or untracked but not
     ignored), for the same reason :func:`_live_prose_files` asks git: in a live
@@ -162,15 +163,16 @@ def _find_bash_scripts_without_strict_mode() -> list[str]:
             "--",
             "*.sh",
         ],
-        cwd=_REPO_ROOT,
+        cwd=repo_root,
         capture_output=True,
         text=True,
         check=True,
     )
+    kept_as_they_came = {repo_root / "system" / "vendor", *_installed_app_directories(repo_root)}
     violations: list[str] = []
     for rel in filter(None, candidates.stdout.split("\0")):
-        script = _REPO_ROOT / rel
-        if _VENDORED_DIR in script.parents or not script.is_file():
+        script = repo_root / rel
+        if kept_as_they_came.intersection(script.parents) or not script.is_file():
             continue
         content = script.read_text(errors="replace")
         if re.search(r"^#!/.*bash", content) and "set -euo pipefail" not in content:
@@ -230,6 +232,25 @@ def test_a_python_dir_without_a_pyproject_is_caught_and_a_plain_scripts_dir_is_n
 
     assert _skill_python_dirs_without_a_pyproject(tmp_path) == [
         "half-built-skill/python"
+    ]
+
+
+def test_an_installed_apps_bash_scripts_are_left_out_and_an_owned_apps_are_not(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    records = tmp_path / "system" / "config" / "apps"
+    records.mkdir(parents=True)
+    for name, origin in (("notes", "installed"), ("digest", "local")):
+        (records / f"{name}.toml").write_text(
+            f'name = "{name}"\npackage = "{name}"\nport = 8084\norigin = "{origin}"\n'
+        )
+        unit = tmp_path / "system" / "apps" / name / "env.d" / f"2100-{name}.sh"
+        unit.parent.mkdir(parents=True)
+        unit.write_text("#!/usr/bin/env bash\napt-get install -y poppler-utils\n")
+
+    assert _find_bash_scripts_without_strict_mode(tmp_path) == [
+        "system/apps/digest/env.d/2100-digest.sh"
     ]
 
 
