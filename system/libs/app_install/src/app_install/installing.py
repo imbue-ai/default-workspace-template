@@ -22,6 +22,7 @@ from loguru import logger
 from pydantic import Field
 
 from app_install.collisions import find_collisions
+from app_install.collisions import workspace_app_names
 from app_install.derived import derive_files
 from app_install.derived import program_names
 from app_install.derived import write_derived_files
@@ -192,7 +193,7 @@ def install_app(
         problems.append(f"supervisord did not start the app's programs: {reload_failure}")
     # A program waiting on a secret file cannot answer yet, so its port is not waited for.
     is_answering = reload_failure is None and not missing_secret_files and runtime.wait_for_port(record.port)
-    present_apps = {str(present.name) for present in load_all_records(repo_root)}
+    present_apps = workspace_app_names(repo_root)
     missing_dependencies = tuple(
         str(dependency.name) for dependency in manifest.dependencies if str(dependency.name) not in present_apps
     )

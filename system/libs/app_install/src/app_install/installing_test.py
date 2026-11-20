@@ -113,6 +113,22 @@ def test_an_app_with_everything_it_needs_is_waited_for_until_it_answers(tmp_path
     assert runtime.calls == ["install_environment apt=[]", "reload_programs", "wait_for_port 8080"]
 
 
+def test_an_app_the_workspace_ships_is_not_a_missing_dependency(tmp_path: Path) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    # An app the workspace ships has a manifest and no record.
+    write_workspace_file(workspace, "system/apps/terminal/app.toml", 'name = "terminal"\ndisplay_name = "Terminal"\n')
+    commit_all(workspace, "the terminal")
+    published = make_published_app_repository(
+        tmp_path / "published-notes",
+        "notes",
+        '\n[[dependencies]]\nname = "terminal"\n\n[[dependencies]]\nname = "datalib"\n',
+    )
+
+    outcome = install_app(workspace, f"file://{published}", None, RecordingRuntime(repo_root=workspace), never_bound)
+
+    assert outcome.missing_dependencies == ("datalib",)
+
+
 def test_a_named_ref_is_the_one_installed(tmp_path: Path) -> None:
     workspace = make_workspace_repository(tmp_path / "workspace")
     published, _ = _published_notes(tmp_path)

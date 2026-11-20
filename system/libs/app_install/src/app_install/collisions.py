@@ -51,11 +51,24 @@ def _console_scripts(package_directory: Path) -> set[str]:
     return {name for name in scripts if isinstance(name, str)} if isinstance(scripts, dict) else set()
 
 
-def _other_app_directories(repo_root: Path, package: str) -> list[Path]:
+def _app_directories(repo_root: Path) -> list[Path]:
     apps_directory = repo_root / APPS_DIRECTORY
     if not apps_directory.is_dir():
         return []
-    return [path for path in sorted(apps_directory.iterdir()) if path.is_dir() and path.name != package]
+    return [path for path in sorted(apps_directory.iterdir()) if path.is_dir()]
+
+
+def _other_app_directories(repo_root: Path, package: str) -> list[Path]:
+    return [path for path in _app_directories(repo_root) if path.name != package]
+
+
+def workspace_app_names(repo_root: Path) -> frozenset[str]:
+    """The name of every app in the workspace, as its manifest gives it: the apps the workspace ships, which
+    have no record, as well as the ones built or installed in it."""
+    names = (
+        _read_toml_or_empty(directory / MANIFEST_FILENAME).get("name") for directory in _app_directories(repo_root)
+    )
+    return frozenset(name for name in names if isinstance(name, str))
 
 
 def _names_in(directory: Path, suffix: str) -> set[str]:
