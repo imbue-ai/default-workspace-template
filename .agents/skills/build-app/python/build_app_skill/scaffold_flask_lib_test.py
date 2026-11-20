@@ -614,6 +614,41 @@ def _import_scaffolded_runner(
     return module
 
 
+def test_the_runner_finds_the_shell_modules_from_its_checkout_not_the_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An app's tests run from its own directory, so the runner must not resolve the shell's modules from there."""
+    source = scaffold_flask_lib._lib_runner(
+        "inbox-status",
+        "inbox_status",
+        "inbox status dashboard",
+        8081,
+        "inbox status dashboard",
+    )
+    app_dir = tmp_path / "system/apps/inbox_status"
+    runner = app_dir / "src/inbox_status/runner.py"
+    runner.parent.mkdir(parents=True)
+    runner.write_text(source)
+    modules_dir = tmp_path / scaffold_flask_lib.SHELL_STATIC_MODULES_DIR
+    modules_dir.mkdir(parents=True)
+    (modules_dir / "app_contract.js").write_text("export function connectToShell() {}\n")
+    monkeypatch.chdir(app_dir)
+    spec = importlib.util.spec_from_file_location("scaffolded_runner_in_checkout", runner)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    served = module.app.test_client().get("/_static/app_contract.js")
+    assert served.status_code == 200
+    assert b"connectToShell" in served.data
+
+
+def test_the_shell_app_dir_contains_the_shell_modules() -> None:
+    # The runner finds its checkout by the shell's app directory, then reads the modules under it.
+    assert Path(scaffold_flask_lib.SHELL_STATIC_MODULES_DIR).is_relative_to(
+        scaffold_flask_lib.SHELL_APP_DIR
+    )
+
+
 def test_the_runner_serves_the_shell_modules_and_nothing_else(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -778,9 +813,11 @@ def test_the_runner_module_evaluates_its_environment_reads(tmp_path: Path) -> No
         8081,
         "inbox status dashboard",
     )
-    namespace: dict[str, object] = {"__name__": "inbox_status.runner"}
+    runner = tmp_path / "runner.py"
+    # A module always has __file__; the runner finds its checkout from it.
+    namespace: dict[str, object] = {"__name__": "inbox_status.runner", "__file__": str(runner)}
 
-    exec(compile(source, str(tmp_path / "runner.py"), "exec"), namespace)
+    exec(compile(source, str(runner), "exec"), namespace)
 
     assert namespace["PORT"] == 8081
     assert namespace["DATA_DIR"] == Path("data/.apps/inbox-status")

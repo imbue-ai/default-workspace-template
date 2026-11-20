@@ -77,6 +77,8 @@ SHELL_STATIC_MODULES_DIR = (
     "system/apps/system_interface/imbue/system_interface/static/_static"
 )
 SHELL_STATIC_MODULE_NAMES = ("app_contract.js", "context_menu.js")
+# The shell's app, which every checkout holds: a scaffolded runner finds its checkout's root by it.
+SHELL_APP_DIR = "system/apps/system_interface"
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 # The <name> of data/.secrets/<name>.env, as the chat app's secret card and
 # app_manifest.primitives.SECRET_FILE_NAME_PATTERN spell it.
@@ -391,8 +393,24 @@ PORT = int(os.environ.get("{port_env_var}", "{port}"))
 # the element context menu (the right-click menu whose last rows hand the
 # clicked element to a chat). A module import is a fetch without cookies, which
 # the forwarder refuses across origins, so they are served here rather than from
-# the shell. Relative to the repo root the service runs from, like DATA_DIR.
-SHELL_STATIC_MODULES_DIR = Path("{SHELL_STATIC_MODULES_DIR}")
+# the shell.
+SHELL_STATIC_MODULES_RELATIVE_DIR = Path("{SHELL_STATIC_MODULES_DIR}")
+SHELL_APP_RELATIVE_DIR = Path("{SHELL_APP_DIR}")
+
+
+def _checkout_root() -> Path:
+    """The checkout this app's source sits in: the nearest folder above this file holding the shell's app.
+
+    Found from this file, not the working directory: the service runs from the repo root, but the app's
+    tests run from its own directory, and a harden worker's from its worktree's copy of it. Falls back to
+    the working directory for a copy of the app installed away from its checkout."""
+    for folder in Path(__file__).resolve().parents:
+        if (folder / SHELL_APP_RELATIVE_DIR).is_dir():
+            return folder
+    return Path.cwd()
+
+
+SHELL_STATIC_MODULES_DIR = _checkout_root() / SHELL_STATIC_MODULES_RELATIVE_DIR
 SHELL_STATIC_MODULE_NAMES = {SHELL_STATIC_MODULE_NAMES!r}
 
 # The script every page serves (keep it on every page): it connects the page to
@@ -525,8 +543,7 @@ def shell_module(basename: str) -> Response:
     module_path = SHELL_STATIC_MODULES_DIR / basename
     if not module_path.is_file():
         abort(404)
-    # Flask resolves a relative path against the app's own directory, not the cwd.
-    return send_file(module_path.absolute(), mimetype="text/javascript")
+    return send_file(module_path, mimetype="text/javascript")
 
 
 @app.route("/health")
