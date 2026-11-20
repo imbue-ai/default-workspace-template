@@ -1,0 +1,1 @@
+The `data/.state/` README lists `user_timezone_source`, which marks a workspace timezone the user chose, and says that Imbue Studio rewrites `user_timezone` when the user changes the workspace's timezone.
