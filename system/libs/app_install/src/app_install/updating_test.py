@@ -68,7 +68,7 @@ def test_an_update_brings_the_new_version_over_the_workspaces_own_changes(tmp_pa
     write_workspace_file(workspace, "data/.apps/notes/notes.json", '["first"]')
     runtime = RecordingRuntime(repo_root=workspace)
 
-    outcome = update_app(workspace, "notes", None, False, runtime, never_bound)
+    outcome = update_app(workspace, "notes", None, False, runtime)
 
     assert (outcome.result, outcome.ref, outcome.previous_version) == (UpdateResult.UPDATED, "v0.2.0", "0.1.0")
     record = load_record(workspace, "notes")
@@ -95,7 +95,7 @@ def test_an_app_already_at_the_newest_version_is_left_alone(tmp_path: Path) -> N
     before = run_git(workspace, ["rev-parse", "HEAD"])
     runtime = RecordingRuntime(repo_root=workspace)
 
-    outcome = update_app(workspace, "notes", None, False, runtime, never_bound)
+    outcome = update_app(workspace, "notes", None, False, runtime)
 
     assert outcome.result is UpdateResult.UP_TO_DATE
     assert run_git(workspace, ["rev-parse", "HEAD"]) == before
@@ -111,7 +111,7 @@ def test_a_conflict_in_the_apps_code_waits_in_a_worktree_and_is_finished_with_co
     before = run_git(workspace, ["rev-parse", "HEAD"])
     runtime = RecordingRuntime(repo_root=workspace)
 
-    stopped = update_app(workspace, "notes", None, False, runtime, never_bound)
+    stopped = update_app(workspace, "notes", None, False, runtime)
 
     worktree = update_worktree_path(workspace, "notes")
     assert stopped.result is UpdateResult.CONFLICT
@@ -123,17 +123,17 @@ def test_a_conflict_in_the_apps_code_waits_in_a_worktree_and_is_finished_with_co
     assert _app_file(workspace, "notes.py").read_text() == _notes_py("hi there", 10)
     assert load_record(workspace, "notes").upstream_version == "0.1.0"
     with pytest.raises(UpdateInProgressError, match="--continue"):
-        update_app(workspace, "notes", None, False, runtime, never_bound)
+        update_app(workspace, "notes", None, False, runtime)
 
     # Continuing before the conflict is resolved changes nothing.
-    still_stopped = update_app(workspace, "notes", None, True, runtime, never_bound)
+    still_stopped = update_app(workspace, "notes", None, True, runtime)
     assert still_stopped.result is UpdateResult.CONFLICT
 
     # An agent resolves it in the worktree and commits there.
     (worktree / "system" / "apps" / "notes" / "notes.py").write_text(_notes_py("good morning, hi there", 10))
     run_git(worktree, ["add", "--all"])
     run_git(worktree, ["commit", "--quiet", "--no-edit"])
-    finished = update_app(workspace, "notes", None, True, runtime, never_bound)
+    finished = update_app(workspace, "notes", None, True, runtime)
 
     assert finished.result is UpdateResult.UPDATED
     # The finished update still names the copy of the data made when it started.
@@ -152,7 +152,7 @@ def test_a_conflict_in_the_lock_alone_takes_the_publishers_and_makes_it_again(tm
     _publish(published, "0.2.0", _notes_py("hello", 10), "lock of 0.2.0\n")
     runtime = RecordingRuntime(repo_root=workspace, relocked_lock_text="lock made again from 0.2.0\n")
 
-    outcome = update_app(workspace, "notes", None, False, runtime, never_bound)
+    outcome = update_app(workspace, "notes", None, False, runtime)
 
     assert outcome.result is UpdateResult.UPDATED
     assert _app_file(workspace, "uv.lock").read_text() == "lock made again from 0.2.0\n"
@@ -165,14 +165,14 @@ def test_an_update_whose_checks_fail_waits_in_its_worktree_with_the_live_app_unt
     before = run_git(workspace, ["rev-parse", "HEAD"])
     failing = RecordingRuntime(repo_root=workspace, verify_failure="1 failed: test_greeting")
 
-    stopped = update_app(workspace, "notes", None, False, failing, never_bound)
+    stopped = update_app(workspace, "notes", None, False, failing)
 
     assert (stopped.result, stopped.detail) == (UpdateResult.TESTS_FAILED, "1 failed: test_greeting")
     assert run_git(workspace, ["rev-parse", "HEAD"]) == before
     assert update_worktree_path(workspace, "notes").is_dir()
 
     # Once the checks pass, the same update is finished from where it stopped.
-    finished = update_app(workspace, "notes", None, True, RecordingRuntime(repo_root=workspace), never_bound)
+    finished = update_app(workspace, "notes", None, True, RecordingRuntime(repo_root=workspace))
 
     assert finished.result is UpdateResult.UPDATED
     assert load_record(workspace, "notes").upstream_version == "0.2.0"
@@ -182,11 +182,11 @@ def test_only_the_newest_snapshot_of_an_apps_data_is_kept(tmp_path: Path) -> Non
     workspace, published = _installed_notes(tmp_path)
     write_workspace_file(workspace, "data/.apps/notes/notes.json", '["first"]')
     _publish(published, "0.2.0", _notes_py("hello", 11), "lock of 0.1.0\n")
-    first = update_app(workspace, "notes", None, False, RecordingRuntime(repo_root=workspace), never_bound)
+    first = update_app(workspace, "notes", None, False, RecordingRuntime(repo_root=workspace))
     write_workspace_file(workspace, "data/.apps/notes/notes.json", '["first", "second"]')
     _publish(published, "0.3.0", _notes_py("hello", 12), "lock of 0.1.0\n")
 
-    second = update_app(workspace, "notes", None, False, RecordingRuntime(repo_root=workspace), never_bound)
+    second = update_app(workspace, "notes", None, False, RecordingRuntime(repo_root=workspace))
 
     assert first.snapshot != second.snapshot
     assert not (workspace / first.snapshot).exists()
@@ -197,7 +197,7 @@ def test_an_app_with_no_stored_data_updates_without_a_snapshot(tmp_path: Path) -
     workspace, published = _installed_notes(tmp_path)
     _publish(published, "0.2.0", _notes_py("hello", 11), "lock of 0.1.0\n")
 
-    outcome = update_app(workspace, "notes", None, False, RecordingRuntime(repo_root=workspace), never_bound)
+    outcome = update_app(workspace, "notes", None, False, RecordingRuntime(repo_root=workspace))
 
     assert (outcome.result, outcome.snapshot) == (UpdateResult.UPDATED, "")
 
@@ -207,14 +207,14 @@ def test_an_app_built_here_has_nothing_to_update_from(tmp_path: Path) -> None:
     add_app(workspace, write_user_app(workspace, "digest"), None, never_bound)
 
     with pytest.raises(NotInstalledAppError, match="built in this workspace"):
-        update_app(workspace, "digest", None, False, RecordingRuntime(repo_root=workspace), never_bound)
+        update_app(workspace, "digest", None, False, RecordingRuntime(repo_root=workspace))
 
 
 def test_continuing_when_no_update_is_waiting_is_refused(tmp_path: Path) -> None:
     workspace, _ = _installed_notes(tmp_path)
 
     with pytest.raises(UpdateInProgressError, match="no update of notes is waiting"):
-        update_app(workspace, "notes", None, True, RecordingRuntime(repo_root=workspace), never_bound)
+        update_app(workspace, "notes", None, True, RecordingRuntime(repo_root=workspace))
 
 
 def test_data_that_does_not_fit_beside_itself_needs_a_recent_backup_before_an_update(tmp_path: Path) -> None:
@@ -225,14 +225,14 @@ def test_data_that_does_not_fit_beside_itself_needs_a_recent_backup_before_an_up
     full_disk = RecordingRuntime(repo_root=workspace, free_bytes=0)
 
     with pytest.raises(NoSnapshotError, match="no recent backup"):
-        update_app(workspace, "notes", None, False, full_disk, never_bound)
+        update_app(workspace, "notes", None, False, full_disk)
 
     assert run_git(workspace, ["rev-parse", "HEAD"]) == before
     assert not update_worktree_path(workspace, "notes").exists()
 
     # With a recent backup to fall back on, the update goes ahead without a copy.
     backed_up = RecordingRuntime(repo_root=workspace, free_bytes=0, is_backup_recent=True)
-    outcome = update_app(workspace, "notes", None, False, backed_up, never_bound)
+    outcome = update_app(workspace, "notes", None, False, backed_up)
 
     assert (outcome.result, outcome.snapshot) == (UpdateResult.UPDATED, "")
 

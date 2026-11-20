@@ -173,9 +173,7 @@ def update_command(repo_root: Path, name: str, ref: str | None, is_continuing: b
     """Update the installed app NAME from the repository it came from, over the workspace's own changes to it."""
     with install_lock(repo_root):
         try:
-            outcome = update_app(
-                repo_root, name, ref, is_continuing, WorkspaceRuntime(repo_root=repo_root), is_port_bound
-            )
+            outcome = update_app(repo_root, name, ref, is_continuing, WorkspaceRuntime(repo_root=repo_root))
         except CollisionError as e:
             _refuse("collision", name=name, problems=list(e.problems))
         except RepositoryUnreachableError as e:

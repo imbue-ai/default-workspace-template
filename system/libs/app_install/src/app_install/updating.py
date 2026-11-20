@@ -9,7 +9,6 @@ app is untouched until the result lands.
 
 import json
 import shutil
-from collections.abc import Callable
 from enum import auto
 from pathlib import Path
 from typing import Final
@@ -286,7 +285,6 @@ def update_app(
     requested_ref: str | None,
     is_continuing: bool,
     runtime: WorkspaceRuntimeInterface,
-    is_bound: Callable[[int], bool],
 ) -> UpdateOutcome:
     """Bring the installed app ``name`` to ``requested_ref`` of the repository it came from, or to its latest
     version; with ``is_continuing``, finish an update that stopped for a person.
