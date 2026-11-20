@@ -66,7 +66,7 @@ PRE_TOOL_USE_BUDGET_SECONDS = 45.0
 
 SHELL_TOOL_NAMES = frozenset({"run_terminal_command", "monitor"})
 ALWAYS_BACKGROUNDED_TOOL_NAME = "monitor"
-# The shortest ``block_until_ms`` that outlasts a gateway request's echo before grok backgrounds the call.
+# A ``block_until_ms`` below this backgrounds the call before a gateway request's echo returns.
 MIN_FOREGROUND_BLOCK_UNTIL_MS = 1000
 USE_TOOL_NAME = "use_tool"
 USE_TOOL_INLINE_KEYS = frozenset({"tool_name", "tool_input"})
