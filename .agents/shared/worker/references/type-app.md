@@ -91,9 +91,13 @@ App specifics:
   uv run --no-sync pytest system/apps/<package>           # a built-in app
   ```
 
-  Its pages import the shell's built modules, which a fresh worktree lacks
-  (the shell's `static/` is gitignored), so build them once before its
-  browser tests: `(cd system && npm ci && npm run build)`.
+  Its pages import the shell's two browser modules. An app built on the app
+  SDK serves them by fetching them from the running shell
+  (`register_shell_module_routes`) and answers 404 for both when no shell
+  runs, so its pages load without the shell's features. An app whose
+  `runner.py` reads them from the shell's `static/` directory instead, which
+  is gitignored and so missing from a fresh worktree, needs them built once
+  before its browser tests: `(cd system && npm ci && npm run build)`.
 
   The gate is `harden-creation.md`'s "The test gate": `select-tests` turns the
   app's references into the suites that exercise them (a referenced
