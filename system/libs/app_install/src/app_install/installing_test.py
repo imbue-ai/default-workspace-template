@@ -5,6 +5,7 @@ import pytest
 from click.testing import CliRunner
 
 from app_install.cli import main
+from app_install.conftest import RepositoryHostStandIn
 from app_install.errors import CollisionError
 from app_install.errors import NotAnAppError
 from app_install.errors import RepositoryUnreachableError
@@ -218,6 +219,25 @@ def test_a_repository_that_cannot_be_read_is_reported_as_unreachable(tmp_path: P
         )
 
     assert raised.value.is_access_needed is False
+
+
+def test_the_command_tells_a_repository_that_needs_access_from_one_that_lacks_the_ref(
+    tmp_path: Path, repository_host: RepositoryHostStandIn
+) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    published = make_published_app_repository(tmp_path / "published-shelf", "shelf")
+    runner = CliRunner()
+    root = ["--repo-root", str(workspace)]
+    before = _state(workspace)
+
+    refused = runner.invoke(main, [*root, "install", repository_host.repository_url])
+    no_such_ref = runner.invoke(main, [*root, "install", f"file://{published}", "--branch", "no-such-branch"])
+
+    assert (refused.exit_code, json.loads(refused.output)["result"]) == (1, "needs_github_access")
+    report = json.loads(no_such_ref.output)
+    assert (no_such_ref.exit_code, report["result"]) == (1, "unreachable")
+    assert "no-such-branch" in report["detail"]
+    assert _state(workspace) == before
 
 
 def test_the_command_reports_what_was_installed_and_what_the_app_still_needs(tmp_path: Path) -> None:

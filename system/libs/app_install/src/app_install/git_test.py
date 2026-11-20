@@ -2,7 +2,10 @@ from pathlib import Path
 
 import pytest
 
+from app_install.conftest import RepositoryHostStandIn
 from app_install.errors import GitCommandError
+from app_install.errors import RepositoryUnreachableError
+from app_install.git import fetch_commit
 from app_install.git import land_commit
 from app_install.git import run_git
 from app_install.testing import commit_all
@@ -109,3 +112,28 @@ def test_landing_is_refused_over_a_merge_the_primary_checkout_has_not_concluded(
 
     assert run_git(workspace, ["rev-parse", "MERGE_HEAD"]) == theirs
     assert (workspace / "README.md").read_text() == "the resolution, not committed yet\n"
+
+
+def test_a_repository_that_refuses_an_anonymous_read_is_read_again_with_the_workspaces_access(
+    tmp_path: Path, repository_host: RepositoryHostStandIn
+) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+
+    with pytest.raises(RepositoryUnreachableError, match="without the workspace's GitHub access") as raised:
+        fetch_commit(workspace, repository_host.repository_url, "main")
+
+    assert raised.value.is_access_needed is True
+    assert len(repository_host.requested_paths) == 2
+
+
+def test_a_read_that_fails_for_a_reason_no_credential_changes_is_not_tried_again(
+    tmp_path: Path, repository_host: RepositoryHostStandIn
+) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    repository_host.status = 500
+
+    with pytest.raises(RepositoryUnreachableError, match="returned error: 500") as raised:
+        fetch_commit(workspace, repository_host.repository_url, "main")
+
+    assert raised.value.is_access_needed is False
+    assert len(repository_host.requested_paths) == 1

@@ -87,21 +87,29 @@ def run_git(
     return completed.stdout.strip()
 
 
+def _is_access_refusal(failure: GitCommandError) -> bool:
+    return any(marker in str(failure) for marker in _ACCESS_FAILURE_MARKERS)
+
+
 def _run_reaching_remote(cwd: Path, arguments: Sequence[str], url: str) -> str:
-    """Run a command that reads ``url``, anonymously first and then with the workspace's GitHub access: through
-    the latchkey gateway, which holds whatever permission the user has granted, whether or not GitHub sync has
-    wired it into the container's global git configuration. Raises RepositoryUnreachableError when neither
-    reaches it."""
+    """Run a command that reads ``url``, anonymously first and, when that is refused for want of a credential,
+    with the workspace's GitHub access: through the latchkey gateway, which holds whatever permission the user
+    has granted, whether or not GitHub sync has wired it into the container's global git configuration. A
+    failure no credential would change (a ref the repository does not have) is not tried again. Raises
+    RepositoryUnreachableError when the repository is not reached."""
     try:
         return run_git(cwd, arguments, is_global_config_read=False)
     except GitCommandError as anonymous_failure:
+        if not _is_access_refusal(anonymous_failure):
+            raise RepositoryUnreachableError(
+                f"could not read {url}: {anonymous_failure}", is_access_needed=False
+            ) from anonymous_failure
         try:
             return run_git(cwd, arguments, is_global_config_read=True, is_gateway_used=True)
         except GitCommandError as e:
-            is_access_needed = any(marker in str(e) for marker in _ACCESS_FAILURE_MARKERS)
             raise RepositoryUnreachableError(
                 f"could not read {url}: {e} (without the workspace's GitHub access: {anonymous_failure})",
-                is_access_needed=is_access_needed,
+                is_access_needed=_is_access_refusal(e),
             ) from e
 
 
