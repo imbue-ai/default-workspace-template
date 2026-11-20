@@ -1,1 +1,0 @@
-The build-app scaffold's standalone-project test stages `system/libs/workspace_layout` in full beside the other libraries a scaffolded app installs, since `app-schema` now depends on it and uv builds it from the staged tree.

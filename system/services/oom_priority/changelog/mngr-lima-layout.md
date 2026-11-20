@@ -1,1 +1,0 @@
-Documented what MemTotal is for a lima workspace (the VM's own RAM, set by the lima create template's `--memory` and changeable with `mngr lima resize`), so earlyoom's thresholds follow the VM's size. No code change.

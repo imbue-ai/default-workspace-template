@@ -149,6 +149,7 @@ Its state lives under `data/.state/system_interface/`: `desktops.json`, `tour.js
 offered), `placements/<desktop>/<client>.json`,
 `window_paths/<client>.json` (a client's own paths for independent windows),
 `clients.json`, `users.json` (the desktop made for each visiting user),
+`visitor_desktops_adopted` (the mark that the visitors' desktops from before desktop owners were given their visitors),
 `avatar_selection.json`, and the client-activity
 event log (`events/client_activity/events.jsonl`, what `workspace-layout context`
 reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
@@ -256,9 +257,15 @@ through `relay.ts`). A solo page hands on its apps' messages but never the
 chrome's, which the main window's page already relays. A `path` handler has the
 message posted to the route it named; a `show` handler has the shell build the
 page its template names from the message's fields and show it through the op
-route's `show` below, in-process. A message some app did not take becomes a
-notice carrying that app's reason, and a page shown while the client has only
+route's `show` below, in-process; when the handler sets `reload_when_raised`
+and the show raised a window already at that page, the shell then refreshes
+that window. A message some app did not take becomes a notice carrying that
+app's reason, and a page shown while the client has only
 pop-outs open becomes a notice to reopen the main window. The shell's page
+announces `reportsChatOnScreen` to the chrome, promising the
+`minds:chat-on-screen` a chat's own page sends once its transcript is drawn in
+a window on screen, which the relay forwards up with the other `minds:`
+messages. The shell's page
 also opens links itself: it announces `opensLinks` and `opensCustomSchemeLinks`
 to the chrome and opens a `minds:open-link` (a popup Imbue Studio turned back
 into the workspace) or a
@@ -420,7 +427,7 @@ recorded, else what the Imbue Studio desktop recorded of them when it granted
 them (`data/.secrets/share_identities.json`, written beside the grants with
 every save: the email and display name each granted account id resolved
 from, which is how someone granted but never yet here gets a name rather than
-their id), else their email's local part, else their id. The apps read the
+their id), else their email's local part, else `Guest`. The apps read the
 roster from here rather than from its files: it is the one place names, keys,
 and handles are decided.
 
@@ -432,11 +439,15 @@ file the Imbue Studio desktop writes while the workspace is shared (read fresh o
 every miss; no file means no profiles). Each answer, and each failure, is
 cached for 5 minutes under `data/.state/presence/profiles/<user_id>.json`, so
 a connector outage costs one failed fetch per user per 5 minutes and no
-request ever hangs or fails on it. The profile rides on each present user
-over the wire (`display_name`, `profile_picture_url`, null when there is none)
-and names a visitor's desktop on their first arrival. The picture itself is
-served from the shell's own origin, since the pages' content security policy
-admits no outside image: the roster points at
+request ever hangs or fails on it. The roster and the presence listing never
+wait on the connector at all: they answer from the cache as it stands, a stale
+entry included while the workspace is still shared, fetch what is missing or
+stale on one background thread, and announce the roster and the connected set
+again when that changed what the cache answers. The profile rides on each
+present user over the wire (`display_name`, `profile_picture_url`, null when
+there is none) and names a visitor's desktop on their first arrival. The
+picture itself is served from the shell's own origin, since the pages' content
+security policy admits no outside image: the roster points at
 `GET /api/roster/<key>/picture?v=<version>`, which fetches the bytes once from
 the profile's URL (5 second bound) and keeps them under
 `data/.state/presence/profiles/<user_id>.picture.json` until the profile names
@@ -459,13 +470,18 @@ profile is resolved before the arrival takes the state lock), seeded from the
 first desktop: its shortcuts, its wallpaper, and a new window at the path of
 each window open there. It is remembered in `users.json`, every later client
 of that user lands on it, a returning client keeps the desktop it was on (when
-it last arrived as that same user), and if it has been deleted the next
-arrival seeds another and says so. Every desktop stays shared and reachable
-from everyone's launcher; there is no private mode. The seeded desktop is
-written with the visitor's key as its owner (the multiplayer spec, section
-8.1), so their card and their overview list it as theirs; a desktop whose owner
-has since left the grants is left behind, listed in the owner's overview under
-"Left behind" so it can be viewed and deleted.
+it last arrived as that same user), and if it has been deleted, or the
+desktop under its id is no longer theirs (a desktop the owner makes later can
+take a deleted one's id), the next arrival seeds another and says so. Every
+desktop stays shared and reachable from everyone's launcher; there is no
+private mode. The seeded desktop is written with the visitor's key as its
+owner (the multiplayer spec, section 8.1), so their card and their overview
+list it as theirs (a shell older than desktop owners seeded it with none, so
+the first start of a newer one gives each ownerless desktop `users.json`
+records for a visitor that visitor's key, and marks it done in
+`visitor_desktops_adopted`); a desktop whose owner has since left the grants
+is left behind, listed in the owner's overview under "Left behind" so it can
+be viewed and deleted.
 
 ### The desktop, the taskbar, and the launcher
 
@@ -510,12 +526,15 @@ in the owner's colour around the whole desktop, the taskbar included, and a
 chip in that colour with their picture, "<Name> · <Desktop name>", and "Stop
 viewing" in place of the tray, the overview button hidden meanwhile (and the
 backdrop menu's "Show all desktops" disabled). Stop viewing goes back to the
-desktop the window came from, else the viewer's first. A viewed desktop is
-shown as its owner has it, live: the layout read is the owner's newest
+desktop the window came from, else the viewer's first, else the desktop the
+shell seeds for a visitor who has none left; when none of those is somewhere
+else to go, a toast says the window could not leave, and why (the shell did
+not answer, or the viewer has no desktop of their own to go to). A viewed
+desktop is shown as its owner has it, live: the layout read is the owner's newest
 client's written one (`?of=owner` on the placements read), refreshed on every
 `placements_updated` push for the desktop and by a slow backstop poll, and it
 is read-only from every side -- the desktop's stage (the wallpaper, the
-shortcut grid, the windows, the ghosts, the pages host) is `inert`, so nothing
+shortcut grid, the windows, the pages host) is `inert`, so nothing
 on it takes a press, a key, or focus and Tab reaches nothing inside it; the
 taskbar's entries mirror theirs without acting; the backdrop menu keeps "New
 desktop" and "Keyboard shortcuts..." (the viewer's own wherever they are) and
@@ -578,7 +597,7 @@ colour; a dashed envelope for an invited email; a monogram tile for a visiting
 agent; a neutral silhouette for the owner of a workspace that has not shared;
 faded while the entry is not here; stacked from four entries on, each
 tucked under the one before it, spread while the pointer is over them; hopping
-once when it arrives and when a bubble of its appears), the viewer's own
+once when it arrives and when it says something), the viewer's own
 picture, and the agent's avatar at 36px in its mood, attending while the pinned
 chat window is focused -- the one creature's docked home, not drawn while this
 client floats the avatar over the windows instead. Hovering
@@ -597,23 +616,28 @@ workspace name with a pencil that opens the avatar chooser, "Working" or
 person drafts a mention of them (`@<handle> `) through the first launch path of
 the machine that declares a `mention_param` (the chat app's, into the Lounge),
 into its pinned window on this desktop when there is one; clicking the agent
-runs the primary text action with nothing to send, which opens the main chat;
-clicking your own picture does nothing. The shell names no app in any of this.
+puts the avatar's pinned window on this desktop on screen on whatever chat it
+holds (restored, raised, or its pulled-out window shown, never put away), and
+only with no such window runs the primary text action with nothing to send,
+which opens the main chat; clicking your own picture does nothing. The shell
+names no app in any of this.
 
 The chat app feeds the tray over loopback: `POST /api/bubbles` with every message
-somebody sends and every turn the agent closes with text (`{"speaker", "chat_id",
-"chat_title", "text", "message_id", "mentions"}`), which the shell broadcasts as
+somebody sends, every post the agent makes into a room, and every notification a chat
+sends the user (`{"speaker", "chat_id", "chat_title", "text", "message_id", "mentions",
+"kind"}`, `kind` being `message` or `notification`), which the shell broadcasts as
 `bubble` to every window but the speaker's own clients (the clients whose records
 carry the speaker's key; the owner's under either of their keys, the account's or
 the synthetic `owner`, whichever the bubble carries; a window looking at the
 bubble's chat drops it on receipt unless it mentions the viewer); and
 `POST /api/chats-activity` with what every chat is doing (`{"chats": [{"chat_id",
 "title", "status", "kind"}]}`), kept and broadcast as `chats_activity`, and sent on
-connect once reported. A speech bubble is a rounded card hanging above the tray
-with an arrow at the speaker's entry, holding what was said, a dismiss X, and a
-click that opens the chat it was said in; it lives five seconds after its last
-change, a person's new message replaces their bubble, the agent's new message
-within its bubble's lifetime is appended (folding past three lines into "and N
+connect once reported. Every `bubble` hops its speaker's entry, but only a
+`notification` or a message that mentions the viewer raises a speech bubble. A speech
+bubble is a rounded card hanging above the tray with an arrow at the speaker's entry,
+holding what was said, a dismiss X, and a click that opens the chat it was said in; it
+lives five seconds after its last change, a person's new message replaces their bubble,
+the agent's new bubble within its bubble's lifetime is appended (folding past three lines into "and N
 more"), bubbles of different speakers stack upward in arrival order, and a mention
 of the viewer wears an accent border and stays until dismissed or its chat is
 opened (`model/Bubbles.ts`, a pure reducer; the timers are the store's).

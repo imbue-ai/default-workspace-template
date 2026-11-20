@@ -9,8 +9,9 @@ metadata:
 # Notify the user
 
 This skill posts a message from this chat to the Imbue Studio app's
-notification menu; clicking it brings the user here. It is one-way: any answer
-comes back in this chat.
+notification menu, and shows it as a bubble over the agent on the workspace's
+desktop for everyone not looking at this chat; clicking either brings them
+here. It is one-way: any answer comes back in this chat.
 
 ## When to use it
 
@@ -58,5 +59,6 @@ The script exits 0 when the app accepted the notification and non-zero when
 it did not (the app was unreachable, or the gateway refused). **Read the exit
 code.** When it fails, say so in your reply -- "I tried to notify you but the
 notification did not go out" -- so the user knows why they heard nothing;
-never retry in a loop. A `could not check who is watching this chat` warning
-is not a failure: the notification still went out, and the exit code says so.
+never retry in a loop. A `could not check who is watching this chat` or
+`could not show the notification on the workspace's desktop` warning is not a
+failure: the notification still went out, and the exit code says so.

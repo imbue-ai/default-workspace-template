@@ -456,3 +456,8 @@ export function keydownMatchesAction(
   if (resolved === null) return false;
   return keydownMatchesChords(event, resolved.chords_by_action[actionId] ?? [], context);
 }
+
+/** Whether an input method is handling this keydown (a composition is open), so the field must not act on it. */
+export function isHandledByInputMethod(event: { isComposing?: boolean }): boolean {
+  return event.isComposing === true;
+}

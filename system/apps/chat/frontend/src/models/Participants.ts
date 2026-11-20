@@ -2,8 +2,9 @@
  * Who this page is, and who everyone else is (the multiplayer spec, sections 4 and 5.4): the page's own
  * participant key from ``GET /api/me``, and the roster from ``GET /api/participants`` (the shell's, served by the
  * chat app with every picture on this origin). Both load as the page boots and again whenever the page comes back
- * into view or focus, or someone's mentions change (a few seconds of cache folds a burst of those into one read),
- * so a person who joined after the page loaded, and the owner's key once the workspace is shared, are drawn right;
+ * into view or focus, someone's mentions change, or a turn arrives naming its author differently than the page's
+ * copy does (a few seconds of cache folds a burst of those into one read), so a person who joined or was renamed
+ * after the page loaded, and the owner's key once the workspace is shared, are drawn right;
  * a transcript turn is drawn as the viewer's own, or as another person's with their picture and name, from these.
  */
 
@@ -71,9 +72,18 @@ export function getWorkspaceAgent(): Participant | null {
   return getParticipant(WORKSPACE_AGENT_KEY);
 }
 
-/** The display name of an author key: the roster's, else the name the turn carried, else the key. */
+/** What a person's account is called when nothing names it: never its raw id (the shell's roster says the same). */
+const UNNAMED_PERSON_NAME = "Guest";
+const PERSON_KEY_PREFIX = "user:";
+
+/** The display name of an author key: the roster's, else the name the turn carried, else a neutral label for a
+ *  person's account and the key itself for anyone else. */
 export function participantName(key: string, fallbackName: string | null): string {
-  return getParticipant(key)?.display_name ?? fallbackName ?? key;
+  return (
+    getParticipant(key)?.display_name ??
+    fallbackName ??
+    (key.startsWith(PERSON_KEY_PREFIX) ? UNNAMED_PERSON_NAME : key)
+  );
 }
 
 /** Whether a key is the owner's, under either of the owner's keys (the spec's S12): the synthetic ``owner`` of an
@@ -131,6 +141,29 @@ export function ensureParticipants(): Promise<void> {
       loading = null;
     });
   return loading;
+}
+
+/** What a turn says of who wrote it: the author's key and the name the chat app called them by. */
+export interface TurnAuthorship {
+  author?: string;
+  author_name?: string;
+}
+
+/**
+ * Read the roster again when an arriving turn names its author differently than the page's copy does, or names one
+ * the copy lacks: the page loaded it before that person arrived, or before they were renamed, and it is otherwise
+ * read again only on a focus, a visibility change, or a mentions push. The owner's keys are left out, since an
+ * owner's turn is named from the owner's entry whatever key it carries.
+ */
+export function ensureParticipantsKnowAuthors(turns: readonly TurnAuthorship[]): void {
+  const isAnyAuthorUnknown = turns.some(
+    (turn) =>
+      turn.author !== undefined &&
+      turn.author_name !== undefined &&
+      !isOwnerKey(turn.author) &&
+      getParticipant(turn.author)?.display_name !== turn.author_name,
+  );
+  if (isAnyAuthorUnknown) void ensureParticipants();
 }
 
 /** Make the page a given participant's, over a given roster, without a request. Test-only. */

@@ -261,6 +261,19 @@ class AttachmentUploadResponse(FrozenModel):
     size: int = Field(description="Size of the stored upload in bytes")
 
 
+class InterruptAgentRequest(FrozenModel):
+    """Optional request body for the /api/chats/{id}/interrupt endpoint."""
+
+    only_if_idle: bool = Field(
+        default=False,
+        description="Restart only a chat that has ended its turn; a busy one is refused with 409 and what it is doing",
+    )
+    keep_queue: bool = Field(
+        default=False,
+        description="Resend the messages queued for the agent as one turn after the restart, instead of dropping them",
+    )
+
+
 class InterruptAgentResponse(FrozenModel):
     """Response from the /api/chats/{id}/interrupt endpoint."""
 
@@ -278,6 +291,13 @@ class ChatWatchersResponse(FrozenModel):
     """Response from GET /api/chats/{id}/watchers."""
 
     watched_by: tuple[str, ...] = Field(description="The page instances shown and focused on the chat now")
+
+
+class ChatNotificationRequest(FrozenModel):
+    """Request body for POST /api/chats/{id}/notification: the notification the chat just sent the user."""
+
+    message: str = Field(min_length=1, description="What the notification says")
+    title: str | None = Field(default=None, description="Its optional title, shown as a prefix on the message")
 
 
 class DrainToComposerResponse(FrozenModel):
@@ -527,6 +547,13 @@ class HeldSendSnapshot(DisplayDecisionFields, MessageAuthorFields):
 
     message_id: str = Field(description="The sender's stable send-time id, which the page's own bubble carries too")
     text: str = Field(description="The message's words, without the author prefix a non-owner's send carries")
+    is_delivered: bool = Field(
+        default=False,
+        description=(
+            "Whether the switch has delivered it, so its turn may already be in the transcript or the agent's queue; "
+            "False while it is still held"
+        ),
+    )
 
 
 class HandoffState(FrozenModel):
@@ -549,8 +576,9 @@ class HandoffState(FrozenModel):
     held_sends: tuple[HeldSendSnapshot, ...] = Field(
         default=(),
         description=(
-            "The messages held for after the switch, the confirming message first, so a page (a reloaded one "
-            "too) keeps showing them until they land in the transcript"
+            "The messages sent during the switch, the confirming message first, those the switch has already "
+            "delivered included until it is done, so a page (a reloaded one too) keeps showing them until they "
+            "land in the transcript"
         ),
     )
     model_pick: ModelPick | None = Field(
@@ -570,6 +598,14 @@ class HandoffState(FrozenModel):
         description=(
             "Whether the chat had no user turn to carry over, so the switch only starts it on the target: the page "
             "shows no handoff for it"
+        ),
+    )
+    has_landed: bool = Field(
+        default=False,
+        description=(
+            "Whether a handoff's successor is already the chat's agent, with only the prompt and the held sends "
+            "left to deliver: the page then shows the successor as it shows any agent, and an interrupt waits for "
+            "the delivery rather than being refused"
         ),
     )
 
@@ -625,6 +661,12 @@ class ConvergingResponse(ErrorResponse):
     """The 409 a verb answers while the chat converges on a new agent, with the handoff's phase."""
 
     phase: HandoffPhase = Field(description="The phase the chat is in")
+
+
+class InterruptBusyResponse(ErrorResponse):
+    """The 409 an ``only_if_idle`` interrupt answers for a chat that has not ended its turn."""
+
+    busy_with: str = Field(description="What the chat is in the middle of, in plain words")
 
 
 class HandoffCancelResponse(FrozenModel):

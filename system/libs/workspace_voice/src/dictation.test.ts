@@ -1,31 +1,46 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDictation, smoothLevel } from "./dictation";
-import type { DictationChannel, DictationEvents, DictationProblem, DictationState } from "./dictation";
+
+// The page's speech models, which a dictation handed no port of its own transcribes on.
+const pageSpeechModels = vi.hoisted(() => ({ engine: vi.fn() }));
+vi.mock("./speechModel", () => ({ getSpeechModels: () => pageSpeechModels }));
+
+import {
+  createDictation,
+  defaultDictationDeps,
+  describeSpeechModelLoadError,
+  isSpeechModelLoadProblem,
+  smoothLevel,
+} from "./dictation";
+import type {
+  DictationChannel,
+  DictationEvents,
+  DictationOptions,
+  DictationProblem,
+  DictationState,
+} from "./dictation";
+import { describeMicrophoneError } from "./microphone";
 import type { SpeechDetector, SpeechDetectorOptions } from "./speechDetector";
 import type { TranscriptionResult } from "./speechEngine";
-import { EngineLoadError } from "./workerClient";
+import { EngineLoadError, EngineWorkerLostError } from "./workerClient";
 import type { EngineWorkerClient } from "./workerClient";
 
 const FRAME_SAMPLES = 512;
 const ASSET_BASE = "https://chat.test/assets/voice/";
+const OPTIONS: DictationOptions = { engineId: "moonshine-base", assetBase: ASSET_BASE, preferredDevice: null };
 
 class FakeClient implements EngineWorkerClient {
   readonly engineId = "moonshine-base";
   isDead = false;
-  loadError: Error | null = null;
   readonly jobs: { audio: Float32Array; resolve(text: string): void; reject(error: Error): void }[] = [];
-  load = vi.fn(async (_device: unknown, onProgress: (l: number, t: number) => void): Promise<"wasm"> => {
-    if (this.loadError !== null) throw this.loadError;
-    onProgress(50, 100);
-    onProgress(100, 100);
-    return "wasm";
-  });
+  load = vi.fn(async (): Promise<"wasm"> => "wasm");
   transcribe(audio: Float32Array): Promise<TranscriptionResult> {
     return new Promise((resolve, reject) => {
       this.jobs.push({ audio, resolve: (text) => resolve({ text, words: null }), reject });
     });
   }
   onUnloaded(): void {}
+  onMessage(): void {}
+  onLost(): void {}
   dispose(): void {
     this.isDead = true;
   }
@@ -33,8 +48,11 @@ class FakeClient implements EngineWorkerClient {
 
 class FakeDetector implements SpeechDetector {
   static startError: Error | null = null;
+  /** A start waits on this, when set: a microphone still being opened. */
+  static startGate: Promise<void> | null = null;
   readonly start = vi.fn(async () => {
     if (FakeDetector.startError !== null) throw FakeDetector.startError;
+    if (FakeDetector.startGate !== null) await FakeDetector.startGate;
   });
   readonly release = vi.fn(async () => undefined);
   constructor(readonly options: SpeechDetectorOptions) {}
@@ -59,7 +77,6 @@ class FakeChannel implements DictationChannel {
 
 interface Recorder extends DictationEvents {
   states: DictationState[];
-  progress: [number, number][];
   levels: number[];
   finals: string[];
   tentatives: string[];
@@ -70,14 +87,12 @@ interface Recorder extends DictationEvents {
 function recorder(): Recorder {
   const record: Recorder = {
     states: [],
-    progress: [],
     levels: [],
     finals: [],
     tentatives: [],
     utteranceEnds: 0,
     problems: [],
     onStateChange: (state) => void record.states.push(state),
-    onProgress: (loaded, total) => void record.progress.push([loaded, total]),
     onLevel: (level) => void record.levels.push(level),
     onFinalWords: (words) => void record.finals.push(words),
     onTentativeWords: (words) => void record.tentatives.push(words),
@@ -95,27 +110,27 @@ async function settled(): Promise<void> {
 
 function harness() {
   const client = new FakeClient();
+  // The port the page holds now: the one ``client`` until a test puts another in its place.
+  const page = { client };
+  const connect = vi.fn((_options: DictationOptions): EngineWorkerClient => page.client);
   const channel = new FakeChannel();
   const events = recorder();
   const detectors: FakeDetector[] = [];
+  const getStream = vi.fn(async () => ({}) as MediaStream);
   let now = 1000;
   const clock = { advance: (ms: number) => (now += ms) };
-  const dictation = createDictation(
-    { engineId: "moonshine-base", assetBase: ASSET_BASE, preferredDevice: null },
-    events,
-    {
-      connect: () => client,
-      createDetector: async (options) => {
-        const detector = new FakeDetector(options);
-        detectors.push(detector);
-        return detector;
-      },
-      getStream: async () => ({}) as MediaStream,
-      isMicrophoneAllowedByFrame: () => true,
-      now: () => now,
-      createChannel: () => channel,
+  const dictation = createDictation(OPTIONS, events, {
+    connect,
+    createDetector: async (options) => {
+      const detector = new FakeDetector(options);
+      detectors.push(detector);
+      return detector;
     },
-  );
+    getStream,
+    isMicrophoneAllowedByFrame: () => true,
+    now: () => now,
+    createChannel: () => channel,
+  });
   const detector = (): FakeDetector => detectors[detectors.length - 1];
   /** Feed ``count`` frames of ``level`` 32 ms apart. */
   const speak = (count: number, level = 0.1): void => {
@@ -124,27 +139,83 @@ function harness() {
       detector().frame(level);
     }
   };
-  return { client, channel, events, dictation, detector, detectors, speak, clock };
+  return { client, page, connect, channel, events, dictation, detector, detectors, getStream, speak, clock };
+}
+
+/** A gate on the detector's start that the test opens when it chooses: a microphone still being opened. */
+function holdMicrophone(): () => void {
+  let release: () => void = () => undefined;
+  FakeDetector.startGate = new Promise((resolve) => {
+    release = resolve;
+  });
+  return release;
 }
 
 beforeEach(() => {
   FakeDetector.startError = null;
+  FakeDetector.startGate = null;
+  pageSpeechModels.engine.mockReset();
 });
 
 describe("dictation", () => {
-  it("loads the engine, opens the microphone, and listens, announcing itself to the workspace", async () => {
-    const { client, channel, events, dictation, detector } = harness();
+  it("opens the microphone and listens, announcing itself to the workspace, and loads nothing itself", async () => {
+    const { client, connect, channel, events, dictation, detector } = harness();
     await dictation.start();
-    expect(events.states).toEqual(["loading", "starting", "listening"]);
-    expect(events.progress).toEqual([
-      [50, 100],
-      [100, 100],
-    ]);
-    expect(client.load).toHaveBeenCalledWith(null, expect.any(Function));
+    expect(events.states).toEqual(["starting", "listening"]);
+    expect(client.load).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
     expect(detector().start).toHaveBeenCalledTimes(1);
     expect(detector().options.assetBase).toBe(ASSET_BASE);
     expect(channel.posted).toEqual([{ type: "dictation-started", token: expect.any(String) }]);
     expect(events.problems).toEqual([null]);
+  });
+
+  it("is starting from the press itself, before the microphone has opened", async () => {
+    const { events, dictation } = harness();
+    const release = holdMicrophone();
+    const started = dictation.start();
+    expect(dictation.state).toBe("starting");
+    expect(events.states).toEqual(["starting"]);
+    release();
+    await started;
+    expect(events.states).toEqual(["starting", "listening"]);
+  });
+
+  it("transcribes on the page's port to the engine worker, asked for at every job", async () => {
+    const { client, page, connect, events, dictation, detector, speak } = harness();
+    await dictation.start();
+    detector().options.onSpeechStart();
+    speak(20);
+    expect(connect).toHaveBeenLastCalledWith(OPTIONS);
+    expect(client.jobs.length).toBe(1);
+    // The worker is lost and the page connects again: the words that follow go to the port it holds now.
+    const reconnected = new FakeClient();
+    page.client = reconnected;
+    client.jobs[0].resolve("hello");
+    await settled();
+    detector().options.onSpeechEnd();
+    await settled();
+    expect(client.jobs.length).toBe(1);
+    expect(reconnected.jobs.length).toBe(1);
+    reconnected.jobs[0].resolve("Hello there.");
+    await settled();
+    expect(events.finals).toEqual(["Hello there."]);
+  });
+
+  it("reaches the engine worker through the page's speech models unless handed another way", () => {
+    const client = new FakeClient();
+    pageSpeechModels.engine.mockReturnValue(client);
+    expect(defaultDictationDeps().connect(OPTIONS)).toBe(client);
+    expect(pageSpeechModels.engine).toHaveBeenCalledWith(OPTIONS);
+  });
+
+  it("leaves the page's port to the engine worker open when it is disposed", async () => {
+    const { client, dictation, detector } = harness();
+    await dictation.start();
+    dictation.dispose();
+    expect(detector().release).toHaveBeenCalledTimes(1);
+    expect(client.isDead).toBe(false);
+    expect(dictation.state).toBe("idle");
   });
 
   it("previews the utterance's words as a tail, then lands them as final words when it ends", async () => {
@@ -213,7 +284,7 @@ describe("dictation", () => {
     client.jobs[0].resolve("Done.");
     await stopping;
     expect(events.finals).toEqual(["Done."]);
-    expect(events.states).toEqual(["loading", "starting", "listening", "stopping", "idle"]);
+    expect(events.states).toEqual(["starting", "listening", "stopping", "idle"]);
     expect(events.utteranceEnds).toBe(1);
   });
 
@@ -239,17 +310,9 @@ describe("dictation", () => {
     const { events, dictation, detector } = harness();
     FakeDetector.startError = Object.assign(new Error("denied"), { name: "NotAllowedError" });
     await dictation.start();
-    expect(events.states).toEqual(["loading", "starting", "idle"]);
+    expect(events.states).toEqual(["starting", "idle"]);
     expect(events.problems[1]).toMatchObject({ kind: "blocked", canRetry: false });
     expect(detector().release).toHaveBeenCalledTimes(1);
-  });
-
-  it("names the file when the model could not be downloaded", async () => {
-    const { client, events, dictation } = harness();
-    client.loadError = new EngineLoadError("config.json does not match its pinned SHA-256", "config.json");
-    await dictation.start();
-    expect(events.states).toEqual(["loading", "idle"]);
-    expect(events.problems[1]).toMatchObject({ kind: "download", message: expect.stringContaining("config.json") });
   });
 
   it("holds words that keep failing, stops listening, and lands them on Retry", async () => {
@@ -310,10 +373,92 @@ describe("dictation", () => {
     expect(dictation.state).toBe("listening");
   });
 
+  it("calls off a start still opening the microphone when a dictation starts elsewhere", async () => {
+    const { channel, events, dictation, detector } = harness();
+    // The workspace is heard from the first start on.
+    await dictation.start();
+    await dictation.stop();
+    const release = holdMicrophone();
+    const started = dictation.start();
+    await settled();
+    expect(dictation.state).toBe("starting");
+    channel.hear({ type: "dictation-started", token: "another-page" });
+    await settled();
+    expect(dictation.state).toBe("idle");
+    expect(detector().release).toHaveBeenCalledTimes(1);
+    release();
+    await started;
+    expect(events.states.slice(-2)).toEqual(["starting", "idle"]);
+  });
+
   it("meters the level with a fast attack and a slow release", () => {
     const up = smoothLevel(0, 1, 32);
     const down = smoothLevel(1, 0, 32);
     expect(up).toBeGreaterThan(0.7);
     expect(1 - down).toBeLessThan(0.3);
+  });
+});
+
+describe("describeSpeechModelLoadError", () => {
+  it("names the file a download failed on, and offers Retry", () => {
+    const error = new EngineLoadError("config.json does not match its pinned SHA-256", "config.json");
+    expect(describeSpeechModelLoadError(error)).toEqual({
+      kind: "download",
+      message: "The speech model couldn't be downloaded (config.json). Check your internet connection and try again.",
+      canRetry: true,
+    });
+  });
+
+  it("tells a lost worker apart from a model that would not load, whose own reason it gives", () => {
+    expect(describeSpeechModelLoadError(new EngineWorkerLostError("The speech engine stopped answering"))).toEqual({
+      kind: "lost",
+      message: "The speech engine stopped responding. Try again.",
+      canRetry: true,
+    });
+    expect(describeSpeechModelLoadError(new EngineLoadError("no WebGPU adapter", null))).toEqual({
+      kind: "engine",
+      message: "The speech model couldn't be loaded: no WebGPU adapter",
+      canRetry: true,
+    });
+    expect(describeSpeechModelLoadError("out of memory").message).toBe(
+      "The speech model couldn't be loaded: out of memory",
+    );
+  });
+});
+
+describe("isSpeechModelLoadProblem", () => {
+  it("is true of every way a load of the speech model fails", () => {
+    const failures = [
+      new EngineLoadError("config.json does not match its pinned SHA-256", "config.json"),
+      new EngineLoadError("no WebGPU adapter", null),
+      new EngineWorkerLostError("The speech engine stopped answering"),
+      "out of memory",
+    ];
+    for (const failure of failures) {
+      const problem = describeSpeechModelLoadError(failure);
+      expect(isSpeechModelLoadProblem(problem), problem.kind).toBe(true);
+    }
+  });
+
+  it("is false of a problem with the microphone, and of held words", () => {
+    const microphoneErrors = ["NotAllowedError", "NotFoundError", "NotReadableError", "UnknownError"].map((name) =>
+      Object.assign(new Error("no microphone"), { name }),
+    );
+    const problems: DictationProblem[] = [
+      ...microphoneErrors.map((error) => describeMicrophoneError(error, true)),
+      describeMicrophoneError(microphoneErrors[0], false),
+      { kind: "held", message: "Some words are held.", canRetry: true },
+    ];
+    expect(problems.map((problem) => problem.kind)).toEqual([
+      "blocked",
+      "missing",
+      "busy",
+      "failed",
+      "frame_blocked",
+      "held",
+    ]);
+    for (const problem of problems) {
+      expect(isSpeechModelLoadProblem(problem), problem.kind).toBe(false);
+    }
   });
 });

@@ -11,6 +11,7 @@ import {
   isChordHiddenIn,
   isRefusedChord,
   isWorkspaceWideChord,
+  isHandledByInputMethod,
   keydownMatchesAction,
   keydownMatchesChords,
   readsChordAsApple,
@@ -248,5 +249,20 @@ describe("readsChordAsApple", () => {
     expect(readsChordAsApple("meta+k", "mac")).toBe(true);
     expect(readsChordAsApple("meta+k", "windows")).toBe(false);
     expect(readsChordAsApple("ctrl+k", "windows")).toBe(true);
+  });
+});
+
+describe("isHandledByInputMethod", () => {
+  it("is true for a keystroke made inside a composition", () => {
+    expect(isHandledByInputMethod(keydown("Enter", { isComposing: true }))).toBe(true);
+  });
+
+  it("is false for an ordinary keystroke, and for an event that carries no flag", () => {
+    expect(isHandledByInputMethod(keydown("Enter"))).toBe(false);
+    expect(isHandledByInputMethod({})).toBe(false);
+  });
+
+  it("does not take a bare keyCode of 229 for a composition", () => {
+    expect(isHandledByInputMethod(keydown("Enter", { keyCode: 229 }))).toBe(false);
   });
 });
