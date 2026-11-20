@@ -4,8 +4,6 @@ import contextlib
 import json
 import os
 import threading
-from collections.abc import Callable
-from collections.abc import Hashable
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -15,13 +13,11 @@ from typing import TypeVar
 from uuid import uuid4
 
 from loguru import logger
-from pydantic import BaseModel
 from pydantic import Field
 from pydantic import ValidationError
 from pydantic.config import ExtraValues
 
 from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.errors import ShellStateError
 
 # Where the shell keeps its state (desktop contracts.md section 4), relative to the workspace root the
@@ -105,56 +101,6 @@ def move_unreadable_state_file_aside(path: Path, reason: str) -> Path:
         raise ShellStateError(f"cannot move the unreadable shell state file {path} aside: {e}") from e
     logger.warning("Moved the unreadable shell state file {} aside to {}: it {}", path, aside.name, reason)
     return aside
-
-
-@pure
-def with_unknown_fields_kept(
-    written: dict[str, Any],
-    written_model: BaseModel,
-    stored: dict[str, Any],
-    stored_model: BaseModel,
-    identity_of: Callable[[BaseModel], Hashable | None],
-) -> dict[str, Any]:
-    """``written``, the JSON ``written_model`` dumps to, with the fields its models do not know put back from
-    ``stored``, the JSON ``stored_model`` was read from with those fields ignored. They go back at every level: into
-    a nested object both hold, and into an item of a list of objects that ``stored`` holds an item of the same
-    identity (by ``identity_of``; None matches nothing). Any other value is written as it is."""
-    known_fields = type(written_model).model_fields
-    kept = {**written, **{key: value for key, value in stored.items() if key not in known_fields}}
-    for name in known_fields:
-        kept[name] = _value_with_unknown_fields_kept(
-            written[name], getattr(written_model, name), stored.get(name), getattr(stored_model, name), identity_of
-        )
-    return kept
-
-
-@pure
-def _value_with_unknown_fields_kept(
-    written: Any,
-    written_value: Any,
-    stored: Any,
-    stored_value: Any,
-    identity_of: Callable[[BaseModel], Hashable | None],
-) -> Any:
-    if isinstance(written_value, BaseModel) and isinstance(stored_value, BaseModel) and isinstance(stored, dict):
-        return with_unknown_fields_kept(written, written_value, stored, stored_value, identity_of)
-    if not (isinstance(written_value, tuple) and isinstance(stored_value, tuple) and isinstance(stored, list)):
-        return written
-    # The stored list was validated item by item, so its JSON and its models line up.
-    stored_by_identity: dict[Hashable, tuple[dict[str, Any], BaseModel]] = {}
-    for item, item_model in zip(stored, stored_value, strict=True):
-        identity = identity_of(item_model) if isinstance(item_model, BaseModel) and isinstance(item, dict) else None
-        if identity is not None:
-            stored_by_identity[identity] = (item, item_model)
-    kept_items: list[Any] = []
-    for item, item_model in zip(written, written_value, strict=True):
-        stored_item = stored_by_identity.get(identity_of(item_model)) if isinstance(item_model, BaseModel) else None
-        kept_items.append(
-            with_unknown_fields_kept(item, item_model, stored_item[0], stored_item[1], identity_of)
-            if stored_item is not None
-            else item
-        )
-    return kept_items
 
 
 def write_json_atomic(path: Path, document: dict[str, Any]) -> None:
