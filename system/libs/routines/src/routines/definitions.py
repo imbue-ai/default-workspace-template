@@ -20,7 +20,9 @@ from tomlkit import TOMLDocument
 from tomlkit.exceptions import ParseError
 
 from app_manifest.errors import InvalidManifestValueError
+from app_manifest.errors import RecordLoadError
 from app_manifest.primitives import AppName
+from app_manifest.records import load_record
 from app_manifest.records import record_path
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
@@ -143,17 +145,21 @@ class DefinitionFile(FrozenModel):
 
 
 def user_app_package_of(paths: RoutinesPaths, app_name: str) -> str | None:
-    """The directory under system/apps of the user app by that name; None when the name is no user app's. A user
-    app has its directory and the workspace's record of it; a built-in app has no record, and its routines stay
-    under system/routines."""
+    """The directory under system/apps of the user app by that name, as the workspace's record of the app names
+    it; None when the name is no user app's. A user app has its directory and its record; a built-in app has no
+    record, and its routines stay under system/routines."""
     try:
         name = AppName(app_name)
     except InvalidManifestValueError:
         return None
-    app_package = name.replace("-", "_")
-    if not paths.app_dir(app_package).is_dir() or not record_path(paths.repo_root, name).is_file():
+    if not record_path(paths.repo_root, name).is_file():
         return None
-    return app_package
+    try:
+        app_package = load_record(paths.repo_root, name).package
+    except RecordLoadError as e:
+        logger.warning("Not treating {} as a user app, since its record cannot be read: {}", app_name, e)
+        return None
+    return app_package if paths.app_dir(app_package).is_dir() else None
 
 
 @pure

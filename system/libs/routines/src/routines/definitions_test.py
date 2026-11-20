@@ -198,6 +198,20 @@ def test_a_routine_added_for_a_user_app_is_written_into_the_apps_directory_and_c
     assert (loaded.definition, loaded.app_package) == (definition, "inbox_status")
 
 
+def test_a_user_apps_directory_is_the_one_its_record_names_whatever_the_app_is_called(
+    definitions: FileDefinitionStore,
+) -> None:
+    make_user_app(definitions.paths, "news", app_package="news_reader")
+    # A directory that happens to carry the app's name belongs to something else.
+    definitions.paths.app_dir("news").mkdir(parents=True)
+    definition = _digest().model_copy_update(to_update(_digest().field_ref().app, "news"))
+
+    path = definitions.add(TEST_ROUTINE_ID, definition)
+
+    assert path == definitions.paths.repo_root / "system/apps/news_reader/routines/inbox-digest.toml"
+    assert definitions.load(TEST_ROUTINE_ID).app_package == "news_reader"
+
+
 @pytest.mark.parametrize("app_name", ["chat", "nothing-by-this-name", "../escape"])
 def test_a_routine_added_for_an_app_that_is_no_user_app_stays_under_system_routines(
     definitions: FileDefinitionStore, app_name: str

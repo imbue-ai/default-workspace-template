@@ -56,10 +56,10 @@ def make_workspace_paths(root: Path) -> RoutinesPaths:
     return RoutinesPaths(repo_root=root)
 
 
-def make_user_app(paths: RoutinesPaths, app_name: str) -> str:
+def make_user_app(paths: RoutinesPaths, app_name: str, app_package: str | None = None) -> str:
     """A user app as an install leaves it: its directory under system/apps and the workspace's record of it.
-    Answers the directory's name, the app's name with its hyphens as underscores."""
-    app_package = app_name.replace("-", "_")
+    Answers the directory's name: ``app_package``, else the app's name with its hyphens as underscores."""
+    app_package = app_package or app_name.replace("-", "_")
     paths.app_dir(app_package).mkdir(parents=True)
     write_record(
         paths.repo_root, AppRecord(name=AppName(app_name), package=app_package, port=8090, origin=AppOrigin.LOCAL)
