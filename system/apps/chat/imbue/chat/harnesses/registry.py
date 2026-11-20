@@ -689,8 +689,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             }
         ),
         popups=(
-            # No sign-in lane offers xAI, so /login and /logout point at the agent's terminal.
-            HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=_AUTH_COMMANDS, action=PopupAction.NOTICE),
+            HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=_AUTH_COMMANDS, action=PopupAction.OPEN_AUTH),
             HarnessPopup(
                 trigger=PopupTrigger.COMPOSER_COMMAND, commands=_GROK_DECLINED_COMMANDS, action=PopupAction.NOTICE
             ),
