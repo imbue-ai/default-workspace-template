@@ -76,9 +76,10 @@ class AccountBinding(ABC):
     def account_env(self, account_dir: Path) -> dict[str, str]:
         """The environment that scopes the harness's CLI to one account.
 
-        A CLI the chat app runs starts from `account_process_env`, which layers `cli_env` over the
-        server's environment, because both `pexpect.spawn` and `Popen` REPLACE the environment rather
-        than merging into it, and a child without `PATH` never starts.
+        Only the scoping variables. A run layers them over the server's environment, because both
+        `pexpect.spawn` and `Popen` REPLACE the environment rather than merging into it, and a child
+        without `PATH` never starts; a sign-in or probe gets that whole environment from
+        `account_process_env`.
         """
 
     def cli_env(self, account_dir: Path) -> dict[str, str]:
