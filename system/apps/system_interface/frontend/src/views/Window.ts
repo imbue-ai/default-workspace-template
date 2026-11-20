@@ -25,7 +25,6 @@ import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import type { PixelRect, ResizeEdge } from "../geometry/frames";
 import { RESIZE_EDGES } from "../geometry/frames";
 import { windowChromeZIndex } from "../geometry/stacking";
-import { appNotFoundSentence } from "../model/failures";
 import type { FailureNotice } from "../model/failures";
 import type { AppRecord, WindowRecord, WindowState } from "../model/records";
 import { FailureLine } from "./FailureLine";
@@ -95,9 +94,9 @@ export interface WindowAttrs {
   readonly stopped: FailureNotice | null;
   /** Report a bug about the stopped notice where it asks for one; null where no bug report can be opened. */
   readonly onReportBug: ReportBug;
-  /** Whether the window's app is no longer part of the workspace (the app list has landed without it): the window
-   *  says so and offers to close, in place of a page it can never show. */
-  readonly isAppGone: boolean;
+  /** What the window says in place of a page it can never show when its app couldn't be found (the app list has
+   *  landed without it), with its close (the store's ``goneAppNotice``); null otherwise. */
+  readonly gone: FailureNotice | null;
   /** Immersive mode's state and verbs for the fullscreen strip; null hides its control. */
   readonly immersive: ImmersiveControls | null;
   readonly onRaise: () => void;
@@ -108,8 +107,8 @@ export interface WindowAttrs {
   readonly chrome: ThemeChrome;
 }
 
-/** What a window shows in place of its page: why it has none (its app is stopped, or no longer part of the
- *  workspace), with the buttons for the next step. */
+/** What a window shows in place of its page: why it has none (its app is stopped, or couldn't be found), with the
+ *  buttons for the next step. */
 export function windowPlaceholder(marker: string, notice: FailureNotice, onReportBug: ReportBug): m.Vnode {
   return m(
     "div",
@@ -119,17 +118,6 @@ export function windowPlaceholder(marker: string, notice: FailureNotice, onRepor
     },
     m(FailureLine, { notice, onReportBug, marker: `${marker}-notice`, messageClass: "type-label text-primary" }),
   );
-}
-
-/** What a window of an app the workspace's app list no longer has shows. The list drops an app taken out and one
- *  whose record could not be read alike, so it says only that the app couldn't be found. */
-export function appGoneNotice(onClose: () => void): FailureNotice {
-  return {
-    message: appNotFoundSentence("This app", null),
-    details: null,
-    actions: [{ label: "Close window", run: onClose }],
-    isReportable: false,
-  };
 }
 
 function stripControl(name: string, label: string, markup: string, onClick: () => void): m.Vnode {
@@ -195,7 +183,7 @@ export function Window(): m.Component<WindowAttrs> {
   return {
     view(vnode) {
       const attrs = vnode.attrs;
-      const { window, app, title, rect, state, stackIndex, isFocused, isTouch, stopped, isAppGone, onReportBug } =
+      const { window, app, title, rect, state, stackIndex, isFocused, isTouch, stopped, gone, onReportBug } =
         attrs;
       const isFullscreen = state === "FULLSCREEN";
       const isResizable = !isTouch && !isFullscreen;
@@ -239,7 +227,7 @@ export function Window(): m.Component<WindowAttrs> {
                     state,
                     isFocused,
                     // A window with no page has nothing to refresh.
-                    canRefresh: !isAppGone,
+                    canRefresh: gone === null,
                     isMenuOpen: attrs.isMenuOpen,
                     hasAppChat: attrs.hasAppChat,
                     sizeMenuTrigger: attrs.sizeMenuTrigger,
@@ -259,7 +247,7 @@ export function Window(): m.Component<WindowAttrs> {
                 },
                 [
                   stopped === null ? null : windowPlaceholder("stopped-app", stopped, onReportBug),
-                  isAppGone ? windowPlaceholder("gone-app", appGoneNotice(attrs.onClose), onReportBug) : null,
+                  gone === null ? null : windowPlaceholder("gone-app", gone, onReportBug),
                   // The shield: the press that closes an open menu or the launcher (or raises the window, on touch)
                   // lands here rather than in the page, and bubbles to the window's own handler and on to
                   // the document. A right-click here is that press and nothing more: handled, so the

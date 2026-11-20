@@ -31,7 +31,7 @@ import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { UpdateNoticeBanner } from "../UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "../UpdateStalenessBanner";
 import { BootFailureNotice, bootSpinner } from "../FailureLine";
-import { appGoneNotice, windowPlaceholder } from "../Window";
+import { windowPlaceholder } from "../Window";
 import { MENU_MIN_WIDTH, openShareSettings, phoneWindowMenuRows } from "../WindowMenu";
 import { HomeGrid } from "./HomeGrid";
 import { PhoneBar } from "./PhoneBar";
@@ -290,7 +290,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
                     { class: "absolute inset-0" },
                     windowPlaceholder(
                       "gone-app",
-                      appGoneNotice(() => void store.closeOrMinimizeWindow(shownWindow.id)),
+                      store.goneAppNotice(shownWindow.app, () => void store.closeOrMinimizeWindow(shownWindow.id)),
                       store.reportBugAction(),
                     ),
                   )

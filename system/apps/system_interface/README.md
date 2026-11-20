@@ -131,7 +131,8 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
 Its state lives under `data/.state/system_interface/`: `desktops.json`, `tour.json` (whether the tour has run, and where it resumes), `offer_tour` (the bootstrap's mark on a new workspace, without which the tour never starts by itself),
 `desktop_themes.json` (the workspace's default theme and each desktop's own),
 `default_shortcuts_offered.json` (the default shortcuts the shell has
-offered), `placements/<desktop>/<client>.json`,
+offered), `shortcut_names.json` (what each shortcut's app and launch path were
+called while the app was registered), `placements/<desktop>/<client>.json`,
 `window_paths/<client>.json` (a client's own paths for independent windows),
 `clients.json`, `users.json` (the desktop made for each visiting user),
 `visitor_desktops_adopted` (the mark that the visitors' desktops from before desktop owners were given their visitors),
@@ -683,7 +684,18 @@ open, placed there once by that app for the first client that connects.
 
 A refused operation (an open, a close, a shortcut move) says so in a toast at
 the foot of the screen (the shared toasts of `system/libs/workspace_ui`) rather
-than a browser alert. A toast whose sentence asks for a bug report offers
+than a browser alert. A failure whose sentence asks for a bug report, and a
+refusal that leaves the person unable to do what they meant to (an app that
+couldn't be found, a launch path an app no longer offers), offers "Ask an agent
+to fix this", decided in one place (the store's notice builder): asked in the
+chat about the app when the failure is the app's (a launch it answered with an
+error, a quit, a message it refused), else in the main chat behind `/assist`,
+with the failure's sentence and details as `agentFixTask` words them. None is
+offered where the ask would go through what failed (a failure of the app agents
+are asked through, Chat on a stock workspace), where the shell recovers by
+itself (a gone window or desktop, which it reads again), for a deliberate rule,
+for an app still starting, or before the app list has loaded. A toast whose
+sentence asks for a bug report then offers
 "Report a bug" whenever the Imbue Studio chrome says it opens one, decided as
 the toast draws, and the report it opens carries the toast's sentence and
 details (`minds:open-help {errorDetails}`); a failure told in place (a dialog's
@@ -833,11 +845,14 @@ this" sends the message the command below carries through the workspace's
 primary text action (the main chat on a stock workspace: the failure is the
 shell's own, so the ask is about no app), and frames that chat on the page; until
 the launch answers it reads "Asking an agent…" and takes no second press, and a
-refused attempt is told under it. Behind
-"See details" are the command,
+refused attempt is told under it. Until then, behind
+"See details" are the command and
 "Open this workspace's terminal", whose session of the already-running terminal
-app is made in a frame only when that section is first opened, and, after a
-refused attempt, why the agent couldn't be asked. The command is a different
+app is made in a frame only when that section is first opened. Once an attempt
+is refused, the way out is in the open: "Couldn't ask an agent. You can start
+one yourself: run this command in the terminal below.", the command with Copy,
+and the terminal section opened (or the sentence saying there is no terminal),
+and "See details" keeps only why the agent couldn't be asked. The command is a different
 route from the button, and the page says so: run in a terminal, it starts a new
 chat with an agent straight through mngr instead of asking in the main chat, so
 it needs no Chat app and is there for when an agent can't be asked from the
@@ -848,7 +863,7 @@ so both launches go through the shell's `POST /api/not-built/launch` (desktop
 contracts.md section 5.1), which answers where the launched page is. The command:
 
 ```
-env -u TMUX mngr create --connect --template chat --label user_created=true --message "i'm seeing \"this workspace's interface needs to be rebuilt, can you fix it?\""
+env -u TMUX mngr create --connect --template chat --label user_created=true --message "/assist Imbue Studio showed the user this failure: This workspace's interface needs to be rebuilt. Find out why it failed and fix it, then tell the user what was wrong and what you changed."
 ```
 
 `--template chat` is what makes the result a chat, and it carries everything
@@ -875,9 +890,12 @@ places:
   workspace -- so a test reads the template and fails if that setting ever
   leaves it.
 - **A `--message` carrying the page's own heading**, so the agent opens already
-  knowing what the reader is looking at. A test ties the two together, since a
-  reworded heading would otherwise leave the message quoting a sentence that
-  appears nowhere.
+  knowing what the reader is looking at, worded as the desktop's asks are
+  (Imbue Studio telling the agent what the user was shown, never the user
+  speaking) behind `/assist`, so the agent runs the workspace's assist flow. The
+  button sends the same message. A test ties the message to the heading, since
+  a reworded heading would otherwise leave it naming a sentence that appears
+  nowhere.
 
 The line also names no agent, so mngr mints one and a second run starts a fresh
 conversation rather than colliding with the first. `env -u TMUX` is what lets the

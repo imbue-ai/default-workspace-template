@@ -26,7 +26,7 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     isShielded: false,
     stopped: null,
     onReportBug: null,
-    isAppGone: false,
+    gone: null,
     immersive: null,
     onRaise: vi.fn(),
     onControl: vi.fn(),
@@ -258,13 +258,17 @@ describe("Window", () => {
     expect(reportBug).toHaveBeenCalledWith({ message: stopped.message, details: null });
   });
 
-  it("says a window's app couldn't be found in the workspace, offers to close it, and drops Refresh", () => {
+  it("shows a window's app couldn't be found in place of its page, with its buttons, and drops Refresh", () => {
     const onClose = vi.fn();
-    const element = render({ app: undefined, isAppGone: true, onClose });
+    const gone = {
+      message: "This app couldn't be found in this workspace.",
+      details: null,
+      isReportable: false,
+      actions: [{ label: "Close window", run: onClose }],
+    };
+    const element = render({ app: undefined, gone });
     const placeholder = element.querySelector("[data-gone-app]") as HTMLElement;
-    expect(placeholder.querySelector(".gone-app-notice-message")?.textContent).toBe(
-      "This app couldn't be found in this workspace.",
-    );
+    expect(placeholder.querySelector(".gone-app-notice-message")?.textContent).toBe(gone.message);
     (placeholder.querySelector("button") as HTMLButtonElement).click();
     expect(onClose).toHaveBeenCalledTimes(1);
     const controls = [...element.querySelectorAll("[data-window-control]")].map((control) =>

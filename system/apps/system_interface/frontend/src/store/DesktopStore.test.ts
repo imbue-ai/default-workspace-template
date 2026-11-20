@@ -1747,6 +1747,21 @@ describe("an agent by default", () => {
     expect(api.calls).toContain("removeDesktopShortcut:home:docs:new");
   });
 
+  it("offers no Remove shortcut once the workspace, read again, no longer holds the shortcut", async () => {
+    api.desktops = [desktopRecord("home", { shortcuts: [shortcutRecord("docs", { column: 0, row: 0 })] })];
+    const store = await startedStore();
+    const [shortcut] = store.getState().desktops[0].shortcuts;
+    // The shell drops a gone app's shortcuts itself; this window has not heard yet.
+    api.desktops = [desktopRecord("home")];
+    api.nextRefusal = shellRefusal(400, "No registered app named 'docs'", APP_GONE_SENTENCE, "app_unavailable");
+    await store.runShortcut(shortcut);
+    await settle();
+    expect(store.getState().desktops[0].shortcuts).toEqual([]);
+    const [toast] = store.toasts.current();
+    expect(toast.message).toBe("Docs couldn't be found in this workspace, so nothing was opened.");
+    expect(toast.actions.map((action) => action.label)).toEqual(["Ask an agent to fix this"]);
+  });
+
   it("names a shortcut whose app is gone by the names it was made with, and a launch path by its label", async () => {
     api.desktops = [
       desktopRecord("home", {
@@ -1777,6 +1792,21 @@ describe("an agent by default", () => {
         ["Remove shortcut", "Ask an agent to fix this"],
       ],
     ]);
+  });
+
+  it("says a window's app couldn't be found, with its close and an agent asked in the main chat", async () => {
+    const store = await startedStore();
+    const onClose = vi.fn();
+    const gone = store.goneAppNotice("buildlog", onClose);
+    expect(gone.message).toBe("This app couldn't be found in this workspace.");
+    expect(gone.actions.map((action) => action.label)).toEqual(["Close window", "Ask an agent to fix this"]);
+    gone.actions[0].run();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    gone.actions[1].run();
+    await settle();
+    expect(lastAsk().launch).toBe("chat:new:new");
+    expect(lastAsk().message).toContain("This app couldn't be found in this workspace.");
+    expect(lastAsk().message).toContain('the app registered as "buildlog"');
   });
 
   it("moves a window whose desktop another window deleted off it, says where it is now, and tries again there", async () => {

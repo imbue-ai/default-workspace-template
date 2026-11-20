@@ -227,7 +227,10 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                               ? store.stoppedNotice(app, window.id)
                               : null,
                           onReportBug: store.reportBugAction(),
-                          isAppGone: app === undefined && state.isAppsLoaded,
+                          gone:
+                            app === undefined && state.isAppsLoaded
+                              ? store.goneAppNotice(window.app, () => void store.closeOrMinimizeWindow(window.id))
+                              : null,
                           immersive: store.getCanImmerse()
                             ? {
                                 isOn: immersive !== null,

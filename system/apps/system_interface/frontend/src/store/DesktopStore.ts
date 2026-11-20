@@ -363,6 +363,25 @@ interface LaunchFailureCopy {
   readonly shortcut?: ShortcutTarget;
 }
 
+/** Whether ``failure`` refuses something this window held that has gone in the meantime (an app, a launch path, a
+ *  window, a desktop), so the window reads the workspace again. */
+function isReadAgainFirst(failure: Failure): boolean {
+  const kind = refusalKindOf(failure);
+  return (
+    kind === "app_unavailable" || kind === "launch_path_gone" || kind === "window_gone" || kind === "desktop_gone"
+  );
+}
+
+/** Try again, where the request can be repeated as it was asked. */
+function tryAgainOf(asked: AskedFor): ToastAction[] {
+  return asked.retry === undefined ? [] : [{ label: "Try again", run: asked.retry }];
+}
+
+/** What a refused request did not do, as its sentence says. */
+function outcomeOf(asked: AskedFor): string {
+  return asked.isOpen === true ? NOTHING_OPENED : NOTHING_CHANGED;
+}
+
 /** What a page's draft into the pinned window was for, which its failure names. */
 export type DraftPurpose = "page-draft" | "avatar-request" | "theme-request";
 /** Why a click on a person's tray entry went nowhere: no app takes a mention of them. */
@@ -895,16 +914,16 @@ export class DesktopStore {
    * went in the meantime names them as this window last knew them and has this window read the workspace again. An
    * agent it owes is asked about the app when the failure is the app's (``asked.isAboutApp``), else in the main chat.
    */
-  private noticeFor(whatFailed: string, error: unknown, asked: AskedFor = {}): FailureNotice {
+  private noticeFor(whatFailed: string, error: unknown, asked: AskedFor = {}, isReadAgain = false): FailureNotice {
     const failure = describeRequestFailure(error);
-    const tryAgain: ToastAction[] = asked.retry === undefined ? [] : [{ label: "Try again", run: asked.retry }];
+    if (!isReadAgain && isReadAgainFirst(failure)) void this.refreshInventory();
+    const tryAgain = tryAgainOf(asked);
     const app = asked.app;
     const told = failureSentence(failure, whatFailed);
     const aboutApp: AgentAsk = app === undefined ? "shell" : { about: app, windowId: null };
-    const outcome = asked.isOpen === true ? NOTHING_OPENED : NOTHING_CHANGED;
+    const outcome = outcomeOf(asked);
     switch (refusalKindOf(failure)) {
       case "app_unavailable":
-        void this.refreshInventory();
         return this.noticeOf(
           {
             message: appNotFoundSentence(app?.display_name ?? "This app", outcome),
@@ -915,7 +934,6 @@ export class DesktopStore {
           { agent: aboutApp, isStuck: true },
         );
       case "launch_path_gone":
-        void this.refreshInventory();
         return this.noticeOf(
           {
             message:
@@ -929,10 +947,8 @@ export class DesktopStore {
           { agent: aboutApp, isStuck: true },
         );
       case "window_gone":
-        void this.refreshInventory();
         break;
       case "desktop_gone":
-        void this.refreshInventory();
         return this.desktopGoneNotice(failure.details, null, outcome, tryAgain);
       case "out_of_space":
         return this.noticeOf(told, [this.freeSpaceAction(told), ...tryAgain], { agent: "withheld" });
@@ -961,27 +977,24 @@ export class DesktopStore {
   }
 
   /** Tell ``tell`` (a toast, or the surface that ran the request) that a request this window built failed, in
-   *  ``noticeFor``'s words. A refusal saying the desktop it acted on was deleted first reads this window's desktops
-   *  again, which moves the window off that desktop, so the note can name the one it is on now. */
+   *  ``noticeFor``'s words. A refusal for something gone in the meantime first reads the workspace again, so the note
+   *  offers what is still so after it: "Remove shortcut" only while the desktop still holds the shortcut (the shell
+   *  drops a gone app's shortcuts itself), and the desktop the window was moved to off a deleted one. */
   private async tellFailure(whatFailed: string, error: unknown, asked: AskedFor, tell: FailureReport): Promise<void> {
     const failure = describeRequestFailure(error);
-    if (refusalKindOf(failure) !== "desktop_gone") {
+    if (!isReadAgainFirst(failure)) {
       tell(this.noticeFor(whatFailed, error, asked));
       return;
     }
     const before = this.state.activeDesktopId;
     await this.refreshInventory();
+    if (refusalKindOf(failure) !== "desktop_gone") {
+      tell(this.noticeFor(whatFailed, error, asked, true));
+      return;
+    }
     const now = activeDesktop(this.state);
     const name = now === null || now.id === before ? null : now.name;
-    const tryAgain: ToastAction[] = asked.retry === undefined ? [] : [{ label: "Try again", run: asked.retry }];
-    tell(
-      this.desktopGoneNotice(
-        failure.details,
-        name,
-        asked.isOpen === true ? NOTHING_OPENED : NOTHING_CHANGED,
-        tryAgain,
-      ),
-    );
+    tell(this.desktopGoneNotice(failure.details, name, outcomeOf(asked), tryAgainOf(asked)));
   }
 
   /** What a request on a desktop another window deleted gets: what happened, and the desktop this window is on now
@@ -1388,6 +1401,22 @@ export class DesktopStore {
     return this.plainNotice(sentence, [
       this.askAboutAppAction("Ask an agent to start it", stoppedRequest(app), app, windowId),
     ]);
+  }
+
+  /** What a window of ``appName``, an app the app list no longer has, says in place of its page: that the app
+   *  couldn't be found (the list drops an app taken out and one whose record could not be read alike, so no removal
+   *  is claimed), with "Close window" (``onClose``) and an agent, asked in the main chat, since nothing is left to
+   *  ask about. */
+  goneAppNotice(appName: string, onClose: () => void): FailureNotice {
+    return this.noticeOf(
+      {
+        message: appNotFoundSentence("This app", null),
+        details: `The window shows the app registered as "${appName}", which the workspace's app list does not have.`,
+        isReportable: false,
+      },
+      [{ label: "Close window", run: onClose }],
+      { agent: "shell", isStuck: true },
+    );
   }
 
   /** Whether ``app`` is the one an ask about it would be sent through (the app of the launch ``askAgent`` runs for

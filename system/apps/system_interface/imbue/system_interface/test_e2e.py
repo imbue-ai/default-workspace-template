@@ -1213,7 +1213,10 @@ def test_a_launch_into_an_app_that_is_not_running_says_so_and_offers_an_agent_to
         assert asked["body"] == {
             _PINNED_APP_PARAM: "ghost",
             _PINNED_APP_DISPLAY_NAME_PARAM: "Ghost",
-            _PINNED_TEXT_PARAM: "Ghost (ghost) isn't running in this workspace. Please start it again.",
+            _PINNED_TEXT_PARAM: (
+                "Imbue Studio showed the user that Ghost (the ghost app) isn't running in this workspace. Find out why "
+                "it stopped and start it again, then tell the user what was wrong."
+            ),
             "client_id": _client_id(page),
             "desktop_id": _HOME_DESKTOP_ID,
         }
