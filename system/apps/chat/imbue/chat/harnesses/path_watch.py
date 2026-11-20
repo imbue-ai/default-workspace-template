@@ -15,8 +15,8 @@ Per-path rule: an existing directory is watched recursively (so codex's rotating
 rollout files under a stable sessions root all wake the loop without rescheduling);
 anything else is watched via its parent directory (so a not-yet-created file --
 claude's ``settings.json`` before first launch -- is caught the moment it appears).
-Directories that do not exist yet are retried on each loop, and so is a watched
-directory that was deleted, whose watch watchdog stops for good.
+Directories that do not exist yet are retried on each loop, as is a watched
+directory that was deleted (watchdog stops its watch for good).
 
 Every watcher of one app watches through one :class:`SharedWatchObserver`, so watchers
 of the same directory share its OS watch and watchdog's threads (one per observer, two per
@@ -131,11 +131,7 @@ class SharedWatchObserver:
             _stop_observer(idle_observer)
 
     def is_watching(self, directory: Path, is_recursive: bool, handler: FileSystemEventHandler) -> bool:
-        """Whether ``directory``'s events still reach ``handler``.
-
-        A watch that watchdog stopped, as it does once the watched directory is deleted, is released for every
-        subscriber, so the next subscription gets a fresh one.
-        """
+        """Whether ``directory``'s events still reach ``handler``, releasing a stopped watch for every subscriber."""
         key: _WatchKey = (str(directory), is_recursive)
         with self._lock:
             handlers = self._handlers_by_key.get(key)
@@ -282,8 +278,8 @@ class PathWatcher:
 
         For an existing directory path, watch it recursively; otherwise watch the
         path's parent directory (catching a file that does not exist yet). A dir
-        that is still absent is skipped and retried on the next loop, and so is a
-        watched dir whose watch stopped.
+        that is still absent is skipped and retried on the next loop, as is a watched
+        dir whose watch stopped.
         """
         self._forget_stopped_watches()
         for path in self._paths:
@@ -311,7 +307,7 @@ class PathWatcher:
                 self._watched.add(key)
 
     def _forget_stopped_watches(self) -> None:
-        """Drop each watched dir whose events no longer reach this watcher, leaving the loop to subscribe again."""
+        """Drop each watched dir whose events no longer reach this watcher."""
         with self._subscription_lock:
             for directory, is_recursive in list(self._watched):
                 if not self._watch_observer.is_watching(Path(directory), is_recursive, self._handler):
