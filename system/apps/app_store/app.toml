@@ -1,0 +1,36 @@
+# The App Store app: one-click installs of a curated catalog of open-source apps (shipped in the package, reviewed
+# with the workspace), the apps this workspace already has, and the published template catalog, whose Install starts
+# the same adopt chat Getting Started does. It declares no launch path, so the desktop offers the synthesized
+# ``open`` at its root.
+name = "app-store"
+display_name = "App Store"
+description = "Install open-source apps in one click, and browse published templates to adopt."
+api_schema_path = "/api/schema"
+icon = "icon.svg"
+critical = false
+# It runs installs in the background and re-creates installed apps' supervisord programs when it starts, so it keeps
+# running when no window shows it.
+stop_when_no_windows = false
+priority = "app-store"
+# After Routines (45) and before System Monitor (50) in the launcher and the desktop's seeded shortcuts.
+launcher_rank = 48
+
+[default_shortcut]
+launch = "open"
+mode = "focus"
+
+# The page is built only from the shared components and the design tokens (its template shelves are Getting
+# Started's own), so every theme styles it. The installed apps' icons and the template drawings are content.
+[theming]
+mode = "tokens"
+
+# A preview serves the page on a free port, unregistered, over scratch data and state folders, and runs no installs:
+# it does not re-point the live row, touch supervisord, or read the live install records.
+[preview]
+command = ["app-store", "--no-register"]
+env = {APP_STORE_PORT = "{port:main}", APP_STORE_HOST = "{host}", APP_STORE_DATA_DIR = "{scratch}/data", APP_STORE_STATE_DIR = "{scratch}/state"}
+health_path = "/api/health"
+
+[[references]]
+path = ".agents/skills/add-repo-to-store"
+note = "Hands install files for GitHub repositories to POST /api/repo-adds and tries them with app_store.try_install"

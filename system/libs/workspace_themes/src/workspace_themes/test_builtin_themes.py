@@ -12,6 +12,7 @@ _BUILTIN_THEME_IDS = ("standard", "mac-classic", "windows-2000")
 # and this suite runs there too.
 _BUILT_IN_VISIBLE_APP_NAMES = frozenset(
     {
+        "app-store",
         "chat",
         "datalib",
         "files",

@@ -1,0 +1,8 @@
+/* Getting Started's stylesheet brings the design system (Tailwind, the workspace's tokens and type roles, shared
+   with every other frontend of the workspace; see system/libs/workspace_ui) and the template rails' edge fades,
+   which the Templates section shares with it, since it draws Getting Started's own shelves. */
+@import "getting-started-frontend/src/style.css";
+
+/* The utility classes live in the TS views' class strings (see Getting Started's stylesheet on why the sources
+   are enumerated). */
+@source "./**/*.ts";
