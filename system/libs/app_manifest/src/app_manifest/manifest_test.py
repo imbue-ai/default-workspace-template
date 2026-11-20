@@ -1777,7 +1777,6 @@ def test_a_manifest_that_declares_none_of_them_runs_the_scaffolds_way(tmp_path: 
 def test_a_program_or_publish_declaration_off_its_rule_fails_to_load(
     tmp_path: Path, addition: str, problem: str
 ) -> None:
-    # Top-level keys go before the first table, so an addition that is one is placed ahead of the head's tables.
     manifest_path = _write_manifest_beside_its_icon(tmp_path, _NOTES_MANIFEST_HEAD + addition)
 
     with pytest.raises(ManifestLoadError, match=problem):
