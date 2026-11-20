@@ -597,10 +597,9 @@ class MngrMessenger(FrozenModel):
         """Press ``key`` into the agent with ``agent_id`` at ``known_locations``, else discovery.
 
         The key-chord sibling of ``send_to_agent``: it tries the known location first, and
-        falls back to discovery only when the press there reached no agent (``_is_unreached``),
-        which takes in an agent not running there as well as a location miss. A press that
-        failed at the agent is not pressed again. It delivers a keystroke rather than text and
-        never auto-starts a stopped agent. Returns True when the chord reached the agent.
+        falls back to discovery only when the press there reached no agent (``_is_unreached``).
+        It delivers a keystroke rather than text and never auto-starts a stopped agent.
+        Returns True when the chord reached the agent.
         """
         mngr_ctx, cg = _get_mngr_context()
         try:
