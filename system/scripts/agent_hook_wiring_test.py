@@ -1,8 +1,9 @@
 """Tests that every hook script this repo wires up actually exists.
 
-The `agent_*` scripts here are reached three different ways -- `.claude/settings.json`
-for claude, `.codex/hooks.json` for codex, and `.pi/extensions/policy_guards.ts` for pi.
-All three name the scripts as plain strings, and a name that no longer resolves fails
+The `agent_*` scripts here are reached four different ways -- `.claude/settings.json`
+for claude, `.codex/hooks.json` for codex, `.pi/extensions/policy_guards.ts` for pi, and
+`.grok/hooks/policy.json` with the `agent_grok_policy_guards.py` it runs for grok.
+All of them name the scripts as plain strings, and a name that no longer resolves fails
 *silently*: the hook never runs and the guard is simply gone. So a rename that misses one
 of these files, or a guard added to one harness and forgotten on another, is invisible
 without this test.
@@ -17,9 +18,13 @@ asserted here.
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
+
+from workspace_bare_scripts import agent_grok_policy_guards as _grok_dispatcher
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPTS_DIR = _REPO_ROOT / "system" / "scripts"
@@ -27,9 +32,15 @@ _SCRIPTS_DIR = _REPO_ROOT / "system" / "scripts"
 _CLAUDE_SETTINGS = _REPO_ROOT / ".claude" / "settings.json"
 _CODEX_HOOKS = _REPO_ROOT / ".codex" / "hooks.json"
 _PI_POLICY_GUARDS = _REPO_ROOT / ".pi" / "extensions" / "policy_guards.ts"
+_GROK_HOOKS = _REPO_ROOT / ".grok" / "hooks" / "policy.json"
+_GROK_DISPATCHER_NAME = "agent_grok_policy_guards.py"
+# grok 1.0.62's PreToolUse timeout for a handler that sets none, after which the handler fails open.
+_GROK_DEFAULT_TIMEOUT_SECONDS = 5
+# The one variable reference grok leaves for `sh` to expand, which an unset variable cannot empty.
+_GROK_WORK_DIR_REFERENCE = "${MNGR_AGENT_WORK_DIR:-.}"
 
 # A `system/scripts/<name>` path inside a hook command, however the harness spells the
-# work-dir prefix (`"${CLAUDE_PROJECT_DIR}"/`, `"$MNGR_AGENT_WORK_DIR/`, `./`).
+# work-dir prefix (`"${CLAUDE_PROJECT_DIR}"/`, `"$MNGR_AGENT_WORK_DIR/`, `${MNGR_AGENT_WORK_DIR:-.}/`).
 _SCRIPT_REF_RE = re.compile(r"system/scripts/([A-Za-z0-9_]+\.(?:sh|py))")
 # The script paths policy_guards.ts builds, as `join(SCRIPTS, "<name>")`.
 _PI_SCRIPT_RE = re.compile(r'join\(SCRIPTS,\s*"([^"]+)"\)')
@@ -60,9 +71,19 @@ def _all_hook_commands(config: dict[str, Any]) -> list[str]:
     ]
 
 
+def _handlers(config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Every ``(event, handler)`` in a claude-shaped config."""
+    return [
+        (event, hook)
+        for event, matchers in config.get("hooks", {}).items()
+        for matcher in matchers
+        for hook in matcher.get("hooks", [])
+    ]
+
+
 def test_every_wired_hook_script_exists() -> None:
     """A hook naming a script that is not here would never run, and never say so."""
-    for config_path in (_CLAUDE_SETTINGS, _CODEX_HOOKS):
+    for config_path in (_CLAUDE_SETTINGS, _CODEX_HOOKS, _GROK_HOOKS):
         config = json.loads(config_path.read_text())
         names = _referenced_scripts(_all_hook_commands(config))
         assert names, f"{config_path.name} references no system/scripts hook at all"
@@ -115,3 +136,89 @@ def test_pi_runs_the_same_pretooluse_scripts_as_claude() -> None:
         assert (_SCRIPTS_DIR / name).is_file(), (
             f"policy_guards.ts runs a missing script: {name}"
         )
+
+
+def test_grok_runs_claudes_pretooluse_scripts_in_claudes_order() -> None:
+    """grok's one PreToolUse hook runs the scripts itself, from a list in the dispatcher, so the
+    list is held to claude's, order included: the rewrite must come after every guard."""
+    claude = json.loads(_CLAUDE_SETTINGS.read_text())
+    claude_scripts = [
+        name
+        for command in _hook_commands(claude, "PreToolUse")
+        for name in _SCRIPT_REF_RE.findall(command)
+    ]
+    assert list(_grok_dispatcher.PRETOOLUSE_SCRIPTS) == claude_scripts
+    for name in _grok_dispatcher.PRETOOLUSE_SCRIPTS:
+        assert (_SCRIPTS_DIR / name).is_file(), (
+            f"{_GROK_DISPATCHER_NAME} runs a missing script: {name}"
+        )
+
+
+def test_grok_wires_the_dispatcher_for_pretooluse_and_userpromptsubmit() -> None:
+    grok = json.loads(_GROK_HOOKS.read_text())
+    for event, command in (
+        ("PreToolUse", _grok_dispatcher.PRE_TOOL_USE_COMMAND),
+        ("UserPromptSubmit", _grok_dispatcher.USER_PROMPT_SUBMIT_COMMAND),
+    ):
+        commands = _hook_commands(grok, event)
+        assert len(commands) == 1, f"{event}: {commands}"
+        assert _referenced_scripts(commands) == {_GROK_DISPATCHER_NAME}
+        assert commands[0].split()[-1] == command
+
+
+def test_a_wired_grok_dispatcher_whose_script_is_gone_does_not_refuse(
+    tmp_path: Path,
+) -> None:
+    """grok refuses a call on a PreToolUse exit 2, which python3 gives for a missing script, and
+    a session keeps the hooks it started with when an older commit is checked out under it."""
+    grok = json.loads(_GROK_HOOKS.read_text())
+    for event in ("PreToolUse", "UserPromptSubmit"):
+        (command,) = _hook_commands(grok, event)
+        finished = subprocess.run(
+            ["sh", "-c", command],
+            input="{}",
+            text=True,
+            env=os.environ | {"MNGR_AGENT_WORK_DIR": str(tmp_path)},
+            cwd=tmp_path,
+            capture_output=True,
+            timeout=30,
+        )
+        assert finished.returncode != 2, f"{event}: {finished.stderr}"
+
+
+def test_every_grok_hook_carries_a_timeout_in_seconds() -> None:
+    """A handler without one gets grok's short default and fails open when it runs out; a
+    negative or non-numeric one never loads."""
+    grok = json.loads(_GROK_HOOKS.read_text())
+    for event, handler in _handlers(grok):
+        timeout = handler.get("timeout")
+        assert isinstance(timeout, (int, float)) and not isinstance(timeout, bool), (
+            f"{event} handler has no numeric timeout: {handler}"
+        )
+        assert timeout > _GROK_DEFAULT_TIMEOUT_SECONDS, f"{event}: {handler}"
+    (pre_tool_use,) = [h for e, h in _handlers(grok) if e == "PreToolUse"]
+    assert pre_tool_use["timeout"] > _grok_dispatcher.PRE_TOOL_USE_BUDGET_SECONDS, (
+        "grok would stop the dispatcher before it gives up on a slow guard"
+    )
+
+
+def test_grok_hook_commands_expand_no_bare_variable() -> None:
+    """grok expands a command's variables itself, an unset `$VAR` to nothing, so a bare
+    reference can point a hook at `/system/scripts/...`, which fails open."""
+    grok = json.loads(_GROK_HOOKS.read_text())
+    for _, handler in _handlers(grok):
+        command = handler["command"]
+        assert "$" not in command.replace(_GROK_WORK_DIR_REFERENCE, ""), command
+
+
+def test_grok_runs_code_guardians_stop_gate_only_at_a_turns_end() -> None:
+    """grok also fires Stop when a session ends (quit, `/new`, a resume), where the gate has no turn to check."""
+    grok = json.loads(_GROK_HOOKS.read_text())
+    (gate_command,) = [
+        command
+        for command in _hook_commands(grok, "Stop")
+        if "stop_hook_entrypoint.sh" in command
+    ]
+    assert gate_command.startswith(
+        f"{_GROK_WORK_DIR_REFERENCE}/system/scripts/grok_turn_end_stop_hook.sh bash "
+    )
