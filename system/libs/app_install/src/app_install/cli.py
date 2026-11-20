@@ -3,6 +3,7 @@
 Usage, from the workspace repo's root::
 
     uv run --no-sync app-install add <package> [--port <n>]
+    uv run --no-sync app-install install <url> [--branch <ref>]
     uv run --no-sync app-install regenerate [<name>]
     uv run --no-sync app-install uninstall <name>
     uv run --no-sync app-install migrate <package> [--dry-run]
@@ -22,6 +23,10 @@ import click
 
 from app_install.errors import AppInstallError
 from app_install.errors import CollisionError
+from app_install.errors import NotAnAppError
+from app_install.errors import RepositoryUnreachableError
+from app_install.installing import InstallOutcome
+from app_install.installing import install_app
 from app_install.migration import MigrateOutcome
 from app_install.migration import migrate_app
 from app_install.operations import add_app
@@ -82,6 +87,59 @@ def add_command(repo_root: Path, package: str, port: int | None) -> None:
         port=outcome.record.port,
         changed_paths=list(outcome.changed_paths),
     )
+
+
+def _install_fields(outcome: InstallOutcome) -> dict[str, object]:
+    manifest = outcome.manifest
+    missing_secret_files = set(outcome.missing_secret_files)
+    return {
+        "name": str(outcome.record.name),
+        "package": outcome.record.package,
+        "port": outcome.record.port,
+        "ref": outcome.ref,
+        "version": outcome.record.upstream_version,
+        "upstream_url": outcome.record.upstream_url,
+        "upstream_commit": outcome.record.upstream_commit,
+        "programs": list(outcome.programs),
+        "is_answering": outcome.is_answering,
+        "needs": {
+            "permissions": [note.model_dump(mode="json") for note in manifest.permissions],
+            "secrets": [
+                {
+                    "file": str(secret.file),
+                    "variables": [str(variable) for variable in secret.variables],
+                    "note": str(secret.note or ""),
+                    "is_present": f"data/.secrets/{secret.file}.env" not in missing_secret_files,
+                }
+                for secret in manifest.secrets
+            ],
+            "llm": manifest.llm.model_dump(mode="json") if manifest.llm is not None else None,
+            "adaptation": [note.model_dump(mode="json") for note in manifest.adaptation],
+            "missing_dependencies": list(outcome.missing_dependencies),
+            "unresolved_environment": list(outcome.unresolved_environment),
+        },
+        "problems": list(outcome.problems),
+    }
+
+
+@main.command("install")
+@click.argument("url")
+@click.option("--branch", "ref", default=None, help="The tag or branch to install; the latest version otherwise")
+@click.pass_obj
+def install_command(repo_root: Path, url: str, ref: str | None) -> None:
+    """Install the app published at URL: add it to the workspace, register it, and start its programs."""
+    with install_lock(repo_root):
+        try:
+            outcome = install_app(repo_root, url, ref, WorkspaceRuntime(repo_root=repo_root), is_port_bound)
+        except CollisionError as e:
+            _refuse("collision", url=url, problems=list(e.problems))
+        except NotAnAppError as e:
+            _refuse("not_an_app", url=url, detail=str(e))
+        except RepositoryUnreachableError as e:
+            _refuse("needs_github_access" if e.is_access_needed else "unreachable", url=url, detail=str(e))
+        except (AppInstallError, AppManifestError) as e:
+            _refuse("refused", url=url, detail=str(e))
+    _emit("installed", **_install_fields(outcome))
 
 
 @main.command("regenerate")

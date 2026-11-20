@@ -1,17 +1,23 @@
 """The installer's hands on the running workspace: supervisorctl, the registration script, and git."""
 
+import socket
 import subprocess
+import threading
+import time
 from collections.abc import Sequence
 from typing import Final
 
+from app_install.git import COMMITTER_EMAIL
+from app_install.git import COMMITTER_NAME
 from app_install.interfaces import WorkspaceRuntimeInterface
+from app_manifest.manifest import EnvironmentNote
 
-# The installer's own committer: its commits come from a command, not from any one chat's agent, and the
-# analytics feed tells them from the user's own work by this name.
-COMMITTER_NAME: Final[str] = "app-install"
-COMMITTER_EMAIL: Final[str] = "app-install@workspace.invalid"
 _FORWARD_PORT: Final[str] = "system/scripts/forward_port.py"
-_COMMAND_TIMEOUT_SECONDS: Final[float] = 120.0
+# Long enough for a system package or a tool to download and build.
+_COMMAND_TIMEOUT_SECONDS: Final[float] = 900.0
+# How long a newly started app is given to answer on its port: it links and syncs its own environment first.
+_PORT_WAIT_SECONDS: Final[float] = 120.0
+_PORT_POLL_SECONDS: Final[float] = 0.5
 _NOTHING_TO_COMMIT_MARKERS: Final[tuple[str, ...]] = ("nothing to commit", "no changes added to commit")
 
 
@@ -39,6 +45,45 @@ class WorkspaceRuntime(WorkspaceRuntimeInterface):
 
     def reload_programs(self) -> str | None:
         return self._run(["supervisorctl", "reread"]) or self._run(["supervisorctl", "update"])
+
+    def wait_for_port(self, port: int) -> bool:
+        deadline = time.monotonic() + _PORT_WAIT_SECONDS
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=_PORT_POLL_SECONDS):
+                    return True
+            except OSError:
+                threading.Event().wait(_PORT_POLL_SECONDS)
+        return False
+
+    def install_environment(self, environment: EnvironmentNote) -> tuple[str, ...]:
+        commands: list[tuple[str, list[str]]] = []
+        if environment.apt:
+            names = [str(name) for name in environment.apt]
+            commands.append(
+                (f"apt: {' '.join(names)}", ["apt-get", "install", "-y", "--no-install-recommends", *names])
+            )
+        if environment.cargo_default_toolchain is not None:
+            toolchain = str(environment.cargo_default_toolchain)
+            commands.append((f"rustup default {toolchain}", ["rustup", "default", toolchain]))
+        commands.extend(
+            (f"npm: {name}@{version}", ["npm", "install", "-g", f"{name}@{version}"])
+            for name, version in sorted(environment.npm_global.items())
+        )
+        commands.extend(
+            (f"uv tool: {name}=={version}", ["uv", "tool", "install", f"{name}=={version}"])
+            for name, version in sorted(environment.uv_tools.items())
+        )
+        commands.extend(
+            (f"cargo: {name}@{version}", ["cargo", "install", "--locked", f"{name}@{version}"])
+            for name, version in sorted(environment.cargo_crates.items())
+        )
+        unresolved: list[str] = []
+        for label, argv in commands:
+            failure = self._run(argv)
+            if failure is not None:
+                unresolved.append(f"{label} ({failure.splitlines()[-1] if failure else 'failed'})")
+        return tuple(unresolved)
 
     def remove_registry_row(self, name: str) -> str | None:
         return self._run(["python3", _FORWARD_PORT, "--remove", "--name", name])
