@@ -285,9 +285,9 @@ class AgentSessionWatcher(TranscriptReader, ABC):
     ) -> None:
         """Give a watcher the capabilities it needs to DELIVER its own queue. No-op by default.
 
-        Only a harness that holds the queue on the agent's behalf needs these -- antigravity and
-        grok, whose parked messages live invisibly inside their TUIs, so nothing else can deliver
-        them. Every other harness's queue is consumed by the harness itself and needs no sender.
+        Only a harness that holds the queue on the agent's behalf needs these: one whose parked
+        messages live invisibly inside its TUI, so nothing else can deliver them. Every other
+        harness's queue is consumed by the harness itself and needs no sender.
 
         ``read_lifecycle_state`` is not optional politeness: mngr's text send AUTO-STARTS a stopped
         agent, and the working->IDLE signal cannot distinguish "turn finished" from "process died". A
