@@ -85,7 +85,7 @@ _APPS_OFFERED_FILE_VERSION: Final[int] = 1
 # shell older than the one that keeps desktops.json's unknown fields reads an unknown field there as an unreadable
 # file and seeds a fresh desktop over it, and an update's rollback can put such a shell back.
 # CLEANUP: move these names onto the shortcut records in desktops.json once every shell a rollback can return to
-# keeps desktops.json's unknown fields (branch gabriel/desktop-state-keeps-unknown-fields), reading this file once
+# keeps desktops.json's unknown fields (dwt PR #1205), reading this file once
 # to carry the names over.
 SHORTCUT_NAMES_FILENAME: Final[str] = "shortcut_names.json"
 SHORTCUT_NAMES_FILE_VERSION: Final[int] = 1
