@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import tomlkit
 from agents_shared.validate_skill import third_party_skills
-from app_install.records import AppOrigin, load_all_records
+from app_manifest.records import AppOrigin, load_all_records
 from inline_snapshot import snapshot
 from vendor_testing import resolves_into_vendor
 

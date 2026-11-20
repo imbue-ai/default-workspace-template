@@ -3,16 +3,16 @@ from pathlib import Path
 import pytest
 from inline_snapshot import snapshot
 
-from app_install.errors import AppNotFoundError
-from app_install.errors import RecordLoadError
-from app_install.records import AppOrigin
-from app_install.records import AppRecord
-from app_install.records import RecordReference
-from app_install.records import load_all_records
-from app_install.records import load_record
-from app_install.records import parse_record
-from app_install.records import render_record
-from app_install.records import write_record
+from app_manifest.errors import AppRecordNotFoundError
+from app_manifest.errors import RecordLoadError
+from app_manifest.records import AppOrigin
+from app_manifest.records import AppRecord
+from app_manifest.records import RecordReference
+from app_manifest.records import load_all_records
+from app_manifest.records import load_record
+from app_manifest.records import parse_record
+from app_manifest.records import render_record
+from app_manifest.records import write_record
 
 
 def _installed_record() -> AppRecord:
@@ -68,7 +68,7 @@ def test_a_record_reads_back_as_the_record_that_was_written(tmp_path: Path) -> N
 
 def test_a_workspace_with_no_records_directory_has_no_user_apps(tmp_path: Path) -> None:
     assert load_all_records(tmp_path) == ()
-    with pytest.raises(AppNotFoundError, match="notes"):
+    with pytest.raises(AppRecordNotFoundError, match="notes"):
         load_record(tmp_path, "notes")
 
 

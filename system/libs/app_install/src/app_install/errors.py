@@ -2,10 +2,6 @@ class AppInstallError(Exception):
     """Base of every error the installer raises."""
 
 
-class RecordLoadError(AppInstallError, ValueError):
-    """An app record that cannot be read: it is not TOML, or not the record's shape."""
-
-
 class AppNotFoundError(AppInstallError, KeyError):
     """No app directory, or no app record, answers to the given name."""
 

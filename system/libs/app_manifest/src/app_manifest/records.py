@@ -12,17 +12,16 @@ from enum import auto
 from pathlib import Path
 from typing import Final
 
-from imbue.imbue_common.enums import LowerCaseStrEnum
-from imbue.imbue_common.frozen_model import FrozenModel
 from pydantic import Field
 from pydantic import ValidationError
 
-from app_install.errors import AppNotFoundError
-from app_install.errors import RecordLoadError
-from app_install.paths import RECORDS_DIRECTORY
-from app_install.paths import record_path
+from app_manifest.errors import AppRecordNotFoundError
+from app_manifest.errors import RecordLoadError
 from app_manifest.primitives import AppName
+from imbue.imbue_common.enums import LowerCaseStrEnum
+from imbue.imbue_common.frozen_model import FrozenModel
 
+RECORDS_DIRECTORY: Final[Path] = Path("system/config/apps")
 LOWEST_PORT: Final[int] = 1
 HIGHEST_PORT: Final[int] = 65535
 _RECORD_HEADER: Final[str] = (
@@ -68,6 +67,11 @@ class AppRecord(FrozenModel):
     references: tuple[RecordReference, ...] = Field(
         default=(), description="Paths elsewhere in this workspace that use the app"
     )
+
+
+def record_path(repo_root: Path, name: str) -> Path:
+    """Where the record of the app registered as ``name`` is kept."""
+    return repo_root / RECORDS_DIRECTORY / f"{name}.toml"
 
 
 def _toml_string(value: str) -> str:
@@ -120,10 +124,10 @@ def parse_record(text: str, source: Path) -> AppRecord:
 
 
 def load_record(repo_root: Path, name: str) -> AppRecord:
-    """The record of the app registered as ``name``; raises AppNotFoundError when it has none."""
+    """The record of the app registered as ``name``; raises AppRecordNotFoundError when it has none."""
     path = record_path(repo_root, name)
     if not path.is_file():
-        raise AppNotFoundError(f"no app record for {name!r} (expected {path.relative_to(repo_root)})")
+        raise AppRecordNotFoundError(f"no app record for {name!r} (expected {path.relative_to(repo_root)})")
     return parse_record(path.read_text(encoding="utf-8"), path)
 
 

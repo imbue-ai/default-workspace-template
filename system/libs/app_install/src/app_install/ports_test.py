@@ -5,8 +5,8 @@ import pytest
 from app_install.errors import PortUnavailableError
 from app_install.ports import allocate_port
 from app_install.ports import ports_in_use
-from app_install.records import AppOrigin
-from app_install.records import AppRecord
+from app_manifest.records import AppOrigin
+from app_manifest.records import AppRecord
 
 
 def _never_bound(port: int) -> bool:

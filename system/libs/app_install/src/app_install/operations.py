@@ -23,17 +23,16 @@ from app_install.errors import CollisionError
 from app_install.paths import INSTALL_LOCK_PATH
 from app_install.paths import app_directory
 from app_install.paths import manifest_path
-from app_install.paths import record_path
 from app_install.ports import allocate_port
-from app_install.records import AppOrigin
-from app_install.records import AppRecord
-from app_install.records import load_all_records
-from app_install.records import load_record
-from app_install.records import write_record
 from app_manifest.errors import AppManifestError
 from app_manifest.manifest import AppManifest
 from app_manifest.manifest import ManifestReadMode
 from app_manifest.manifest import load_manifest
+from app_manifest.records import AppOrigin
+from app_manifest.records import AppRecord
+from app_manifest.records import load_all_records
+from app_manifest.records import record_path
+from app_manifest.records import write_record
 
 _GIT_TIMEOUT_SECONDS: Final[float] = 30.0
 # A record no commit holds yet sorts after every committed one, so it is the one a duplicate port is taken from.
@@ -219,7 +218,3 @@ def list_apps(repo_root: Path) -> tuple[ListedApp, ...]:
         ListedApp(record=record, state="owned" if record.origin is AppOrigin.LOCAL else "installed")
         for record in load_all_records(repo_root)
     )
-
-
-def record_for(repo_root: Path, name: str) -> AppRecord:
-    return load_record(repo_root, name)

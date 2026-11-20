@@ -3,7 +3,6 @@ from typing import Final
 
 # Every path is relative to the workspace repo's root, the directory the command is run from.
 APPS_DIRECTORY: Final[Path] = Path("system/apps")
-RECORDS_DIRECTORY: Final[Path] = Path("system/config/apps")
 SUPERVISORD_CONF: Final[Path] = Path("system/supervisord.conf")
 SUPERVISORD_DROPIN_DIRECTORY: Final[Path] = Path("system/supervisord.conf.d")
 SKILLS_DIRECTORY: Final[Path] = Path(".agents/skills")
@@ -24,10 +23,6 @@ def app_directory(repo_root: Path, package: str) -> Path:
 
 def manifest_path(repo_root: Path, package: str) -> Path:
     return app_directory(repo_root, package) / MANIFEST_FILENAME
-
-
-def record_path(repo_root: Path, name: str) -> Path:
-    return repo_root / RECORDS_DIRECTORY / f"{name}.toml"
 
 
 def program_conf_path(repo_root: Path, program: str) -> Path:

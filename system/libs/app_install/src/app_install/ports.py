@@ -16,8 +16,8 @@ from typing import Final
 from app_install.errors import PortUnavailableError
 from app_install.paths import SUPERVISORD_CONF
 from app_install.paths import SUPERVISORD_DROPIN_DIRECTORY
-from app_install.records import HIGHEST_PORT
-from app_install.records import AppRecord
+from app_manifest.records import HIGHEST_PORT
+from app_manifest.records import AppRecord
 from app_manifest.registry_location import registry_path
 
 LOWEST_AUTOMATIC_PORT: Final[int] = 8080

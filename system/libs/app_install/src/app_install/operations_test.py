@@ -14,14 +14,14 @@ from app_install.operations import add_app
 from app_install.operations import check
 from app_install.operations import list_apps
 from app_install.operations import regenerate
-from app_install.records import AppOrigin
-from app_install.records import AppRecord
-from app_install.records import load_record
-from app_install.records import write_record
 from app_install.testing import never_bound
 from app_install.testing import write_app_file
 from app_install.testing import write_user_app
 from app_install.testing import write_workspace_file
+from app_manifest.records import AppOrigin
+from app_manifest.records import AppRecord
+from app_manifest.records import load_record
+from app_manifest.records import write_record
 
 
 @pytest.fixture(autouse=True)

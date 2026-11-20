@@ -101,7 +101,7 @@ def check_command(repo_root: Path) -> None:
     """Fail when a derived file differs from what regenerate would write, or a uniqueness rule is broken."""
     try:
         problems = check(repo_root)
-    except AppInstallError as e:
+    except (AppInstallError, AppManifestError) as e:
         _refuse("refused", detail=str(e))
     if problems:
         _refuse("inconsistent", problems=list(problems))
@@ -114,6 +114,6 @@ def list_command(repo_root: Path) -> None:
     """Print every user app's record and whether it was built here or installed."""
     try:
         apps = list_apps(repo_root)
-    except AppInstallError as e:
+    except (AppInstallError, AppManifestError) as e:
         _refuse("refused", detail=str(e))
     _emit("listed", apps=[{**app.record.model_dump(mode="json"), "state": app.state} for app in apps])

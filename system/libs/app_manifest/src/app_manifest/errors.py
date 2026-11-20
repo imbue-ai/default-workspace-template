@@ -36,3 +36,11 @@ class SuiteSelectionError(AppManifestError):
 
 class AppRegistrationError(AppManifestError):
     """The registration script could not upsert the app's row: it is missing, failed, or did not finish."""
+
+
+class RecordLoadError(AppManifestError, ValueError):
+    """An app record that cannot be read: it is not TOML, or not the record's shape."""
+
+
+class AppRecordNotFoundError(AppManifestError, KeyError):
+    """No app record answers to the given name."""

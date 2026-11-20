@@ -9,12 +9,12 @@ from app_install.derived import derive_files
 from app_install.derived import describe_differences
 from app_install.derived import existing_derived_paths
 from app_install.derived import write_derived_files
-from app_install.records import AppOrigin
-from app_install.records import AppRecord
 from app_install.testing import write_app_file
 from app_install.testing import write_user_app
 from app_manifest.manifest import ManifestReadMode
 from app_manifest.manifest import load_manifest
+from app_manifest.records import AppOrigin
+from app_manifest.records import AppRecord
 
 
 def _derive(repo_root: Path, name: str, port: int, extra_manifest: str = "", is_python: bool = True):
