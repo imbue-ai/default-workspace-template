@@ -18,6 +18,7 @@ from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import BROWSER_FLEET_TAG
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
+from imbue.chat.harnesses.message_display import RETIRED_BROWSER_FLEET_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.message_display import SecretResolutionVerdict
 from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_NOTE_TAG
@@ -43,13 +44,20 @@ def test_stop_hook_feedback_is_a_chip() -> None:
     assert decision.display_label == "Stop hook feedback"
 
 
-def test_browser_fleet_nudge_is_a_chip_with_the_sentinel_stripped() -> None:
+# A transcript keeps the text a nudge was sent with, so one from before the command was renamed
+# still carries the old tag.
+@pytest.mark.parametrize("tag", [BROWSER_FLEET_TAG, RETIRED_BROWSER_FLEET_TAG])
+def test_browser_fleet_nudge_is_a_chip_with_the_sentinel_stripped(tag: str) -> None:
     inner = "Browser foo-1 was handed back to you. Re-run `state foo-1`."
-    decision = classify_user_message(f"<{BROWSER_FLEET_TAG}>{inner}</{BROWSER_FLEET_TAG}>")
+    decision = classify_user_message(f"<{tag}>{inner}</{tag}>")
     assert decision is not None
     assert decision.display is DisplayKind.CHIP
     assert decision.display_label == "Browser fleet"
     assert decision.display_body == inner
+
+
+def test_a_nudge_whose_closing_tag_is_the_other_name_is_not_a_chip() -> None:
+    assert classify_user_message(f"<{BROWSER_FLEET_TAG}>Browser foo-1 is free</{RETIRED_BROWSER_FLEET_TAG}>") is None
 
 
 def test_a_seeded_chats_first_send_shows_the_words_and_hides_the_context_it_carries() -> None:
