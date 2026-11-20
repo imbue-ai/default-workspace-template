@@ -92,6 +92,7 @@ from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_records import InMemoryChatRecordStore
+from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import read_seed_events
@@ -115,6 +116,7 @@ from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
+from imbue.chat.harnesses.message_display import FIRST_RUN_KICKOFF_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
 from imbue.chat.harnesses.model import ModelIdentity
@@ -949,6 +951,35 @@ def test_a_send_to_an_unseeded_or_unknown_chat_is_delivered_as_given(
         assert delivered == ["hello"]
     finally:
         manager.stop()
+
+
+def test_a_first_run_chat_launched_with_no_words_is_started_with_the_kickoff_note_and_owes_no_seed(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A first-run workspace's owner connects a provider and has typed nothing: the agent is started with a note
+    of the chat app's own (the welcome, what they picked, what to open with), so it speaks first, and since the
+    note carries the seed no later send owes it."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    try:
+        seeded = manager.seed_chat(
+            "Main", FIRST_RUN_WELCOME, first_run_context="I want to use Studio for: Music.", is_first_run=True
+        )
+        manager.create_chat("", chat_id=seeded.chat_id)
+        wait_until_true(
+            lambda: manager.get_provisional_chat(seeded.chat_id) is None, 10, "the provisional chat's completion"
+        )
+        record = store.read(ChatId(seeded.chat_id))
+    finally:
+        manager.stop()
+
+    (recorded,) = argv_log.read_text().splitlines()
+    assert f"<{FIRST_RUN_KICKOFF_TAG}>" in recorded and recorded.rstrip().endswith(f"</{FIRST_RUN_KICKOFF_TAG}>")
+    assert "I want to use Studio for: Music." in recorded
+    assert FIRST_RUN_WELCOME[0].text in recorded
+    assert record is not None and record.is_seed_pending is False
 
 
 def test_a_waited_launch_of_a_seeded_chat_reports_the_member_agent_it_created(

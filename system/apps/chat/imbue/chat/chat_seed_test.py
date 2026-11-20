@@ -5,12 +5,13 @@ from pathlib import Path
 
 from loguru import logger
 
-from imbue.chat.chat_seed import FIRST_RUN_CONTEXT_FILENAME
 from imbue.chat.chat_seed import INLINE_SEED_MAX_BYTES
 from imbue.chat.chat_seed import SEED_FILENAME
 from imbue.chat.chat_seed import SEED_SOURCE
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_seed import first_run_kickoff_message
+from imbue.chat.chat_seed import is_first_run_seed
 from imbue.chat.chat_seed import read_first_run_context
 from imbue.chat.chat_seed import read_seed_events
 from imbue.chat.chat_seed import seed_agent_info
@@ -184,9 +185,35 @@ def test_the_first_runs_words_ride_the_launch_message_and_nothing_else(tmp_path:
     assert launch.endswith("\nhello")
 
 
-def test_an_empty_first_run_answer_writes_nothing(tmp_path: Path) -> None:
+def test_a_first_run_chat_with_nothing_said_is_still_marked_and_carries_no_about_user_block(tmp_path: Path) -> None:
     chat_dir = _seeded_chat_dir(tmp_path, _turns())
+    assert is_first_run_seed(chat_dir) is False
     write_first_run_context(chat_dir, "   ")
 
-    assert not (chat_dir / FIRST_RUN_CONTEXT_FILENAME).exists()
+    assert is_first_run_seed(chat_dir) is True
     assert "<about-user>" not in seed_context_message(chat_dir, "hello")
+
+
+def test_the_kickoff_note_carries_the_welcome_and_the_picks_and_is_hidden_whole(tmp_path: Path) -> None:
+    chat_dir = _seeded_chat_dir(tmp_path, _turns())
+    write_first_run_context(chat_dir, "I want to use Studio for: Music, Film, art.")
+
+    note = first_run_kickoff_message(chat_dir)
+
+    for turn in _turns():
+        assert turn.text in note
+    assert "<about-user>\nI want to use Studio for: Music, Film, art.\n</about-user>" in note
+    decision = classify_user_message(note)
+    assert decision is not None and decision.display is DisplayKind.HIDDEN
+
+
+def test_the_kickoff_note_with_no_picks_asks_for_a_plain_ready_to_help(tmp_path: Path) -> None:
+    chat_dir = _seeded_chat_dir(tmp_path, _turns())
+    write_first_run_context(chat_dir, "")
+
+    note = first_run_kickoff_message(chat_dir)
+
+    assert "<about-user>" not in note
+    assert "here and ready to help" in note
+    decision = classify_user_message(note)
+    assert decision is not None and decision.display is DisplayKind.HIDDEN

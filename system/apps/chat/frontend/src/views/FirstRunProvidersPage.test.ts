@@ -97,6 +97,8 @@ describe("FirstRunProvidersPage", () => {
     expect(text(tree)).toContain(FIRST_RUN_CONNECTED_HEADING);
     expect(nodes(tree).some((node) => node.attrs?.["data-first-run-account"] === "acct-1")).toBe(true);
     expect(byId(tree, "first-run-next").attrs.disabled).toBe(false);
+    // With a provider connected there is nothing to skip.
+    expect(nodes(tree).some((node) => node.attrs?.id === "first-run-skip")).toBe(false);
   });
 
   it("finishes the step once on Skip and tells the shell to take its cover down", async () => {

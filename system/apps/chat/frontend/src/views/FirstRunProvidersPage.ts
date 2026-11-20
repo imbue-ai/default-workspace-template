@@ -4,7 +4,7 @@
  * Imbue Studio's first run ends here, inside the new workspace: the shell covers the desktop with this
  * page until its owner connects an AI provider or skips. The tiles are the lanes; a tile opens that
  * lane's sign-in in the provider chooser, which does the signing in. Once an account is connected it is
- * listed, more can be added, and Next leaves. Skip and Next both finish the step for good
+ * listed, more can be added, Skip goes away and Next leaves. Skip and Next both finish the step for good
  * (`finishFirstRunProviderStep`), after which the shell takes its cover down.
  */
 
@@ -129,12 +129,21 @@ export function FirstRunProvidersPage(): m.Component<FirstRunProvidersPageAttrs>
             getLanes().map(laneTile),
           ),
           leaveError === "" ? null : m("p", { class: "mt-6 text-center text-[14px]", role: "alert" }, leaveError),
-          m("div", { class: "mt-12 flex items-center justify-between" }, [
-            m(
-              "button",
-              { id: "first-run-skip", type: "button", class: "first-run-skip", disabled: isLeaving, onclick: () => leave(shell) },
-              FIRST_RUN_SKIP_LABEL,
-            ),
+          // Skip is for leaving with nothing connected; once something is, Next is the one way on.
+          m("div", { class: `mt-12 flex items-center ${hasAccount ? "justify-end" : "justify-between"}` }, [
+            hasAccount
+              ? null
+              : m(
+                  "button",
+                  {
+                    id: "first-run-skip",
+                    type: "button",
+                    class: "first-run-skip",
+                    disabled: isLeaving,
+                    onclick: () => leave(shell),
+                  },
+                  FIRST_RUN_SKIP_LABEL,
+                ),
             m(
               "button",
               {
