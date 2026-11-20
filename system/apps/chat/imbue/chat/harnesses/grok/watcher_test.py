@@ -47,6 +47,14 @@ _SHORT_WITNESS_SECONDS = 0.3
 _LONG_WITNESS_SECONDS = 6.0
 # A record time after every captured session's, for the prompts the scripted grok logs.
 _PROMPT_CLOCK_MS = 1_800_000_000_000
+# The (lifecycle state, `active` marker present) pairs under which the flush worker types nothing.
+_NOT_READY_TO_TYPE_CASES = [
+    pytest.param("RUNNING", False, id="mngr_reports_running"),
+    pytest.param("WAITING", True, id="the_active_marker_is_ahead_of_the_reported_state"),
+    pytest.param("STOPPED", False, id="the_agent_is_stopped"),
+    pytest.param(None, False, id="the_agent_is_not_tracked"),
+    pytest.param("UNKNOWN", True, id="mngr_cannot_observe_the_agent"),
+]
 
 
 def _build_watcher(agent_state_dir: Path) -> tuple[GrokSessionWatcher, list[dict[str, Any]]]:
@@ -459,13 +467,7 @@ def test_the_flush_types_the_held_block_once_and_its_chip_leaves_before_its_turn
 
 @pytest.mark.parametrize(
     ("lifecycle_state", "is_marker_present"),
-    [
-        pytest.param("RUNNING", False, id="mngr_reports_running"),
-        pytest.param("WAITING", True, id="the_active_marker_is_ahead_of_the_reported_state"),
-        pytest.param("STOPPED", False, id="the_agent_is_stopped"),
-        pytest.param(None, False, id="the_agent_is_not_tracked"),
-        pytest.param("UNKNOWN", True, id="mngr_cannot_observe_the_agent"),
-    ],
+    _NOT_READY_TO_TYPE_CASES,
 )
 def test_the_flush_types_nothing_while_a_turn_is_in_flight_or_the_agent_is_not_alive(
     tmp_path: Path, lifecycle_state: str | None, is_marker_present: bool
@@ -665,13 +667,7 @@ def test_the_flush_types_each_control_command_alone_then_the_held_block(tmp_path
 
 @pytest.mark.parametrize(
     ("lifecycle_state", "is_marker_present"),
-    [
-        pytest.param("RUNNING", False, id="mngr_reports_running"),
-        pytest.param("WAITING", True, id="the_active_marker_is_ahead_of_the_reported_state"),
-        pytest.param("STOPPED", False, id="the_agent_is_stopped"),
-        pytest.param(None, False, id="the_agent_is_not_tracked"),
-        pytest.param("UNKNOWN", True, id="mngr_cannot_observe_the_agent"),
-    ],
+    _NOT_READY_TO_TYPE_CASES,
 )
 def test_the_flush_types_no_control_command_while_a_turn_is_in_flight_or_the_agent_is_not_alive(
     tmp_path: Path, lifecycle_state: str | None, is_marker_present: bool
