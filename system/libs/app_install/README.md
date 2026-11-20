@@ -85,7 +85,7 @@ The live app is untouched until the result lands.
 - The app's stored data is copied to `data/.state/app_install/snapshots/<name>/` first, out of the backup, and only the newest copy is kept. When the data does not fit on the disk beside itself, the update goes ahead only if the workspace has a recent backup (`no_snapshot` otherwise).
 - A conflict in `uv.lock` alone is settled by taking the publisher's lock and making it again. Any other conflict ends the run with `conflict`, the files, and the worktree the merge waits in, `data/.state/app_install/worktrees/<name>`: resolve it there, commit, and run the update again with `--continue`.
 - The merged app is registered and regenerated on the port it already has, and its checks are run (its environment syncs from its lock and its tests pass). `tests_failed` leaves the worktree for a fix, and `--continue` picks it up.
-- Then the result lands as one commit, the record takes the new commit, tree, and version, anything new in `[environment]` is installed, and the app's programs are restarted.
+- Then the result lands as one commit, the record takes the new commit, tree, and version, anything new in `[environment]` is installed, and the app's programs are restarted. A result that does not merge into the primary branch, which changed the same lines while the update waited, is refused with the primary checkout left as it was: merge the primary branch into the waiting worktree, commit, and run the update again with `--continue`.
 
 `up_to_date` means the app is already at the version asked for.
 An app this workspace built has nothing to update from.

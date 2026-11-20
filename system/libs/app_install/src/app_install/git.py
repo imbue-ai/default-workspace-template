@@ -127,9 +127,22 @@ def fetch_commit(cwd: Path, url: str, ref: str) -> str:
 
 def land_commit(repo_root: Path, commit: str) -> None:
     """Bring the installer's commit onto the primary checkout: as a fast-forward, or as a merge when the primary
-    branch moved while the installer worked."""
+    branch moved while the installer worked. Raises GitCommandError, with the primary checkout as it was, when
+    the two do not merge."""
     try:
         run_git(repo_root, ["merge", "--ff-only", commit])
+        return
     except GitCommandError as fast_forward_failure:
         logger.debug("Landing {} by a merge, since it does not fast-forward: {}", commit, fast_forward_failure)
+    try:
         run_git(repo_root, ["merge", "--no-edit", commit])
+    except GitCommandError as merge_failure:
+        # A merge that stops on a conflict leaves the checkout half merged, with conflict markers in live files.
+        try:
+            run_git(repo_root, ["merge", "--abort"])
+        except GitCommandError as abort_failure:
+            # git has nothing to abort when it refused to start the merge, which changed nothing.
+            logger.debug("No merge of {} to take back: {}", commit, abort_failure)
+        raise GitCommandError(
+            f"{commit} does not merge into the primary checkout, which is left as it was: {merge_failure}"
+        ) from merge_failure

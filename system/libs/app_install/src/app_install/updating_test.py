@@ -5,6 +5,7 @@ import pytest
 from click.testing import CliRunner
 
 from app_install.cli import main
+from app_install.errors import GitCommandError
 from app_install.errors import NoSnapshotError
 from app_install.errors import NotInstalledAppError
 from app_install.errors import UpdateInProgressError
@@ -176,6 +177,38 @@ def test_an_update_whose_checks_fail_waits_in_its_worktree_with_the_live_app_unt
 
     assert finished.result is UpdateResult.UPDATED
     assert load_record(workspace, "notes").upstream_version == "0.2.0"
+
+
+def test_an_update_that_no_longer_merges_into_the_live_app_leaves_it_as_it_was(tmp_path: Path) -> None:
+    workspace, published = _installed_notes(tmp_path)
+    _publish(published, "0.2.0", _notes_py("good morning", 10), "lock of 0.2.0\n")
+    update_app(workspace, "notes", None, False, RecordingRuntime(repo_root=workspace, verify_failure="1 failed"))
+    # While the update waited, the workspace changed the line the publisher changed.
+    _app_file(workspace, "notes.py").write_text(_notes_py("hey", 10))
+    moved = commit_all(workspace, "a shorter greeting")
+    runtime = RecordingRuntime(repo_root=workspace)
+
+    with pytest.raises(GitCommandError, match="left as it was"):
+        update_app(workspace, "notes", None, True, runtime)
+
+    worktree = update_worktree_path(workspace, "notes")
+    assert run_git(workspace, ["rev-parse", "HEAD"]) == moved
+    assert run_git(workspace, ["status", "--porcelain"]) == ""
+    assert _app_file(workspace, "notes.py").read_text() == _notes_py("hey", 10)
+    assert load_record(workspace, "notes").upstream_version == "0.1.0"
+    assert worktree.is_dir()
+
+    # An agent brings the workspace's change into the waiting worktree, and the same update is finished.
+    with pytest.raises(GitCommandError, match="CONFLICT"):
+        run_git(worktree, ["merge", "--no-edit", moved])
+    (worktree / "system" / "apps" / "notes" / "notes.py").write_text(_notes_py("hey, good morning", 10))
+    run_git(worktree, ["add", "--all"])
+    run_git(worktree, ["commit", "--quiet", "--no-edit"])
+    finished = update_app(workspace, "notes", None, True, runtime)
+
+    assert finished.result is UpdateResult.UPDATED
+    assert _app_file(workspace, "notes.py").read_text() == _notes_py("hey, good morning", 10)
+    assert check(workspace) == ()
 
 
 def test_only_the_newest_snapshot_of_an_apps_data_is_kept(tmp_path: Path) -> None:
