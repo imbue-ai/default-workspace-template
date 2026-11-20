@@ -555,6 +555,82 @@ def test_a_send_that_waited_and_then_went_unconfirmed_is_sent_once_more() -> Non
     assert send_calls == [(known,)] * 3
 
 
+def _not_running() -> MessageResult:
+    return MessageResult(
+        failures=[
+            AgentSendFailure(
+                agent_name="alpha",
+                reason="Agent is not running (state: STOPPED)",
+                kind=SendFailureKind.AGENT_UNREACHABLE,
+            )
+        ]
+    )
+
+
+def _refused_press() -> MessageResult:
+    return MessageResult(
+        failures=[
+            AgentSendFailure(agent_name="alpha", reason="refused to press C-c", kind=SendFailureKind.INPUT_BLOCKED)
+        ]
+    )
+
+
+def _press_recording_messenger(
+    known: AgentMatch,
+    known_location_result: MessageResult,
+    discovered: AgentMatch,
+    press_calls: list[tuple[AgentMatch, ...]],
+) -> MngrMessenger:
+    """A messenger whose press answers ``known_location_result`` at ``known`` and lands at ``discovered``, where
+    discovery finds the agent. Each press is recorded in ``press_calls``."""
+
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        return (discovered,)
+
+    def _press(matches: Sequence[AgentMatch], key: str, ctx: MngrContext) -> MessageResult:
+        press_calls.append(tuple(matches))
+        return known_location_result if tuple(matches) == (known,) else _delivered_to(matches)
+
+    return MngrMessenger(discover=_discover, press=_press)
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    "known_location_result",
+    [_not_found_on_host, _not_running, MessageResult],
+    ids=["agent-not-found", "not-running", "matched-nothing"],
+)
+def test_a_key_press_that_reached_no_agent_is_pressed_at_a_discovered_location(
+    known_location_result: Callable[[], MessageResult],
+) -> None:
+    """Nothing was pressed where no running agent was found, so the key is pressed where discovery finds it."""
+    known = _make_match(host="host-a")
+    discovered = _make_match(host="host-b")
+    press_calls: list[tuple[AgentMatch, ...]] = []
+    messenger = _press_recording_messenger(known, known_location_result(), discovered, press_calls)
+    assert messenger.press_key_chord_to_agent(_AGENT_ID, "C-c", (known,))
+    assert press_calls == [(known,), (discovered,)]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    "known_location_result",
+    [_refused_press, _unclassified_failure, _state_unknown],
+    ids=["refused", "unclassified", "state-unknown"],
+)
+def test_a_key_press_that_failed_at_the_agent_is_not_pressed_again(
+    known_location_result: Callable[[], MessageResult],
+) -> None:
+    """The agent was where it was looked for, so a second press would reach it again: a key it refused could cancel a
+    turn it started meanwhile, and a key it may have taken would be pressed twice."""
+    known = _make_match(host="host-a")
+    discovered = _make_match(host="host-b")
+    press_calls: list[tuple[AgentMatch, ...]] = []
+    messenger = _press_recording_messenger(known, known_location_result(), discovered, press_calls)
+    assert not messenger.press_key_chord_to_agent(_AGENT_ID, "C-c", (known,))
+    assert press_calls == [(known,)]
+
+
 @pytest.mark.usefixtures("isolated_mngr_env")
 def test_returns_a_reason_when_nothing_reachable() -> None:
     """A send that reaches no agent reports why, since the reason is what the user can act on."""
