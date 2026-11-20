@@ -31,6 +31,7 @@ from app_install.errors import NoSnapshotError
 from app_install.errors import NotInstalledAppError
 from app_install.errors import UpdateInProgressError
 from app_install.git import fetch_commit
+from app_install.git import land_commit
 from app_install.git import resolve_ref
 from app_install.git import run_git
 from app_install.interfaces import WorkspaceRuntimeInterface
@@ -258,12 +259,7 @@ def _finish(
             detail=check_failure,
         )
 
-    landed = run_git(worktree, ["rev-parse", "HEAD"])
-    try:
-        run_git(repo_root, ["merge", "--ff-only", landed])
-    except GitCommandError as fast_forward_failure:
-        logger.debug("Landing {} by a merge, since it does not fast-forward: {}", landed, fast_forward_failure)
-        run_git(repo_root, ["merge", "--no-edit", landed])
+    land_commit(repo_root, run_git(worktree, ["rev-parse", "HEAD"]))
     run_git(repo_root, ["update-ref", f"{UPSTREAM_REF_PREFIX}{name}", pending.commit])
     _remove_worktree(repo_root, name)
 

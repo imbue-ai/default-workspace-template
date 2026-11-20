@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
+from loguru import logger
+
 from app_install.errors import GitCommandError
 from app_install.errors import RepositoryUnreachableError
 
@@ -103,3 +105,13 @@ def fetch_commit(cwd: Path, url: str, ref: str) -> str:
     """Fetch ``ref`` of ``url`` into the repository at ``cwd`` and return the commit it names."""
     _run_reaching_remote(cwd, ["fetch", "--no-tags", url, ref], url)
     return run_git(cwd, ["rev-parse", "FETCH_HEAD^{commit}"])
+
+
+def land_commit(repo_root: Path, commit: str) -> None:
+    """Bring the installer's commit onto the primary checkout: as a fast-forward, or as a merge when the primary
+    branch moved while the installer worked."""
+    try:
+        run_git(repo_root, ["merge", "--ff-only", commit])
+    except GitCommandError as fast_forward_failure:
+        logger.debug("Landing {} by a merge, since it does not fast-forward: {}", commit, fast_forward_failure)
+        run_git(repo_root, ["merge", "--no-edit", commit])

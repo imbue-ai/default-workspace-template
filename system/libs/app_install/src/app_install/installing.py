@@ -29,6 +29,7 @@ from app_install.errors import CollisionError
 from app_install.errors import GitCommandError
 from app_install.errors import NotAnAppError
 from app_install.git import fetch_commit
+from app_install.git import land_commit
 from app_install.git import resolve_ref
 from app_install.git import run_git
 from app_install.interfaces import WorkspaceRuntimeInterface
@@ -111,16 +112,6 @@ def _read_published_name(repo_root: Path, commit: str, url: str) -> AppName:
         raise NotAnAppError(f"the {MANIFEST_FILENAME} of {url} names an app that cannot be registered: {e}") from e
 
 
-def _land(repo_root: Path, commit: str) -> None:
-    """Bring the installer's commit onto the primary checkout: as a fast-forward, or as a merge when the primary
-    branch moved while the installer worked."""
-    try:
-        run_git(repo_root, ["merge", "--ff-only", commit])
-    except GitCommandError as fast_forward_failure:
-        logger.debug("Landing {} by a merge, since it does not fast-forward: {}", commit, fast_forward_failure)
-        run_git(repo_root, ["merge", "--no-edit", commit])
-
-
 def install_app(
     repo_root: Path,
     url: str,
@@ -185,7 +176,7 @@ def install_app(
         write_derived_files(worktree, package, derive_files(worktree, record, manifest))
         run_git(worktree, ["add", "--all"])
         run_git(worktree, ["commit", "--quiet", "-m", f"app-install: register {name}"])
-        _land(repo_root, run_git(worktree, ["rev-parse", "HEAD"]))
+        land_commit(repo_root, run_git(worktree, ["rev-parse", "HEAD"]))
     # Keeps the upstream commit's objects in the workspace repository for a later update or split to build on.
     run_git(repo_root, ["update-ref", f"{UPSTREAM_REF_PREFIX}{name}", commit])
 
