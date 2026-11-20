@@ -295,13 +295,13 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
                     ),
                   )
                 : null,
-              bootFailure !== null && !state.isDesktopsLoaded
+              bootFailure !== null
                 ? m(
                     "div",
                     { class: "absolute inset-0 flex items-center justify-center" },
                     m(BootFailureNotice, { failure: bootFailure, onReportBug: store.reportBugAction() }),
                   )
-                : !state.isDesktopsLoaded
+                : !store.hasBootAnswered()
                   ? m("div", { class: "absolute inset-0 flex items-center justify-center bg-page" }, bootSpinner())
                   : null,
               isHome

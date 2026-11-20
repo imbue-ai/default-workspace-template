@@ -1110,6 +1110,12 @@ export class DesktopStore {
     void this.tellFailure(whatFailed, error, options, (notice) => this.toastNotice(notice, options));
   }
 
+  /** Whether a startup read has answered and the window landed: until then the desktop shows a spinner (or why the
+   *  read has not answered), whatever the socket has brought meanwhile. */
+  hasBootAnswered(): boolean {
+    return this.isBooted;
+  }
+
   /** Why the startup read of the desktops and apps has not answered, while no read has: nothing answered it (and it
    *  is being tried again, ``isRetrying``: "Still trying…", and "Report a bug" once that has gone on for a while, a
    *  wait with no end owing a way out), or the shell answered with an error (with Reload, the only retry); null

@@ -173,6 +173,10 @@ describe("the startup read", () => {
     const answer = await mountBeforeTheRead(null);
     expect(document.querySelector("[data-boot-spinner]")).not.toBeNull();
     expect(document.querySelector("[data-boot-failure]")).toBeNull();
+    // The socket's desktops arriving first land nothing, so the spinner stays.
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    m.redraw.sync();
+    expect(document.querySelector("[data-boot-spinner]")).not.toBeNull();
     answer();
     await settle();
     m.redraw.sync();

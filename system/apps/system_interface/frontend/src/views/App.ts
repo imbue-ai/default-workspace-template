@@ -1256,7 +1256,7 @@ export function App(): m.Component<AppAttrs> {
       { class: "flex h-full items-center justify-center text-(length:--font-size-row) text-faint" },
       bootFailure !== null
         ? m(BootFailureNotice, { failure: bootFailure, onReportBug: current.reportBugAction() })
-        : current.getState().isDesktopsLoaded
+        : current.hasBootAnswered()
           ? "No desktop yet."
           : bootSpinner(),
     );

@@ -35,13 +35,13 @@ export const SoloView: m.Component<SoloViewAttrs> = {
           oncreate: (created: m.VnodeDOM) => vnode.attrs.onPagesHostCreated(created.dom as HTMLElement),
           onbeforeupdate: () => false,
         }),
-        bootFailure !== null && !state.isDesktopsLoaded
+        bootFailure !== null
           ? m(
               "div",
               { class: "flex h-full items-center justify-center" },
               m(BootFailureNotice, { failure: bootFailure, onReportBug: store.reportBugAction() }),
             )
-          : !state.isDesktopsLoaded
+          : !store.hasBootAnswered()
             ? m("div", { class: "flex h-full items-center justify-center" }, bootSpinner())
             : isKnown
               ? null
