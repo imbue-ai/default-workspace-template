@@ -154,7 +154,7 @@ Save the raw sample to `data/.tasks/fetch-process-show/$SLUG/sample.json` so the
 can ask to see it and so it can **seed the first surface**. Include in each
 sampled record its **raw payload and a source reference**, not only the processed
 fields -- the first surface renders this sample, and per the preserve-and-surface
-principle (CLAUDE.md) that surface must be able to show the raw record and link
+principle (AGENTS.md) that surface must be able to show the raw record and link
 to its source. If the sample carries only extracted fields, the raw/source
 affordance has nothing to point at. Default presentation is a brief
 natural-language summary; pick a table / inline JSON / structured prose if the
@@ -223,7 +223,7 @@ the user**. If you ever feel the urge to write a second way of producing the dat
 to feed a surface, stop -- that divergence is the bug this rule exists to prevent.
 
 **Surface the raw data and its source from the first version.** Per the
-preserve-and-surface principle (CLAUDE.md), the first surface -- not just the
+preserve-and-surface principle (AGENTS.md), the first surface -- not just the
 crystallized one -- includes a clean, unprompted affordance to view each record's
 raw payload (rendered in its native format -- "view raw email" shows the rendered
 email, not HTML source) and jump to its source (e.g. "open in Gmail"). Build it in

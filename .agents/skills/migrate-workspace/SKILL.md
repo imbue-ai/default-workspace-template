@@ -467,7 +467,8 @@ user skill with scripts" in the same reference; until it does,
 `validate_skill.py` rejects it.
 
 **Template-file edits.** Port them *semantically* into their new counterparts and
-report each port: `CLAUDE.md` additions appended to this `CLAUDE.md`, settings
+report each port: additions to the old `AGENTS.md` or `CLAUDE.md` appended to
+this `AGENTS.md` (only Claude-specific notes go in this `CLAUDE.md`), settings
 keys set in the new settings file, supervisord program blocks re-added. Never
 overwrite a template file with the old one wholesale.
 
