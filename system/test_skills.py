@@ -12,6 +12,7 @@ from pathlib import Path
 from agents_shared.skill_checks import (
     GUIDE_PATH,
     SkillTree,
+    outside_links_into_skills,
     skill_dirs,
     unreached_shared_files,
 )
@@ -42,4 +43,15 @@ def test_every_shared_file_is_reached() -> None:
         "each from the skill or reference that needs it, by its path (a filename pattern links "
         f"nothing), or delete it. See {GUIDE_PATH}.\n"
         + "\n".join(f"  - {path}" for path in unreached)
+    )
+
+
+def test_no_file_outside_every_skill_links_a_file_inside_one() -> None:
+    reaching = outside_links_into_skills(_REPO_ROOT)
+    assert not reaching, (
+        "These files link a markdown file inside a skill. The shared layer and AGENTS.md may "
+        "name a skill, by its name or its SKILL.md, but a skill's other markdown is its own. "
+        "Move what every reader needs into the shared layer, or name the skill and let it "
+        f"send its own reader on. See {GUIDE_PATH}.\n"
+        + "\n".join(f"  - {shared} links {linked}" for shared, linked in reaching)
     )

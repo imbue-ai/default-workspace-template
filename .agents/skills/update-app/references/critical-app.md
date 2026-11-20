@@ -326,7 +326,7 @@ launch, background-poll) with these specifics:
   conversation rather than reconstructing it from prose.
 
 - **Terminal handling:** on `done`, go to step 4. On `stuck` or a dead-worker
-  timeout, surface to the user per `launch-task`'s `worker-failure.md`; do not
+  timeout, surface to the user per `.agents/shared/references/lead-proxy/worker-failure.md`; do not
   merge or apply, and do not retry silently.
 
 **Optional final preview before merge.** When the worker produced **real work
@@ -421,7 +421,8 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    merge on any failure**. `--keep-rollback-point` keeps the snapshots and a
    record of what it touched afterwards, which is what the notice below offers
    back; any later apply replaces them. Interpret the exit code and report it,
-   per `update-self`'s `apply-outcomes.md`:
+   per `.agents/shared/references/apply-exit-codes.md`, which also covers an apply
+   that was interrupted:
 
    - `0`: applied; the live app is updated and healthy.
    - `2`: the change was bad and was **automatically rolled back**; the live

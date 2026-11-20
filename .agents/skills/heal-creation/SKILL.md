@@ -169,7 +169,7 @@ Flow-specific substitutions:
   prints under `data/.tasks/harden/heal-$SLUG/reports/consumed/`
 - The only user-approval gate is `final-creation` -- a heal has no outline gate.
 - Terminal statuses: `done` (go live, Step 4); `stuck` (failure flow per
-  `.agents/skills/launch-task/references/worker-failure.md`, which stops the
+  `.agents/shared/references/lead-proxy/worker-failure.md`, which stops the
   worker).
 
 ## Step 4: Merge and go live

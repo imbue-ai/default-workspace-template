@@ -3,7 +3,7 @@ name: update-self
 description: Safely pull updates from the upstream template repo. Use to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 metadata:
   author: imbue
-  exempt-checks: size depth paths contents
+  exempt-checks: size paths contents
   exempt-reason: awaiting-restructure
 ---
 
@@ -548,14 +548,14 @@ Their answer, whenever it comes, arrives in this chat: follow
 ## 5. Terminal status
 
 - A worker that died without reporting is not yet a failure: recover it per
-  `.agents/skills/launch-task/references/dead-worker-recovery.md`, then re-arm
+  `.agents/shared/references/lead-proxy/dead-worker-recovery.md`, then re-arm
   the poll. It is stuck only once that recovery has not brought it back.
 - A **`stuck`** report that shows the merge cannot land without breaking the
   running workspace is a migration-required update: follow
   `references/apply-outcomes.md`, "Migration-required updates", which ends the
   pass `NEEDS_RECREATION`.
 - Any other **`stuck`**, or a dead worker its recovery did not bring back -> surface per
-  `.agents/skills/launch-task/references/worker-failure.md` (if the user
+  `.agents/shared/references/lead-proxy/worker-failure.md` (if the user
   then overrides, see `references/resuming-after-stuck.md`). Nothing is merged
   or applied. Compose it as a plain-language lead ("I couldn't complete this
   update cleanly; your workspace is untouched") followed by a clearly-marked
@@ -770,8 +770,9 @@ are installed instead of a live build; the apply installs them only as a set (on
 
 That one command is the whole landing: it fast-forwards to the worker's
 branch, refreshes, rebuilds and restarts what the update changed, probes the
-workspace's health, and reverts the entire merge on any failure. Exit codes,
-each spelled out in `references/apply-outcomes.md`:
+workspace's health, and reverts the entire merge on any failure. What each
+exit code means is in `.agents/shared/references/apply-exit-codes.md`, and what this
+pass does on each in `references/apply-outcomes.md`:
 
 - **`0` -- applied.** Read its closing stderr lines before signing off.
 - **`2` -- automatically rolled back.** The update did not land and the
@@ -810,10 +811,10 @@ stopped and told nothing: starting it would take the memory back, and the next
 message to it starts it. It is safe to re-run: a non-zero exit names what it
 could not start or tell, and the same command finishes the rest.
 
-What each outcome means for the user, the `provision-incomplete` and
-`emergency.json` records, an interrupted apply (re-run the same command; it
-resumes), and how to honor a rollback request are in
-`references/apply-outcomes.md`.
+The `provision-incomplete` and `emergency.json` records and an interrupted
+apply (re-run the same command; it resumes) are in
+`.agents/shared/references/apply-exit-codes.md`. What each outcome means for the
+user and how to honor a rollback request are in `references/apply-outcomes.md`.
 
 ### 5c. Carry out the report-driven remainder
 
@@ -829,7 +830,7 @@ that no longer imports, a consumer the report names that the update broke:
 2. Dispatch a repair worker with the evidence (the program's status and the
    tail of its stderr log, the failing check's output, what the update changed
    that it touches), through `launch-task` as in Step 4, with
-   `references/python-packaging-migration.md` named when the failure is one of
+   `.agents/shared/references/python-packaging-migration.md` named when the failure is one of
    its symptoms.
 3. Finish the run (the rest of this step, then Step 6) once it is fixed, or once
    the worker gives up. A give-up is still recorded as `UPDATED`, with a

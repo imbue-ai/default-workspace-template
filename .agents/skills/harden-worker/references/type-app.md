@@ -5,7 +5,7 @@ its own `system/supervisord.conf.d/<name>.conf`, served at its own browser origi
 (`http://<name>.<workspace-host>/`, routed straight to the app's registered
 port). This reference describes what an app *is*; for how to
 run and test a web frontend in isolation, see
-`.agents/skills/harden-worker/references/web-frontend-testing.md`.
+`.agents/shared/references/web-frontend-testing.md`.
 
 ## Contents
 
@@ -88,9 +88,8 @@ open` / `refresh` / `list` against the served tree.
 The user built and confirmed the app on a desktop, as its owner, so two ways
 of reaching it went untried: from a phone, and by someone else. Once sharing
 is on, the app has its own public address (`build-app`'s "The shared (public)
-URL"), and the user can open it from their phone's browser
-(`.agents/skills/use-from-phone/SKILL.md`) or grant it to other people and to
-visiting agents. The crystallize pass runs these checks after its first
+URL"), and the user can open it from their phone's browser (the
+`use-from-phone` skill) or grant it to other people and to visiting agents. The crystallize pass runs these checks after its first
 milestone (`op-crystallize.md`, Stage 3). Each finding is either fixed and
 covered by a test, or named in your report; none is a reason to stop the pass.
 

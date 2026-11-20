@@ -1,6 +1,6 @@
 # Dead worker recovery
 
-When a worker (sub-agent created via `launch-task`) is in `STOPPED` state -- claude session died mid-iteration, but the worktree (and any uncommitted work in it) is still intact -- the default path is to restart it, not to manually salvage. Messaging it with `create_worker.py reply` restarts it: the send re-creates its tmux session and re-execs claude in the existing worktree without touching git state, so uncommitted changes survive the restart.
+When a worker (sub-agent created via `launch-task`) is in `STOPPED` state -- claude session died mid-iteration, but the worktree (and any uncommitted work in it) is still intact -- the default path is to restart it, not to manually salvage. Messaging it with `create_worker.py reply --task-file <TASK_FILE>` (the task file you launched it with) restarts it: the send re-creates its tmux session and re-execs claude in the existing worktree without touching git state, so uncommitted changes survive the restart.
 
 This applies to a worker that *crashed*: STOPPED with no `archived_at` label, or an empty one, in `mngr list --format jsonl`. A STOPPED worker whose `archived_at` is set was stopped on purpose by its lead (`create_worker.py stop`, the failure flow's last step) and is not a restart candidate -- its lead has already reported the failure; read its branch and transcript instead.
 
@@ -17,7 +17,7 @@ grep '"agent_name": *"<worker>"' /home/user/workspace/data/.state/oom_priority/e
 
 Revival guidelines when a worker was shed (first free memory with the user per `.agents/shared/references/freeing-memory.md`, or the revival lands in the same pressure):
 
-- **Revive at most once** by nudging it to continue (`uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply --task-file data/.tasks/launch-task/<worker>/task.md -m continue`); the send relaunches the shed agent. You do not need to resend the task: it survives in the worker's conversation history, and a SessionStart hook already tells the revived worker it was paused, so it re-checks state before continuing.
+- **Revive at most once** by nudging it to continue (`uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply --task-file <TASK_FILE> -m continue`); the send relaunches the shed agent. You do not need to resend the task: it survives in the worker's conversation history, and a SessionStart hook already tells the revived worker it was paused, so it re-checks state before continuing.
 - **If the same worker has already been shed twice** (two `process_shed` lines naming it): stop. Do not keep reviving -- surface to the user with the ledger details, because something about this worker's footprint is incompatible with the current memory budget. Reviving again will most likely just be shed a third time.
 
 If the worker was *not* in the ledger, it died for some other reason (e.g. a claude crash); proceed with the normal restart path below.
@@ -28,7 +28,7 @@ If the worker was *not* in the ledger, it died for some other reason (e.g. a cla
 
    ```bash
    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
-       --task-file data/.tasks/launch-task/<worker>/task.md \
+       --task-file <TASK_FILE> \
        -m "your previous run died. inspect git status and continue / submit as appropriate."
    ```
 

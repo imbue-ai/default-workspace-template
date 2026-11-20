@@ -6,7 +6,8 @@ how to write the gate report; this reference only defines what goes inside it.)
 
 The outline contains:
 
-- A kebab-case skill name (naming rules in `spec-summary.md`).
+- A kebab-case skill name (naming rules in
+  `.agents/shared/references/spec-summary.md`).
 - A one-paragraph description stating what the skill does AND when to use it
   (this becomes the SKILL.md `description` frontmatter).
 - Inputs (CLI args if there's a script; prose parameters if agent-driven) and

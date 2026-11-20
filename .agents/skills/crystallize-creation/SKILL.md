@@ -233,7 +233,7 @@ Flow-specific substitutions:
   still runs only on `done`.
 - Terminal statuses: `done` (merge, destroy the worker per `lead-proxy.md`,
   then Step 6); `stuck` (failure flow per
-  `launch-task/references/worker-failure.md`, which stops the worker).
+  `.agents/shared/references/lead-proxy/worker-failure.md`, which stops the worker).
 
 ## Step 6: Go live
 
