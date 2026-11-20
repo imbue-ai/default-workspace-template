@@ -4696,6 +4696,28 @@ class AgentManager:
         except (AgentCreationError, AccountError, OSError, ValueError) as e:
             _loguru_logger.warning("Did not start the first-run main chat {}: {}", main_chat_id, e)
 
+    def update_first_run_context(self, first_run_context: str) -> CreatedChat | None:
+        """Take what the user told Imbue Studio's first run again, for a first-run main chat nobody has sent to
+        yet: the app seeds the chat as the workspace finishes building and hands the answer over once more as the
+        user enters, since they may have answered in between. Answers the chat, or None when there is no such
+        chat to update (no first-run seed, or its first agent already has the note)."""
+        main_chat_id = self._main_chat.read()
+        if main_chat_id is None:
+            return None
+        chat_dir = self._chat_files_root / main_chat_id
+        with self._lock:
+            provisional = self._provisional_chats.get(main_chat_id)
+            if (
+                provisional is None
+                or provisional.phase is not ProvisionalChatPhase.AWAITING_FIRST_SEND
+                or not is_first_run_seed(chat_dir)
+            ):
+                return None
+            write_first_run_context(chat_dir, first_run_context)
+        return CreatedChat(
+            chat_id=provisional.chat_id, name=canonical_agent_name(provisional.name), display_name=provisional.name
+        )
+
     def seed_chat(
         self, title: str, turns: tuple[SeedTurn, ...], first_run_context: str = "", is_first_run: bool = False
     ) -> CreatedChat:

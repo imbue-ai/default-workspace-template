@@ -84,6 +84,7 @@ from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_seed import first_run_kickoff_message
 from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.chat_transcript import agent_switch_event_id
@@ -4064,6 +4065,23 @@ def test_a_first_run_seed_owes_the_provider_page_until_the_owner_leaves_it(tmp_p
         AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path).is_first_run_provider_step_pending()
         is False
     )
+
+
+def test_a_first_run_seed_handed_over_again_updates_what_the_user_said_on_the_same_chat(tmp_path: Path) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+    first = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True, "context": ""})
+
+    again = client.post(
+        "/api/chats/seed", json={"turns": [], "is_first_run": True, "context": "I want to use Studio for: Film."}
+    )
+
+    assert first.status_code == 201 and again.status_code == 201
+    chat_id = first.get_json()["chat_id"]
+    assert again.get_json()["chat_id"] == chat_id
+    assert "I want to use Studio for: Film." in first_run_kickoff_message(tmp_path / chat_id)
+    assert len(agent_manager.get_provisional_chats()) == 1
 
 
 def test_an_ordinary_seed_owes_no_provider_page(tmp_path: Path) -> None:

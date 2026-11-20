@@ -2299,6 +2299,14 @@ def _seed_chat() -> Response:
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
     seed_request = parse_request_body(SeedChatRequest)
+    if seed_request.is_first_run:
+        # Handed over again as the user enters the workspace: the chat is there already, and only what they
+        # said about themselves may have changed.
+        updated = agent_manager.update_first_run_context(seed_request.context)
+        if updated is not None:
+            return model_response(
+                CreateChatResponse(chat_id=updated.chat_id, name=updated.name, display_name=updated.display_name), 201
+            )
     try:
         if seed_request.is_first_run:
             created = agent_manager.seed_chat(
