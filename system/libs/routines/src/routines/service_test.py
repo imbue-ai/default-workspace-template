@@ -28,6 +28,8 @@ from routines.primitives import RoutineId
 from routines.primitives import RunId
 from routines.primitives import RunTrigger
 from routines.primitives import TimeOfDay
+from routines.primitives import Weekday
+from routines.schedule import apply_schedule
 from routines.service import RoutinesService
 from routines.state import FileStateStore
 from routines.testing import TEST_NOW
@@ -222,6 +224,27 @@ def test_rescheduling_a_routine_an_app_owns_back_to_its_files_schedule_drops_the
     assert service.row(SYNC).schedule_text == "Every day at 7:30 am"
     assert path.read_bytes() == _DAILY_TOML.encode()
     assert repository.commits == []
+
+
+def test_a_schedule_put_back_with_its_weekdays_in_another_order_is_the_files_own_again(
+    paths: RoutinesPaths,
+    service: RoutinesService,
+) -> None:
+    """The app's editor appends a day that is ticked again, and `routines edit --days` takes them as typed."""
+    write_app_definition(paths, "news_sync", SYNC, _DAILY_TOML + 'days = ["mon", "wed", "fri"]\n')
+    file_schedule = service.effective(SYNC).definition
+    assert file_schedule is not None
+    reordered = ScheduleChange(every=Duration("1d"), at=TimeOfDay("07:30"), days=(Weekday.MON, Weekday.FRI, Weekday.WED))
+
+    service.change_schedule(SYNC, ScheduleChange(every=Duration("1d"), at=TimeOfDay("07:30"), days=(Weekday.MON, Weekday.FRI)))
+    service.change_schedule(SYNC, reordered)
+    after_the_editor = service.states.read(SYNC).schedule_override
+    service.change_schedule(SYNC, _EVERY_TWO_HOURS)
+    service.replace(SYNC, apply_schedule(file_schedule, reordered), "edit")
+
+    assert after_the_editor is None
+    assert service.states.read(SYNC).schedule_override is None
+    assert service.row(SYNC).schedule_text == "Every Monday, Wednesday and Friday at 7:30 am"
 
 
 def test_rescheduling_a_routine_the_workspace_owns_rewrites_its_file_and_commits_it(

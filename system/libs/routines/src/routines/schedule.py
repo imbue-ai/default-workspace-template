@@ -83,6 +83,19 @@ def schedule_of(definition: RoutineDefinition) -> ScheduleOverride:
 
 
 @pure
+def is_same_schedule(first: RoutineDefinition, second: RoutineDefinition) -> bool:
+    """Whether the two run on one schedule. The weekdays are a set, so the order they are written in is no part
+    of it."""
+    return (first.every, first.at, frozenset(first.days), first.day_of_month, first.once) == (
+        second.every,
+        second.at,
+        frozenset(second.days),
+        second.day_of_month,
+        second.once,
+    )
+
+
+@pure
 def effective_routine(loaded: LoadedRoutine, state: RoutineState) -> LoadedRoutine:
     """The routine as it runs: one an app owns carries the schedule its state keeps for the user, when there is
     one, in place of its file's; any other is as loaded."""

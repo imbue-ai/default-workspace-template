@@ -54,6 +54,7 @@ from routines.runner import read_result
 from routines.runner import spawn_run_process
 from routines.schedule import apply_schedule
 from routines.schedule import effective_routine
+from routines.schedule import is_same_schedule
 from routines.schedule import schedule_of
 from routines.state import FileStateStore
 from routines.tails import read_tail
@@ -192,7 +193,7 @@ class RoutinesService(MutableModel):
         """Record the schedule of the rescheduled definition as the user's, in the state of a routine an app
         owns; a schedule that is the file's own again clears the record instead, so the routine follows its app
         once more."""
-        override = None if rescheduled == definition else schedule_of(rescheduled)
+        override = None if is_same_schedule(rescheduled, definition) else schedule_of(rescheduled)
         self.states.update(
             routine_id,
             lambda state: state.model_copy_update(to_update(state.field_ref().schedule_override, override)),

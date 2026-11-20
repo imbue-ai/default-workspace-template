@@ -19,6 +19,7 @@ from routines.schedule import describe_moment
 from routines.schedule import describe_schedule
 from routines.schedule import effective_routine
 from routines.schedule import is_overdue
+from routines.schedule import is_same_schedule
 from routines.schedule import next_due
 from routines.schedule import overdue_margin_seconds
 from routines.schedule import schedule_of
@@ -258,6 +259,14 @@ def test_the_schedule_of_a_definition_put_back_on_it_changes_nothing() -> None:
     definition = _definition(every="1mo", at="09:00", day_of_month=3)
     assert schedule_of(definition) == ScheduleOverride(every=Duration("1mo"), at=TimeOfDay("09:00"), day_of_month=3)
     assert apply_schedule(definition, schedule_of(definition)) == definition
+
+
+def test_two_schedules_are_one_whatever_order_their_weekdays_are_written_in() -> None:
+    written = _definition(every="1d", at="07:30", days=["mon", "wed", "fri"])
+
+    assert is_same_schedule(written, _definition(every="1d", at="07:30", days=["fri", "mon", "wed"]))
+    assert not is_same_schedule(written, _definition(every="1d", at="07:30", days=["mon", "fri"]))
+    assert not is_same_schedule(written, _definition(every="1d", at="08:00", days=["mon", "wed", "fri"]))
 
 
 @pytest.mark.parametrize(
