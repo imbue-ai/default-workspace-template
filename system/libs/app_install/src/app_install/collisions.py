@@ -12,6 +12,8 @@ from collections.abc import Set as AbstractSet
 from pathlib import Path
 from typing import Final
 
+from loguru import logger
+
 from app_install.derived import app_skill_names
 from app_install.derived import existing_derived_paths
 from app_install.derived import program_names
@@ -33,10 +35,13 @@ _ENVIRONMENT_UNIT_SUFFIX: Final[str] = ".sh"
 
 
 def _read_toml_or_empty(path: Path) -> dict[str, object]:
+    if not path.is_file():
+        return {}
     try:
         return tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
         # Another app's unreadable file is that app's problem, reported by the checks on it; it names nothing here.
+        logger.debug("Reading no names from {}, which cannot be read: {}", path, e)
         return {}
 
 

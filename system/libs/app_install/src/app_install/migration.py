@@ -115,7 +115,8 @@ def _own_port(repo_root: Path, manifest: AppManifest) -> int | None:
         return None
     try:
         rows = tomllib.loads(registry.read_text(encoding="utf-8")).get("apps", [])
-    except tomllib.TOMLDecodeError:
+    except tomllib.TOMLDecodeError as e:
+        logger.debug("Reading no port from the registry {}, which does not parse: {}", registry, e)
         return None
     for row in rows:
         if isinstance(row, dict) and row.get("name") == str(manifest.name):
@@ -132,7 +133,8 @@ def _paths_other_apps_reference(repo_root: Path, package: str) -> set[str]:
             continue
         try:
             references = tomllib.loads(other.read_text(encoding="utf-8")).get("references", [])
-        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+            logger.debug("Reading no references from {}, which cannot be read: {}", other, e)
             continue
         referenced.update(str(entry.get("path")) for entry in references if isinstance(entry, dict))
     return referenced
@@ -158,7 +160,8 @@ def _routine_files_of(repo_root: Path, name: str) -> list[Path]:
     for path in sorted((repo_root / ROUTINES_DIRECTORY).glob("*.toml")):
         try:
             owner = tomllib.loads(path.read_text(encoding="utf-8")).get("app")
-        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+            logger.debug("Not moving the routine {}, which cannot be read: {}", path, e)
             continue
         if owner == name:
             routines.append(path)

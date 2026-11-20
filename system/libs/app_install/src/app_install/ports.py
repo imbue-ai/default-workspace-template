@@ -13,6 +13,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
+from loguru import logger
+
 from app_install.errors import PortUnavailableError
 from app_install.paths import supervisord_conf_files
 from app_manifest.records import HIGHEST_PORT
@@ -53,8 +55,9 @@ def _registry_ports(repo_root: Path) -> set[int]:
         return set()
     try:
         rows = tomllib.loads(registry.read_text()).get("apps", [])
-    except tomllib.TOMLDecodeError:
+    except tomllib.TOMLDecodeError as e:
         # The registry is machine state the shell rebuilds; an unreadable one names no port.
+        logger.debug("Reading no ports from the registry {}, which does not parse: {}", registry, e)
         return set()
     ports: set[int] = set()
     for row in rows:

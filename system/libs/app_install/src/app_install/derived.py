@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Final
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from loguru import logger
 from pydantic import Field
 
 from app_install.paths import APP_SKILLS_DIRNAME
@@ -239,7 +240,8 @@ def derive_files(repo_root: Path, record: AppRecord, manifest: AppManifest) -> D
 def _is_generated_for(path: Path, package: str) -> bool:
     try:
         first_line = path.read_text(encoding="utf-8").split("\n", 1)[0]
-    except (OSError, UnicodeDecodeError):
+    except (OSError, UnicodeDecodeError) as e:
+        logger.debug("Not treating {} as generated, since it cannot be read: {}", path, e)
         return False
     return first_line.startswith(
         f"{GENERATED_HEADER_PREFIX}{_package_relative_directory(package)}/{MANIFEST_FILENAME} "
