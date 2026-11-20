@@ -118,7 +118,7 @@ def resolve_ref(cwd: Path, url: str, requested_ref: str | None) -> str:
     its ``main`` branch."""
     if requested_ref:
         return requested_ref
-    listing = _run_reaching_remote(cwd, ["ls-remote", "--tags", "--refs", url], url)
+    listing = _run_reaching_remote(cwd, ["ls-remote", "--tags", "--refs", "--", url], url)
     versions: list[tuple[tuple[int, int, int], str]] = []
     for line in listing.splitlines():
         match = _VERSION_TAG_PATTERN.search(line)
@@ -129,7 +129,8 @@ def resolve_ref(cwd: Path, url: str, requested_ref: str | None) -> str:
 
 def fetch_commit(cwd: Path, url: str, ref: str) -> str:
     """Fetch ``ref`` of ``url`` into the repository at ``cwd`` and return the commit it names."""
-    _run_reaching_remote(cwd, ["fetch", "--no-tags", url, ref], url)
+    # The URL is a link someone was sent and the ref may come with it: after "--" git reads neither as an option.
+    _run_reaching_remote(cwd, ["fetch", "--no-tags", "--", url, ref], url)
     return run_git(cwd, ["rev-parse", "FETCH_HEAD^{commit}"])
 
 

@@ -9,6 +9,7 @@ from app_install.git import fetch_commit
 from app_install.git import land_commit
 from app_install.git import run_git
 from app_install.testing import commit_all
+from app_install.testing import make_published_app_repository
 from app_install.testing import make_workspace_repository
 from app_install.testing import write_workspace_file
 
@@ -137,3 +138,14 @@ def test_a_read_that_fails_for_a_reason_no_credential_changes_is_not_tried_again
 
     assert raised.value.is_access_needed is False
     assert len(repository_host.requested_paths) == 1
+
+
+def test_a_ref_that_is_spelled_like_an_option_is_read_as_a_ref_and_runs_nothing(tmp_path: Path) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    published = make_published_app_repository(tmp_path / "published", "notes")
+
+    with pytest.raises(RepositoryUnreachableError):
+        fetch_commit(workspace, str(published), "--upload-pack=touch injected")
+
+    assert not (workspace / "injected").exists()
+
