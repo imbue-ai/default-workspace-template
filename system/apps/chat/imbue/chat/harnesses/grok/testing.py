@@ -1,12 +1,15 @@
 """Test utilities for the grok harness: the captured grok sessions under ``fixtures/``, and a fake grok agent state
 dir in mngr's layout, written by hand, built from them."""
 
+import json
 from pathlib import Path
 from typing import Final
+from uuid import uuid4
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.grok.session_parser import UPDATES_FILENAME
 from imbue.chat.harnesses.grok.watcher import SESSIONS_DIRNAME
+from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.mngr_grok.grok_config import get_grok_home
 
 GROK_FIXTURES_DIR: Final[Path] = Path(__file__).parent / "fixtures"
@@ -89,12 +92,38 @@ def write_grok_agent_state(agent_state_dir: Path, scenario_dir: Path) -> None:
         )
 
 
-def make_grok_agent_info(agent_state_dir: Path, agent_id: str, name: str) -> AgentInfo:
-    """A running grok agent whose state dir is ``agent_state_dir``; grok reads no claude config dir."""
+def make_grok_agent_info(agent_state_dir: Path, agent_id: str, name: str, state: str = "RUNNING") -> AgentInfo:
+    """A grok agent in lifecycle ``state`` whose state dir is ``agent_state_dir``; grok reads no claude config dir."""
     return AgentInfo(
         id=agent_id,
         name=name,
-        state="RUNNING",
+        state=state,
         agent_state_dir=agent_state_dir,
         claude_config_dir=agent_state_dir / "unused",
+        harness=HarnessType.GROK,
     )
+
+
+def make_grok_agent_state_dir(parent: Path) -> Path:
+    """A new, empty agent state dir under ``parent``, named by a fresh agent id as mngr names one."""
+    agent_state_dir = parent / f"agent-{uuid4().hex}"
+    agent_state_dir.mkdir(parents=True)
+    return agent_state_dir
+
+
+def user_prompt_line(session_id: str, text: str, prompt_index: int, timestamp_ms: int) -> bytes:
+    """One hand-built updates.jsonl record of a user prompt grok logged, carrying the fields the parser reads."""
+    record = {
+        "timestamp": timestamp_ms // 1000,
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "user_message_chunk",
+                "content": {"type": "text", "text": text},
+                "_meta": {"modelId": "stub-model", "promptIndex": prompt_index},
+            },
+            "_meta": {"eventId": f"{session_id}-{timestamp_ms}", "agentTimestampMs": timestamp_ms},
+        },
+    }
+    return (json.dumps(record) + "\n").encode()

@@ -129,6 +129,8 @@ class SessionDeps(FrozenModel):
     is_harness_starting_up: Callable[[], bool]
     # Whether the manager still tracks this agent (a connection built after teardown is dropped).
     is_tracked: Callable[[], bool]
+    # The agent's lifecycle state as mngr last reported it, or None while the manager does not track it.
+    read_lifecycle_state: Callable[[], str | None]
     # Codex connection callbacks: the ledger's queue snapshot / committed user-turn fan-out.
     on_queue_snapshot: Callable[[list[dict[str, Any]]], None]
     on_user_turn: Callable[[dict[str, Any]], None]

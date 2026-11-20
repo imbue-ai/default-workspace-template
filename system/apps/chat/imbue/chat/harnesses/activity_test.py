@@ -237,11 +237,12 @@ def test_dead_lifecycle_settles_idle_for_every_harness(harness: HarnessType) -> 
 
 
 def test_active_marker_declarations_match_what_mngr_writes() -> None:
-    """claude/pi keep the shared `active` marker their hooks/extension flip; codex declares
+    """claude/pi/grok keep the shared `active` marker their hooks/extension flip; codex declares
     None (mngr_codex writes no marker -- the daemon is the turn authority)."""
     assert build_tracker(HarnessType.CLAUDE).active_marker_filename == "active"
     assert build_tracker(HarnessType.PI_CODING).active_marker_filename == "active"
     assert build_tracker(HarnessType.CODEX).active_marker_filename is None
+    assert build_tracker(HarnessType.GROK).active_marker_filename == "active"
 
 
 @pytest.mark.parametrize("harness", _PLACEHOLDER_HARNESSES)
@@ -284,6 +285,7 @@ def test_placeholder_harness_reports_an_empty_transcript(harness: HarnessType) -
         (HarnessType.CLAUDE, "claude_process_started"),
         (HarnessType.CODEX, "codex_process_started"),
         (HarnessType.PI_CODING, "pi_process_started"),
+        (HarnessType.GROK, "grok_process_started"),
     ],
 )
 def test_process_started_marker_is_declared_on_the_spec(harness: HarnessType, expected: str) -> None:

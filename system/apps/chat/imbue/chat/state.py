@@ -239,9 +239,9 @@ class ChatAppState(MutableModel):
             watcher.set_watch_observer(self.watch_observer)
             self.agent_manager.register_queue_idle_handler(agent_info.id, watcher.notify_idle)
             self.agent_manager.register_queue_busy_handler(agent_info.id, watcher.notify_busy)
-            # A harness that holds the queue on its agent's behalf (antigravity) also needs to
-            # DELIVER it, which needs the manager's send path and a liveness check. No-op for
-            # every other harness, whose queue its own harness consumes.
+            # A harness that holds the queue on its agent's behalf also needs to DELIVER it, which
+            # needs the manager's send path and the agent's lifecycle state. No-op for every other
+            # harness, whose queue its own harness consumes.
             watcher.set_flush_hooks(
                 # Not sent again when mngr cannot confirm it: the flush sends a block it did not see
                 # land again itself, on a later pass and only while no turn is open, so a second send
@@ -252,7 +252,7 @@ class ChatAppState(MutableModel):
                     ),
                     SendDelivery,
                 ),
-                lambda: self.agent_manager.is_agent_alive(agent_info.id),
+                lambda: self.agent_manager.get_agent_lifecycle_state(agent_info.id),
                 lambda text, sent_after: self.agent_manager.note_resent_send(agent_info.id, text, sent_after),
             )
             self.watchers[agent_info.id] = watcher

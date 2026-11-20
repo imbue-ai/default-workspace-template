@@ -26,8 +26,8 @@ than no entry, because the next person plans around it.
   `turn/start`/`turn/steer`, stop = `turn/interrupt`, queue = pending steers observed via
   events, delivered = the committed `userMessage`, reconciliation by the minted `clientId`.
 
-- **antigravity (the queue is OURS, and one typist owns it):** agy is the only harness whose
-  queue cannot be observed at all -- it parks mid-turn input inside its TUI, invisible on disk,
+- **antigravity (the queue is OURS, and one typist owns it):** agy's queue cannot be
+  observed at all -- it parks mid-turn input inside its TUI, invisible on disk,
   and merges everything parked into one turn. So it is never allowed to park anything. `send`
   does not type: it enqueues, publishes the chip inside the POST, and wakes the ONE typist, a
   per-agent worker that delivers the whole block only when its bounded predicate says no turn
@@ -39,6 +39,19 @@ than no entry, because the next person plans around it.
   because a second typist could deliver the same block twice. It needs no restart to stop
   (nothing is parked inside agy to retract), keeping the restart only as the hammer for a
   cancel that cannot be trusted to have landed.
+
+- **grok (antigravity's shape, gated on mngr's published state):** grok parks mid-turn input in
+  its own queue, which leaves nothing on disk until the message runs, so a grok chat holds every
+  message itself, as E11 describes for agy. `send` holds the message and answers NOT_READY only
+  while grok is starting or mngr reports the agent dead. One flush worker on the grok watcher
+  types the held block only while mngr reports the agent alive and the shared
+  `resolve_is_turn_in_flight` reads no turn in flight from mngr's lifecycle state and its
+  `active` marker; RUNNING_BACKGROUND is no turn, and UNKNOWN holds the block.
+  queue = ours, journalled per grok process. delivered = mngr confirming grok took the block
+  (the submission, or the block's queued row), or grok's session log gaining a user turn that
+  ends with the block. stop = one Ctrl+C through mngr into a turn mngr reports in flight, then
+  handing back every held message the worker has not claimed, with flushes paused meanwhile;
+  grok is never restarted. tap = the same press, then the worker delivers.
 
 The target is to make them converge on the clean, single-path shape; claude's heuristic
 path is what most needs to move toward it.
@@ -290,6 +303,9 @@ In the ordinary failure modes this is bounded and self-correcting:
   bounded delivery witness, and an attempt ceiling after which the entry stops being retried
   and reads *Queued* rather than *Sending*. Its worker also republishes the queue on every
   tick, level-triggered, so a stale snapshot is corrected as soon as any watcher exists.
+- **grok:** as antigravity: each of the worker's sends is bounded by mngr's confirmation and a
+  witness window, an entry that spent `MAX_DELIVERY_ATTEMPTS` reads *Queued* (E18), and the
+  worker republishes the queue on every attempt.
 
 What is NOT bounded is the case where nothing is left to report: a watcher torn down while a
 send is still in flight (its publisher is detached, so the settle updates the queue but
@@ -305,6 +321,40 @@ reload re-reads real state; stopping the agent returns the message to the compos
 
 The scope is deliberately minimal: this is reachable only when the backend keeps running but
 stops publishing for a given agent, which is not a state ordinary failures produce.
+
+### E17. grok — a turn that starts between the flush's check and mngr's typing parks the block in grok
+**Accepted, as for agy (E11, E12).** The flush types only while mngr reports no turn in flight,
+but a turn can start after that check and before mngr types: grok's wake turn for finished
+background work, or a prompt typed at grok's pane. The shared `resolve_is_turn_in_flight` reads
+RUNNING_BACKGROUND as no turn even with the `active` marker up, so a wake turn that has started
+while mngr still reports RUNNING_BACKGROUND is typed into the same way. grok then queues the
+block behind that turn, and mngr confirms it by the block's queued row, so the chat counts it
+delivered with no turn to show for it yet. Until grok runs it, the message shows nowhere (A1a);
+a stop does not return it (Interrupt step 2), because grok runs it as soon as the cancel lands;
+and a restart of grok loses it. The flush keeps the live emit muted while it looks for the
+block's turn, so the overtaking turn's events show only once the witness window ends. Closing
+the window would take a send that mngr refuses once a turn has started, re-checked under its
+message lock.
+
+### E18. grok — a block mngr could not confirm is typed again, at most three times
+mngr can type a block and still be unable to confirm it. The flush then looks for a user turn
+holding the block in grok's session log, and when none shows within the witness window it types
+the block again on a later pass, so a block grok took but logged late runs twice; the chat's
+"Sent again" line marks it. A send mngr refused before typing (a screen other than grok's
+composer) spends an attempt too. After `MAX_DELIVERY_ATTEMPTS` the entry stays Queued until a
+stop returns it, as E14 describes for agy. A stop that lands while the flush is typing a block
+leaves that block to the flush; if grok then shows no sign it took the block, the flush types it no
+more, and it stays Queued for the next stop.
+
+### E19. grok — a stop mngr cannot press leaves the turn running
+mngr presses Ctrl+C only into a running top-level turn whose composer is empty, so a stop presses
+nothing into a wake turn grok has not started yet, or into a turn whose composer holds text
+someone typed at grok's pane. Stop and the tap ask mngr to press only while the shared
+`resolve_is_turn_in_flight` reads a turn, so they press nothing into a wake turn mngr still
+reports as RUNNING_BACKGROUND either. A turn still holding mngr's `active` marker at the deadline
+after a press, such as one whose foreground subagent grok's cancel leaves running, is left too.
+The held messages come back either way; the stop never restarts grok, since a restart would also
+end its background work.
 
 ---
 

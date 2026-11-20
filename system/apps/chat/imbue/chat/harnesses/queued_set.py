@@ -20,6 +20,9 @@ model: it is per-session scratch state mutated in place by its populator, not a
 domain value object.
 """
 
+from datetime import datetime
+from datetime import timezone
+
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -118,3 +121,8 @@ class QueuedSet:
         are excluded. Empty string when there are no real entries.
         """
         return "\n".join(message.content for message in self.pending if not message.is_phantom)
+
+
+def now_enqueue_timestamp() -> str:
+    """The enqueue timestamp of an entry the chat holds itself, in the ISO/Z shape the harnesses' entries carry."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

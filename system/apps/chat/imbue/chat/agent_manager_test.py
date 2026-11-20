@@ -5802,7 +5802,7 @@ def test_note_agent_alive_flips_a_dead_state_to_waiting(agent_manager: AgentMana
     revived = agent_manager.get_agent_by_id("revived")
     assert revived is not None
     assert revived.state == "WAITING"
-    assert agent_manager.is_agent_alive("revived")
+    assert agent_manager.get_agent_lifecycle_state("revived") == "WAITING"
 
 
 def test_note_agent_alive_leaves_live_and_unknown_states_alone(agent_manager: AgentManager) -> None:
@@ -5823,6 +5823,7 @@ def test_note_agent_alive_leaves_live_and_unknown_states_alone(agent_manager: Ag
 
     agent_manager.note_agent_alive("never-tracked")
     assert agent_manager.get_agent_by_id("never-tracked") is None
+    assert agent_manager.get_agent_lifecycle_state("never-tracked") is None
 
 
 def test_a_filed_permission_request_is_pending_until_its_verdict_lands(

@@ -4119,17 +4119,11 @@ class AgentManager:
             is_reviving = agent is not None and bool(self._connecting_message_ids_by_agent.get(agent.id))
         return agent is not None and is_lifecycle_dead(agent.state) and not is_reviving
 
-    def is_agent_alive(self, agent_id: str) -> bool:
-        """Whether the agent's process is not POSITIVELY dead.
-
-        Same rule the activity gate uses: everything outside the dead states counts as alive,
-        and an unknown/unobservable lifecycle is non-evidence rather than death. An agent we
-        have no record of is treated as dead -- the safe direction for the one caller, the
-        antigravity flush, which must never resurrect a stopped agent to deliver its queue.
-        """
+    def get_agent_lifecycle_state(self, agent_id: str) -> str | None:
+        """The agent's lifecycle state as mngr last reported it, or None for an agent the manager does not track."""
         with self._lock:
             agent_state = self._agents.get(agent_id)
-        return agent_state is not None and not is_lifecycle_dead(agent_state.state)
+        return agent_state.state if agent_state is not None else None
 
     def note_agent_alive(self, agent_id: str) -> None:
         """Record that this server just started ``agent_id``, without waiting for observe.
@@ -6081,6 +6075,7 @@ class AgentManager:
                 state_dir, spec.startup_ready_marker, spec.process_started_marker_filename
             ),
             is_tracked=lambda: self.is_activity_tracked(agent_id),
+            read_lifecycle_state=lambda: self.get_agent_lifecycle_state(agent_id),
             on_queue_snapshot=lambda snapshot: self.update_queued_messages(agent_id, snapshot),
             on_user_turn=lambda event: self._broadcast_codex_user_turn(agent_id, event),
             recompute_activity=lambda: self._recompute_activity_state(agent_id, broadcast_on_change=True),

@@ -44,8 +44,8 @@ FlushSendCallback = Callable[[str], bool]
 # could have been stamped from at the earliest (``ResentSendSnapshot.sent_after``).
 FlushResentCallback = Callable[[str, float], None]
 
-# Whether the agent's process is currently alive -- see ``set_flush_hooks``.
-IsAliveCallback = Callable[[], bool]
+# The agent's lifecycle state as mngr last reported it, or None when the chat does not track the agent.
+ReadLifecycleStateCallback = Callable[[], str | None]
 
 # Called with the full queued-message snapshot each time it changes. Harness-
 # agnostic wire shape (a list of ``{queued_id, content, timestamp}`` dicts); the
@@ -278,16 +278,19 @@ class AgentSessionWatcher(TranscriptReader, ABC):
         """Hand a tap's claim back unsettled, without charging a delivery attempt. No-op by default."""
 
     def set_flush_hooks(
-        self, send: "FlushSendCallback", is_alive: "IsAliveCallback", note_resent: "FlushResentCallback"
+        self,
+        send: "FlushSendCallback",
+        read_lifecycle_state: "ReadLifecycleStateCallback",
+        note_resent: "FlushResentCallback",
     ) -> None:
         """Give a watcher the capabilities it needs to DELIVER its own queue. No-op by default.
 
-        Only a harness that holds the queue on the agent's behalf needs these -- antigravity,
-        whose parked messages live invisibly inside its TUI, so nothing else can deliver them.
-        Every other harness's queue is consumed by the harness itself and needs no sender.
+        Only a harness that holds the queue on the agent's behalf needs these: one whose parked
+        messages live invisibly inside its TUI, so nothing else can deliver them. Every other
+        harness's queue is consumed by the harness itself and needs no sender.
 
-        ``is_alive`` is not optional politeness: mngr's text send AUTO-STARTS a stopped agent,
-        and the working->IDLE signal cannot distinguish "turn finished" from "process died". A
+        ``read_lifecycle_state`` is not optional politeness: mngr's text send AUTO-STARTS a stopped
+        agent, and the working->IDLE signal cannot distinguish "turn finished" from "process died". A
         flush that skipped this check would resurrect a stopped agent and deliver its queue,
         which the contract forbids outright ("NEVER auto-sent on resume"; "the queue is empty
         whenever the agent is stopped").

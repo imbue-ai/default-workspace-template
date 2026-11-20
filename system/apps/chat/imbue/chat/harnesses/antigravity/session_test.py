@@ -35,6 +35,7 @@ def _session(state_dir: Path, sent: list[str]) -> AntigravityHarnessSession:
             notify_agents_changed=lambda: None,
             is_harness_starting_up=lambda: False,
             is_tracked=lambda: True,
+            read_lifecycle_state=lambda: "WAITING",
             on_queue_snapshot=lambda snapshot: None,
             on_user_turn=lambda event: None,
             recompute_activity=lambda: None,

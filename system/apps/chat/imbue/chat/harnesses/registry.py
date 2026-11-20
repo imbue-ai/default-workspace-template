@@ -55,6 +55,13 @@ from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.chat.harnesses.codex.watcher import CodexTranscriptLoader
 from imbue.chat.harnesses.events import SpecialEventKind
+from imbue.chat.harnesses.grok.activity import GrokActivityTracker
+from imbue.chat.harnesses.grok.model import GROK_CATALOG
+from imbue.chat.harnesses.grok.session import GrokHarnessSession
+from imbue.chat.harnesses.grok.tap import GrokAtomicShoulderTap
+from imbue.chat.harnesses.grok.tap import GrokInterruptToComposer
+from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
+from imbue.chat.harnesses.grok.watcher import GrokTranscriptLoader
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import InterruptToComposer
 from imbue.chat.harnesses.interrupt import RestartDrainInterruptToComposer
@@ -92,6 +99,7 @@ from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.harnesses.startup_readiness import StartupReadyMarker
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.mngr_grok.resources.grok_hook import SESSION_STARTED_FILENAME as GROK_SESSION_STARTED_FILENAME
 
 
 class PopupTrigger(StrEnum):
@@ -271,8 +279,104 @@ _PI_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/tree",
 )
 
-# The auth-intercept commands every auth-declaring harness shares: typing either opens
-# the harness's agent-auth surface instead of sending.
+# Grok Build commands the chat declines (action="notice"), by first token: typed and entered as mngr sends them, each
+# opens a picker or view over grok 1.0.62's composer, ends grok, changes a setting or how grok takes later messages,
+# or answers only in a side panel the chat does not show.
+_GROK_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
+    "/agents",
+    "/agents-dashboard",
+    # These two leave always-approve, so the next tool call waits on a permission card.
+    "/always-approve",
+    "/auto",
+    "/btw",
+    # Hides the footer hints mngr reads grok's state from.
+    "/compact-mode",
+    "/config",
+    "/config-agents",
+    "/context",
+    "/cost",
+    "/dashboard",
+    "/delete",
+    "/density",
+    "/docs",
+    "/edit-prompt",
+    "/exit",
+    "/feedback",
+    "/find",
+    "/fork",
+    "/guides",
+    "/help",
+    "/history",
+    "/home",
+    "/hooks",
+    "/howto",
+    "/import-claude",
+    "/info",
+    "/jump",
+    "/log",
+    "/marketplace",
+    "/mcps",
+    # grok's menu completes it to /remember, whose composer saves the next message as a memory note.
+    "/mem",
+    # Replaces the composer box and footer hints mngr reads grok's state from.
+    "/minimal",
+    # Makes Enter insert a newline, so no later message is submitted.
+    "/ml",
+    "/multiline",
+    "/onboarding",
+    "/personas",
+    # Leaves grok in plan mode, whose exit tool this workspace removes.
+    "/plan",
+    "/plugin",
+    "/plugins",
+    "/preferences",
+    "/prefs",
+    "/privacy",
+    "/quit",
+    "/recap",
+    "/remember",
+    "/rename",
+    "/resume",
+    "/rewind",
+    "/session-info",
+    "/sessions",
+    "/settings",
+    "/skills",
+    "/summarize",
+    "/t",
+    "/theme",
+    "/timeline",
+    "/timestamps",
+    "/title",
+    "/tour",
+    "/transcript",
+    "/tutorial",
+    "/undo",
+    "/usage",
+    "/vim-mode",
+    # Starts dictation from the machine's microphone.
+    "/voice",
+    "/welcome",
+    "/workflows",
+)
+
+# grok compacts on its own `/compact`, which the chat would neither show nor wait for.
+_GROK_COMPACT_POPUP: Final[HarnessPopup] = HarnessPopup(
+    trigger=PopupTrigger.COMPOSER_COMMAND,
+    commands=("/compact",),
+    action=PopupAction.NOTICE,
+    notice_body="Compacting isn't available for Grok Build chats yet.",
+)
+
+# The model bar's popup for grok also declines `/m`, grok's alias of `/model`.
+_GROK_MODEL_BAR_POPUP: Final[HarnessPopup] = HarnessPopup(
+    trigger=PopupTrigger.COMPOSER_COMMAND,
+    commands=(*_MODEL_BAR_COMMANDS, "/m"),
+    action=PopupAction.NOTICE,
+    notice_body=_MODEL_BAR_NOTICE,
+)
+
+# The auth commands the composer intercepts instead of sending.
 _AUTH_COMMANDS: Final[tuple[str, ...]] = ("/login", "/logout")
 
 # The fast-mode turn limit, declared by the harnesses that can launch fast. Claude Code
@@ -555,6 +659,42 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         popups=(_MODEL_BAR_POPUP,),
         # No `/login` popup, unlike codex and pi: agy has no such command. Signing in is what
         # a bare `agy` does on first launch, which is what the instructions below say.
+    ),
+    HarnessType.GROK: HarnessSpec(
+        name=HarnessType.GROK,
+        # Tails the updates.jsonl of each top-level session mngr records for the agent and of each subagent's child
+        # session. The dot follows mngr's lifecycle and its `active` marker.
+        watcher_class=GrokSessionWatcher,
+        loader_class=GrokTranscriptLoader,
+        tracker_class=GrokActivityTracker,
+        process_started_marker_filename=GrokActivityTracker.marker_filename,
+        # Written by mngr's hook at grok's SessionStart and deleted by its launch script.
+        startup_ready_marker=StartupReadyMarker(filename=GROK_SESSION_STARTED_FILENAME, is_deleted_at_launch=True),
+        # The chat holds every message and the watcher's flush worker alone types it, once mngr reports no turn in
+        # flight. Stop and the tap press one Ctrl+C, which mngr presses only into a cancellable turn.
+        session_class=GrokHarnessSession,
+        interrupt_to_composer_class=GrokInterruptToComposer,
+        shoulder_tap_class=GrokAtomicShoulderTap,
+        cancel_chord="C-c",
+        resolver_class=PlaceholderModelResolver,
+        catalog_factory=lambda: GROK_CATALOG,
+        model_state_relative_path=Path("."),
+        special_kinds=frozenset(
+            {
+                SpecialEventKind.TURN_STARTED,
+                SpecialEventKind.TURN_COMPLETED,
+                SpecialEventKind.TURN_ABORTED,
+            }
+        ),
+        popups=(
+            # No sign-in lane offers xAI, so /login and /logout point at the agent's terminal.
+            HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=_AUTH_COMMANDS, action=PopupAction.NOTICE),
+            HarnessPopup(
+                trigger=PopupTrigger.COMPOSER_COMMAND, commands=_GROK_DECLINED_COMMANDS, action=PopupAction.NOTICE
+            ),
+            _GROK_COMPACT_POPUP,
+            _GROK_MODEL_BAR_POPUP,
+        ),
     ),
     # The seed segment of a seeded chat (``chat_seed.py``): turns written before any agent joined
     # it, read like an archived segment. No agent ever runs
