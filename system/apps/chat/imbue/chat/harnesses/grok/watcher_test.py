@@ -9,6 +9,7 @@ import pytest
 
 from imbue.chat.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.chat.harnesses.grok.queue_tracker import MAX_DELIVERY_ATTEMPTS
+from imbue.chat.harnesses.grok.testing import ROOTS_RELATIVE_PATH
 from imbue.chat.harnesses.grok.testing import add_grok_session
 from imbue.chat.harnesses.grok.testing import append_grok_updates
 from imbue.chat.harnesses.grok.testing import find_fixture_scenario
@@ -494,6 +495,24 @@ def test_a_block_mngr_confirmed_is_delivered_though_grok_logged_no_turn_for_it(t
     watcher._attempt_flush()
 
     assert send.sent == ["queued inside grok"]
+    assert watcher.get_queued_messages() == []
+
+
+def test_a_block_mngr_confirmed_stays_delivered_when_grok_logs_cannot_be_read_after_the_send(tmp_path: Path) -> None:
+    watcher, send, _log = _flushing_watcher(tmp_path, is_logged=False)
+    roots_path = send.agent_state_dir / ROOTS_RELATIVE_PATH
+
+    def make_the_roots_unreadable() -> None:
+        roots_path.unlink()
+        roots_path.mkdir()
+
+    send.after_send = make_the_roots_unreadable
+    _hold(watcher, "held")
+
+    with pytest.raises(OSError):
+        watcher._attempt_flush()
+
+    assert send.sent == ["held"]
     assert watcher.get_queued_messages() == []
 
 

@@ -430,8 +430,8 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         """Claim the held block, type it through mngr, and settle it by what mngr and grok's log show.
 
         A block mngr confirmed grok took is delivered, even when grok queued it behind a turn that started first and
-        logs it only once that turn ends. A block mngr could not confirm is delivered once a user turn holding it
-        shows, and otherwise waits for a later attempt.
+        logs it only once that turn ends; it stays Sending until its turn shows or the witness window ends. A block
+        mngr could not confirm is delivered once a user turn holding it shows, and otherwise waits for a later attempt.
         """
         with self._lock:
             self._refresh_locked()
@@ -444,9 +444,10 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         earlier_flush_began_at = self._queue.note_flush_began(claimed, time.time())
         delivered: tuple[str, ...] = ()
         try:
-            is_confirmed = send(block)
-            is_witnessed = self._await_turn_holding(witness_start, block)
-            if is_confirmed or is_witnessed:
+            if send(block):
+                delivered = claimed
+                self._await_turn_holding(witness_start, block)
+            elif self._await_turn_holding(witness_start, block):
                 delivered = claimed
         finally:
             self._queue.finish_flush(claimed, generation, delivered=delivered)
