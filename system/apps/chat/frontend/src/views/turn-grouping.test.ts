@@ -605,6 +605,7 @@ describe("narration and close-time ejection", () => {
       workMsg("t2", "Edit", "w1"),
       result("t2", "w1", "ok"),
       userMsg("t3", "also check this"),
+      assistantText("t3a", "Sure, checking it too.", "ans"),
       workMsg("t4", "Read", "w2"),
       result("t4", "w2", "ok"),
     ];
@@ -648,6 +649,94 @@ describe("narration and close-time ejection", () => {
     const sections = run(events, /* idle */ false);
     expect(sections[1].live_step_id).toBe("s1");
     expect(stepItems(sections[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
+  });
+
+  // The open-steps reminder asks the agent to re-start a step it means to keep working on, which it
+  // does before answering. That only says the step is still open: the answer stays the turn's reply,
+  // and the step joins the turn with the agent's next real work.
+  it("keeps the answer out of a carried-over step the agent re-starts before answering", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "what's the difference between RAM and disk?"),
+      tkMsg("t4", "tk start s1", "t4"),
+      result("t4", "t4", startOut("s1", "Check overall disk usage")),
+      assistantText("t5", "RAM is short-term memory; disk keeps files. Back to the cleanup.", "ans"),
+    ];
+    const answering = run(events, /* idle */ false);
+    expect(answering[1].live_step_id).toBeNull();
+
+    const idle = run(events, /* idle */ true);
+    expect(idle[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
+    expect(stepItems(idle[1].items)).toHaveLength(0);
+
+    const working = run(
+      [
+        ...events,
+        assistantText("t6", "Looking at the cache next.", "narr"),
+        workMsg("t7", "Bash", "w2"),
+        result("t7", "w2", "ok"),
+      ],
+      /* idle */ false,
+    );
+    const inlineIds = working[1].items.flatMap((item) =>
+      item.kind === "ungrouped" ? item.events.flatMap((part) => ("event_id" in part ? [part.event_id] : [])) : [],
+    );
+    expect(inlineIds).toContain("ans");
+    expect(working[1].live_step_id).toBe("s1");
+    expect(stepItems(working[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
+  });
+
+  // The agent often looks something up before answering, then goes back to the earlier work. The
+  // lookup takes the carried-over step up, but the answer is still the reply to the user's message.
+  it("keeps the answer out of a carried-over step the agent works in before answering", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "how big is the cache?"),
+      workMsg("t4", "Bash", "w2"),
+      result("t4", "w2", "ok"),
+      assistantText("t5", "The cache is 4 GB. Back to the cleanup.", "ans"),
+      assistantText("t6", "Looking at old logs next.", "narr"),
+      workMsg("t7", "Bash", "w3"),
+      result("t7", "w3", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const inlineIds = sections[1].items.flatMap((item) =>
+      item.kind === "ungrouped" ? item.events.flatMap((part) => ("event_id" in part ? [part.event_id] : [])) : [],
+    );
+    expect(inlineIds).toEqual(["ans"]);
+    const step = stepItems(sections[1].items)[0];
+    expect(step.events.map((e) => e.event_id)).toEqual(["a-w2", "narr", "a-w3"]);
+    expect(step.narration).toBe("Looking at old logs next.");
+    expect(sections[1].live_step_id).toBe("s1");
+
+    // While the answer is still being written, it streams as a reply, not under the step.
+    expect(run(events.slice(0, 8), /* idle */ false)[1].live_step_id).toBeNull();
+  });
+
+  // Moving a step is the agent taking up the work, so what it says after that is the step's.
+  it("treats prose after a step move in a new turn as the step's narration", () => {
+    const events = [
+      userMsg("t0", "add a login page"),
+      tkMsg("t1", "tk start s2", "t1"),
+      result("t1", "t1", startOut("s2", "Build the login page")),
+      workMsg("t2", "Read", "w1"),
+      result("t2", "w1", "ok"),
+      assistantText("t3", "The routes live in one file; adding the page there.", "narr"),
+      workMsg("t4", "Edit", "w2"),
+      result("t4", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const step = stepItems(sections[0].items)[0];
+    expect(step.events.map((e) => e.event_id)).toEqual(["a-w1", "narr", "a-w2"]);
+    expect(step.narration).toBe("The routes live in one file; adding the page there.");
   });
 
   // Moving a step ends the carried-over step's claim on the turn without taking it up: the agent
@@ -821,7 +910,8 @@ describe("narration and close-time ejection", () => {
   });
 
   // A regular ticket is not a step, so picking one up leaves the carried-over step to be taken up
-  // by the work that follows.
+  // by the work that follows. The agent has not answered yet, so its next words are the answer and
+  // are written as a reply, not into the step.
   it("takes a carried-over step up again after a regular ticket transition", () => {
     const events = [
       userMsg("t0", "free up disk"),
@@ -834,7 +924,7 @@ describe("narration and close-time ejection", () => {
       result("t5", "w2", "ok"),
     ];
     const sections = run(events, /* idle */ false);
-    expect(sections[1].live_step_id).toBe("s1");
+    expect(sections[1].live_step_id).toBeNull();
     expect(stepItems(sections[1].items).map((s) => s.ticket_id)).toEqual(["s1"]);
     expect(stepItems(sections[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
   });
