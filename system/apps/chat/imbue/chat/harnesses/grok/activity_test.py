@@ -199,6 +199,28 @@ def test_a_subagents_unanswered_tool_call_leaves_a_top_level_turn_thinking() -> 
     )
 
 
+def test_a_call_event_re_delivered_after_its_result_does_not_run_again() -> None:
+    tracker = GrokActivityTracker.build()
+    call = _tool_call_event(_ROOT, "root-call", "2026-10-22T10:00:01Z")
+    tracker.observe([_turn_marker(SpecialEventKind.TURN_STARTED, "2026-10-22T10:00:00Z"), call])
+    tracker.observe(
+        [
+            {
+                "type": "tool_result",
+                "session_id": _ROOT,
+                "timestamp": "2026-10-22T10:00:02Z",
+                "tool_call_id": "root-call",
+            }
+        ]
+    )
+
+    tracker.observe([call])
+
+    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=True, process_started_at=None) is (
+        _THINKING
+    )
+
+
 def test_a_call_a_dead_process_left_unanswered_does_not_run_in_the_next_processs_turn() -> None:
     tracker = GrokActivityTracker.build()
     tracker.observe(
