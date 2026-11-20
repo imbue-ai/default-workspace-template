@@ -679,7 +679,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         interrupt_to_composer_class=GrokInterruptToComposer,
         shoulder_tap_class=GrokAtomicShoulderTap,
         cancel_chord="C-c",
-        # A pick is held on the agent's control lane, whose `/model` and `/effort` the flush worker types between turns.
         resolver_class=GrokModelResolver,
         catalog_factory=lambda: GROK_CATALOG,
         model_state_relative_path=GROK_STATE_RELATIVE_PATH,

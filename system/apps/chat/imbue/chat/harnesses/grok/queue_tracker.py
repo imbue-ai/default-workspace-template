@@ -4,8 +4,8 @@ grok parks a message typed during a turn in its own queue, which leaves nothing 
 the chat holds every message itself: it waits here, and the watcher's flush worker, the only typist, types the held
 block once mngr reports no turn in flight. Entries are journalled under the current grok process's session token, so
 they survive a chat app restart and are dropped when grok relaunches (contract Part B). The control lane holds the
-model bar's newest `/model` and `/effort`, which the worker types each alone, ahead of the held block; it is never
-published, journalled or handed back by stop.
+model bar's newest `/model` and `/effort`, typed ahead of the held block; it is never published, journalled or handed
+back by stop.
 """
 
 import json

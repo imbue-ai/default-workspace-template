@@ -1,9 +1,4 @@
-"""grok's model catalog and its model resolver.
-
-The catalog is grok 1.0.62's built-in model set, as its binary embeds it, each model with the efforts it declares.
-A switch holds grok's `/model <id>` and `/effort <level>` on the agent's control lane, which the flush worker types
-once mngr reports no turn in flight; the bar reconciles from the ``model_state.json`` mngr writes for grok.
-"""
+"""grok's model catalog, grok 1.0.62's built-in models, and its model resolver."""
 
 import json
 from collections.abc import Callable
