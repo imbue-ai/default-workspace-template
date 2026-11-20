@@ -1,6 +1,6 @@
 # app_manifest
 
-The models behind a workspace app's two descriptions (a third, the OpenAPI document of its HTTP API, is `system/libs/app_schema`):
+The models behind a workspace app's two descriptions (a third, the OpenAPI document of its HTTP API, is the app SDK's `imbue.app_sdk.api_schema`):
 
 - **The manifest**, `system/apps/<package>/app.toml`: an app's static
   declarations (name, display name, a one-line description, the path of its
@@ -283,8 +283,12 @@ its manifest may depend on the workspace around it:
   so both are in the footprint. `skill:<name>` for such a skill is the app.
 
 A manifest that still carries `[[references]]` or `[wiring]` beside a record
-loads, and the footprint ignores both tables. `load_manifest` still checks that
-each path such a `[[references]]` names exists.
+loads in the tolerant mode with both tables unread: the footprint ignores them,
+and `load_manifest` does not check the paths such a `[[references]]` names, so
+an installed app's manifest is not held to this workspace's tree. The strict
+mode (`app-manifest validate-manifest`) refuses such a manifest, and says that
+what else uses the app is listed in its record and that its background
+programs are `[[services]]`.
 
 `app-manifest pass-scope` writes the scope file for a harden pass, which covers
 every creation one change touched:
