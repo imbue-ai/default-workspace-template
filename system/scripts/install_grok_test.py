@@ -1,10 +1,4 @@
-"""install_grok.sh leaves a grok at the pinned version alone, refuses a download that does not
-match the pinned sha256, and installs a matching one only when it reports the pinned version.
-
-A stub `curl` serves a prepared file and logs its calls, and a stub `uname` fixes the
-architecture, so no test reaches the network. The install tests run a copy of the script whose
-pinned sha256s are the served file's.
-"""
+"""Tests for install_grok.sh, run against a stub `curl` and `uname` so none reaches the network."""
 
 import gzip
 import hashlib

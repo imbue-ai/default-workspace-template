@@ -1,11 +1,10 @@
 #!/bin/bash
-# Install the pinned Grok Build CLI (`grok`) from xAI, checked against the
-# per-arch sha256 recorded here (xAI publishes none). A grok already at
-# GROK_VERSION is left in place.
+# Installs xAI's Grok Build CLI (`grok`) at GROK_VERSION, checked against the
+# per-arch sha256s below (xAI publishes none).
 #
-# Keep GROK_VERSION at the version mngr's grok plugin is tested with. To bump:
-# download https://x.ai/cli/grok-<version>-linux-{x86_64,aarch64}.gz, then set
-# GROK_VERSION and both sha256s below from the downloaded files.
+# GROK_VERSION is the version mngr's grok plugin is tested with. To bump, download
+# https://x.ai/cli/grok-<version>-linux-{x86_64,aarch64}.gz and set GROK_VERSION
+# and both sha256s from those files.
 set -euo pipefail
 
 GROK_VERSION="1.0.62"
@@ -40,6 +39,7 @@ asset="grok-${GROK_VERSION}-linux-${asset_arch}.gz"
 tmp="$(mktemp -d)"
 staged=""
 trap 'rm -rf "$tmp" ${staged:+"$staged"}' EXIT
+# Beside the target, so it runs where /tmp is noexec and the rename is atomic.
 staged="$(mktemp "${GROK_INSTALL_PATH}.XXXXXX")"
 
 curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o "${tmp}/${asset}" "https://x.ai/cli/${asset}"
@@ -48,7 +48,6 @@ if ! echo "${sha256}  ${tmp}/${asset}" | sha256sum -c --status -; then
     exit 1
 fi
 
-# Staged beside the target, so it runs where /tmp is noexec and the rename is atomic.
 gzip -dc "${tmp}/${asset}" > "$staged"
 chmod 0755 "$staged"
 if ! reports_pinned_version "$staged"; then

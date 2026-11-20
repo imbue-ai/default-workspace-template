@@ -20,10 +20,10 @@ ENV PATH="/root/.local/bin:$PATH"
 
 # System toolchain (repo-independent). Shared verbatim with the Lima provider,
 # which runs this exact script in the VM. setup_system.sh installs the system
-# toolchain AND invokes the sibling installers (secret scanners, agy, grok,
-# owner-exec, earlyoom), so every provisioning path -- docker-built images, Lima
-# VMs, and the update apply's live re-run -- gets every global binary from one
-# common script; system/test_provisioner_single_entry.py holds it to that.
+# toolchain AND invokes the sibling installers, so every provisioning path --
+# docker-built images, Lima VMs, and the update apply's live re-run -- gets every
+# global binary from one common script; system/test_provisioner_single_entry.py
+# holds it to that.
 # Copied with its sibling _provision_guard.sh (which setup_system.sh sources
 # via `dirname "$0"`) and those installers (which it invokes the same way) and
 # nothing else, so this expensive, stable layer caches against these scripts +
