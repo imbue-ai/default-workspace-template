@@ -24,7 +24,9 @@ other program; for such an app:
 - **Add it** with the `build-app` scaffold, or `uv run --no-sync app-install
   add <package>` for an app directory that already exists.
 - **Change how it runs** in its `app.toml` (`[run]`, `[[services]]`,
-  `[[secrets]]`), then `uv run --no-sync app-install regenerate <name>` and
+  `[[secrets]]`; a `command` there is one of the app's console scripts when
+  the app has a `pyproject.toml`, and is run as given otherwise), then
+  `uv run --no-sync app-install regenerate <name>` and
   `supervisorctl reread && supervisorctl update`. Never edit the generated
   file: `uv run --no-sync app-install check` reports it, and the next
   regenerate overwrites it.

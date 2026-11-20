@@ -343,6 +343,11 @@ lets two agents scaffold two apps at once:
   supervisorctl reread && supervisorctl update
   ```
 
+  A `command` in `[run]` or `[[services]]` names one of the app's console
+  scripts (`[project.scripts]` in its `pyproject.toml`): the program runs it
+  from the app's own `.venv/bin`. Only an app with no `pyproject.toml` (a
+  wrapped server, below) has its command run as given.
+
   A scaffolded app has no `[run]` table: without one, the program runs the
   console script named after the app with `<PACKAGE_UPPER>_PORT` set to its
   port. A `[run]` table replaces all of that, so one you add to a scaffolded
