@@ -325,13 +325,16 @@ stops publishing for a given agent, which is not a state ordinary failures produ
 ### E17. grok — a turn that starts between the flush's check and mngr's typing parks the block in grok
 **Accepted, as for agy (E11, E12).** The flush types only while mngr reports no turn in flight,
 but a turn can start after that check and before mngr types: grok's wake turn for finished
-background work, or a prompt typed at grok's pane. grok then queues the block behind that turn,
-and mngr confirms it by the block's queued row, so the chat counts it delivered with no turn to
-show for it yet. Until grok runs it, the message shows nowhere (A1a); a stop does not return it
-(Interrupt step 2), because grok runs it as soon as the cancel lands; and a restart of grok
-loses it. The flush keeps the live emit muted while it looks for the block's turn, so the
-overtaking turn's events show only once the witness window ends. Closing the window would take
-a send that mngr refuses once a turn has started, re-checked under its message lock.
+background work, or a prompt typed at grok's pane. The shared `resolve_is_turn_in_flight` reads
+RUNNING_BACKGROUND as no turn even with the `active` marker up, so a wake turn that has started
+while mngr still reports RUNNING_BACKGROUND is typed into the same way. grok then queues the
+block behind that turn, and mngr confirms it by the block's queued row, so the chat counts it
+delivered with no turn to show for it yet. Until grok runs it, the message shows nowhere (A1a);
+a stop does not return it (Interrupt step 2), because grok runs it as soon as the cancel lands;
+and a restart of grok loses it. The flush keeps the live emit muted while it looks for the
+block's turn, so the overtaking turn's events show only once the witness window ends. Closing
+the window would take a send that mngr refuses once a turn has started, re-checked under its
+message lock.
 
 ### E18. grok — a block mngr could not confirm is typed again, at most three times
 mngr can type a block and still be unable to confirm it. The flush then looks for a user turn
@@ -344,9 +347,11 @@ stop returns it, as E14 describes for agy.
 ### E19. grok — a stop mngr cannot press leaves the turn running
 mngr presses Ctrl+C only into a running top-level turn whose composer is empty, so a stop presses
 nothing into a wake turn grok has not started yet, or into a turn whose composer holds text
-someone typed at grok's pane. A turn still holding mngr's `active` marker at the deadline after a
-press, such as one whose foreground subagent grok's cancel leaves running, is left too. The held
-messages come back either way; grok restarts nothing, since a restart would also end its
+someone typed at grok's pane. Stop and the tap ask mngr to press only while the shared
+`resolve_is_turn_in_flight` reads a turn, so they press nothing into a wake turn mngr still
+reports as RUNNING_BACKGROUND either. A turn still holding mngr's `active` marker at the deadline
+after a press, such as one whose foreground subagent grok's cancel leaves running, is left too.
+The held messages come back either way; grok restarts nothing, since a restart would also end its
 background work.
 
 ---
