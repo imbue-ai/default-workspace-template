@@ -224,5 +224,6 @@ class ChatStatusWord(UpperCaseStrEnum):
     IDLE = auto()
     ATTENTION = auto()
     STOPPED = auto()
+    INTERRUPTED = auto()
     ERROR = auto()
     UNKNOWN = auto()

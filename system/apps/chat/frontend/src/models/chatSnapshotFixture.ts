@@ -35,6 +35,7 @@ export function chatSnapshotFixture(
       is_resending_after_sign_in: false,
       is_busy: false,
       background_tasks: [],
+      is_interrupted: false,
       ...agentOverrides,
     },
   };

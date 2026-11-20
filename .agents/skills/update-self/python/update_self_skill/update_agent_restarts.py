@@ -48,6 +48,8 @@ SELF_RESTART_LOG_NAME = "helper.log"
 # interrupt route's ``InterruptAgentRequest`` and 409 answers). A ``system/apps/chat`` server test
 # runs ``restart_idle_agents`` against the real app, so it fails when these drift from it.
 STOPPED_CHAT_STATUS = "stopped"
+# A chat whose agent died mid-turn and has not been resumed; a restart would drop its offer to resume.
+INTERRUPTED_CHAT_STATUS = "interrupted"
 ROOM_CHAT_KIND = "room"
 INTERRUPT_IF_IDLE_REQUEST: Mapping[str, object] = {"only_if_idle": True}
 BUSY_WITH_FIELD = "busy_with"
@@ -204,7 +206,7 @@ def restart_idle_agents(
 ) -> dict[str, list[dict[str, str]]]:
     """Restart every idle chat but the pass's own and its worker's; the report of what happened.
 
-    A stopped chat needs nothing, since its next start loads what the update installed, and
+    A stopped or interrupted chat needs nothing, since its next start loads what the update installed, and
     neither does one in ``started_after_landing`` (chat ids the pass's resume started after the
     update landed), nor a room, whose agent runs no harness; one deleted since the list was
     read is skipped. Raises
@@ -219,7 +221,7 @@ def restart_idle_agents(
         if chat.chat_id == own_chat_id or chat.name == UPDATE_WORKER_NAME:
             continue
         if (
-            chat.status == STOPPED_CHAT_STATUS
+            chat.status in (STOPPED_CHAT_STATUS, INTERRUPTED_CHAT_STATUS)
             or chat.kind == ROOM_CHAT_KIND
             or chat.chat_id in started_after_landing
         ):

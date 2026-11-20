@@ -167,12 +167,13 @@ attribute a request to a client, and the app asks the shell for windows,
 through one client of the `workspace_layout` library that asks as the chat app
 (`shell_client.py`), which the send routes, the auto-open reactor, and the
 focus-chat route share. A chat's status (`ChatStatus` in
-`primitives.py`: working, background, idle, attention, stopped, or error) comes
-from its active agent's activity state, a pending permission request, the
-lifecycle, and the chat's pending background tasks, and rides the
+`primitives.py`: working, background, idle, attention, stopped, interrupted, or
+error) comes from its active agent's activity state, a pending permission
+request, the lifecycle, and the chat's pending background tasks, and rides the
 `chats_updated` snapshots the chat root's list draws its status dots from. The
-first that holds wins: stopped, attention, working, background, idle; a chat
-switching agents is working, or error once the switch failed.
+first that holds wins: interrupted (the agent's process died mid-turn and no
+message has reached it since), stopped, attention, working, background, idle; a
+chat switching agents is working, or error once the switch failed.
 
 A chat is busy when its agent will resume on its own: a turn is in flight, or a
 background task is pending whose completion starts one. The pending tasks are

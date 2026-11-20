@@ -71,12 +71,13 @@ export interface ChatRailAttrs {
 /** The status each dot stands for: working is the accent and breathes; background (no turn, but a
  *  pending task will start one) is a dashed accent ring that turns slowly; done (a finished turn
  *  the user has not looked at, see ``chatUnread``) is a green check; attention is amber; idle
- *  is a hollow grey ring; error is red; stopped wears a pause mark. */
+ *  is a hollow grey ring; error and interrupted (the agent stopped mid-turn) are red; stopped wears a pause mark. */
 const DOT_CLASS_BY_STATUS: Readonly<Record<string, string>> = {
   working: "chat-rail-dot--pulse bg-accent",
   background: "chat-rail-dot--dashed",
   attention: "bg-warning",
   error: "bg-danger",
+  interrupted: "bg-danger",
 };
 
 function displayStatus(row: ChatRow): string {
@@ -202,7 +203,8 @@ function deleteFromMenu(attrs: RowMenuContext, row: ChatRow): void {
 /** The rows a chat's menu offers, ending with ``referenceRows``: the reference rows for the element right-clicked,
  *  and none for a menu opened from a kebab. */
 export function rowMenuRows(attrs: RowMenuContext, row: ChatRow, referenceRows: readonly MenuRow[] = []): MenuRow[] {
-  const isStopped = row.status === "stopped";
+  // An interrupted chat stays interrupted after its agent is started again, so its verb follows the process.
+  const isStopped = row.status === "stopped" || (row.status === "interrupted" && row.isAgentProcessDead);
   return [
     { kind: "action", key: "rename", label: "Rename", onSelect: () => beginRename(row) },
     // A helper another agent started cannot be the main chat, a room never is, and the main chat needs no offer to

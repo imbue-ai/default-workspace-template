@@ -43,8 +43,13 @@ def test_a_bubble_never_shows_a_messages_dictation_note() -> None:
 
 
 def test_every_chat_status_and_kind_is_spelled_the_same_on_the_wire() -> None:
-    assert [activity_status_of(status).name for status in ChatStatus] == [status.name for status in ChatStatus]
+    spelled_alike = [status for status in ChatStatus if status is not ChatStatus.INTERRUPTED]
+    assert [activity_status_of(status).name for status in spelled_alike] == [status.name for status in spelled_alike]
     assert [activity_kind_of(kind).name for kind in ChatKind] == [kind.name for kind in ChatKind]
+
+
+def test_the_tray_shows_an_interrupted_chat_as_a_failed_one() -> None:
+    assert activity_status_of(ChatStatus.INTERRUPTED) is ChatActivityStatus.ERROR
 
 
 def test_the_chats_activity_report_lists_every_chat_with_its_status_and_kind() -> None:

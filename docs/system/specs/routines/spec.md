@@ -26,7 +26,7 @@ Facts this design builds on, as of `main` at `2cf9763de` (2026-10-20).
 - The Caretaker is that pattern with a deterministic gate: `system/services/caretaker/caretaker_check.sh` looks for failing services, fresh error output, a full disk, and memory-guard sheds, and wakes the `caretaker` agent (its own create template, its own skill) only with findings or on its first run.
   It is off by default; the `enable-caretaker` and `disable-caretaker` skills write and remove its cron entry.
 - The `manage-scheduled-tasks` skill is the only instruction agents have for scheduling, and it asks them to hand-write cron lines, choose between the runner and a plain cron line, and keep two copies of each entry.
-- The chat app owns the chats and knows what each is doing: `GET /api/agents` answers every agent with its `chat_id` and `is_busy`, the `ChatSnapshot` status (`working`, `background`, `idle`, `attention`, `stopped`, `error`) is what the chat list draws, and `POST /api/chats/<chat-id>/stop`, `start`, `interrupt`, and `message` act on a chat.
+- The chat app owns the chats and knows what each is doing: `GET /api/agents` answers every agent with its `chat_id` and `is_busy`, the `ChatSnapshot` status (`working`, `background`, `idle`, `attention`, `stopped`, `interrupted`, `error`) is what the chat list draws, and `POST /api/chats/<chat-id>/stop`, `start`, `interrupt`, and `message` act on a chat.
   `system/scripts/message_chat.py` sends to a chat by id and revives a stopped agent on send; `system/scripts/message_chat.py --create` makes a chat the way the launcher does.
 - A chat agent notifies the user through `POST /api/v1/agents/<agent-id>/notifications` on the Imbue Studio app, via the latchkey gateway, with `message`, an optional `title`, and `watched_by` (`.agents/skills/notify-user/scripts/notify_user.py`).
   The feed resolves the entry's destination from the agent's chat: a click lands in that chat.
@@ -210,7 +210,7 @@ Inside a run (`ROUTINES_RUN_ID` set) the wake attaches the chat to that run and 
    A send the chat app answers with 202 is held for the agent the chat is moving to, which the handoff delivers later: a held `/clear` is waited out (the chat listed and idle again, within two minutes) before the cursor is read, so the cursor sits after the clear; a held `/<skill>` gets the same two minutes, rather than one, before the agent counts as never started.
 4. **Wait for the turn.** Poll the chat's snapshot every second.
    The turn is over when the status is `idle` and the transcript (`GET /api/chats/<id>/events`) holds an agent message after the sent one; that is `succeeded`.
-   `stopped` or `error` is `failed`.
+   `stopped`, `interrupted` (the agent's process died mid-turn) or `error` is `failed`.
    `attention` writes a `run_blocked` event once (the user must answer the agent) and keeps waiting, so a run the user unblocks can still end well.
    A chat that is still `idle` with no answer a minute after the send never started; that is `failed` with the summary saying so.
    Past `timeout`, interrupt the chat (`POST .../interrupt`) and end the run `timed_out`.

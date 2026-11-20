@@ -82,6 +82,15 @@ describe("ChatRail status marks", () => {
     expect(rail.querySelector('[data-chat-id="agent-stopped"]')?.className).toContain("opacity-50");
     expect(rail.querySelector('[data-chat-id="agent-idle"]')?.className).not.toContain("opacity-50");
   });
+
+  it("draws an interrupted chat with the error's red dot, and never dims it", () => {
+    const rail = mount([chatRowFixture("agent-cut-off", { status: "interrupted" })]);
+
+    const row = rail.querySelector('[data-chat-id="agent-cut-off"]')!;
+    expect(row.getAttribute("data-status")).toBe("interrupted");
+    expect(dotClassOf("agent-cut-off")).toContain("bg-danger");
+    expect(row.className).not.toContain("opacity-50");
+  });
 });
 
 describe("ChatRail participant photos", () => {
@@ -185,6 +194,21 @@ describe("ChatRail main chat", () => {
     expect(keysOf(main)).not.toContain("stop");
     expect(keysOf(stoppedMain)).not.toContain("start");
     expect(keysOf(other)).toContain("stop");
+  });
+
+  it("offers a restart, not a stop, on a chat whose agent stopped mid-turn, and a stop once it runs again", () => {
+    const interrupted = chatRowFixture("agent-cut-off", { status: "interrupted", isAgentProcessDead: true });
+    const restarted = chatRowFixture("agent-restarted", { status: "interrupted", isAgentProcessDead: false });
+    const context = chatRailAttrsFixture({ rows: [interrupted, restarted] });
+    const keysOf = (row: ChatRow): string[] =>
+      rowMenuRows(context, row).flatMap((menuRow) =>
+        menuRow.kind === "action" && menuRow.key !== undefined ? [menuRow.key] : [],
+      );
+
+    expect(keysOf(interrupted)).toContain("start");
+    expect(keysOf(interrupted)).not.toContain("stop");
+    expect(keysOf(restarted)).toContain("stop");
+    expect(keysOf(restarted)).not.toContain("start");
   });
 
   it("gives a chat waiting for its first send its verbs, and a chat being created its rename and delete too", () => {

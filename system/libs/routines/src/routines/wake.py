@@ -42,7 +42,7 @@ _BUSY_STATUSES: Final[frozenset[ChatStatusWord]] = frozenset(
     (ChatStatusWord.WORKING, ChatStatusWord.BACKGROUND, ChatStatusWord.ATTENTION)
 )
 _GONE_STATUSES: Final[frozenset[ChatStatusWord | None]] = frozenset(
-    (None, ChatStatusWord.STOPPED, ChatStatusWord.ERROR)
+    (None, ChatStatusWord.STOPPED, ChatStatusWord.INTERRUPTED, ChatStatusWord.ERROR)
 )
 
 

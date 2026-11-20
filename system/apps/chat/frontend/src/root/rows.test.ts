@@ -48,6 +48,22 @@ describe("rowsFromSnapshots", () => {
   });
 });
 
+describe("rowsFromSnapshots liveness", () => {
+  it("marks a chat whose agent process is down, and never a chat that is not an agent yet", () => {
+    const rows = rowsFromSnapshots(
+      [chatSnapshotFixture("agent-up"), chatSnapshotFixture("agent-down", { active_agent: { state: "DONE" } })],
+      [provisional("agent-new", "creating")],
+      null,
+    );
+
+    expect(rows.map((row) => [row.chatId, row.isAgentProcessDead])).toEqual([
+      ["agent-up", false],
+      ["agent-down", true],
+      ["agent-new", false],
+    ]);
+  });
+});
+
 describe("groupedRows", () => {
   it("orders by recency with never-messaged chats last, and a chat started here first", () => {
     const rows = rowsFromSnapshots(

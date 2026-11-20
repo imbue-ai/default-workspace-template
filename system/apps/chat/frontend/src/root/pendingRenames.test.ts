@@ -22,6 +22,7 @@ function row(chatId: string, title: string): ChatRow {
     hasMention: false,
     participants: [],
     isMain: false,
+    isAgentProcessDead: false,
   };
 }
 

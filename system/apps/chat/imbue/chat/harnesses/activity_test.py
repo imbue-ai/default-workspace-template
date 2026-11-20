@@ -3,6 +3,7 @@ from typing import Any
 import pytest
 
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
@@ -276,6 +277,27 @@ def test_placeholder_harness_reports_an_empty_transcript(harness: HarnessType) -
     spec = get_harness_spec(harness)
     assert spec.catalog_factory().options == ()
     assert spec.special_kinds == frozenset()
+
+
+def test_a_room_transcript_never_ends_mid_turn() -> None:
+    """Every line of a room is a ``user_message`` and a room has no turns, so a room whose reader died is never a
+    turn cut off."""
+    tracker = build_tracker(HarnessType.ROOM)
+    tracker.observe([{"type": "user_message", "timestamp": "2026-01-01T00:00:00Z", "content": "hi"}])
+    assert tracker.is_tail_mid_turn(None) is False
+    claude = build_tracker(HarnessType.CLAUDE)
+    claude.observe([{"type": "user_message", "timestamp": "2026-01-01T00:00:00Z", "content": "hi"}])
+    assert claude.is_tail_mid_turn(None) is True
+
+
+def test_a_tail_older_than_the_process_is_never_mid_turn() -> None:
+    """A prompt left unanswered by an earlier process is a turn that process abandoned, not one the current one ran."""
+    tracker = build_tracker(HarnessType.CLAUDE)
+    tracker.observe([{"type": "user_message", "timestamp": "2026-01-01T00:00:00Z", "content": "hi"}])
+    tail_at = parse_iso_timestamp_to_epoch("2026-01-01T00:00:00Z")
+    assert tail_at is not None
+    assert tracker.is_tail_mid_turn(tail_at - 1) is True
+    assert tracker.is_tail_mid_turn(tail_at + 1) is False
 
 
 @pytest.mark.parametrize(
