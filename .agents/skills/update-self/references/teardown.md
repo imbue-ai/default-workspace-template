@@ -48,10 +48,6 @@ A browser is not a program and no ending brings one back, so put any this
 pass stopped back yourself (`freeing-memory-for-an-update.md`, "Putting it
 back").
 
-If `workspace-layout list` shows a preview of a critical app left registered,
-tear it down as `older-workspaces.md` ("A stray preview of a critical app")
-says.
-
 ## An ending without a landed apply
 
 Release the leases either way, each as its own command: every `editing

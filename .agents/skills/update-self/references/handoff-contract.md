@@ -5,12 +5,14 @@ running a pass. A pass runs across two versions of this skill at once: Steps
 1-2 from the workspace's *local* copy, and Step 3 onward from the copy staged
 at `data/.tasks/update-self/skill-at-target/.agents/skills/update-self` -- the
 target release's own copy (or the local one, when the ref predates the skill).
-What follows from that for one old release or another is in
-`older-workspaces.md`.
+What holds on every pass because of that is here. What a pass does
+differently on an older workspace is in `older-workspaces.md`, and for the
+worker in `worker/older-workspaces.md`.
 
 ## Contents
 
 - What must stay stable
+- What can go as the floor rises
 - The scheduled entry: a pinned target and ceiling
 - What the apply must tolerate
 - What the what's-new listing assumes of each release
@@ -30,7 +32,7 @@ What follows from that for one old release or another is in
   finds; otherwise an older initiator handing off into a newer copy (or vice
   versa) lands at the wrong step. An initiator from before SKILL.md had its
   "Standing instructions" section has not read them, so Step 3 opens by
-  sending it there and to `older-workspaces.md`.
+  sending it there.
 - **The step headings are parsed.** `update_self_test.py` reads SKILL.md by
   heading (`## 2. Resolve the target`, `## 3. Dispatch the worker`) and the
   step references by file name; a renamed heading or a command moved between
@@ -38,6 +40,10 @@ What follows from that for one old release or another is in
 - **Step 3a's ceiling re-check** must stay: it is the only ceiling check that
   runs whatever copy ran Step 2 (see `version-ceiling.md`, "When Step 3a
   finds the target above the ceiling").
+- **Step 3a's forced tag fetch** must stay too. A copy of Step 2 whose own
+  fetch is not forced cannot move a tag the workspace already holds, so Step
+  3a fetches the tags again, forced, before it builds the bridge, and the
+  bridge is built against the commit the worker will merge.
 - **`/tmp/update-self-target.json` is written by the local copy and read by the
   target's prose**, so its writer can be several releases older or newer than
   its reader. Only `ref` is guaranteed; a version predating the file does not
@@ -54,11 +60,13 @@ What follows from that for one old release or another is in
   `.agents/skills/update-self/scripts/update_self.py` resolves to the
   workspace's own copy, which may predate a subcommand the prose relies on --
   the `run-status` writes in particular fail exactly on the first update into
-  the release that ships them. The one exception is the verdict after the
-  staged copy exits 75 (system Python older than the target's floor): the
-  staged copy exits 75 on every subcommand there, so the command it prints for
-  that verdict runs the local copy, and is skipped when the local copy
-  predates `run-status`.
+  the release that ships them (minds-v0.4.3, so an older copy's Step 1
+  recorded no pass). The staged copy also keeps the record of the apps a pass
+  stopped, which an older own copy would drop. The one exception is the
+  verdict after the staged copy exits 75 (system Python older than the
+  target's floor): the staged copy exits 75 on every subcommand there, so the
+  command it prints for that verdict runs the local copy, and is skipped when
+  the local copy predates `run-status`.
 - **Every prose path outside this skill's own directory uses the staged copy**
   from Step 3 on, in SKILL.md and in every reference (a test holds the prose to
   this, and to naming only paths `stage-shared-prose` stages:
@@ -71,12 +79,25 @@ What follows from that for one old release or another is in
   test holds this too): the lead follows the staged prose but launches with
   the workspace's own `launch-task/create_worker.py`, and under a launcher
   that does not stamp the line it is the only thing that gives the worker a
-  report address.
+  report address: the worker finishes, cannot deliver, and the lead waits out
+  the timeout. Staging a newer launcher would not help: it may depend on
+  settings or plugins the merge has not landed yet.
 - **The prose asks of `create_worker.py` only what every supported launcher
   provides** (`python/update_self_skill/launcher_contract_test.py` pins that set to the oldest
   release the app updates from, over SKILL.md and every reference). Clearing
-  the previous pass's worker uses plain `mngr list` / `mngr destroy` for this
-  reason.
+  the previous pass's worker uses plain `mngr list` / `mngr destroy`, and
+  clearing its branch plain `git`, for this reason. A reply to a gate uses
+  `reply`, which a launcher has from minds-v0.6.1 on, and `older-workspaces.md`
+  has the send for one without it.
+- **The worker delivers its report by hand**: the worker guide's Step 6
+  writes the report file and copies it into place, which is all the
+  launcher's `report` subcommand does, since a launcher from before
+  minds-v0.6.2 has no `report`. A launcher from before minds-v0.6.1 stamps no
+  `lead_work_dir` either, so wherever the worker guide reads `LEAD_WORK_DIR`
+  it falls back to the main worktree of the same repo.
+- **Teardown carries on when `workspace-layout show` fails.** A tree from
+  before minds-v0.8.6 has no `show`, and a shell that is not up fails it on
+  any release, so that line stays at any floor.
 - **The report poll runs the staged skill's own `scripts/run_in_background.py`**,
   whose code (`python/update_self_skill/run_in_background.py`) is a
   byte-identical mirror of `system/scripts/workspace_bare_scripts/run_in_background.py`
@@ -85,6 +106,33 @@ What follows from that for one old release or another is in
   `await`, and looks up its messenger in the workspace's tree:
   `system/scripts/message_chat.py` where there is one, else `mngr message`. `python/update_self_skill/staged_runner_test.py` holds what it asks of each
   to the oldest release that has it.
+
+## What can go as the floor rises
+
+The floor is the oldest release a workspace updates from in one pass
+(`older-workspaces.md` has its value). The items above that only an older
+release needs, and when each can go:
+
+- CLEANUP: at a floor of minds-v0.4.3 every supported copy has `run-status`.
+  The "skipped when the local copy predates `run-status`" clause above goes,
+  with the sentence that skips the verdict in `older-workspaces.md` ("A
+  system Python older than 3.12").
+- CLEANUP: at a floor of minds-v0.6.2 the worker guide's Step 6 and the task
+  file in `launching-the-worker.md` may deliver through `report` as the
+  shared reporting reference says, and the `LEAD_WORK_DIR` fallbacks (the
+  cron listing of the worker guide's Step 4a, and its Step 6) can go.
+- CLEANUP: at a floor of minds-v0.9.0 every supported Step 2 reads the pin.
+  Remove `--ceiling` as a spelling of `--app-version` (`update_self.py`), and
+  the app drops the `--ceiling` instruction from its starting message.
+- CLEANUP: at a floor of minds-v0.10.0 `launching-the-worker.md` may use the
+  launcher's own subcommands (`stop`, `destroy`) and the task file may drop
+  the two frontmatter lines the launcher stamps. Update
+  `launcher_contract_test.py` and
+  `test_skill_md_task_template_carries_the_lead_agent_and_report_fields` with
+  them. The staged runner stays while the lead launches cross-version.
+- CLEANUP: remove the line naming `python-packaging-migration.md` in
+  `after-the-apply.md` when `user_package_migration.py`'s own marker says
+  that module can go.
 
 ## The scheduled entry: a pinned target and ceiling
 
@@ -96,17 +144,17 @@ message and the template only reads it, from Steps 1 and 2 of the workspace's
 
 - **Step 2 must honor the pin in every version.** One that knows the pin reads
   its `Ceiling:`, and a `Target:` the user chose, into `resolve-target`. One
-  that predates the pin follows the message's own instruction to append
-  `--ceiling <ref>` to `resolve-target`, so `--ceiling` must stay an accepted
-  spelling of `--app-version`. Neither kind asks the app, and Step 3a's
-  re-check passes the same pin.
+  that predates the pin (a release before minds-v0.9.0) follows the message's
+  own instruction to append `--ceiling <ref>` to `resolve-target`, so
+  `--ceiling` must stay an accepted spelling of `--app-version`. Neither kind
+  asks the app, and Step 3a's re-check passes the same pin.
 - **Step 1 must never stop to ask.** Nobody may be watching a pass, so a future
   Step 1 must keep taking an abandoned lease over by rule and saving a dirty
   tree as one commit rather than refusing it.
 
 The `--ceiling` instruction exists only for the Step 2 copies that predate the
 pin; the app drops it once the oldest release it updates from reads the pin
-itself (`older-workspaces.md` carries the marker).
+itself ("What can go as the floor rises").
 
 ## What the apply must tolerate
 
