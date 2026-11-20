@@ -86,13 +86,6 @@ def test_grok_opens_the_sign_in_for_login_and_logout_and_declines_its_model_alia
     assert actions["/quit"] == (PopupAction.NOTICE, None)
 
 
-@pytest.mark.parametrize("command", ["/m", "/model", "/effort"])
-def test_grok_declines_its_model_and_effort_commands_with_a_notice_pointing_at_the_model_picker(command: str) -> None:
-    action, notice_body = _grok_composer_actions()[command]
-    assert action is PopupAction.NOTICE
-    assert notice_body is not None and "model picker" in notice_body
-
-
 def test_no_lane_signs_in_to_grok_so_no_account_can_run_it() -> None:
     """grok's chat renders for a grok agent, and nothing a user picks from launches one."""
     assert all(lane.harness is not HarnessType.GROK for lane in LANES)
