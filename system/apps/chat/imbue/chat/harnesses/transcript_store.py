@@ -626,6 +626,10 @@ class StoreBackedWatcher(StoreBackedTranscriptLoader, AgentSessionWatcher, ABC):
         with self._lock:
             self._refresh_locked()
             to_send = self._filter_broadcast(self._store.take_unemitted())
+        self._broadcast(to_send)
+
+    def _broadcast(self, to_send: list[dict[str, Any]]) -> None:
+        """Hand ``to_send`` to ``on_events`` between the side-channel hooks. Called outside the lock."""
         self._before_broadcast()
         if to_send:
             self._on_events(self._agent_id, to_send)
