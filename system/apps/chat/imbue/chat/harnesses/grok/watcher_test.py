@@ -513,6 +513,18 @@ def test_a_slash_command_mngr_confirmed_leaves_without_waiting_for_a_turn_grok_n
     assert watcher.get_queued_messages() == []
 
 
+def test_a_held_slash_command_is_typed_on_its_own_between_the_messages_around_it(tmp_path: Path) -> None:
+    """grok runs a slash command only at the start of its input."""
+    watcher, send, _log = _flushing_watcher(tmp_path)
+    _hold(watcher, "summarize what you did", "/new", "go on", "and then this")
+
+    for _attempt in range(3):
+        watcher._attempt_flush()
+
+    assert send.sent == ["summarize what you did", "/new", "go on\nand then this"]
+    assert watcher.get_queued_messages() == []
+
+
 def test_a_block_mngr_confirmed_stays_delivered_when_grok_logs_cannot_be_read_after_the_send(tmp_path: Path) -> None:
     watcher, send, _log = _flushing_watcher(tmp_path, is_logged=False)
     roots_path = send.agent_state_dir / ROOTS_RELATIVE_PATH

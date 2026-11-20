@@ -17,6 +17,8 @@ from uuid import uuid4
 from loguru import logger
 
 from imbue.chat.harnesses.queued_set import QueuedSet
+from imbue.imbue_common.pure import pure
+from imbue.mngr.agents.tui_utils import is_slash_command_message
 from imbue.mngr_grok.grok_config import PROCESS_STARTED_MARKER_FILENAME
 
 OUTBOX_FILENAME: Final[str] = "grok_outbox.jsonl"
@@ -40,6 +42,16 @@ def session_token(agent_state_dir: Path) -> str:
     except OSError as error:
         logger.opt(exception=error).warning("grok: could not read the launch marker {}", marker_path)
         return ""
+
+
+@pure
+def _entries_of_one_block(entries: list[dict[str, str]]) -> list[dict[str, str]]:
+    """The leading entries one typed block holds: a slash command alone, since grok runs one only at the start of its
+    input, else every entry before the next slash command."""
+    first_command_index = next(
+        (index for index, entry in enumerate(entries) if is_slash_command_message(entry["content"])), len(entries)
+    )
+    return entries[: max(first_command_index, 1)]
 
 
 class GrokQueueTracker:
@@ -228,7 +240,7 @@ class GrokQueueTracker:
         return queued_id
 
     def begin_flush(self) -> tuple[str, tuple[str, ...], int]:
-        """Claim every entry with attempts left: (block, claimed ids, generation).
+        """Claim the leading entries with attempts left that one block holds: (block, claimed ids, generation).
 
         Empty while another claim is open or a stop runs.
         """
@@ -242,6 +254,7 @@ class GrokQueueTracker:
             ]
             if not entries:
                 return "", (), self._generation
+            entries = _entries_of_one_block(entries)
             claimed = tuple(entry["queued_id"] for entry in entries)
             self._sending_ids = set(claimed)
             self._settled_locked()
