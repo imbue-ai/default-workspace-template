@@ -66,13 +66,17 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   against the repo root, given or derived from a `system/apps/<package>/app.toml`
   layout -- that every reference exists, sits neither in the app's own
   directory nor in another app's, and goes through no symlinked directory,
-  which git never reports a changed file through), `ManifestReadMode` (what
+  which git never reports a changed file through; the references of an app
+  with a record are the record's, so its manifest's are not checked),
+  `ManifestReadMode` (what
   `load_manifest` does with a key the models do not declare, in the manifest
   or in any table or array entry of it: `TOLERANT`, the default, logs a
   warning naming the manifest and the key and ignores it, so a reader still
   reads the manifest of an app installed from a repository whose template is
   newer than this workspace's; `STRICT` fails the load, for a check of a
-  manifest this workspace is authoring; every other rule holds in both),
+  manifest this workspace is authoring, and also refuses a `[[references]]`
+  or `[wiring]` table beside a record, which `TOLERANT` loads unread
+  ("Built-in apps and user apps" below); every other rule holds in both),
   `repo_root_for_manifest`,
   `app_package_directory`, and `manifest_icon_path(manifest_path, manifest)`.
 - `app_manifest.registry`: `RegistryRow` (absent keys read as the contract's

@@ -97,7 +97,8 @@ _UNKNOWN_KEY_ERROR_TYPE: Final[str] = "extra_forbidden"
 
 
 class ManifestReadMode(LowerCaseStrEnum):
-    """What ``load_manifest`` does with a key the manifest models do not declare."""
+    """What ``load_manifest`` does with a key the manifest models do not declare, and with a ``[[references]]``
+    or ``[wiring]`` table in the manifest of an app that has a record."""
 
     # Warns about the key and ignores it: for a reader, which has to read a manifest written
     # for a newer template than this workspace's (an app installed from someone else's repository).
@@ -336,7 +337,8 @@ class ScopeRules(FrozenModel):
 
     exclude: tuple[ExcludeGlob, ...] = Field(
         default=(),
-        description="Repo-root-relative gitignore-style globs no pass ever considers",
+        description="gitignore-style globs no pass ever considers: relative to the repo root, or to the app's "
+        "own directory for an app with a record",
     )
 
 
@@ -1003,13 +1005,18 @@ def load_manifest(
     """Read and validate an app.toml, also checking that the icon it names exists beside it.
 
     A key the models do not declare, at any depth, is logged as a warning and ignored in the
-    tolerant mode, and fails the load in the strict one; every other rule holds in both.
+    tolerant mode, and fails the load in the strict one.
 
     The reference rules that need the manifest's place in the tree (every reference exists, and
     none names this app's own directory or another app's) are checked against ``repo_root`` when
     it is given, and otherwise against the root derived from a manifest that sits at
     ``system/apps/<package>/app.toml``. A manifest anywhere else (a temp directory in a test)
     with no explicit root skips those checks; the value rules still apply.
+
+    An app with a record under that root keeps what uses it in the record, so its manifest's
+    ``[[references]]`` and ``[wiring]`` are not read: the tolerant mode loads them without those
+    checks, and the strict mode refuses a manifest that still carries either. Every other rule
+    holds in both modes.
     """
     try:
         raw_text = path.read_text(encoding="utf-8")
