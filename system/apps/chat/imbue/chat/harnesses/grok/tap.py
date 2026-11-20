@@ -27,7 +27,7 @@ from imbue.mngr.utils.polling import poll_until
 # How long a pressed turn may take to clear mngr's ``active`` marker.
 TURN_END_DEADLINE_SECONDS: Final[float] = 8.0
 # How long a tap whose press mngr refused waits for the marker: mngr refuses a press into a turn grok has just ended,
-# whose marker goes up to about a second later.
+# whose marker is removed up to about a second later.
 REFUSED_PRESS_TURN_END_SECONDS: Final[float] = 2.0
 _TURN_END_POLL_SECONDS: Final[float] = 0.2
 
