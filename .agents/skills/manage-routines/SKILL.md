@@ -84,9 +84,9 @@ letters, digits and hyphens, and no two routines in the workspace share one,
 wherever their files are.
 
 `--app <name>` also decides where the file is written. For an app built or
-installed in this workspace (it has a folder `system/apps/<package>/`, where
-`<package>` is the name with hyphens as underscores, and a record
-`system/config/apps/<name>.toml`), the definition goes into the app's own
+installed in this workspace (it has a record
+`system/config/apps/<name>.toml`, and the folder `system/apps/<package>/`
+that record names), the definition goes into the app's own
 folder, `system/apps/<package>/routines/<id>.toml`, so the routine is part of
 the app and goes wherever the app goes. For a built-in app, or a name that is
 no app, the file goes under `system/routines/` and the name only groups the

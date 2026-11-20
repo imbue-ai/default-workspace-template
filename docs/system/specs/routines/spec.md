@@ -125,7 +125,7 @@ The library never rewrites or deletes a file inside an app's directory, since th
   The override applies only to a routine an app owns; a routine under `system/routines` runs on its file whatever its state holds.
 - **Any other change is a change to the app.** `routines edit` of a field that is not part of the schedule, and `routines remove`, are refused with `AppOwnedRoutineError`, which names the app's directory and the file to change there.
 - **The switch is state for every routine** (decision 8), so turning an app's routine off needs nothing more.
-- **`routines add --app <name>`** writes the new definition into `system/apps/<package>/routines/` and commits it there, when `<name>` is a user app: its directory exists (`<package>` is the name with each hyphen an underscore) and so does the workspace's record of it, `system/config/apps/<name>.toml`.
+- **`routines add --app <name>`** writes the new definition into `system/apps/<package>/routines/` and commits it there, when `<name>` is a user app: the workspace has a record of it, `system/config/apps/<name>.toml`, and the directory that record names as its `package` exists.
   For any other name (a built-in app, or no app) the definition goes under `system/routines` as before, with `app` kept for grouping.
 
 ## 5. Schedules and due computation

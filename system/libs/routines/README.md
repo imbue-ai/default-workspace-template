@@ -64,9 +64,8 @@ would leave an installed app modified against where it came from:
 - The on/off switch is state for every routine, an app's included.
 - `routines add --app <name>` writes the definition into
   `system/apps/<package>/routines/` and commits it there when `<name>` is a
-  user app: `system/apps/<package>/` exists (`<package>` is the name with
-  hyphens as underscores) and so does its record,
-  `system/config/apps/<name>.toml`. Any other `--app` (a built-in app, or a
+  user app: it has a record, `system/config/apps/<name>.toml`, and the
+  directory that record names as its `package` exists. Any other `--app` (a built-in app, or a
   name that is no app) is written under `system/routines` with the name kept
   for grouping.
 
