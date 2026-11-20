@@ -1,7 +1,8 @@
-"""Test utilities for the grok harness: the captured grok sessions under ``fixtures/``, and a fake grok agent state
-dir in mngr's layout, written by hand, built from them."""
+"""Test utilities for the grok harness: the captured grok sessions under ``fixtures/``, a fake grok agent state
+dir in mngr's layout, written by hand, built from them, and grok account credential files."""
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 from uuid import uuid4
@@ -127,3 +128,25 @@ def user_prompt_line(session_id: str, text: str, prompt_index: int, timestamp_ms
         },
     }
     return (json.dumps(record) + "\n").encode()
+
+
+# The auth.json scope of a grok session login, `<issuer>::<client id>`.
+GROK_SESSION_SCOPE: Final[str] = "https://auth.x.ai::client-id"
+
+
+def build_grok_key_scope(key: str = "xai-key-5c1e") -> dict[str, object]:
+    """The ``xai::api_key`` scope grok itself writes for a stored key."""
+    return {
+        "key": key,
+        "auth_mode": "api_key",
+        "create_time": "2026-10-19T19:11:22.318953Z",
+        "user_id": "",
+        "email": None,
+        "coding_data_retention_opt_out": True,
+    }
+
+
+def write_grok_auth(account_dir: Path, scopes: Mapping[str, object]) -> None:
+    """Write a grok account's ``auth.json`` holding ``scopes``."""
+    account_dir.mkdir(parents=True, exist_ok=True)
+    (account_dir / "auth.json").write_text(json.dumps(scopes))

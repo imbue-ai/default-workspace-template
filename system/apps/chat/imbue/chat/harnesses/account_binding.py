@@ -1,13 +1,16 @@
 """Binding an agent to an account, per harness: the scope a CLI runs under, and how an agent is pointed at it.
 
-"Which account" is one environment variable per harness:
+"Which account" is one environment variable per harness, except grok, which splits it in two:
 
     claude   CLAUDE_CONFIG_DIR
     codex    CODEX_HOME
     agy      HOME               (it has no config-dir override -- the home IS the scope)
     pi       PI_CODING_AGENT_DIR
+    grok     GROK_HOME          (where it keeps state; the account folder for a sign-in, the
+                                 agent's own home for an agent)
+             GROK_AUTH_PATH     (the credential file; the account's, for both)
 
-mngr already sets all four per-agent; binding changes what they point at, and nothing else. Each
+mngr already sets these per-agent; binding changes what they point at, and nothing else. Each
 harness registers an ``AccountBinding`` on its ``HarnessSpec`` (``registry.build_account_binding``),
 so nothing outside the harness modules branches on which harness it binds.
 
@@ -20,10 +23,10 @@ land at the right moments:
     --env KEY=VALUE              written to <state>/env BEFORE provisioning
     --extra-provision-command    run AFTER provisioning, BEFORE start
 
-So claude binds through the env file (its launch command carries no inline `env`, so the
-sourced value wins), and the other three bind by replacing the credential symlink that
-provisioning just created -- the same `ln -sfn` mngr itself used, one step later
-(``CredentialLinkAccountBinding``).
+So claude and grok bind through the env file (claude's launch command carries no inline `env`,
+and grok's launch script keeps an env-file `GROK_AUTH_PATH`, so the sourced value wins), and the
+other three bind by replacing the credential symlink that provisioning just created -- the same
+`ln -sfn` mngr itself used, one step later (``CredentialLinkAccountBinding``).
 
 A create that names no account gets the same binding from the workspace's own mngr config:
 the account store writes the default account's harness and binding into
