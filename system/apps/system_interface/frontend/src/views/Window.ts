@@ -183,8 +183,7 @@ export function Window(): m.Component<WindowAttrs> {
   return {
     view(vnode) {
       const attrs = vnode.attrs;
-      const { window, app, title, rect, state, stackIndex, isFocused, isTouch, stopped, gone, onReportBug } =
-        attrs;
+      const { window, app, title, rect, state, stackIndex, isFocused, isTouch, stopped, gone, onReportBug } = attrs;
       const isFullscreen = state === "FULLSCREEN";
       const isResizable = !isTouch && !isFullscreen;
       return m(

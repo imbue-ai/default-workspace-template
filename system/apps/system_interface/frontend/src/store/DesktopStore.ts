@@ -842,9 +842,18 @@ export class DesktopStore {
   }
 
   /** ``error`` in ``failureSentence``'s words for ``whatFailed`` (a sentence stem naming what failed), as a surface
-   *  shows it, with ``actions``: a failure of the shell's own, whose agent is asked in the main chat. */
-  failureNotice(whatFailed: string, error: unknown, actions: readonly ToastAction[] = []): FailureNotice {
-    return this.noticeOf(failureSentence(describeRequestFailure(error), whatFailed), actions, { agent: "shell" });
+   *  shows it, with ``actions``: a failure of the shell's own, whose agent is asked in the main chat. ``isStuck``
+   *  says a refusal with a reason leaves the person unable to do what they meant to, so it owes an agent too. */
+  failureNotice(
+    whatFailed: string,
+    error: unknown,
+    actions: readonly ToastAction[] = [],
+    isStuck = false,
+  ): FailureNotice {
+    return this.noticeOf(failureSentence(describeRequestFailure(error), whatFailed), actions, {
+      agent: "shell",
+      isStuck,
+    });
   }
 
   /** Toast a failed start of a page that does not show the outcome itself: lasting when there is more to it than the

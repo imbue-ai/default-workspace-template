@@ -27,6 +27,9 @@ class RefusalKind(LowerCaseStrEnum):
     # The desktop a request named was deleted (by another window, as a rule): the frontend reads its desktops again,
     # which moves it off that desktop, and says where it is now.
     DESKTOP_GONE = auto()
+    # The update-self script refused a rollback without starting it: the notice stays as it was, which only the
+    # workspace can change, so the frontend offers an agent.
+    ROLLBACK_REFUSED = auto()
 
 
 # The app list drops an app taken out of the workspace and one whose registry row could not be read alike, so the
@@ -199,7 +202,8 @@ class UpdateNoticeRecordError(ShellError, ValueError):
 
 
 class UpdateNoticeRefusedError(ShellError, ValueError):
-    """The update notice is not in a state the verb applies to: nothing kept, a rollback already running, or one done."""
+    """The update notice is not in a state the verb applies to (nothing kept, a rollback already running, or one done),
+    or the update-self script refused the rollback without starting it."""
 
 
 class UpdateNoticeCommandError(ShellError, RuntimeError):

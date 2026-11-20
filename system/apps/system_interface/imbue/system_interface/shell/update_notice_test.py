@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from imbue.mngr.utils.polling import wait_for
+from imbue.system_interface.shell.errors import RefusalKind
 from imbue.system_interface.shell.errors import UpdateNoticeCommandError
 from imbue.system_interface.shell.errors import UpdateNoticeRefusedError
 from imbue.system_interface.shell.testing import drain_messages
@@ -155,13 +156,15 @@ def test_the_rollback_launches_the_script_detached_in_its_own_session(tmp_path: 
 @pytest.mark.timeout(30)
 def test_a_rollback_the_script_refuses_is_a_refusal_in_the_scripts_words(tmp_path: Path) -> None:
     """The script refuses on its own grounds (a dirty tree, an apply in flight) before writing any
-    progress; the launch reads that exit rather than answering as if a rollback were under way."""
+    progress; the launch reads that exit rather than answering as if a rollback were under way, as a
+    refusal the frontend offers an agent for, since only the workspace can change what refused it."""
     watch = _watch(tmp_path)
     write_stub_update_self_script(watch.repo_root, exit_code=1)
     write_rollback_point(watch.repo_root)
 
-    with pytest.raises(UpdateNoticeRefusedError, match="told to fail"):
+    with pytest.raises(UpdateNoticeRefusedError, match="told to fail") as refused:
         watch.launch_rollback()
+    assert refused.value.kind is RefusalKind.ROLLBACK_REFUSED
 
     current = watch.current()
     assert current is not None and not current.is_rolling_back and not current.is_settled
@@ -225,6 +228,8 @@ def test_the_rollback_is_refused_without_a_point_while_one_runs_and_once_it_sett
         watch.launch_rollback()
 
     write_rollback_point(watch.repo_root, outcome="Rolled back to the previous version.")
-    with pytest.raises(UpdateNoticeRefusedError, match="already rolled back"):
+    with pytest.raises(UpdateNoticeRefusedError, match="already rolled back") as settled:
         watch.launch_rollback()
+    # A notice in another state says so in words the notice's own state explains: no agent is owed.
+    assert settled.value.kind is None
     assert read_stub_update_self_calls(watch.repo_root) == []

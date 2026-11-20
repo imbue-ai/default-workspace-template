@@ -15,6 +15,8 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { bannerClass } from "@imbue/workspace-ui/src/components/banner";
 import { DestroyConfirmDialog } from "@imbue/workspace-ui/src/DestroyConfirmDialog";
+import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
+import { refusalKindOf } from "../model/failures";
 import type { FailureNotice } from "../model/failures";
 import {
   SHELL_APP_NAME,
@@ -153,7 +155,10 @@ export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
     try {
       await verb();
     } catch (caught) {
-      error = store.failureNotice(whatFailed, caught);
+      // A rollback the update-self script refused leaves the notice where it was, which only the workspace can
+      // change, so it owes an agent though it asks for no bug report.
+      const isStuck = refusalKindOf(describeRequestFailure(caught)) === "rollback_refused";
+      error = store.failureNotice(whatFailed, caught, [], isStuck);
       errorState = stateKey(notice);
     } finally {
       isRequestInFlight = false;

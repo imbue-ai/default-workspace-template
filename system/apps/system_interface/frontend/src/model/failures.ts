@@ -39,6 +39,7 @@ const REFUSAL_KIND_VALUES = [
   "launched_not_opened_out_of_space",
   "launched_not_opened",
   "desktop_gone",
+  "rollback_refused",
 ] as const;
 
 /** What the shell's refusals name with ``kind`` (desktop contracts.md, the error body), for the desktop to word

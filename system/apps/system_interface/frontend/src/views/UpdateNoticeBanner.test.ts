@@ -16,6 +16,7 @@ import { FakeDesktopApi, FakeDesktopSocket } from "../testing/fakeShell";
 import {
   appAskLaunchPathRecord,
   appRecord,
+  chatLikeAppRecord,
   desktopRecord,
   launchPathRecord,
   noticeWire,
@@ -156,6 +157,35 @@ describe("UpdateNoticeBanner", () => {
 
     expect(root.querySelector(".update-notice-banner-error")?.textContent).toContain("preview");
     expect(root.querySelector(".update-notice-confirm")).not.toBeNull();
+  });
+
+  it("offers an agent, in the main chat, for a rollback the update-self script refused, and none for a stale notice", async () => {
+    socket.deliver().onAppsUpdated([chatLikeAppRecord("chat")]);
+    const fetchMock = vi.fn(async () =>
+      Response.json(
+        { detail: "The rollback was refused (exit 1): the working tree is dirty", kind: "rollback_refused" },
+        { status: 409 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const root = mountBanner();
+    deliverNotice(noticeWire(["chat"]));
+    click(root, ".update-notice-rollback");
+    m.redraw.sync();
+    click(root, ".destroy-dialog-btn-destroy");
+    await settled();
+    const actions = (): (string | null)[] =>
+      [...root.querySelectorAll(".update-notice-banner-error-action")].map((button) => button.textContent);
+    expect(root.querySelector(".update-notice-banner-error-message")?.textContent).toBe("Couldn't roll back.");
+    expect(actions()).toEqual(["Ask an agent to fix this"]);
+
+    // A refusal the notice's own state explains (a rollback already running) is not one an agent is owed.
+    stubFetch(409, "A rollback is already running.");
+    click(root, ".update-notice-rollback");
+    m.redraw.sync();
+    click(root, ".destroy-dialog-btn-destroy");
+    await settled();
+    expect(actions()).toEqual([]);
   });
 
   it("drops a refusal once the notice moves on to the state that explains it", async () => {
