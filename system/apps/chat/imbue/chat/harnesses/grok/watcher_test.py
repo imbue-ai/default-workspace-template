@@ -605,7 +605,9 @@ def test_the_flush_drops_the_messages_held_for_a_grok_that_relaunched(tmp_path: 
     assert watcher.get_queued_messages() == []
 
 
-def test_a_started_watchers_worker_types_a_held_message_once_mngr_reports_the_turn_over(tmp_path: Path) -> None:
+def test_a_started_watchers_worker_types_a_pick_and_a_held_message_once_mngr_reports_the_turn_over(
+    tmp_path: Path,
+) -> None:
     lifecycle = ["RUNNING"]
     agent_state_dir = make_grok_agent_state_dir(tmp_path)
     add_grok_session(
@@ -618,6 +620,7 @@ def test_a_started_watchers_worker_types_a_held_message_once_mngr_reports_the_tu
     watcher.set_flush_hooks(send, lambda: lifecycle[0], lambda text, sent_after: None)
     watcher.start()
     try:
+        watcher._queue.hold_control_command(model_command("grok-4.5"))
         _hold(watcher, "held")
         watcher.notify_idle()
         assert not poll_until(lambda: bool(send.sent), timeout=0.5, poll_interval=0.05)
@@ -633,7 +636,7 @@ def test_a_started_watchers_worker_types_a_held_message_once_mngr_reports_the_tu
     finally:
         watcher.stop()
 
-    assert send.sent == ["held"]
+    assert send.sent == ["/model grok-4.5", "held"]
 
 
 def _write_model_state(agent_state_dir: Path, model: str, effort: str | None) -> None:
@@ -743,36 +746,3 @@ def test_a_control_command_whose_send_raises_is_charged_an_attempt(tmp_path: Pat
 
     assert send.sent == ["/effort low"] * MAX_DELIVERY_ATTEMPTS
     assert watcher._queue.has_control_commands() is False
-
-
-def test_a_started_watchers_worker_types_a_pick_made_mid_turn_once_mngr_reports_the_turn_over(tmp_path: Path) -> None:
-    lifecycle = ["RUNNING"]
-    agent_state_dir = make_grok_agent_state_dir(tmp_path)
-    add_grok_session(
-        agent_state_dir, _PLAIN_ROOT, read_fixture_updates(find_fixture_scenario("plain"), _PLAIN_ROOT), is_root=True
-    )
-    _write_model_state(agent_state_dir, "grok-4.6", "high")
-    watcher = GrokSessionWatcher.build(
-        make_grok_agent_info(agent_state_dir, agent_state_dir.name, "grok-worker"), lambda _agent_id, _events: None
-    )
-    watcher.delivery_witness_seconds = _SHORT_WITNESS_SECONDS
-    send = _ScriptedSend(agent_state_dir, is_confirmed=True, is_logged=False)
-    watcher.set_flush_hooks(send, lambda: lifecycle[0], lambda text, sent_after: None)
-    watcher.start()
-    try:
-        watcher._queue.hold_control_command(model_command("grok-4.5"))
-        _hold(watcher, "held")
-        assert not poll_until(lambda: bool(send.sent), timeout=0.5, poll_interval=0.05)
-
-        lifecycle[0] = "WAITING"
-        watcher.notify_idle()
-        wait_for(
-            lambda: not watcher.get_queued_messages(),
-            timeout=_LIVE_TAIL_TIMEOUT_SECONDS,
-            poll_interval=0.05,
-            error_message="the worker never delivered the held message",
-        )
-    finally:
-        watcher.stop()
-
-    assert send.sent == ["/model grok-4.5", "held"]
