@@ -104,6 +104,8 @@ class AntigravityQueueTracker:
     # cleared by a session change: a pick the user made still applies to the agy that comes up.
     _model_command: str | None
     _model_command_attempts: int
+    # ``is_sending``'s answer, read without the lock, since another tracker's publish reads it while holding its own.
+    _is_sending_now: bool
 
     @classmethod
     def build(cls, outbox_path: Path, session_token: str) -> "AntigravityQueueTracker":
@@ -121,6 +123,7 @@ class AntigravityQueueTracker:
         self._wake = None
         self._model_command = None
         self._model_command_attempts = 0
+        self._is_sending_now = False
         self._replay()
         return self
 
@@ -191,6 +194,7 @@ class AntigravityQueueTracker:
 
     def _settled(self) -> None:
         """Journal and publish, under the lock, so the announcement cannot lag the change."""
+        self._is_sending_now = bool(self._sending_ids or self._pending_send)
         self._write_journal()
         if self._publish is not None:
             self._publish(self._snapshot_locked())
@@ -475,8 +479,7 @@ class AntigravityQueueTracker:
         nothing useful to do -- and offering the button in that window made it flash on every
         ordinary send while the worker got to the message.
         """
-        with self._lock:
-            return bool(self._sending_ids or self._pending_send)
+        return self._is_sending_now
 
     def is_exhausted(self, queued_id: str) -> bool:
         with self._lock:

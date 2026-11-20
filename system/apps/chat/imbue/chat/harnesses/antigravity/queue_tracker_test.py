@@ -1,11 +1,15 @@
 """Unit tests for agy's held queue: claims, settles, journal lifetime and publication."""
 
 import json
+import threading
 from pathlib import Path
+from typing import Any
 
 from imbue.chat.harnesses.antigravity.queue_tracker import AntigravityQueueTracker
 from imbue.chat.harnesses.antigravity.queue_tracker import MAX_DELIVERY_ATTEMPTS
 from imbue.chat.harnesses.antigravity.queue_tracker import session_token
+
+_RENDEZVOUS_SECONDS = 3.0
 
 
 def _tracker(tmp_path: Path, token: str = "session-1") -> AntigravityQueueTracker:
@@ -225,6 +229,38 @@ def test_republish_announces_the_queue_unchanged(tmp_path: Path) -> None:
     tracker.attach(publish=lambda snap: published.append([str(e["content"]) for e in snap]), wake=lambda: None)
     tracker.republish()
     assert published == [["beep"]]
+
+
+def test_trackers_publishing_at_once_each_read_the_others_sending_state(tmp_path: Path) -> None:
+    """A tracker publishes under its lock, and the chat-list push its publish runs reads every agy chat's sending state."""
+    flushing_dir, holding_dir = tmp_path / "flushing", tmp_path / "holding"
+    flushing_dir.mkdir()
+    holding_dir.mkdir()
+    flushing, holding = _tracker(flushing_dir), _tracker(holding_dir)
+    flushing.enqueue("claimed", "t0")
+    both_publishing = threading.Barrier(2, timeout=_RENDEZVOUS_SECONDS)
+    sending_states: dict[str, bool] = {}
+    for name, tracker, other in (("flushing", flushing, holding), ("holding", holding, flushing)):
+
+        def read_the_other(
+            _snapshot: list[dict[str, Any]], name: str = name, other: AntigravityQueueTracker = other
+        ) -> None:
+            both_publishing.wait()
+            sending_states[name] = other.is_sending()
+
+        tracker.attach(publish=read_the_other, wake=lambda: None)
+    mutations = [
+        threading.Thread(target=flushing.begin_flush, daemon=True),
+        threading.Thread(target=holding.enqueue, args=("held", "t1"), daemon=True),
+    ]
+
+    for mutation in mutations:
+        mutation.start()
+    for mutation in mutations:
+        mutation.join(timeout=_RENDEZVOUS_SECONDS)
+
+    assert not any(mutation.is_alive() for mutation in mutations)
+    assert sending_states == {"flushing": False, "holding": True}
 
 
 def test_take_unclaimed_does_not_void_the_flush_it_spares(tmp_path: Path) -> None:
