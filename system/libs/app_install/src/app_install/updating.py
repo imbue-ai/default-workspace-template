@@ -209,11 +209,7 @@ def _finish(
     relative_worktree = worktree.relative_to(repo_root).as_posix()
     previous_version = record.upstream_version
     conflicted = _conflicted_paths(worktree)
-    if (
-        conflicted
-        or (worktree / ".git").is_file()
-        and run_git(worktree, ["rev-parse", "--verify", "--quiet", "HEAD"]) == ""
-    ):
+    if conflicted:
         return UpdateOutcome(
             result=UpdateResult.CONFLICT,
             record=record,
