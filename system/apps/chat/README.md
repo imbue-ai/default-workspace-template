@@ -427,8 +427,8 @@ answers its repeats). The page shows "Sent again" under the message, with a "?" 
 and folds a second copy that reaches the transcript into that line
 (`frontend/src/models/ResentSends.ts`). A send still unconfirmed the second
 time is not sent a third: its failure gets the "Couldn't confirm your message
-arrived" notice. Antigravity's flush, which sends again a block it did not see
-land on its own later pass, asks for no such repeat
+arrived" notice. Antigravity's and Grok Build's flushes, which send again a block
+they did not see land on their own later pass, ask for no such repeat
 (`is_resent_when_unsure=False`). A stop of the agent ends all of these repeats:
 Stop hands the in-flight message back to the composer, so nothing more is sent.
 Since mngr counts a Claude message as delivered once Claude shows it, which
@@ -653,7 +653,7 @@ user sends in it. A
 name the user or an agent chose is left alone. What has been tried is kept in
 `naming.json` in the chat's folder, so a restart neither renames a named chat
 nor retries past the limit. A harness with no `OneShotCompletion` (Pi,
-Antigravity, OpenCode) keeps the minted name, and a secondary chat names
+Antigravity, Grok Build, OpenCode) keeps the minted name, and a secondary chat names
 nothing.
 
 A name a person or an agent gives wins over the automatic one. While their
@@ -695,7 +695,7 @@ describes is not used here, since the sweep is the timer.
 
 Idle compaction applies to the harnesses mngr can compact: Claude, Codex and Pi
 (`supports_compaction` in `harnesses/registry.py`, shipped on `/api/harnesses`).
-Antigravity and OpenCode chats are never compacted or passed to the plugin, and
+Antigravity, Grok Build and OpenCode chats are never compacted or passed to the plugin, and
 their model menu has no Auto-compact row.
 
 **The Auto-compact setting.** Each chat is On or Off, chosen in the model menu's

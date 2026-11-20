@@ -1,7 +1,7 @@
 # The message-lifecycle contract (CANONICAL)
 
 The single source of truth for what happens to a user's message across every harness
-(claude, codex, pi, antigravity): send, queue, shoulder-tap, interrupt, and return-to-composer. Harness
+(claude, codex, pi, antigravity, grok): send, queue, shoulder-tap, interrupt, and return-to-composer. Harness
 implementations differ; **the observable behavior is identical**. If an implementation
 disagrees with this doc, the implementation is wrong.
 
