@@ -34,6 +34,7 @@ from app_manifest.scope import (
     SERVICE_CONVENTIONS,
     SKILL_CONVENTIONS,
     compute_app_scope,
+    find_app_record,
     resolve_loaded_manifest,
 )
 from app_manifest.testing import write_app_manifest
@@ -133,6 +134,18 @@ def _manifests_sharing_a_name(repo_root: Path) -> list[str]:
         for name, paths in paths_by_name.items()
         if len(paths) > 1
     )
+
+
+def _declared_wiring_programs(
+    manifest_path: Path, repo_root: Path = _REPO_ROOT
+) -> tuple[str, ...]:
+    """The programs a manifest's ``[wiring]`` declares, as far as the tree reads them: none
+    for an app with a record, whose background programs are its ``[[services]]`` and whose
+    ``[wiring]``, when its publisher's manifest still carries one, is not read."""
+    manifest = _load_manifest(manifest_path, repo_root)
+    if find_app_record(repo_root, manifest_path, manifest) is not None:
+        return ()
+    return tuple(str(program) for program in manifest.wiring.programs)
 
 
 def _program_commands() -> dict[str, str]:
@@ -398,11 +411,27 @@ def test_built_in_app_footprint_carries_the_drop_ins_that_run_it(
 def test_every_declared_wiring_program_has_a_supervisord_block() -> None:
     command_by_program = _program_or_listener_commands()
     for manifest_path in _every_manifest_path():
-        for program in _load_manifest(manifest_path).wiring.programs:
+        for program in _declared_wiring_programs(manifest_path):
             assert program in command_by_program, (
                 f"{manifest_path} declares wiring program {program!r}, which neither "
                 "system/supervisord.conf nor a drop-in beside it defines"
             )
+
+
+def test_the_wiring_of_an_installed_app_is_not_held_to_this_tree(tmp_path: Path) -> None:
+    wired = '[wiring]\nprograms = ["indexer-of-its-publisher"]\n'
+    manifest_paths = {
+        name: write_app_manifest(
+            tmp_path, name, f"{_named_manifest(name)}{wired}", is_icon_written=True
+        )
+        for name in ("notes", "news")
+    }
+    _write_app_record(tmp_path, "notes", AppOrigin.INSTALLED)
+
+    assert _declared_wiring_programs(manifest_paths["notes"], tmp_path) == ()
+    assert _declared_wiring_programs(manifest_paths["news"], tmp_path) == (
+        "indexer-of-its-publisher",
+    )
 
 
 def test_every_derived_file_is_what_app_install_generates() -> None:
