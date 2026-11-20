@@ -237,7 +237,7 @@ A surface rendering the sample is still a mock, however real its routes are:
 `build-app` keeps it inside its labeled mock frame, with a note saying it shows a
 sample and what does not work yet, until you point it at the pipeline's output.
 Only then take the frame down, with `build-app`'s `mock_frame.py down` (its
-Step 2).
+step 5).
 
 Additional surfaces (scheduling, persistence, history, live integration) each get
 their *own* delivery and feedback gate -- even when the user's original prompt
