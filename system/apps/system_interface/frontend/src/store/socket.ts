@@ -121,6 +121,8 @@ export interface SocketHandlers {
   onBubble(bubble: BubbleWire): void;
   /** The socket (re)opened: the client state is re-reported through ``reportClientState``. */
   onConnected(): void;
+  /** The open socket answered the check ``reviveNow`` made: it held through the time the page was out of sight. */
+  onLiveConfirmed(): void;
 }
 
 /** What the store asks of its socket, so a test can stand one in. */
@@ -131,9 +133,11 @@ export interface DesktopSocket {
   /** Register this socket as a pulled-out window's, under this client and naming no desktop: the ops aimed at
    *  the client reach it, and the client's active desktop stays its main window's. */
   reportPopOut(): void;
-  /** Reopen a dropped socket now rather than when its backoff says, as a page coming back into sight does: the
-   *  retries made while it slept may have pushed the next one many seconds out. An open socket is left alone. */
-  reconnectNow(): void;
+  /** Make sure the socket is live now, as a page coming back into sight does, rather than when the backoff says:
+   *  the retries made while it slept may have pushed the next one many seconds out. One that is not open (closed,
+   *  or still connecting on a network that may have died meanwhile) is replaced at once; an open one is asked to
+   *  answer, and replaced if it does not in time, since a connection the network dropped can still read as open. */
+  reviveNow(): void;
 }
 
 interface RawSocketEvent {
@@ -160,11 +164,16 @@ interface RawSocketEvent {
 
 const LAYOUT_OP_NAMES: readonly string[] = ["refresh", "reload_system_interface", "show", "open", "focus"];
 
+/** How long an open socket has to answer ``reviveNow``'s ping. The shell reads a socket's incoming messages about
+ *  once a second, so the answer can take that long on top of the round trip. */
+export const LIVENESS_DEADLINE_MS = 4000;
+
 export class ShellSocket implements DesktopSocket {
   private ws: WebSocket | null = null;
   private handlers: SocketHandlers | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly reconnectBackoff = new ReconnectBackoff();
+  private livenessTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly clientId: string) {}
 
@@ -194,14 +203,49 @@ export class ShellSocket implements DesktopSocket {
     this.ws.send(JSON.stringify({ type: "client_state", client_id: this.clientId, is_pop_out: true }));
   }
 
-  reconnectNow(): void {
-    if (this.handlers === null || this.ws !== null) return;
+  reviveNow(): void {
+    if (this.handlers === null) return;
+    this.reconnectBackoff.reset();
+    const ws = this.ws;
+    if (ws !== null && ws.readyState === WebSocket.OPEN) {
+      this.checkLive(ws);
+      return;
+    }
+    if (ws !== null) this.discard(ws);
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    this.reconnectBackoff.reset();
     this.open();
+  }
+
+  private checkLive(ws: WebSocket): void {
+    if (this.livenessTimer !== null) return;
+    ws.send(JSON.stringify({ type: "ping" }));
+    this.livenessTimer = setTimeout(() => {
+      this.livenessTimer = null;
+      if (this.ws !== ws) return;
+      console.warn("[si-ws] no answer from the open socket: replacing it");
+      this.discard(ws);
+      this.open();
+    }, LIVENESS_DEADLINE_MS);
+  }
+
+  /** Let go of a socket this one replaces: its late events must not touch the new one's state. */
+  private discard(ws: WebSocket): void {
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onclose = null;
+    ws.onerror = null;
+    ws.close();
+    if (this.ws === ws) this.ws = null;
+    this.endLivenessCheck();
+  }
+
+  private endLivenessCheck(): void {
+    if (this.livenessTimer === null) return;
+    clearTimeout(this.livenessTimer);
+    this.livenessTimer = null;
   }
 
   private open(): void {
@@ -216,6 +260,11 @@ export class ShellSocket implements DesktopSocket {
       this.handlers?.onConnected();
     };
     ws.onmessage = (event: MessageEvent) => {
+      // Anything heard proves the socket live, the answer to a ping or not.
+      if (this.livenessTimer !== null) {
+        this.endLivenessCheck();
+        this.handlers?.onLiveConfirmed();
+      }
       const data = parseJsonMessage<RawSocketEvent>(event.data as string);
       if (data !== null) this.handleEvent(data);
     };
@@ -224,6 +273,7 @@ export class ShellSocket implements DesktopSocket {
         `[si-ws] closed (code=${event.code} reason=${JSON.stringify(event.reason)} wasClean=${event.wasClean})`,
       );
       this.ws = null;
+      this.endLivenessCheck();
       this.scheduleReconnect();
     };
     ws.onerror = () => {
@@ -305,6 +355,8 @@ export class ShellSocket implements DesktopSocket {
         return;
       case "keybindings_changed":
         handlers.onKeybindingsChanged();
+        return;
+      case "pong":
         return;
       case "layout_op": {
         // A targeted op is for one client's windows; an untargeted one (a refresh of a whole app,

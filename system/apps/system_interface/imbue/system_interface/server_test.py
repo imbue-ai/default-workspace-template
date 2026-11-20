@@ -1095,6 +1095,25 @@ def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> 
         shell.broadcaster.unregister(client_queue)
 
 
+def test_a_ping_is_answered_on_its_own_connection_and_registers_nothing(app: Flask) -> None:
+    """A page back in sight pings its socket to learn whether it survived; the answer goes to that connection
+    alone, and the ping neither registers nor moves the client."""
+    shell = state_of(app).shell
+    pinging_queue = shell.broadcaster.register()
+    other_queue = shell.broadcaster.register()
+    try:
+        assert (
+            _handle_client_state_message(json.dumps({"type": "ping"}), pinging_queue, shell, is_first_report=False)
+            is False
+        )
+        assert pinging_queue.get_nowait() == json.dumps({"type": "pong"})
+        assert pinging_queue.empty() and other_queue.empty()
+        assert shell.broadcaster.get_client_info(pinging_queue) is None
+    finally:
+        shell.broadcaster.unregister(pinging_queue)
+        shell.broadcaster.unregister(other_queue)
+
+
 def test_client_state_reports_register_the_client_and_log_only_real_desktop_switches(app: Flask) -> None:
     """A report registers the connection with the broadcaster and records the client; a desktop_switch is
     logged only when the report names a previous desktop that differs; anything malformed is ignored."""

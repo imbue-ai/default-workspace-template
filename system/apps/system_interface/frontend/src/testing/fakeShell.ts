@@ -640,8 +640,8 @@ export class FakeDesktopSocket implements DesktopSocket {
   readonly reports: ClientStateReport[] = [];
   /** How many times the store registered the socket as a pop-out's. */
   popOutReports = 0;
-  /** How many times the store asked a dropped socket to reopen now. */
-  reconnectNowRequests = 0;
+  /** How many times the store asked the socket to make sure it is live now. */
+  reviveRequests = 0;
 
   connect(handlers: SocketHandlers): void {
     this.handlers = handlers;
@@ -655,8 +655,8 @@ export class FakeDesktopSocket implements DesktopSocket {
     this.popOutReports += 1;
   }
 
-  reconnectNow(): void {
-    this.reconnectNowRequests += 1;
+  reviveNow(): void {
+    this.reviveRequests += 1;
   }
 
   /** The handlers the store registered; a test delivers events through them. */

@@ -1,7 +1,12 @@
+import http.client
 import json
 import os
 import shutil
+import socket
 import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -12,6 +17,7 @@ from share_gateway.caddyfile import build_grantable_service_names
 from share_gateway.caddyfile import build_label_to_name
 from share_gateway.caddyfile import parse_registered_apps
 from share_gateway.caddyfile import render_caddyfile
+from share_gateway.caddyfile import render_compression
 
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
 _AUTH_LABEL = "auth-x7k9q2w1"
@@ -307,15 +313,12 @@ def test_caddyfile_writes_a_bounded_access_log_without_headers_or_query_strings(
     assert rendered.index("https://*.") < rendered.index("    log {")
 
 
-def test_caddyfile_compresses_every_origin_but_never_an_event_stream() -> None:
+def test_caddyfile_compresses_every_origin() -> None:
     rendered = _render()
 
-    encode_block = rendered[rendered.index("    encode zstd gzip {") : rendered.index("    # Labels are semi-secret")]
-    for content_type in ("text/html", "text/javascript", "text/css", "application/json"):
-        assert f"header Content-Type {content_type}*" in encode_block
-    assert "text/*" not in encode_block and "event-stream" not in encode_block
+    assert render_compression(indent="    ") in rendered
     # In the site block, ahead of every route, so it covers each app's origin.
-    assert rendered.index("https://*.") < rendered.index("    encode zstd gzip {") < rendered.index("handle @auth")
+    assert rendered.index("https://*.") < rendered.index("    encode @compressible") < rendered.index("handle @auth")
 
 
 def _caddy_binary() -> str | None:
@@ -327,7 +330,7 @@ def _caddy_binary() -> str | None:
 
 def test_the_rendered_caddyfile_adapts_with_the_access_log_filters_in_place(tmp_path: Path) -> None:
     """The log block's syntax is caddy's to judge: ``caddy adapt`` parses the rendered file exactly as the gateway
-    would start it. Skipped where no caddy is installed (CI); a workspace, where the gateway runs, has one."""
+    would start it. Skipped where no caddy is installed; the workspace image and CI's both install the pinned one."""
     caddy = _caddy_binary()
     if caddy is None:
         pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
@@ -353,7 +356,9 @@ def test_the_rendered_caddyfile_adapts_with_the_access_log_filters_in_place(tmp_
     }
     assert access_log["encoder"]["format"] == "filter" and access_log["encoder"]["wrap"] == {"format": "json"}
     (server,) = json.loads(adapted.stdout)["apps"]["http"]["servers"].values()
-    encoders = [handler for route in server["routes"] for handler in _handlers_of(route) if handler["handler"] == "encode"]
+    encoders = [
+        handler for route in server["routes"] for handler in _handlers_of(route) if handler["handler"] == "encode"
+    ]
     assert encoders and set(encoders[0]["encodings"]) == {"gzip", "zstd"}
     assert access_log["encoder"]["fields"] == {
         "request>headers": {"filter": "delete"},
@@ -371,3 +376,138 @@ def _handlers_of(route: dict) -> list[dict]:
         for nested in handler.get("routes", []):
             found.extend(_handlers_of(nested))
     return found
+
+
+_APP_SCRIPT = b"function f() { return 'abcdefghij'; }\n" * 2000
+# The test app's event stream stays quiet until the test has its headers, then sends its one event.
+_STREAM_RELEASED = threading.Event()
+
+
+class _AppBackend(BaseHTTPRequestHandler):
+    """An app behind the share: a script it serves whole, in a range or as its headers alone, and a quiet event
+    stream."""
+
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+    def do_HEAD(self) -> None:
+        self._serve(is_head=True)
+
+    def do_GET(self) -> None:
+        self._serve(is_head=False)
+
+    def _serve(self, is_head: bool) -> None:
+        if self.path == "/events":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            self.wfile.flush()
+            _STREAM_RELEASED.wait(timeout=10)
+            event = b"data: hello\n\n"
+            self.wfile.write(b"%x\r\n%s\r\n0\r\n\r\n" % (len(event), event))
+            return
+        byte_range = self.headers.get("Range")
+        if byte_range is None:
+            body = _APP_SCRIPT
+            self.send_response(200)
+        else:
+            first, last = (int(bound) for bound in byte_range.removeprefix("bytes=").split("-"))
+            body = _APP_SCRIPT[first : last + 1]
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {first}-{last}/{len(_APP_SCRIPT)}")
+        self.send_header("Content-Type", "text/javascript; charset=utf-8")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if not is_head:
+            self.wfile.write(body)
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def _request(
+    port: int, method: str, path: str, headers: dict[str, str], timeout_seconds: float = 10
+) -> http.client.HTTPResponse:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout_seconds)
+    connection.request(method, path, headers=headers)
+    return connection.getresponse()
+
+
+def test_caddy_compresses_a_plain_get_but_not_a_head_a_range_or_an_event_stream(tmp_path: Path) -> None:
+    """The rendered compression, run by caddy in front of an app: a plain GET is compressed, while a HEAD keeps the
+    real length, a ranged request gets a plain 206, and an event stream's headers arrive while it is still quiet,
+    before its first event. Skipped where no caddy is installed, as the adapt test is."""
+    caddy = _caddy_binary()
+    if caddy is None:
+        pytest.skip("no caddy binary on PATH or in CADDY_BINARY")
+    backend = ThreadingHTTPServer(("127.0.0.1", 0), _AppBackend)
+    threading.Thread(target=backend.serve_forever, daemon=True).start()
+    port = _free_port()
+    caddyfile = tmp_path / "Caddyfile"
+    caddyfile.write_text(
+        "{\n    admin off\n    auto_https off\n}\n"
+        f"http://127.0.0.1:{port} {{\n{render_compression(indent='    ')}\n"
+        f"    reverse_proxy 127.0.0.1:{backend.server_port}\n}}\n"
+    )
+    caddy_env = {**os.environ, "XDG_DATA_HOME": str(tmp_path / "data"), "XDG_CONFIG_HOME": str(tmp_path / "config")}
+    # Caddy connects back to this listener once its config is running, so the requests below never race its start.
+    ready = socket.create_server(("127.0.0.1", 0))
+    ready.settimeout(15)
+    _STREAM_RELEASED.clear()
+    with (tmp_path / "caddy.log").open("w") as caddy_log:
+        server = subprocess.Popen(
+            [
+                caddy,
+                "run",
+                "--config",
+                str(caddyfile),
+                "--adapter",
+                "caddyfile",
+                "--pingback",
+                f"127.0.0.1:{ready.getsockname()[1]}",
+            ],
+            stdout=caddy_log,
+            stderr=subprocess.STDOUT,
+            env=caddy_env,
+        )
+    try:
+        try:
+            ready.accept()[0].close()
+        except TimeoutError:
+            pytest.fail((tmp_path / "caddy.log").read_text())
+
+        whole = _request(port, "GET", "/app.js", {"Accept-Encoding": "gzip"})
+        assert whole.getheader("Content-Encoding") == "gzip"
+        assert len(whole.read()) < len(_APP_SCRIPT)
+
+        head = _request(port, "HEAD", "/app.js", {"Accept-Encoding": "gzip"})
+        assert head.getheader("Content-Encoding") is None
+        assert head.getheader("Content-Length") == str(len(_APP_SCRIPT))
+
+        # Well past the size caddy starts compressing at, so only the matcher keeps the range plain.
+        ranged = _request(port, "GET", "/app.js", {"Accept-Encoding": "gzip", "Range": "bytes=0-9999"})
+        assert ranged.status == 206
+        assert ranged.getheader("Content-Encoding") is None
+        assert ranged.read() == _APP_SCRIPT[:10000]
+
+        # The headers arrive while the stream has sent nothing yet: an encoder holding them would time this out,
+        # well before the app gives up waiting and sends its event anyway.
+        stream = _request(
+            port, "GET", "/events", {"Accept-Encoding": "gzip", "Accept": "text/event-stream"}, timeout_seconds=5
+        )
+        assert stream.getheader("Content-Encoding") is None
+        _STREAM_RELEASED.set()
+        assert stream.read() == b"data: hello\n\n"
+    finally:
+        _STREAM_RELEASED.set()
+        ready.close()
+        server.terminate()
+        server.wait(timeout=10)
+        backend.shutdown()

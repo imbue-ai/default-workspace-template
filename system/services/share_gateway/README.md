@@ -39,7 +39,11 @@ three things running:
    nosniff`, `Referrer-Policy: same-origin`, and a `frame-ancestors` policy
    naming who may embed the workspace) and no `Server` header, so a service
    gets them without setting any itself; a service's own
-   `Content-Security-Policy` is left in place beside the gateway's.
+   `Content-Security-Policy` is left in place beside the gateway's. It also
+   compresses what the services serve: a plain `GET` of a text type (HTML,
+   CSS, JavaScript, JSON, plain text, SVG) goes out zstd- or gzip-encoded,
+   while a `HEAD`, a ranged request, an event stream and any
+   already-compressed type pass through untouched.
 3. **frpc, one per relay**: outbound tunnels to EVERY relay of the region
    (the multi-relay design: any relay can then serve any visitor),
    authenticated by the per-share relay token (in the client metadata; the

@@ -2940,18 +2940,22 @@ describe("the phone layout", () => {
     expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-3" });
   });
 
-  it("reopens a dropped socket at once on coming back into sight, and not on going out of it", async () => {
+  it("revives the socket at once on coming back into sight, and not on going out of it", async () => {
     const store = await phoneStore(["win-1"]);
     store.onVisibilityChange(false);
-    expect(socket.reconnectNowRequests).toBe(0);
+    expect(socket.reviveRequests).toBe(0);
     store.onVisibilityChange(true);
-    expect(socket.reconnectNowRequests).toBe(1);
+    expect(socket.reviveRequests).toBe(1);
   });
 
-  it("lands before its desktop's layout is read, so the shown page need not wait on that read", async () => {
+  it("lands on the window it last showed before its desktop's layout is read, so that page need not wait", async () => {
     api.apps = [appRecord("docs"), chat];
-    api.desktops = [desktopRecord("home", { windows: [windowRecord("chat-1", "chat", "/", { is_pinned: true })] })];
-    api.clients = [clientRecord(CLIENT, { active_desktop: "home" })];
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("chat-1", "chat", "/", { is_pinned: true }), windowRecord("win-1", "docs", "/a")],
+      }),
+    ];
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home", shown_history: ["win-1"] })];
     let answerLayout: () => void = () => undefined;
     api.layoutReadGate = new Promise((resolve) => {
       answerLayout = resolve;
@@ -2962,19 +2966,58 @@ describe("the phone layout", () => {
     await settle();
     expect(api.calls).toContain("fetchPlacements:home");
     expect(store.getState().isLayoutLoaded).toBe(false);
-    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "chat-1" });
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-1" });
     answerLayout();
     await starting;
-    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "chat-1" });
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-1" });
   });
 
-  it("lands home when the workspace has no desktop to land on", async () => {
-    api.apps = [appRecord("docs")];
+  it("lands home when the workspace has no desktop, without recording it, and lands properly once one comes", async () => {
+    api.apps = [appRecord("docs"), chat];
     api.desktops = [];
     api.clients = [clientRecord(CLIENT)];
     const store = makeStore();
     store.setThemeMetrics(METRICS, PHONE);
     await store.start(NO_LINK);
+    expect(store.getState().phone.shown).toEqual({ kind: "home" });
+    // A reread that still finds no desktop does not record home as where this client was.
+    store.onVisibilityChange(false);
+    store.onVisibilityChange(true);
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("recordShown:"))).toEqual([]);
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("chat-1", "chat", "/", { is_pinned: true })] })];
+    socket.deliver().onDesktopsUpdated([...api.desktops]);
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "chat-1" });
+  });
+
+  it("lands home rather than on nothing when the startup read fails, and where it was once a push brings desktops", async () => {
+    api.apps = [appRecord("docs"), chat];
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("chat-1", "chat", "/", { is_pinned: true }), windowRecord("win-1", "docs", "/a")],
+      }),
+    ];
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home", shown_history: ["win-1"] })];
+    api.refusal = "the shell is restarting";
+    const store = makeStore();
+    store.setThemeMetrics(METRICS, PHONE);
+    await store.start(NO_LINK);
+    expect(store.getState().phone.shown).toEqual({ kind: "home" });
+    // The shell back: its socket pushes the desktops, and the phone reads where this client was before landing.
+    api.refusal = null;
+    socket.deliver().onAppsUpdated([...api.apps]);
+    socket.deliver().onDesktopsUpdated([...api.desktops]);
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-1" });
+    expect(api.clients.find((client) => client.id === CLIENT)?.shown_history).toEqual(["win-1"]);
+  });
+
+  it("lands home when the startup read fails before the phone layout is known", async () => {
+    api.refusal = "the shell is restarting";
+    const store = makeStore();
+    await store.start(NO_LINK);
+    store.setThemeMetrics(METRICS, PHONE);
     expect(store.getState().phone.shown).toEqual({ kind: "home" });
   });
 
@@ -3008,6 +3051,26 @@ describe("the phone layout", () => {
     store.onVisibilityChange(false);
     socket.deliver().onConnected();
     expect(reloaded).toEqual(["win-1"]);
+  });
+
+  it("does not reload the shown page on a later reconnect when the socket held while the page was away", async () => {
+    const store = await phoneStore(["win-1"]);
+    const reloaded: string[] = [];
+    store.setPageDriver({
+      reload: (id) => void reloaded.push(id),
+      reloadApp: () => undefined,
+      resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
+      requestClose: () => undefined,
+      ownsCloseChord: () => false,
+    });
+    socket.deliver().onConnected();
+    store.onVisibilityChange(false);
+    store.onVisibilityChange(true);
+    socket.deliver().onLiveConfirmed();
+    // A blip long after the page came back: the page's own connections were never in doubt.
+    socket.deliver().onConnected();
+    expect(reloaded).toEqual([]);
   });
 });
 
