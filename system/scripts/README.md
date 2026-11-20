@@ -18,10 +18,12 @@ needs a directory put on `sys.path`, and each stub says which. See
   which the apply runs as a self-contained unit), and the boot-convergence units in
   `env.d/`.
 - Cross-harness agent policy hooks (`agent_*.sh` / `agent_*.py`), wired in
-  `.claude/settings.json` for claude and `.codex/hooks.json` for codex; pi's
+  `.claude/settings.json` for claude, `.codex/hooks.json` for codex and
+  `.grok/hooks/policy.json` (through `agent_grok_policy_guards.py`) for grok; pi's
   `.pi/extensions/policy_guards.ts` and agy's `agy_shim/bash` feed the same
-  scripts the payload they read on stdin. See `tool-call-policies.md` for what
-  each one enforces.
+  scripts the payload they read on stdin. `grok_turn_end_stop_hook.sh` runs a
+  grok Stop hook only at a turn's end, not when a session ends. See
+  `tool-call-policies.md` for what each one enforces.
 - Plugin provisioning: `install_agent_plugins.sh` (run by `setup_system.sh`)
   puts the agent plugins under `/opt/agent-plugins/` as local marketplaces, at
   commits it pins: code-guardian, and Anthropic's `frontend-design` under a
