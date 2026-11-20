@@ -1,0 +1,1 @@
+A desktop's shortcuts on the wire (`DesktopView.shortcuts`, now `ShortcutView`) carry `app_display_name` and `launch_label`: what the shortcut's app and launch path were called while the app was registered, null where the shell recorded nothing. The stored `DesktopShortcut` is unchanged.

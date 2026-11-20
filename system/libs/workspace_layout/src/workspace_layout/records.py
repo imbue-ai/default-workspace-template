@@ -259,9 +259,22 @@ class WindowView(Window):
     client_paths: dict[ClientId, WindowPath] = Field(description="Each client's own path, by client id")
 
 
-class DesktopView(Desktop):
-    """The ``desktop`` object of desktop contracts.md section 5.2: the record, its windows as views."""
+class ShortcutView(DesktopShortcut):
+    """A desktop's shortcut as a listing shows it: the record, with what its app and launch path were called while
+    the app was registered, so a shortcut whose app is gone can still be named."""
 
+    app_display_name: str | None = Field(
+        default=None, description="The app's display name; None when the shell never knew it for this shortcut"
+    )
+    launch_label: str | None = Field(
+        default=None, description="The launch path's label; None when the shell never knew it for this shortcut"
+    )
+
+
+class DesktopView(Desktop):
+    """The ``desktop`` object of desktop contracts.md section 5.2: the record, its shortcuts and windows as views."""
+
+    shortcuts: tuple[ShortcutView, ...] = Field(description="At most one per (app, launch), in insertion order")
     windows: tuple[WindowView, ...] = Field(description="Every window on the desktop, in opening order")
     theme: str | None = Field(
         default=None, description="The desktop's own workspace theme id; None when it wears the workspace's default"

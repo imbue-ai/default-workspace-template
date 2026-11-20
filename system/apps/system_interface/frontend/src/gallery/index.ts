@@ -6,12 +6,15 @@
 
 import "../style.css";
 import m from "mithril";
+import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import { STANDARD_THEME_ID, wearTheme } from "@imbue/workspace-ui/src/themes/themeClient";
 import { fetchInventory, fetchThemes } from "../model/api";
 import { themeRefOf } from "../model/themes";
 import { afterPageLoad } from "../theme/pageLoad";
 import { setIconTheme } from "../views/themeIcons";
-import { ThemeGallery, galleryStateOf } from "../views/ThemeGallery";
+import { FailureLine } from "../views/FailureLine";
+import { FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { ThemeGallery, galleryFailureNotice, galleryStateOf, isGalleryFailureReportable } from "../views/ThemeGallery";
 
 async function start(): Promise<void> {
   const root = document.getElementById("app");
@@ -35,7 +38,30 @@ async function start(): Promise<void> {
 void start().catch((error: unknown) => {
   console.error("[gallery] could not load the themes or the apps", error);
   const root = document.getElementById("app");
-  if (root !== null) {
-    root.textContent = `The theme gallery could not load: ${error instanceof Error ? error.message : String(error)}`;
-  }
+  if (root === null) return;
+  // A shell that frames the gallery says whether Imbue Studio opens bug reports, which can arrive after the failure,
+  // and asks an agent for it.
+  const connection = connectToShell({ onHandshake: () => m.redraw() });
+  const reload = (): void => window.location.reload();
+  m.mount(root, {
+    view: () => {
+      const notice = galleryFailureNotice(error, reload, connection.canReportBug());
+      return m("div", { class: "flex flex-col items-start gap-1" }, [
+        m(FailureLine, { notice, onReportBug: null, marker: "theme-gallery-failure", messageClass: "text-primary" }),
+        m(
+          "div",
+          { class: "flex flex-wrap gap-1" },
+          m(FailureRemedies, {
+            connection,
+            failure: {
+              message: notice.message,
+              details: notice.details,
+              isReportable: isGalleryFailureReportable(error),
+            },
+            sm: true,
+          }),
+        ),
+      ]);
+    },
+  });
 });

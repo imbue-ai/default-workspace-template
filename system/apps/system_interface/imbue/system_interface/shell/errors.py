@@ -1,5 +1,64 @@
+from enum import auto
+from typing import Final
+
+from imbue.imbue_common.enums import LowerCaseStrEnum
+
+
+class RefusalKind(LowerCaseStrEnum):
+    """What a refusal is, for a frontend that words it with what only it holds: the name of an app the shell no
+    longer has, the label of a launch path an app no longer offers, the sentence of the press that failed (a wire
+    value: the ``kind`` of an error answer)."""
+
+    APP_UNAVAILABLE = auto()
+    LAUNCH_PATH_GONE = auto()
+    WINDOW_GONE = auto()
+    # A state file could not be written: the frontend offers to try the change again.
+    OUT_OF_SPACE = auto()
+    NOT_SAVED = auto()
+    # A POST launch reached an app that is not running: stopped and not started on a request, or woken and not up.
+    APP_STOPPED = auto()
+    APP_COULD_NOT_START = auto()
+    APP_START_BUDGET_SPENT = auto()
+    APP_STILL_STARTING = auto()
+    # The app took the launch, but the shell could not write the window that would show it: the disk was full (the
+    # frontend offers an agent to free up space), or another write failed.
+    LAUNCHED_NOT_OPENED_OUT_OF_SPACE = auto()
+    LAUNCHED_NOT_OPENED = auto()
+    # The desktop a request named was deleted (by another window, as a rule): the frontend reads its desktops again,
+    # which moves it off that desktop, and says where it is now.
+    DESKTOP_GONE = auto()
+    # The update-self script refused a rollback without starting it: the notice stays as it was, which only the
+    # workspace can change, so the frontend offers an agent.
+    ROLLBACK_REFUSED = auto()
+
+
+# The app list drops an app taken out of the workspace and one whose registry row could not be read alike, so the
+# sentence claims neither.
+APP_UNAVAILABLE_SENTENCE: Final[str] = "This app couldn't be found in this workspace, so nothing was changed."
+WINDOW_GONE_SENTENCE: Final[str] = "That window is no longer here, so nothing was changed. Try again."
+DESKTOP_GONE_SENTENCE: Final[str] = "That desktop was just deleted, so nothing was changed."
+LAST_DESKTOP_SENTENCE: Final[str] = "You can't delete your only desktop. Add another one first."
+OUT_OF_SPACE_SENTENCE: Final[str] = "This workspace is out of space, so your change could not be saved."
+NOT_SAVED_SENTENCE: Final[str] = "Your change could not be saved. Try again. If this persists, report a bug."
+
+
 class ShellError(Exception):
-    """Base error for everything in the shell subpackage."""
+    """Base error for everything in the shell subpackage. The message is the developer's reason, which the log,
+    agents, and "See details" read; ``user_facing_message``, when set, is the sentence a person is shown in its place,
+    ``reportable`` whether that sentence asks for a bug report, and ``kind`` names the refusal for a frontend that
+    words it itself."""
+
+    def __init__(
+        self,
+        message: str = "",
+        user_facing_message: str | None = None,
+        kind: RefusalKind | None = None,
+        reportable: bool | None = None,
+    ) -> None:
+        self.user_facing_message = user_facing_message
+        self.kind = kind
+        self.reportable = reportable
+        super().__init__(message)
 
 
 class InvalidShellValueError(ShellError, ValueError):
@@ -47,7 +106,9 @@ class DesktopNotFoundError(ShellError, LookupError):
 
     def __init__(self, desktop: str) -> None:
         self.desktop = desktop
-        super().__init__(f"Desktop '{desktop}' not found")
+        super().__init__(
+            f"Desktop '{desktop}' not found", user_facing_message=DESKTOP_GONE_SENTENCE, kind=RefusalKind.DESKTOP_GONE
+        )
 
 
 class DesktopConflictError(ShellError, ValueError):
@@ -57,6 +118,9 @@ class DesktopConflictError(ShellError, ValueError):
 class LastDesktopError(ShellError, ValueError):
     """The last remaining desktop cannot be deleted (answered 409)."""
 
+    def __init__(self, message: str) -> None:
+        super().__init__(message, user_facing_message=LAST_DESKTOP_SENTENCE)
+
 
 class DesktopValueError(ShellError, ValueError):
     """A desktop's name, colour, glyph, shortcut, wallpaper, or a window's app or path is not usable."""
@@ -65,12 +129,17 @@ class DesktopValueError(ShellError, ValueError):
 class LaunchFailureError(ShellError):
     """A launch that opened nothing. The message is for the log and "See details". ``user_facing_message`` is a
     sentence the app itself wrote for people about it, passed on as written, and ``reportable`` the app's own word on
-    whether that sentence asks for a bug report; both are None when the app gave none (the frontends word it then)."""
+    whether that sentence asks for a bug report; both are None when the app gave none (the frontends word it then).
+    ``kind`` is set only where the shell knows why the app could not take the launch (it is not running)."""
 
-    def __init__(self, message: str, user_facing_message: str | None = None, reportable: bool | None = None) -> None:
-        self.user_facing_message = user_facing_message
-        self.reportable = reportable
-        super().__init__(message)
+    def __init__(
+        self,
+        message: str,
+        user_facing_message: str | None = None,
+        reportable: bool | None = None,
+        kind: RefusalKind | None = None,
+    ) -> None:
+        super().__init__(message, user_facing_message=user_facing_message, kind=kind, reportable=reportable)
 
 
 class LaunchRefusedError(LaunchFailureError, ValueError):
@@ -83,12 +152,20 @@ class LaunchUnavailableError(LaunchFailureError, RuntimeError):
     than a page path (answered 502)."""
 
 
+class LaunchUnreachableError(LaunchUnavailableError):
+    """Nothing listens at the app's address: the POST launch's connection was refused (answered 502)."""
+
+
+class LaunchedNotOpenedError(ShellError):
+    """The app took the launch, but no window could be written to show its page (answered 500)."""
+
+
 class WindowNotFoundError(ShellError, LookupError):
     """No window on the desktop has the given id."""
 
-    def __init__(self, window: str) -> None:
+    def __init__(self, window: str, user_facing_message: str | None = None, kind: RefusalKind | None = None) -> None:
         self.window = window
-        super().__init__(f"Window '{window}' not found")
+        super().__init__(f"Window '{window}' not found", user_facing_message=user_facing_message, kind=kind)
 
 
 class WindowPoppedOutError(ShellError, ValueError):
@@ -125,7 +202,8 @@ class UpdateNoticeRecordError(ShellError, ValueError):
 
 
 class UpdateNoticeRefusedError(ShellError, ValueError):
-    """The update notice is not in a state the verb applies to: nothing kept, a rollback already running, or one done."""
+    """The update notice is not in a state the verb applies to (nothing kept, a rollback already running, or one done),
+    or the update-self script refused the rollback without starting it."""
 
 
 class UpdateNoticeCommandError(ShellError, RuntimeError):

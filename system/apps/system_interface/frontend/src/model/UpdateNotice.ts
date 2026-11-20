@@ -13,6 +13,10 @@ import type { UpdateNoticeWire } from "./records";
 /** The shell's own app name, which the banner words as the workspace interface. */
 export const SHELL_APP_NAME = "system_interface";
 
+/** What finishes a rollback of an update that reached the workspace's own setup: the restart of the workspace's
+ *  system services, which a rollback leaves to an agent (update-self's ``update_apply.SERVICES_RESTART_COMMAND``). */
+export const SYSTEM_SERVICES_RESTART_COMMAND = "mngr start --restart system-services";
+
 export interface UpdateNotice {
   readonly mergeSha: string;
   /** Seconds since the epoch. */

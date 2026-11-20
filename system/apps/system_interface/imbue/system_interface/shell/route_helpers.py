@@ -16,6 +16,7 @@ from workspace_layout.primitives import ClientId
 from imbue.system_interface.shell.client_activity import find_client_id_for_page
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import NoTargetClientError
+from imbue.system_interface.shell.errors import RefusalKind
 from imbue.system_interface.shell.state import ShellState
 
 HTTP_OK: Final[int] = 200
@@ -37,12 +38,17 @@ IMAGE_CONTENT_SECURITY_POLICY: Final[str] = "default-src 'none'; style-src 'unsa
 
 
 def detail_response(
-    message: str, status_code: int, user_facing_message: str | None = None, reportable: bool | None = None
+    message: str,
+    status_code: int,
+    user_facing_message: str | None = None,
+    reportable: bool | None = None,
+    kind: RefusalKind | None = None,
 ) -> ResponseReturnValue:
     """A refusal or a failure as the ``ErrorResponse`` every route answers them with: ``detail`` is the developer's
     reason, which every caller reads; ``user_facing_message``, when there is one, is the sentence the workspace's
-    frontends show a person in its place, and ``reportable`` whether that sentence asks for a bug report."""
-    return error_response(message, status_code, user_facing_message, reportable)
+    frontends show a person in its place, ``reportable`` whether that sentence asks for a bug report, and ``kind``
+    names the refusal for a frontend that words it itself."""
+    return error_response(message, status_code, user_facing_message, reportable, None if kind is None else kind.value)
 
 
 def request_identity() -> RequestIdentity:

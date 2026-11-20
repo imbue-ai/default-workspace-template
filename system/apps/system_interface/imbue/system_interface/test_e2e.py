@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -52,7 +53,9 @@ from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
 from imbue.system_interface.profiles import DEFAULT_SHARE_ENV_PATH
+from imbue.system_interface.recovery_page import DESKTOPS_RECOVERY_PATH
 from imbue.system_interface.server import create_application
+from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
 from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
 from imbue.system_interface.shell.testing import files_registry_row
 from imbue.system_interface.shell.testing import identity_headers
@@ -63,6 +66,7 @@ from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_rollback_point
 from imbue.system_interface.shell.testing import write_stub_update_self_script
 from imbue.system_interface.shell.tour import OFFER_TOUR_FILENAME
+from imbue.system_interface.shell.window_paths import WINDOW_PATHS_DIRNAME
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import is_e2e_browser_installed
@@ -902,6 +906,30 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     )
 
 
+def test_a_startup_read_the_shell_answers_with_an_error_goes_to_the_recovery_page_whose_reload_lands_the_desktop(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """The shell answering the read of the desktops and apps with an error sends the page to the recovery page, which
+    says so from its own read of them; once they load, its Reload lands the desktop."""
+    desktops_file = e2e_server.state_dir / DESKTOPS_FILENAME
+    set_aside = desktops_file.with_name("desktops.json.aside")
+    if desktops_file.exists():
+        desktops_file.rename(set_aside)
+    # A directory where the desktops file should be: the shell cannot seed the first desktop, so its read fails.
+    desktops_file.mkdir()
+
+    page.goto(f"{e2e_server.base_url}/")
+
+    page.wait_for_url(f"{e2e_server.base_url}{DESKTOPS_RECOVERY_PATH}", timeout=15000)
+    expect(page.get_by_role("heading")).to_have_text("This workspace's desktops couldn't be loaded.")
+    desktops_file.rmdir()
+    if set_aside.exists():
+        set_aside.rename(desktops_file)
+    page.get_by_role("button", name="Reload").click()
+    page.wait_for_url(f"{e2e_server.base_url}/", timeout=15000)
+    expect(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible(timeout=15000)
+
+
 @pytest.mark.timeout(60, func_only=False)
 def test_the_tray_stacks_four_people_and_opens_a_persons_card_on_hover(e2e_server: E2EServer, page: Page) -> None:
     """With three people granted the workspace, the tray's people are four (the three in grant order, then the
@@ -1170,6 +1198,90 @@ def test_launcher_free_text_rows_point_the_pinned_window_at_the_text(tmp_path: P
         menu = _open_launcher(page)
         menu.locator(f'[data-launch="{_PINNED_APP_NAME}:root"]').click()
         expect(_window(page, pinned["id"])).to_be_visible(timeout=10000)
+        assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_launch_into_an_app_that_is_not_running_says_so_and_offers_an_agent_to_start_it(
+    tmp_path: Path, page: Page
+) -> None:
+    """A POST launch nothing listens for, of an app the workspace does not start on a request, is told as the app's
+    stopped window tells it (not as a failed open to report), and the agent it offers is asked through the launch
+    path that takes an ask about an app, naming the stopped app, the note staying up."""
+    ghost_row = registry_row_toml(
+        "ghost",
+        f"http://127.0.0.1:{find_free_port()}",
+        display_name="Ghost",
+        default_shortcuts=[("new", "new")],
+        launch_paths=(("new", "New ghost", "/new"),),
+        launch_methods={"new": "POST"},
+    )
+    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar"), extra_rows=(ghost_row,)) as server:
+        _land(page, server)
+        windows_before = [window["id"] for window in _windows(server.base_url)]
+
+        page.locator('[data-shortcut="ghost:new"]').dblclick()
+
+        toast = page.locator("[data-toast]")
+        expect(toast).to_contain_text("Ghost isn't running.", timeout=10000)
+        expect(toast).not_to_contain_text("couldn't open that")
+        ask = toast.get_by_role("button", name="Ask an agent to start it")
+        expect(ask).to_be_visible()
+        ask.click()
+        wait_for(
+            lambda: len(_posted_launches(server.pinned_url)) > 0,
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the request to start Ghost never reached the agent's app",
+        )
+        (asked,) = _posted_launches(server.pinned_url)
+        assert asked["path"] == f"/{_PINNED_APP_ASK_LAUNCH_ID}"
+        assert asked["body"] == {
+            _PINNED_APP_PARAM: "ghost",
+            _PINNED_APP_DISPLAY_NAME_PARAM: "Ghost",
+            _PINNED_TEXT_PARAM: (
+                "Imbue Studio showed the user that Ghost (the ghost app) isn't running in this workspace. Find out why "
+                "it stopped and start it again, then tell the user what was wrong."
+            ),
+            "client_id": _client_id(page),
+            "desktop_id": _HOME_DESKTOP_ID,
+        }
+        # Handing the failure to an agent leaves the note up.
+        expect(toast).to_contain_text("Ghost isn't running.")
+        assert [window["id"] for window in _windows(server.base_url)] == windows_before
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_send_the_app_took_shows_its_page_once_though_the_window_s_place_could_not_be_saved(
+    tmp_path: Path, page: Page
+) -> None:
+    """With this client's window paths unwritable (a file where their directory should be, which stops root too),
+    text sent into the pinned window still goes to the app once, the window shows the page the app answered, the
+    launcher lets go of the text, and a note says the place wasn't saved (the send is not offered again, which
+    would ask the app a second time)."""
+    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar")) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        window_paths = server.state_dir / WINDOW_PATHS_DIRNAME
+        shutil.rmtree(window_paths, ignore_errors=True)
+        window_paths.write_text("a file where the window paths directory should be")
+
+        _open_launcher(page)
+        field = page.locator("[data-launcher-field] textarea")
+        field.fill("free up some space")
+        page.keyboard.press("Enter")
+
+        new_page_path = _launched_page_path(_PINNED_NEW_LAUNCH_ID, {_PINNED_TEXT_PARAM: "free up some space"})
+        frame = _page_frame(page, pinned["id"])
+        expect(frame.locator("#where")).to_have_text(new_page_path, timeout=15000)
+        expect(page.locator("[data-toast]")).to_contain_text(
+            "Your message was sent to Buddy, but its window's position couldn't be saved, so it may move back after a "
+            "reload.",
+            timeout=10000,
+        )
+        expect(field).to_have_value("")
+        page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
+        assert len(_posted_launches(server.pinned_url)) == 1
         assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
 
 
@@ -3538,7 +3650,7 @@ def test_a_kept_rollback_point_raises_one_banner_naming_its_apps_and_everything_
     frame = _page_frame(page, window_id)
     expect(page.locator(".update-notice-banner")).to_have_count(0)
 
-    write_rollback_point(e2e_server.repo_root, apps=[_STUB_APP_NAME, "system_interface"])
+    write_rollback_point(e2e_server.repo_root, apps=[_STUB_APP_NAME, "system_interface"], applied_at=time.time())
 
     banner = page.locator(".update-notice-banner")
     expect(banner).to_be_visible(timeout=15000)

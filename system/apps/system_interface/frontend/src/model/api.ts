@@ -176,7 +176,8 @@ export async function deleteDesktop(desktopId: string): Promise<string> {
 }
 
 export async function setDesktopShortcut(desktopId: string, shortcut: DesktopShortcut): Promise<Desktop> {
-  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/shortcuts"), shortcut));
+  const { target, mode, cell } = shortcut;
+  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/shortcuts"), { target, mode, cell }));
 }
 
 export async function moveDesktopShortcut(
@@ -287,6 +288,8 @@ export interface LaunchOutcome {
   readonly path: string;
   /** True when a window was opened for the page. */
   readonly isNew: boolean;
+  /** Why the shell could not record where the window is, though the app took the launch; null when it did. */
+  readonly unsavedKind: "out_of_space" | "not_saved" | null;
 }
 
 /** Run a launch path for this client (post-launch-paths plan section 5.3): the shell resolves the page (built for a
@@ -300,15 +303,20 @@ export async function launch(desktopId: string, request: LaunchRequest): Promise
   if (request.target.kind === "show" && request.target.besideWindowId !== undefined) {
     target.beside = request.target.besideWindowId;
   }
-  const data = await postJson<{ window: unknown; path: string; is_new: boolean }>(desktopUrl(desktopId, "/launch"), {
-    app: request.app,
-    launch: request.launch,
-    params: request.params,
-    client_id: request.clientId,
-    target,
-    minimized: request.isMinimized,
-  });
-  return { window: parseWindow(data.window), path: data.path, isNew: data.is_new === true };
+  const data = await postJson<{ window: unknown; path: string; is_new: boolean; unsaved_kind?: string | null }>(
+    desktopUrl(desktopId, "/launch"),
+    {
+      app: request.app,
+      launch: request.launch,
+      params: request.params,
+      client_id: request.clientId,
+      target,
+      minimized: request.isMinimized,
+    },
+  );
+  const unsavedKind =
+    data.unsaved_kind === "out_of_space" || data.unsaved_kind === "not_saved" ? data.unsaved_kind : null;
+  return { window: parseWindow(data.window), path: data.path, isNew: data.is_new === true, unsavedKind };
 }
 
 export async function closeWindow(desktopId: string, windowId: string): Promise<void> {

@@ -36,7 +36,7 @@ import { TOUR_API, TourController, tourStartDelayFromSearch } from "./model/tour
 import type { TourAction } from "./model/tourCards";
 import { avatarPinnedWindow } from "./reducers/desktopState";
 import { initEmbedderRelay, setEmbedderAppMessageHandler } from "./relay";
-import { reloadInterface } from "./reload";
+import { openDesktopsRecoveryPage, reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
 import { openBugReport } from "@imbue/workspace-ui/src/report-bug";
 import { ShellSocket } from "./store/socket";
@@ -121,6 +121,7 @@ function bootstrap(): void {
           modes,
           redraw: () => m.redraw(),
           reloadInterface,
+          openDesktopsRecoveryPage,
           popOut: popOutBridge,
           outsideLinks,
           reportBug: openBugReport,

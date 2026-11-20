@@ -13,8 +13,16 @@ import m from "mithril";
 import type { UpdateNoticeWire } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket } from "../testing/fakeShell";
-import { appRecord, desktopRecord, noticeWire, themeMetricsRecord } from "../testing/records";
-import { SYSTEM_SERVICES_RESTART_DETAILS, UpdateNoticeBanner } from "./UpdateNoticeBanner";
+import {
+  appAskLaunchPathRecord,
+  appRecord,
+  chatLikeAppRecord,
+  desktopRecord,
+  launchPathRecord,
+  noticeWire,
+  themeMetricsRecord,
+} from "../testing/records";
+import { SYSTEM_SERVICES_RESTART_DETAILS, UpdateNoticeBanner, finishRollbackRequest } from "./UpdateNoticeBanner";
 
 const CLIENT = "client-1";
 const NO_LINK = { desktopId: null, open: null, launch: null };
@@ -41,6 +49,11 @@ function requestedPaths(fetchMock: ReturnType<typeof vi.fn>): string[] {
 function deliverNotice(wire: UpdateNoticeWire | null): void {
   socket.deliver().onUpdateNoticeChanged(wire);
   m.redraw.sync();
+}
+
+/** The wire time of an update applied ``secondsAgo`` before now. */
+function appliedSecondsAgo(secondsAgo: number): number {
+  return Math.floor(Date.now() / 1000) - secondsAgo;
 }
 
 function mountBanner(): HTMLElement {
@@ -70,6 +83,7 @@ beforeEach(async () => {
     modes: { isPhone: false, isTouch: false },
     redraw: () => m.redraw(),
     reloadInterface: () => undefined,
+    openDesktopsRecoveryPage: () => undefined,
   });
   await store.start(NO_LINK);
   socket
@@ -89,23 +103,37 @@ describe("UpdateNoticeBanner", () => {
 
   it("names every app the apply touched, since a rollback takes them all back together", () => {
     const root = mountBanner();
-    deliverNotice(noticeWire(["chat"]));
+    const now = appliedSecondsAgo(0);
+    deliverNotice(noticeWire(["chat"], { applied_at: now }));
     expect(root.querySelector(".update-notice-banner")?.textContent).toContain(
       "Chat was updated a moment ago. If something is not working, you can go back to the previous version.",
     );
 
-    deliverNotice(noticeWire(["chat", "system_interface"]));
+    deliverNotice(noticeWire(["chat", "system_interface"], { applied_at: now }));
     expect(root.querySelector(".update-notice-banner")?.textContent).toContain(
       "Chat and the workspace interface were updated a moment ago.",
     );
 
-    deliverNotice(noticeWire([]));
+    deliverNotice(noticeWire([], { applied_at: now }));
     expect(root.querySelector(".update-notice-banner")?.textContent).toContain(
       "The workspace was updated a moment ago.",
     );
 
     deliverNotice(null);
     expect(root.querySelector(".update-notice-banner")).toBeNull();
+  });
+
+  it("says how long ago the update was applied, since the notice stays until someone confirms it", () => {
+    const root = mountBanner();
+    const text = (): string | null | undefined => root.querySelector(".update-notice-banner")?.textContent;
+    deliverNotice(noticeWire(["chat"], { applied_at: appliedSecondsAgo(5 * 60) }));
+    expect(text()).toContain("Chat was updated 5 minutes ago.");
+    deliverNotice(noticeWire(["chat"], { applied_at: appliedSecondsAgo(3 * 60 * 60) }));
+    expect(text()).toContain("Chat was updated 3 hours ago.");
+    deliverNotice(noticeWire(["chat"], { applied_at: appliedSecondsAgo(26 * 60 * 60) }));
+    expect(text()).toContain("Chat was updated yesterday.");
+    deliverNotice(noticeWire(["chat"], { applied_at: appliedSecondsAgo(4 * 24 * 60 * 60) }));
+    expect(text()).toContain("Chat was updated 4 days ago.");
   });
 
   it("offers the two verbs on an open notice, and Everything seems good confirms it", async () => {
@@ -132,6 +160,35 @@ describe("UpdateNoticeBanner", () => {
     expect(root.querySelector(".update-notice-confirm")).not.toBeNull();
   });
 
+  it("offers an agent, in the main chat, for a rollback the update-self script refused, and none for a stale notice", async () => {
+    socket.deliver().onAppsUpdated([chatLikeAppRecord("chat")]);
+    const fetchMock = vi.fn(async () =>
+      Response.json(
+        { detail: "The rollback was refused (exit 1): the working tree is dirty", kind: "rollback_refused" },
+        { status: 409 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const root = mountBanner();
+    deliverNotice(noticeWire(["chat"]));
+    click(root, ".update-notice-rollback");
+    m.redraw.sync();
+    click(root, ".destroy-dialog-btn-destroy");
+    await settled();
+    const actions = (): (string | null)[] =>
+      [...root.querySelectorAll(".update-notice-banner-error-action")].map((button) => button.textContent);
+    expect(root.querySelector(".update-notice-banner-error-message")?.textContent).toBe("Couldn't roll back.");
+    expect(actions()).toEqual(["Ask an agent to fix this"]);
+
+    // A refusal the notice's own state explains (a rollback already running) is not one an agent is owed.
+    stubFetch(409, "A rollback is already running.");
+    click(root, ".update-notice-rollback");
+    m.redraw.sync();
+    click(root, ".destroy-dialog-btn-destroy");
+    await settled();
+    expect(actions()).toEqual([]);
+  });
+
   it("drops a refusal once the notice moves on to the state that explains it", async () => {
     // A second window's Roll back, refused because the first's rollback is already running: the
     // refusal stands beside the open notice, and goes when that rollback's progress arrives.
@@ -151,7 +208,7 @@ describe("UpdateNoticeBanner", () => {
     expect(root.querySelector(".update-notice-banner-error")).toBeNull();
   });
 
-  it("asks before rolling back, naming the apps and the programs, then posts the rollback", async () => {
+  it("asks before rolling back, naming the apps and what restarts as people know them, then posts the rollback", async () => {
     const fetchMock = stubFetch(202, "The rollback has started.");
     const root = mountBanner();
     deliverNotice(noticeWire(["chat", "system_interface"]));
@@ -161,7 +218,7 @@ describe("UpdateNoticeBanner", () => {
 
     const dialog = root.querySelector(".modal-message");
     expect(dialog?.textContent).toContain("Chat and the workspace interface");
-    expect(dialog?.textContent).toContain("chat and system_interface will restart");
+    expect(dialog?.textContent).toContain("Chat and the workspace interface will restart.");
     expect(root.textContent).not.toContain(SYSTEM_SERVICES_RESTART_DETAILS);
     expect(requestedPaths(fetchMock)).toEqual([]);
 
@@ -195,8 +252,66 @@ describe("UpdateNoticeBanner", () => {
 
     const dialog = root.querySelector(".modal-message");
     expect(dialog?.textContent).toContain("the workspace");
-    expect(dialog?.textContent).toContain("no app restarts on its own");
+    expect(dialog?.textContent).toContain("No app restarts on its own.");
     expect(root.textContent).toContain(SYSTEM_SERVICES_RESTART_DETAILS);
+  });
+
+  it("names a restarted program that shows no app as another part of the workspace", () => {
+    const root = mountBanner();
+    deliverNotice(noticeWire(["chat"], { programs: ["chat", "backup-service"] }));
+    click(root, ".update-notice-rollback");
+    m.redraw.sync();
+    expect(root.querySelector(".modal-message")?.textContent).toContain(
+      "Chat and other parts of the workspace will restart.",
+    );
+  });
+
+  it("offers to ask an agent, in the main chat, to finish a rollback that left the restart to one, telling it how the rollback ended", async () => {
+    // The update is no app's, so the ask runs the primary text action whatever else the chat app declares.
+    socket.deliver().onAppsUpdated([
+      appRecord("chat", {
+        display_name: "Chat",
+        launch_paths: [
+          launchPathRecord({ id: "main", path: "/main", params: ["message"], text_param: "message" }),
+          launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" }),
+          appAskLaunchPathRecord(),
+        ],
+      }),
+    ]);
+    const root = mountBanner();
+    deliverNotice(noticeWire(["chat"], { outcome: "Rolled back to the previous version." }));
+    expect(root.querySelector(".update-notice-finish")).toBeNull();
+
+    // The outcome update-self writes for such an update says what is left in words; the command that does it is
+    // behind See details.
+    const restored = "The previous version is restored. To finish, the workspace needs to restart.";
+    deliverNotice(noticeWire(["chat"], { outcome: restored, needs_system_services_restart: true }));
+    const text = root.querySelector(".update-notice-banner-text");
+    expect(text?.firstChild?.textContent).toBe(restored);
+    expect(text?.querySelector("details")?.textContent).toContain("mngr start --restart system-services");
+    click(root, ".update-notice-finish");
+    // While the chat's window is not up yet the button says so and takes no second press.
+    m.redraw.sync();
+    const finish = root.querySelector(".update-notice-finish") as HTMLButtonElement;
+    expect(finish.textContent).toBe("Asking an agent…");
+    expect(finish.disabled).toBe(true);
+    await settled();
+    expect((root.querySelector(".update-notice-finish") as HTMLButtonElement).textContent).toBe(
+      "Ask an agent to finish it",
+    );
+    // A rollback that failed settles the same record: the agent is told what happened, not that the files are back.
+    const failed = "The update could not be reverted, so nothing was changed: conflict. Ask your agent to look at it.";
+    deliverNotice(noticeWire(["chat"], { outcome: failed, needs_system_services_restart: true }));
+    click(root, ".update-notice-finish");
+    await settled();
+    // Behind the assist command, the outcome as the notice showed it and the command that finishes such a rollback.
+    expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual(
+      [restored, failed].map(
+        (outcome) =>
+          `launch:home:chat:main:${JSON.stringify({ message: `/assist ${finishRollbackRequest(outcome)}` })}:new`,
+      ),
+    );
+    expect(finishRollbackRequest(restored)).toContain("`mngr start --restart system-services`");
   });
 
   it("shows a running rollback's progress with no verbs, then the outcome with Close", async () => {

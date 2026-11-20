@@ -1,6 +1,8 @@
 """Tests for the shell's HTTP routes (desktop contracts.md sections 5, 6, and 8) over a test state and the two-app registry."""
 
+import json
 import queue
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +27,12 @@ from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.app_theming import AppThemingStore
 from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
 from imbue.system_interface.shell.desktops import DESKTOP_GLYPH_COLORS
+from imbue.system_interface.shell.errors import APP_UNAVAILABLE_SENTENCE
+from imbue.system_interface.shell.errors import DESKTOP_GONE_SENTENCE
+from imbue.system_interface.shell.errors import LAST_DESKTOP_SENTENCE
 from imbue.system_interface.shell.errors import LaunchUnavailableError
+from imbue.system_interface.shell.errors import LaunchUnreachableError
+from imbue.system_interface.shell.errors import WINDOW_GONE_SENTENCE
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
@@ -49,6 +56,7 @@ from imbue.system_interface.shell.testing import write_rollback_point
 from imbue.system_interface.shell.testing import write_stub_update_self_script
 from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.shell.wallpapers import BUNDLED_WALLPAPERS_DIRNAME
+from imbue.system_interface.shell.window_paths import WINDOW_PATHS_DIRNAME
 from imbue.system_interface.testing import FakeSupervisorServer
 from imbue.system_interface.testing import serve_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -1170,7 +1178,7 @@ def test_the_default_desktop_is_seeded_from_the_registry_on_the_first_read(clien
     (home,) = desktops
     assert home["name"] == "Home" and home["wallpaper"] is None and "sharing" not in home
     assert home["windows"] == []
-    assert home["shortcuts"] == [
+    assert [{key: shortcut[key] for key in ("target", "mode", "cell")} for shortcut in home["shortcuts"]] == [
         {
             "target": {"kind": "launch", "app": "terminal", "launch": "new"},
             "mode": "new",
@@ -1608,6 +1616,40 @@ def test_an_op_targets_the_named_desktop_and_load_switches_the_client(client: Fl
     assert loaded.status_code == 200 and loaded.get_json()["desktop_id"] == "home"
     assert _op(client, "load", {"desktop": "Nowhere"}, requester).status_code == 404
     assert _op(client, "load", {}, requester).status_code == 400
+
+
+def test_a_shortcut_is_answered_with_what_its_app_and_launch_path_are_called_kept_beside_the_desktops(
+    client: FlaskClient, tmp_path: Path
+) -> None:
+    """A window still showing a shortcut whose app has since left the app list names it by these; they live in a
+    file of their own, since a shell from before them still reads the desktops file and refuses a key it does not
+    know."""
+    # The seeded shortcuts carry their names from the first read.
+    (home,) = client.get("/api/desktops").get_json()["desktops"]
+    assert [(shortcut["app_display_name"], shortcut["launch_label"]) for shortcut in home["shortcuts"]] == [
+        ("Terminal", "New terminal"),
+        ("Files", "Files"),
+    ]
+    answer = client.post(
+        "/api/desktops/home/shortcuts",
+        json={
+            "target": {"kind": "launch", "app": "terminal", "launch": "new"},
+            "mode": "new",
+            "cell": {"column": 3, "row": 0},
+        },
+    )
+    assert answer.status_code == 200
+    (terminal,) = [shortcut for shortcut in answer.get_json()["shortcuts"] if shortcut["target"]["app"] == "terminal"]
+    assert (terminal["app_display_name"], terminal["launch_label"], terminal["cell"]) == (
+        "Terminal",
+        "New terminal",
+        {"column": 3, "row": 0},
+    )
+
+    (desktops_file,) = tmp_path.rglob("desktops.json")
+    for desktop in json.loads(desktops_file.read_text())["desktops"]:
+        for shortcut in desktop["shortcuts"]:
+            assert set(shortcut) == {"target", "mode", "cell"}
 
 
 def test_shortcut_and_wallpaper_ops_edit_the_target_desktop(client: FlaskClient, app: Flask) -> None:
@@ -2962,7 +3004,12 @@ class _RecordingLaunchPoster:
         return outcome
 
 
-def _launching_shell(tmp_path: Path, broadcaster: WebSocketBroadcaster, poster: _RecordingLaunchPoster) -> Flask:
+def _launching_shell(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    poster: _RecordingLaunchPoster,
+    prober: FakeLivenessProber | None = None,
+) -> Flask:
     """The shell over the two-app registry plus a pinned ``buddy`` app declaring a POST launch path ``new`` at
     ``/api/intake`` with a preset, a declared param, and a text param, the way the chat's manifest does."""
     registry_path = write_two_app_registry(
@@ -2979,7 +3026,9 @@ def _launching_shell(tmp_path: Path, broadcaster: WebSocketBroadcaster, poster: 
             launch_presets={"new": {"target": "new_chat"}},
         ),
     )
-    return shell_application(tmp_path, build_inventory(registry_path, broadcaster), broadcaster, launch_poster=poster)
+    return shell_application(
+        tmp_path, build_inventory(registry_path, broadcaster, prober=prober), broadcaster, launch_poster=poster
+    )
 
 
 def _launch(client: FlaskClient, body: dict[str, Any]) -> Any:
@@ -3317,6 +3366,118 @@ def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_n
         assert set(no_page.get_json()) == {"detail"} and no_page.get_json()["detail"].startswith(expected)
     # Only the pinned window stands: nothing opened for any of them.
     assert len(_desktop_windows(client)) == 1
+
+
+def test_a_post_launch_to_an_app_that_turns_out_to_be_stopped_answers_its_kind(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """Nothing listens at the app's address and the shell then reads it as stopped: the answer names the app as
+    stopped, so the desktop words it as the app's stopped window does."""
+    prober = FakeLivenessProber()
+    poster = _RecordingLaunchPoster([LaunchUnreachableError("buddy could not be reached for the launch: refused")])
+    app = _launching_shell(tmp_path, broadcaster, poster, prober)
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    prober.is_running_by_name["buddy"] = False
+
+    stopped = _launch(
+        client, {"app": "buddy", "launch": "new", "params": {"message": "hi"}, "target": {"kind": "new"}}
+    )
+
+    assert stopped.status_code == 502
+    assert stopped.get_json()["kind"] == "app_stopped"
+    assert stopped.get_json()["user_facing_message"] == "Buddy isn't running right now, so it couldn't open that."
+    assert len(_desktop_windows(client)) == 1
+
+
+def test_a_send_the_app_took_is_not_failed_by_a_window_path_write_that_fails_after_it(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The app acts on a POST launch (a chat may already be started), so a shell write that then fails does not
+    answer the launch as failed, which would invite a second one: a send into the pinned window whose path for this
+    client cannot be written (a file where its directory should be, which stops root too) is answered with the
+    window at its new page and ``layout_saved`` false, and posted once."""
+    poster = _RecordingLaunchPoster([LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-1"})])
+    app = _launching_shell(tmp_path, broadcaster, poster)
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    (pinned,) = _desktop_windows(client)
+    window_paths = tmp_path / "state" / WINDOW_PATHS_DIRNAME
+    shutil.rmtree(window_paths, ignore_errors=True)
+    window_paths.write_text("a file where this client's window paths directory should be")
+
+    sent = _launch(
+        client,
+        {
+            "app": "buddy",
+            "launch": "new",
+            "params": {"message": "free up space"},
+            "target": {"kind": "window", "window_id": pinned["id"]},
+        },
+    )
+
+    assert sent.status_code == 200, sent.get_json()
+    assert sent.get_json()["layout_saved"] is False and sent.get_json()["unsaved_kind"] == "not_saved"
+    assert (sent.get_json()["window"]["id"], sent.get_json()["window"]["path"]) == (pinned["id"], "/?chat=agent-1")
+    assert len(poster.posts) == 1
+
+
+def test_a_refusal_for_something_this_window_held_says_it_is_gone_and_that_nothing_was_changed(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The desktop builds its requests from the apps and desktops it last heard of; what went in the meantime is
+    refused before anything is written, in a sentence for people and a kind for the frontend to word with the name
+    and label only it still holds. The developer's reason stays in ``detail``, which agents and the CLI read."""
+    app = _launching_shell(tmp_path, broadcaster, _RecordingLaunchPoster([]))
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    (pinned,) = _desktop_windows(client)
+    gone_app = {"user_facing_message": APP_UNAVAILABLE_SENTENCE, "kind": "app_unavailable"}
+
+    assert _open_window(client, "gone", "/").get_json() == {"detail": "No registered app named 'gone'", **gone_app}
+    assert _launch(client, {"app": "gone", "launch": "new", "target": {"kind": "new"}}).get_json() == {
+        "detail": "No registered app named 'gone'",
+        **gone_app,
+    }
+    shortcut = {
+        "target": {"kind": "launch", "app": "gone", "launch": "open"},
+        "mode": "focus",
+        "cell": {"column": 0, "row": 0},
+    }
+    assert client.post("/api/desktops/home/shortcuts", json=shortcut).get_json()["kind"] == "app_unavailable"
+    quit_answer = client.post("/api/apps/gone/quit")
+    assert quit_answer.status_code == 404 and quit_answer.get_json()["kind"] == "app_unavailable"
+
+    gone_launch = _launch(client, {"app": "buddy", "launch": "old", "target": {"kind": "new"}})
+    assert gone_launch.status_code == 400
+    assert gone_launch.get_json() == {
+        "detail": "App 'buddy' declares no launch path 'old'",
+        "user_facing_message": "Buddy no longer offers that, so nothing was changed.",
+        "kind": "launch_path_gone",
+    }
+
+    # A launch into a window that has gone, or that now shows another app.
+    terminal = _open_window(client, "terminal", "/").get_json()["window"]
+    for window_id in ("win-00000000000000ff", terminal["id"]):
+        into_gone = _launch(
+            client, {"app": "buddy", "launch": "new", "target": {"kind": "window", "window_id": window_id}}
+        )
+        assert into_gone.get_json()["user_facing_message"] == WINDOW_GONE_SENTENCE
+        assert into_gone.get_json()["kind"] == "window_gone"
+
+    terminal_shortcut = {**shortcut, "target": {"kind": "launch", "app": "terminal", "launch": "new"}}
+    deleted = client.post("/api/desktops/research/shortcuts", json=terminal_shortcut)
+    assert deleted.status_code == 404
+    assert deleted.get_json() == {
+        "detail": "Desktop 'research' not found",
+        "user_facing_message": DESKTOP_GONE_SENTENCE,
+        "kind": "desktop_gone",
+    }
+
+    only = client.post("/api/desktops/home/delete")
+    assert only.status_code == 409 and only.get_json()["user_facing_message"] == LAST_DESKTOP_SENTENCE
+    # Nothing was opened, launched, or posted for any of them.
+    assert [window["id"] for window in _desktop_windows(client)] == [pinned["id"], terminal["id"]]
 
 
 def test_an_open_op_at_a_post_launch_path_posts_for_its_page_with_and_without_a_client(

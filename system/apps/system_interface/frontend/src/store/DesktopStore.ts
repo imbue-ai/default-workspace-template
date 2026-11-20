@@ -27,11 +27,22 @@ import {
   isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
-import { DEFAULT_WHAT_FAILED, failureSentence, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
-import type { FailureMessage } from "@imbue/workspace-ui/src/models/failure";
-import { assistRequest } from "@imbue/workspace-ui/src/app_contract";
+import { failureSentence, fallbackSentence } from "@imbue/workspace-ui/src/models/failure";
+import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
+import { agentFixTask, assistRequest } from "@imbue/workspace-ui/src/app_contract";
 import type { ReportedFailure, StartOutcome } from "@imbue/workspace-ui/src/app_contract";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
+import { ASK_AGENT_TO_FIX_LABEL, ASKING_AN_AGENT_LABEL } from "@imbue/workspace-ui/src/components/FailureButtons";
+import {
+  appNotFoundSentence,
+  couldNotStartRequest,
+  isRetryable,
+  refusalKindOf,
+  stoppedRequest,
+  stoppedSentence,
+  tookLaunchLead,
+} from "../model/failures";
+import type { FailureNotice } from "../model/failures";
 import { refreshShellKeybindings } from "../model/keybindings";
 import {
   NO_DRAFT_APP_REASON,
@@ -50,6 +61,7 @@ import {
   mentionRowsOf,
   textRowDisabledReason,
 } from "../model/launch";
+import type { AppLaunch } from "../model/launch";
 import { applyPresence, getOwnIdentity, getOwnParticipant } from "../model/Presence";
 import { applyRoster, getRoster } from "../model/Roster";
 import { isClientOf, isOwnDesktop, ownDesktops, ownerEntryOf } from "../model/Ownership";
@@ -89,12 +101,13 @@ import type {
   PresentUser,
   RosterParticipant,
   ShortcutMode,
+  ShortcutTarget,
   Wallpaper,
   WindowRecord,
   WindowState,
 } from "../model/records";
 import { isSameCell, isSameWindowPaths, shortcutKey } from "../model/records";
-import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
+import { ToastQueue, type ToastAction } from "@imbue/workspace-ui/src/models/toasts";
 import { OwnIdMinter, PAGE_ID_PREFIX, REPORT_ID_PREFIX, SAVE_ID_PREFIX, mintHex } from "../model/ownIds";
 import { isPreviewShell } from "../model/PreviewShell";
 import { noticeFromWire } from "../model/UpdateNotice";
@@ -175,6 +188,7 @@ import {
   nextDesktopName,
   resolveLaunchRun,
 } from "../reducers/shortcuts";
+import type { UnavailableReason } from "../reducers/shortcuts";
 import type { ThemeMetrics, RenderModes } from "../theme/metrics";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type {
@@ -275,6 +289,97 @@ export const OTHER_WORKSPACE_LINK_NOTICE = "That link belongs to another workspa
 export const SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE =
   "It opened on your desktop. Reopen the main Imbue Studio window to see it.";
 
+/** What the startup read's line says while nothing has answered it and it is being tried again. */
+export const BOOT_STILL_TRYING_SENTENCE = "The workspace didn't answer. Still trying\u2026";
+
+/** The first wait before the startup read is tried again after nothing answered it, and the longest it grows to. */
+export const BOOT_RETRY_FIRST_MS = 2_000;
+export const BOOT_RETRY_CAP_MS = 15_000;
+
+/** How long the startup read goes unanswered before its line offers "Report a bug": a wait with no end owes a way
+ *  out. */
+export const BOOT_REPORT_AFTER_MS = 60_000;
+
+/** What a refused request did not do, as its sentence says: an open, or any other change. */
+const NOTHING_OPENED = "nothing was opened";
+const NOTHING_CHANGED = "nothing was changed";
+
+/** The prefix of every message type a link becomes when it is relayed to an app: ``open:url`` for a local URL, and
+ *  ``open:<scheme>`` (``open:web`` for a web link) for an external one; ``open:file`` is the one that is no link. */
+const OPEN_MESSAGE_PREFIX = "open:";
+
+/** Where a failure of something a surface ran is told: under that surface (the launcher's field) rather than in a
+ *  toast. */
+export type FailureReport = (notice: FailureNotice) => void;
+
+/** Where "Ask an agent to fix this" on a failure asks: the chat about the app the failure is about (laid out beside
+ *  its window when it is shown in one), the main chat for a failure of the shell's own, or nowhere where the ask would
+ *  go through what failed or the surface recovers by itself. */
+type AgentAsk = { readonly about: AppRecord; readonly windowId: string | null } | "shell" | "withheld";
+
+/** Whether a notice owes an agent beyond a sentence that asks for a bug report, and where it is asked. */
+interface AgentOffer {
+  readonly agent: AgentAsk;
+  /** The refusal leaves the person unable to do what they meant to, so it offers an agent though it asks for no bug
+   *  report. */
+  readonly isStuck?: boolean;
+}
+
+/** What a refusal of a request the desktop built from the apps it held is worded with: the app and the launch path
+ *  as the desktop last knew them, and how to try the request again. */
+interface AskedFor {
+  /** The app the request named, as this window knew it when it asked. */
+  readonly app?: AppRecord;
+  readonly launchLabel?: string;
+  readonly retry?: () => void;
+  /** The request would have opened something, which a refusal says was not ("nothing was opened"). */
+  readonly isOpen?: boolean;
+  /** The shortcut the request ran, which a refusal for its gone app or launch path offers to remove. */
+  readonly shortcut?: ShortcutTarget;
+  /** The failure is the app's own (it answered with an error, or could not be quit), so an agent it owes is asked in
+   *  the chat about the app rather than the main chat. */
+  readonly isAboutApp?: boolean;
+}
+
+/** Why the startup read has not answered, as the backdrop shows it beside its spinner: nothing answered it, and it is
+ *  being tried again. */
+export interface BootFailure {
+  readonly notice: FailureNotice;
+}
+
+/** How a launch's failure is told: what failed, as a sentence stem for ``failureSentence`` (by default that the app
+ *  couldn't open what was asked), and where it goes (a toast unless a surface reports it itself). */
+interface LaunchFailureCopy {
+  readonly whatFailed?: string;
+  readonly report?: FailureReport;
+  /** What a toast's Try again runs, when it is more than the launch itself; a surface that reports the failure
+   *  itself keeps its own retry (the launcher's field, which still holds the text). */
+  readonly retry?: () => void;
+  /** The shortcut that ran the launch, which a refusal for its gone app or launch path offers to remove. */
+  readonly shortcut?: ShortcutTarget;
+}
+
+/** Whether ``failure`` refuses something this window held that has gone in the meantime (an app, a launch path, a
+ *  window, a desktop), so the window reads the workspace again. */
+function isReadAgainFirst(failure: Failure): boolean {
+  const kind = refusalKindOf(failure);
+  return (
+    kind === "app_unavailable" || kind === "launch_path_gone" || kind === "window_gone" || kind === "desktop_gone"
+  );
+}
+
+/** Try again, where the request can be repeated as it was asked. */
+function tryAgainOf(asked: AskedFor): ToastAction[] {
+  return asked.retry === undefined ? [] : [{ label: "Try again", run: asked.retry }];
+}
+
+/** What a refused request did not do, as its sentence says. */
+function outcomeOf(asked: AskedFor): string {
+  return asked.isOpen === true ? NOTHING_OPENED : NOTHING_CHANGED;
+}
+
+/** What a page's draft into the pinned window was for, which its failure names. */
+export type DraftPurpose = "page-draft" | "avatar-request" | "theme-request";
 /** Why a click on a person's tray entry went nowhere: no app takes a mention of them. */
 export const NO_MENTION_APP_REASON = "No app in this workspace can open a chat with them";
 /** Why a window's "Chat about this app" went nowhere: no app declares a launch path about an app. */
@@ -424,9 +529,6 @@ const PLACEMENT_EDIT_EVENTS: ReadonlySet<DesktopEvent["type"]> = new Set([
   "window_reattached",
 ]);
 
-/** Where a launch's failure goes instead of a toast: the caller shows it where the press was. */
-type LaunchFailureSink = (failure: FailureMessage) => void;
-
 export interface StoreDependencies {
   readonly clientId: string;
   readonly api: DesktopApi;
@@ -437,6 +539,9 @@ export interface StoreDependencies {
   readonly redraw: () => void;
   /** Reload the whole interface (the ``reload_system_interface`` op). */
   readonly reloadInterface: () => void;
+  /** Send the page to the shell's recovery page for desktops that couldn't be loaded, which says why, offers an agent,
+   *  and comes back once they load. */
+  readonly openDesktopsRecoveryPage: () => void;
   /** The pull-out conversation with the embedder; absent means no embedder. */
   readonly popOut?: PopOutBridge;
   /** Where external links open when no app takes them; absent opens none. */
@@ -624,8 +729,28 @@ export class DesktopStore {
   /** Whether the page was out of sight since the socket last connected: a reconnect then reloads the phone's page,
    *  whose own connection most likely went down with the shell's. */
   private isHiddenSinceConnect = false;
+  /** Why nothing has answered the startup read of the desktops and apps, shown in the backdrop until a read does. */
+  private bootFailure: Failure | null = null;
+  /** Since when nothing has answered the startup read (null while something has, or nothing failed). */
+  private bootUnansweredSince: number | null = null;
+  /** Whether a startup read has answered and the window landed: until then a read nothing answered is tried again. */
+  private isBooted = false;
+  /** The startup read under way, which a retry or a reconnect joins rather than starting a second. */
+  private bootRead: Promise<void> | null = null;
+  /** The next try of a startup read nothing answered, and how long the one after it waits. */
+  private bootRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private bootRetryDelayMs = BOOT_RETRY_FIRST_MS;
+  /** The deep link the page was opened with, honoured once a startup read answers. */
+  private bootDeepLink: DeepLink | null = null;
+  /** Where the shell said this client lands, once an arrival has been answered; a retried startup read arrives again
+   *  only while none has. */
+  private bootArrival: ClientArrival | null = null;
   /** The notes a refusal leaves on screen (plan-phone-interface.md's toasts). */
   readonly toasts: ToastQueue;
+  /** The requests of the agents asked from the shell's own buttons whose launch has not settled. */
+  private readonly agentAsks = new Set<string>();
+  /** The stopped apps' notes up, by toast id, with whether the app list has shown the app stopped since. */
+  private readonly toastsUntilRunning = new Map<number, { readonly app: string; isSeenStopped: boolean }>();
   /** The speech bubbles up over the tray (the multiplayer spec, section 6.5), in arrival order. */
   private bubbles: BubbleStack = [];
   private bubbleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -689,34 +814,326 @@ export class DesktopStore {
     this.toasts.show(message);
   }
 
-  /**
-   * Tell the user that what they asked for failed with ``error``, in ``failureSentence``'s words for ``whatFailed``
-   * (a sentence stem naming it), with the status and the server's own text behind "See details". A call site whose
-   * retry is the control just pressed asks for a plain note; any other, and any failure that asks for a bug report,
-   * shows one that stays, which for a failure that asks for one offers "Report a bug" wherever the embedder opens a bug
-   * report when the toast is drawn (``reportBugAction``).
-   */
-  private toastFailure(whatFailed: string, error: unknown, options: { readonly isLasting: boolean }): void {
-    this.showFailure(failureSentence(describeRequestFailure(error), whatFailed), options);
+  /** ``told`` as a surface shows it: ``actions``, then "Ask an agent to fix this" where one is owed (the sentence asks
+   *  for a bug report, or ``offer`` says the refusal leaves the person stuck) and can be asked where ``offer`` says. */
+  private noticeOf(told: FailureMessage, actions: readonly ToastAction[], offer: AgentOffer): FailureNotice {
+    const isOwed = told.isReportable || offer.isStuck === true;
+    const agent = isOwed ? this.fixAgentAction(told, offer.agent) : null;
+    return { ...told, actions: agent === null ? actions : [...actions, agent] };
+  }
+
+  /** A sentence of the desktop's own that asks for no bug report and leaves nobody stuck, with ``actions``. */
+  private plainNotice(message: string, actions: readonly ToastAction[] = []): FailureNotice {
+    return { message, details: null, isReportable: false, actions };
+  }
+
+  /** "Ask an agent to fix this" about ``told``, asked where ``agent`` says; null where it is withheld, where the ask
+   *  would go through the very app the failure is about (Chat), or where no agent can be asked at all. */
+  private fixAgentAction(told: FailureMessage, agent: AgentAsk): ToastAction | null {
+    if (agent === "withheld") return null;
+    const task = agentFixTask({ whatFailed: told.message, details: told.details });
+    if (agent === "shell") {
+      if (freeTextRowsOf(openableApps(this.state)).length === 0) return null;
+      return this.askAgentAction(ASK_AGENT_TO_FIX_LABEL, task, () => this.askAgent(task, null));
+    }
+    if (this.isAskedThrough(agent.about)) return null;
+    return this.askAboutAppAction(ASK_AGENT_TO_FIX_LABEL, task, agent.about, agent.windowId);
+  }
+
+  /** ``error`` in ``failureSentence``'s words for ``whatFailed`` (a sentence stem naming what failed), as a surface
+   *  shows it, with ``actions``: a failure of the shell's own, whose agent is asked in the main chat. ``isStuck``
+   *  says a refusal with a reason leaves the person unable to do what they meant to, so it owes an agent too. */
+  failureNotice(
+    whatFailed: string,
+    error: unknown,
+    actions: readonly ToastAction[] = [],
+    isStuck = false,
+  ): FailureNotice {
+    return this.noticeOf(failureSentence(describeRequestFailure(error), whatFailed), actions, {
+      agent: "shell",
+      isStuck,
+    });
   }
 
   /** Toast a failed start of a page that does not show the outcome itself: lasting when there is more to it than the
-   *  sentence (a launch's reason, a bug report to ask for), a plain note otherwise (no app takes text, a refusal). */
+   *  sentence (a launch's reason, a bug report to ask for), a plain note otherwise (no app takes text, a refusal). It
+   *  is an ask's own failure, so it offers no second ask. */
   showStartFailure(failure: FailureMessage): void {
-    this.showFailure(failure, { isLasting: failure.details !== null || failure.isReportable });
+    this.toastNotice({ ...failure, actions: [] }, { isLasting: failure.details !== null || failure.isReportable });
   }
 
-  /** ``toastFailure`` for a failure already worded. */
-  private showFailure(told: FailureMessage, { isLasting }: { readonly isLasting: boolean }): void {
-    if (!isLasting && !told.isReportable) {
-      this.toasts.show(told.message, { isLasting: false, details: told.details });
+  /** A failed change in ``noticeFor``'s words for ``whatFailed``, for a surface that shows it itself (a dialog's
+   *  line), offering ``retry`` where the failure is one to try again. */
+  changeFailureNotice(whatFailed: string, error: unknown, retry: () => void): FailureNotice {
+    return this.noticeFor(whatFailed, error, { retry });
+  }
+
+  /**
+   * Show ``notice`` in a toast. A call site whose retry is the control just pressed asks for a plain note, which
+   * still holds the details behind "See details"; any other shows one that stays, with its details and buttons, and
+   * so does any notice that asks for a bug report or carries a button, which a note that leaves on its own cannot
+   * hold. A toast that asks for a bug report offers "Report a bug" wherever the embedder opens one when the toast is
+   * drawn (``reportBugAction``); its agent is among the notice's own buttons, since only the store knows where to ask.
+   */
+  private toastNotice(notice: FailureNotice, { isLasting }: { readonly isLasting: boolean }): void {
+    if (!isLasting && !notice.isReportable && notice.actions.length === 0) {
+      this.toasts.show(notice.message, { isLasting: false, details: notice.details });
       return;
     }
-    this.toasts.show(told.message, {
+    this.toasts.show(notice.message, {
       isLasting: true,
-      details: told.details,
-      isReportable: told.isReportable,
+      details: notice.details,
+      actions: notice.actions,
+      isReportable: notice.isReportable,
     });
+    const toasts = this.toasts.current();
+    const shown = toasts[toasts.length - 1];
+    if (notice.untilRunning !== undefined && shown !== undefined) {
+      const app = appByName(this.state, notice.untilRunning);
+      this.toastsUntilRunning.set(shown.id, { app: notice.untilRunning, isSeenStopped: app?.is_running === false });
+    }
+  }
+
+  /** Take down each stopped app's note once its app runs again. The app list may still say an app runs when its
+   *  launch found it stopped, so only a reading of it running after one of it stopped counts. */
+  private dismissNotesOfRunningApps(): void {
+    const current = new Set(this.toasts.current().map((toast) => toast.id));
+    for (const [id, watch] of this.toastsUntilRunning) {
+      const app = appByName(this.state, watch.app);
+      if (!current.has(id) || app === undefined) {
+        this.toastsUntilRunning.delete(id);
+      } else if (!app.is_running) {
+        watch.isSeenStopped = true;
+      } else if (watch.isSeenStopped) {
+        this.toastsUntilRunning.delete(id);
+        this.toasts.dismiss(id);
+      }
+    }
+  }
+
+  /** What users call the app, or "This app" for one this window no longer knows. */
+  private displayNameOf(appName: string): string {
+    return appByName(this.state, appName)?.display_name ?? "This app";
+  }
+
+  /**
+   * The notice for ``error``, a failure of a request this window built from the apps and desktops it held, in
+   * ``failureSentence``'s words for ``whatFailed``. A refusal for an app, a launch path, a window, or a desktop that
+   * went in the meantime names them as this window last knew them and has this window read the workspace again. An
+   * agent it owes is asked about the app when the failure is the app's (``asked.isAboutApp``), else in the main chat.
+   */
+  private noticeFor(whatFailed: string, error: unknown, asked: AskedFor = {}, isReadAgain = false): FailureNotice {
+    const failure = describeRequestFailure(error);
+    if (!isReadAgain && isReadAgainFirst(failure)) void this.refreshInventory();
+    const tryAgain = tryAgainOf(asked);
+    const app = asked.app;
+    const told = failureSentence(failure, whatFailed);
+    const aboutApp: AgentAsk = app === undefined ? "shell" : { about: app, windowId: null };
+    const outcome = outcomeOf(asked);
+    switch (refusalKindOf(failure)) {
+      case "app_unavailable":
+        return this.noticeOf(
+          {
+            message: appNotFoundSentence(app?.display_name ?? "This app", outcome),
+            details: failure.details,
+            isReportable: false,
+          },
+          this.shortcutRemoval(asked.shortcut),
+          { agent: aboutApp, isStuck: true },
+        );
+      case "launch_path_gone":
+        return this.noticeOf(
+          {
+            message:
+              app === undefined || asked.launchLabel === undefined
+                ? told.message
+                : `${app.display_name} no longer offers “${asked.launchLabel}”, so ${outcome}.`,
+            details: failure.details,
+            isReportable: false,
+          },
+          this.shortcutRemoval(asked.shortcut),
+          { agent: aboutApp, isStuck: true },
+        );
+      case "window_gone":
+        break;
+      case "desktop_gone":
+        return this.desktopGoneNotice(failure.details, null, outcome, tryAgain);
+      case "out_of_space":
+        return this.noticeOf(told, [this.freeSpaceAction(told), ...tryAgain], { agent: "withheld" });
+      case "not_saved":
+        return this.noticeOf(told, tryAgain, { agent: "shell" });
+      case "app_stopped":
+        if (app === undefined) break;
+        return { ...this.stoppedNotice(app, null), details: failure.details, untilRunning: app.name };
+      case "app_could_not_start":
+        if (app === undefined) break;
+        return this.couldNotStartNotice(app, `${app.display_name} couldn't start.`, failure.details, tryAgain);
+      case "app_start_budget_spent":
+        if (app === undefined) break;
+        return this.couldNotStartNotice(app, told.message, failure.details, []);
+      case "app_still_starting":
+        return this.noticeOf(told, tryAgain, { agent: "withheld" });
+      case "launched_not_opened_out_of_space":
+        return this.noticeOf(told, [this.freeSpaceAction(told)], { agent: "withheld" });
+      case "launched_not_opened":
+        return this.noticeOf(told, app === undefined ? [] : [this.openAppAction(app)], { agent: "shell" });
+      case null:
+        break;
+    }
+    const agent: AgentAsk = asked.isAboutApp === true ? aboutApp : "shell";
+    return this.noticeOf(told, isRetryable(failure) ? tryAgain : [], { agent });
+  }
+
+  /** Tell ``tell`` (a toast, or the surface that ran the request) that a request this window built failed, in
+   *  ``noticeFor``'s words. A refusal for something gone in the meantime first reads the workspace again, so the note
+   *  offers what is still so after it: "Remove shortcut" only while the desktop still holds the shortcut (the shell
+   *  drops a gone app's shortcuts itself), and the desktop the window was moved to off a deleted one. */
+  private async tellFailure(whatFailed: string, error: unknown, asked: AskedFor, tell: FailureReport): Promise<void> {
+    const failure = describeRequestFailure(error);
+    if (!isReadAgainFirst(failure)) {
+      tell(this.noticeFor(whatFailed, error, asked));
+      return;
+    }
+    const before = this.state.activeDesktopId;
+    await this.refreshInventory();
+    if (refusalKindOf(failure) !== "desktop_gone") {
+      tell(this.noticeFor(whatFailed, error, asked, true));
+      return;
+    }
+    const now = activeDesktop(this.state);
+    const name = now === null || now.id === before ? null : now.name;
+    tell(this.desktopGoneNotice(failure.details, name, outcomeOf(asked), tryAgainOf(asked)));
+  }
+
+  /** What a request on a desktop another window deleted gets: what happened, and the desktop this window is on now
+   *  (``desktopName``, null while it is not known), with Try again, which acts there. A stale view the window
+   *  recovers from itself, so it offers no agent. */
+  private desktopGoneNotice(
+    details: string | null,
+    desktopName: string | null,
+    outcome: string,
+    tryAgain: readonly ToastAction[],
+  ): FailureNotice {
+    const message =
+      desktopName === null
+        ? `The desktop you were on was deleted in another window, so ${outcome}.`
+        : `The desktop you were on was deleted in another window, so ${outcome}. You're now on “${desktopName}”.`;
+    return this.noticeOf({ message, details, isReportable: false }, tryAgain, { agent: "withheld" });
+  }
+
+  /** "Remove shortcut" for the shortcut a request ran, while the active desktop still holds it; nothing otherwise. */
+  private shortcutRemoval(shortcut: ShortcutTarget | undefined): ToastAction[] {
+    const desktop = activeDesktop(this.state);
+    if (shortcut === undefined || desktop === null) return [];
+    if (findShortcut(desktop, shortcut.app, shortcut.launch) === undefined) return [];
+    return [{ label: "Remove shortcut", run: () => void this.removeShortcut(shortcut.app, shortcut.launch) }];
+  }
+
+  /** "Open <App>": a plain open of the app's first page, which does not run the launch that took effect again. */
+  private openAppAction(app: AppRecord): ToastAction {
+    return { label: `Open ${app.display_name}`, run: () => void this.openWindowAt(app.name, "/", "focus") };
+  }
+
+  /** What a full disk offers: an agent, in the main chat, asked to free up space about ``told``; its toast stays
+   *  up. */
+  private freeSpaceAction(told: FailureMessage): ToastAction {
+    const request = assistRequest(agentFixTask({ whatFailed: told.message, details: told.details }));
+    return this.askAgentAction("Ask an agent to free up space", request, () => this.startWithText(request));
+  }
+
+  /** An "Ask an agent to ..." button about ``app``, for a window of it (``windowId``) or a toast (null): the ask
+   *  goes to the chat about the app, beside the window when there is one. */
+  private askAboutAppAction(label: string, request: string, app: AppRecord, windowId: string | null): ToastAction {
+    return this.askAgentAction(label, request, () => this.askAgentAbout(request, app, windowId));
+  }
+
+  /** An "Ask an agent to ..." button: it reads "Asking an agent…" and takes no press while its ask is out, and its
+   *  toast stays up. ``start`` sends the ask where it goes. */
+  private askAgentAction(label: string, request: string, start: () => Promise<StartOutcome>): ToastAction {
+    return {
+      label,
+      run: () => void this.askOnce(request, start),
+      keepsToast: true,
+      pending: { isPending: () => this.isAskingAgent(request), label: ASKING_AN_AGENT_LABEL },
+    };
+  }
+
+  /** Whether an agent was asked ``request`` and its chat's window is not on the desktop yet. */
+  isAskingAgent(request: string): boolean {
+    return this.agentAsks.has(request);
+  }
+
+  /** Ask an agent ``request`` from a button of the shell's own that is about no app (an update left unfinished):
+   *  in the main chat, as ``askAgent`` sends an ask with no window. */
+  async askAgentFromShell(request: string): Promise<void> {
+    return this.askOnce(request, () => this.askAgent(request, null));
+  }
+
+  /** Send ``request`` with ``start`` from one of the shell's own buttons, once at a time per request; a failure is
+   *  toasted here, since ``askAgent`` and ``startWithText`` leave that to their caller. */
+  private async askOnce(request: string, start: () => Promise<StartOutcome>): Promise<void> {
+    if (this.agentAsks.has(request) || this.refuseWhileViewing("ask an agent")) return;
+    this.agentAsks.add(request);
+    this.notifyListeners();
+    try {
+      const outcome = await start();
+      if (!outcome.isOpened) this.toastNotice({ ...outcome.failure, actions: [] }, { isLasting: true });
+    } finally {
+      this.agentAsks.delete(request);
+      this.notifyListeners();
+    }
+  }
+
+  /** An app that could not start, as its could-not-start page says it: ``sentence``, then ``actions`` and an agent
+   *  asked to look at it, unless the app is the one agents are asked through, which can only be reported. */
+  private couldNotStartNotice(
+    app: AppRecord,
+    sentence: string,
+    details: string | null,
+    actions: readonly ToastAction[],
+  ): FailureNotice {
+    if (this.isAskedThrough(app)) {
+      return this.noticeOf(
+        { message: `${sentence} If this persists, report a bug.`, details, isReportable: true },
+        actions,
+        {
+          agent: "withheld",
+        },
+      );
+    }
+    return {
+      message: sentence,
+      details,
+      isReportable: false,
+      actions: [
+        ...actions,
+        this.askAboutAppAction("Ask an agent to look at it", couldNotStartRequest(app), app, null),
+      ],
+    };
+  }
+
+  /** Tell the user, in a toast, that what they asked for failed with ``error`` (see ``tellFailure`` and
+   *  ``toastNotice``). */
+  private toastFailure(whatFailed: string, error: unknown, options: AskedFor & { readonly isLasting: boolean }): void {
+    void this.tellFailure(whatFailed, error, options, (notice) => this.toastNotice(notice, options));
+  }
+
+  /** Whether a startup read has answered and the window landed: until then the desktop shows a spinner (or why the
+   *  read has not answered), whatever the socket has brought meanwhile. */
+  hasBootAnswered(): boolean {
+    return this.isBooted;
+  }
+
+  /** Why the startup read of the desktops and apps has not answered, while no read has and nothing answered it (it is
+   *  being tried again: "Still trying…", and "Report a bug" once that has gone on for a while, a wait with no end
+   *  owing a way out); null before the first answer and once a read has answered. */
+  getBootFailure(): BootFailure | null {
+    const failure = this.bootFailure;
+    if (failure === null) return null;
+    const isLong = this.bootUnansweredSince !== null && Date.now() - this.bootUnansweredSince >= BOOT_REPORT_AFTER_MS;
+    return {
+      notice: { message: BOOT_STILL_TRYING_SENTENCE, details: failure.details, isReportable: isLong, actions: [] },
+    };
   }
 
   /** Whether this window is viewing somebody else's desktop, in which case the change named by ``action`` is
@@ -967,6 +1384,49 @@ export class DesktopStore {
     return gridDimensions(this.frameBackdrop(), this.metrics);
   }
 
+  /** What a window of ``app`` (``windowId``; null for a toast about the app), stopped and not started by the
+   *  workspace on a request, says: that it isn't running, and the next step the workspace has. That is an agent
+   *  asked to start it, in the chat about the app, unless the app is the one agents are asked through, which can
+   *  only be reported. */
+  stoppedNotice(app: AppRecord, windowId: string | null): FailureNotice {
+    const sentence = stoppedSentence(app);
+    if (this.isAskedThrough(app)) {
+      return this.noticeOf(
+        { message: `${sentence} If this persists, report a bug.`, details: null, isReportable: true },
+        [],
+        {
+          agent: "withheld",
+        },
+      );
+    }
+    return this.plainNotice(sentence, [
+      this.askAboutAppAction("Ask an agent to start it", stoppedRequest(app), app, windowId),
+    ]);
+  }
+
+  /** What a window of ``appName``, an app the app list no longer has, says in place of its page: that the app
+   *  couldn't be found (the list drops an app taken out and one whose record could not be read alike, so no removal
+   *  is claimed), with "Close window" (``onClose``) and an agent, asked in the main chat, since nothing is left to
+   *  ask about. */
+  goneAppNotice(appName: string, onClose: () => void): FailureNotice {
+    return this.noticeOf(
+      {
+        message: appNotFoundSentence("This app", null),
+        details: `The window shows the app registered as "${appName}", which the workspace's app list does not have.`,
+        isReportable: false,
+      },
+      [{ label: "Close window", run: onClose }],
+      { agent: "shell", isStuck: true },
+    );
+  }
+
+  /** Whether ``app`` is the one an ask about it would be sent through (the app of the launch ``askAgent`` runs for
+   *  it, Chat on a stock workspace), or there is none, so no agent can be asked about it. */
+  private isAskedThrough(app: AppRecord): boolean {
+    const through = this.askLaunchAbout(app) ?? freeTextRowsOf(openableApps(this.state))[0];
+    return through === undefined || through.app.name === app.name;
+  }
+
   /** Whether this shell can stop and start the app: supervised, not critical, not inside a critical program, and
    *  not from a preview shell, whose stop and start would reach the live workspace's supervisord. */
   canStopApp(app: AppRecord): boolean {
@@ -1116,7 +1576,7 @@ export class DesktopStore {
     const app = appByName(this.state, appName);
     const launch = (app === undefined ? undefined : appShortcutsOf(app)[0])?.launch ?? app?.launch_paths[0]?.id;
     if (app === undefined || launch === undefined) {
-      this.toast(`Cannot open: ${appName} has nothing to open`);
+      this.toast(`${this.displayNameOf(appName)} has nothing to open right now.`);
       return;
     }
     await this.runLaunch(app.name, launch, "new");
@@ -1138,7 +1598,10 @@ export class DesktopStore {
     void this.refreshInventory();
   }
 
+  /** Read the shell's word again (the inventory), taking it as a push would. Before a startup read has answered it is
+   *  that read, tried again, so the window lands too. */
   private async refreshInventory(): Promise<void> {
+    if (!this.isBooted) return this.boot();
     let inventory: Inventory;
     try {
       inventory = await this.deps.api.fetchInventory();
@@ -1294,27 +1757,83 @@ export class DesktopStore {
     });
     void this.loadAvatarSelection();
     void this.loadThemes();
+    this.bootDeepLink = deepLink;
+    await this.boot();
+  }
+
+  /** The startup read, one at a time: a call while one is under way joins it, and one after a read answered does
+   *  nothing. */
+  private boot(): Promise<void> {
+    if (this.isBooted) return Promise.resolve();
+    if (this.bootRead === null) {
+      this.bootRead = this.readAndLand().finally(() => {
+        this.bootRead = null;
+      });
+    }
+    return this.bootRead;
+  }
+
+  /** Arrive (until an arrival has been answered), read the inventory, and land; a read nothing answered is told in
+   *  the backdrop and tried again, and one the shell answered with an error sends the page to the recovery page. */
+  private async readAndLand(): Promise<void> {
+    this.clearBootRetry();
     const entryPushesBefore = this.entryPushes;
     // The arrival comes first: it may seed a desktop for this user, which the inventory read then includes.
-    let arrival: ClientArrival | null;
-    try {
-      arrival = await this.deps.api.arriveClient(this.deps.clientId);
-    } catch (error) {
-      console.warn("[si] the shell could not settle where this client lands", error);
-      arrival = null;
+    if (this.bootArrival === null) {
+      try {
+        this.bootArrival = await this.deps.api.arriveClient(this.deps.clientId);
+      } catch (error) {
+        console.warn("[si] the shell could not settle where this client lands", error);
+      }
+      // The arrival wrote this client's record, which the backdrop size report (measured already, as a rule) needs.
+      this.isArrivalSettled = true;
+      this.scheduleViewportReport();
     }
-    // The arrival wrote this client's record, which the backdrop size report (measured already, as a rule) needs.
-    this.isArrivalSettled = true;
-    this.scheduleViewportReport();
     let inventory: Inventory;
     try {
       inventory = await this.deps.api.fetchInventory();
     } catch (error) {
       console.warn("[si] could not read the inventory", error);
-      // Lasting: nothing on screen retries the read, and the desktop stays on "Loading..." after a plain note leaves.
-      this.toastFailure("Could not read the desktops and apps", error, { isLasting: true });
+      this.takeBootFailure(describeRequestFailure(error, "read"));
       return;
     }
+    this.isBooted = true;
+    this.bootFailure = null;
+    this.bootUnansweredSince = null;
+    await this.land(inventory, this.bootArrival, entryPushesBefore);
+  }
+
+  /** Tell why nothing answered the startup read until a read answers, trying it again after a wait that grows to
+   *  ``BOOT_RETRY_CAP_MS`` (a reconnect of the socket tries it at once); a read the shell answered with an error goes
+   *  to the recovery page, which reads the desktops itself and says why they couldn't be loaded. */
+  private takeBootFailure(failure: Failure): void {
+    if (failure.cause !== "not_answered") {
+      this.bootFailure = null;
+      this.bootUnansweredSince = null;
+      this.deps.openDesktopsRecoveryPage();
+      this.notifyListeners();
+      return;
+    }
+    this.bootFailure = failure;
+    this.bootUnansweredSince ??= Date.now();
+    const delay = this.bootRetryDelayMs;
+    this.bootRetryDelayMs = Math.min(delay * 2, BOOT_RETRY_CAP_MS);
+    this.bootRetryTimer = setTimeout(() => {
+      this.bootRetryTimer = null;
+      void this.boot();
+    }, delay);
+    this.notifyListeners();
+  }
+
+  private clearBootRetry(): void {
+    if (this.bootRetryTimer === null) return;
+    clearTimeout(this.bootRetryTimer);
+    this.bootRetryTimer = null;
+  }
+
+  /** Take the inventory a startup read answered and land: on the deep link's desktop else the one the shell
+   *  answered, with the layout fetched, then the deep link's open or launch. */
+  private async land(inventory: Inventory, arrival: ClientArrival | null, entryPushesBefore: number): Promise<void> {
     // The apps before the desktops, so the first draw of a desktop's shortcuts already knows every app.
     this.takeApps(inventory.apps);
     this.desktopsRevision += 1;
@@ -1336,6 +1855,7 @@ export class DesktopStore {
         ? null
         : (inventory.desktops.find((desktop) => desktop.windows.some((window) => window.id === this.soloWindowId))
             ?.id ?? null);
+    const deepLink = this.bootDeepLink ?? { desktopId: null, open: null, launch: null };
     // A phone never picks a desktop: its active one is only ever the one the shell assigns on arrival.
     const deepLinkDesktopId = this.isPhoneLayout() ? null : deepLink.desktopId;
     const chosen = chooseInitialDesktopId(inventory.desktops, soloDesktopId ?? deepLinkDesktopId, landing);
@@ -1349,13 +1869,17 @@ export class DesktopStore {
 
   /** The socket (re)opened: the shell hears which desktop this client is on. The first connect leaves
    *  the rest to ``start``; a reconnect resynchronises, since the messages of the time apart are gone
-   *  with the socket (the shell resends the apps and desktops itself). */
+   *  with the socket (the shell resends the apps and desktops itself). Before a startup read has answered, a
+   *  connect is the shell answering again, so a read nothing answered is tried at once. */
   private takeConnected(): void {
     // A solo shell's socket is still its client's: registered as a pop-out's, the ops aimed at the client reach it.
     if (this.soloWindowId !== null) this.deps.socket.reportPopOut();
     const wasHidden = this.isHiddenSinceConnect;
     this.isHiddenSinceConnect = false;
+    if (!this.isBooted && this.bootFailure !== null) void this.boot();
     if (this.hasSocketConnected) {
+      // Before a startup read has answered there is nothing to resynchronise: that read lands the window.
+      if (!this.isBooted) return;
       void this.resyncAfterReconnect();
       const shown = shownWindowOf(this.state);
       if (wasHidden && this.isPhoneLayout() && shown !== null) this.pageDriver?.reload(shown.id);
@@ -1430,6 +1954,7 @@ export class DesktopStore {
     const themingBefore = new Map(this.state.apps.map((app) => [app.name, app.theming]));
     this.dispatch({ type: "apps_updated", apps });
     this.markAppsLoaded();
+    this.dismissNotesOfRunningApps();
     for (const app of apps) {
       const before = themingBefore.get(app.name);
       if (before !== undefined && before !== app.theming) this.pageDriver?.resendTheme(app.name);
@@ -1992,17 +2517,26 @@ export class DesktopStore {
    *  app on this desktop takes one, or the launch was refused. A text that is not about the window's page
    *  (``isAboutPage`` false) is sent without it, so the app drafts it where such a text goes (the chat app: its
    *  main chat) rather than into what the window shows. */
-  async draftIntoPinnedWindow(text: string, isAboutPage = true): Promise<boolean> {
+  async draftIntoPinnedWindow(
+    text: string,
+    isAboutPage = true,
+    purpose: DraftPurpose = "page-draft",
+  ): Promise<boolean> {
     const target = draftTargetOf(this.state);
     if (target === null) return false;
+    const name = this.displayNameOf(target.window.app);
+    const whatFailed = draftWhatFailed(purpose, name);
     const launched = await this.launchAt(
       target.window.app,
       target.launchPath.id,
       freeTextParams(target.launchPath, text),
       { kind: "window", windowId: target.window.id, sendsWindowPath: isAboutPage },
+      { whatFailed, retry: () => void this.draftIntoPinnedWindow(text, isAboutPage, purpose) },
     );
+    // A refused draft leaves the window where it was: nothing in it changed.
+    if (launched === null) return false;
     this.restoreWindow(target.window.id);
-    return launched !== null;
+    return true;
   }
 
   /** A message this page received, from the Imbue Studio chrome (``senderApp`` null) or from the frame of an app's
@@ -2034,13 +2568,25 @@ export class DesktopStore {
     try {
       relay = await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload, sender);
     } catch (error) {
-      this.toastFailure(DEFAULT_WHAT_FAILED, error, { isLasting: false });
+      const refusing = undeliveredAppOf(error);
+      const app = refusing === null ? undefined : appByName(this.state, refusing);
+      this.toastFailure(this.relayWhatFailed(type, error), error, { isLasting: false, app, isAboutApp: true });
       return false;
     }
     if (relay.deliveries.some((delivery) => delivery.has_no_desktop_window)) {
       this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);
     }
     return true;
+  }
+
+  /** What a relayed message that did not reach every app was for, by its type: a file to open, a link (named with
+   *  the app that did not take it), a chat to show, or anything else. */
+  private relayWhatFailed(type: string, error: unknown): string {
+    if (type === OPEN_FILE_MESSAGE) return "Couldn't open that file";
+    if (type === FOCUS_CHAT_MESSAGE_TYPE) return "Couldn't show that chat";
+    if (!type.startsWith(OPEN_MESSAGE_PREFIX)) return "Couldn't do that";
+    const app = undeliveredAppOf(error);
+    return app === null ? "Couldn't open this link" : `${this.displayNameOf(app)} couldn't open this link`;
   }
 
   /** Open a link where it belongs in this workspace: a file in Files (``open:file``), a local URL on an
@@ -2126,13 +2672,18 @@ export class DesktopStore {
   /** Put a page of ``app`` on this client's screen through the shell's ``show``: a window already there is raised,
    *  else the app's window on one of the ``repoint`` pages (or its pinned window) is pointed at it, else one opens. */
   async showAppPage(app: string, path: string, repoint: readonly string[]): Promise<void> {
+    const known = appByName(this.state, app);
     await this.flushPendingSave();
     let outcome: PageShowOutcome;
     try {
       outcome = await this.deps.api.showPage(this.deps.clientId, { app, path, repoint });
     } catch (error) {
-      this.toastFailure(`Could not open ${appByName(this.state, app)?.display_name ?? app}`, error, {
+      this.toastFailure(`${this.displayNameOf(app)} couldn't be opened`, error, {
         isLasting: false,
+        app: known,
+        isOpen: true,
+        isAboutApp: true,
+        retry: () => void this.showAppPage(app, path, repoint),
       });
       return;
     }
@@ -2170,7 +2721,7 @@ export class DesktopStore {
       reported = await this.deps.api.reportWindowLocation(found.desktop.id, windowId, this.deps.clientId, path, title);
     } catch (error) {
       // Lasting: the page moved its own window, so nothing the user pressed retries it.
-      this.toastFailure("Could not move the window", error, { isLasting: true });
+      this.toastFailure("This window couldn't be moved", error, { isLasting: true });
       return false;
     }
     this.applyOwnNavigation(found, reported);
@@ -2212,7 +2763,10 @@ export class DesktopStore {
     try {
       await this.deps.api.selectAvatar(design);
     } catch (error) {
-      this.toastFailure("Could not change the avatar", error, { isLasting: false });
+      this.toastFailure("Couldn't change the avatar", error, {
+        isLasting: false,
+        retry: () => void this.selectAvatar(design),
+      });
     }
   }
 
@@ -2230,13 +2784,19 @@ export class DesktopStore {
       if (this.entryPushes !== entryPushesBefore) return;
       this.dispatch({ type: "entries_updated", entries: record.entries });
     } catch (error) {
-      this.toastFailure("Could not change the entry", error, { isLasting: false });
-      if (this.entryPushes !== entryPushesBefore) return;
+      const asked = { isLasting: false, retry: () => void this.setEntryPresentation(app, presentation) };
+      const whatFailed = `Couldn't change how ${this.displayNameOf(app)} shows in the taskbar`;
+      // A push that landed meanwhile is the shell's newer word, and stands.
+      if (this.entryPushes !== entryPushesBefore) {
+        this.toastFailure(whatFailed, error, asked);
+        return;
+      }
       const others = Object.fromEntries(Object.entries(this.state.entries).filter(([name]) => name !== app));
       this.dispatch({
         type: "entries_updated",
         entries: previous === undefined ? others : { ...others, [app]: previous },
       });
+      this.toastFailure(`${whatFailed}, so it's back as it was`, error, asked);
     }
   }
 
@@ -2362,7 +2922,10 @@ export class DesktopStore {
       this.takeDesktop(created);
       await this.switchDesktop(created.id);
     } catch (error) {
-      this.toastFailure("Could not create the desktop", error, { isLasting: false });
+      this.toastFailure("Couldn't create a new desktop", error, {
+        isLasting: false,
+        retry: () => void this.createDesktop(name),
+      });
     }
   }
 
@@ -2375,7 +2938,10 @@ export class DesktopStore {
     try {
       this.takeDesktop(await this.deps.api.renameDesktop(desktopId, name));
     } catch (error) {
-      this.toast(`Could not rename the desktop: ${(error as Error).message}`);
+      this.toastFailure("This desktop couldn't be renamed", error, {
+        isLasting: false,
+        retry: () => void this.renameDesktop(desktopId, name),
+      });
     }
   }
 
@@ -2385,7 +2951,10 @@ export class DesktopStore {
     try {
       this.dispatch({ type: "desktops_updated", desktops: await this.deps.api.reorderDesktops(desktopIds) });
     } catch (error) {
-      this.toast(`Could not reorder the desktops: ${(error as Error).message}`);
+      this.toastFailure("Your desktops couldn't be reordered", error, {
+        isLasting: false,
+        retry: () => void this.reorderDesktops(desktopIds),
+      });
     }
   }
 
@@ -2519,7 +3088,10 @@ export class DesktopStore {
     try {
       await this.deps.api.deleteDesktop(desktopId);
     } catch (error) {
-      this.toast(`Could not delete the desktop: ${(error as Error).message}`);
+      this.toastFailure("This desktop couldn't be deleted", error, {
+        isLasting: false,
+        retry: () => void this.deleteDesktop(desktopId),
+      });
     }
   }
 
@@ -2539,16 +3111,32 @@ export class DesktopStore {
     if (desktop === null) return;
     if (findShortcut(desktop, app, launch) !== undefined) return;
     const cell = cellForAddedShortcut(desktop, this.gridDimensions());
-    const shortcut: DesktopShortcut = { target: { kind: "launch", app, launch }, mode, cell };
+    const known = appByName(this.state, app);
+    const shortcut: DesktopShortcut = {
+      target: { kind: "launch", app, launch },
+      mode,
+      cell,
+      app_display_name: known?.display_name ?? null,
+      launch_label: this.launchLabelOf(app, launch) ?? null,
+    };
     this.takeDesktop({ ...desktop, shortcuts: [...desktop.shortcuts, shortcut] });
     try {
       this.takeDesktop(await this.deps.api.setDesktopShortcut(desktop.id, shortcut));
     } catch (error) {
       const now = desktopById(this.state, desktop.id);
-      if (now !== null && findShortcut(now, app, launch) === shortcut) {
+      const isTakenOff = now !== null && findShortcut(now, app, launch) === shortcut;
+      if (isTakenOff) {
         this.takeDesktop({ ...now, shortcuts: now.shortcuts.filter((candidate) => candidate !== shortcut) });
       }
-      this.toastFailure("Could not add the shortcut", error, { isLasting: false });
+      const whatFailed = isTakenOff
+        ? "Couldn't add this shortcut, so it's been taken off again"
+        : "Couldn't add this shortcut";
+      this.toastFailure(whatFailed, error, {
+        isLasting: false,
+        app: known,
+        launchLabel: shortcut.launch_label ?? undefined,
+        retry: () => void this.addShortcut(app, launch, mode),
+      });
     }
   }
 
@@ -2557,7 +3145,12 @@ export class DesktopStore {
     try {
       this.takeDesktop(await this.deps.api.setDesktopShortcut(desktopId, shortcut));
     } catch (error) {
-      this.toastFailure("Could not change the shortcut", error, { isLasting: false });
+      this.toastFailure("Couldn't change this shortcut", error, {
+        isLasting: false,
+        app: appByName(this.state, shortcut.target.app),
+        launchLabel: this.launchLabelOf(shortcut.target.app, shortcut.target.launch),
+        retry: () => void this.setShortcut(desktopId, shortcut),
+      });
     }
   }
 
@@ -2598,7 +3191,10 @@ export class DesktopStore {
       this.takeDesktop(await this.deps.api.moveDesktopShortcut(desktop.id, app, launch, cell));
     } catch (error) {
       this.withShortcutCells(changes.map((entry) => ({ ...entry, cell: entry.storedCell })));
-      this.toastFailure("Could not move the shortcut", error, { isLasting: false });
+      this.toastFailure("Couldn't move this shortcut, so it's back where it was", error, {
+        isLasting: false,
+        retry: () => void this.dropShortcut(app, launch, cell, shown),
+      });
     }
   }
 
@@ -2630,10 +3226,11 @@ export class DesktopStore {
       this.takeDesktop(await this.deps.api.removeDesktopShortcut(desktop.id, app, launch));
     } catch (error) {
       const now = desktopById(this.state, desktop.id);
-      if (this.desktopsRevision === revision && now !== null && findShortcut(now, app, launch) === undefined) {
-        this.takeDesktop({ ...now, shortcuts: [...now.shortcuts, removed] });
-      }
-      this.toastFailure("Could not remove the shortcut", error, { isLasting: false });
+      const isPutBack =
+        this.desktopsRevision === revision && now !== null && findShortcut(now, app, launch) === undefined;
+      if (isPutBack) this.takeDesktop({ ...now, shortcuts: [...now.shortcuts, removed] });
+      const whatFailed = isPutBack ? "Couldn't remove this shortcut, so it's back" : "Couldn't remove this shortcut";
+      this.toastFailure(whatFailed, error, { isLasting: false, retry: () => void this.removeShortcut(app, launch) });
     }
   }
 
@@ -2650,14 +3247,51 @@ export class DesktopStore {
       case "open":
         // A focus shortcut whose window this client has never placed still has one on the desktop when another
         // client opened it: the shell finds it at the launch path and raises it here rather than opening a second.
-        await this.launchAt(run.app, run.launch, {}, { kind: mode === "focus" ? "focus" : "new" });
+        await this.launchAt(
+          run.app,
+          run.launch,
+          {},
+          { kind: mode === "focus" ? "focus" : "new" },
+          { shortcut: { kind: "launch", app: run.app, launch: run.launch } },
+        );
         return;
       case "connecting":
         this.toast(STILL_CONNECTING_NOTICE);
         return;
       case "unavailable":
-        this.toast(`Cannot open: ${run.reason}`);
+        this.toastNotice(this.unavailableNotice(app, launch, run.reason), { isLasting: false });
         return;
+    }
+  }
+
+  /** Why a shortcut of ``(app, launch)`` cannot run, named as the shortcut was made where its app is gone, with
+   *  "Remove shortcut" when the active desktop holds one that will never run again, and an agent: the person cannot
+   *  open what they meant to. */
+  private unavailableNotice(app: string, launch: string, reason: UnavailableReason): FailureNotice {
+    const desktop = activeDesktop(this.state);
+    const shortcut = desktop === null ? undefined : findShortcut(desktop, app, launch);
+    const removal = this.shortcutRemoval({ kind: "launch", app, launch });
+    switch (reason.kind) {
+      case "app_gone": {
+        const name = shortcut?.app_display_name ?? "This shortcut's app";
+        const message = appNotFoundSentence(name, NOTHING_OPENED);
+        return this.noticeOf({ message, details: null, isReportable: false }, removal, {
+          agent: "shell",
+          isStuck: true,
+        });
+      }
+      case "launch_gone": {
+        const label = shortcut?.launch_label ?? null;
+        const message =
+          label === null
+            ? `${reason.displayName} can no longer open this shortcut.`
+            : `${reason.displayName} no longer offers “${label}”, so ${NOTHING_OPENED}.`;
+        const known = appByName(this.state, app);
+        const agent: AgentAsk = known === undefined ? "shell" : { about: known, windowId: null };
+        return this.noticeOf({ message, details: null, isReportable: false }, removal, { agent, isStuck: true });
+      }
+      case "no_desktop":
+        return this.plainNotice("Choose a desktop in the tray, then try again.");
     }
   }
 
@@ -2666,12 +3300,23 @@ export class DesktopStore {
     return this.runLaunch(shortcut.target.app, shortcut.target.launch, shortcut.mode);
   }
 
-  /** The app and launch path a launcher row names, or null (told to the user) when the app declares no such path. */
-  private launchOf(appName: string, launchId: string): { app: AppRecord; launchPath: LaunchPath } | null {
+  /** The label of the app's launch path as this window last knew it, for a refusal that names it. */
+  private launchLabelOf(appName: string, launchId: string): string | undefined {
+    const app = appByName(this.state, appName);
+    return (app === undefined ? null : launchPathOf(app, launchId))?.label;
+  }
+
+  /** The app and launch path a launcher row names, or null (told to ``report``, else in a toast) when the app no
+   *  longer declares that path: it changed while the menu was open. */
+  private launchOf(
+    appName: string,
+    launchId: string,
+    report: FailureReport,
+  ): { app: AppRecord; launchPath: LaunchPath } | null {
     const app = appByName(this.state, appName);
     const launchPath = app === undefined ? null : launchPathOf(app, launchId);
     if (app === undefined || launchPath === null) {
-      this.toast(`Cannot open: ${appName} has no launch path ${launchId}`);
+      report(this.plainNotice(`${this.displayNameOf(appName)} changed while this menu was open. Try again.`));
       return null;
     }
     return { app, launchPath };
@@ -2680,69 +3325,88 @@ export class DesktopStore {
   /** Run a launch-path row (launcher plan section 3.3): a GET launch path at its app's pin path raises the pinned
    *  window on the active desktop and opens nothing; a row of a one-window app launches into the window the
    *  desktop already holds (whichever client opened it; the shell raises it here) and opens one only when there
-   *  is none; every other launches into a new window. */
-  async runLaunchRow(appName: string, launchId: string): Promise<void> {
-    const found = this.launchOf(appName, launchId);
-    if (found === null) return;
+   *  is none; every other launches into a new window. A failure goes to ``report`` when the surface that ran the
+   *  row shows it (the launcher, under its field), else to a toast; answers whether the row ran. */
+  async runLaunchRow(appName: string, launchId: string, report?: FailureReport): Promise<boolean> {
+    const toReport = report ?? ((notice: FailureNotice) => this.toastNotice(notice, { isLasting: false }));
+    const found = this.launchOf(appName, launchId, toReport);
+    if (found === null) return false;
     const kind = launchRowKindOf(found.app, found.launchPath);
     if (kind === "focus") {
       const pinned = pinnedWindowOf(this.state, found.app.name);
       if (pinned !== null) {
         this.restoreWindow(pinned.id);
-        return;
+        return true;
       }
     }
-    await this.launchAt(found.app.name, found.launchPath.id, {}, { kind: kind === "one" ? "focus" : "new" });
+    const target: LaunchTarget = { kind: kind === "one" ? "focus" : "new" };
+    return (await this.launchAt(found.app.name, found.launchPath.id, {}, target, { report })) !== null;
   }
 
   /** Run a free-text row with ``text`` (launcher plan section 3.2, post-launch-paths plan section 4.1),
    *  pinned-first: when the app has a pinned window on the active desktop, the launch runs into this client's view
    *  of it (the page the launch answers is pure, so a linked window is safe too) and the window is restored and
    *  raised; otherwise the launch opens a new window. False when the text cannot go (a GET launch path over the
-   *  path bound) or the shell refused, each toasted or, given ``onFailure``, handed to it to show. */
+   *  path bound) or the shell refused, each told to ``report`` when the surface that ran it shows it (the launcher,
+   *  which keeps the text in its field), else in a toast. A send the shell refused leaves the pinned window where it
+   *  was. */
   async runFreeText(
     appName: string,
     launchId: string,
     text: string,
-    onFailure: LaunchFailureSink | null = null,
+    report?: FailureReport,
+    whatFailed?: string,
   ): Promise<boolean> {
-    const found = this.launchOf(appName, launchId);
+    const toReport = report ?? ((notice: FailureNotice) => this.toastNotice(notice, { isLasting: false }));
+    const found = this.launchOf(appName, launchId, toReport);
     if (found === null) return false;
     const disabledReason = textRowDisabledReason(found.launchPath, text);
     if (disabledReason !== null) {
-      if (onFailure === null) this.toast(disabledReason);
-      else onFailure({ message: `${disabledReason}.`, details: null, isReportable: false });
+      toReport(this.plainNotice(disabledReason));
       return false;
     }
     return this.launchPinnedFirst(
       found.app.name,
       found.launchPath.id,
       freeTextParams(found.launchPath, text),
-      onFailure,
+      report,
+      whatFailed,
     );
   }
 
   /** Run a launch path with ``params`` into the app's pinned window on the active desktop when there is one (the
-   *  window restored and raised), else into a new window. Whether the shell accepted the launch. */
+   *  window restored and raised), else into a new window; a failure goes to ``report`` when the surface that ran it
+   *  shows it, else to a toast. Whether the shell accepted the launch. */
   private async launchPinnedFirst(
     appName: string,
     launchId: string,
     params: Record<string, string>,
-    onFailure: LaunchFailureSink | null = null,
+    report?: FailureReport,
+    whatFailed?: string,
   ): Promise<boolean> {
     const pinned = pinnedWindowOf(this.state, appName);
     if (pinned !== null) {
+      const name = this.displayNameOf(appName);
       const launched = await this.launchAt(
         appName,
         launchId,
         params,
         { kind: "window", windowId: pinned.id },
-        onFailure,
+        {
+          whatFailed:
+            whatFailed ??
+            (report === undefined
+              ? `Couldn't send that to ${name}`
+              : `Couldn't send that to ${name}, so your text is still in the box`),
+          report,
+          retry: () => void this.launchPinnedFirst(appName, launchId, params, report, whatFailed),
+        },
       );
+      if (launched === null) return false;
       this.restoreWindow(pinned.id);
-      return launched !== null;
+      return true;
     }
-    return (await this.launchAt(appName, launchId, params, { kind: "new" }, onFailure)) !== null;
+    return (await this.launchAt(appName, launchId, params, { kind: "new" }, { whatFailed, report })) !== null;
   }
 
   /** A page's ``shell:draft-text`` (element-reference-menu plan section 6): the text is drafted into the pinned
@@ -2767,8 +3431,8 @@ export class DesktopStore {
     if (row === undefined) {
       return { isOpened: false, failure: { message: `${NO_TEXT_APP_REASON}.`, details: null, isReportable: false } };
     }
-    return this.startOutcomeOf(row.app, (onFailure) =>
-      this.runFreeText(row.app.name, row.launchPath.id, text, onFailure),
+    return this.startOutcomeOf(row.app, (report, whatFailed) =>
+      this.runFreeText(row.app.name, row.launchPath.id, text, report, whatFailed),
     );
   }
 
@@ -2779,17 +3443,35 @@ export class DesktopStore {
    *  launch path, the primary text action runs with the text instead, behind the assist command (the ask launch
    *  path's chat puts it in front of its own lead-in). Settles as ``startWithText`` does. */
   async askAgent(text: string, windowId: string | null): Promise<StartOutcome> {
-    const refusal = this.startRefusalWhileViewing();
-    if (refusal !== null) return refusal;
     const asking = windowId === null ? null : findWindow(this.state, windowId);
     const about = asking === null ? undefined : appByName(this.state, asking.window.app);
-    const launch = about === undefined || about.internal ? null : appAskLaunchOf(openableApps(this.state));
-    if (asking === null || about === undefined || launch === null) return this.startWithText(assistRequest(text));
+    return this.askAgentAbout(text, about ?? null, asking?.window.id ?? null);
+  }
+
+  /** Send ``text`` to the chat about ``about``, as ``askAgent`` does for the app of a window: laid out beside
+   *  ``besideWindowId`` when the ask was pressed in a window, else wherever the show rule puts it. With no app, an
+   *  internal one, or no launch path that takes an ask's text, the primary text action runs with the text instead. */
+  private async askAgentAbout(
+    text: string,
+    about: AppRecord | null,
+    besideWindowId: string | null,
+  ): Promise<StartOutcome> {
+    const refusal = this.startRefusalWhileViewing();
+    if (refusal !== null) return refusal;
+    const launch = this.askLaunchAbout(about);
+    if (about === null || launch === null) return this.startWithText(assistRequest(text));
     const params = appAskParams(launch.launchPath, about, text);
-    return this.startOutcomeOf(launch.app, async (onFailure) => {
-      const target: LaunchTarget = { kind: "show", besideWindowId: asking.window.id };
-      return (await this.launchAt(launch.app.name, launch.launchPath.id, params, target, onFailure)) !== null;
+    return this.startOutcomeOf(launch.app, async (report, whatFailed) => {
+      const target: LaunchTarget = besideWindowId === null ? { kind: "show" } : { kind: "show", besideWindowId };
+      const shown = await this.launchAt(launch.app.name, launch.launchPath.id, params, target, { whatFailed, report });
+      return shown !== null;
     });
+  }
+
+  /** The launch an ask about ``about`` runs: the machine's first launch path that takes an ask's text, for an app
+   *  that is not internal; null where the ask runs the primary text action instead. */
+  private askLaunchAbout(about: AppRecord | null): AppLaunch | null {
+    return about === null || about.internal ? null : appAskLaunchOf(openableApps(this.state));
   }
 
   /** The refusal a start gets while this client views somebody else's desktop, for the caller to show; null on a
@@ -2803,24 +3485,26 @@ export class DesktopStore {
     };
   }
 
-  /** How ``launch`` went, as a start answers it: opened, or the failure the launch handed its sink, else the
-   *  fallback that names ``app``, the app the launch ran. */
+  /** How ``launch`` went, as a start answers it: opened, or the failure the launch reported, else the fallback
+   *  that names ``app``, the app the launch ran. */
   private async startOutcomeOf(
     app: AppRecord,
-    launch: (onFailure: LaunchFailureSink) => Promise<boolean>,
+    launch: (report: FailureReport, whatFailed: string) => Promise<boolean>,
   ): Promise<StartOutcome> {
-    let failure: FailureMessage | null = null;
-    const isOpened = await launch((told) => {
-      failure = told;
-    });
+    const whatFailed = `${app.display_name} couldn't open that`;
+    let failure: FailureNotice | null = null;
+    const isOpened = await launch((notice) => {
+      failure = notice;
+    }, whatFailed);
     if (isOpened) return { isOpened: true };
+    const told: FailureMessage = failure ?? {
+      message: fallbackSentence(whatFailed),
+      details: null,
+      isReportable: true,
+    };
     return {
       isOpened: false,
-      failure: failure ?? {
-        message: fallbackSentence(`${app.display_name} couldn't open that`),
-        details: null,
-        isReportable: true,
-      },
+      failure: { message: told.message, details: told.details, isReportable: told.isReportable },
     };
   }
 
@@ -2839,6 +3523,7 @@ export class DesktopStore {
     const desktopId = this.openingDesktopId();
     if (desktopId === null) return null;
     const isMinimized = this.isPhoneLayout();
+    const known = appByName(this.state, app);
     // The shell writes the new placement over the stored layout, and the refetch takes that: a gesture
     // still waiting in the debounce goes into the file first or it is lost.
     await this.flushPendingSave();
@@ -2852,8 +3537,12 @@ export class DesktopStore {
         isMinimized,
       });
     } catch (error) {
-      this.toastFailure(`Could not open ${appByName(this.state, app)?.display_name ?? app}`, error, {
+      this.toastFailure(`${this.displayNameOf(app)} couldn't be opened`, error, {
         isLasting: false,
+        app: known,
+        isOpen: true,
+        isAboutApp: true,
+        retry: () => void this.openWindowAt(app, path, ifPresent),
       });
       return null;
     }
@@ -2873,14 +3562,14 @@ export class DesktopStore {
    *  page (built for a GET launch path, asked of the app for a POST one) and opens a window there, points the
    *  named window at it, or shows it by the show rule. An opened, focused, or shown window is taken as an open
    *  is; a navigated one (the named window, or the pinned window a show pointed at the page) as this client's own
-   *  navigation, so the page follows. Answers the window's id, or null when the shell refused, told to the user in a
-   *  toast or, given ``onFailure``, handed to it to show. */
+   *  navigation, so the page follows. Answers the window's id, or null when the shell refused (told to the user, in
+   *  ``copy``'s words and where it says). */
   async launchAt(
     app: string,
     launchId: string,
     params: Readonly<Record<string, string>>,
     target: LaunchTarget,
-    onFailure: LaunchFailureSink | null = null,
+    copy: LaunchFailureCopy = {},
   ): Promise<string | null> {
     if (this.refuseWhileViewing(`open ${app}`)) return null;
     // A launch into a named window runs on that window's desktop, a show beside one on that window's; any other on
@@ -2894,6 +3583,8 @@ export class DesktopStore {
     const desktopId = named?.desktop.id ?? this.openingDesktopId();
     if (desktopId === null) return null;
     const isMinimized = this.isPhoneLayout();
+    const known = appByName(this.state, app);
+    const launchPath = known === undefined ? null : launchPathOf(known, launchId);
     await this.flushPendingSave();
     let outcome: LaunchOutcome;
     try {
@@ -2906,15 +3597,28 @@ export class DesktopStore {
         isMinimized,
       });
     } catch (error) {
-      const told = failureSentence(
-        describeRequestFailure(error),
-        `${appByName(this.state, app)?.display_name ?? app} couldn't open that`,
-      );
-      // Lasting for every launch, a shortcut's included: one from a text row or a page's draft has already let go of
-      // the text it carried, so pressing again is no retry, and an app's own reason waits behind "See details".
-      if (onFailure === null) this.showFailure(told, { isLasting: true });
-      else onFailure(told);
+      const asked: AskedFor = {
+        app: known,
+        launchLabel: launchPath?.label,
+        isOpen: true,
+        isAboutApp: true,
+        shortcut: copy.shortcut,
+        retry:
+          copy.report !== undefined
+            ? undefined
+            : (copy.retry ?? (() => void this.launchAt(app, launchId, params, target, copy))),
+      };
+      // Lasting for every launch, a shortcut's included: a text row or a page's draft has already let go of the text
+      // it carried, which only the toast's Try again still holds, and an app's own reason waits behind "See details".
+      const tell = copy.report ?? ((notice: FailureNotice) => this.toastNotice(notice, { isLasting: true }));
+      await this.tellFailure(copy.whatFailed ?? `${this.displayNameOf(app)} couldn't open that`, error, asked, tell);
       return null;
+    }
+    if (outcome.unsavedKind !== null) {
+      const name = known?.display_name ?? "This app";
+      this.toastNotice(this.unsavedLaunchNotice(tookLaunchLead(name, launchPath), outcome.unsavedKind), {
+        isLasting: false,
+      });
     }
     if (target.kind === "window") {
       if (named !== null) this.applyOwnNavigation(named, outcome.window);
@@ -2926,6 +3630,29 @@ export class DesktopStore {
     }
     this.takeOpened(desktopId, outcome.window, outcome.isNew, isMinimized);
     return outcome.window.id;
+  }
+
+  /** What a launch the app took says when the shell could not record where its window is (``lead`` names the
+   *  launch: "Your message was sent to Chat"): the window shows what was asked for, but may be back where it was
+   *  after a reload. */
+  private unsavedLaunchNotice(lead: string, unsavedKind: "out_of_space" | "not_saved"): FailureNotice {
+    if (unsavedKind === "out_of_space") {
+      const told = {
+        message: `${lead}, but this workspace is out of space, so window changes can't be saved.`,
+        details: null,
+        isReportable: false,
+      };
+      return this.noticeOf(told, [this.freeSpaceAction(told)], { agent: "withheld" });
+    }
+    return this.noticeOf(
+      {
+        message: `${lead}, but its window's position couldn't be saved, so it may move back after a reload.`,
+        details: null,
+        isReportable: true,
+      },
+      [],
+      { agent: "shell" },
+    );
   }
 
   /** ``shell:open {path, ifPresent}`` from a page: a window of the posting window's own app, on its desktop. */
@@ -2950,7 +3677,10 @@ export class DesktopStore {
     try {
       await this.deps.api.closeWindow(found.desktop.id, windowId);
     } catch (error) {
-      this.toastFailure("Could not close the window", error, { isLasting: false });
+      this.toastFailure("This window couldn't be closed", error, {
+        isLasting: false,
+        retry: () => void this.closeWindow(windowId),
+      });
       return;
     }
     this.dispatch({ type: "window_closed_here", desktopId: found.desktop.id, windowId });
@@ -3173,7 +3903,12 @@ export class DesktopStore {
       await this.deps.api.quitApp(appName);
     } catch (error) {
       // Lasting: Quit closed the app's windows before the stop failed, so no window is left to Quit from again.
-      this.toastFailure(`Failed to quit ${appName}`, error, { isLasting: true });
+      this.toastFailure(`${this.displayNameOf(appName)} couldn't be quit`, error, {
+        isLasting: true,
+        app: appByName(this.state, appName),
+        isAboutApp: true,
+        retry: () => void this.quitApp(appName),
+      });
     }
   }
 
@@ -3645,4 +4380,29 @@ export function chooseInitialDesktopId(
   if (deepLinkDesktopId !== null && ids.has(deepLinkDesktopId)) return deepLinkDesktopId;
   if (arrivalDesktopId !== null && ids.has(arrivalDesktopId)) return arrivalDesktopId;
   return desktops[0].id;
+}
+
+/** What failed when a draft for ``purpose`` into ``appName``'s pinned window did, as a sentence stem: a chooser's
+ *  request is named, since its dialog has closed and nothing on screen says what was asked. */
+function draftWhatFailed(purpose: DraftPurpose, appName: string): string {
+  switch (purpose) {
+    case "page-draft":
+      return `Couldn't put that into ${appName}`;
+    case "avatar-request":
+      return `Couldn't start the avatar request in ${appName}`;
+    case "theme-request":
+      return `Couldn't start the theme request in ${appName}`;
+  }
+}
+
+/** The first app a refused relay names as not having taken the message, from the shell's answer; null with none. */
+function undeliveredAppOf(error: unknown): string | null {
+  const deliveries = describeRequestFailure(error).body?.deliveries;
+  if (!Array.isArray(deliveries)) return null;
+  for (const delivery of deliveries as unknown[]) {
+    if (typeof delivery !== "object" || delivery === null) continue;
+    const { app, detail } = delivery as { app?: unknown; detail?: unknown };
+    if (typeof app === "string" && typeof detail === "string" && detail !== "") return app;
+  }
+  return null;
 }

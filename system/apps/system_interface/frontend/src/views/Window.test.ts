@@ -24,11 +24,14 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     hasAppChat: true,
     sizeMenuTrigger: {},
     isShielded: false,
-    isStopped: false,
+    stopped: null,
+    onReportBug: null,
+    gone: null,
     immersive: null,
     onRaise: vi.fn(),
     onControl: vi.fn(),
     onToggleMaximize: vi.fn(),
+    onClose: vi.fn(),
     chrome: STANDARD_CHROME,
     ...overrides,
   };
@@ -185,17 +188,93 @@ describe("Window", () => {
     expect(unlocked.querySelector("[data-fullscreen-hint]")?.textContent).toBe("Immersive, without the keyboard lock");
   });
 
-  it("shows a placeholder, and no page, for an app the caller says is stopped", () => {
-    const element = render({ app: appRecord("docs", { is_running: false, program: "" }), isStopped: true });
+  it("shows what the caller says of a stopped app in place of its page, with the next step's button", () => {
+    const askAgent = vi.fn();
+    const element = render({
+      app: appRecord("docs", { is_running: false, program: "" }),
+      stopped: {
+        message: "Docs isn't running.",
+        details: null,
+        actions: [{ label: "Ask an agent to start it", run: askAgent }],
+        isReportable: false,
+      },
+    });
     const placeholder = element.querySelector("[data-stopped-app]") as HTMLElement;
-    expect(placeholder.textContent).toContain("Docs");
-    expect(placeholder.textContent).toContain("not running (managed outside the workspace)");
-    expect(placeholder.querySelector("button")).toBeNull();
+    expect(placeholder.querySelector(".stopped-app-notice-message")?.textContent).toBe("Docs isn't running.");
+    (placeholder.querySelector("button") as HTMLButtonElement).click();
+    expect(askAgent).toHaveBeenCalledTimes(1);
     unmountViews();
     // A stopped app the shell wakes on a request keeps its page: the parker answers it.
     expect(
-      render({ app: appRecord("docs", { is_running: false }), isStopped: false }).querySelector("[data-stopped-app]"),
+      render({ app: appRecord("docs", { is_running: false }), stopped: null }).querySelector("[data-stopped-app]"),
     ).toBeNull();
+  });
+
+  it("draws a pending button as its pending label, taking no press, until it settles", () => {
+    let isPending = true;
+    const askAgent = vi.fn();
+    const element = render({
+      app: appRecord("docs", { is_running: false, program: "" }),
+      stopped: {
+        message: "Docs isn't running.",
+        details: null,
+        actions: [
+          {
+            label: "Ask an agent to start it",
+            run: askAgent,
+            pending: { isPending: () => isPending, label: "Asking an agent…" },
+          },
+        ],
+        isReportable: false,
+      },
+    });
+    const button = (): HTMLButtonElement => element.querySelector("[data-stopped-app] button") as HTMLButtonElement;
+    expect(button().textContent).toBe("Asking an agent…");
+    expect(button().disabled).toBe(true);
+    button().click();
+    expect(askAgent).not.toHaveBeenCalled();
+    isPending = false;
+    m.redraw.sync();
+    expect(button().textContent).toBe("Ask an agent to start it");
+    expect(button().disabled).toBe(false);
+  });
+
+  it("offers Report a bug about a stopped app's sentence that asks for one, decided as it draws", () => {
+    const stopped = {
+      message: "Chat is not running right now. If this persists, report a bug.",
+      details: null,
+      actions: [],
+      isReportable: true,
+    };
+    const chat = appRecord("chat", { is_running: false });
+    expect(render({ app: chat, stopped }).querySelector("[data-stopped-app] button")).toBeNull();
+    unmountViews();
+    const reportBug = vi.fn();
+    const button = render({ app: chat, stopped, onReportBug: reportBug }).querySelector(
+      "[data-stopped-app] button",
+    ) as HTMLButtonElement;
+    expect(button.textContent).toBe("Report a bug");
+    button.click();
+    expect(reportBug).toHaveBeenCalledWith({ message: stopped.message, details: null });
+  });
+
+  it("shows a window's app couldn't be found in place of its page, with its buttons, and drops Refresh", () => {
+    const onClose = vi.fn();
+    const gone = {
+      message: "This app couldn't be found in this workspace.",
+      details: null,
+      isReportable: false,
+      actions: [{ label: "Close window", run: onClose }],
+    };
+    const element = render({ app: undefined, gone });
+    const placeholder = element.querySelector("[data-gone-app]") as HTMLElement;
+    expect(placeholder.querySelector(".gone-app-notice-message")?.textContent).toBe(gone.message);
+    (placeholder.querySelector("button") as HTMLButtonElement).click();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    const controls = [...element.querySelectorAll("[data-window-control]")].map((control) =>
+      control.getAttribute("data-window-control"),
+    );
+    expect(controls).toEqual(["menu", "minimize", "maximize", "close"]);
   });
 
   it("a double click on the title bar toggles maximize, a click on a control does not", () => {

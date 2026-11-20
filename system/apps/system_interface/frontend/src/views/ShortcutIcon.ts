@@ -19,6 +19,7 @@ import type { PixelPoint, PixelRect } from "../geometry/frames";
 import type { AppRecord, DesktopShortcut, GridCell } from "../model/records";
 import { appShortcutsOf, launchPathOf } from "../model/launch";
 import { shortcutKey } from "../model/records";
+import { stoppedSentence } from "../model/failures";
 import { appGlyph } from "./glyphs";
 import { rectStyle } from "./pixelStyle";
 
@@ -53,9 +54,9 @@ export interface ShortcutIconAttrs {
 
 /** What a shortcut reads: its app's name, whatever its mode ("Terminal"), as the launcher tile reads the launch
  *  path's label; a default shortcut after the app's first reads its launch path's label ("Browser" beside "Screen"),
- *  so an app's own shortcuts can be told apart. */
+ *  so an app's own shortcuts can be told apart. One whose app is gone reads the name it was made with. */
 export function shortcutLabel(shortcut: DesktopShortcut, app: AppRecord | undefined): string {
-  if (app === undefined) return shortcut.target.app;
+  if (app === undefined) return shortcut.app_display_name ?? shortcut.target.app;
   const declaredIndex = appShortcutsOf(app).findIndex((own) => own.launch === shortcut.target.launch);
   if (declaredIndex <= 0) return app.display_name;
   return launchPathOf(app, shortcut.target.launch)?.label ?? app.display_name;
@@ -113,10 +114,11 @@ function shortcutContent(app: AppRecord | undefined, label: string, isLifted: bo
   ];
 }
 
-/** The hover text a shortcut owes: why it is faint, or nothing when it is ready. */
-export function shortcutTooltip(label: string, isStopped: boolean, isConnecting: boolean): string | null {
+/** The hover text a shortcut owes: why it is faint (in the words its window's placeholder uses), or nothing when it
+ *  is ready. */
+export function shortcutTooltip(app: AppRecord | undefined, isStopped: boolean, isConnecting: boolean): string | null {
   if (isConnecting) return CONNECTING_TOOLTIP;
-  return isStopped ? `${label}: not running` : null;
+  return isStopped && app !== undefined ? stoppedSentence(app) : null;
 }
 
 /** What being in the hand comes to, spelled once for the render and for the per-frame paint of the drag:
@@ -184,7 +186,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
               : "") +
             (isStopped || isConnecting ? "text-faint" : "text-primary"),
           style: { ...rectStyle(rect), ...liftStyle(lift) },
-          ...hoverTooltipAttrs(shortcutTooltip(label, isStopped, isConnecting)),
+          ...hoverTooltipAttrs(shortcutTooltip(app, isStopped, isConnecting)),
           onclick: isRunOnClick ? onRun : onSelect,
           // A double tap's dblclick follows two clicks that already ran the shortcut.
           ondblclick: (event: MouseEvent) => {

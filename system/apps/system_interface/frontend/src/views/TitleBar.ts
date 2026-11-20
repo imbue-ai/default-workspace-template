@@ -39,6 +39,8 @@ export interface TitleBarAttrs {
   readonly app: AppRecord | undefined;
   readonly state: WindowState;
   readonly isFocused: boolean;
+  /** Whether the window has a page to refresh. */
+  readonly canRefresh: boolean;
   readonly isMenuOpen: boolean;
   /** Whether the bar offers "Chat about this app": an app that is not internal, on a machine with an app-chat launch
    *  path (the multiplayer spec, section 9.1); absent reads as not offered. */
@@ -117,6 +119,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
         app,
         state,
         isFocused,
+        canRefresh,
         isMenuOpen,
         hasAppChat,
         sizeMenuTrigger,
@@ -139,6 +142,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           case "title":
             return !isTitleCentered;
           case "refresh":
+            return isFocused && canRefresh;
           case "menu":
             return isFocused;
           case "minimize":

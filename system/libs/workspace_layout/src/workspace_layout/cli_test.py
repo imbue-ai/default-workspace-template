@@ -34,7 +34,7 @@ from workspace_layout.cli import window_argument
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import WindowId
-from workspace_layout.records import DesktopShortcut
+from workspace_layout.records import ShortcutView
 from workspace_layout.records import WindowView
 from workspace_layout.shell_url import INVENTORY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
@@ -508,10 +508,12 @@ def test_desktops_and_list_read_the_inventory_document(
             "target": {"kind": "launch", "app": "files", "launch": "new"},
             "mode": "focus",
             "cell": {"column": 0, "row": 0},
+            "app_display_name": "Files",
+            "launch_label": "New File Viewer",
         }
     ]
     home = fake_desktop(
-        "home", [_FILES_WINDOW], shortcuts=[DesktopShortcut.model_validate(shortcut) for shortcut in shortcuts]
+        "home", [_FILES_WINDOW], shortcuts=[ShortcutView.model_validate(shortcut) for shortcut in shortcuts]
     )
     popped_out = PoppedOutWindow(window_id=WindowId(_FILES_ID), desktop_id=DesktopId("home"), is_ghost_hidden=False)
     clients = (
@@ -658,9 +660,11 @@ def test_shortcut_verbs_post_to_the_desktop_and_print_its_shortcuts(
         "target": {"kind": "launch", "app": "docs", "launch": "open"},
         "mode": "new",
         "cell": {"column": 1, "row": 0},
+        "app_display_name": "Docs",
+        "launch_label": "Docs",
     }
     loopback_shell.op_answer = desktop_answer(
-        fake_desktop("research", shortcuts=[DesktopShortcut.model_validate(row)]), "c1", None
+        fake_desktop("research", shortcuts=[ShortcutView.model_validate(row)]), "c1", None
     )
     assert run_layout_cli(["shortcuts", "--desktop", "Research", "--json"], layout_context) == 0
     assert json.loads(capsys.readouterr().out) == {"desktop": "research", "shortcuts": [row]}

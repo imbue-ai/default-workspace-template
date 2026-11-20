@@ -56,6 +56,7 @@ from workspace_layout.primitives import WindowTitle
 from workspace_layout.records import DesktopLayoutView
 from workspace_layout.records import DesktopShortcut
 from workspace_layout.records import DesktopView
+from workspace_layout.records import ShortcutView
 from workspace_layout.records import WindowView
 from workspace_layout.roster import RosterDocument
 from workspace_layout.roster import RosterParticipant
@@ -101,7 +102,7 @@ def fake_window(
 def fake_desktop(
     desktop_id: str = FAKE_DESKTOP_ID,
     windows: Sequence[WindowView] = (),
-    shortcuts: Sequence[DesktopShortcut] = (),
+    shortcuts: Sequence[DesktopShortcut | ShortcutView] = (),
 ) -> DesktopView:
     """A desktop named for its id, with no wallpaper, as the shell's answers carry it."""
     return DesktopView(
@@ -110,7 +111,12 @@ def fake_desktop(
         color="#4f46e5",
         glyph=0,
         wallpaper=None,
-        shortcuts=tuple(shortcuts),
+        shortcuts=tuple(
+            shortcut
+            if isinstance(shortcut, ShortcutView)
+            else ShortcutView(target=shortcut.target, mode=shortcut.mode, cell=shortcut.cell)
+            for shortcut in shortcuts
+        ),
         windows=tuple(windows),
     )
 

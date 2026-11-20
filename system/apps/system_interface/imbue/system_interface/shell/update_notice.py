@@ -36,6 +36,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.system_interface.file_watch import start_file_watch
 from imbue.system_interface.file_watch import stop_file_watch
+from imbue.system_interface.shell.errors import RefusalKind
 from imbue.system_interface.shell.errors import UpdateNoticeCommandError
 from imbue.system_interface.shell.errors import UpdateNoticeRecordError
 from imbue.system_interface.shell.errors import UpdateNoticeRefusedError
@@ -296,7 +297,8 @@ class UpdateNoticeWatch(MutableModel):
                 if returncode == 0:
                     return
                 raise UpdateNoticeRefusedError(
-                    f"The rollback was refused (exit {returncode}): {_log_tail_since(log_path, log_offset)}"
+                    f"The rollback was refused (exit {returncode}): {_log_tail_since(log_path, log_offset)}",
+                    kind=RefusalKind.ROLLBACK_REFUSED,
                 )
             self._record_changed.wait(timeout=_ROLLBACK_START_POLL_SECONDS)
         raise UpdateNoticeCommandError(
