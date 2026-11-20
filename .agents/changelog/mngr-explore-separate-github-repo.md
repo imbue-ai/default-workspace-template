@@ -1,1 +1,3 @@
 The checks the workspace runs on its own skills now leave out the skills an installed app carries: an app whose record says it was installed from someone else's repository is kept as it came, without an entry in `.agents/third-party-skills.toml`.
+
+The manage-routines skill says where a routine's file lives when it belongs to an app (`system/apps/<package>/routines/<id>.toml`), that `routines add --app <name>` writes there for an app built or installed in the workspace, that rescheduling such a routine is kept as the user's choice without touching the app's file, and that any other change or a removal is made by changing the app.

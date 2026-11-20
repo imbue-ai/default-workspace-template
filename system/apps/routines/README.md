@@ -35,9 +35,9 @@ and the API's are the same shapes:
 | `GET /api/routines/<id>/runs/<run id>` | One run with the tail of its log; `/log` the whole log as text. |
 | `POST /api/routines/<id>/run` | Starts a manual run; 409 while one is going, 400 for a broken definition. |
 | `PUT /api/routines/<id>/enabled` | `{"is_enabled": bool}`. |
-| `PUT /api/routines/<id>/schedule` | The schedule fields; 400 with the reason, 409 in the library's words when the definition's commit is refused (the file stays written: the next definition write commits it). |
+| `PUT /api/routines/<id>/schedule` | The schedule fields; 400 with the reason, 409 in the library's words when the definition's commit is refused (the file stays written: the next definition write commits it). For a routine an app owns the schedule is kept in the routine's state and the app's file is not rewritten. |
 | `POST /api/routines/<id>/fix` | Opens the fix chat. |
-| `DELETE /api/routines/<id>` | Removes the routine; 409 while a run of it is going, 500 with the reason when its state directory cannot be deleted whole (the routine stays). A removal whose commit is refused is still a removal (204, logged): the next definition write commits it. |
+| `DELETE /api/routines/<id>` | Removes the routine; 409 while a run of it is going, 409 for a routine an app owns (it is removed by changing the app) or whose id more than one file has, 500 with the reason when its state directory cannot be deleted whole (the routine stays). A removal whose commit is refused is still a removal (204, logged): the next definition write commits it. |
 
 Every mutation goes through the library's service, which is what the
 `routines` command runs. The manifest registers `minds:show-routine`, the

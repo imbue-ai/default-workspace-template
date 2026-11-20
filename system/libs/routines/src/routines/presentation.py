@@ -27,6 +27,7 @@ from routines.schedule import describe_age
 from routines.schedule import describe_duration
 from routines.schedule import describe_moment
 from routines.schedule import describe_schedule
+from routines.schedule import effective_routine
 from routines.schedule import is_overdue
 from routines.schedule import is_switched_on
 from routines.schedule import next_due
@@ -181,6 +182,7 @@ def last_run_record(state: RoutineState, routine_id: RoutineId, now: datetime) -
 
 @pure
 def build_row(loaded: LoadedRoutine, state: RoutineState, now: datetime, zone: tzinfo) -> RoutineRow:
+    loaded = effective_routine(loaded, state)
     definition = loaded.definition
     due = next_due(definition, state, now, zone) if definition is not None else None
     health = health_of(loaded, state, due, now)

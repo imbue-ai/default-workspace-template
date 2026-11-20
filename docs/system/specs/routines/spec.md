@@ -44,6 +44,7 @@ Facts this design builds on, as of `main` at `2cf9763de` (2026-10-20).
    An app that needs periodic work makes it a routine instead of a loop inside its service.
 2. **The definition is the source of truth.** Each routine is one TOML file, tracked in git like an app or a skill.
    Cron holds one line for the whole workspace and no routine is ever written to it.
+   A routine an app owns is defined inside the app's directory, and that file is the app's: what the user changes about such a routine is kept in its state (section 4.1).
 3. **One runner, one state store, one ledger.** Scheduled runs and manual runs take the same code path; the trigger is a field.
    The runner records every run, so history needs no cooperation from the routine.
 4. **Two ways to say what runs, one path.** A routine runs a command or a skill.
@@ -59,7 +60,7 @@ Facts this design builds on, as of `main` at `2cf9763de` (2026-10-20).
 
 - **Routine**: a definition file plus its state.
   Its **id** is the file's stem.
-- **Definition**: `system/routines/<id>.toml`, the tracked record of what the routine is and when it runs.
+- **Definition**: `system/routines/<id>.toml`, or `system/apps/<package>/routines/<id>.toml` for a routine an app owns, the tracked record of what the routine is and when it runs.
 - **Schedule**: the part of the definition that says when.
 - **Run**: one execution of the routine, with a **run id**, a **trigger** (`scheduled` or `manual`), an **outcome**, a log, and optionally a chat.
 - **Command run**: a run that executes a process.
@@ -71,8 +72,8 @@ Facts this design builds on, as of `main` at `2cf9763de` (2026-10-20).
 
 ## 4. The definition file
 
-One routine per file, `system/routines/<id>.toml`.
-The root `routines` symlink points at that directory beside `apps` and `skills`.
+One routine per file, `system/routines/<id>.toml`, or `system/apps/<package>/routines/<id>.toml` for a routine an app owns (section 4.1).
+The root `routines` symlink points at `system/routines` beside `apps` and `skills`.
 The id matches `[a-z0-9][a-z0-9-]{0,62}` so it can name a chat, a log file, and a path segment unchanged.
 
 ```toml
@@ -110,11 +111,29 @@ The app's schedule editor has no agent to commit for it, and an agent that calls
 The commit stages that one file and commits it with `git commit --only`, so another agent's half-staged work is never swept up; a commit refused because the index is locked or a merge is in progress is retried once after a second, and when it still fails the file stays written and the user sees "Couldn't save that change because something else is saving right now. Try again in a moment." (the next write of the file commits both).
 The commit identity is the library's own, not whichever chat happens to be open.
 
+### 4.1 Routines an app owns
+
+A user app is one directory, `system/apps/<package>/`, which may be installed from someone else's repository, and the routines it owns are the files under its `routines/`.
+The library reads `system/apps/*/routines/*.toml` beside `system/routines/*.toml` and lists the union by file name.
+A routine id is unique across the workspace: an id that more than one file has is listed once, as broken, with a reason naming every file, and it is neither run nor changed until one file is left.
+
+The library never rewrites or deletes a file inside an app's directory, since that would leave an installed app modified and in conflict with its next update.
+
+- **A reschedule is state.** The schedule the user picks is written to the routine's state as `schedule_override`, with no write to the definition and no commit.
+  The routine runs on the override while there is one and on its definition's schedule otherwise; every reader of a schedule (the due computation, the words the rows show, the tick, the schedule editor) takes it through `effective_routine` in `schedule.py`.
+  Rescheduling the routine back to exactly its definition's schedule clears the override, so the routine follows its app again.
+  The override applies only to a routine an app owns; a routine under `system/routines` runs on its file whatever its state holds.
+- **Any other change is a change to the app.** `routines edit` of a field that is not part of the schedule, and `routines remove`, are refused with `AppOwnedRoutineError`, which names the app's directory and the file to change there.
+- **The switch is state for every routine** (decision 8), so turning an app's routine off needs nothing more.
+- **`routines add --app <name>`** writes the new definition into `system/apps/<package>/routines/` and commits it there, when `<name>` is a user app: its directory exists (`<package>` is the name with each hyphen an underscore) and so does the workspace's record of it, `system/config/apps/<name>.toml`.
+  For any other name (a built-in app, or no app) the definition goes under `system/routines` as before, with `app` kept for grouping.
+
 ## 5. Schedules and due computation
 
 Time inside the library is UTC-aware everywhere.
 A definition's `at`, `once`, and `days` are in the container's local time zone, which the bootstrap sets to the user's; the library converts at the boundary.
 All arithmetic is in `schedule.py` as pure functions of the definition, the state, and `now`.
+The definition these functions are given is the routine as it runs: for a routine an app owns, its definition with the user's `schedule_override` in place of the file's schedule when the state has one (section 4.1).
 
 ### 5.1 The next due moment
 
@@ -234,6 +253,7 @@ A skill run has no result file; its summary is the agent's last message (6.4), w
 ```json
 {
   "is_enabled": true,
+  "schedule_override": null,
   "chat_id": "agent-...",
   "last_started_at": "2026-10-20T14:30:00.000000+00:00",
   "last_succeeded_at": "2026-10-20T14:30:12.000000+00:00",
@@ -246,6 +266,7 @@ A skill run has no result file; its summary is the agent's last message (6.4), w
 ```
 
 `is_enabled` is null until the user flips the switch; the definition's `enabled` applies while it is.
+`schedule_override` is null unless the user has rescheduled a routine an app owns, when it holds the schedule fields (`every`, `at`, `days`, `day_of_month`, `once`) the routine runs on in place of its definition's (section 4.1); a state file written before the field existed reads as null.
 `current_run` carries the run id, the pid, the trigger, and when it started.
 Every write to the file, the switch included, goes through the library under the routine's lock, so the app and a run never race on it.
 Deleting a routine's state directory resets it; deleting `last_succeeded_at` makes it due.
@@ -312,13 +333,13 @@ The Caretaker's check (section 11) is the other layer: it reads the listing for 
 |---|---|
 | `routines list` | Every routine with health, schedule, next run, last run. |
 | `routines show <id>` | One routine with its recent runs. |
-| `routines add <id> --title --what (--every \| --once) [--at] [--days] [--day-of-month] (--skill \| -- <command...>) [--app] [--timeout] [--retry-after] [--notify-after-failures] [--disabled]` | Writes the definition after validating it; refuses an id that exists. |
-| `routines edit <id> [same flags]` | Rewrites the named fields, keeping the rest and the comments. |
+| `routines add <id> --title --what (--every \| --once) [--at] [--days] [--day-of-month] (--skill \| -- <command...>) [--app] [--timeout] [--retry-after] [--notify-after-failures] [--disabled]` | Writes the definition after validating it; refuses an id that exists. With `--app` naming a user app, the file goes into that app's `routines/` (section 4.1). |
+| `routines edit <id> [same flags]` | Rewrites the named fields, keeping the rest and the comments. For a routine an app owns, the schedule flags are kept in its state and any other flag is refused (section 4.1). |
 | `routines enable <id>`, `routines disable <id>` | Flips the switch in the state. |
 | `routines run <id> [--wait]` | A manual run; without `--wait` it is detached and the command returns the run id. `--trigger scheduled` is the tick's spelling and nobody else's. |
 | `routines runs <id> [--limit N]` | The routine's recent runs. |
 | `routines log <id> [<run_id>]` | A run's log, the last run's by default. |
-| `routines remove <id>` | Deletes the definition and the state, keeps the ledger; stops the routine's chat agent if it has one, and never destroys it, since the chat is the user's to read or delete. |
+| `routines remove <id>` | Deletes the definition and the state, keeps the ledger; stops the routine's chat agent if it has one, and never destroys it, since the chat is the user's to read or delete. Refused for a routine an app owns, which is removed by changing the app. |
 | `routines wake <skill> [--routine <id>] [--title] [--timeout]` | Section 6.4; inside a run, the wait never reaches past what is left of the run's own time, whatever `--timeout` says. |
 | `routines tick` | Section 6.1. |
 | `routines migrate-cron` | Section 12. |
@@ -361,9 +382,9 @@ Typed routes in `app_schema`'s route table, every model in the library's `data_t
 | `GET /api/routines/<id>/runs/<run_id>` | `RunDetail` with the log tail; `GET .../runs/<run_id>/log` the whole log as text. |
 | `POST /api/routines/<id>/run` | Starts a manual run; 409 while one is in flight, 400 for a broken definition. |
 | `PUT /api/routines/<id>/enabled` | `{"is_enabled": bool}`. |
-| `PUT /api/routines/<id>/schedule` | The schedule fields; 400 with the validation message. |
+| `PUT /api/routines/<id>/schedule` | The schedule fields; 400 with the validation message. For a routine an app owns the schedule is kept in its state (section 4.1). |
 | `POST /api/routines/<id>/fix` | Opens the fix chat; answers its id. |
-| `DELETE /api/routines/<id>` | Removes the routine; 409 while a run of it is in flight. |
+| `DELETE /api/routines/<id>` | Removes the routine; 409 while a run of it is in flight, and for a routine an app owns. |
 | `GET /api/health`, `GET /api/schema` | As every app. |
 
 A preview boot (`ROUTINES_APP_PREVIEW`) answers every mutation with 403, as the shell's preview does.

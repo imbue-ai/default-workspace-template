@@ -11,6 +11,8 @@ from routines.primitives import RoutineId
 from routines.primitives import RunId
 
 DEFINITIONS_DIR: Final[Path] = Path("system/routines")
+APPS_DIR: Final[Path] = Path("system/apps")
+APP_DEFINITIONS_DIRNAME: Final[str] = "routines"
 STATE_DIR: Final[Path] = Path("data/.state/routines")
 DEFINITION_SUFFIX: Final[str] = ".toml"
 STATE_FILENAME: Final[str] = "state.json"
@@ -58,8 +60,22 @@ class RoutinesPaths(FrozenModel):
     def housekeeping_path(self) -> Path:
         return self.state_dir / HOUSEKEEPING_FILENAME
 
-    def definition_path(self, routine_id: RoutineId) -> Path:
+    @property
+    def apps_dir(self) -> Path:
+        return self.repo_root / APPS_DIR
+
+    def workspace_definition_path(self, routine_id: RoutineId) -> Path:
+        """Where the definition of a routine no app owns lives; one an app owns is under the app's directory."""
         return self.definitions_dir / f"{routine_id}{DEFINITION_SUFFIX}"
+
+    def app_dir(self, app_package: str) -> Path:
+        return self.apps_dir / app_package
+
+    def app_definitions_dir(self, app_package: str) -> Path:
+        return self.app_dir(app_package) / APP_DEFINITIONS_DIRNAME
+
+    def app_definition_path(self, app_package: str, routine_id: RoutineId) -> Path:
+        return self.app_definitions_dir(app_package) / f"{routine_id}{DEFINITION_SUFFIX}"
 
     def routine_state_dir(self, routine_id: RoutineId) -> Path:
         return self.state_dir / routine_id

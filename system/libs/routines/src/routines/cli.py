@@ -353,11 +353,11 @@ def add_command(routine_id: str, **options: object) -> None:
 @click.argument("routine_id")
 @_definition_options
 def edit_command(routine_id: str, **options: object) -> None:
-    """Rewrite the named fields of a routine, keeping the rest."""
+    """Change the named fields of a routine, keeping the rest. Of a routine an app owns only the schedule can be
+    changed, and the change is kept in the routine's state rather than in the app's file."""
     service = _service()
     try:
-        loaded = service.definitions.load(RoutineId(routine_id))
-        base = loaded.definition
+        base = service.effective(RoutineId(routine_id)).definition
         definition = _definition_from_options(base, DefinitionOptions.model_validate(options))
         path = service.replace(RoutineId(routine_id), definition, "edit")
     except ValidationError as e:
@@ -487,7 +487,8 @@ def log_command(routine_id: str, run_id: str | None) -> None:
 @routines.command("remove")
 @click.argument("routine_id")
 def remove_command(routine_id: str) -> None:
-    """Delete a routine's definition and state; its runs stay in the ledger and its chat stays in the list."""
+    """Delete a routine's definition and state; its runs stay in the ledger and its chat stays in the list. A
+    routine an app owns is removed by changing the app, and is refused here."""
     try:
         _service().remove(RoutineId(routine_id))
     except RoutinesError as e:

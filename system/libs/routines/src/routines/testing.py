@@ -10,7 +10,13 @@ from datetime import timezone
 from pathlib import Path
 from typing import Final
 
+from app_manifest.primitives import AppName
+from app_manifest.records import AppOrigin
+from app_manifest.records import AppRecord
+from app_manifest.records import write_record
 from routines.data_types import LastRun
+from routines.data_types import LoadedRoutine
+from routines.data_types import RoutineDefinition
 from routines.definitions import FileDefinitionStore
 from routines.interfaces import ChatAppInterface
 from routines.interfaces import ClockInterface
@@ -48,6 +54,49 @@ def make_workspace_paths(root: Path) -> RoutinesPaths:
     """A fresh workspace root with the definitions directory in place."""
     (root / "system" / "routines").mkdir(parents=True)
     return RoutinesPaths(repo_root=root)
+
+
+def make_user_app(paths: RoutinesPaths, app_name: str) -> str:
+    """A user app as an install leaves it: its directory under system/apps and the workspace's record of it.
+    Answers the directory's name, the app's name with its hyphens as underscores."""
+    app_package = app_name.replace("-", "_")
+    paths.app_dir(app_package).mkdir(parents=True)
+    write_record(
+        paths.repo_root, AppRecord(name=AppName(app_name), package=app_package, port=8090, origin=AppOrigin.LOCAL)
+    )
+    return app_package
+
+
+def write_app_definition(paths: RoutinesPaths, app_package: str, routine_id: RoutineId, text: str) -> Path:
+    """A definition file an app ships in its own directory, written as the app's repository has it."""
+    path = paths.app_definition_path(app_package, routine_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
+def loaded_routine(
+    routine_id: RoutineId,
+    definition: RoutineDefinition | None,
+    error: str | None = None,
+    app_package: str | None = None,
+) -> LoadedRoutine:
+    """A routine as the store loads it from the one file that has its id, the workspace's own or the app's, for
+    a test that reads no file: the path is the one the file would have under the current directory."""
+    paths = RoutinesPaths(repo_root=Path())
+    path = (
+        paths.app_definition_path(app_package, routine_id)
+        if app_package is not None
+        else paths.workspace_definition_path(routine_id)
+    )
+    return LoadedRoutine(
+        routine_id=routine_id,
+        definition=definition,
+        error=error,
+        path=path,
+        app_package=app_package,
+        is_duplicated=False,
+    )
 
 
 def init_git_workspace(paths: RoutinesPaths) -> RoutinesPaths:

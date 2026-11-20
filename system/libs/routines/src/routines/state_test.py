@@ -4,8 +4,12 @@ import pytest
 
 from imbue.imbue_common.model_update import to_update
 from routines.data_types import RoutineState
+from routines.data_types import ScheduleOverride
 from routines.errors import StateRemovalError
+from routines.primitives import Duration
 from routines.primitives import RunId
+from routines.primitives import TimeOfDay
+from routines.primitives import Weekday
 from routines.state import FileStateStore
 from routines.testing import TEST_ROUTINE_ID
 
@@ -93,3 +97,38 @@ def test_a_field_a_newer_writer_added_is_ignored_in_the_state_and_in_its_runs(st
     state = states.read(TEST_ROUTINE_ID)
     assert state.is_enabled is False
     assert state.current_run is not None and state.last_run is not None
+
+
+def test_a_state_file_written_before_schedules_were_kept_in_it_has_no_schedule_of_its_own(
+    states: FileStateStore,
+) -> None:
+    path = states.paths.state_path(TEST_ROUTINE_ID)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"is_enabled": False, "chat_id": "agent-1", "consecutive_failures": 2}))
+
+    state = states.read(TEST_ROUTINE_ID)
+
+    assert state.schedule_override is None
+    assert (state.is_enabled, state.chat_id, state.consecutive_failures) == (False, "agent-1", 2)
+
+
+def test_a_users_schedule_is_read_back_from_disk_as_it_was_kept(states: FileStateStore) -> None:
+    override = ScheduleOverride(every=Duration("1d"), at=TimeOfDay("08:15"), days=(Weekday.MON, Weekday.FRI))
+    states.update(
+        TEST_ROUTINE_ID,
+        lambda state: state.model_copy_update(to_update(state.field_ref().schedule_override, override)),
+    )
+
+    reread = FileStateStore(paths=states.paths).read(TEST_ROUTINE_ID)
+
+    assert reread.schedule_override == override
+    kept = json.loads(states.paths.state_path(TEST_ROUTINE_ID).read_text())["schedule_override"]
+    assert kept == {"every": "1d", "at": "08:15", "days": ["MON", "FRI"], "day_of_month": None, "once": None}
+
+
+def test_a_field_a_newer_writer_added_to_a_users_schedule_is_ignored(states: FileStateStore) -> None:
+    path = states.paths.state_path(TEST_ROUTINE_ID)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"schedule_override": {"every": "2h", "newer_field": 1}}))
+
+    assert states.read(TEST_ROUTINE_ID).schedule_override == ScheduleOverride(every=Duration("2h"))

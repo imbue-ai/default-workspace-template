@@ -36,21 +36,24 @@ class ClockInterface(MutableModel, ABC):
 
 
 class DefinitionStoreInterface(MutableModel, ABC):
-    """The definition files under ``system/routines``."""
+    """The definition files: the workspace's own under ``system/routines``, and each app's under its directory's
+    ``routines``. An app's files are read, and added to, but never rewritten or deleted."""
 
     paths: RoutinesPaths = Field(frozen=True, description="Where the definitions live")
 
     @abstractmethod
     def list_routines(self) -> list[LoadedRoutine]:
-        """Every definition file, by id, broken ones included."""
+        """Every routine, one per id in a fixed order, broken ones included; an id more than one file has is one
+        broken routine."""
 
     @abstractmethod
     def load(self, routine_id: RoutineId) -> LoadedRoutine:
-        """One definition file; raises RoutineNotFoundError when there is none."""
+        """One routine, wherever its file is; raises RoutineNotFoundError when there is none."""
 
     @abstractmethod
     def add(self, routine_id: RoutineId, definition: RoutineDefinition) -> Path:
-        """Write a new definition file and commit it; raises RoutineExistsError when one exists."""
+        """Write a new definition file and commit it: in the directory of the user app the definition names, else
+        under ``system/routines``. Raises RoutineExistsError when any file has the id."""
 
     @abstractmethod
     def replace(
@@ -59,11 +62,13 @@ class DefinitionStoreInterface(MutableModel, ABC):
         definition: RoutineDefinition,
         change_description: str,
     ) -> Path:
-        """Rewrite an existing definition file, keeping its comments, and commit it."""
+        """Rewrite the workspace's own definition file, keeping its comments, and commit it; raises
+        RoutineNotFoundError when there is none, AppOwnedRoutineError for an app's file and DuplicateRoutineError
+        for an id more than one file has."""
 
     @abstractmethod
     def remove(self, routine_id: RoutineId) -> None:
-        """Delete a definition file and commit the deletion; raises RoutineNotFoundError when there is none."""
+        """Delete the workspace's own definition file and commit the deletion; raises as ``replace`` does."""
 
 
 class StateStoreInterface(MutableModel, ABC):
