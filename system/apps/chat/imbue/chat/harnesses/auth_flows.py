@@ -79,6 +79,7 @@ from imbue.chat.harnesses.pty_auth import extract_wrapped_value
 from imbue.chat.harnesses.pty_auth import safe_close
 from imbue.chat.harnesses.pty_auth import safe_terminate
 from imbue.chat.harnesses.pty_auth import spawn_pty
+from imbue.chat.harnesses.pty_auth import take_expect_output
 from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.sign_in_relay import BROWSER_ENV_VAR
 from imbue.chat.harnesses.sign_in_relay import BROWSER_SHIM_RELATIVE_PATH
@@ -408,8 +409,7 @@ class AuthFlowService:
         session.scratch_dir = Path(tempfile.mkdtemp(prefix="minds-sign-in-"))
         socket_path = session.scratch_dir / APP_SERVER_SOCKET_FILENAME
         env = {
-            **os.environ,
-            **build_account_binding(session.lane.harness).cli_env(account_path),
+            **build_account_binding(session.lane.harness).account_process_env(account_path),
             BROWSER_ENV_VAR: str(self._work_dir / BROWSER_SHIM_RELATIVE_PATH),
             SIGN_IN_URL_FILE_ENV_VAR: str(session.scratch_dir / SIGN_IN_URL_FILENAME),
             SIGN_IN_FLOW_ENV_VAR: "1",
@@ -470,7 +470,7 @@ class AuthFlowService:
 
     def _drive_locked(self, session: _Session, method: PtyMethod, account_path: Path) -> tuple[str | None, str | None]:
         """Spawn the CLI, get it to the point of showing something, and scrape it."""
-        env = {**os.environ, **build_account_binding(session.lane.harness).cli_env(account_path)}
+        env = build_account_binding(session.lane.harness).account_process_env(account_path)
         url_file: Path | None = None
         if method.relays_browser_sign_in:
             session.scratch_dir = Path(tempfile.mkdtemp(prefix="minds-sign-in-"))
@@ -495,7 +495,7 @@ class AuthFlowService:
             ):
                 self._fail_locked(session, "The sign-in screen did not appear as expected.")
                 raise FlowError(session.detail or "unexpected screen")
-            session.output += (session.process.before or "") + (session.process.after or "")
+            session.output += take_expect_output(session.process)
         else:
             # No anchor to expect, so wait for the screen itself to stop changing. Better
             # than a fixed pause: a CLI that draws fast is not made slow, and one that
@@ -530,7 +530,7 @@ class AuthFlowService:
             )
             if 1 <= index <= len(failure_patterns):
                 # Report the CLI's own words rather than a timeout it did not have.
-                session.output += (session.process.before or "") + (session.process.after or "")
+                session.output += take_expect_output(session.process)
                 _, copy = method.failures[index - 1]
                 match = re.search(failure_patterns[index - 1], session.output)
                 detail = copy.replace("{1}", match.group(1)) if match is not None and match.groups() else copy
@@ -539,7 +539,7 @@ class AuthFlowService:
             if index != 0:
                 self._fail_locked(session, "Timed out waiting for the sign-in details.")
                 raise FlowError(session.detail or "no value")
-            session.output += (session.process.before or "") + (session.process.after or "")
+            session.output += take_expect_output(session.process)
         # A URL is drained until it can be extracted -- the CLI animates forever afterwards,
         # so there is no quiet gap to wait for. A minted token is drained to process exit,
         # because the CLI prints it and leaves.

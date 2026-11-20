@@ -48,6 +48,9 @@ from imbue.imbue_common.frozen_model import FrozenModel
 # sources the agent's env before running the command.
 _STATE_DIR_SHELL_VAR: Final = '"$MNGR_AGENT_STATE_DIR"'
 
+# mngr's per-agent env file, sourced into the agent's tmux session on every start.
+AGENT_ENV_FILENAME: Final = "env"
+
 
 class BindingError(RuntimeError):
     """An agent could not be bound to an account."""
@@ -70,18 +73,21 @@ class AccountBinding(ABC):
     def account_env(self, account_dir: Path) -> dict[str, str]:
         """The environment that scopes the harness's CLI to one account.
 
-        Only the scoping variable -- callers layer this over `os.environ` themselves, because
-        both `pexpect.spawn` and `Popen` REPLACE the environment rather than merging into it, and
-        a child without `PATH` never starts.
+        A CLI the chat app runs starts from `account_process_env`, which layers `cli_env` over the
+        server's environment, because both `pexpect.spawn` and `Popen` REPLACE the environment rather
+        than merging into it, and a child without `PATH` never starts.
         """
 
     def cli_env(self, account_dir: Path) -> dict[str, str]:
         """The environment the chat app runs the harness's CLI under for one account, outside any agent.
 
-        ``account_env``, plus whatever the CLI must be told when no agent's launch sets it. Layered
-        over `os.environ` the same way.
+        ``account_env``, plus whatever the CLI must be told when no agent's launch sets it.
         """
         return self.account_env(account_dir)
+
+    def account_process_env(self, account_dir: Path) -> dict[str, str]:
+        """The whole environment a run of the harness's CLI on one account starts with: ``cli_env`` over os.environ."""
+        return {**os.environ, **self.cli_env(account_dir)}
 
     @abstractmethod
     def credential_paths(self, account_dir: Path) -> tuple[Path, ...]:
@@ -183,3 +189,17 @@ def _replace_symlink(source: Path, dest: Path) -> None:
     temp_path.unlink(missing_ok=True)
     os.symlink(source, temp_path)
     os.replace(temp_path, dest)
+
+
+def rewrite_env_var(env_path: Path, key: str, value: str) -> None:
+    """Set one ``KEY=VALUE`` line in an env file mngr wrote, keeping every other line as it is."""
+    lines = env_path.read_text().splitlines() if env_path.exists() else []
+    kept = [line for line in lines if not line.startswith(f"{key}=")]
+    # mngr's own quoting rule for the values it writes.
+    is_quoted = any(character in value for character in (" ", '"', "'", "\n"))
+    written = '"' + value.replace('"', '\\"') + '"' if is_quoted else value
+    temp_path = env_path.with_name(f"{env_path.name}.rebind-tmp")
+    temp_path.write_text("\n".join([*kept, f"{key}={written}"]) + "\n")
+    if env_path.exists():
+        temp_path.chmod(env_path.stat().st_mode & 0o777)
+    os.replace(temp_path, env_path)
