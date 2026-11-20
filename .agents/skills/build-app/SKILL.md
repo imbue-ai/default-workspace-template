@@ -121,7 +121,7 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   it.
 - **Do not pick a port: the workspace allocates one.** Both paths register the
   app through `app-install` (the scaffolder calls it for you; the wrap-existing
-  escape hatch runs `uv run --no-sync app-install add <name>`). It gives the
+  escape hatch runs `uv run --no-sync app-install add <package>`). It gives the
   app the lowest port at or above 8080 that no supervisord program, no row of
   `data/.state/apps.toml` and no other app's record holds, that is not one of
   the Screen's ports, and that nothing is listening on, so manual port checks
