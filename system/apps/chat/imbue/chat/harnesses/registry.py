@@ -367,7 +367,7 @@ class HarnessSpec(FrozenModel):
     # How the chat app asks this harness one question on a chat's account, outside the chat (a new
     # chat's name). None for a harness that cannot yet: its chats keep the name they were minted with.
     one_shot_completion_class: type[OneShotCompletion] | None = None
-    # The connectors kept on the provider account's own side, and each agent's switch for loading them
+    # The connectors kept on the provider account's own side, and the workspace's switch for loading them
     # (``harnesses/cloud_connections.py``). None for a harness whose provider keeps none.
     cloud_connections_class: type[CloudConnections] | None = None
     # Whether mngr can compact this harness's context (the autocompact plugin's request), which is

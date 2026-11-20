@@ -1,5 +1,5 @@
 """Codex's cloud connections: the ``app/list`` exchange over a scripted transport, the probe's failure
-against a stub ``codex`` on PATH, and the ``features.apps`` flag in an agent's own config."""
+against a stub ``codex`` on PATH."""
 
 import json
 import os
@@ -8,15 +8,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import tomlkit
 
 from imbue.chat.harnesses.cloud_connections import CloudConnectionsError
 from imbue.chat.harnesses.codex.cloud_connections import CodexCloudConnections
 from imbue.chat.harnesses.codex.cloud_connections import list_connected_apps
 from imbue.mngr_codex.app_server_client import CodexAppServerClient
 from imbue.mngr_codex.app_server_client import CodexAppServerError
-from imbue.mngr_codex.codex_config import get_codex_config_path
-from imbue.mngr_codex.codex_config import get_codex_home
 
 
 class _AppListTransport:
@@ -47,13 +44,6 @@ class _AppListTransport:
 
 def _app(name: str, is_accessible: bool) -> dict[str, Any]:
     return {"id": name.lower(), "name": name, "isAccessible": is_accessible, "isEnabled": True}
-
-
-def _agent_config(tmp_path: Path, text: str) -> Path:
-    codex_home = get_codex_home(tmp_path)
-    codex_home.mkdir(parents=True)
-    get_codex_config_path(codex_home).write_text(text)
-    return tmp_path
 
 
 def test_only_the_apps_connected_on_the_account_are_named(tmp_path: Path) -> None:
@@ -97,49 +87,3 @@ def test_a_codex_that_does_not_come_up_is_reported_as_no_list(tmp_path: Path, mo
         CodexCloudConnections().list_connected(tmp_path)
 
     assert seen.read_text().startswith("-c features.apps=true app-server --listen unix://")
-
-
-@pytest.mark.parametrize(
-    ("config", "expected"),
-    [
-        ("[features]\napps = false\nmemories = false\n", False),
-        ("[features]\napps = true\n", True),
-        ("[features]\nmemories = false\n", True),
-        ('model = "gpt-6.1-sol"\n', True),
-    ],
-)
-def test_an_agent_loads_the_apps_unless_its_config_turns_them_off(tmp_path: Path, config: str, expected: bool) -> None:
-    assert CodexCloudConnections().is_enabled(_agent_config(tmp_path, config)) is expected
-
-
-def test_enabling_flips_the_one_flag_and_keeps_the_rest_of_the_config(tmp_path: Path) -> None:
-    agent_state_dir = _agent_config(
-        tmp_path, 'model = "gpt-6.1-sol"\n\n[features]\nmemories = false\napps = false\nunified_exec_tty = false\n'
-    )
-    connections = CodexCloudConnections()
-
-    connections.enable(agent_state_dir)
-
-    assert connections.is_enabled(agent_state_dir)
-    config = tomlkit.parse(get_codex_config_path(get_codex_home(agent_state_dir)).read_text()).unwrap()
-    assert config == {
-        "model": "gpt-6.1-sol",
-        "features": {"memories": False, "apps": True, "unified_exec_tty": False},
-    }
-
-
-def test_enabling_adds_the_flag_to_a_config_with_no_features_table(tmp_path: Path) -> None:
-    agent_state_dir = _agent_config(tmp_path, 'model = "gpt-6.1-sol"\n')
-
-    CodexCloudConnections().enable(agent_state_dir)
-
-    config = tomlkit.parse(get_codex_config_path(get_codex_home(agent_state_dir)).read_text()).unwrap()
-    assert config == {"model": "gpt-6.1-sol", "features": {"apps": True}}
-
-
-def test_an_agent_with_no_config_cannot_be_read_or_switched(tmp_path: Path) -> None:
-    connections = CodexCloudConnections()
-    with pytest.raises(CloudConnectionsError, match="unreadable"):
-        connections.is_enabled(tmp_path)
-    with pytest.raises(CloudConnectionsError, match="unreadable"):
-        connections.enable(tmp_path)

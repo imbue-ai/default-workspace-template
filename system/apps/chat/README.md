@@ -1008,10 +1008,12 @@ as shown, since a window for each is worse than missing one.
 
 A Claude subscription or a ChatGPT account can have third-party services connected on the
 provider's own side (claude.ai connectors, ChatGPT apps), which claude and codex load as MCP
-servers the provider hosts. The workspace turns that off for every agent (`.mngr/settings.toml`:
-`ENABLE_CLAUDEAI_MCP_SERVERS=false` in each agent's own env file, `features.apps = false` in each codex
-agent's config), because those connections reach a service without the latchkey gateway and the
-permissions granted there. A permission card can offer the way around
+servers the provider hosts. The workspace turns that off for every agent, because those connections reach
+a service without the latchkey gateway and the permissions granted there. One line of the host's
+env file is the switch for both harnesses (`.mngr/settings.toml`): `ENABLE_CLAUDEAI_MCP_SERVERS=false`,
+which Claude Code reads itself and which each codex agent is started with as
+`-c features.apps=${ENABLE_CLAUDEAI_MCP_SERVERS:-false}`, over the `features.apps = false` in its config.
+mngr sources the host's env file at every agent start and never rewrites it. A permission card can offer the way around
 (`cloud_connections.py`, `harnesses/cloud_connections.py`).
 
 When an account signs in, the chat app asks its provider once, on a thread of its own, which
@@ -1029,22 +1031,23 @@ visiting agent is admitted), the request comes from the owner, and one of the ac
 connectors is named like the service: its name contains the service's catalog key read as words
 and without a trailing `-mcp` (`google-gmail` as "google gmail"), or the catalog's display name
 without a parenthesized transport ("Notion (MCP)" as "notion"), whatever the case. Whether an
-agent loads the connections is read off the agent itself each time (the `ENABLE_CLAUDEAI_MCP_SERVERS`
-line its env file or its host's leaves it with; `features.apps` in its `config.toml`), so nothing
-else records it.
+agent loads the connections is read each time off the switch and the agent itself: the switch is
+on, and the agent's process started after the host's env file was last written (the marker its
+harness touches at each start). So a chat that was running when another chat turned the switch on
+is still offered it, and taking the offer there only restarts it.
 
-The claude line sits in the agent's own env file because a variable the host's env file sets
-cannot be overridden per agent: the interactive shell an agent is launched from sources the
-host's file again (`~/.bashrc`) after mngr has applied the agent's. A workspace created while the
-default was still written to the host's file therefore keeps the connectors off for every claude
-agent, and no offer is made there.
+The switch is the host's line, not one in an agent's own env file, because the host's value wins
+for a claude agent whatever its own file says: the interactive shell it is launched from sources
+the host's file again (`~/.bashrc`) after mngr has applied the agent's. The variable must stay out
+of the agents' own files, since the codex daemon's shell reads those last.
 
 The offer is one line under the card's button; opening it shows that it circumvents Imbue
 Studio's permission guarantees and a button that takes it,
-`POST /api/chats/<chat-id>/cloud-connections/enable` with the request's id. That sets the agent's
-own switch (which only that agent reads, so other chats and new ones are unaffected), removes the
+`POST /api/chats/<chat-id>/cloud-connections/enable` with the request's id. That turns the
+workspace's switch on (for every agent that starts from then on: new chats, restarted ones, and
+background agents, each with the connections of the account it runs on), removes the
 permission request from the gateway (`DELETE /permission-requests/<id>`, which Imbue Studio hears
-of), restarts the agent, since both harnesses read the switch as they start, and sends it a
+of), restarts the chat's agent, since both harnesses read the switch as they start, and sends it a
 notice saying what happened. The notice carries the permission-resolution tag with a verdict of
 its own (`cloud_connections`), so the page draws no row for it and the card reads "Cloud
 connections enabled instead". Messages queued for the agent are sent again after the notice. The

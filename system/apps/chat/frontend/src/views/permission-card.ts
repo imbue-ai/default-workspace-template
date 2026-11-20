@@ -427,9 +427,10 @@ function renderCloudConnectionsOffer(offer: CloudConnectionsOfferView): m.Vnode 
               m.trust(icon("alert", { size: 13, className: "mt-0.5 shrink-0" })),
               m(
                 "span",
-                "This circumvents Imbue Studio's permission guarantees: the agent in this chat will be able to use " +
-                  `every service connected on your ${offer.providerName} account, without the permissions you grant ` +
-                  "here. The chat restarts to apply it.",
+                "This circumvents Imbue Studio's permission guarantees: every agent in this workspace will be able to " +
+                  `use every service connected on your ${offer.providerName} account, or on whichever account it ` +
+                  "runs on, without the permissions you grant here. This chat restarts to apply it; other chats " +
+                  "pick it up when they next restart.",
               ),
             ],
           ),

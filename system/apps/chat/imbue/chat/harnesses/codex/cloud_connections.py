@@ -1,9 +1,9 @@
 """Codex's cloud connections: the apps (connectors) of a ChatGPT account.
 
 A codex signed in with ChatGPT loads the apps connected on that account through one MCP server
-OpenAI hosts (``codex_apps``), unless ``features.apps`` is off in its config. The workspace turns
-it off in every agent's ``config.toml`` (``.mngr/settings.toml``), so an agent loads them only
-once its own config says ``apps = true``; codex reads that when the agent's thread is loaded.
+OpenAI hosts (``codex_apps``), unless ``features.apps`` is off. Every agent's ``config.toml`` turns
+it off (``.mngr/settings.toml``), and the command line each agent's codex is started with overrides
+that from the workspace's switch (``harnesses/cloud_connections.py``).
 
 The list is asked of the account's own codex, the way its models are
 (:mod:`~imbue.chat.harnesses.codex.account_models`): a short-lived ``codex app-server`` bound to
@@ -14,24 +14,20 @@ with an API key has no apps, and its codex answers with an empty list.
 import json
 import tempfile
 import time
-from collections.abc import MutableMapping
 from pathlib import Path
 from typing import Any
+from typing import ClassVar
 from typing import Final
 
-import tomlkit
 from loguru import logger as _loguru_logger
-from tomlkit.exceptions import ParseError
 
 from imbue.chat.harnesses.cloud_connections import CloudConnections
 from imbue.chat.harnesses.cloud_connections import CloudConnectionsError
 from imbue.chat.harnesses.codex.account_models import AccountModelProbeError
 from imbue.chat.harnesses.codex.account_models import ask_codex_account
-from imbue.mngr.utils.file_utils import atomic_write
 from imbue.mngr_codex.app_server_client import CodexAppServerClient
 from imbue.mngr_codex.app_server_client import CodexAppServerError
-from imbue.mngr_codex.codex_config import get_codex_config_path
-from imbue.mngr_codex.codex_config import get_codex_home
+from imbue.mngr_codex.codex_config import PROCESS_STARTED_MARKER_FILENAME
 
 logger = _loguru_logger
 
@@ -105,19 +101,12 @@ def list_connected_apps(client: CodexAppServerClient) -> tuple[str, ...]:
     raise CodexAppServerError(f"codex app-server request {_APP_LIST_METHOD!r} timed out")
 
 
-def _read_config(config_path: Path) -> tomlkit.TOMLDocument:
-    try:
-        text = config_path.read_text()
-    except OSError as e:
-        raise CloudConnectionsError(f"the codex config at {config_path} is unreadable: {e}") from e
-    try:
-        return tomlkit.parse(text)
-    except ParseError as e:
-        raise CloudConnectionsError(f"the codex config at {config_path} is not TOML: {e}") from e
-
-
 class CodexCloudConnections(CloudConnections):
-    """The apps of the ChatGPT account, and the ``features.apps`` flag that makes one agent load them."""
+    """The apps of the ChatGPT account."""
+
+    process_started_marker_filename: ClassVar[str] = PROCESS_STARTED_MARKER_FILENAME
+    # codex is started with the apps off unless the variable turns them on.
+    is_on_when_unset: ClassVar[bool] = False
 
     def list_connected(self, account_dir: Path) -> tuple[str, ...]:
         # A socket of its own rather than the account's: the account's is taken, under its probe
@@ -135,25 +124,3 @@ class CodexCloudConnections(CloudConnections):
                 )
             except AccountModelProbeError as e:
                 raise CloudConnectionsError(str(e)) from e
-
-    def is_enabled(self, agent_state_dir: Path) -> bool:
-        features = _read_config(get_codex_config_path(get_codex_home(agent_state_dir))).get(_FEATURES_TABLE)
-        # codex loads the apps unless its config turns them off.
-        return not isinstance(features, MutableMapping) or features.get(_APPS_FEATURE) is not False
-
-    def enable(self, agent_state_dir: Path) -> None:
-        config_path = get_codex_config_path(get_codex_home(agent_state_dir))
-        document = _read_config(config_path)
-        features = document.get(_FEATURES_TABLE)
-        if features is None:
-            features = tomlkit.table()
-            document[_FEATURES_TABLE] = features
-        if not isinstance(features, MutableMapping):
-            raise CloudConnectionsError(
-                f"the codex config at {config_path} has a [{_FEATURES_TABLE}] that is no table"
-            )
-        features[_APPS_FEATURE] = True
-        try:
-            atomic_write(config_path, tomlkit.dumps(document))
-        except OSError as e:
-            raise CloudConnectionsError(f"the codex config at {config_path} could not be written: {e}") from e

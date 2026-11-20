@@ -9,7 +9,7 @@ from loguru import logger as _loguru_logger
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.account_binding import AccountBinding
 from imbue.chat.harnesses.account_binding import DefaultCreateBinding
-from imbue.chat.harnesses.claude.agent_env import rewrite_agent_env_var
+from imbue.chat.harnesses.agent_env import rewrite_agent_env_var
 from imbue.chat.harnesses.claude.session_files import claude_session_ids
 from imbue.chat.harnesses.claude.session_files import move_claude_sessions
 from imbue.mngr_claude.claude_config import auto_dismiss_claude_dialogs

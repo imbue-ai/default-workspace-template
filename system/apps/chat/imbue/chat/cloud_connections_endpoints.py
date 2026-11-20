@@ -2,11 +2,12 @@
 cloud connections, and taking it.
 
 The card asks the GET whether to make the offer for the service its request names
-(``cloud_connections.offer_for``). Taking it is the POST: the chat's agent is set to load its
-account's connections, the permission request is withdrawn from the gateway, the agent is
-restarted (it reads the switch only as it starts), and it is told what happened in a notice the
-page draws no row for. The switch is written first and stays written whatever follows, so a
-restart that fails here still takes effect on the agent's next start.
+(``cloud_connections.offer_for``). Taking it is the POST: the workspace's switch for its
+agents' cloud connections is turned on, the permission request is withdrawn from the gateway, the
+chat's agent is restarted (an agent reads the switch only as it starts), and it is told what
+happened in a notice the page draws no row for. The switch is written first and stays written
+whatever follows, so a restart that fails here still takes effect on the agent's next start. Every
+other agent in the workspace gets the connections of its own account when it next starts too.
 
 Kept out of server.py like the other endpoint modules; what it needs from the router -- a chat's
 agent, restarting it, and sending it a message -- comes through the ``CloudConnectionsChatBridge``
@@ -71,7 +72,7 @@ class EnableCloudConnectionsBody(FrozenModel):
 
 
 class EnableCloudConnectionsResponse(FrozenModel):
-    """What taking the offer did, beyond setting the agent's switch and restarting it."""
+    """What taking the offer did, beyond turning the workspace's switch on and restarting the chat's agent."""
 
     is_request_withdrawn: bool = Field(description="Whether the permission request was removed from the gateway")
     is_notice_delivered: bool = Field(description="Whether the restarted agent was told what happened")

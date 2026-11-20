@@ -2,6 +2,7 @@
 permission request, the restart, and the notice -- over a recording bridge in place of the router's and a
 scripted gateway."""
 
+import os
 from pathlib import Path
 
 import httpx
@@ -44,14 +45,15 @@ def _gateway(requests: list[httpx.Request], delete_status: int = 200) -> httpx.C
 
 
 def _claude_agent(tmp_path: Path, connected: tuple[str, ...]) -> AgentInfo:
-    """A claude agent whose own env file turns the connectors off, on an account with ``connected`` recorded."""
+    """A claude agent whose host turns the connectors off, on an account with ``connected`` recorded."""
     account_id, account_path = accounts.mint_account_dir()
     accounts.commit_account(account_id, "anthropic", "Anthropic")
     (account_path / CONNECTED_FILENAME).write_text(ConnectedConnectors(names=connected).model_dump_json())
     host_dir = tmp_path / "host"
     agent_state_dir = host_dir / "agents" / "agent-1"
     agent_state_dir.mkdir(parents=True)
-    (agent_state_dir / "env").write_text(f"MNGR_HOST_DIR={host_dir}\nENABLE_CLAUDEAI_MCP_SERVERS=false\n")
+    (host_dir / "env").write_text("ENABLE_CLAUDEAI_MCP_SERVERS=false\n")
+    (agent_state_dir / "env").write_text(f"MNGR_HOST_DIR={host_dir}\n")
     return AgentInfo(
         id="agent-1",
         name="chat-1",
@@ -61,6 +63,16 @@ def _claude_agent(tmp_path: Path, connected: tuple[str, ...]) -> AgentInfo:
         labels={"account": account_id},
         harness=HarnessType.CLAUDE,
     )
+
+
+def _switch(agent_info: AgentInfo) -> str:
+    """The workspace's switch, as the host's env file holds it."""
+    return (agent_info.agent_state_dir.parent.parent / "env").read_text()
+
+
+def _start(agent_info: AgentInfo) -> None:
+    """What the agent's harness leaves behind each time its process starts."""
+    (agent_info.agent_state_dir / ClaudeCloudConnections.process_started_marker_filename).touch()
 
 
 def _client(
@@ -131,7 +143,7 @@ def test_no_offer_to_a_visitor_in_a_shared_workspace_on_a_preview_or_without_a_s
     assert _offer(preview)["is_offered"] is False
 
 
-def test_taking_the_offer_switches_the_agent_withdraws_the_request_restarts_and_tells_the_agent(
+def test_taking_the_offer_switches_the_workspace_withdraws_the_request_restarts_and_tells_the_agent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     agent_info = _claude_agent(tmp_path, ("Gmail",))
@@ -143,7 +155,7 @@ def test_taking_the_offer_switches_the_agent_withdraws_the_request_restarts_and_
 
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"is_request_withdrawn": True, "is_notice_delivered": True}
-    assert ClaudeCloudConnections().is_enabled(agent_info.agent_state_dir)
+    assert _switch(agent_info) == "ENABLE_CLAUDEAI_MCP_SERVERS=true\n"
     (withdrawal,) = gateway_requests
     assert (withdrawal.method, withdrawal.url.path) == ("DELETE", "/permission-requests/req-7")
     assert withdrawal.headers["x-latchkey-device"] == "*"
@@ -160,7 +172,8 @@ def test_taking_the_offer_switches_the_agent_withdraws_the_request_restarts_and_
         "cloud_connections",
         "req-7",
     )
-    # Once the agent loads them there is nothing left to offer, or to take a second time.
+    # Once the agent has started with them there is nothing left to offer, or to take a second time.
+    _start(agent_info)
     assert _offer(client)["is_offered"] is False
     again = client.post(f"/api/chats/{_CHAT}/cloud-connections/enable", json={"request_id": "req-7"})
     assert again.status_code == 409
@@ -178,7 +191,7 @@ def test_the_switch_stays_set_when_the_request_cannot_be_withdrawn_or_the_notice
     assert response.status_code == 200, response.get_json()
     assert response.get_json() == {"is_request_withdrawn": False, "is_notice_delivered": False}
     assert bridge.restarted == [_CHAT]
-    assert ClaudeCloudConnections().is_enabled(agent_info.agent_state_dir)
+    assert _switch(agent_info) == "ENABLE_CLAUDEAI_MCP_SERVERS=true\n"
 
 
 def test_a_restart_that_fails_is_a_500_with_the_switch_already_set(
@@ -193,7 +206,7 @@ def test_a_restart_that_fails_is_a_500_with_the_switch_already_set(
     assert response.status_code == 500
     assert "would not start" in response.get_json()["detail"]
     assert bridge.sent == []
-    assert ClaudeCloudConnections().is_enabled(agent_info.agent_state_dir)
+    assert _switch(agent_info) == "ENABLE_CLAUDEAI_MCP_SERVERS=true\n"
 
 
 def test_taking_the_offer_is_refused_where_it_is_never_made(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -228,7 +241,29 @@ def test_taking_the_offer_is_refused_where_it_is_never_made(tmp_path: Path, monk
     _share_workspace(tmp_path / "preview")
     assert client.post(path, json=body).status_code == 403
 
-    assert not ClaudeCloudConnections().is_enabled(agent_info.agent_state_dir)
+    assert _switch(agent_info) == "ENABLE_CLAUDEAI_MCP_SERVERS=false\n"
     assert gateway_requests == []
     assert bridge.restarted == []
     assert bridge.sent == []
+
+
+def test_a_chat_that_started_before_the_switch_was_turned_on_is_still_offered_it_and_only_restarted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another chat turned the workspace's switch on while this one was running: its agent has none of the
+    connections yet, so its card still offers them, and taking the offer restarts it without rewriting the switch."""
+    agent_info = _claude_agent(tmp_path, ("Gmail",))
+    _start(agent_info)
+    host_env = agent_info.agent_state_dir.parent.parent / "env"
+    host_env.write_text("ENABLE_CLAUDEAI_MCP_SERVERS=true\n")
+    switched_at = (agent_info.agent_state_dir / ClaudeCloudConnections.process_started_marker_filename).stat().st_mtime + 60
+    os.utime(host_env, (switched_at, switched_at))
+    bridge = RecordingCloudConnectionsBridge(agents_by_chat_id={_CHAT: agent_info})
+    client = _client(tmp_path, monkeypatch, bridge, [])
+    assert _offer(client)["is_offered"] is True
+
+    response = client.post(f"/api/chats/{_CHAT}/cloud-connections/enable", json={"request_id": "req-7"})
+
+    assert response.status_code == 200, response.get_json()
+    assert bridge.restarted == [_CHAT]
+    assert host_env.stat().st_mtime == switched_at

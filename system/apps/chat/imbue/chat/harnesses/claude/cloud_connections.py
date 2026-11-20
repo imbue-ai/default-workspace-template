@@ -2,13 +2,7 @@
 
 Claude Code fetches the connectors of the claude.ai account it is signed in to and loads each as
 an MCP server Anthropic hosts, unless ``ENABLE_CLAUDEAI_MCP_SERVERS`` says otherwise in its
-environment when it starts. The workspace sets that to ``false`` in every agent's own env file
-(``env`` under ``[commands.create]`` in ``.mngr/settings.toml``), so an agent loads them only once
-that line says ``true``.
-
-A workspace created while the default was written to the host's env file instead keeps the
-connectors off for every agent: the host's line wins over an agent's (``agent_env.py``), so no
-agent's switch can turn them on there, and its switch counts as unreadable.
+environment when it starts: the workspace's switch (``harnesses/cloud_connections.py``).
 
 The list is read from the endpoint Claude Code itself reads it from, with the access token a
 subscription sign-in (``claude auth login``) leaves in the account folder. An account signed in
@@ -18,19 +12,14 @@ any other way (an API key, a long-lived token) holds no such token and has no co
 import json
 from pathlib import Path
 from typing import Any
+from typing import ClassVar
 from typing import Final
 
 import httpx
 
-from imbue.chat.harnesses.claude.agent_env import read_agent_env_var
-from imbue.chat.harnesses.claude.agent_env import read_host_env_var
-from imbue.chat.harnesses.claude.agent_env import rewrite_agent_env_var
+from imbue.chat.harnesses.claude.tap import CLAUDE_PROCESS_STARTED_MARKER_FILENAME
 from imbue.chat.harnesses.cloud_connections import CloudConnections
 from imbue.chat.harnesses.cloud_connections import CloudConnectionsError
-
-CLAUDEAI_MCP_SERVERS_ENV_VAR: Final = "ENABLE_CLAUDEAI_MCP_SERVERS"
-# The values Claude Code reads as "off"; anything else, and the variable unset, leaves the connectors on.
-_DISABLING_VALUES: Final = frozenset(("0", "false", "no", "off"))
 
 _CREDENTIALS_FILENAME: Final = ".credentials.json"
 _CONNECTORS_URL: Final = "https://api.anthropic.com/v1/mcp_servers"
@@ -79,12 +68,12 @@ def _connector_names(page: Any) -> list[str]:
     ]
 
 
-def _is_disabling(value: str) -> bool:
-    return value.strip().lower() in _DISABLING_VALUES
-
-
 class ClaudeCloudConnections(CloudConnections):
-    """The claude.ai connectors of the account, and the env line that makes one agent load them."""
+    """The claude.ai connectors of the account."""
+
+    process_started_marker_filename: ClassVar[str] = CLAUDE_PROCESS_STARTED_MARKER_FILENAME
+    # Claude Code loads the connectors unless the variable turns them off.
+    is_on_when_unset: ClassVar[bool] = True
 
     # What the list is fetched over; None for httpx's own, the network. A test hands in a scripted one.
     _transport: httpx.BaseTransport | None = None
@@ -121,24 +110,3 @@ class ClaudeCloudConnections(CloudConnections):
                     break
                 params = {"limit": str(_PAGE_SIZE), "page": next_page}
         return tuple(dict.fromkeys(names))
-
-    def is_enabled(self, agent_state_dir: Path) -> bool:
-        try:
-            host_value = read_host_env_var(agent_state_dir, CLAUDEAI_MCP_SERVERS_ENV_VAR)
-            value = read_agent_env_var(agent_state_dir, CLAUDEAI_MCP_SERVERS_ENV_VAR)
-        except OSError as e:
-            raise CloudConnectionsError(f"the env files of the agent at {agent_state_dir} are unreadable: {e}") from e
-        if host_value is not None and _is_disabling(host_value):
-            raise CloudConnectionsError(
-                f"the host of the agent at {agent_state_dir} turns the connectors off for all of its agents, "
-                "which no agent's own env file can override"
-            )
-        return value is None or not _is_disabling(value)
-
-    def enable(self, agent_state_dir: Path) -> None:
-        try:
-            rewrite_agent_env_var(agent_state_dir, CLAUDEAI_MCP_SERVERS_ENV_VAR, "true")
-        except OSError as e:
-            raise CloudConnectionsError(
-                f"the env file of the agent at {agent_state_dir} could not be written: {e}"
-            ) from e

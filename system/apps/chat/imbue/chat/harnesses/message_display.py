@@ -215,7 +215,7 @@ def format_cloud_connections_notice(provider_name: str, request_id: str) -> str:
     """
     tag = f"(resolution: {CLOUD_CONNECTIONS_RESOLUTION}, request_id: {request_id})"
     return (
-        f"The user chose to enable the cloud MCP connections of their {provider_name} account for this chat instead "
+        f"The user chose to enable the cloud MCP connections of their {provider_name} account instead "
         f"of answering your permission request, which has been withdrawn; do not send it again. You were restarted "
         f"so those connections load: the services connected on that account are now tools in your tool list. Use "
         f"them for what you needed the permission for. {tag}"

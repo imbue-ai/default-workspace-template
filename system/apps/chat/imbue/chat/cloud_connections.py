@@ -4,12 +4,12 @@ A user may already have connected a service on their Anthropic or OpenAI account
 connector, a ChatGPT app). The workspace keeps its agents from loading those, since they reach the
 service without the latchkey gateway and the permissions granted there
 (``harnesses/cloud_connections.py``). When an agent asks for permission to a service the user's
-account already has connected, the permission card offers the way around: turn the account's
-connections on for the chat's agent and restart it.
+account already has connected, the permission card offers the way around: turn the workspace's
+one switch for them on, which every agent reads as it starts, and restart the chat's agent.
 
 Which connectors an account has is asked once, when the account signs in, on a thread of its own,
 and kept in the account's folder; a failure leaves nothing there and no offer is ever made for the
-account. Whether an agent already loads them is read off the agent itself each time.
+account. Whether an agent already loads them is read off the switch and the agent's start each time.
 
 Nothing is offered in a shared workspace: the connections are the account owner's, and an agent
 there takes messages from people who are not.

@@ -28,18 +28,14 @@ _GMAIL = ("google-gmail", "Gmail")
 class _ScriptedConnections(CloudConnections):
     """Answers the connector list with what a test scripts: names, or a failure."""
 
+    process_started_marker_filename = "scripted_process_started"
+    is_on_when_unset = False
     names: tuple[str, ...] | None = None
 
     def list_connected(self, account_dir: Path) -> tuple[str, ...]:
         if self.names is None:
             raise CloudConnectionsError("the provider would not say")
         return self.names
-
-    def is_enabled(self, agent_state_dir: Path) -> bool:
-        return False
-
-    def enable(self, agent_state_dir: Path) -> None:
-        pass
 
 
 def _scripted(names: tuple[str, ...] | None) -> _ScriptedConnections:
@@ -54,13 +50,16 @@ def _account(home: Path, lane: str = "anthropic") -> accounts.Account:
 
 
 def _claude_agent(tmp_path: Path, account_id: str | None, is_enabled: bool = False) -> AgentInfo:
-    """A claude agent whose own env file turns the connectors off, as the workspace writes it."""
+    """A claude agent whose host turns the connectors off, as the workspace's does."""
     host_dir = tmp_path / "host"
     agent_state_dir = host_dir / "agents" / "agent-1"
     agent_state_dir.mkdir(parents=True)
-    (agent_state_dir / "env").write_text(f"MNGR_HOST_DIR={host_dir}\nENABLE_CLAUDEAI_MCP_SERVERS=false\n")
+    (host_dir / "env").write_text("ENABLE_CLAUDEAI_MCP_SERVERS=false\n")
+    (agent_state_dir / "env").write_text(f"MNGR_HOST_DIR={host_dir}\n")
     if is_enabled:
         ClaudeCloudConnections().enable(agent_state_dir)
+        # The agent's process started after the switch was turned on.
+        (agent_state_dir / ClaudeCloudConnections.process_started_marker_filename).touch()
     return AgentInfo(
         id="agent-1",
         name="chat-1",
