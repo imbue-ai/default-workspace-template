@@ -1,3 +1,4 @@
+import os
 from collections.abc import Generator
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
@@ -6,6 +7,11 @@ from threading import Thread
 import pytest
 
 _HTTP_FORBIDDEN = 403
+_FAILING_SUPERVISORCTL = """\
+#!/bin/sh
+echo "no supervisord runs beside a test's tree" >&2
+exit 2
+"""
 
 
 class RepositoryHostStandIn(ThreadingHTTPServer):
@@ -44,6 +50,17 @@ def no_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test reads a repository through the gateway of the workspace it happens to run in."""
     for name in ("LATCHKEY_GATEWAY", "LATCHKEY_GATEWAY_PASSWORD", "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"):
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def no_supervisord(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """No test reaches the supervisord of the workspace it happens to run in: ``supervisorctl`` finds that one
+    from any directory, and would have it apply whatever program files are waiting there."""
+    directory = tmp_path_factory.mktemp("no-supervisord")
+    stub = directory / "supervisorctl"
+    stub.write_text(_FAILING_SUPERVISORCTL)
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{directory}{os.pathsep}{os.environ.get('PATH', '')}")
 
 
 @pytest.fixture
