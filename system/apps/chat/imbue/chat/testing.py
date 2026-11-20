@@ -90,6 +90,7 @@ from imbue.chat.mentions import MentionStore
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import ChatSnapshot
+from imbue.chat.models import CreateFailureKind
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
@@ -1442,6 +1443,7 @@ def seed_failed_chat(
     account_id: str = "acct-1",
     message: str = "",
     labels: Mapping[str, str] | None = None,
+    failure_kind: CreateFailureKind | None = None,
 ) -> ProvisionalChat:
     """Plant a provisional chat whose create failed, as the manager holds one after ``mngr create`` exits non-zero:
     what the page's "Try again" relaunches under its id."""
@@ -1453,6 +1455,7 @@ def seed_failed_chat(
         labels=dict(labels or {}),
         phase=ProvisionalChatPhase.FAILED,
         error="mngr create exited with code 3",
+        failure_kind=failure_kind,
     )
     with agent_manager._lock:
         agent_manager._provisional_chats[chat_id] = proto

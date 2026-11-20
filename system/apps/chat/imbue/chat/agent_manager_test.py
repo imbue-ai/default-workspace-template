@@ -134,6 +134,7 @@ from imbue.chat.models import AgentStateItem
 from imbue.chat.models import AgentStopError
 from imbue.chat.models import ChatAccountBinding
 from imbue.chat.models import ChatConvergingError
+from imbue.chat.models import CreateFailureKind
 from imbue.chat.models import CreatedChat
 from imbue.chat.models import HandoffError
 from imbue.chat.models import HandoffFailedStep
@@ -1816,7 +1817,13 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
     ``mngr`` of this fixture fails at once, which would settle it again)."""
     # The account the conftest signed in: what the failed record binds to and the retry names.
     (signed_in,) = read_index().accounts
-    failed = seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1", account_id=signed_in.id)
+    failed = seed_failed_chat(
+        agent_manager,
+        ChatId("failed-1"),
+        "Chat 1",
+        account_id=signed_in.id,
+        failure_kind=CreateFailureKind.CODEX_PLUGIN_INSTALL_REFUSED,
+    )
     q = broadcaster.register()
 
     created = agent_manager.create_chat("", chat_id="failed-1", account_id=failed.account_id)
@@ -1836,6 +1843,7 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
         "labels": {},
         "phase": "creating",
         "error": None,
+        "failure_kind": None,
         "is_seeded": False,
         "held_sends": [],
         "model_pick": None,
@@ -2681,6 +2689,54 @@ def test_run_creation_leaves_a_failed_chat_in_the_failed_phase_with_the_output_t
     assert proto.error is not None
     assert proto.error.startswith("mngr create exited with code 3")
     assert "the real reason" in proto.error
+
+
+# What mngr prints when the Codex plugin installer, an extra provisioning command, refuses: mngr's wrap of the
+# command's stderr, which carries the installer's refusal marker (pinned in
+# ``system/scripts/codex_update_plugin_test.py`` too).
+_CODEX_INSTALLER_REFUSAL_OUTPUT = (
+    "Extra provision command failed: bash system/scripts/codex_update_plugin.sh\n"
+    "stderr: error: codex-plugin-install-refused: MNGR_AGENT_STATE_DIR is required; refusing a shared-home install"
+)
+
+
+@pytest.mark.parametrize(
+    ("harness", "output", "expected_kind"),
+    [
+        (HarnessType.CODEX, _CODEX_INSTALLER_REFUSAL_OUTPUT, CreateFailureKind.CODEX_PLUGIN_INSTALL_REFUSED),
+        (HarnessType.CODEX, "Extra provision command failed: true\nstderr: disk full", None),
+        (HarnessType.CLAUDE, _CODEX_INSTALLER_REFUSAL_OUTPUT, None),
+    ],
+    ids=["codex-refusal", "codex-other-failure", "claude-with-the-marker"],
+)
+def test_a_failed_create_records_and_tells_the_page_the_kind_of_failure_its_output_shows(
+    agent_manager: AgentManager,
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    harness: HarnessType,
+    output: str,
+    expected_kind: CreateFailureKind | None,
+) -> None:
+    """Only a Codex create whose output carries the installer's refusal is that refusal; the page is told the kind
+    with the failure, and the record keeps it for a page that connects later."""
+    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+    q = broadcaster.register()
+    cmd = ["sh", "-c", 'printf "%s\\n" "$0" >&2; exit 1', output]
+
+    agent_manager._run_creation(ChatId("test-id"), "test-id", "test-agent", cmd, tmp_path, {}, harness)
+
+    failed = agent_manager.get_provisional_chat("test-id")
+    assert failed is not None
+    assert failed.phase is ProvisionalChatPhase.FAILED
+    assert failed.failure_kind is expected_kind
+    assert failed.error is not None and output.splitlines()[-1] in failed.error
+    messages = []
+    while not q.empty():
+        raw = q.get_nowait()
+        assert raw is not None
+        messages.append(json.loads(raw))
+    [completed] = [message for message in messages if message["type"] == "provisional_chat_completed"]
+    assert completed.get("failure_kind") == (None if expected_kind is None else expected_kind.value)
 
 
 def test_handle_observe_line_empty_is_ignored(agent_manager: AgentManager) -> None:

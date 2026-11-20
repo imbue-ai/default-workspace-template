@@ -914,6 +914,14 @@ class ProvisionalChatPhase(LowerCaseStrEnum):
     FAILED = auto()
 
 
+class CreateFailureKind(LowerCaseStrEnum):
+    """A failed create the page words in its own sentence, read from what ``mngr create`` printed."""
+
+    # A Codex agent's plugin installer (``system/scripts/codex_update_plugin.sh``, an extra provisioning command)
+    # refused to install, so mngr could not set the agent up.
+    CODEX_PLUGIN_INSTALL_REFUSED = auto()
+
+
 class ProvisionalChat(FrozenModel):
     """A chat the app has minted but whose first agent mngr does not know yet.
 
@@ -931,6 +939,9 @@ class ProvisionalChat(FrozenModel):
     labels: dict[str, str] = Field(default_factory=dict, description="The extra labels its create was asked for")
     phase: ProvisionalChatPhase = Field(description="Where the creation stands")
     error: str | None = Field(default=None, description="Why the creation failed, in the failed phase")
+    failure_kind: CreateFailureKind | None = Field(
+        default=None, description="Which known failure the create hit, in the failed phase; None for any other"
+    )
     is_seeded: bool = Field(
         default=False,
         description="Whether the chat has a seed segment to show while it is created (``chat_seed.py``)",

@@ -1,0 +1,1 @@
+The Codex plugin installer (`system/scripts/codex_update_plugin.sh`) prints `error: codex-plugin-install-refused: <reason>` for both of its refusals, so the chat app can tell a Codex create the installer refused from any other failed create (see `system/apps/chat/changelog/gabriel-err-copy-w1c-codex-refusal.md`).

@@ -97,7 +97,13 @@ import { hasLandedLiveSwitch, hasOpenHandoffRequest, isTailTurnSettled, liveComp
 import { closeRunningCompactionChips } from "./compaction-chips";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
-import { AskAgentToFixButton, FailureRemedies } from "@imbue/workspace-ui/src/components/FailureButtons";
+import {
+  AskAgentToFixButton,
+  FailureRemedies,
+  ReportBugButton,
+} from "@imbue/workspace-ui/src/components/FailureButtons";
+import { withAskFailure } from "@imbue/workspace-ui/src/app_contract";
+import type { ShownFailure } from "@imbue/workspace-ui/src/app_contract";
 import { askConnectionToChat, chatToAskAboutFailedCreate } from "./ask-running-agent";
 import { SWITCH_PROVIDER_LABEL, chooseProviderInPlaceOf } from "./provider-switch";
 import {
@@ -120,6 +126,15 @@ const FAILED_CREATE_BUTTONS_CLASS =
   "flex flex-wrap items-center justify-center gap-2 " +
   "[&_.ask-agent-failure]:flex [&_.ask-agent-failure]:flex-col [&_.ask-agent-failure]:items-center " +
   "[&_.ask-agent-failure-message]:text-center";
+
+/** What the failed-create page says under its heading: a sign-in for a chat that names no account, else what failed,
+ *  worded by the failure's kind, and the page's ways out. */
+function failedCreateSentence(provisional: ProvisionalChat): string {
+  if (provisional.account_id === "") return "Sign in to a provider to start this chat.";
+  return provisional.failure_kind === "codex_plugin_install_refused"
+    ? "This chat's agent couldn't be set up. Try again, or switch to another provider."
+    : "The agent for this chat couldn't be started. Try again, or switch to another provider.";
+}
 
 function getChatTerminalUrl(chatId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
@@ -377,6 +392,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   let pageActionError: FailureLines | null = null;
   // A failed create's "Ask an agent to fix this" waiting for its answer: the page's other ways out wait with it.
   let askInFlight = false;
+  // What that ask's refusal said, which the page's Report a bug files with the create's failure.
+  let refusedAsk: ShownFailure | null = null;
 
   async function fetchScreenCapture(chatId: string): Promise<void> {
     if (screenAttemptedChatId === chatId) {
@@ -637,19 +654,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     }
     const hasAccount = provisional.account_id !== "";
     const chatToAskId = chatToAskAboutFailedCreate(provisional);
+    const sentence = failedCreateSentence(provisional);
     return m(
       "div",
       { class: "message-list-create-failed flex flex-col items-center justify-center h-full gap-4 p-8" },
       [
         ...renderFailedCreateHeldSends(chatId),
         m("p", { class: "type-heading text-primary" }, "This chat could not be started"),
-        m(
-          "p",
-          { class: "message-list-create-failed-text text-secondary text-center" },
-          hasAccount
-            ? "The agent for this chat couldn't be started. Try again, or switch to another provider."
-            : "Sign in to a provider to start this chat.",
-        ),
+        m("p", { class: "message-list-create-failed-text text-secondary text-center" }, sentence),
         m("div", { class: "text-secondary" }, m(SeeDetails, { details: provisional.error })),
         // A Try again that failed again is the page's own failure, which the page's ask (a running chat's, or none
         // where a new chat would meet it too) is about.
@@ -702,8 +714,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
             },
             "Remove this chat",
           ),
-          // Last in the row: the button says under itself what a refused ask came to, which then ends the page
-          // rather than sitting between its buttons.
+          // The agent first, then the page's one Report a bug, as every failure offers them. A refused ask is told
+          // under the ask's button, on a line of its own, and the report files it with the create's failure.
           chatToAskId === null
             ? null
             : m(AskAgentToFixButton, {
@@ -712,7 +724,17 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                   whatFailed: `The chat "${provisional.name}" couldn't be started`,
                   details: joinDetailLines([provisional.error, launchError?.details ?? null]),
                 },
+                pageReportBug: {
+                  onFailureChange: (failure) => {
+                    refusedAsk = failure;
+                  },
+                },
               }),
+          m(ReportBugButton, {
+            connection: getShellConnection(),
+            failure: withAskFailure({ message: sentence, details: provisional.error }, refusedAsk),
+            extra: "message-list-create-report-bug",
+          }),
         ]),
       ],
     );

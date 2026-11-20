@@ -209,6 +209,10 @@ export interface QueuedMessage extends DisplayDecision, MessageAuthor {
 /** Where a chat that is not an agent yet stands (the backend's ``ProvisionalChatPhase``). */
 export type ProvisionalChatPhase = "awaiting_first_send" | "creating" | "failed";
 
+/** A failed create the page words in its own sentence (the backend's ``CreateFailureKind``): a Codex agent's plugin
+ *  installer refused to install, so the agent couldn't be set up. */
+export type CreateFailureKind = "codex_plugin_install_refused";
+
 /** A chat the app minted but mngr does not know yet: the backend's ``ProvisionalChat`` as its
  *  ``ProvisionalChatAsShown`` sends it, its held sends as the page draws them. */
 export interface ProvisionalChat {
@@ -221,6 +225,8 @@ export interface ProvisionalChat {
   phase: ProvisionalChatPhase;
   // Why the create failed, in the failed phase.
   error: string | null;
+  // Which known failure the create hit, in the failed phase; null for any other.
+  failure_kind: CreateFailureKind | null;
   // Whether the chat has a seed segment to show while it is created: turns written before any agent
   // joined it (the Imbue Studio app's onboarding, or the main chat the app opens on an update). Its page
   // keeps the transcript and the composer up through the create rather than the provisional screens.
@@ -243,6 +249,8 @@ type WsEvent =
       error: string | null;
       // A discard's: the messages the chat held, dropped with it. Absent from any other completion.
       held_sends?: HeldSend[];
+      // A failed create's of a known kind. Absent from any other completion.
+      failure_kind?: CreateFailureKind;
     }
   | { type: "accounts_updated" };
 
@@ -475,8 +483,9 @@ function handleEvent(event: WsEvent): void {
         }
       } else {
         const error = event.error;
+        const failureKind = event.failure_kind ?? null;
         provisionalChats = provisionalChats.map((p) =>
-          p.chat_id === event.chat_id ? { ...p, phase: "failed", error } : p,
+          p.chat_id === event.chat_id ? { ...p, phase: "failed", error, failure_kind: failureKind } : p,
         );
         settleRegistration(event.chat_id, new ChatNotStartedError(error));
       }

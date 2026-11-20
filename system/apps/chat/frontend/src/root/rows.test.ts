@@ -13,6 +13,7 @@ function provisional(chatId: string, phase: ProvisionalChat["phase"], name = "")
     kind: "agent",
     phase,
     error: null,
+    failure_kind: null,
     is_seeded: false,
     held_sends: [],
     model_pick: null,
