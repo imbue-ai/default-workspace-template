@@ -1,6 +1,6 @@
 ---
 name: file-sharing
-description: Use to read and write files and directories on the user's local filesystem. Also useful for importing Apple Notes, Photos, and other similar locally stored data.
+description: Use to read and write files and directories on the user's local filesystem. For Mac app data (Notes, browser history, Reminders, Calendar, Messages, installed apps), use the read-app-data skill instead.
 metadata:
   author: imbue
 ---
@@ -10,6 +10,7 @@ metadata:
 ## Instructions
 
 Use this skill when the user asks you to work with files located directly on their computer.
+To read their Mac app data -- Notes, Safari or other browser history, Reminders, Calendar, Messages, recent code projects, shell history, or installed apps -- use the `read-app-data` skill instead: it asks for exactly those files by name, and never ask for `~/Library` here to reach them.
 To *run* something on their computer rather than read or write its files, see the `run-on-users-computer` skill instead; file sharing is the first thing it tells you to try.
 
 **First, look for a synced copy.** If the folder you need is already under

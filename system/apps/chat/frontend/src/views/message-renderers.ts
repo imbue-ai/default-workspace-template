@@ -30,6 +30,7 @@ import { AutocompactNotice } from "./AutocompactNotice";
 import { compactionChips, type CompactionPart } from "./compaction-chips";
 import { STRETCH_PIECES_CLASS, STRETCH_TEXT_EDGE_CLASS, renderAgentProse } from "./machine-bubbles";
 import { railNodeAttrs } from "./agent-rail";
+import { repliesFor, replyStateSignature } from "./reply-state";
 import { runningCallElapsed, runningToolCall } from "./ActivityIndicator";
 import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
 import { BADGE_PART } from "@imbue/workspace-ui/src/themes/parts";
@@ -198,6 +199,7 @@ export function StableAssistantMessage(): m.Component<{
   let renderedResultSignature = "";
   let renderedReauthSignature = "";
   let renderedRunningChipSignature = "";
+  let renderedReplySignature = "";
   let renderedIsStretchHead = false;
   let renderedDetailVersion = -1;
   let renderedExpansionVersion = -1;
@@ -223,6 +225,9 @@ export function StableAssistantMessage(): m.Component<{
         currentResultSignature !== renderedResultSignature ||
         reauthNoteSignature(event, chatId) !== renderedReauthSignature ||
         runningChipSignature(event, chatId) !== renderedRunningChipSignature ||
+        // Whether its reply buttons can be pressed lives outside the event: a user turn after it, a send on its
+        // way, the composer coming and going.
+        replyStateSignature(event, chatId) !== renderedReplySignature ||
         isStretchHead !== renderedIsStretchHead ||
         getEventDetailVersion(chatId) !== renderedDetailVersion ||
         // Opening a tool chip swaps WHICH detail panel exists, so it needs a
@@ -241,6 +246,7 @@ export function StableAssistantMessage(): m.Component<{
       renderedResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
       renderedReauthSignature = reauthNoteSignature(event, chatId);
       renderedRunningChipSignature = runningChipSignature(event, chatId);
+      renderedReplySignature = replyStateSignature(event, chatId);
       renderedIsStretchHead = isStretchHead;
       renderedDetailVersion = getEventDetailVersion(chatId);
       renderedExpansionVersion = getExpansionVersion();
@@ -781,6 +787,7 @@ function appendEventParts(
         expansionKeyPrefix: event.event_id,
         layout: isOnLine ? "bubble" : "plain",
         isStretchHead: placement.isStretchHead && children.length === 0,
+        replies: repliesFor(event, chatId),
       });
       if (prose !== null) children.push(prose);
     }

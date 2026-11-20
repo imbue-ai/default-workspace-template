@@ -281,6 +281,22 @@
   }
 }
 
+/* A reply button (markdown.ts, a `#reply=` link): a small button inline in the text, side by side with its siblings,
+   whose label wraps rather than overflowing the bubble. Plain CSS, so it wins over the button recipe's own height
+   and nowrap utilities without tying on their order in the bundle. */
+.markdown-content .message-reply-button {
+  height: auto;
+  min-height: 28px;
+  max-width: 100%;
+  margin: 2px 4px 2px 0;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  white-space: normal;
+  line-height: 1.3;
+  text-align: left;
+  vertical-align: middle;
+}
+
 .markdown-content .tool-call-block {
   cursor: pointer;
   margin-top: 0.75em;

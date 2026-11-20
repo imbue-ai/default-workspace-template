@@ -9,7 +9,7 @@
  */
 
 import m from "mithril";
-import { MarkdownContent } from "../markdown";
+import { MarkdownContent, type MarkdownReplies } from "../markdown";
 import { getWorkspaceAgent } from "../models/Participants";
 import { AgentRail, railNodeAttrs } from "./agent-rail";
 import { FACE_COLUMN_CLASS, TURN_FACE_SIZE_PX, participantPicture } from "./participant-picture";
@@ -40,6 +40,8 @@ export interface AgentProseAttrs {
   readonly layout: ProseLayout;
   /** The stretch's first piece: its corner squares toward the face beside it. */
   readonly isStretchHead: boolean;
+  /** How the prose's reply buttons send; absent where they cannot (they stay disabled). */
+  readonly replies?: MarkdownReplies;
 }
 
 /** The agent's prose. Null for whitespace-only text (a lone newline before a tool call), which draws nothing. */
@@ -50,6 +52,7 @@ export function renderAgentProse(attrs: AgentProseAttrs): m.Vnode | null {
     content: trimmed,
     requestedAt: attrs.timestamp,
     expansionKeyPrefix: attrs.expansionKeyPrefix,
+    replies: attrs.replies,
   });
   if (attrs.layout === "plain") return m("div", { class: "agent-prose", "data-agent-prose": "" }, content);
   return m(

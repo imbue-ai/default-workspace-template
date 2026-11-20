@@ -971,3 +971,56 @@ describe("the auth-error note's switch link", () => {
     expect(findButton(children, "Sign in again")).not.toBeNull();
   });
 });
+
+describe("an agent message's reply buttons", () => {
+  function offer(id: string): AssistantMessageEvent {
+    return {
+      timestamp: "2026-11-01T00:00:00Z",
+      type: "assistant_message",
+      event_id: id,
+      source: "test",
+      model: "m",
+      text: "Shall I? [Yes](#reply=yes) [No](#reply=no)",
+      tool_calls: [],
+      stop_reason: "end_turn",
+      usage: null,
+      is_auth_error: false,
+      is_api_error: false,
+      api_error_kind: null,
+      is_provider_fault: false,
+    };
+  }
+
+  /** The replies the message's prose hands its markdown. */
+  function repliesOf(event: AssistantMessageEvent): unknown {
+    const rendered = renderAssistantRun([event], new Map(), "chat-replies");
+    const markdown = findVnode(rendered, (v) => typeof v.attrs?.content === "string");
+    expect(markdown, "the prose should render its markdown").not.toBeNull();
+    return markdown!.attrs!.replies;
+  }
+
+  it("hands the prose its chat and whether a user turn follows the message", () => {
+    const event = offer("a-offer");
+    transcript.events = [event];
+    expect(repliesOf(event)).toEqual({ chatId: "chat-replies", isAnswered: false });
+
+    transcript.events = [
+      event,
+      {
+        timestamp: "2026-11-01T00:00:01Z",
+        type: "user_message",
+        event_id: "u-after",
+        source: "test",
+        role: "user",
+        content: "no",
+      },
+    ];
+    expect(repliesOf(event)).toEqual({ chatId: "chat-replies", isAnswered: true });
+  });
+
+  it("hands prose with no reply links none", () => {
+    const event = { ...offer("a-plain"), text: "Nothing to answer here." };
+    transcript.events = [event];
+    expect(repliesOf(event)).toBeUndefined();
+  });
+});

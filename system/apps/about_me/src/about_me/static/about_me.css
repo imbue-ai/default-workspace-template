@@ -1,0 +1,230 @@
+/* The page's own layout, on the workspace's tokens only (the page kit defines them, and a theme redefines them), in
+   a layer so a theme's unlayered rules win wherever they reach. */
+@layer app {
+  body {
+    margin: 0;
+    background: var(--c-bg);
+    color: var(--c-text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--font-size-body);
+    line-height: 1.5;
+  }
+
+  main {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 20px 24px 40px;
+  }
+
+  h1 {
+    font-family: var(--font-display, var(--font-sans));
+    font-size: var(--font-size-heading);
+    font-weight: var(--weight-semibold);
+    line-height: 1.3;
+    margin: 0 0 4px;
+  }
+
+  h2 {
+    font-size: var(--font-size-helper);
+    font-weight: var(--weight-semibold);
+    color: var(--c-text-secondary);
+    margin: 12px 0 4px;
+  }
+
+  .explanation {
+    color: var(--c-text-secondary);
+    margin: 0 0 16px;
+  }
+
+  .notice {
+    color: var(--c-text-secondary);
+    font-size: var(--font-size-row);
+    margin: 0 0 12px;
+  }
+
+  .fact-list {
+    list-style: none;
+    margin: 0 0 16px;
+    padding: 0;
+    border-top: 1px solid var(--c-border);
+  }
+
+  .fact {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--c-border);
+  }
+
+  .fact-body {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .fact-text {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .fact-meta {
+    margin: 2px 0 0;
+    color: var(--c-text-secondary);
+    font-size: var(--font-size-row);
+    overflow-wrap: anywhere;
+  }
+
+  .fact-meta a {
+    color: var(--c-accent);
+  }
+
+  .fact-actions {
+    flex: none;
+    display: flex;
+    gap: 4px;
+  }
+
+  .fact-edit-input {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .forget-controls,
+  .forget-confirm {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .forget-confirm[hidden] {
+    display: none;
+  }
+
+  .group {
+    margin: 0 0 24px;
+  }
+
+  .group h2 {
+    font-size: var(--font-size-body);
+    color: var(--c-text-primary);
+    margin: 0 0 8px;
+  }
+
+  .lookup h3 {
+    font-size: var(--font-size-row);
+    font-weight: var(--weight-semibold);
+    color: var(--c-text-secondary);
+    margin: 0 0 4px;
+  }
+
+  .lookup {
+    margin: 0 0 12px;
+  }
+
+  .memory-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--c-border);
+  }
+
+  .memory {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--c-border);
+  }
+
+  .memory-body,
+  .memory-form {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .memory-title {
+    margin: 0;
+    font-weight: var(--weight-semibold);
+    overflow-wrap: anywhere;
+  }
+
+  .memory-text {
+    margin: 2px 0 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .memory-form label {
+    display: block;
+    font-size: var(--font-size-row);
+    color: var(--c-text-secondary);
+    margin: 0 0 8px;
+  }
+
+  .memory-form input,
+  .memory-form textarea {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 2px;
+    font: inherit;
+  }
+
+  .fact-actions[hidden] {
+    display: none;
+  }
+
+  .forget-controls[hidden] {
+    display: none;
+  }
+
+  .add-fact {
+    margin: 8px 0 24px;
+  }
+
+  .add-fact label {
+    display: block;
+    font-size: var(--font-size-row);
+    color: var(--c-text-secondary);
+    margin: 0 0 4px;
+  }
+
+  .add-fact-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .add-fact-row input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .empty-state {
+    color: var(--c-text-secondary);
+    padding: 24px 0;
+    margin: 0;
+  }
+
+  .raw-files {
+    margin-top: 32px;
+    color: var(--c-text-secondary);
+    font-size: var(--font-size-row);
+  }
+
+  .raw-files summary {
+    cursor: pointer;
+  }
+
+  .raw-files pre {
+    margin: 0;
+    padding: 8px 10px;
+    background: var(--c-surface-secondary);
+    border-radius: var(--radius-md);
+    color: var(--c-text-primary);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-helper);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}

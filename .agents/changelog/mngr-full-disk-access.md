@@ -1,0 +1,17 @@
+`read-app-data` says that "the apps I have installed" and "my recent projects" mean the user's Mac, never the workspace's own apps or folders, and an agent with no grant asks for one rather than describing the workspace.
+
+`read-app-data` tells the gateway's "Request not permitted by the user" (the grant is gone) from a 403 the Mac itself returns, and on the latter checks Imbue Studio's Full Disk Access status and files a `full-disk-access` request (once per task, never after the user turned such requests off); it reads the app-data verdicts `GRANTED_PENDING_RESTART` and `NOT_GRANTED_ASKING_TURNED_OFF`, withdraws a request still waiting once its source is `RESTORED`, and says "you approved" only after a `GRANTED` verdict.
+
+New `suggest-apps` skill: when the user wants an app built but has no idea what, or names nothing specific, the agent asks once to read everyday app data (installed apps and browser history, plus Notes, Reminders, and Calendar when Imbue Studio has Full Disk Access or the user still allows asking for it; never Messages, shell history, or code projects unless the user brings them up), reads it for patterns rather than details, and suggests three to five apps with why each fits, then builds the one picked. Without data it asks two or three quick questions and suggests from the answers. `do-something-new` routes such requests to it.
+
+A workspace's first chat ends its first reply with a one-time offer to suggest apps from the user's Mac app data, filed as an `app-data` request with `origin: "first-chat-offer"` (installed apps and browser history, plus Notes, Reminders, and Calendar when Full Disk Access is on or may be asked for). It is skipped when the workspace already holds app-data grants or the message is not the owner's, waits for a calm reply after an urgent first message, and is recorded in `data/.skills/read-app-data/first_chat_offer.json` so no later chat repeats it.
+
+`read-app-data` says that while Full Disk Access is off, Imbue Studio stops the synchronized copies of the sources it protects, tells the agent with `SYNC_STOPPED`, and never restarts them on its own: a new request with `"sync": true` asks again.
+
+`read-app-data` says a workspace shared with anyone besides its owner is refused app data and Full Disk Access as `REFUSED_SHARED`, and the agent does not ask again until the owner stops sharing it; sharing also stops the workspace's synchronized app-data copies, with no message, so the agent stops reading them.
+
+`read-app-data` reads the `READABLE_AGAIN` notice Imbue Studio sends when Full Disk Access comes back on: protected sources can be read again, and their syncs stay stopped.
+
+The app-data skills tell the agent to wait for Imbue Studio's answer before telling the user a request is on their screen, since a shared workspace's request is refused at once without one.
+
+When the first message itself asks for app ideas, `read-app-data` makes the `suggest-apps` request the first-chat offer, so the same sources are not asked for twice.

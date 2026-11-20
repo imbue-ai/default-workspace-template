@@ -14,6 +14,7 @@ dependencies = [
     "env-converge",
     "host-backup",
     "share-gateway",
+    "about-me-app",
     "chat",
     "files-app",
     "getting-started",
@@ -156,6 +157,7 @@ members = [
     "system/services/host_backup",
     "system/services/oom_priority",
     "system/services/share_gateway",
+    "system/apps/about_me",
     "system/apps/chat",
     "system/apps/files",
     "system/apps/getting_started",
@@ -194,6 +196,7 @@ latchkey-access = { workspace = true }
 routines = { workspace = true }
 disk-headroom = { workspace = true }
 # The built-in apps, which the root dependencies name so a root-closure sync keeps them.
+about-me-app = { workspace = true }
 chat = { workspace = true }
 files-app = { workspace = true }
 getting-started = { workspace = true }
