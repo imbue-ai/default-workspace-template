@@ -21,6 +21,10 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   manifest's fields onto the row at registration and adds the URL and the
   origin label). The row shape is `contracts.md` section 3.
 
+It also holds the model of the **app record**, `system/config/apps/<name>.toml`:
+what this workspace records about an app its agent built or installed, which
+`app-install` writes and the footprint reads.
+
 ## API
 
 - `app_manifest.manifest`: `AppManifest` (pydantic, `extra = "forbid"`; every
@@ -61,7 +65,22 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   table: how far the app takes part in workspace themes, a `ThemingMode` of
   `tokens` (the default), `parts`, or `none`, and for `parts` the `AppPart`s
   a theme may style, each an `AppPartName` unique within the app and a
-  description), `load_manifest(path, repo_root=None, mode=ManifestReadMode.TOLERANT)`
+  description), the fields that say how a user app runs and what it asks of
+  a workspace that installs it (`version`, a semantic version, and
+  `verified_template`, a `minds-v<version>` template version, both written
+  when the app is published; `RunSpec`, the `[run]` table: the `command` of
+  the app's main program, its `args` and its `env`; `ServiceSpec`, one
+  `[[services]]` entry: a background program run as `<name>-<role>`, whose
+  `role` is lowercase words joined by hyphens and unique within the app; in
+  both, a text may carry only the `{port:main}` and `{host}` placeholders,
+  and an `env` value may hold one kind of quote, and not at either end,
+  which is all a supervisord environment line can carry; and the guidance
+  for an adopter: `PermissionNote` (`[[permissions]]`), `LlmNote` (`[llm]`),
+  `EnvironmentNote` (`[environment]`: `apt`, `npm_global`, `uv_tools`,
+  `cargo_crates`, `cargo_default_toolchain`), `AppDependency`
+  (`[[dependencies]]`, each name once), `AdaptationNote` (`[[adaptation]]`),
+  and `PublishRules` (`[publish] exclude`, globs relative to the app's
+  directory)), `load_manifest(path, repo_root=None, mode=ManifestReadMode.TOLERANT)`
   (reads, validates, checks the icon file exists beside the manifest, and --
   against the repo root, given or derived from a `system/apps/<package>/app.toml`
   layout -- that every reference exists, sits neither in the app's own
@@ -79,6 +98,18 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   ("Built-in apps and user apps" below); every other rule holds in both),
   `repo_root_for_manifest`,
   `app_package_directory`, and `manifest_icon_path(manifest_path, manifest)`.
+- `app_manifest.records`: the app record, the file that makes an app a user
+  app. `AppRecord` (`name`, which is the file's stem; `package`, the app's
+  directory under `system/apps/`; `port`, the loopback port of its main
+  program; `origin`, an `AppOrigin` of `local` or `installed`; the
+  `upstream_*` fields of an installed app; `dev_repo_url`; the `published_*`
+  fields; `verified_template`; and `references`, each a `RecordReference` of
+  a path elsewhere in the workspace that uses the app, with a note),
+  `record_path(repo_root, name)`, `load_record` (raises
+  `AppRecordNotFoundError` for an app with none), `load_all_records`,
+  `parse_record` (a record that does not parse, or whose file is not named
+  after its app, raises `RecordLoadError`), `render_record` (the file's
+  text, the same text for the same record), and `write_record`.
 - `app_manifest.registry`: `RegistryRow` (absent keys read as the contract's
   defaults; unknown keys are ignored so a newer registration script never hides
   an app from an older reader), `read_registry(path)` (a row that fails
