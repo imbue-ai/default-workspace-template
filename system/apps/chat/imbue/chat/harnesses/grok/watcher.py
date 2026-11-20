@@ -46,6 +46,7 @@ from imbue.chat.harnesses.transcript_store import iter_line_spans
 from imbue.chat.harnesses.transcript_store import split_at_last_complete_line
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.mngr.agents.tui_utils import is_slash_command_message
 from imbue.mngr.errors import MngrError
 from imbue.mngr_grok.grok_config import get_grok_home
 from imbue.mngr_grok.grok_sessions import find_local_session_dir
@@ -430,8 +431,9 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         """Claim the held block, type it through mngr, and settle it by what mngr and grok's log show.
 
         A block mngr confirmed grok took is delivered, even when grok queued it behind a turn that started first and
-        logs it only once that turn ends; it stays Sending until its turn shows or the witness window ends. A block
-        mngr could not confirm is delivered once a user turn holding it shows, and otherwise waits for a later attempt.
+        logs it only once that turn ends; it stays Sending until its turn shows or the witness window ends, unless it
+        is a slash command, which grok runs without logging a user turn. A block mngr could not confirm is delivered
+        once a user turn holding it shows, and otherwise waits for a later attempt.
         """
         with self._lock:
             self._refresh_locked()
@@ -446,7 +448,8 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         try:
             if send(block):
                 delivered = claimed
-                self._await_turn_holding(witness_start, block)
+                if not is_slash_command_message(block):
+                    self._await_turn_holding(witness_start, block)
             elif self._await_turn_holding(witness_start, block):
                 delivered = claimed
         finally:

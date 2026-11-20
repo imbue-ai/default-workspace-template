@@ -1,6 +1,7 @@
 """Tests for the grok transcript loader and session watcher, over grok 1.0.62's own session logs."""
 
 import json
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,7 @@ _SUBAGENT_ENDS_MID_REPLY_CHILD = "01a16809-3142-7c61-82ac-f493c95a71d0"
 _SUBAGENT_SPAWNED_OFFSET = 3737
 _LIVE_TAIL_TIMEOUT_SECONDS = 10.0
 _SHORT_WITNESS_SECONDS = 0.3
+_LONG_WITNESS_SECONDS = 6.0
 # A record time after every captured session's, for the prompts the scripted grok logs.
 _PROMPT_CLOCK_MS = 1_800_000_000_000
 
@@ -495,6 +497,19 @@ def test_a_block_mngr_confirmed_is_delivered_though_grok_logged_no_turn_for_it(t
     watcher._attempt_flush()
 
     assert send.sent == ["queued inside grok"]
+    assert watcher.get_queued_messages() == []
+
+
+def test_a_slash_command_mngr_confirmed_leaves_without_waiting_for_a_turn_grok_never_logs(tmp_path: Path) -> None:
+    watcher, send, _log = _flushing_watcher(tmp_path, is_logged=False)
+    watcher.delivery_witness_seconds = _LONG_WITNESS_SECONDS
+    _hold(watcher, "/new")
+
+    started_at = time.monotonic()
+    watcher._attempt_flush()
+
+    assert time.monotonic() - started_at < _LONG_WITNESS_SECONDS / 2
+    assert send.sent == ["/new"]
     assert watcher.get_queued_messages() == []
 
 
