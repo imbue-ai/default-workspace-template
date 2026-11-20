@@ -7,3 +7,5 @@ The routines spec (`docs/system/specs/routines/spec.md`) describes routines an a
 `AGENTS.md` tells the agent that an app it built or installed keeps everything it owns in its own directory, that the app's program file and skill links are generated from its manifest and never edited, and how to find another app by name.
 
 The app model contracts (`docs/system/blueprint/workspace-app-model/contracts.md`, section 2) say how the manifest's `references`, `scope` and `wiring` tables are read for a built-in app and for an app the workspace built or installed, whose references live in its record and whose exclude globs are relative to its own directory.
+
+The workspace app model's contracts list the manifest fields that say how an app runs and what an adopter needs (`version`, `verified_template`, `[run]`, `[[services]]`, `[[permissions]]`, `[llm]`, `[environment]`, `[[dependencies]]`, `[[adaptation]]`, `[publish]`).
