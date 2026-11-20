@@ -40,18 +40,20 @@ def _environment(is_global_config_read: bool, is_gateway_used: bool) -> dict[str
     environment["GIT_AUTHOR_EMAIL"] = COMMITTER_EMAIL
     environment["GIT_COMMITTER_NAME"] = COMMITTER_NAME
     environment["GIT_COMMITTER_EMAIL"] = COMMITTER_EMAIL
-    if not is_global_config_read:
+    gateway_entries = (gateway_git_config() or []) if is_gateway_used else []
+    if not is_global_config_read or gateway_entries:
         # With GitHub sync enabled the container's global configuration routes every github.com URL through the
-        # latchkey gateway; leaving it out is what makes a fetch anonymous.
+        # latchkey gateway; leaving it out is what makes a fetch anonymous. It is left out of a read through the
+        # gateway too: git sends every extraHeader it reads, so the gateway's headers would go out twice, once
+        # from each place, and the gateway refuses a password it is sent twice.
         environment["GIT_CONFIG_GLOBAL"] = os.devnull
-    if is_gateway_used:
+    if gateway_entries:
         # In the environment and not in the arguments, so the gateway's password is in no process listing.
         first_index = int(environment.get("GIT_CONFIG_COUNT", "0"))
-        entries = gateway_git_config() or []
-        for index, (key, value) in enumerate(entries, start=first_index):
+        for index, (key, value) in enumerate(gateway_entries, start=first_index):
             environment[f"GIT_CONFIG_KEY_{index}"] = key
             environment[f"GIT_CONFIG_VALUE_{index}"] = value
-        environment["GIT_CONFIG_COUNT"] = str(first_index + len(entries))
+        environment["GIT_CONFIG_COUNT"] = str(first_index + len(gateway_entries))
     return environment
 
 
@@ -62,8 +64,9 @@ def run_git(
 
     Hooks are off because GitHub sync's post-commit hook would push the branch of every repository the
     installer commits in, its scratch worktrees included. With ``is_gateway_used`` every github.com URL the
-    command names goes through the latchkey gateway, when the workspace has one. Raises GitCommandError when
-    the command fails.
+    command names goes through the latchkey gateway, when the workspace has one, and the command then reads the
+    gateway's wiring from here alone, not from the global configuration. Raises GitCommandError when the command
+    fails.
     """
     argv = ["git", "-c", f"core.hooksPath={os.devnull}", *arguments]
     try:

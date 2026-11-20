@@ -45,6 +45,31 @@ def test_the_gateway_wiring_is_added_after_configuration_the_environment_already
     assert run_git(workspace, ["ls-remote", "--get-url", _APP_URL], is_gateway_used=True).startswith(_GATEWAY)
 
 
+def test_wiring_github_sync_already_wrote_is_not_sent_a_second_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    _set_gateway(monkeypatch)
+    # What GitHub sync leaves in the container's global configuration once it is enabled.
+    global_configuration = tmp_path / "gitconfig"
+    global_configuration.write_text(
+        f'[url "{_GATEWAY}/gateway/https://github.com/"]\n'
+        "\tinsteadOf = https://github.com/\n"
+        f'[http "{_GATEWAY}/"]\n'
+        "\textraHeader = X-Latchkey-Gateway-Password: pw-abc\n"
+        "\textraHeader = X-Latchkey-Gateway-Permissions-Override: jwt-xyz\n"
+    )
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_configuration))
+
+    headers = run_git(workspace, ["config", "--get-all", f"http.{_GATEWAY}/.extraHeader"], is_gateway_used=True)
+
+    assert headers.splitlines() == [
+        "X-Latchkey-Gateway-Password: pw-abc",
+        "X-Latchkey-Gateway-Permissions-Override: jwt-xyz",
+    ]
+    assert run_git(workspace, ["ls-remote", "--get-url", _APP_URL], is_gateway_used=True).startswith(_GATEWAY)
+
+
 def test_an_anonymous_read_and_a_local_command_leave_the_gateway_out(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
