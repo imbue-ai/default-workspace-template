@@ -198,7 +198,7 @@ export function windowMenuRows(app: AppRecord | undefined, actions: WindowMenuAc
 /** What a phone's window menu offers (plan-phone-interface.md): no placement verbs, no pull-out, and no Close,
  *  since a window's row has its own X. */
 export interface PhoneWindowMenuActions {
-  /** Null when the window has no page to refresh: its app is no longer part of the workspace. */
+  /** Null when the window has no page to refresh: its app is not in the app list. */
   readonly refresh: (() => void) | null;
   /** Null when there is no share surface: a critical app, or a page no chrome embeds. */
   readonly share: (() => void) | null;

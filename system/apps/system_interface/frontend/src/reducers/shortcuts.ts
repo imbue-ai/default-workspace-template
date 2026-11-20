@@ -15,7 +15,7 @@ import type { Desktop, DesktopShortcut, GridCell, ShortcutMode } from "../model/
 import { activeDesktop, appByName } from "./desktopState";
 import type { DesktopState } from "./desktopState";
 
-/** Why a launch cannot run: its app is no longer part of the workspace, its app no longer offers the launch path,
+/** Why a launch cannot run: its app is not in the app list, its app no longer offers the launch path,
  *  or no desktop is active to open it on. */
 export type UnavailableReason =
   | { readonly kind: "app_gone" }
