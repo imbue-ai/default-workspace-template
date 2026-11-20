@@ -1,0 +1,1 @@
+The `custom` create template launches a grok agent through the absolute workspace path of the OOM band wrapper and clears grok's workspace prompt block, as it does for every other harness, so a custom agent on an xAI account starts in the user's own repo. `system/test_mngr_template_stacking.py` checks that every harness a signed-in account runs on gets both.

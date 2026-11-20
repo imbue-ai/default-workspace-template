@@ -55,6 +55,7 @@ from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.chat.harnesses.codex.watcher import CodexTranscriptLoader
 from imbue.chat.harnesses.events import SpecialEventKind
+from imbue.chat.harnesses.grok.account_binding import GrokAccountBinding
 from imbue.chat.harnesses.grok.activity import GrokActivityTracker
 from imbue.chat.harnesses.grok.model import GROK_CATALOG
 from imbue.chat.harnesses.grok.session import GrokHarnessSession
@@ -670,6 +671,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         process_started_marker_filename=GrokActivityTracker.marker_filename,
         # Written by mngr's hook at grok's SessionStart and deleted by its launch script.
         startup_ready_marker=StartupReadyMarker(filename=GROK_SESSION_STARTED_FILENAME, is_deleted_at_launch=True),
+        binding_class=GrokAccountBinding,
         # The chat holds every message and the watcher's flush worker alone types it, once mngr reports no turn in
         # flight. Stop and the tap press one Ctrl+C, which mngr presses only into a cancellable turn.
         session_class=GrokHarnessSession,
@@ -687,8 +689,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             }
         ),
         popups=(
-            # No sign-in lane offers xAI, so /login and /logout point at the agent's terminal.
-            HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=_AUTH_COMMANDS, action=PopupAction.NOTICE),
+            HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=_AUTH_COMMANDS, action=PopupAction.OPEN_AUTH),
             HarnessPopup(
                 trigger=PopupTrigger.COMPOSER_COMMAND, commands=_GROK_DECLINED_COMMANDS, action=PopupAction.NOTICE
             ),

@@ -19,6 +19,7 @@ from typing import Any
 import click
 import tomlkit
 from click.core import ParameterSource
+from imbue.chat.harnesses.lanes import LANES
 from imbue.mngr.cli.common_opts import apply_create_template
 from imbue.mngr.config.data_types import CreateTemplate, CreateTemplateName, MngrConfig
 from imbue.mngr.main import get_or_create_plugin_manager
@@ -191,16 +192,27 @@ def test_custom_template_marks_the_agent_role_and_keeps_every_harness_launchable
     The role marker drives tooling that tells agent kinds apart, and the absolute
     launch-command overrides are what keep a custom agent launchable from a work
     dir that has no `system/` tree of its own (the agent-type defaults are
-    ${MNGR_AGENT_WORK_DIR}-relative).
+    ${MNGR_AGENT_WORK_DIR}-relative). Every harness a signed-in account runs on
+    needs one, along with its workspace prompt block cleared.
     """
     result = _apply_custom()
     assert "MNGR_AGENT_ROLE=custom" in result["env"]
     settings = result["setting"]
     command_overrides = [entry for entry in settings if ".command=" in entry]
-    assert len(command_overrides) == 5, (
-        f"one launch-command override per harness, got {command_overrides!r}"
-    )
     assert all("/home/user/workspace/" in entry for entry in command_overrides)
+    account_harnesses = {str(lane.harness) for lane in LANES}
+    relaunched_types = {entry.split(".")[1] for entry in command_overrides}
+    assert account_harnesses <= relaunched_types, (
+        f"harnesses without a launch-command override: {account_harnesses - relaunched_types}"
+    )
+    cleared_prompt_types = {
+        entry.split(".")[1]
+        for entry in settings
+        if entry.endswith(".append_system_prompt=[]")
+    }
+    assert account_harnesses <= cleared_prompt_types, (
+        f"harnesses whose workspace prompt is not cleared: {account_harnesses - cleared_prompt_types}"
+    )
     # Claude keeps permission bypass but regains its native planning/todo tools.
     cli_args_overrides = [
         entry for entry in settings if entry.startswith("agent_types.claude.cli_args=")

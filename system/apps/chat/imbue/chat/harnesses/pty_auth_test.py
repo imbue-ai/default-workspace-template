@@ -1,5 +1,11 @@
 """Tests for the PTY sign-in machinery that is not specific to one harness."""
 
+import re
+
+from imbue.chat.harnesses.pty_auth import drain_pty_stream_until_quiet
+from imbue.chat.harnesses.pty_auth import safe_terminate
+from imbue.chat.harnesses.pty_auth import spawn_pty
+from imbue.chat.harnesses.pty_auth import take_expect_output
 from imbue.chat.harnesses.pty_auth import terminal_env
 
 
@@ -39,3 +45,17 @@ def test_the_spawned_terminal_is_described_as_its_own() -> None:
 def test_no_environment_stays_no_environment() -> None:
     """None means "inherit the parent wholesale", which is pexpect's own default."""
     assert terminal_env(None) is None
+
+
+def test_what_a_match_read_past_itself_is_kept_on_a_real_pty() -> None:
+    """pexpect keeps the rest of a matching read in its buffer, where no drain reads."""
+    process = spawn_pty("/bin/sh", ["-c", "printf 'before MARK after\\n'; sleep 5"], 5.0)
+    try:
+        assert process.expect([re.compile("MARK")], timeout=5.0) == 0
+        taken = take_expect_output(process)
+        assert process.buffer == ""
+        output = drain_pty_stream_until_quiet(process, taken, 0.3, 5.0)
+    finally:
+        safe_terminate(process)
+
+    assert "before MARK after" in output

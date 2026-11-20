@@ -2,7 +2,7 @@
 
 import pytest
 
-from imbue.chat.harnesses.account_binding import BindingError
+from imbue.chat.harnesses.grok.account_binding import GrokAccountBinding
 from imbue.chat.harnesses.lanes import LANES
 from imbue.chat.harnesses.registry import ComposerCompactHandling
 from imbue.chat.harnesses.registry import HARNESS_SPECS
@@ -78,20 +78,17 @@ def _grok_composer_actions() -> dict[str, tuple[PopupAction, str | None]]:
     }
 
 
-def test_grok_points_login_and_logout_at_its_terminal_and_declines_its_model_alias_like_model() -> None:
-    """No sign-in lane offers xAI, so the provider list cannot sign a grok agent in."""
+def test_grok_opens_the_sign_in_for_login_and_logout_and_declines_its_model_alias_like_model() -> None:
     actions = _grok_composer_actions()
-    assert actions["/login"] == (PopupAction.NOTICE, None)
-    assert actions["/logout"] == (PopupAction.NOTICE, None)
+    assert actions["/login"] == (PopupAction.OPEN_AUTH, None)
+    assert actions["/logout"] == (PopupAction.OPEN_AUTH, None)
     assert actions["/m"] == actions["/model"]
     assert actions["/quit"] == (PopupAction.NOTICE, None)
 
 
-def test_no_lane_signs_in_to_grok_so_no_account_can_run_it() -> None:
-    """grok's chat renders for a grok agent, and nothing a user picks from launches one."""
-    assert all(lane.harness is not HarnessType.GROK for lane in LANES)
-    with pytest.raises(BindingError):
-        build_account_binding(HarnessType.GROK)
+def test_the_xai_lane_alone_signs_in_to_grok_and_its_accounts_bind_by_grok_s_binding() -> None:
+    assert [lane.id for lane in LANES if lane.harness is HarnessType.GROK] == ["xai"]
+    assert isinstance(build_account_binding(HarnessType.GROK), GrokAccountBinding)
 
 
 def test_grok_declines_a_composer_compact_with_its_own_notice() -> None:

@@ -329,7 +329,9 @@ armed switch's next message carries it out); a failed start or a model pick the
 agent cannot take leaves the chat in the `failed` phase, and the retry offers
 the accounts of the same harness and lane.
 `harnesses/binding.py`'s `REBIND_VERIFIED_HARNESSES` names the harnesses a chat
-may be rebound on; a same-lane target on any other harness is a handoff.
+may be rebound on; a same-lane target on any other harness is a handoff. Grok
+is not among them: mngr carries an xAI account's consent answers into a grok
+agent only when it creates one.
 
 The page drives both from the composer's provider menu: pressing an account on
 another harness opens the switch dialog ("Switch to Codex?"), which takes the
@@ -967,6 +969,17 @@ Which messages a sign-in error refused goes by timestamp, on both the page
 (`auth-recovery.ts`) and the chat app: claude can write the error into its
 transcript ahead of the message it refused.
 
+An xAI sign-in has no browser to relay. `grok login --device-auth` prints a
+page and a one-time code; the chooser shows both and waits while the user
+confirms the code on that page, from any device, and grok decides the outcome:
+its clean exit with its "Signed in" line succeeds, and its `Error:` line is the
+failure shown. A pasted xAI API key is checked with xAI (`GET
+https://api.x.ai/v1/api-key`) before anything is written, and then replaces the
+account's `auth.json` with grok's key scope. Every agent on the account shares
+that file, so the chat writes it only under grok's own `auth.json.lock`, and a
+device sign-in takes away a key an earlier paste left, which grok would
+otherwise fall back to.
+
 A sign-in error only shows to someone looking at the chat, so the chat app also
 tells the Imbue Studio app's feed (`sign_in_notices.py`,
 `imbue_studio_notifications.py`). A chat's refusals form a run, from its first
@@ -985,7 +998,7 @@ create the Imbue Studio app's chats fall back to on a template whose script has 
 create mode -- through `.mngr/settings.local.toml`, mngr's
 git-ignored local config layer (`create_defaults.py`). The account store writes
 it on every index write and at boot: `[commands.create]` with the default
-account's harness as `type`, its binding (`env__extend` for claude, an
+account's harness as `type`, its binding (`env__extend` for claude and grok, an
 `extra_provision_command__extend` credential link over `$MNGR_AGENT_STATE_DIR`
 for codex, agy and pi) and the `account=<id>` label a re-auth restarts agents
 by (only the live ones; a stopped agent picks up the new credentials when it

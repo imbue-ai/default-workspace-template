@@ -4,9 +4,9 @@ Every `mngr create` in the workspace that names no harness and no account -- the
 Imbue Studio app starts from outside, workers, automations, the caretaker -- resolves through
 `.mngr/settings.local.toml`, mngr's git-ignored local config layer, which sits above the
 committed `.mngr/settings.toml` and below the CLI. Its managed `[commands.create]` keys name
-the default account's harness as `type`, its binding (the variable claude is scoped by, or
-for the other harnesses the credential symlink over `$MNGR_AGENT_STATE_DIR`, which needs no
-agent id), and the `account=<id>` label a re-auth restarts agents by.
+the default account's harness as `type`, its binding (the env line claude and grok are bound
+by, or for the other harnesses the credential symlink over `$MNGR_AGENT_STATE_DIR`, which needs
+no agent id), and the `account=<id>` label a re-auth restarts agents by.
 
 The account store owns the file: it is rewritten from the index on every index write and at
 the chat app's boot, and is derived output only -- the pin and the most recently used account

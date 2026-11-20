@@ -44,7 +44,7 @@ uv run --no-sync .agents/skills/launch-custom-agent/python/launch_custom_agent_s
     --message "<the user's task, verbatim or lightly cleaned up>"
 ```
 
-Other flags: `--account <id>`, `--harness <claude|codex|pi-coding|opencode|antigravity>`,
+Other flags: `--account <id>`, `--harness <claude|codex|pi-coding|opencode|antigravity|grok>`,
 `--branch <spec>`, `--display-name <name>`, `--message-file <path>`. The script
 validates the inputs, binds the agent to the account the way a chat is bound, runs
 the `mngr create`, and prints the agent id and work dir. It refuses a taken name, a

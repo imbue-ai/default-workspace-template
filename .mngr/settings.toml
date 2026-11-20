@@ -1875,12 +1875,14 @@ setting__extend = [
     "agent_types.pi-coding.command=python3 /home/user/workspace/system/services/oom_priority/bin/agent_oom_launch.py pi",
     "agent_types.opencode.command=python3 /home/user/workspace/system/services/oom_priority/bin/agent_oom_launch.py opencode",
     "agent_types.antigravity.command=python3 /home/user/workspace/system/services/oom_priority/bin/agent_oom_launch.py agy",
+    "agent_types.grok.command=python3 /home/user/workspace/system/services/oom_priority/bin/agent_oom_launch.py grok",
     "agent_types.claude.cli_args=--dangerously-skip-permissions",
     "agent_types.claude.append_system_prompt=[]",
     "agent_types.codex.append_system_prompt=[]",
     "agent_types.pi-coding.append_system_prompt=[]",
     "agent_types.opencode.append_system_prompt=[]",
     "agent_types.antigravity.append_system_prompt=[]",
+    "agent_types.grok.append_system_prompt=[]",
     'agent_types.codex.extra_provision_command=["bash /home/user/workspace/system/scripts/codex_update_plugin.sh"]',
 ]
 append_system_prompt__extend = ["""# Custom coding agent context

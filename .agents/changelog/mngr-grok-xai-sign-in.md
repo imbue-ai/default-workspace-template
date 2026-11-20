@@ -1,0 +1,3 @@
+The use-ai-integration billing reference says how each harness binds a chat to its account, grok by `GROK_AUTH_PATH` naming the account's `auth.json`, and that a same-harness account switch rebinds in place except on grok, which moves to a new agent.
+
+The launch-custom-agent skill lists `grok` among its `--harness` values.

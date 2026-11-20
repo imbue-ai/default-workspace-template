@@ -34,6 +34,8 @@ export interface LaneMethod {
   description: string;
   /** Empty unless the provider has to be signed up for before a key exists. */
   signup_url: string;
+  /** What a paste method's key looks like, for its field; empty for the field's default. */
+  key_hint: string;
   /** Markdown shown while the sign-in waits on the browser; empty when it needs no account setting. */
   note: string;
   shape: FlowShape;
