@@ -20,6 +20,7 @@ hand.
 
 | # | Method | Workable when | What you say | Read |
 |---|---|---|---|---|
+| 0 | **Pre-configured tools** | Your own tool list already has tools for the service, such as `mcp__claude_ai_<Service>__...` or `mcp__codex_apps__...`. Never try to add them yourself. | "I'll use the Gmail connection on your Anthropic account." | |
 | 1 | **Service latchkey already knows** | `latchkey services list` names the service, possibly under a name other than the product's (Notion is `notion-mcp`); `latchkey services info <name>` gives auth options and status. | "I'll use your connected Slack account." | `references/latchkey.md` |
 | 2 | **Official MCP server** | The service itself hosts an MCP server (its docs link to it, or it lives in the service's own GitHub organization) **and** the server's OAuth metadata publishes a `registration_endpoint`, so latchkey can register itself as a client; `references/mcp.md` shows how to check that with no credential. A server that wants a client registered by hand is not this row, and neither is one that takes a key in a header (that is row 3's request on the server's domain). Anyone else's server is never used, and a server published as a package to run here is not this row (it only calls the service's API, which rows 3 and 5 reach). The server is a custom latchkey service, signed in through its own OAuth (the `mcp` login flow), so its credential stays in Imbue Studio's credential store. Never a harness's own MCP config. | "Example has its own connector; I'll ask you to approve the connection and sign in to Example, in a window Imbue Studio opens on your computer." | `references/mcp.md` |
 | 3 | **Custom latchkey service, with a key** | The API is HTTP(S) and takes a key the user can copy from their account settings as one header (`Authorization: Bearer <token>`, or a named header via `payload.header`). A key that goes in the query string, a signature scheme, or two values that must be combined are NOT workable here. | "I'll ask you to approve a connection to api.example.com and paste its API key into the approval window; the key stays in Imbue Studio's credential store." | `references/latchkey.md`, "Custom services" |
@@ -41,43 +42,6 @@ credential: a `403` from a plain `curl` says nothing about the same request
 carrying the user's key or session. When a site may refuse the row's requests
 anyway (bot challenges, blocked networks), name that as the risk in your
 explanation, try the row, and move to the next one when it actually fails.
-
-## Connections the user turned on themselves
-
-The user may already have a service connected on their Anthropic or OpenAI
-account itself (a claude.ai connector, a ChatGPT app). This workspace keeps
-those away from its agents, because they reach the service without the
-permissions the user grants here. The card of a permission request you send can
-offer the user that way around, and only they can take it. When they do, the
-request is withdrawn, you are restarted, and a message tells you so:
-
-```
-The user chose to enable the cloud MCP connections of their Anthropic account ... (resolution: cloud_connections, request_id: <id>)
-```
-
-From then on the account's connections are tools in your own tool list
-(`mcp__claude_ai_<Service>__...` on Claude, `mcp__codex_apps__...` on Codex),
-in this chat only:
-
-- **Use them for a service they cover, ahead of the table.** Do not send the
-  withdrawn request again, and do not ask for a latchkey permission to a service
-  one of those tools already reaches. Look at your tool list for what is
-  covered; a connector's name may differ from the service's (Gmail, not Google
-  Gmail).
-- **The table still decides everything else**: a service none of those tools
-  reaches, and anything that has to work outside this chat. An app, a scheduled
-  job, another chat and a background agent do not have these tools, so a
-  connection they need goes through rows 1 to 5 as before.
-- **A tool that answers that it needs a sign-in** cannot be signed in from
-  here: say the connection on the user's account needs reconnecting there, or
-  fall back to the table.
-- **Never turn this on yourself, and never ask the user to.** It is not a row.
-  Changing your own environment or your harness's config to load these
-  connections, or steering the user to the offer, takes away a choice that is
-  theirs. Without that message and those tools, the table is all there is.
-
-To the user these are "the Gmail connection on your Anthropic account", never
-MCP or connectors.
 
 ## Rules that apply to every row
 
