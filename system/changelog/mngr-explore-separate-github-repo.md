@@ -3,3 +3,7 @@ The workspace now installs the app SDK (`imbue-app-sdk`, imported as `imbue.app_
 The workspace gains `system/config/apps/`, where each app the agent builds or installs has one record, and the `app-install` command that writes it (`system/libs/app_install/`). The repo-wide tests now check that no two apps declare the same name, that every generated program file and skill link matches what `app-install` generates, and they leave an installed app out of the rule that every package carries the template's ratchets.
 
 The routines spec (`docs/system/specs/routines/spec.md`) describes routines an app owns: where their definitions live, that a routine id is unique across the workspace, that a reschedule is kept in the routine's state while every other change is a change to the app, and where `routines add --app` writes.
+
+`AGENTS.md` tells the agent that an app it built or installed keeps everything it owns in its own directory, that the app's program file and skill links are generated from its manifest and never edited, and how to find another app by name.
+
+The app model contracts (`docs/system/blueprint/workspace-app-model/contracts.md`, section 2) say how the manifest's `references`, `scope` and `wiring` tables are read for a built-in app and for an app the workspace built or installed, whose references live in its record and whose exclude globs are relative to its own directory.

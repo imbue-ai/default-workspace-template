@@ -13,6 +13,11 @@ from typing import Final
 from loguru import logger
 from werkzeug.test import TestResponse
 
+from app_manifest.primitives import AppName
+from app_manifest.records import AppOrigin
+from app_manifest.records import AppRecord
+from app_manifest.records import RecordReference
+from app_manifest.records import write_record
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_MODULE_PATHS
 from app_manifest.selection import ALWAYS_RUN_GUARDS
@@ -20,6 +25,9 @@ from app_manifest.selection import ALWAYS_RUN_GUARDS
 APP_ICON_MARKUP: Final[str] = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 )
+
+# The port a test's app record carries; nothing in these tests listens on it.
+_RECORD_PORT: Final[int] = 8080
 
 # A git command against a freshly made temp repository is instant; anything near this is a hang.
 _GIT_TIMEOUT_SECONDS: Final[float] = 30.0
@@ -62,6 +70,29 @@ def write_app_manifest(repo_root: Path, package: str, body: str, is_icon_written
     manifest_path = app_directory / "app.toml"
     manifest_path.write_text(body, encoding="utf-8")
     return manifest_path
+
+
+def write_app_record(repo_root: Path, name: str, package: str, references: Mapping[str, str]) -> Path:
+    """Create the record that makes ``system/apps/<package>`` a user app the workspace built, listing
+    each of ``references`` (a repo-relative path and its note) as something that uses the app."""
+    record = AppRecord(
+        name=AppName(name),
+        package=package,
+        port=_RECORD_PORT,
+        origin=AppOrigin.LOCAL,
+        references=tuple(RecordReference(path=path, note=note) for path, note in references.items()),
+    )
+    return write_record(repo_root, record)
+
+
+def write_app_skill(repo_root: Path, package: str, skill: str) -> Path:
+    """Create a skill the app in ``system/apps/<package>`` carries, and the link ``app-install``
+    generates for it in the skills directory; returns the link."""
+    write_repo_file(repo_root, f"system/apps/{package}/skills/{skill}/SKILL.md", f"# {skill}\n")
+    link = repo_root / ".agents" / "skills" / skill
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(f"../../system/apps/{package}/skills/{skill}")
+    return link
 
 
 def write_supervisord_conf(repo_root: Path, section_names: Sequence[str]) -> Path:
