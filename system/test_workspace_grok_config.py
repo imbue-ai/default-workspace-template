@@ -33,6 +33,7 @@ from imbue.mngr_grok.grok_config import build_config_toml
 _REPO_ROOT = Path(__file__).parents[1]
 _SETTINGS_PATH = _REPO_ROOT / ".mngr" / "settings.toml"
 _DOCKERFILE_PATH = _REPO_ROOT / "system" / "Dockerfile"
+_SUPERVISORD_MAIN_CONF_PATH = _REPO_ROOT / "system" / "supervisord.conf"
 _SUPERVISORD_CONF_DIR = _REPO_ROOT / "system" / "supervisord.conf.d"
 _GROK_ACCOUNT_VARIABLES = frozenset({"GROK_AUTH_PATH", "XAI_API_KEY", "GROK_HOME"})
 _EXPORT_KEYS = frozenset({"env", "host_env", "pass_env", "pass_host_env"})
@@ -158,13 +159,17 @@ def test_no_workspace_wide_export_names_a_grok_account_variable() -> None:
     dockerfile_names = _DOCKERFILE_EXPORT_RE.findall(_DOCKERFILE_PATH.read_text())
     supervisord_names = [
         name
-        for conf_path in sorted(_SUPERVISORD_CONF_DIR.glob("*.conf"))
+        for conf_path in (
+            _SUPERVISORD_MAIN_CONF_PATH,
+            *sorted(_SUPERVISORD_CONF_DIR.glob("*.conf")),
+        )
         for environment in _SUPERVISORD_ENVIRONMENT_RE.findall(conf_path.read_text())
         for name in _SUPERVISORD_VARIABLE_RE.findall(environment)
     ]
 
     assert "MNGR_AGENT_ROLE" in settings_names
     assert "XDG_CACHE_HOME" in dockerfile_names
+    assert "MNGR_ALLOW_UNKNOWN_CONFIG" in supervisord_names
     assert "MALLOC_ARENA_MAX" in supervisord_names
     assert _GROK_ACCOUNT_VARIABLES.isdisjoint(
         [*settings_names, *dockerfile_names, *supervisord_names]
