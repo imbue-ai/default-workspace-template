@@ -17,8 +17,8 @@ vi.mock("@imbue/workspace-ui/src/embed", () => ({
 
 import { RELAY_ACK_TIMEOUT_MS, endProviderRelay, requestProviderRelay } from "./providerRelay";
 
-function ack(relay: unknown): void {
-  embed.handlers.get("minds:provider-sign-in-ack")?.({ type: "minds:provider-sign-in-ack", relay });
+function ack(relay: unknown, reason?: unknown): void {
+  embed.handlers.get("minds:provider-sign-in-ack")?.({ type: "minds:provider-sign-in-ack", relay, reason });
 }
 
 beforeEach(() => {
@@ -47,11 +47,25 @@ describe("asking the desktop app to relay a sign-in", () => {
   it("takes the desktop app at its word", async () => {
     const relaying = requestProviderRelay("https://claude.ai/x", "flow-1");
     ack(true);
-    expect(await relaying).toBe(true);
+    expect(await relaying).toBe("relaying");
 
     const declined = requestProviderRelay("https://claude.ai/x", "flow-2");
     ack(false);
-    expect(await declined).toBe(false);
+    expect(await declined).toBe("unavailable");
+  });
+
+  it("tells a taken callback port apart from a desktop app that cannot relay", async () => {
+    const taken = requestProviderRelay("https://claude.ai/x", "flow-1");
+    ack(false, "port_taken");
+    expect(await taken).toBe("port_taken");
+
+    const noBrowser = requestProviderRelay("https://claude.ai/x", "flow-2");
+    ack(false, "no_browser");
+    expect(await noBrowser).toBe("unavailable");
+
+    const unknown = requestProviderRelay("https://claude.ai/x", "flow-3");
+    ack(false, "something_newer");
+    expect(await unknown).toBe("unavailable");
   });
 
   it("signs in without it when nothing answers in time", async () => {
@@ -59,7 +73,7 @@ describe("asking the desktop app to relay a sign-in", () => {
 
     vi.advanceTimersByTime(RELAY_ACK_TIMEOUT_MS);
 
-    expect(await relaying).toBe(false);
+    expect(await relaying).toBe("unavailable");
     expect(embed.handlers.has("minds:provider-sign-in-ack")).toBe(false);
   });
 
@@ -72,14 +86,14 @@ describe("asking the desktop app to relay a sign-in", () => {
     ack(true);
     vi.advanceTimersByTime(RELAY_ACK_TIMEOUT_MS);
 
-    expect(await newer).toBe(true);
-    expect(await older).toBe(false);
+    expect(await newer).toBe("relaying");
+    expect(await older).toBe("unavailable");
   });
 
   it("reads anything but a true relay as no", async () => {
     const relaying = requestProviderRelay("https://claude.ai/x", "flow-1");
     ack("true");
-    expect(await relaying).toBe(false);
+    expect(await relaying).toBe("unavailable");
   });
 
   it("does not wait on a page that no chrome embeds", async () => {
@@ -87,7 +101,7 @@ describe("asking the desktop app to relay a sign-in", () => {
     topLevel.parent = topLevel;
     vi.stubGlobal("window", topLevel);
 
-    expect(await requestProviderRelay("https://claude.ai/x", "flow-1")).toBe(false);
+    expect(await requestProviderRelay("https://claude.ai/x", "flow-1")).toBe("unavailable");
     expect(embed.sent).toEqual([]);
   });
 
