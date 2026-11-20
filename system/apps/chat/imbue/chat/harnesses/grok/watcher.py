@@ -109,8 +109,6 @@ class GrokTranscriptLoader(StoreBackedTranscriptLoader):
         self._subagent_metadata_by_session = {}
         self._store.ensure_lane(MAIN_LANE)
 
-    # base hooks
-
     def _refresh_locked(self) -> None:
         self._discover_root_sessions_locked()
         self._consume_root_sessions_locked()
@@ -133,8 +131,6 @@ class GrokTranscriptLoader(StoreBackedTranscriptLoader):
         with self._lock:
             self._refresh_locked()
             return self._subagent_metadata_by_session.get(subagent_session_id)
-
-    # discovery and reading
 
     def _discover_root_sessions_locked(self) -> None:
         for session_dir in list_local_root_session_dirs(self._agent_state_dir):
@@ -237,8 +233,6 @@ class GrokTranscriptLoader(StoreBackedTranscriptLoader):
             if tool_call.get("tool_call_id") == call_event_id:
                 tool_call["subagent_metadata"] = metadata
         self._store.register_rebroadcast(call_event_id)
-
-    # on-demand payload detail
 
     def _parse_detail(
         self, event: dict[str, Any], source_line: str | None, thinking_line: str | None
