@@ -18,13 +18,17 @@ bucket's in ``system/changelog/``); a PR that touches a project must add
 ``<project_dir>/changelog/<branch>.md`` (slashes in the branch name replaced
 with dashes).
 
+A PR whose branch starts with ``mngr/changelog-consolidation`` (e.g. the
+nightly's ``mngr/changelog-consolidation-<timestamp>``), which moves the entries
+into the root ``CHANGELOG.md`` and ``UNABRIDGED_CHANGELOG.md``, owes no entry.
+
 Run it from the repo root::
 
     uv run --no-sync system/scripts/workspace_scripts/check_changelog_entries.py
 
 Exit codes:
-    0  -- ok (entries present, or nothing to check: not a PR branch / no
-          project files changed)
+    0  -- ok (entries present, or nothing to check: not a PR branch / exempt /
+          no project files changed)
     1  -- one or more touched projects are missing their entry file
     2  -- cannot establish a usable diff base (misconfiguration); never a
           silent pass
@@ -47,6 +51,8 @@ AGENTS_DIR = ".agents"
 # members (system/scripts and the .agents projects) fall into the dev and agents
 # buckets.
 PROJECT_PARENT_DIRS = ("system/libs", "system/services", "system/apps")
+
+_EXEMPT_BRANCH_PREFIXES = ("mngr/changelog-consolidation",)
 
 
 def project_for_path(rel_path: Path | str, repo_root: Path) -> str:
@@ -250,11 +256,21 @@ def find_missing_entries(branch: str, touched: set[str], repo_root: Path) -> lis
     return missing
 
 
+def is_exempt_branch(branch: str) -> bool:
+    """Whether ``branch`` owes no entries whatever it changes."""
+    return branch.startswith(_EXEMPT_BRANCH_PREFIXES)
+
+
 def main(repo_root: Path = _REPO_ROOT) -> int:
     branch = detect_branch(repo_root)
     if not branch or branch == "main":
         print(
             "changelog gate: not a PR branch (branch is empty or 'main'); nothing to check."
+        )
+        return 0
+    if is_exempt_branch(branch):
+        print(
+            f"changelog gate: branch '{branch}' is exempt from the changelog requirement."
         )
         return 0
 

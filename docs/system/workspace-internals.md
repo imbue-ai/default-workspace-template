@@ -54,7 +54,7 @@ is named `<app>-<role>`.
 
 ## Structure
 
-- `CLAUDE.md` - Agent instructions
+- `AGENTS.md` - Agent instructions (`CLAUDE.md` loads it and adds Claude-only notes)
 - `apps` / `skills` / `routines` - Top-level symlinks to `system/apps/`,
   `.agents/skills/` and `system/routines/` for discoverability
 - `system/config/parent.toml` - Upstream repo for pulling updates

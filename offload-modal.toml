@@ -30,6 +30,8 @@ build_inputs = [
     "uv.lock",
     "system/package.json",
     "system/package-lock.json",
+    # Read by every npm ci; turns off onnxruntime-node's CUDA download.
+    "system/.npmrc",
     # Everything system/Dockerfile copies in and runs.
     "system/scripts/write_apt_sources.sh",
     "system/scripts/setup_system.sh",

@@ -15,8 +15,9 @@ export const CARD_WIDTH_PX = 216;
 /** The gap between a card and the top of the entry it hangs over. */
 const CARD_GAP_PX = 6;
 
-/** Which card is open: a person's (by roster key) or the agent's. */
-export type OpenCard = { readonly kind: "person"; readonly key: string } | { readonly kind: "agent" };
+/** Which card is open: a person's (by roster key), the agent's, or the resource gauge's. */
+export type OpenCard =
+  { readonly kind: "person"; readonly key: string } | { readonly kind: "agent" } | { readonly kind: "resources" };
 
 export interface TrayCardHover {
   /** The card open now, or null. */

@@ -22,7 +22,7 @@ set -euo pipefail
 emit_as_codex=0
 [[ "${1:-}" == "--codex" ]] && emit_as_codex=1
 
-repo_root="${MNGR_AGENT_WORK_DIR:-$(pwd)}"
+repo_root="${MNGR_AGENT_WORK_DIR:-${CLAUDE_PROJECT_DIR:-$(pwd)}}"
 # Honor any externally-set TICKETS_DIR (the agent's env normally pins it
 # via .mngr/settings.toml -- e.g. /home/user/workspace/data/.tickets -- so the tk
 # tickets live under runtime/ with the rest of the synced state). Fall back to tk's
@@ -59,7 +59,7 @@ $open_lines
 
 For each one, decide before continuing: keep working on it (call \`tk start <id>\` if it is not already in_progress), replace it with a fresh step, or close it now with \`tk close <id> "<summary>"\` (the positional summary is required for steps). The summary is a concise one-line description of the *work done* in this step (the caption a non-technical user sees), not the outcome -- the outcome goes in your final assistant message. Steps are sequential: do not start a new step until the previous one is closed.
 
-See CLAUDE.md > Task management for the full protocol.
+See AGENTS.md > Task management for the full protocol.
 EOF
 )
 

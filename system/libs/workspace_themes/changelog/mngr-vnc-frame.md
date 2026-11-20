@@ -1,1 +1,0 @@
-The two drawn built-in themes (Classic Mac, Windows 2000) ship a hand-drawn icon for the Screen, a monitor on a stand showing one window, in place of the deleted browser app's globe, and the built-in theme icon test counts the Screen among the apps every drawn theme must cover.
