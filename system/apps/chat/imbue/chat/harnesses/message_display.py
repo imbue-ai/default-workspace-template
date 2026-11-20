@@ -14,12 +14,8 @@ ITS detectors here; a detector only some harnesses emit simply never fires for t
 
 Order of decision (:func:`classify_user_message`):
 
-1. An explicit detector matches (for a harness note only: grok's stop-hook note and its
-   interrupted-turn note; then stop hook, fleet, task-notification, background-task report,
-   workspace-update note, grok's wake report, skill, /welcome, a seeded chat's context block,
-   model-bar traffic, a latchkey resolution, a secret-card resolution, reports merged into a turn
-   with the user's words)
-   -> that decision. Explicit detectors WIN over ``is_meta`` -- Stop-hook feedback is
+1. An explicit detector matches (``_DETECTORS``, after ``_HARNESS_NOTE_DETECTORS`` for a harness
+   note) -> that decision. Explicit detectors WIN over ``is_meta`` -- Stop-hook feedback is
    ``is_meta`` yet deliberately surfaces as a chip.
 2. else ``is_wake`` (a turn the harness started itself to report background work) -> a notice.
 3. else ``is_meta`` (a framework-injected, model-only message) -> hidden. One rule hides the

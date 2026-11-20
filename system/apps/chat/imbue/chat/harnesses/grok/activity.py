@@ -1,5 +1,4 @@
-"""Grok's activity tracker: mngr's turn-in-flight answer, refined to a tool verb by the top-level sessions' own
-unanswered tool calls. The pure derivation lives beside it in ``activity_state``."""
+"""Grok's activity tracker; the pure derivation lives beside it in ``activity_state``."""
 
 from typing import Any
 from typing import ClassVar

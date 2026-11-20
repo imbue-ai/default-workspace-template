@@ -1,9 +1,5 @@
 """Test utilities for the grok harness: the captured grok sessions under ``fixtures/``, and a fake grok agent state
-dir in mngr's layout built from them.
-
-The layout is mngr's own, written here by hand; ``watcher_test`` pins it against mngr's grok session helpers, so an
-mngr bump that moves it fails there first.
-"""
+dir in mngr's layout, written by hand, built from them."""
 
 from pathlib import Path
 from typing import Final
