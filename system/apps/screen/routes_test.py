@@ -15,11 +15,13 @@ from flask.testing import FlaskClient
 
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
-from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
-from app_schema.testing import CROSS_SITE_FETCH_HEADERS
-from app_schema.testing import REBOUND_BASE_URL
-from app_schema.testing import assert_api_schema_describes_app
-from app_schema.testing import assert_request_guard_refuses_unknown_provenance
+from imbue.app_sdk.api_schema import DEFAULT_API_SCHEMA_PATH
+from imbue.app_sdk.app_testing import CROSS_SITE_FETCH_HEADERS
+from imbue.app_sdk.app_testing import REBOUND_BASE_URL
+from imbue.app_sdk.app_testing import assert_api_schema_describes_app
+from imbue.app_sdk.app_testing import assert_request_guard_refuses_unknown_provenance
+from imbue.app_sdk.identity import OTHER_ORIGIN_REFUSAL
+from imbue.app_sdk.identity import UNTRUSTED_LOOPBACK_REFUSAL
 from mock_chromium_test import FakeCdpConnector
 from mock_messenger_test import RecordingLauncher
 from mock_neko_test import FakeNeko
@@ -35,8 +37,6 @@ from screen.service import ScreenService
 from screen.watch import STOPPED_NOTIFICATION_PATH
 from testing import start_browser
 from testing import start_service_stack
-from workspace_layout.identity import OTHER_ORIGIN_REFUSAL
-from workspace_layout.identity import UNTRUSTED_LOOPBACK_REFUSAL
 from workspace_layout.testing import LoopbackShell
 
 _OWNER: Final[dict[str, str]] = {

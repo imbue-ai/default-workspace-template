@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Any
 
 from flask.testing import FlaskClient
-from workspace_layout.identity import IDENTITY_HEADER
 from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 
+from imbue.app_sdk.identity import IDENTITY_HEADER
 from imbue.chat.keybindings_endpoints import chat_keybinding_actions
 from imbue.chat.server import create_application
 from imbue.chat.testing import build_test_state
@@ -37,9 +37,7 @@ def test_me_answers_the_defaults_when_no_profile_file_exists() -> None:
     }
 
 
-def test_me_resolves_the_owners_snapshot_value_but_never_a_visitors(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+def test_me_resolves_the_owners_snapshot_value_but_never_a_visitors(tmp_path: Path, monkeypatch: Any) -> None:
     # The routes resolve against the working directory's profile files (cwd is
     # the workspace root in production), so the test stages one.
     monkeypatch.chdir(tmp_path)

@@ -15,15 +15,15 @@ from unittest.mock import patch
 import httpx
 import pytest
 from app_manifest.testing import assert_document_policy_admits_page
-from app_schema.testing import CROSS_SITE_FETCH_HEADERS
-from app_schema.testing import assert_api_schema_describes_app
-from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from flask import Flask
 from flask.testing import FlaskClient
-from workspace_layout.identity import ANONYMOUS_OWNER
-from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 
+from imbue.app_sdk.app_testing import CROSS_SITE_FETCH_HEADERS
+from imbue.app_sdk.app_testing import assert_api_schema_describes_app
+from imbue.app_sdk.app_testing import assert_request_guard_refuses_unknown_provenance
+from imbue.app_sdk.identity import ANONYMOUS_OWNER
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.avatar.primitives import DesignId

@@ -11,9 +11,9 @@ from pathlib import Path
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
-from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.server import create_application

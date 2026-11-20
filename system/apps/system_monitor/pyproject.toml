@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
-    "app-schema",
+    "imbue-app-sdk",
     "disk-headroom",
     "flask>=3.0",
     "host-backup",
@@ -20,7 +20,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     # What the API-document test validates the served document with.
-    "app-schema[testing]",
+    "imbue-app-sdk[testing]",
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
     "ty==0.0.87",
 ]

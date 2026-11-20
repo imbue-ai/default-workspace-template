@@ -122,7 +122,7 @@ counts under the chat or program that started it.
 
 The app describes its own HTTP API at `GET /api/schema` (the manifest's
 `api_schema_path`), an OpenAPI document built from its routes by
-`system/libs/app_schema`: `/api/stats` (the overview's reading),
+the app SDK (`imbue.app_sdk`): `/api/stats` (the overview's reading),
 `/api/history?span=1h|24h` (the longer graphs), `/api/disk` (the disk view),
 `POST /api/disk/scan` (start the walk), and `POST /api/stop` (a Stop button's
 request).

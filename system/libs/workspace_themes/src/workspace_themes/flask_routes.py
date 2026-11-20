@@ -3,8 +3,8 @@ from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Final, assert_never
 
-from app_schema.api_schema import RouteTable, SchemalessRoute
 from flask import Blueprint, Flask, Response, abort, request, send_file
+from imbue.app_sdk.api_schema import RouteTable, SchemalessRoute
 from loguru import logger
 
 from workspace_themes.catalog import CachingThemeCatalogLoader

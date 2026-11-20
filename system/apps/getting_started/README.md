@@ -22,7 +22,7 @@ from the workspace venv (`.venv/bin/getting-started`), serving on
 - `GET /api/health`: `{"status", "is_frontend_built"}`, the app's liveness probe (the update
   apply's post-restart probes cover critical apps only, which this one is not).
 - `GET /api/schema`: the OpenAPI document of these routes, built from the app's url map
-  (`system/libs/app_schema`); the manifest's `api_schema_path`.
+  (the app SDK, `imbue.app_sdk`); the manifest's `api_schema_path`.
 - `GET /api/templates-catalog`: the template catalog (`catalog/README.md` at the repo root),
   fetched from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL` (the shell's old variable name, kept
   so nothing outside the workspace changes), reused for six hours, and kept as a last good

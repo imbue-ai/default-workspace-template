@@ -10,9 +10,10 @@ README for details.
   and the `app-manifest validate-manifest` command.
 - `app_registration/` - Writes an app's row in the app registry: what
   `system/scripts/forward_port.py` runs, stdlib-only.
-- `app_schema/` - An app's self-description: the OpenAPI document of its HTTP
-  API, built from its Flask routes and served at the path its manifest names
-  in `api_schema_path`, and the assertion an app's tests make about it.
+- `app_schema/` - The names of the app SDK (`imbue.app_sdk`, installed from
+  the mngr commit `pyproject.toml` pins) under the package they had before
+  it: an app's request guard, its route helpers, and the OpenAPI document
+  built from its routes. Kept for apps built before the SDK.
 - `workspace_layout/` - The shell's layout routes as one typed client the
   apps share, and the agent-facing `uv run --no-sync workspace-layout` command that
   reads and arranges the desktop.

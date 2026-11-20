@@ -4,6 +4,14 @@ from typing import Any
 from typing import Final
 from typing import Self
 
+from imbue.app_sdk.primitives import FILENAME_SAFE_PATTERN as FILENAME_SAFE_PATTERN
+from imbue.app_sdk.primitives import MAX_PARTICIPANT_NAME_LENGTH as MAX_PARTICIPANT_NAME_LENGTH
+from imbue.app_sdk.primitives import OWNER_PARTICIPANT_KEY as OWNER_PARTICIPANT_KEY
+from imbue.app_sdk.primitives import OWNER_PARTICIPANT_KEY_VALUE as OWNER_PARTICIPANT_KEY_VALUE
+from imbue.app_sdk.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY as WORKSPACE_AGENT_PARTICIPANT_KEY
+from imbue.app_sdk.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY_VALUE as WORKSPACE_AGENT_PARTICIPANT_KEY_VALUE
+from imbue.app_sdk.primitives import ParticipantKey as ParticipantKey
+from imbue.app_sdk.primitives import UserId as UserId
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.primitives import NonEmptyStr
@@ -15,24 +23,7 @@ from workspace_layout.errors import InvalidLayoutValueError
 
 # A desktop id is the slugified desktop name (desktop contracts.md section 1).
 _DESKTOP_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
-# A value that names a file on disk is held to one filename-safe alphabet.
-FILENAME_SAFE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _WINDOW_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^win-[0-9a-f]{16}$")
-# A name known only from a hand-typed author prefix may hold any printable text; its key form holds it to at most
-# this many characters, which is what the chat app truncates such a name to.
-MAX_PARTICIPANT_NAME_LENGTH: Final[int] = 60
-# A participant key (the multiplayer spec, section 4.1): the owner of an unshared workspace, the workspace's own
-# agent, a signed-in person, an invited email, a visiting agent, or a name known only from a hand-typed prefix.
-# Every form is filename-safe and URL-path-safe, since a key names a mentions file and sits in a picture path: no
-# slash anywhere, no control character, and no "#", "?", or "%" in an address.
-_PARTICIPANT_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"^(?:owner|workspace-agent|user:[A-Za-z0-9][A-Za-z0-9._-]{0,127}|email:[^\s/#?%:@]+@[^\s/#?%@]+"
-    r"|agent:[A-Za-z0-9][A-Za-z0-9._-]{0,127}"
-    rf"|name:[^\n/\x00-\x1f]{{1,{MAX_PARTICIPANT_NAME_LENGTH}}})$"
-)
-# The keys that name a presence file (``data/.state/presence/users/<id>.json``), by their id part.
-OWNER_PARTICIPANT_KEY_VALUE: Final[str] = "owner"
-WORKSPACE_AGENT_PARTICIPANT_KEY_VALUE: Final[str] = "workspace-agent"
 # A window's path and title (desktop contracts.md section 1).
 MAX_WINDOW_PATH_LENGTH: Final[int] = 2048
 MAX_WINDOW_TITLE_LENGTH: Final[int] = 256
@@ -80,39 +71,6 @@ class WindowId(NonEmptyStr):
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
         return _string_schema(cls)
-
-
-class UserId(NonEmptyStr):
-    """A signed-in account's user id as the identity header carries it; it names the user's state files, so it is held
-    to a filename-safe alphabet."""
-
-    def __new__(cls, value: str) -> Self:
-        if not FILENAME_SAFE_PATTERN.fullmatch(value):
-            raise InvalidLayoutValueError(f"invalid user id {value!r}")
-        return super().__new__(cls, value)
-
-    @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
-        return _string_schema(cls)
-
-
-class ParticipantKey(NonEmptyStr):
-    """Who a message, a desktop, a client, or a roster entry belongs to (the multiplayer spec, section 4.1):
-    ``owner``, ``workspace-agent``, ``user:<user_id>``, ``email:<address>``, ``agent:<agent_id>``, or ``name:<name>``,
-    each filename-safe (no slash, no control character)."""
-
-    def __new__(cls, value: str) -> Self:
-        if not _PARTICIPANT_KEY_PATTERN.fullmatch(value):
-            raise InvalidLayoutValueError(f"invalid participant key {value!r}")
-        return super().__new__(cls, value)
-
-    @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
-        return _string_schema(cls)
-
-
-OWNER_PARTICIPANT_KEY: Final[ParticipantKey] = ParticipantKey(OWNER_PARTICIPANT_KEY_VALUE)
-WORKSPACE_AGENT_PARTICIPANT_KEY: Final[ParticipantKey] = ParticipantKey(WORKSPACE_AGENT_PARTICIPANT_KEY_VALUE)
 
 
 class ParticipantKind(LowerCaseStrEnum):

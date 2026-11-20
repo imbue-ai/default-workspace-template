@@ -27,15 +27,15 @@ from typing import Any
 from typing import Final
 
 import httpx
-from app_schema.api_schema import RouteModels
-from app_schema.api_schema import RouteTable
-from app_schema.routes import error_response
-from app_schema.routes import model_response
 from flask import Flask
 from flask import Response
 from latchkey_access.gateway import GatewayAccess
 from loguru import logger as _loguru_logger
 
+from imbue.app_sdk.api_schema import RouteModels
+from imbue.app_sdk.api_schema import RouteTable
+from imbue.app_sdk.routes import error_response
+from imbue.app_sdk.routes import model_response
 from imbue.chat.models import LatchkeyPermissionInfo
 from imbue.chat.models import LatchkeyScopeInfo
 from imbue.chat.state import get_state

@@ -309,16 +309,14 @@ version = "0.1.0"
 source = { editable = "system/libs/app_schema" }
 dependencies = [
     { name = "app-manifest" },
-    { name = "flask" },
+    { name = "imbue-app-sdk" },
     { name = "imbue-common" },
-    { name = "loguru" },
-    { name = "pydantic" },
     { name = "workspace-layout" },
 ]
 
 [package.optional-dependencies]
 testing = [
-    { name = "openapi-spec-validator" },
+    { name = "imbue-app-sdk", extra = ["testing"] },
 ]
 
 [package.dev-dependencies]
@@ -330,11 +328,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "flask", specifier = ">=3.0" },
+    { name = "imbue-app-sdk", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
+    { name = "imbue-app-sdk", extras = ["testing"], marker = "extra == 'testing'", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fimbue_common&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
-    { name = "loguru", specifier = ">=0.7" },
-    { name = "openapi-spec-validator", marker = "extra == 'testing'", specifier = ">=0.7" },
-    { name = "pydantic", specifier = ">=2.0" },
     { name = "workspace-layout", editable = "system/libs/workspace_layout" },
 ]
 provides-extras = ["testing"]
@@ -675,12 +671,12 @@ version = "0.1.0"
 source = { editable = "system/apps/chat" }
 dependencies = [
     { name = "app-manifest" },
-    { name = "app-schema" },
     { name = "chat-background-tasks" },
     { name = "concurrency-group" },
     { name = "flask" },
     { name = "flask-sock" },
     { name = "httpx" },
+    { name = "imbue-app-sdk" },
     { name = "imbue-common" },
     { name = "imbue-mngr" },
     { name = "imbue-mngr-antigravity" },
@@ -706,8 +702,8 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "app-schema", extra = ["testing"] },
     { name = "coverage" },
+    { name = "imbue-app-sdk", extra = ["testing"] },
     { name = "inline-snapshot" },
     { name = "mngr-cli-contract" },
     { name = "playwright" },
@@ -727,12 +723,12 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "chat-background-tasks", editable = "system/libs/chat_background_tasks" },
     { name = "concurrency-group", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fconcurrency_group&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-app-sdk", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fimbue_common&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-mngr-antigravity", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr_antigravity&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
@@ -758,8 +754,8 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
     { name = "coverage" },
+    { name = "imbue-app-sdk", extras = ["testing"], git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "inline-snapshot", specifier = ">=0.13" },
     { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },
     { name = "playwright", specifier = ">=1.40" },
@@ -1243,10 +1239,10 @@ version = "0.1.0"
 source = { editable = "system/apps/files" }
 dependencies = [
     { name = "app-manifest" },
-    { name = "app-schema" },
     { name = "click" },
     { name = "flask" },
     { name = "httpx" },
+    { name = "imbue-app-sdk" },
     { name = "imbue-common" },
     { name = "latchkey-access" },
     { name = "loguru" },
@@ -1259,7 +1255,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "app-schema", extra = ["testing"] },
+    { name = "imbue-app-sdk", extra = ["testing"] },
     { name = "inline-snapshot" },
     { name = "pytest" },
     { name = "pytest-timeout" },
@@ -1269,10 +1265,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "click", specifier = ">=8.1" },
     { name = "flask", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-app-sdk", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fimbue_common&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "latchkey-access", editable = "system/libs/latchkey_access" },
     { name = "loguru", specifier = ">=0.7" },
@@ -1285,7 +1281,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
+    { name = "imbue-app-sdk", extras = ["testing"], git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "inline-snapshot", specifier = ">=0.13" },
     { name = "pytest", specifier = ">=9.0" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },
@@ -1426,10 +1422,10 @@ version = "0.1.0"
 source = { editable = "system/apps/getting_started" }
 dependencies = [
     { name = "app-manifest" },
-    { name = "app-schema" },
     { name = "click" },
     { name = "flask" },
     { name = "httpx" },
+    { name = "imbue-app-sdk" },
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "pydantic" },
@@ -1440,8 +1436,8 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "app-schema", extra = ["testing"] },
     { name = "coverage" },
+    { name = "imbue-app-sdk", extra = ["testing"] },
     { name = "inline-snapshot" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -1453,10 +1449,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "click", specifier = ">=8.1" },
     { name = "flask", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-app-sdk", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fimbue_common&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -1467,8 +1463,8 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
     { name = "coverage" },
+    { name = "imbue-app-sdk", extras = ["testing"], git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "inline-snapshot", specifier = ">=0.13" },
     { name = "pytest", specifier = ">=9.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
@@ -1835,6 +1831,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/cd/63/9496c57188a2ee585e0f1db071d75089a11e98aa86eb99d9d7618fc1edce/idna-3.18.tar.gz", hash = "sha256:ffb385a7e039654cef1ab9ef32c6fafe283c0c0467bba1d9029738ce4a14a848", size = 196711, upload-time = "2026-06-02T14:34:07.794Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1e/5e/d4e9f1a599fb8e573b7b87160658329fbf28d19eac2718f51fc3def3aa5a/idna-3.18-py3-none-any.whl", hash = "sha256:7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2", size = 65455, upload-time = "2026-06-02T14:34:06.319Z" },
+]
+
+[[package]]
+name = "imbue-app-sdk"
+version = "0.1.0"
+source = { git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472#c4910d54bbbedc38bbf62b82e3a771e72af74472" }
+dependencies = [
+    { name = "flask" },
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+testing = [
+    { name = "openapi-spec-validator" },
 ]
 
 [[package]]
@@ -3679,8 +3689,8 @@ version = "0.1.0"
 source = { editable = "system/apps/routines" }
 dependencies = [
     { name = "app-manifest" },
-    { name = "app-schema" },
     { name = "flask" },
+    { name = "imbue-app-sdk" },
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "pydantic" },
@@ -3691,7 +3701,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "app-schema", extra = ["testing"] },
+    { name = "imbue-app-sdk", extra = ["testing"] },
     { name = "inline-snapshot" },
     { name = "pytest" },
     { name = "pytest-timeout" },
@@ -3702,8 +3712,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "flask", specifier = ">=3.0" },
+    { name = "imbue-app-sdk", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fimbue_common&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -3714,7 +3724,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
+    { name = "imbue-app-sdk", extras = ["testing"], git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "inline-snapshot", specifier = ">=0.13" },
     { name = "pytest", specifier = ">=9.0" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },
@@ -3850,11 +3860,11 @@ version = "0.1.0"
 source = { editable = "system/apps/screen" }
 dependencies = [
     { name = "app-manifest" },
-    { name = "app-schema" },
     { name = "click" },
     { name = "flask" },
     { name = "flask-sock" },
     { name = "httpx" },
+    { name = "imbue-app-sdk" },
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "oom-priority" },
@@ -3872,8 +3882,8 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "app-schema", extra = ["testing"] },
     { name = "coverage" },
+    { name = "imbue-app-sdk", extra = ["testing"] },
     { name = "inline-snapshot" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -3886,11 +3896,11 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "click", specifier = ">=8.1" },
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-app-sdk", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fimbue_common&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
@@ -3908,8 +3918,8 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
     { name = "coverage" },
+    { name = "imbue-app-sdk", extras = ["testing"], git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "inline-snapshot", specifier = ">=0.13" },
     { name = "pytest", specifier = ">=9.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
@@ -4072,8 +4082,8 @@ version = "0.1.0"
 source = { editable = "system/apps/style_guide" }
 dependencies = [
     { name = "app-manifest" },
-    { name = "app-schema" },
     { name = "flask" },
+    { name = "imbue-app-sdk" },
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "pydantic" },
@@ -4083,7 +4093,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "app-schema", extra = ["testing"] },
+    { name = "imbue-app-sdk", extra = ["testing"] },
     { name = "inline-snapshot" },
     { name = "pytest" },
     { name = "pytest-timeout" },
@@ -4094,8 +4104,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "flask", specifier = ">=3.0" },
+    { name = "imbue-app-sdk", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fimbue_common&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -4105,7 +4115,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
+    { name = "imbue-app-sdk", extras = ["testing"], git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "inline-snapshot", specifier = ">=0.13" },
     { name = "pytest", specifier = ">=9.0" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },
@@ -4119,7 +4129,6 @@ version = "0.1.0"
 source = { editable = "system/apps/system_interface" }
 dependencies = [
     { name = "app-manifest" },
-    { name = "app-schema" },
     { name = "chat-background-tasks" },
     { name = "concurrency-group" },
     { name = "defusedxml" },
@@ -4128,6 +4137,7 @@ dependencies = [
     { name = "flask" },
     { name = "flask-sock" },
     { name = "httpx" },
+    { name = "imbue-app-sdk" },
     { name = "imbue-common" },
     { name = "latchkey-access" },
     { name = "oom-priority" },
@@ -4144,9 +4154,9 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "app-schema", extra = ["testing"] },
     { name = "chat" },
     { name = "coverage" },
+    { name = "imbue-app-sdk", extra = ["testing"] },
     { name = "imbue-mngr" },
     { name = "inline-snapshot" },
     { name = "mngr-cli-contract" },
@@ -4164,7 +4174,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "chat-background-tasks", editable = "system/libs/chat_background_tasks" },
     { name = "concurrency-group", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fconcurrency_group&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "defusedxml", specifier = ">=0.7" },
@@ -4173,6 +4182,7 @@ requires-dist = [
     { name = "flask", specifier = ">=3.1" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-app-sdk", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fimbue_common&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "latchkey-access", editable = "system/libs/latchkey_access" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
@@ -4189,9 +4199,9 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
     { name = "chat", editable = "system/apps/chat" },
     { name = "coverage" },
+    { name = "imbue-app-sdk", extras = ["testing"], git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "inline-snapshot", specifier = ">=0.13" },
     { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },
@@ -4212,11 +4222,11 @@ version = "0.1.0"
 source = { editable = "system/apps/system_monitor" }
 dependencies = [
     { name = "app-manifest" },
-    { name = "app-schema" },
     { name = "disk-headroom" },
     { name = "flask" },
     { name = "host-backup" },
     { name = "httpx" },
+    { name = "imbue-app-sdk" },
     { name = "imbue-common" },
     { name = "oom-priority" },
     { name = "pydantic" },
@@ -4225,18 +4235,18 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "app-schema", extra = ["testing"] },
+    { name = "imbue-app-sdk", extra = ["testing"] },
     { name = "ty" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "disk-headroom", editable = "system/libs/disk_headroom" },
     { name = "flask", specifier = ">=3.0" },
     { name = "host-backup", editable = "system/services/host_backup" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-app-sdk", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fimbue_common&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -4245,7 +4255,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
+    { name = "imbue-app-sdk", extras = ["testing"], git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "ty", specifier = "==0.0.87" },
 ]
 
@@ -4273,9 +4283,9 @@ version = "0.1.0"
 source = { editable = "system/apps/terminal" }
 dependencies = [
     { name = "app-manifest" },
-    { name = "app-schema" },
     { name = "click" },
     { name = "flask" },
+    { name = "imbue-app-sdk" },
     { name = "imbue-common" },
     { name = "imbue-mngr-ttyd" },
     { name = "loguru" },
@@ -4287,8 +4297,8 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "app-schema", extra = ["testing"] },
     { name = "httpx" },
+    { name = "imbue-app-sdk", extra = ["testing"] },
     { name = "imbue-mngr" },
     { name = "ty" },
 ]
@@ -4296,9 +4306,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "click", specifier = ">=8.1" },
     { name = "flask", specifier = ">=3.0" },
+    { name = "imbue-app-sdk", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fimbue_common&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-mngr-ttyd", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr_ttyd&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "loguru", specifier = ">=0.7" },
@@ -4310,8 +4320,8 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-app-sdk", extras = ["testing"], git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fmngr&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "ty", specifier = "==0.0.87" },
 ]
@@ -4753,6 +4763,7 @@ version = "0.1.0"
 source = { editable = "system/libs/workspace_layout" }
 dependencies = [
     { name = "app-manifest" },
+    { name = "imbue-app-sdk" },
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "pydantic" },
@@ -4766,6 +4777,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "imbue-app-sdk", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fimbue_common&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.12" },
@@ -4780,6 +4792,7 @@ version = "0.1.0"
 source = { editable = "system/libs/workspace_profile" }
 dependencies = [
     { name = "app-manifest" },
+    { name = "imbue-app-sdk" },
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "pydantic" },
@@ -4794,6 +4807,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "imbue-app-sdk", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fimbue_common&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -4826,9 +4840,9 @@ version = "0.1.0"
 source = { editable = "system/libs/workspace_themes" }
 dependencies = [
     { name = "app-manifest" },
-    { name = "app-schema" },
     { name = "click" },
     { name = "flask" },
+    { name = "imbue-app-sdk" },
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "pillow" },
@@ -4839,9 +4853,9 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "click", specifier = ">=8.1" },
     { name = "flask", specifier = ">=3.0" },
+    { name = "imbue-app-sdk", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fapp_sdk&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fimbue_common&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pillow", specifier = ">=12.1" },

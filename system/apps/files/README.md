@@ -84,7 +84,7 @@ what its grants match); one that predates that serves them with no id
 `X-Latchkey-Device` header, which routes the request to it.
 
 `/__files/api/schema` is the OpenAPI document of the app's routes, built from its
-url map (`system/libs/app_schema`); the manifest's `api_schema_path`, which the
+url map (the app SDK, `imbue.app_sdk`); the manifest's `api_schema_path`, which the
 visiting-agent primer links. The server's route table says what each route
 exchanges: the connections listing answers the `Connections` model and refuses
 with `{"detail": ...}`; the file routes serve files of any kind, so they are

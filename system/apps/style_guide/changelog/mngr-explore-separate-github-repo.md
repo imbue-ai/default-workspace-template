@@ -1,0 +1,1 @@
+Imports the request guard, the route helpers, the API document, and the request identity from the app SDK (`imbue.app_sdk`, the `imbue-app-sdk` package) in place of the workspace's `app_schema` and `workspace_layout.identity`, which the SDK was built from. Behaviour is unchanged; a refused request is now logged through Flask's logger.

@@ -33,7 +33,6 @@ from share_grants.agent_grants import AgentGrant
 from share_grants.agent_grants import read_agent_last_seen_times
 from share_grants.grants import Grants
 from watchdog.observers.api import BaseObserver
-from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.primitives import OWNER_PARTICIPANT_KEY
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ParticipantKind
@@ -46,6 +45,7 @@ from workspace_layout.roster import assign_handles
 from workspace_layout.roster import participant_color
 from workspace_layout.shell_url import ROSTER_ROUTE
 
+from imbue.app_sdk.errors import InvalidIdentityValueError
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
 from imbue.imbue_common.mutable_model import MutableModel
@@ -378,7 +378,7 @@ class RosterSource(MutableModel):
         version of the document it came from, so one bad entry costs one entry rather than the whole roster."""
         try:
             return ParticipantKey(value)
-        except InvalidLayoutValueError as e:
+        except InvalidIdentityValueError as e:
             path, version = document
             warned = self._warned_entries_by_path.get(path)
             if warned is None or warned.version != version:

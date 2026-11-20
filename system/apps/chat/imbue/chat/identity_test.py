@@ -1,8 +1,8 @@
 import pytest
-from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from flask import Flask
-from workspace_layout.identity import IDENTITY_HEADER
 
+from imbue.app_sdk.app_testing import assert_request_guard_refuses_unknown_provenance
+from imbue.app_sdk.identity import IDENTITY_HEADER
 from imbue.chat.identity import UnreadableIdentityHeaderError
 from imbue.chat.identity import is_owner_identity
 from imbue.chat.identity import request_identity

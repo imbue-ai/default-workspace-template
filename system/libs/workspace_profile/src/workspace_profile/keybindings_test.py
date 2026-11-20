@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
-from workspace_layout.identity import ANONYMOUS_OWNER, RequestIdentity
+from imbue.app_sdk.identity import ANONYMOUS_OWNER, RequestIdentity
 
 from workspace_profile.errors import InvalidChordError, ProfileWriteError
 from workspace_profile.keybindings import (
@@ -37,7 +37,18 @@ def _snapshot(keybindings: dict[str, object]) -> WorkspaceProfileSnapshot:
 
 @pytest.mark.parametrize(
     "chord",
-    ["a", "7", "[", "enter", "f11", "ctrl+a", "ctrl+shift+p", "alt+arrowleft", "ctrl+alt+shift+meta+z", "meta+plus"],
+    [
+        "a",
+        "7",
+        "[",
+        "enter",
+        "f11",
+        "ctrl+a",
+        "ctrl+shift+p",
+        "alt+arrowleft",
+        "ctrl+alt+shift+meta+z",
+        "meta+plus",
+    ],
 )
 def test_canonical_chords_are_accepted(chord: str) -> None:
     assert is_canonical_chord(chord) is True
@@ -45,7 +56,20 @@ def test_canonical_chords_are_accepted(chord: str) -> None:
 
 @pytest.mark.parametrize(
     "chord",
-    ["", "A", "Ctrl+a", "cmd+a", "shift+ctrl+a", "ctrl+ctrl+a", "ctrl+", "+", "ctrl++", "esc", "ctrl", "a+b"],
+    [
+        "",
+        "A",
+        "Ctrl+a",
+        "cmd+a",
+        "shift+ctrl+a",
+        "ctrl+ctrl+a",
+        "ctrl+",
+        "+",
+        "ctrl++",
+        "esc",
+        "ctrl",
+        "a+b",
+    ],
     ids=[
         "empty",
         "uppercase-key",
@@ -79,20 +103,27 @@ def test_non_canonical_chords_are_refused(chord: str) -> None:
         ("enter", "enter"),
     ],
 )
-def test_normalize_chord_canonicalizes_recorder_spellings(spelled: str, canonical: str) -> None:
+def test_normalize_chord_canonicalizes_recorder_spellings(
+    spelled: str, canonical: str
+) -> None:
     normalized = normalize_chord(spelled)
     assert normalized == canonical
     assert is_canonical_chord(normalized)
 
 
-@pytest.mark.parametrize("spelled", ["", "ctrl+", "banana+a", "ctrl+ctrl+a", "unknownkey"])
+@pytest.mark.parametrize(
+    "spelled", ["", "ctrl+", "banana+a", "ctrl+ctrl+a", "unknownkey"]
+)
 def test_normalize_chord_refuses_what_it_cannot_spell(spelled: str) -> None:
     with pytest.raises(InvalidChordError):
         normalize_chord(spelled)
 
 
 def test_a_valid_keybindings_value_has_no_problem() -> None:
-    value = {"files": {"rename": ["f2"], "delete": []}, "chat": {"send-message": ["enter", "ctrl+enter"]}}
+    value = {
+        "files": {"rename": ["f2"], "delete": []},
+        "chat": {"send-message": ["enter", "ctrl+enter"]},
+    }
     assert describe_keybindings_value_problem(value) is None
     assert describe_keybindings_value_problem({}) is None
 
@@ -107,14 +138,25 @@ def test_a_valid_keybindings_value_has_no_problem() -> None:
         ({"files": {"rename": "f2"}}, "list of chords"),
         ({"files": {"rename": ["F2"]}}, "not a canonical chord"),
     ],
-    ids=["not-a-map", "bad-app-name", "no-action-level", "bad-action-id", "chords-not-a-list", "bad-chord"],
+    ids=[
+        "not-a-map",
+        "bad-app-name",
+        "no-action-level",
+        "bad-action-id",
+        "chords-not-a-list",
+        "bad-chord",
+    ],
 )
-def test_keybindings_value_problems_are_named(value: object, problem_fragment: str) -> None:
+def test_keybindings_value_problems_are_named(
+    value: object, problem_fragment: str
+) -> None:
     problem = describe_keybindings_value_problem(value)
     assert problem is not None and problem_fragment in problem
 
 
-def test_parse_keybindings_value_keeps_assignments_and_drops_malformed_entries() -> None:
+def test_parse_keybindings_value_keeps_assignments_and_drops_malformed_entries() -> (
+    None
+):
     parsed = parse_keybindings_value(
         {"chat": {"send-message": ["enter", 7], "bad": "enter"}, "broken": ["x"], 3: {}}
     )
@@ -130,44 +172,72 @@ def test_resolution_order_for_the_owner(tmp_path: Path) -> None:
     snapshot = _snapshot({"chat": {"send-message": ["ctrl+enter"]}})
 
     resolved = resolve_app_keybindings(
-        "chat", defaults, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+        "chat",
+        defaults,
+        snapshot=snapshot,
+        identity=ANONYMOUS_OWNER,
+        workspace_root=tmp_path,
     )
     assert resolved == {"send-message": ["ctrl+enter"]}
 
-    write_unsent_change_values(tmp_path, {"keybindings": {"chat": {"send-message": ["meta+enter"]}}})
+    write_unsent_change_values(
+        tmp_path, {"keybindings": {"chat": {"send-message": ["meta+enter"]}}}
+    )
     resolved_with_unsent = resolve_app_keybindings(
-        "chat", defaults, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+        "chat",
+        defaults,
+        snapshot=snapshot,
+        identity=ANONYMOUS_OWNER,
+        workspace_root=tmp_path,
     )
     assert resolved_with_unsent == {"send-message": ["meta+enter"]}
 
-    write_user_override_values(tmp_path, "owner-1", {"keybindings": {"chat": {"send-message": ["alt+enter"]}}})
+    write_user_override_values(
+        tmp_path, "owner-1", {"keybindings": {"chat": {"send-message": ["alt+enter"]}}}
+    )
     resolved_with_override = resolve_app_keybindings(
-        "chat", defaults, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+        "chat",
+        defaults,
+        snapshot=snapshot,
+        identity=ANONYMOUS_OWNER,
+        workspace_root=tmp_path,
     )
     assert resolved_with_override == {"send-message": ["alt+enter"]}
 
 
-def test_a_visitor_never_sees_the_owners_account_or_unsent_values(tmp_path: Path) -> None:
+def test_a_visitor_never_sees_the_owners_account_or_unsent_values(
+    tmp_path: Path,
+) -> None:
     defaults = {"send-message": ["enter"]}
     snapshot = _snapshot({"chat": {"send-message": ["ctrl+enter"]}})
-    write_unsent_change_values(tmp_path, {"keybindings": {"chat": {"send-message": ["meta+enter"]}}})
+    write_unsent_change_values(
+        tmp_path, {"keybindings": {"chat": {"send-message": ["meta+enter"]}}}
+    )
 
     resolved = resolve_app_keybindings(
         "chat", defaults, snapshot=snapshot, identity=_VISITOR, workspace_root=tmp_path
     )
     assert resolved == {"send-message": ["enter"]}
 
-    write_user_override_values(tmp_path, "visitor-1", {"keybindings": {"chat": {"send-message": ["f9"]}}})
+    write_user_override_values(
+        tmp_path, "visitor-1", {"keybindings": {"chat": {"send-message": ["f9"]}}}
+    )
     resolved_with_own = resolve_app_keybindings(
         "chat", defaults, snapshot=snapshot, identity=_VISITOR, workspace_root=tmp_path
     )
     assert resolved_with_own == {"send-message": ["f9"]}
 
 
-def test_an_unknown_actions_assignment_never_leaks_into_the_resolution(tmp_path: Path) -> None:
+def test_an_unknown_actions_assignment_never_leaks_into_the_resolution(
+    tmp_path: Path,
+) -> None:
     snapshot = _snapshot({"chat": {"future-action": ["f9"]}})
     resolved = resolve_app_keybindings(
-        "chat", {"send-message": ["enter"]}, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+        "chat",
+        {"send-message": ["enter"]},
+        snapshot=snapshot,
+        identity=ANONYMOUS_OWNER,
+        workspace_root=tmp_path,
     )
     assert resolved == {"send-message": ["enter"]}
 
@@ -175,7 +245,11 @@ def test_an_unknown_actions_assignment_never_leaks_into_the_resolution(tmp_path:
 def test_an_empty_assignment_unbinds_rather_than_falling_back(tmp_path: Path) -> None:
     snapshot = _snapshot({"chat": {"send-message": []}})
     resolved = resolve_app_keybindings(
-        "chat", {"send-message": ["enter"]}, snapshot=snapshot, identity=ANONYMOUS_OWNER, workspace_root=tmp_path
+        "chat",
+        {"send-message": ["enter"]},
+        snapshot=snapshot,
+        identity=ANONYMOUS_OWNER,
+        workspace_root=tmp_path,
     )
     assert resolved == {"send-message": []}
 
@@ -194,12 +268,20 @@ def test_assignment_helpers_round_trip_one_layer() -> None:
 
 
 def test_the_writers_round_trip_through_the_loaders(tmp_path: Path) -> None:
-    write_user_override_values(tmp_path, "user-1", {"keybindings": {"files": {"rename": ["f2"]}}})
-    assert load_user_override_values(tmp_path, "user-1") == {"keybindings": {"files": {"rename": ["f2"]}}}
+    write_user_override_values(
+        tmp_path, "user-1", {"keybindings": {"files": {"rename": ["f2"]}}}
+    )
+    assert load_user_override_values(tmp_path, "user-1") == {
+        "keybindings": {"files": {"rename": ["f2"]}}
+    }
 
     write_unsent_change_values(tmp_path, {"keybindings": {"files": {"rename": ["f3"]}}})
-    assert load_unsent_change_values(tmp_path) == {"keybindings": {"files": {"rename": ["f3"]}}}
-    raw = json.loads((tmp_path / UNSENT_CHANGES_RELATIVE_PATH).read_text(encoding="utf-8"))
+    assert load_unsent_change_values(tmp_path) == {
+        "keybindings": {"files": {"rename": ["f3"]}}
+    }
+    raw = json.loads(
+        (tmp_path / UNSENT_CHANGES_RELATIVE_PATH).read_text(encoding="utf-8")
+    )
     assert raw == {"keybindings": {"files": {"rename": ["f3"]}}}
 
 

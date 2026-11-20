@@ -1,14 +1,13 @@
+from imbue.app_sdk.errors import InvalidIdentityHeaderError as InvalidIdentityHeaderError
+from imbue.app_sdk.errors import InvalidIdentityValueError as InvalidIdentityValueError
+
+
 class WorkspaceLayoutError(Exception):
     """Base error for everything in the workspace_layout library."""
 
 
 class InvalidLayoutValueError(WorkspaceLayoutError, ValueError):
     """A value on the shell's layout wire (an id, a requester) does not satisfy its rule."""
-
-
-class InvalidIdentityHeaderError(InvalidLayoutValueError):
-    """A present ``X-Imbue-Identity`` header that does not parse: never a proxy's, so the request is refused rather
-    than read as the owner's (the multiplayer spec, D10)."""
 
 
 class ShellOpError(WorkspaceLayoutError):

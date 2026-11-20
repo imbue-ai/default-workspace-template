@@ -6,11 +6,11 @@ from typing import Final
 
 from flask import request
 
+from imbue.app_sdk.identity import IDENTITY_HEADER
+from imbue.app_sdk.identity import RequestIdentity
+from imbue.app_sdk.identity import parse_identity_header
 from screen.primitives import NekoSessionId
 from screen.service import ScreenService
-from workspace_layout.identity import IDENTITY_HEADER
-from workspace_layout.identity import RequestIdentity
-from workspace_layout.identity import parse_identity_header
 
 SESSION_ID_FIELD: Final[str] = "session_id"
 VISITOR_REFUSAL: Final[str] = "this route is the workspace owner's"

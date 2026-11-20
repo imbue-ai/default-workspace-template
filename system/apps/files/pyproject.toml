@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
-    "app-schema",
+    "imbue-app-sdk",
     "click>=8.1",
     "flask>=3.0",
     "httpx>=0.27",
@@ -26,7 +26,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "app-schema[testing]",
+    "imbue-app-sdk[testing]",
     "pytest>=9.0",
     "pytest-timeout>=2.3.0",
     "inline-snapshot>=0.13",
@@ -54,7 +54,7 @@ ignore = ["E501"]
 force-single-line = true
 case-sensitive = true
 order-by-type = false
-known-first-party = ["files_app", "imbue", "app_manifest", "app_schema"]
+known-first-party = ["files_app", "imbue", "app_manifest"]
 
 # Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward
 # (out of this repo entirely when it is checked out nested inside another).

@@ -1,6 +1,6 @@
 """What the service's JSON routes take and answer (docs/system/specs/screen/spec.md section 10.1), the models the
 route table publishes in the OpenAPI document at ``/api/schema`` and checks every parse and answer against
-(``system/libs/app_schema``). A request model that the shell posts beside its own envelope fields, or that a script
+(`the app SDK (`imbue.app_sdk`)`). A request model that the shell posts beside its own envelope fields, or that a script
 may pad, ignores what it does not know; an answer is exactly its fields."""
 
 from typing import Any

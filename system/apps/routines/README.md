@@ -24,7 +24,7 @@ schedule. It is the user's view of the routines library
 
 One document serves every page; the page reads its path, reports it to the
 shell with `shell:location`, and polls the API every 30 seconds (every 5 while
-a run is going). The API is typed through `app_schema` and published at
+a run is going). The API is typed through the app SDK (`imbue.app_sdk`) and published at
 `/api/schema`; every model is the library's, so the `routines` command's JSON
 and the API's are the same shapes:
 

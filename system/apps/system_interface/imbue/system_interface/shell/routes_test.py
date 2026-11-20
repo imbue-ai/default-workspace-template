@@ -8,8 +8,6 @@ import pytest
 from app_manifest.primitives import AppName
 from flask import Flask
 from flask.testing import FlaskClient
-from workspace_layout.identity import ANONYMOUS_OWNER
-from workspace_layout.identity import RequestIdentity
 from workspace_layout.ops import OpRequester
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
@@ -19,6 +17,8 @@ from workspace_themes.contract import BUILTIN_THEMES_DIRECTORY
 from workspace_themes.testing import write_standard_theme
 from workspace_themes.testing import write_test_theme
 
+from imbue.app_sdk.identity import ANONYMOUS_OWNER
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
@@ -55,7 +55,7 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _NOT_LOOPBACK = {"REMOTE_ADDR": "10.0.0.7"}
 # A page's request as a proxy delivers it: the identity header stamped, which is what admits a request from anywhere
-# but loopback (workspace_layout.identity).
+# but loopback (imbue.app_sdk.identity).
 _PAGE_HEADERS = identity_headers(ANONYMOUS_OWNER)
 _BOB_IDENTITY = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
 _TERMINAL_REQUESTER = {"app": "terminal", "marker": "terminal-7"}

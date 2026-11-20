@@ -9,9 +9,6 @@ from pathlib import Path
 from typing import Final
 
 from app_manifest.manifest import KeybindingAction
-from app_schema.api_schema import RouteModels
-from app_schema.api_schema import RouteTable
-from app_schema.routes import model_response
 from flask import Flask
 from flask import Response
 from workspace_profile.manifest import KEYBINDINGS_ME_SUBPATH
@@ -20,6 +17,9 @@ from workspace_profile.manifest import load_app_keybinding_actions
 from workspace_profile.manifest import resolve_keybindings_me_response
 from workspace_profile.snapshot import load_workspace_profile_snapshot
 
+from imbue.app_sdk.api_schema import RouteModels
+from imbue.app_sdk.api_schema import RouteTable
+from imbue.app_sdk.routes import model_response
 from imbue.chat.identity import request_identity
 from imbue.chat.primitives import CHAT_APP_NAME
 

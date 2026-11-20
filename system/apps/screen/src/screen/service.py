@@ -21,6 +21,7 @@ from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import SecretStr
 
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.imbue_common.event_envelope import parse_iso_timestamp
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
@@ -76,7 +77,6 @@ from screen.windows import find_file_manager_window
 from screen.xclipboard import ClipboardContents
 from screen.xclipboard import ClipboardMonitor
 from screen.xclipboard import XClipboard
-from workspace_layout.identity import RequestIdentity
 
 # How long a disconnected human session is kept before the reaper deletes it (spec section 6.3).
 SESSION_REAP_AFTER: Final[timedelta] = timedelta(minutes=10)

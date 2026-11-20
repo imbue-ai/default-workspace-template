@@ -12,10 +12,10 @@ from pydantic import Field
 from pydantic import ModelWrapValidatorHandler
 from pydantic import ValidationError
 from pydantic import model_validator
-from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import ParticipantKey
 
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.shell.data_types import WindowInputReport
 

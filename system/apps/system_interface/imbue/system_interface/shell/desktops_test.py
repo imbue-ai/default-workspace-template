@@ -9,7 +9,6 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.registry import read_registry
-from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import ParticipantKey
@@ -26,6 +25,7 @@ from workspace_layout.records import ShortcutTarget
 from workspace_layout.records import Wallpaper
 from workspace_themes.primitives import ThemeId
 
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.imbue_common.model_update import to_update
 from imbue.system_interface.shell.data_types import AppPin
 from imbue.system_interface.shell.data_types import ThemeChoices

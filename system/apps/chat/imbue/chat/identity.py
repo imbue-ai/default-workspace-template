@@ -1,6 +1,6 @@
 """Who a request comes from, as the proxy that admitted it vouches in the `X-Imbue-Identity` header.
 
-The same reading the shell makes (``workspace_layout.identity``): a missing header means the request came
+The same reading the shell makes (``imbue.app_sdk.identity``): a missing header means the request came
 through no current proxy -- an older forward, or a caller inside the container -- and is the owner's; a present
 header that does not parse is nobody's proxy's, and the request is refused with a 400 (the multiplayer spec, D10)
 rather than read as the owner's. Only a header that says ``owner: false`` is a visitor, and a visitor is a person
@@ -10,18 +10,18 @@ section 4.1): the owner of a workspace that has not shared is the synthetic ``ow
 
 from typing import Final
 
-from app_schema.routes import error_response
 from flask import Response
 from flask import request
 from loguru import logger
 from workspace_layout.errors import InvalidIdentityHeaderError
-from workspace_layout.identity import IDENTITY_HEADER
-from workspace_layout.identity import RequestIdentity
-from workspace_layout.identity import is_owner_participant
-from workspace_layout.identity import parse_identity_header
-from workspace_layout.identity import participant_key_of
 from workspace_layout.primitives import ParticipantKey
 
+from imbue.app_sdk.identity import IDENTITY_HEADER
+from imbue.app_sdk.identity import RequestIdentity
+from imbue.app_sdk.identity import is_owner_participant
+from imbue.app_sdk.identity import parse_identity_header
+from imbue.app_sdk.identity import participant_key_of
+from imbue.app_sdk.routes import error_response
 from imbue.chat.errors import ChatAppError
 
 OWNER_ONLY_DETAIL: Final = "Only the owner of this workspace can connect an AI account."

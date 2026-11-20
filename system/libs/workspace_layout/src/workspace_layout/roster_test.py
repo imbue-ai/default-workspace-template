@@ -1,6 +1,6 @@
 import pytest
+from imbue.app_sdk.errors import InvalidIdentityValueError
 
-from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.roster import PARTICIPANT_COLORS
 from workspace_layout.roster import assign_handles
@@ -47,5 +47,5 @@ def test_every_participant_key_form_is_accepted(value: str) -> None:
 
 @pytest.mark.parametrize("value", ["", "user:", "user:bob smith", "email:nobody", "guest", "name:"])
 def test_a_malformed_participant_key_is_refused(value: str) -> None:
-    with pytest.raises(InvalidLayoutValueError):
+    with pytest.raises(InvalidIdentityValueError):
         ParticipantKey(value)

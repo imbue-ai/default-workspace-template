@@ -3,14 +3,14 @@ workspace's selection; registration is loopback-only, for an agent inside the wo
 
 from typing import Final
 
-from app_schema.routes import model_response
-from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import Response
 from flask import request
 from flask.typing import ResponseReturnValue
 from loguru import logger
 
+from imbue.app_sdk.routes import model_response
+from imbue.app_sdk.routes import parse_request_body
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.avatar.api_models import AvatarRegistered
 from imbue.system_interface.avatar.api_models import AvatarSelected

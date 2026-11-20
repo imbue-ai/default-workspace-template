@@ -1,10 +1,10 @@
 from workspace_layout.errors import ShellUnreachableError
-from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.roster import RosterDocument
 from workspace_layout.testing import FakeShell
 from workspace_layout.testing import roster_participant
 
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.chat.roster_client import RosterClient
 from imbue.chat.roster_client import fallback_display_name
 
