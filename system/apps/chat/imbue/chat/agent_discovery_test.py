@@ -362,7 +362,8 @@ def _scripted_messenger(
     discovered: AgentMatch | None = None,
     pause: Callable[[float], None] = lambda _seconds: None,
 ) -> MngrMessenger:
-    """A messenger whose sends answer with ``results`` in order and then deliver, each recorded in ``send_calls``.
+    """A messenger whose sends and key presses answer with ``results`` in order and then deliver, each recorded in
+    ``send_calls``.
 
     The agent is found at ``discovered``; with none given, looking it up fails the test.
     """
@@ -377,7 +378,7 @@ def _scripted_messenger(
         send_calls.append(tuple(matches))
         return remaining.pop(0) if remaining else _delivered_to(matches)
 
-    return MngrMessenger(discover=_discover, send=_send, pause=pause)
+    return MngrMessenger(discover=_discover, send=_send, press=_send, pause=pause)
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")
@@ -575,25 +576,6 @@ def _refused_press() -> MessageResult:
     )
 
 
-def _press_recording_messenger(
-    known: AgentMatch,
-    known_location_result: MessageResult,
-    discovered: AgentMatch,
-    press_calls: list[tuple[AgentMatch, ...]],
-) -> MngrMessenger:
-    """A messenger whose press answers ``known_location_result`` at ``known`` and lands at ``discovered``, where
-    discovery finds the agent. Each press is recorded in ``press_calls``."""
-
-    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        return (discovered,)
-
-    def _press(matches: Sequence[AgentMatch], key: str, ctx: MngrContext) -> MessageResult:
-        press_calls.append(tuple(matches))
-        return known_location_result if tuple(matches) == (known,) else _delivered_to(matches)
-
-    return MngrMessenger(discover=_discover, press=_press)
-
-
 @pytest.mark.usefixtures("isolated_mngr_env")
 @pytest.mark.parametrize(
     "known_location_result",
@@ -607,7 +589,7 @@ def test_a_key_press_that_reached_no_agent_is_pressed_at_a_discovered_location(
     known = _make_match(host="host-a")
     discovered = _make_match(host="host-b")
     press_calls: list[tuple[AgentMatch, ...]] = []
-    messenger = _press_recording_messenger(known, known_location_result(), discovered, press_calls)
+    messenger = _scripted_messenger([known_location_result()], press_calls, discovered=discovered)
     assert messenger.press_key_chord_to_agent(_AGENT_ID, "C-c", (known,))
     assert press_calls == [(known,), (discovered,)]
 
@@ -623,10 +605,9 @@ def test_a_key_press_that_failed_at_the_agent_is_not_pressed_again(
 ) -> None:
     """The agent was where it was looked for, so a second press would reach it again: a key it refused could cancel a
     turn it started meanwhile, and a key it may have taken would be pressed twice."""
-    known = _make_match(host="host-a")
-    discovered = _make_match(host="host-b")
+    known = _make_match()
     press_calls: list[tuple[AgentMatch, ...]] = []
-    messenger = _press_recording_messenger(known, known_location_result(), discovered, press_calls)
+    messenger = _scripted_messenger([known_location_result()], press_calls)
     assert not messenger.press_key_chord_to_agent(_AGENT_ID, "C-c", (known,))
     assert press_calls == [(known,)]
 
