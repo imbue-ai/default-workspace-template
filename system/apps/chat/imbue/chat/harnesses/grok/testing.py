@@ -9,6 +9,7 @@ from uuid import uuid4
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.grok.session_parser import UPDATES_FILENAME
 from imbue.chat.harnesses.grok.watcher import SESSIONS_DIRNAME
+from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.mngr_grok.grok_config import get_grok_home
 
 GROK_FIXTURES_DIR: Final[Path] = Path(__file__).parent / "fixtures"
@@ -99,6 +100,7 @@ def make_grok_agent_info(agent_state_dir: Path, agent_id: str, name: str, state:
         state=state,
         agent_state_dir=agent_state_dir,
         claude_config_dir=agent_state_dir / "unused",
+        harness=HarnessType.GROK,
     )
 
 
