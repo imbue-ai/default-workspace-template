@@ -2,8 +2,12 @@ from pathlib import Path
 
 import pytest
 
+from app_install.errors import GitCommandError
+from app_install.git import land_commit
 from app_install.git import run_git
+from app_install.testing import commit_all
 from app_install.testing import make_workspace_repository
+from app_install.testing import write_workspace_file
 
 _GATEWAY = "http://127.0.0.1:41234"
 _APP_URL = "https://github.com/someone/notes"
@@ -84,3 +88,24 @@ def test_a_workspace_with_no_gateway_reads_with_its_own_configuration_alone(tmp_
     workspace = make_workspace_repository(tmp_path / "workspace")
 
     assert run_git(workspace, ["ls-remote", "--get-url", _APP_URL], is_gateway_used=True) == _APP_URL
+
+
+def test_landing_is_refused_over_a_merge_the_primary_checkout_has_not_concluded(tmp_path: Path) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    run_git(workspace, ["checkout", "--quiet", "-b", "theirs"])
+    write_workspace_file(workspace, "README.md", "their workspace\n")
+    theirs = commit_all(workspace, "their README")
+    run_git(workspace, ["checkout", "--quiet", "main"])
+    write_workspace_file(workspace, "README.md", "our workspace\n")
+    commit_all(workspace, "our README")
+    with pytest.raises(GitCommandError, match="CONFLICT"):
+        run_git(workspace, ["merge", "--no-edit", theirs])
+    write_workspace_file(workspace, "README.md", "the resolution, not committed yet\n")
+    # What the installer would land: a commit made beside the primary branch.
+    landing = run_git(workspace, ["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "app-install: install notes"])
+
+    with pytest.raises(GitCommandError, match="in the middle of a merge"):
+        land_commit(workspace, landing)
+
+    assert run_git(workspace, ["rev-parse", "MERGE_HEAD"]) == theirs
+    assert (workspace / "README.md").read_text() == "the resolution, not committed yet\n"

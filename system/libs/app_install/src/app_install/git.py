@@ -125,10 +125,26 @@ def fetch_commit(cwd: Path, url: str, ref: str) -> str:
     return run_git(cwd, ["rev-parse", "FETCH_HEAD^{commit}"])
 
 
+def _has_unconcluded_merge(repo_root: Path) -> bool:
+    try:
+        run_git(repo_root, ["rev-parse", "--quiet", "--verify", "MERGE_HEAD"])
+    except GitCommandError as e:
+        logger.debug("No merge is in progress in {}: {}", repo_root, e)
+        return False
+    return True
+
+
 def land_commit(repo_root: Path, commit: str) -> None:
     """Bring the installer's commit onto the primary checkout: as a fast-forward, or as a merge when the primary
     branch moved while the installer worked. Raises GitCommandError, with the primary checkout as it was, when
-    the two do not merge."""
+    the two do not merge, and when the primary checkout is in the middle of a merge of its own."""
+    # Checked first: git refuses to start a merge over an unconcluded one, and the abort below would then take
+    # back the merge that was already there, with whatever had been resolved in it.
+    if _has_unconcluded_merge(repo_root):
+        raise GitCommandError(
+            f"{commit} cannot be landed while the primary checkout is in the middle of a merge, which is left as "
+            "it is: conclude or abort that merge, then run the command again"
+        )
     try:
         run_git(repo_root, ["merge", "--ff-only", commit])
         return
