@@ -50,6 +50,8 @@ declare module "@minds/embed-contract" {
   export const HIGHLIGHT_CHROME: "minds:highlight-chrome";
   // Opening the chrome's settings for files shared from the user's computer (contract v11). Probed like the ones above.
   export const OPEN_LOCAL_FILES: "minds:open-local-files";
+  // Opening the chrome's Settings at Local models, where Ollama is installed (contract v16). Probed like the ones above.
+  export const OPEN_LOCAL_MODELS_SETTINGS: "minds:open-local-models-settings";
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;

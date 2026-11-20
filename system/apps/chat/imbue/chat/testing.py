@@ -84,6 +84,9 @@ from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
+from imbue.chat.harnesses.pi_coding.local_model_account import LocalModelAccount
+from imbue.chat.harnesses.pi_coding.local_model_account import LocalModelSignIn
+from imbue.chat.harnesses.pi_coding.local_model_account import plan_listed_records
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.lounge import LoungeKeeper
 from imbue.chat.mentions import MentionStore
@@ -1705,3 +1708,14 @@ def running_workspace(
             chat_server.shutdown()
             chat_thread.join(timeout=5.0)
             chat_state.shutdown()
+
+
+def plan_sign_in_on_the_model_as_named(
+    base_url: str, api_key: str, model_id: str, context_window: int
+) -> LocalModelSignIn:
+    """A local-model sign-in as a server that says nothing of its models gives it: the model as named, and no other."""
+    return LocalModelSignIn(
+        model_id=model_id,
+        context_window=context_window,
+        account=LocalModelAccount(is_context_managed=False, records=plan_listed_records((model_id,), context_window)),
+    )

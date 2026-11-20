@@ -46,8 +46,17 @@ import { Dropdown } from "@imbue/workspace-ui/src/components/dropdown";
 import { renderMarkdown } from "../markdown";
 import { providerMark } from "./providerMarks";
 import { removeAccountDialog } from "./removeAccountDialog";
+import { localModelsSettingsLink } from "./localModelsSettingsLink";
 import * as css from "./providerSignInStyles";
-import type { Lane, LaneMethod, LocalModelServer, StudioLink, UnpickableReason } from "../models/Providers";
+import { formatContextWindow } from "../models/HarnessCatalog";
+import type {
+  Lane,
+  LaneMethod,
+  LocalModelChoice,
+  LocalModelServer,
+  StudioLink,
+  UnpickableReason,
+} from "../models/Providers";
 import {
   abortFlow,
   areLanesLoaded,
@@ -85,7 +94,13 @@ type Mode = "chooser" | "relay" | "menu" | "steps" | "apiKey" | "endpoint";
 interface ModelChoice {
   key: string;
   server: LocalModelServer;
-  model: string;
+  choice: LocalModelChoice;
+}
+
+/** The context size a model's row starts on: the largest on offer within `preferred`, else the smallest. */
+export function startingContextWindow(sizes: readonly number[], preferred: number): number | null {
+  const fitting = sizes.filter((size) => size <= preferred);
+  return fitting[fitting.length - 1] ?? sizes[0] ?? null;
 }
 
 /** The paste step's label: a relayed sign-in finishes by itself, and neither side can tell in
@@ -147,6 +162,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let serverError: string | null = null;
   let pickedModel: string | null = null;
   let contextWindow = "";
+  let defaultContextWindow = 0;
   let minContextWindow = 0;
   // Bumped by every look, so an answer that a newer look has overtaken stands down.
   let serverLook = 0;
@@ -203,10 +219,23 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     return candidate.shape === "endpoint";
   }
 
-  function modelChoices(): ModelChoice[] {
+  function allChoices(): ModelChoice[] {
     return (servers ?? []).flatMap((server) =>
-      server.models.map((model) => ({ key: `${server.base_url}\n${model}`, server, model })),
+      server.choices.map((choice) => ({ key: `${server.base_url}\n${choice.model_id}`, server, choice })),
     );
+  }
+
+  /** The models a chat can be put on. The rest are named under the picker with why not. */
+  function modelChoices(): ModelChoice[] {
+    return allChoices().filter((each) => each.choice.unusable_reason === null);
+  }
+
+  /** Pick a model, and start its context size where the model offers a set of them. */
+  function pickModel(key: string | null): void {
+    pickedModel = key;
+    const sizes = modelChoices().find((each) => each.key === key)?.choice.context_windows ?? [];
+    const starting = startingContextWindow(sizes, defaultContextWindow);
+    if (starting !== null) contextWindow = String(starting);
   }
 
   /**
@@ -240,6 +269,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       if (look !== serverLook) return;
       studioLink = found.studio_link;
       minContextWindow = found.min_context_window;
+      defaultContextWindow = found.default_context_window;
       if (contextWindow === "") contextWindow = String(found.default_context_window);
       if (studioLink === "AWAITING_APPROVAL") {
         if (servers === null) servers = [];
@@ -249,14 +279,17 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       servers = found.servers;
       const choices = modelChoices();
       if (!choices.some((choice) => choice.key === pickedModel)) {
-        pickedModel = choices.length === 1 ? choices[0].key : null;
+        pickModel(choices.length === 1 ? choices[0].key : null);
       }
       if (choices.length === 0) {
         // Nothing to pick from, so the way on is to name a server.
         isNamingServer = true;
         if (found.servers.length > 0) {
           const names = found.servers.map((server) => server.name).join(", ");
-          serverError = `${names} answered but lists no models. Add one there, then look again.`;
+          serverError =
+            allChoices().length > 0
+              ? `${names} answered, but none of its models can run a chat here. Add one there, then look again.`
+              : `${names} answered but lists no models. Add one there, then look again.`;
         }
       }
     } catch (e) {
@@ -911,14 +944,20 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     const choices = modelChoices();
     const picked = choices.find((choice) => choice.key === pickedModel) ?? null;
     const windowTokens = Number(contextWindow);
-    const isWindowValid = Number.isInteger(windowTokens) && windowTokens >= minContextWindow && windowTokens > 0;
+    const offeredSizes = picked?.choice.context_windows ?? [];
+    const unusable = allChoices().filter((each) => each.choice.unusable_reason !== null);
+    const isWindowValid =
+      Number.isInteger(windowTokens) &&
+      windowTokens >= minContextWindow &&
+      windowTokens > 0 &&
+      (offeredSizes.length === 0 || offeredSizes.includes(windowTokens));
     const canSubmit = !busy && getFlow() !== null && picked !== null && isWindowValid;
     const connect = (): void => {
       if (!canSubmit || picked === null) return;
       void send(() =>
         submitEndpoint({
           base_url: picked.server.base_url,
-          model_id: picked.model,
+          model_id: picked.choice.model_id,
           context_window: windowTokens,
           api_key: serverKey.trim(),
           studio_port: picked.server.studio_port ?? null,
@@ -938,17 +977,15 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         ? m("p", { class: css.HINT, "data-e2e": "local-model-looking" }, "Looking for a model server...")
         : choices.length > 0
           ? m(Dropdown<string>, {
-              options: choices.map((choice) => ({
-                value: choice.key,
-                label: choice.model,
-                detail: choice.server.name,
+              options: choices.map((each) => ({
+                value: each.key,
+                label: each.choice.model_id,
+                detail: [each.server.name, each.choice.detail].filter((part) => part !== "").join(", "),
               })),
               value: pickedModel,
               placeholder: "Choose a model...",
               "aria-label": "Model",
-              onSelect: (key) => {
-                pickedModel = key;
-              },
+              onSelect: pickModel,
             })
           : studioLink === "AWAITING_APPROVAL"
             ? m("p", { class: css.HINT, "data-e2e": "local-model-awaiting-approval" }, [
@@ -966,12 +1003,17 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                 ),
               ])
             : m("p", { class: css.HINT, "data-e2e": "local-model-none" }, [
-                studioLink === "UNREACHABLE"
-                  ? "Imbue Studio on your computer did not answer. Check that the computer is awake and " +
-                    "Studio is open. "
-                  : studioLink === "CONNECTED"
-                    ? "No model server is running on your computer. Start one (Ollama, LM Studio or llama.cpp). "
-                    : "No model server answered on your computer. ",
+                ...(studioLink === "UNREACHABLE"
+                  ? [
+                      "Imbue Studio on your computer did not answer. Check that the computer is awake and " +
+                        "Studio is open. ",
+                    ]
+                  : [
+                      "No model server is running on your computer. You may need to install Ollama: Imbue Studio " +
+                        "can do it for you in its Settings, under Local models. ",
+                      localModelsSettingsLink(),
+                      ". Or start your own (Ollama, LM Studio or llama.cpp). ",
+                    ]),
                 m(
                   "button",
                   {
@@ -984,6 +1026,27 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                 ),
               ]),
       serverError !== null ? m("p", { class: errorClass, "data-e2e": "local-model-error" }, serverError) : null,
+      unusable.length > 0
+        ? m("details", { class: css.HINT, "data-e2e": "local-model-unusable" }, [
+            m(
+              "summary",
+              { class: "cursor-pointer" },
+              unusable.length === 1
+                ? "1 other model cannot run a chat here"
+                : `${unusable.length} other models cannot run a chat here`,
+            ),
+            m(
+              "ul",
+              { class: "mt-1 flex flex-col gap-1" },
+              unusable.map((each) =>
+                m("li", { key: each.key }, [
+                  m("span", { class: "font-mono" }, each.choice.model_id),
+                  `: ${each.choice.unusable_reason ?? ""}`,
+                ]),
+              ),
+            ),
+          ])
+        : null,
       isNamingServer
         ? m("div", { class: "mt-4" }, [
             stepLabel(null, "Server address"),
@@ -1044,29 +1107,29 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               "Use a different server",
             ),
           ),
-      m("div", { class: "mt-4" }, [
-        stepLabel(null, "Context window, in tokens"),
-        m("input", {
-          class: inputClass({ mono: true, extra: "w-full" }),
-          ...FIELD_PART,
-          type: "text",
-          inputmode: "numeric",
-          value: contextWindow,
-          spellcheck: false,
-          autocomplete: "off",
-          "data-e2e": "local-model-context",
-          oninput: (event: Event) => {
-            contextWindow = (event.target as HTMLInputElement).value.trim();
-          },
-        }),
-        m(
-          "p",
-          { class: contextWindow !== "" && !isWindowValid ? errorClass : css.HINT },
-          minContextWindow > 0
-            ? `How much the server gives this model. At least ${minContextWindow.toLocaleString("en-US")}; the server's own setting wins when it is lower.`
-            : "How much the server gives this model.",
-        ),
-      ]),
+      offeredSizes.length > 0
+        ? m("div", { class: "mt-4" }, [
+            stepLabel(null, "Context window"),
+            m(Dropdown<string>, {
+              options: offeredSizes.map((size) => ({
+                value: String(size),
+                label: `${formatContextWindow(size)} tokens`,
+                detail: size === offeredSizes[offeredSizes.length - 1] ? "the most this model takes" : undefined,
+              })),
+              value: offeredSizes.includes(windowTokens) ? contextWindow : null,
+              placeholder: "Choose a size...",
+              "aria-label": "Context window",
+              onSelect: (size) => {
+                contextWindow = size;
+              },
+            }),
+            m(
+              "p",
+              { class: css.HINT },
+              "How much of the conversation the model keeps in view. A larger window uses more memory and answers more slowly.",
+            ),
+          ])
+        : contextWindowField(isWindowValid, errorClass),
       m(
         "div",
         { class: `${css.FOOTER_ROW} mt-4` },
@@ -1075,6 +1138,33 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           { variant: "primary", disabled: !canSubmit, "data-e2e": "connect-local-model", onclick: connect },
           "Connect",
         ),
+      ),
+    ]);
+  }
+
+  /** The context size as a number to type, for a server that does not say what its models take. */
+  function contextWindowField(isWindowValid: boolean, errorClass: string): m.Children {
+    return m("div", { class: "mt-4" }, [
+      stepLabel(null, "Context window, in tokens"),
+      m("input", {
+        class: inputClass({ mono: true, extra: "w-full" }),
+        ...FIELD_PART,
+        type: "text",
+        inputmode: "numeric",
+        value: contextWindow,
+        spellcheck: false,
+        autocomplete: "off",
+        "data-e2e": "local-model-context",
+        oninput: (event: Event) => {
+          contextWindow = (event.target as HTMLInputElement).value.trim();
+        },
+      }),
+      m(
+        "p",
+        { class: contextWindow !== "" && !isWindowValid ? errorClass : css.HINT },
+        minContextWindow > 0
+          ? `How much the server gives this model. At least ${minContextWindow.toLocaleString("en-US")}; the server's own setting wins when it is lower.`
+          : "How much the server gives this model.",
       ),
     ]);
   }

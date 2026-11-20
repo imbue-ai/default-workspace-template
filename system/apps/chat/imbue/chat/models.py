@@ -210,6 +210,17 @@ class SetModelChoiceRequest(FrozenModel):
     )
 
 
+class ModelLoadResponse(FrozenModel):
+    """Response from GET /api/chats/{id}/model-load."""
+
+    is_load_pending: bool = Field(
+        description=(
+            "Whether the chat's model server has to read the named model into memory before its next reply. "
+            "False when the chat runs on a provider, or its server does not say"
+        )
+    )
+
+
 class ModelOptionsResponse(FrozenModel):
     """Response from GET /api/chats/{id}/model-options.
 

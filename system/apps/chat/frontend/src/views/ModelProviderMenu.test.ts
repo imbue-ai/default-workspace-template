@@ -197,6 +197,7 @@ vi.mock("./SwitchDialog", async (importOriginal) => ({
 import m from "mithril";
 
 import type { ChatSnapshot } from "../models/Chats";
+import type { CatalogModelOption } from "../models/HarnessCatalog";
 import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
 import { getPendingAccountId, setPendingAccount, setPendingSwitch, setSwitchSending } from "../models/PendingLane";
 import { ModelProviderMenu } from "./ModelProviderMenu";
@@ -635,6 +636,83 @@ describe("the combo card", () => {
       (button) => button.textContent,
     );
     expect(rows).toEqual(["local-model/qwen2.5:7b", "Opus"]);
+  });
+
+  describe("on a local model server's models", () => {
+    const sized = (id: string, family: string, contextWindow: number, label: string): CatalogModelOption => ({
+      ...OPUS,
+      id: `local-model/${id}`,
+      label,
+      family,
+      context_window: contextWindow,
+    });
+    const QWEN = sized("qwen3-40k:latest", "qwen3:8b", 40960, "qwen3:8b (40K)");
+    const LLAMA_40K = sized("llama3.3:latest-ctx40960", "llama3.3:latest", 40960, "llama3.3:latest (40K)");
+    const LLAMA_64K = sized("llama3.3:latest-ctx65536", "llama3.3:latest", 65536, "llama3.3:latest (64K)");
+    const LLAMA_128K = sized("llama3.3:latest-ctx131072", "llama3.3:latest", 131072, "llama3.3:latest (128K)");
+
+    /** A pi chat running `matched`, on an account whose server offers every model above. */
+    async function openMenuOn(matched: CatalogModelOption): Promise<void> {
+      catalogState.catalog = catalogOf({ picker_mode: "search", options: [OPUS] });
+      settingsState.choice = { identity: { model_id: matched.id, effort: null, fast: false }, matched, pending: null };
+      vi.spyOn(m, "request").mockResolvedValue({ models: null, options: [QWEN, LLAMA_64K, LLAMA_128K, LLAMA_40K] });
+      render();
+      click(".model-selector-trigger");
+      await Promise.resolve();
+      await Promise.resolve();
+      render();
+    }
+
+    function submenuRows(): (string | null)[] {
+      return [...document.querySelectorAll<HTMLElement>('[data-menu-part="submenu"] button')].map(
+        (button) => button.textContent,
+      );
+    }
+
+    it("lists each model once, however many context sizes it runs at, and none of the catalog's", async () => {
+      await openMenuOn(LLAMA_64K);
+
+      expect(document.querySelector('[data-menu-row="model"]')?.textContent).toContain("llama3.3:latest");
+      expect(document.querySelector('[data-menu-row="model"]')?.textContent).not.toContain("64K");
+      click('[data-menu-row="model"]');
+      expect(submenuRows()).toEqual(["qwen3:8b", "llama3.3:latest"]);
+    });
+
+    it("moves to another model at the largest size it offers within the one in use", async () => {
+      await openMenuOn(LLAMA_64K);
+      click('[data-menu-row="model"]');
+      clickSubmenuRow("qwen3:8b");
+
+      expect(picks).toHaveLength(1);
+      expect((picks[0] as unknown[])[1]).toEqual({ model_id: QWEN.id, effort: null, fast: false });
+      expect((picks[0] as unknown[])[3]).toEqual(["model"]);
+    });
+
+    it("names the context size on a row of its own, whose submenu offers the model's sizes", async () => {
+      await openMenuOn(LLAMA_64K);
+
+      expect(document.querySelector('[data-menu-row="context-window"]')?.textContent).toContain("64K");
+      click('[data-menu-row="context-window"]');
+      expect(submenuRows()).toEqual(["40K tokens", "64K tokens", "128K tokens"]);
+      click('[data-context-window="131072"]');
+
+      expect(picks).toHaveLength(1);
+      expect((picks[0] as unknown[])[1]).toEqual({ model_id: LLAMA_128K.id, effort: null, fast: false });
+    });
+
+    it("offers a model with one size that size alone", async () => {
+      await openMenuOn(QWEN);
+      click('[data-menu-row="context-window"]');
+
+      expect(submenuRows()).toEqual(["40K tokens"]);
+    });
+  });
+
+  it("has no context row for a model that is not offered at several sizes", () => {
+    render();
+    click(".model-selector-trigger");
+
+    expect(document.querySelector('[data-menu-row="context-window"]')).toBeNull();
   });
 
   it("does not list a hidden model in use, which a harness matched only to name it", () => {

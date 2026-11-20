@@ -951,9 +951,9 @@ under 40,960 tokens fails the sign-in with the setting that raises it, since a
 new chat's first request alone measured 29,280 (the workspace's instructions,
 the output-style rules, its skills and pi's tools, with the sub-agent and
 web-access packages) and the window has to hold a reply as well. The account then holds pi's
-custom provider in `models.json` (id `local-model`, one model, the smaller of
-the context asked for and the one loaded) beside the server's key in
-`auth.json`, and an agent's pi config dir links both. A model whose check answer
+custom provider in `models.json` (id `local-model`, the model signed in on
+first, at the smaller of the context asked for and the one loaded) beside the
+server's key in `auth.json`, and an agent's pi config dir links both. A model whose check answer
 carries reasoning apart from its content is declared a reasoning model there, so
 pi records its thinking as thinking and the chat offers its thinking levels; the
 declaration turns off the `developer` role, which Ollama drops silently, and for
@@ -965,6 +965,46 @@ model list (`is_server_answering`, five seconds): a tunnel to a sleeping compute
 takes a request and never answers it, and pi would wait minutes on it. A server
 that does not answer refuses the send with 409 `kind: model_server_unreachable`,
 and the composer keeps the text beside what to check.
+
+A local-model account offers every model of its server, not only the one it was
+signed in on, and a model once however many context sizes it runs at. Ollama
+loads a model with the context length the model names (`num_ctx`), else 4,096
+tokens, and its OpenAI-compatible endpoint takes no context length with a
+request, so the one way to run a model at another size is a copy of it that
+names the size (instant, sharing the weights), and a server soon lists
+`qwen3:8b`, `qwen3-32k` and `qwen3-40k`, which are one model.
+`harnesses/pi_coding/local_model_catalog.py` reads what Ollama says of its models
+(`/api/tags` for each model's parent, limit and capabilities, `/api/show` for the
+context length a copy names) and folds a copy that names a size into the model
+it was made from: a `LocalModelChoice` is one model with the sizes on offer
+(40,960, 65,536, 131,072 and 262,144 tokens up to the model's own limit, the
+limit itself, and any size it already has a copy at), or the reason a chat
+cannot run on it (it lists no tool calling, or its limit is under 40,960). The
+servers listing carries these as each server's `choices`, from the Imbue Studio
+app's own reading (`described_models`) for a server reached through it, and the
+form offers the usable models in one dropdown, a model's sizes in a second, and
+the rest under "N other models cannot run a chat here" with why. A server that
+is not Ollama says none of this: its models are offered as listed, and the size
+is a number to type. The sign-in names the model and a size; on Ollama the copy
+at that size is found or made (`<model>-ctx<size>`) and is what gets checked.
+
+The account keeps its models in two files
+(`harnesses/pi_coding/local_model_account.py`): `models.json` names every usable
+model at every size on offer, since pi reads it when it starts and can switch a
+running chat only to a model it names, and `local_models.json` beside it keeps
+what pi's file has no place for (which model each entry is a size of, and
+whether it has passed the tool-call check). A size nobody has asked for is named
+there before its copy exists. The options built from them carry `family` (the
+model) and `context_window` apart, so the model menu lists each model once and
+adds a Context window row for the sizes of the one in use; picking another
+model keeps the size where that model offers it. Opening the menu brings both
+files up to date with the server (`GET /api/chats/<chat-id>/model-options`
+answers these accounts with `options`), so a model pulled since shows up and one
+removed goes; a chat that was running before a model appeared reaches it once
+its agent has restarted. A switch to a model that has not been checked makes its
+copy where the server has none and asks it for a tool call before pi hears of
+the switch, and a model that fails is refused with the reason while the chat
+stays where it was.
 
 A Claude or ChatGPT sign-in finishes in the user's own browser. The CLI (`claude
 auth login`, or a short-lived `codex app-server` for ChatGPT) runs with

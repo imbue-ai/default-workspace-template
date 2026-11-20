@@ -177,6 +177,11 @@ vi.mock("./SwitchDialog", () => ({
   beginSwitchToAccountId: mocks.beginSwitchToAccountId,
   launchAwaitingChatAsRoom: mocks.launchAwaitingChatAsRoom,
 }));
+const openLocalModelsSettings = vi.hoisted(() => vi.fn());
+vi.mock("./localModelsSettingsLink", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./localModelsSettingsLink")>()),
+  openLocalModelsSettings,
+}));
 vi.mock("./fast-mode-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./fast-mode-limit")>()),
   chooseFastMode: mocks.chooseFastMode,
@@ -1946,12 +1951,22 @@ describe("MessageInput send failure notice", () => {
     const text = renderedText(after);
     expect(text).toContain("Your model server didn't answer");
     expect(text).toContain(detail);
+    expect(text).toContain("If Ollama is not installed on that computer, Imbue Studio can install it for you");
+    expect(text).toContain("Open Local models settings");
     expect(text).not.toContain("Couldn't send your message");
     expect(text).not.toContain("Restart");
     expect(text).not.toContain("terminal");
     expect(findByTag(after, "textarea")?.attrs?.value).toBe("build me an app");
     expect(error).not.toHaveBeenCalled();
     error.mockRestore();
+
+    openLocalModelsSettings.mockClear();
+    (findButton(after, "Open Local models settings")!.attrs!.onclick as () => void)();
+
+    expect(openLocalModelsSettings).toHaveBeenCalledTimes(1);
+    expect(renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never))).not.toContain(
+      "Your model server didn't answer",
+    );
   });
 
   it("drops the Sending bubble of a /compact the server ran as a compaction, which no turn will echo", async () => {

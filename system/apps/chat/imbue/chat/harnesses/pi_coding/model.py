@@ -29,6 +29,7 @@ from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from typing import Final
 
 from loguru import logger
 
@@ -41,6 +42,7 @@ from imbue.chat.harnesses.interrupt import RestartProcess
 from imbue.chat.harnesses.interrupt import SettleActivity
 from imbue.chat.harnesses.interrupt import restart_drain
 from imbue.chat.harnesses.interrupt import try_hold_message_lock
+from imbue.chat.harnesses.model import EffortChoice
 from imbue.chat.harnesses.model import HarnessCatalog
 from imbue.chat.harnesses.model import HarnessModelResolver
 from imbue.chat.harnesses.model import ModelAxis
@@ -54,7 +56,14 @@ from imbue.chat.harnesses.pi_coding.inbox import PI_INBOX_NAME
 from imbue.chat.harnesses.pi_coding.inbox import PI_INTERRUPT_KEY
 from imbue.chat.harnesses.pi_coding.inbox import PI_RETRACT_KEY
 from imbue.chat.harnesses.pi_coding.inbox import append_pi_inbox_sentinel
+from imbue.chat.harnesses.pi_coding.local_model import LOCAL_MODEL_PROVIDER_ID
+from imbue.chat.harnesses.pi_coding.local_model import LocalModelError
 from imbue.chat.harnesses.pi_coding.local_model import read_models_file_providers
+from imbue.chat.harnesses.pi_coding.local_model_account import LocalModelAccount
+from imbue.chat.harnesses.pi_coding.local_model_account import prepare_model_switch_with_own_client
+from imbue.chat.harnesses.pi_coding.local_model_account import read_account_models
+from imbue.chat.harnesses.pi_coding.local_model_account import refresh_account_models_with_own_client
+from imbue.chat.harnesses.pi_coding.local_model_catalog import format_context_window
 from imbue.chat.harnesses.session import AtomicShoulderTap
 from imbue.chat.harnesses.session import ShoulderTapOutcome
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
@@ -208,12 +217,37 @@ def get_catalog() -> HarnessCatalog:
     return catalog
 
 
+# How a picker option names a model of the account's own model server.
+LOCAL_MODEL_OPTION_PREFIX: Final[str] = f"{LOCAL_MODEL_PROVIDER_ID}/"
+
+
+def to_local_model_options(account: LocalModelAccount) -> tuple[ModelOption, ...]:
+    """A local-model account's models as options: each named for its model and context size, and
+    carrying both apart, so a picker can offer the model once and its sizes beside it."""
+    return tuple(
+        ModelOption(
+            id=f"{LOCAL_MODEL_OPTION_PREFIX}{record.id}",
+            label=f"{record.base_id} ({format_context_window(record.context_window)})",
+            efforts=tuple(
+                EffortChoice(level=level) for level in _supported_thinking_levels({"reasoning": record.is_reasoning})
+            ),
+            supports_fast=False,
+            family=record.base_id,
+            context_window=record.context_window,
+        )
+        for record in account.records
+    )
+
+
 def read_custom_model_options(config_dir: Path) -> tuple[ModelOption, ...]:
     """The models a pi config dir's `models.json` adds, as options tagged the way pi reports them.
 
     These are in no bundled catalog, so they are what lets the model bar name the model such an
     account runs on. Empty for a dir with no `models.json`, which is every other pi account.
     """
+    account = read_account_models(config_dir)
+    if account is not None:
+        return to_local_model_options(account)
     tags: list[tuple[str, tuple[str, ...]]] = []
     for provider_id, provider in read_models_file_providers(config_dir).items():
         models = provider.get("models") if isinstance(provider, dict) else None
@@ -231,13 +265,27 @@ class PiModelResolver(HarnessModelResolver):
     _state_dir: Path
     _agent_name: str
     _start_agent: Callable[[str], None]
+    # Brings a local-model account's models up to date with its server: (config_dir) to the
+    # account's models, or None for any other account.
+    _refresh_local_models: Callable[[Path], LocalModelAccount | None]
+    # Readies a local model for a switch: (config_dir, model_id), raising LocalModelError with
+    # words for the user when the model cannot run a chat.
+    _prepare_local_model: Callable[[Path, str], None]
 
     @classmethod
-    def build(cls, agent_info: AgentInfo, start_agent_fn: Callable[[str], None] = start_agent) -> "PiModelResolver":
+    def build(
+        cls,
+        agent_info: AgentInfo,
+        start_agent_fn: Callable[[str], None] = start_agent,
+        refresh_local_models: Callable[[Path], LocalModelAccount | None] = refresh_account_models_with_own_client,
+        prepare_local_model: Callable[[Path, str], None] = prepare_model_switch_with_own_client,
+    ) -> "PiModelResolver":
         self = cls.__new__(cls)
         self._state_dir = agent_info.agent_state_dir
         self._agent_name = agent_info.name
         self._start_agent = start_agent_fn
+        self._refresh_local_models = refresh_local_models
+        self._prepare_local_model = prepare_local_model
         return self
 
     @classmethod
@@ -246,6 +294,13 @@ class PiModelResolver(HarnessModelResolver):
         # from the catalog: its `auth.json` holds no other provider's key. Any other pi account
         # offers the catalog, which is the base answer.
         return read_custom_model_options(account_dir) or None
+
+    def list_offered_options(self) -> tuple[ModelOption, ...] | None:
+        # An account on a local model server offers that server's models, asked for afresh on
+        # each picker-open so a model pulled since shows up. Every other pi account offers the
+        # catalog, narrowed by `list_offered_models`.
+        account = self._refresh_local_models(self._state_dir / PI_CONFIG_DIR_RELPATH)
+        return to_local_model_options(account) if account is not None else None
 
     def list_offered_models(self) -> tuple[str, ...] | None:
         # pi's offer set is account-gated and dynamic: exactly the provider/model pairs the
@@ -288,6 +343,14 @@ class PiModelResolver(HarnessModelResolver):
         # intent replaces any unconsumed older one (last wins).
         if ModelAxis.MODEL not in axes and ModelAxis.EFFORT not in axes:
             return SwitchResult(ok=True)
+        if ModelAxis.MODEL in axes and identity.model_id.startswith(LOCAL_MODEL_OPTION_PREFIX):
+            # Before pi hears of it: a model that cannot run a chat leaves the chat where it was.
+            try:
+                self._prepare_local_model(
+                    self._state_dir / PI_CONFIG_DIR_RELPATH, identity.model_id.removeprefix(LOCAL_MODEL_OPTION_PREFIX)
+                )
+            except LocalModelError as e:
+                return SwitchResult(ok=False, detail=str(e))
         intent = {"model_id": identity.model_id, "thinking_level": identity.effort}
         control_path = self._state_dir / _CONTROL_NAME
         try:

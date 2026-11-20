@@ -19,6 +19,7 @@ model is declared a reasoning model to pi, so its thinking level can be set; see
 """
 
 import json
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from itertools import repeat
 from pathlib import Path
@@ -30,6 +31,9 @@ import httpx
 from loguru import logger
 from pydantic import Field
 
+from imbue.chat.harnesses.pi_coding.local_model_catalog import LocalModelChoice
+from imbue.chat.harnesses.pi_coding.local_model_catalog import group_model_choices
+from imbue.chat.harnesses.pi_coding.local_model_catalog import read_ollama_models
 from imbue.imbue_common.frozen_model import FrozenModel
 
 # pi's id for the provider, so also the key in `auth.json` and the prefix of the model's tag.
@@ -62,7 +66,7 @@ _REACHABILITY_TIMEOUT_SECONDS: Final = 5.0
 
 UNREACHABLE_MESSAGE: Final = (
     "The model server on your computer did not answer. Check that the computer is awake, that "
-    "Imbue Studio is open on it, and that the model server (for example Ollama) is running. "
+    "Imbue Studio is open on it, and that a model server (for example Ollama) is installed and running. "
     "Then send your message again."
 )
 # A model that is not loaded yet is read off disk before it answers.
@@ -116,6 +120,11 @@ class LocalModelServer(FrozenModel):
     base_url: str = Field(description="The server's OpenAI-compatible root, ending in its version path")
     name: str = Field(description="What the server is, as shown: the product on a known port, else its address")
     models: tuple[str, ...] = Field(description="The ids of the models the server lists")
+    choices: tuple[LocalModelChoice, ...] = Field(
+        default=(),
+        description="The models a chat can be put on, one each, with the context sizes each offers; the "
+        "copies of a model at other context sizes are folded into it",
+    )
     studio_port: int | None = Field(
         default=None,
         description="The server's port on the user's own computer, for a server this workspace reaches only "
@@ -187,7 +196,13 @@ def describe_server(client: httpx.Client, base_url: str, api_key: str) -> LocalM
     models = list_models(client, base_url, api_key)
     parts = urlsplit(base_url)
     name = _SERVER_NAME_BY_PORT.get(parts.port or 0, parts.netloc)
-    return LocalModelServer(base_url=base_url, name=name, models=models)
+    described = read_ollama_models(client, base_url, api_key)
+    choices = (
+        group_model_choices(described, MIN_CONTEXT_WINDOW)
+        if described is not None
+        else tuple(LocalModelChoice(model_id=model) for model in models)
+    )
+    return LocalModelServer(base_url=base_url, name=name, models=models, choices=choices)
 
 
 def _probe_candidate(client: httpx.Client, base_url: str) -> LocalModelServer | None:
@@ -371,19 +386,7 @@ def verify_local_model(base_url: str, api_key: str, model_id: str, context_windo
         return verify_model(client, base_url, api_key, model_id, context_window)
 
 
-def write_models_file(account_dir: Path, base_url: str, model_id: str, profile: LocalModelProfile) -> None:
-    """Write the `models.json` that makes ``model_id`` at ``base_url`` a pi provider of this account.
-
-    A reasoning model is declared one, which is what gives a chat its thinking levels. Two things
-    ride with the declaration:
-
-    * pi sends a reasoning model its instructions under the `developer` role unless told the
-      server does not take it, and Ollama drops a `developer` message without a word (measured
-      on 0.40: the same instruction as `system` is followed, as `developer` it is not counted
-      in the prompt at all), which would leave the model with none of the workspace's rules;
-    * pi's "off" level sends nothing unless the model names what to send, so where the server
-      is known to take one, the effort that stops the reasoning is named.
-    """
+def _to_pi_model(model_id: str, profile: LocalModelProfile) -> dict[str, Any]:
     model: dict[str, Any] = {
         "id": model_id,
         "contextWindow": profile.context_window,
@@ -394,8 +397,25 @@ def write_models_file(account_dir: Path, base_url: str, model_id: str, profile: 
         model["compat"] = {"supportsDeveloperRole": False}
         if profile.reasoning_off_effort is not None:
             model["thinkingLevelMap"] = {"off": profile.reasoning_off_effort}
+    return model
+
+
+def write_models_file(account_dir: Path, base_url: str, profile_by_model_id: Mapping[str, LocalModelProfile]) -> None:
+    """Write the `models.json` that makes the models at ``base_url`` a pi provider of this account.
+
+    The first model is the one a new chat starts on. A reasoning model is declared one, which is what gives a chat its thinking levels. Two things
+    ride with the declaration:
+
+    * pi sends a reasoning model its instructions under the `developer` role unless told the
+      server does not take it, and Ollama drops a `developer` message without a word (measured
+      on 0.40: the same instruction as `system` is followed, as `developer` it is not counted
+      in the prompt at all), which would leave the model with none of the workspace's rules;
+    * pi's "off" level sends nothing unless the model names what to send, so where the server
+      is known to take one, the effort that stops the reasoning is named.
+    """
+    models = [_to_pi_model(model_id, profile) for model_id, profile in profile_by_model_id.items()]
     config = {
-        "providers": {LOCAL_MODEL_PROVIDER_ID: {"baseUrl": base_url, "api": "openai-completions", "models": [model]}}
+        "providers": {LOCAL_MODEL_PROVIDER_ID: {"baseUrl": base_url, "api": "openai-completions", "models": models}}
     }
     path = account_dir / MODELS_FILENAME
     path.write_text(json.dumps(config, indent=2) + "\n")

@@ -746,7 +746,22 @@ describe("a local model", () => {
     base_url: "http://host.docker.internal:11434/v1",
     name: "Ollama",
     models: ["qwen2.5:7b"],
+    choices: [{ model_id: "qwen2.5:7b", detail: "", context_windows: [], unusable_reason: null }],
     studio_port: null,
+  };
+  // An Ollama as it describes its models: one that runs at three sizes, and one too small for a chat.
+  const DESCRIBED_OLLAMA = {
+    ...OLLAMA,
+    models: ["llama3.3:latest", "llama3.3-64k:latest", "qwen2.5:7b"],
+    choices: [
+      { model_id: "llama3.3:latest", detail: "70.6B", context_windows: [40960, 65536, 131072], unusable_reason: null },
+      {
+        model_id: "qwen2.5:7b",
+        detail: "7.6B",
+        context_windows: [],
+        unusable_reason: "It takes a context of 32,768 tokens at most, and a chat here needs 40,960.",
+      },
+    ],
   };
   // The same server as Imbue Studio lists it for a workspace that is not on the user's computer.
   const STUDIO_OLLAMA = { ...OLLAMA, base_url: "http://127.0.0.1:11434/v1", studio_port: 11434 };
@@ -928,9 +943,26 @@ describe("a local model", () => {
 
     const { root } = await openForm();
 
-    expect(root.querySelector('[data-e2e="local-model-none"]')?.textContent).toContain(
-      "No model server is running on your computer",
+    const hint = root.querySelector('[data-e2e="local-model-none"]')?.textContent;
+    expect(hint).toContain("No model server is running on your computer");
+    expect(hint).toContain(
+      "You may need to install Ollama: Imbue Studio can do it for you in its Settings, under Local models.",
     );
+    expect(hint).toContain("Open Local models settings");
+  });
+
+  it("asks Imbue Studio to open its Local models settings from the hint's link", async () => {
+    findLocalModelServers.mockResolvedValue(found([], "CONNECTED"));
+    const posted: unknown[] = [];
+    const post = vi.spyOn(window.parent, "postMessage").mockImplementation((message: unknown) => {
+      posted.push(message);
+    });
+
+    const { root } = await openForm();
+    root.querySelector<HTMLButtonElement>('[data-e2e="open-local-models-settings"]')?.click();
+    post.mockRestore();
+
+    expect(posted).toEqual([{ type: "minds:open-local-models-settings" }]);
   });
 
   it("asks for an address when no server answers, and looks at the one named", async () => {
@@ -939,7 +971,7 @@ describe("a local model", () => {
 
     const { root, draw } = await openForm();
 
-    expect(root.textContent).toContain("No model server answered on your computer.");
+    expect(root.textContent).toContain("No model server is running on your computer. You may need to install Ollama");
     expect((root.querySelector('[data-e2e="connect-local-model"]') as HTMLButtonElement).disabled).toBe(true);
     type(root, "local-model-address", "box.lan:9000");
     type(root, "local-model-key", "sk-secret");
@@ -997,7 +1029,7 @@ describe("a local model", () => {
   });
 
   it("says a server with no models needs one added", async () => {
-    findLocalModelServers.mockResolvedValue(found([{ ...OLLAMA, models: [] }]));
+    findLocalModelServers.mockResolvedValue(found([{ ...OLLAMA, models: [], choices: [] }]));
 
     const { root } = await openForm();
 
@@ -1016,6 +1048,64 @@ describe("a local model", () => {
     expect((root.querySelector('[data-e2e="connect-local-model"]') as HTMLButtonElement).disabled).toBe(true);
     press(root, "connect-local-model");
     expect(submitEndpoint).not.toHaveBeenCalled();
+  });
+
+  it("offers a model once with its context sizes to choose from, starting on the largest within the default", async () => {
+    findLocalModelServers.mockResolvedValue({
+      ...(found([DESCRIBED_OLLAMA]) as object),
+      default_context_window: 65536,
+    });
+
+    const { root, draw } = await openForm();
+
+    // The size is one of the model's own, so there is nothing to type.
+    expect(root.querySelector('[data-e2e="local-model-context"]')).toBeNull();
+    const sizeTrigger = root.querySelector('[aria-label="Context window"]') as HTMLElement;
+    expect(sizeTrigger.textContent).toContain("64K tokens");
+    sizeTrigger.click();
+    draw();
+    expect(
+      [...document.querySelectorAll("[data-dropdown-option]")].map((option) =>
+        option.getAttribute("data-dropdown-option"),
+      ),
+    ).toEqual(["40960", "65536", "131072"]);
+    (document.querySelector('[data-dropdown-option="131072"]') as HTMLElement).click();
+    draw();
+    press(root, "connect-local-model");
+
+    expect(submitEndpoint).toHaveBeenCalledExactlyOnceWith({
+      base_url: "http://host.docker.internal:11434/v1",
+      model_id: "llama3.3:latest",
+      context_window: 131072,
+      api_key: "",
+      studio_port: null,
+    });
+  });
+
+  it("names the models that cannot run a chat, with why, apart from the ones to pick", async () => {
+    findLocalModelServers.mockResolvedValue(found([DESCRIBED_OLLAMA]));
+
+    const { root, draw } = await openForm();
+
+    const unusable = root.querySelector('[data-e2e="local-model-unusable"]') as HTMLElement;
+    expect(unusable.querySelector("summary")?.textContent).toBe("1 other model cannot run a chat here");
+    expect(unusable.textContent).toContain("qwen2.5:7b: It takes a context of 32,768 tokens at most");
+    (root.querySelector('[aria-label="Model"]') as HTMLElement).click();
+    draw();
+    expect(document.querySelectorAll('[data-dropdown-part="list"] [data-dropdown-option]')).toHaveLength(1);
+    (root.querySelector('[aria-label="Model"]') as HTMLElement).click();
+    draw();
+  });
+
+  it("says so when a server's models are all unable to run a chat", async () => {
+    findLocalModelServers.mockResolvedValue(found([{ ...DESCRIBED_OLLAMA, choices: [DESCRIBED_OLLAMA.choices[1]] }]));
+
+    const { root } = await openForm();
+
+    expect(root.querySelector('[data-e2e="local-model-error"]')?.textContent).toContain(
+      "Ollama answered, but none of its models can run a chat here",
+    );
+    expect(root.querySelector('[data-e2e="local-model-unusable"]')).not.toBeNull();
   });
 
   it("offers a different server while one was found", async () => {

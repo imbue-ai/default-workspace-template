@@ -26,10 +26,15 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import get_method
 from imbue.chat.harnesses.pi_coding.local_model import LocalModelError
 from imbue.chat.harnesses.pi_coding.local_model import LocalModelProfile
+from imbue.chat.harnesses.pi_coding.local_model_account import LocalModelAccount
+from imbue.chat.harnesses.pi_coding.local_model_account import LocalModelRecord
+from imbue.chat.harnesses.pi_coding.local_model_account import LocalModelSignIn
+from imbue.chat.harnesses.pi_coding.local_model_account import read_account_models
 from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.sign_in_relay import RelayCallbackError
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.testing import FakePexpectProcess
+from imbue.chat.testing import plan_sign_in_on_the_model_as_named
 from imbue.chat.testing import put_stand_in_cli_on_path
 
 
@@ -971,7 +976,11 @@ def _local_model_service(
     probe: Callable[..., SignedIn] = lambda *_a: SignedIn.YES,
 ) -> AuthFlowService:
     return AuthFlowService.create(
-        home=tmp_path, work_dir=tmp_path / "work", probe=probe, local_model_verifier=verifier
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        probe=probe,
+        local_model_verifier=verifier,
+        local_model_sign_in_planner=plan_sign_in_on_the_model_as_named,
     )
 
 
@@ -1000,6 +1009,74 @@ def test_a_local_model_sign_in_writes_pi_s_provider_and_its_key_and_commits(tmp_
     }
     # pi lists a provider's models only once it holds some credential for it.
     assert json.loads((folder / "auth.json").read_text()) == {"local-model": {"type": "api_key", "key": "local"}}
+
+
+def test_a_local_model_sign_in_gives_the_account_every_model_of_the_server_with_only_its_own_checked(
+    tmp_path: Path,
+) -> None:
+    """The sign-in checks the one model it was asked for, as the server runs it; the rest wait for a switch."""
+    checked: list[tuple[str, int]] = []
+
+    def plan(base_url: str, api_key: str, model_id: str, context_window: int) -> LocalModelSignIn:
+        records = (
+            LocalModelRecord(id="qwen3:8b-ctx40960", base_id="qwen3:8b", context_window=40_960),
+            LocalModelRecord(id="llama3.3:latest-ctx65536", base_id="llama3.3:latest", context_window=65_536),
+        )
+        return LocalModelSignIn(
+            model_id="qwen3:8b-ctx40960",
+            context_window=40_960,
+            account=LocalModelAccount(is_context_managed=True, records=records),
+        )
+
+    def verify(base_url: str, api_key: str, model_id: str, context_window: int) -> LocalModelProfile:
+        checked.append((model_id, context_window))
+        return LocalModelProfile(context_window=context_window, is_reasoning=False)
+
+    service = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        probe=lambda *_a: SignedIn.YES,
+        local_model_verifier=verify,
+        local_model_sign_in_planner=plan,
+    )
+    started = service.start("local-model", "endpoint")
+
+    status = service.submit_endpoint(started.flow_id, "127.0.0.1:11434", "qwen3:8b", 65_536)
+
+    assert status.state is FlowState.OK
+    assert checked == [("qwen3:8b-ctx40960", 40_960)]
+    (account,) = read_index(tmp_path).accounts
+    folder = tmp_path / ".minds" / "accounts" / account.id
+    pi_models = json.loads((folder / "models.json").read_text())["providers"]["local-model"]["models"]
+    assert [model["id"] for model in pi_models] == ["qwen3:8b-ctx40960", "llama3.3:latest-ctx65536"]
+    kept = read_account_models(folder)
+    assert kept is not None
+    assert [(record.id, record.is_checked) for record in kept.records] == [
+        ("qwen3:8b-ctx40960", True),
+        ("llama3.3:latest-ctx65536", False),
+    ]
+
+
+def test_a_local_model_the_server_cannot_set_up_fails_the_sign_in_with_the_reason(tmp_path: Path) -> None:
+    def refuse(base_url: str, api_key: str, model_id: str, context_window: int) -> LocalModelSignIn:
+        raise LocalModelError(f"{model_id} cannot run a chat here. It does not call tools.")
+
+    service = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        probe=lambda *_a: SignedIn.YES,
+        local_model_verifier=_accept_local_model,
+        local_model_sign_in_planner=refuse,
+    )
+    started = service.start("local-model", "endpoint")
+
+    status = service.submit_endpoint(started.flow_id, "127.0.0.1:11434", "gemma3:4b", 65_536)
+
+    assert (status.state, status.detail) == (
+        FlowState.FAILED,
+        "gemma3:4b cannot run a chat here. It does not call tools.",
+    )
+    assert read_index(tmp_path).accounts == ()
 
 
 def test_a_reasoning_local_model_is_signed_in_as_one(tmp_path: Path) -> None:
@@ -1057,7 +1134,7 @@ def test_a_rejected_local_model_re_auth_puts_the_working_one_back(tmp_path: Path
     service.submit_endpoint(started.flow_id, "localhost:11434", "good-model", 32_768)
     (account,) = read_index(tmp_path).accounts
     folder = tmp_path / ".minds" / "accounts" / account.id
-    accepted = {name: (folder / name).read_text() for name in ("auth.json", "models.json")}
+    accepted = {name: (folder / name).read_text() for name in ("auth.json", "models.json", "local_models.json")}
 
     again = service.start("local-model", "endpoint", account_id=account.id)
     status = service.submit_endpoint(again.flow_id, "localhost:11434", "bad-model", 32_768, "another-key")

@@ -45,6 +45,12 @@ vi.mock("../models/Chats", () => ({
   getChatById: () => ({ active_agent: agentState, handoff: handoffState.handoff, status: chatState.status }),
   getQueuedMessagesForChat: () => agentState.queued_messages,
 }));
+// Whether the chat's model server still has the model to read into memory (models/LocalModelLoad).
+const modelLoad = vi.hoisted(() => ({ isPending: false }));
+vi.mock("../models/LocalModelLoad", () => ({
+  isModelLoadPending: (_chatId: string, latestTurn: { hasAgentWork: boolean } | null) =>
+    modelLoad.isPending && (latestTurn === null || !latestTurn.hasAgentWork),
+}));
 // How many of the switching chat's delivered held sends already show in their real form.
 const landedHeldSends = vi.hoisted(() => ({ count: 0 }));
 vi.mock("./HeldSendView", () => ({
@@ -532,6 +538,27 @@ describe("ActivityIndicator — the row before, during and after a turn", () => 
 
     expect(stateOf(strip)).toBe("THINKING");
     expect(partOf(strip, "label")).toBe("Thinking…");
+  });
+
+  it("says the model is loading on the user's computer while a local model's first reply is silent", () => {
+    modelLoad.isPending = true;
+    try {
+      addOutgoing(CHAT_ID, "hello");
+      agentState.activity_state = "THINKING";
+
+      const waiting = render([userMsg(isoAt(NOW))]);
+      expect(stateOf(waiting)).toBe("THINKING");
+      expect(partOf(waiting, "label")).toBe("Loading the model on your computer. The first reply can take a minute…");
+
+      const answering = render([
+        userMsg(isoAt(NOW)),
+        toolUse(isoAt(NOW + 1_000), "Read", "c1", "{}"),
+        toolResult(isoAt(NOW + 1_500), "c1"),
+      ]);
+      expect(partOf(answering, "label")).toBe("Thinking…");
+    } finally {
+      modelLoad.isPending = false;
+    }
   });
 
   it("leaves a running call its stretch shows as a chip to the chip, and holds no caption once the call ends", () => {

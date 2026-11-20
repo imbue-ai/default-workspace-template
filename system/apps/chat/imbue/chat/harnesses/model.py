@@ -81,6 +81,11 @@ class ModelOption(FrozenModel):
     # (``claude-opus-5``) that differs from the ``[1m]``-suffixed switch id, so its
     # options set this explicitly.
     harness_reported_model_id: str | None = None
+    # Set together on a model that runs at several context sizes, each size an option of its own
+    # (a local model server's): the model's name, which its sizes share, and this option's size in
+    # tokens. A picker offers the model once and its sizes beside it. None on every other option.
+    family: str | None = None
+    context_window: int | None = None
 
 
 class ModelIdentity(FrozenModel):

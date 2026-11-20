@@ -328,7 +328,7 @@ def test_no_model_is_refused() -> None:
 
 
 def test_the_models_file_is_a_pi_custom_provider_holding_no_key(tmp_path: Path) -> None:
-    write_models_file(tmp_path, _OLLAMA, "qwen2.5:7b", LocalModelProfile(context_window=32_768, is_reasoning=False))
+    write_models_file(tmp_path, _OLLAMA, {"qwen2.5:7b": LocalModelProfile(context_window=32_768, is_reasoning=False)})
 
     path = tmp_path / "models.json"
     provider = json.loads(path.read_text())["providers"][LOCAL_MODEL_PROVIDER_ID]
@@ -340,8 +340,26 @@ def test_the_models_file_is_a_pi_custom_provider_holding_no_key(tmp_path: Path) 
     assert path.stat().st_mode & 0o077 == 0
 
 
+def test_the_models_file_names_every_model_in_the_order_given(tmp_path: Path) -> None:
+    """pi starts a new chat on the first model its provider names."""
+    write_models_file(
+        tmp_path,
+        _OLLAMA,
+        {
+            "qwen3:8b-ctx40960": LocalModelProfile(context_window=40_960, is_reasoning=False),
+            "llama3.3:latest-ctx65536": LocalModelProfile(context_window=65_536, is_reasoning=False),
+        },
+    )
+
+    models = json.loads((tmp_path / "models.json").read_text())["providers"][LOCAL_MODEL_PROVIDER_ID]["models"]
+    assert [(model["id"], model["contextWindow"]) for model in models] == [
+        ("qwen3:8b-ctx40960", 40_960),
+        ("llama3.3:latest-ctx65536", 65_536),
+    ]
+
+
 def test_the_output_limit_leaves_room_in_a_small_window(tmp_path: Path) -> None:
-    write_models_file(tmp_path, _OLLAMA, "qwen2.5:7b", LocalModelProfile(context_window=16_384, is_reasoning=False))
+    write_models_file(tmp_path, _OLLAMA, {"qwen2.5:7b": LocalModelProfile(context_window=16_384, is_reasoning=False)})
 
     (model,) = json.loads((tmp_path / "models.json").read_text())["providers"][LOCAL_MODEL_PROVIDER_ID]["models"]
     assert model["maxTokens"] == 4_096
@@ -351,7 +369,7 @@ def test_a_reasoning_model_is_declared_one_with_what_ollama_needs(tmp_path: Path
     """The declaration alone would have pi send the instructions under a role Ollama drops."""
     profile = LocalModelProfile(context_window=32_768, is_reasoning=True, reasoning_off_effort="none")
 
-    write_models_file(tmp_path, _OLLAMA, "qwen3:8b", profile)
+    write_models_file(tmp_path, _OLLAMA, {"qwen3:8b": profile})
 
     (model,) = json.loads((tmp_path / "models.json").read_text())["providers"][LOCAL_MODEL_PROVIDER_ID]["models"]
     assert model == {
@@ -365,7 +383,7 @@ def test_a_reasoning_model_is_declared_one_with_what_ollama_needs(tmp_path: Path
 
 
 def test_a_reasoning_model_with_no_known_off_switch_names_none(tmp_path: Path) -> None:
-    write_models_file(tmp_path, _OLLAMA, "m", LocalModelProfile(context_window=32_768, is_reasoning=True))
+    write_models_file(tmp_path, _OLLAMA, {"m": LocalModelProfile(context_window=32_768, is_reasoning=True)})
 
     (model,) = json.loads((tmp_path / "models.json").read_text())["providers"][LOCAL_MODEL_PROVIDER_ID]["models"]
     assert model["reasoning"] is True
@@ -375,7 +393,9 @@ def test_a_reasoning_model_with_no_known_off_switch_names_none(tmp_path: Path) -
 
 def test_a_local_model_accounts_server_address_is_read_back_from_its_models_file(tmp_path: Path) -> None:
     write_models_file(
-        tmp_path, "http://127.0.0.1:11435/v1", "qwen3:8b", LocalModelProfile(context_window=65_536, is_reasoning=False)
+        tmp_path,
+        "http://127.0.0.1:11435/v1",
+        {"qwen3:8b": LocalModelProfile(context_window=65_536, is_reasoning=False)},
     )
 
     assert read_server_base_url(tmp_path) == "http://127.0.0.1:11435/v1"

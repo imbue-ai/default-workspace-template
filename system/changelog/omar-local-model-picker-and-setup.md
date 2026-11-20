@@ -1,0 +1,1 @@
+- `workspace_ui` gains `OPEN_LOCAL_MODELS_SETTINGS` (`minds:open-local-models-settings`, embed contract v16) in `embed.ts`: an app sends it to have Imbue Studio open its Settings at the Local models section, where Studio installs Ollama.

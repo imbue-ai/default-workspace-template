@@ -57,7 +57,8 @@ import { getChatById, getQueuedMessagesForChat } from "../models/Chats";
 import { getEventsForChat, hasMoreAfter } from "../models/Response";
 import { getOutgoingMessages, opensTurnWithHeldSends, sentAtOfArrival } from "../models/OutgoingMessages";
 import { BackgroundTasksLine } from "./BackgroundTasksLine";
-import { awaitingReplyLabel, connectingLabel, isChatConnecting } from "./ConnectingIndicator";
+import { isModelLoadPending } from "../models/LocalModelLoad";
+import { awaitingReplyLabel, connectingLabel, isChatConnecting, loadingModelLabel } from "./ConnectingIndicator";
 import { harnessLabel } from "./harness-labels";
 import { heldSendsShownElsewhere } from "./HeldSendView";
 import { railNodeAttrs } from "./agent-rail";
@@ -420,6 +421,15 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
     scheduleRedrawAt(captionAt === null || captionAt <= now ? nextElapsedAt : Math.min(captionAt, nextElapsedAt), now);
   };
 
+  /** Whether the chat's reply is waiting on its model being loaded, going by the latest turn in `events`. */
+  const isLoadingModel = (chatId: string, events: readonly TranscriptEvent[]): boolean => {
+    const span = latestTurnSpan(events);
+    return isModelLoadPending(
+      chatId,
+      span === null ? null : { id: span.openingEventId, hasAgentWork: span.hasAgentWork },
+    );
+  };
+
   /** The row of a send not yet in a turn: waiting on the agent to come up, or still on its way. Null for neither. */
   const sendStrip = (chatId: string, columnClass: string, now: number): m.Vnode | null => {
     const sentAt = oldestSendingAt(chatId);
@@ -436,7 +446,9 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
       now < captionAt
         ? null
         : isOldestSendWithAgent(chatId)
-          ? awaitingReplyLabel(chatId)
+          ? isLoadingModel(chatId, getEventsForChat(chatId))
+            ? loadingModelLabel(chatId)
+            : awaitingReplyLabel(chatId)
           : harness === undefined
             ? "Sending…"
             : `Sending to ${harnessLabel(harness)}…`;
@@ -454,7 +466,8 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
     if (span === null || span.hasAgentWork) return null;
     const startedAt = turnStartedAt(span);
     scheduleTick(startedAt, now);
-    return renderStrip(null, STARTING_STATE, columnClass, elapsedSince(startedAt, now));
+    const caption = isLoadingModel(attrs.chatId, attrs.events) ? loadingModelLabel(attrs.chatId) : null;
+    return renderStrip(caption, STARTING_STATE, columnClass, elapsedSince(startedAt, now));
   };
 
   /** The activity line: the turn's caption, the wake-up caption, the row of a send
@@ -535,7 +548,9 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
       return sendStrip(chatId, columnClass, now) ?? startingStrip(attrs, columnClass, now);
     }
     cancelWake();
-    return renderStrip(label, state, columnClass, turnElapsed);
+    // A model still being read into memory has the agent "thinking" with nothing to show for it yet.
+    const caption = state === "THINKING" && isLoadingModel(chatId, events) ? loadingModelLabel(chatId) : label;
+    return renderStrip(caption, state, columnClass, turnElapsed);
   };
 
   return {

@@ -146,6 +146,8 @@ from imbue.chat.harnesses.model import validate_model_pick
 from imbue.chat.harnesses.pi_coding.local_model import UNREACHABLE_MESSAGE
 from imbue.chat.harnesses.pi_coding.local_model import is_server_answering
 from imbue.chat.harnesses.pi_coding.local_model import read_server_base_url
+from imbue.chat.harnesses.pi_coding.local_model_account import is_model_load_pending
+from imbue.chat.harnesses.pi_coding.model import LOCAL_MODEL_OPTION_PREFIX
 from imbue.chat.harnesses.registry import ComposerCompactHandling
 from imbue.chat.harnesses.registry import HARNESS_SPECS
 from imbue.chat.harnesses.registry import build_resolver
@@ -206,6 +208,7 @@ from imbue.chat.models import InterruptAgentRequest
 from imbue.chat.models import InterruptAgentResponse
 from imbue.chat.models import InterruptBusyResponse
 from imbue.chat.models import MeResponse
+from imbue.chat.models import ModelLoadResponse
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.models import NoProviderAccountError
 from imbue.chat.models import OkResponse
@@ -1465,6 +1468,28 @@ def _get_model_options_endpoint(chat_id: str) -> Response:
             get_state().agent_manager.get_or_create_session(agent_info).note_offered_options(dynamic_options)
         return model_response(ModelOptionsResponse(options=dynamic_options))
     return model_response(ModelOptionsResponse(models=resolver.list_offered_models()))
+
+
+def _get_model_load_endpoint(chat_id: str) -> Response:
+    """Whether the model named in ``?model=`` (a picker option's id) is still to be loaded by the chat's model server.
+
+    The page asks as it sends, so a first reply that waits a minute on a model being read off disk
+    says so in place of looking stalled. Only a local model can be pending.
+    """
+    agent_info = _find_active_agent(chat_id)
+    if agent_info is None:
+        return _chat_not_found_response(chat_id)
+    option_id = request.args.get("model", "")
+    account_id = account_id_of(agent_info.harness, agent_info.labels)
+    is_load_pending = (
+        agent_info.harness is HarnessType.PI_CODING
+        and account_id is not None
+        and option_id.startswith(LOCAL_MODEL_OPTION_PREFIX)
+        and is_model_load_pending(
+            get_state().http_client, account_dir(account_id), option_id.removeprefix(LOCAL_MODEL_OPTION_PREFIX)
+        )
+    )
+    return model_response(ModelLoadResponse(is_load_pending=is_load_pending))
 
 
 def _get_powered_by_endpoint(chat_id: str) -> Response:
@@ -3124,6 +3149,7 @@ _PER_CHAT_ROUTES: Final[tuple[tuple[str, Callable[..., Response], tuple[str, ...
     ("notification", _notification_endpoint, ("POST",)),
     ("model", _set_model_choice_endpoint, ("POST",)),
     ("model-options", _get_model_options_endpoint, ("GET",)),
+    ("model-load", _get_model_load_endpoint, ("GET",)),
     ("powered-by", _get_powered_by_endpoint, ("GET",)),
     ("interrupt", _interrupt_agent_endpoint, ("POST",)),
     ("flush-queue", _flush_queue_endpoint, ("POST",)),
@@ -3199,9 +3225,7 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("POST", "/api/uploads"): RouteModels(response_model=AttachmentUploadResponse, success_status=201),
     ("GET", "/api/uploads/{relative_path}"): SchemalessRoute(reason="The stored attachment itself"),
     ("DELETE", "/api/uploads/{relative_path}"): RouteModels(response_model=OkResponse),
-    ("POST", "/api/chats/{chat_id}/uploads"): RouteModels(
-        response_model=AttachmentUploadResponse, success_status=201
-    ),
+    ("POST", "/api/chats/{chat_id}/uploads"): RouteModels(response_model=AttachmentUploadResponse, success_status=201),
     ("GET", "/api/chats/{chat_id}/uploads/{relative_path}"): SchemalessRoute(reason="The stored attachment itself"),
     ("DELETE", "/api/chats/{chat_id}/uploads/{relative_path}"): RouteModels(response_model=OkResponse),
     ("GET", "/api/settings"): RouteModels(response_model=ChatSettingsResponse),
@@ -3239,6 +3263,7 @@ _ROUTE_TABLE: Final[RouteTable] = {
         request_model=SetModelChoiceRequest, response_model=SendMessageResponse, alternate_responses=(_CONVERGING,)
     ),
     ("GET", "/api/chats/{chat_id}/model-options"): RouteModels(response_model=ModelOptionsResponse),
+    ("GET", "/api/chats/{chat_id}/model-load"): RouteModels(response_model=ModelLoadResponse),
     ("GET", "/api/chats/{chat_id}/powered-by"): RouteModels(response_model=PoweredByResponse),
     # The view reads the body itself: the stop button posts none.
     ("POST", "/api/chats/{chat_id}/interrupt"): RouteModels(

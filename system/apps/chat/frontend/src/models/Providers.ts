@@ -80,6 +80,19 @@ export interface ProviderAccount {
   signed_in_at: string | null;
 }
 
+/** One model of a server that a chat can be put on. A server's copies of a model at other context
+ *  sizes are folded into the model, as the sizes it offers. */
+export interface LocalModelChoice {
+  model_id: string;
+  /** What tells the model from its neighbours ("8.2B"), or "". */
+  detail: string;
+  /** The context sizes on offer, ascending, in tokens. Empty when the server does not say what the
+   *  model takes: the size is then whatever the user names. */
+  context_windows: number[];
+  /** Why a chat here cannot run on the model, or null when it can. */
+  unusable_reason: string | null;
+}
+
 /** A model server that answered, and the models it lists. */
 export interface LocalModelServer {
   /** The server's OpenAI-compatible root, as a sign-in hands it back. */
@@ -87,6 +100,7 @@ export interface LocalModelServer {
   /** What the server is: the product on a known port ("Ollama"), else its address. */
   name: string;
   models: string[];
+  choices: LocalModelChoice[];
   /** Set for a server on the user's own computer that Imbue Studio connects the workspace to:
    *  its port there, handed back as it is when signing in. */
   studio_port: number | null;

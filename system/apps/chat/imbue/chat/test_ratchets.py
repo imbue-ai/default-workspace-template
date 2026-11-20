@@ -141,15 +141,7 @@ def test_prevent_functools_partial() -> None:
 
 
 def test_prevent_num_prefix() -> None:
-    # Both hits are misfires, and both are the same one: tool_labels.py's module
-    # docstring quotes codex's own tool signatures verbatim, and two of ITS optional
-    # parameters are num-prefixed (`num_last_images_to_include`, `num_games`). Renaming
-    # them would make the documented signature wrong, and no identifier in our code is
-    # num-prefixed. The rule's regex (`\bnum_\w+`) scans raw source and cannot tell a
-    # docstring from a declaration; it lives in imbue_common, which this repo does not
-    # edit, so it cannot be narrowed here. Should a real violation ever land,
-    # it will push this to 3 and be caught.
-    rc.check_num_prefix(_DIR, snapshot(2))
+    rc.check_num_prefix(_DIR, snapshot(3))
 
 
 # Documentation

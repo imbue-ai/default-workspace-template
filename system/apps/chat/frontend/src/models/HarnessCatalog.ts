@@ -30,6 +30,64 @@ export interface CatalogModelOption {
   // The raw model id the harness reports in its live state file (or null = same as `id`).
   // Matched on the backend; the frontend reconciles against the matched option, not this.
   harness_reported_model_id: string | null;
+  // Set together on a model that runs at several context sizes, each size an option of its own (a
+  // local model server's): the model's name, which its sizes share, and this option's size in
+  // tokens. Absent or null on every other option.
+  family?: string | null;
+  context_window?: number | null;
+}
+
+/** A context size as shown: 40960 is "40K". */
+export function formatContextWindow(contextWindow: number): string {
+  return contextWindow % 1024 === 0 ? `${contextWindow / 1024}K` : contextWindow.toLocaleString("en-US");
+}
+
+/** What a model is called where its context size is shown apart from it: its family when it has
+ *  one, else its label. */
+export function modelName(option: CatalogModelOption): string {
+  return option.family ?? option.label;
+}
+
+/** One option per model: the options that share a family are one model at several context sizes,
+ *  and the one kept is the size nearest `preferredContextWindow` from below (else the smallest),
+ *  so moving between models keeps the context size where the next model offers it. */
+export function oneOptionPerModel(
+  options: readonly CatalogModelOption[],
+  preferredContextWindow: number | null,
+): CatalogModelOption[] {
+  const sizesByFamily = new Map<string, CatalogModelOption[]>();
+  for (const option of options) {
+    if (option.family == null) continue;
+    sizesByFamily.set(option.family, [...(sizesByFamily.get(option.family) ?? []), option]);
+  }
+  const seen = new Set<string>();
+  const kept: CatalogModelOption[] = [];
+  for (const option of options) {
+    if (option.family == null) {
+      kept.push(option);
+      continue;
+    }
+    if (seen.has(option.family)) continue;
+    seen.add(option.family);
+    const sizes = contextSizesOf(sizesByFamily.get(option.family) ?? [option]);
+    const fitting = sizes.filter((size) => (size.context_window ?? 0) <= (preferredContextWindow ?? 0));
+    kept.push(fitting[fitting.length - 1] ?? sizes[0]);
+  }
+  return kept;
+}
+
+function contextSizesOf(options: readonly CatalogModelOption[]): CatalogModelOption[] {
+  return [...options].sort((a, b) => (a.context_window ?? 0) - (b.context_window ?? 0));
+}
+
+/** The options that are `option`'s model at each context size on offer, ascending; empty for a
+ *  model with no context size of its own. */
+export function contextSizeOptions(
+  options: readonly CatalogModelOption[],
+  option: CatalogModelOption,
+): CatalogModelOption[] {
+  if (option.family == null) return [];
+  return contextSizesOf(options.filter((candidate) => candidate.family === option.family));
 }
 
 /** The effort an agent is running at: the one it recorded, else its model's default. A harness that

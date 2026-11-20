@@ -39,6 +39,13 @@ export function awaitingReplyLabel(chatId: string): string {
   return model === null ? "Waiting for the model…" : `Waiting for ${model}…`;
 }
 
+/** What the status row says while the user's own computer reads the chat's model into memory, before its first
+ *  reply: the one wait in a turn that can run a minute with nothing arriving. */
+export function loadingModelLabel(chatId: string): string {
+  const model = modelLabelOf(chatId);
+  return `Loading ${model ?? "the model"} on your computer. The first reply can take a minute…`;
+}
+
 /** What the status row says: the model and the provider the message is waiting for, as far as they are known. */
 export function connectingLabel(chatId: string): string {
   const chat = getChatById(chatId);
