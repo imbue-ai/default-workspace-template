@@ -11,9 +11,11 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
+from app_install.derived import is_python_app
 from app_install.git import COMMITTER_EMAIL
 from app_install.git import COMMITTER_NAME
 from app_install.interfaces import WorkspaceRuntimeInterface
+from app_install.paths import APPS_DIRECTORY
 from app_manifest.manifest import EnvironmentNote
 from app_registration import forward_port
 from host_backup.cli import has_recent_backup
@@ -112,15 +114,14 @@ class WorkspaceRuntime(WorkspaceRuntimeInterface):
         return WorkspaceRuntime(repo_root=directory)._run(argv)
 
     def relock_app(self, worktree: Path, package: str) -> str | None:
-        relative = f"system/apps/{package}"
-        if not (worktree / relative / "pyproject.toml").is_file():
+        if not is_python_app(worktree, package):
             return None
-        return self._run_in(worktree, ["uv", "lock", "--project", relative])
+        return self._run_in(worktree, ["uv", "lock", "--project", (APPS_DIRECTORY / package).as_posix()])
 
     def verify_app(self, worktree: Path, package: str) -> str | None:
-        relative = f"system/apps/{package}"
-        if not (worktree / relative / "pyproject.toml").is_file():
+        if not is_python_app(worktree, package):
             return None
+        relative = (APPS_DIRECTORY / package).as_posix()
         sync_failure = self._run_in(worktree, ["uv", "sync", "--locked", "--project", relative])
         if sync_failure is not None or not has_test_files(worktree / relative):
             return sync_failure

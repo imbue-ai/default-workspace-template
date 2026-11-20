@@ -36,10 +36,10 @@ from app_install.git import run_git
 from app_install.interfaces import WorkspaceRuntimeInterface
 from app_install.paths import APPS_DIRECTORY
 from app_install.paths import MANIFEST_FILENAME
-from app_install.paths import SECRETS_DIRECTORY
 from app_install.paths import UPSTREAM_REF_PREFIX
 from app_install.paths import app_directory
 from app_install.paths import manifest_path
+from app_install.paths import secret_file_path
 from app_install.ports import allocate_port
 from app_manifest.errors import AppManifestError
 from app_manifest.errors import InvalidManifestValueError
@@ -187,9 +187,9 @@ def install_app(
 
     unresolved_environment = runtime.install_environment(manifest.environment)
     missing_secret_files = tuple(
-        (SECRETS_DIRECTORY / f"{secret.file}.env").as_posix()
+        secret_file_path(str(secret.file)).as_posix()
         for secret in manifest.secrets
-        if not (repo_root / SECRETS_DIRECTORY / f"{secret.file}.env").is_file()
+        if not (repo_root / secret_file_path(str(secret.file))).is_file()
     )
     problems: list[str] = []
     reload_failure = runtime.reload_programs()

@@ -27,6 +27,7 @@ from app_install.paths import SKILL_FILENAME
 from app_install.paths import SKILLS_DIRECTORY
 from app_install.paths import SUPERVISORD_DROPIN_DIRECTORY
 from app_install.paths import app_directory
+from app_install.paths import secret_file_path
 from app_manifest.manifest import AppManifest
 from app_manifest.manifest import scaffold_env_prefix
 from app_manifest.records import AppRecord
@@ -112,7 +113,7 @@ def _wrapped_in_secrets(argv: Sequence[str], secret_files: Sequence[str]) -> lis
     no value appears in a config file or a command line."""
     wrapped = list(argv)
     for secret_file in reversed(secret_files):
-        wrapped = ["python3", _WITH_SECRETS, f"data/.secrets/{secret_file}.env", "--", *wrapped]
+        wrapped = ["python3", _WITH_SECRETS, secret_file_path(secret_file).as_posix(), "--", *wrapped]
     return wrapped
 
 

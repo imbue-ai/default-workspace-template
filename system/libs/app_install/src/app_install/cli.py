@@ -37,6 +37,7 @@ from app_install.operations import install_lock
 from app_install.operations import list_apps
 from app_install.operations import regenerate
 from app_install.operations import uninstall_app
+from app_install.paths import secret_file_path
 from app_install.ports import is_port_bound
 from app_install.runtime import WorkspaceRuntime
 from app_install.updating import UpdateOutcome
@@ -114,7 +115,7 @@ def _install_fields(outcome: InstallOutcome) -> dict[str, object]:
                     "file": str(secret.file),
                     "variables": [str(variable) for variable in secret.variables],
                     "note": str(secret.note or ""),
-                    "is_present": f"data/.secrets/{secret.file}.env" not in missing_secret_files,
+                    "is_present": secret_file_path(str(secret.file)).as_posix() not in missing_secret_files,
                 }
                 for secret in manifest.secrets
             ],

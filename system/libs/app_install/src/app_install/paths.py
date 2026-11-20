@@ -49,3 +49,8 @@ def program_conf_path(repo_root: Path, program: str) -> Path:
 
 def skill_link_path(repo_root: Path, skill: str) -> Path:
     return repo_root / SKILLS_DIRECTORY / skill
+
+
+def secret_file_path(secret_file: str) -> Path:
+    """Where the secret file a manifest declares as ``secret_file`` is kept, relative to the repo root."""
+    return SECRETS_DIRECTORY / f"{secret_file}.env"

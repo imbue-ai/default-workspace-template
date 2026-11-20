@@ -29,10 +29,10 @@ from app_install.git import run_git
 from app_install.interfaces import WorkspaceRuntimeInterface
 from app_install.paths import APP_DATA_DIRECTORY
 from app_install.paths import INSTALL_LOCK_PATH
-from app_install.paths import SECRETS_DIRECTORY
 from app_install.paths import UPSTREAM_REF_PREFIX
 from app_install.paths import app_directory
 from app_install.paths import manifest_path
+from app_install.paths import secret_file_path
 from app_install.ports import allocate_port
 from app_manifest.errors import AppManifestError
 from app_manifest.manifest import AppManifest
@@ -312,7 +312,7 @@ def _declared_secret_files(repo_root: Path, record: AppRecord) -> tuple[Path, ..
     except (AppNotFoundError, AppManifestError) as e:
         logger.warning("Could not read the manifest of {} to name its secret files: {}", record.name, e)
         return ()
-    return tuple(SECRETS_DIRECTORY / f"{secret.file}.env" for secret in manifest.secrets)
+    return tuple(secret_file_path(str(secret.file)) for secret in manifest.secrets)
 
 
 def list_apps(repo_root: Path) -> tuple[ListedApp, ...]:
