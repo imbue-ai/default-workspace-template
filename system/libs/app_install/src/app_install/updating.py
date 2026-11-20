@@ -77,6 +77,9 @@ class PendingUpdate(FrozenModel):
 
     ref: str = Field(description="The tag or branch being installed")
     commit: str = Field(description="The upstream commit being installed")
+    snapshot: str = Field(
+        default="", description="Where the app's data was copied before the update started, repo-relative"
+    )
 
 
 class UpdateOutcome(FrozenModel):
@@ -197,11 +200,11 @@ def _finish(
     repo_root: Path,
     record: AppRecord,
     pending: PendingUpdate,
-    snapshot: str,
     runtime: WorkspaceRuntimeInterface,
 ) -> UpdateOutcome:
     """Register, check, and land the merged app that waits in the update's worktree."""
     name = str(record.name)
+    snapshot = pending.snapshot
     worktree = update_worktree_path(repo_root, name)
     relative_worktree = worktree.relative_to(repo_root).as_posix()
     previous_version = record.upstream_version
@@ -313,7 +316,7 @@ def update_app(
             pending = PendingUpdate.model_validate(json.loads(pending_file.read_text(encoding="utf-8")))
         except (ValueError, AppManifestError) as e:
             raise AppInstallError(f"the waiting update of {name} cannot be read: {e}") from e
-        return _finish(repo_root, record, pending, "", runtime)
+        return _finish(repo_root, record, pending, runtime)
     if pending_file.exists() or worktree.exists():
         raise UpdateInProgressError(
             f"an update of {name} is waiting at {worktree.relative_to(repo_root).as_posix()}; resolve it there and "
@@ -326,7 +329,7 @@ def update_app(
             result=UpdateResult.UP_TO_DATE, record=record, ref=ref, previous_version=record.upstream_version
         )
     snapshot = snapshot_app_data(repo_root, record, runtime)
-    pending = PendingUpdate(ref=ref, commit=commit)
+    pending = PendingUpdate(ref=ref, commit=commit, snapshot=snapshot)
     conflicted = _merge_new_version(repo_root, record, pending, runtime)
     if conflicted:
         return UpdateOutcome(
@@ -338,4 +341,4 @@ def update_app(
             worktree=worktree.relative_to(repo_root).as_posix(),
             snapshot=snapshot,
         )
-    return _finish(repo_root, record, pending, snapshot, runtime)
+    return _finish(repo_root, record, pending, runtime)
