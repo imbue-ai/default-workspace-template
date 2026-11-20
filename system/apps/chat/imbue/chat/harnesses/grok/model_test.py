@@ -18,10 +18,11 @@ from imbue.chat.harnesses.grok.model import list_grok_model_ids
 from imbue.chat.harnesses.grok.model import offered_catalog_options
 from imbue.chat.harnesses.grok.model import parse_grok_models_output
 from imbue.chat.harnesses.grok.queue_tracker import GrokControlCommand
-from imbue.chat.harnesses.grok.queue_tracker import GrokControlCommandKind
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
+from imbue.chat.harnesses.grok.testing import effort_command
 from imbue.chat.harnesses.grok.testing import make_grok_agent_info
 from imbue.chat.harnesses.grok.testing import make_grok_agent_state_dir
+from imbue.chat.harnesses.grok.testing import model_command
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
@@ -76,14 +77,6 @@ class _ScriptedModelsCommand:
     def __call__(self, environment: Mapping[str, str]) -> FinishedProcess:
         self.environments.append(environment)
         return self.finished
-
-
-def _model(model_id: str) -> GrokControlCommand:
-    return GrokControlCommand(kind=GrokControlCommandKind.MODEL, value=model_id)
-
-
-def _effort(level: str) -> GrokControlCommand:
-    return GrokControlCommand(kind=GrokControlCommandKind.EFFORT, value=level)
 
 
 def _unused_send(_line: str) -> bool:
@@ -169,10 +162,10 @@ def test_a_switch_holds_one_command_per_changed_axis_on_the_agents_control_lane(
     queue = get_tracker(agent_state_dir)
     assert queue.snapshot() == []
     first = queue.next_control_command()
-    assert first == _model("grok-4.5")
+    assert first == model_command("grok-4.5")
     queue.settle_control_command(first, is_delivered=True)
     second = queue.next_control_command()
-    assert second == _effort("low")
+    assert second == effort_command("low")
     queue.settle_control_command(second, is_delivered=True)
     assert queue.has_control_commands() is False
 
@@ -202,30 +195,42 @@ def test_a_switch_holds_nothing_for_an_axis_grok_cannot_change(
     ("command", "identity", "is_in_force"),
     [
         pytest.param(
-            _model("grok-4.5"), ModelIdentity(model_id="grok-4.5", effort="high", fast=False), True, id="same_model"
+            model_command("grok-4.5"),
+            ModelIdentity(model_id="grok-4.5", effort="high", fast=False),
+            True,
+            id="same_model",
         ),
         pytest.param(
-            _model("grok-4.5"), ModelIdentity(model_id="grok-4.6", effort="high", fast=False), False, id="other_model"
+            model_command("grok-4.5"),
+            ModelIdentity(model_id="grok-4.6", effort="high", fast=False),
+            False,
+            id="other_model",
         ),
         pytest.param(
-            _model("stub-model-two"),
+            model_command("stub-model-two"),
             ModelIdentity(model_id="stub-model-two", effort=None, fast=False),
             True,
             id="same_model_outside_the_catalog",
         ),
         pytest.param(
-            _effort("high"), ModelIdentity(model_id="grok-4.6", effort="high", fast=False), True, id="same_effort"
+            effort_command("high"),
+            ModelIdentity(model_id="grok-4.6", effort="high", fast=False),
+            True,
+            id="same_effort",
         ),
         pytest.param(
-            _effort("low"), ModelIdentity(model_id="grok-4.6", effort="high", fast=False), False, id="other_effort"
+            effort_command("low"),
+            ModelIdentity(model_id="grok-4.6", effort="high", fast=False),
+            False,
+            id="other_effort",
         ),
         pytest.param(
-            _effort("low"),
+            effort_command("low"),
             ModelIdentity(model_id="stub-model-two", effort=None, fast=False),
             False,
             id="a_model_without_efforts",
         ),
-        pytest.param(_model("grok-4.6"), None, False, id="no_model_state_yet"),
+        pytest.param(model_command("grok-4.6"), None, False, id="no_model_state_yet"),
     ],
 )
 def test_a_control_command_is_in_force_when_the_model_state_already_records_it(

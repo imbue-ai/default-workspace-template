@@ -9,16 +9,16 @@ from typing import Any
 import pytest
 
 from imbue.chat.activity_state import ACTIVE_MARKER_FILENAME
-from imbue.chat.harnesses.grok.queue_tracker import GrokControlCommand
-from imbue.chat.harnesses.grok.queue_tracker import GrokControlCommandKind
 from imbue.chat.harnesses.grok.queue_tracker import MAX_DELIVERY_ATTEMPTS
 from imbue.chat.harnesses.grok.testing import ROOTS_RELATIVE_PATH
 from imbue.chat.harnesses.grok.testing import add_grok_session
 from imbue.chat.harnesses.grok.testing import append_grok_updates
+from imbue.chat.harnesses.grok.testing import effort_command
 from imbue.chat.harnesses.grok.testing import find_fixture_scenario
 from imbue.chat.harnesses.grok.testing import get_fake_session_dir
 from imbue.chat.harnesses.grok.testing import make_grok_agent_info
 from imbue.chat.harnesses.grok.testing import make_grok_agent_state_dir
+from imbue.chat.harnesses.grok.testing import model_command
 from imbue.chat.harnesses.grok.testing import read_fixture_root_ids
 from imbue.chat.harnesses.grok.testing import read_fixture_updates
 from imbue.chat.harnesses.grok.testing import record_root_session
@@ -634,14 +634,6 @@ def test_a_started_watchers_worker_types_a_held_message_once_mngr_reports_the_tu
     assert send.sent == ["held"]
 
 
-def _model(model_id: str) -> GrokControlCommand:
-    return GrokControlCommand(kind=GrokControlCommandKind.MODEL, value=model_id)
-
-
-def _effort(level: str) -> GrokControlCommand:
-    return GrokControlCommand(kind=GrokControlCommandKind.EFFORT, value=level)
-
-
 def _write_model_state(agent_state_dir: Path, model: str, effort: str | None) -> None:
     """Record grok's model and effort as mngr's status line does."""
     (agent_state_dir / MODEL_STATE_FILENAME).write_text(json.dumps({"model": model, "effort": effort, "fast": False}))
@@ -661,8 +653,8 @@ def test_the_flush_types_each_control_command_alone_then_the_held_block(tmp_path
     watcher, send, _log = _flushing_watcher(tmp_path)
     _write_model_state(send.agent_state_dir, "grok-4.6", "high")
     _hold(watcher, "first", "second")
-    watcher._queue.hold_control_command(_effort("low"))
-    watcher._queue.hold_control_command(_model("grok-4.5"))
+    watcher._queue.hold_control_command(effort_command("low"))
+    watcher._queue.hold_control_command(model_command("grok-4.5"))
 
     _attempt_flush_until_idle(watcher)
 
@@ -687,19 +679,19 @@ def test_the_flush_types_no_control_command_while_a_turn_is_in_flight_or_the_age
     watcher, send, _log = _flushing_watcher(tmp_path, lifecycle_state=lifecycle_state)
     if is_marker_present:
         (send.agent_state_dir / ACTIVE_MARKER_FILENAME).touch()
-    watcher._queue.hold_control_command(_model("grok-4.5"))
+    watcher._queue.hold_control_command(model_command("grok-4.5"))
 
     watcher._attempt_flush()
 
     assert send.sent == []
-    assert watcher._queue.next_control_command() == _model("grok-4.5")
+    assert watcher._queue.next_control_command() == model_command("grok-4.5")
 
 
 def test_the_flush_drops_a_control_command_grok_already_runs_without_typing_it(tmp_path: Path) -> None:
     watcher, send, _log = _flushing_watcher(tmp_path, is_logged=False)
     _write_model_state(send.agent_state_dir, "grok-4.5", "medium")
-    watcher._queue.hold_control_command(_model("grok-4.5"))
-    watcher._queue.hold_control_command(_effort("medium"))
+    watcher._queue.hold_control_command(model_command("grok-4.5"))
+    watcher._queue.hold_control_command(effort_command("medium"))
     _hold(watcher, "held")
 
     _attempt_flush_until_idle(watcher)
@@ -713,8 +705,8 @@ def test_the_flush_judges_each_control_command_by_the_model_state_the_one_before
     watcher, send, _log = _flushing_watcher(tmp_path, is_logged=False)
     _write_model_state(send.agent_state_dir, "grok-4.6", "low")
     send.after_send = lambda: _write_model_state(send.agent_state_dir, "grok-4.5", "high")
-    watcher._queue.hold_control_command(_model("grok-4.5"))
-    watcher._queue.hold_control_command(_effort("low"))
+    watcher._queue.hold_control_command(model_command("grok-4.5"))
+    watcher._queue.hold_control_command(effort_command("low"))
 
     _attempt_flush_until_idle(watcher)
 
@@ -725,7 +717,7 @@ def test_a_control_command_mngr_could_not_confirm_holds_the_block_until_its_atte
     tmp_path: Path,
 ) -> None:
     watcher, send, _log = _flushing_watcher(tmp_path, is_confirmed=False, is_logged=False)
-    watcher._queue.hold_control_command(_model("grok-4.5"))
+    watcher._queue.hold_control_command(model_command("grok-4.5"))
     _hold(watcher, "held")
 
     for _attempt in range(MAX_DELIVERY_ATTEMPTS):
@@ -743,7 +735,7 @@ def test_a_control_command_mngr_could_not_confirm_holds_the_block_until_its_atte
 
 def test_a_control_command_whose_send_raises_is_charged_an_attempt(tmp_path: Path) -> None:
     watcher, send, _log = _flushing_watcher(tmp_path, is_logged=False)
-    watcher._queue.hold_control_command(_effort("low"))
+    watcher._queue.hold_control_command(effort_command("low"))
 
     def raise_from_mngr() -> None:
         raise OSError("mngr could not reach the agent")
@@ -772,7 +764,7 @@ def test_a_started_watchers_worker_types_a_pick_made_mid_turn_once_mngr_reports_
     watcher.set_flush_hooks(send, lambda: lifecycle[0], lambda text, sent_after: None)
     watcher.start()
     try:
-        watcher._queue.hold_control_command(_model("grok-4.5"))
+        watcher._queue.hold_control_command(model_command("grok-4.5"))
         _hold(watcher, "held")
         assert not poll_until(lambda: bool(send.sent), timeout=0.5, poll_interval=0.05)
 

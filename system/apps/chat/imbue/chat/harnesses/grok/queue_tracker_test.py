@@ -4,13 +4,13 @@ the model bar's control lane."""
 import os
 from pathlib import Path
 
-from imbue.chat.harnesses.grok.queue_tracker import GrokControlCommand
-from imbue.chat.harnesses.grok.queue_tracker import GrokControlCommandKind
 from imbue.chat.harnesses.grok.queue_tracker import GrokQueueTracker
 from imbue.chat.harnesses.grok.queue_tracker import MAX_DELIVERY_ATTEMPTS
 from imbue.chat.harnesses.grok.queue_tracker import OUTBOX_FILENAME
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
 from imbue.chat.harnesses.grok.queue_tracker import session_token
+from imbue.chat.harnesses.grok.testing import effort_command
+from imbue.chat.harnesses.grok.testing import model_command
 from imbue.mngr_grok.grok_config import PROCESS_STARTED_MARKER_FILENAME
 
 
@@ -211,17 +211,9 @@ def test_get_tracker_is_one_tracker_per_agent_state_dir(tmp_path: Path) -> None:
     assert get_tracker(agent_state_dir) is get_tracker(agent_state_dir)
 
 
-def _model(model_id: str) -> GrokControlCommand:
-    return GrokControlCommand(kind=GrokControlCommandKind.MODEL, value=model_id)
-
-
-def _effort(level: str) -> GrokControlCommand:
-    return GrokControlCommand(kind=GrokControlCommandKind.EFFORT, value=level)
-
-
 def test_a_control_command_is_grok_s_own_slash_command() -> None:
-    assert _model("grok-4.5").text == "/model grok-4.5"
-    assert _effort("xhigh").text == "/effort xhigh"
+    assert model_command("grok-4.5").text == "/model grok-4.5"
+    assert effort_command("xhigh").text == "/effort xhigh"
 
 
 def test_a_held_control_command_wakes_the_worker_and_is_never_published_or_journalled(tmp_path: Path) -> None:
@@ -232,7 +224,7 @@ def test_a_held_control_command_wakes_the_worker_and_is_never_published_or_journ
         publish=lambda snapshot: published.append([e["content"] for e in snapshot]), wake=lambda: woken.append(True)
     )
 
-    tracker.hold_control_command(_model("grok-4.5"))
+    tracker.hold_control_command(model_command("grok-4.5"))
 
     assert woken == [True]
     assert published == []
@@ -243,16 +235,16 @@ def test_a_held_control_command_wakes_the_worker_and_is_never_published_or_journ
 
 def test_the_control_lane_offers_model_before_effort_and_keeps_the_newest_of_each(tmp_path: Path) -> None:
     tracker = _tracker(tmp_path)
-    tracker.hold_control_command(_effort("low"))
-    tracker.hold_control_command(_model("grok-4.6"))
-    tracker.hold_control_command(_effort("xhigh"))
-    tracker.hold_control_command(_model("grok-4.5"))
+    tracker.hold_control_command(effort_command("low"))
+    tracker.hold_control_command(model_command("grok-4.6"))
+    tracker.hold_control_command(effort_command("xhigh"))
+    tracker.hold_control_command(model_command("grok-4.5"))
 
     first = tracker.next_control_command()
-    assert first == _model("grok-4.5")
+    assert first == model_command("grok-4.5")
     tracker.settle_control_command(first, is_delivered=True)
     second = tracker.next_control_command()
-    assert second == _effort("xhigh")
+    assert second == effort_command("xhigh")
     tracker.settle_control_command(second, is_delivered=True)
 
     assert tracker.next_control_command() is None
@@ -261,7 +253,7 @@ def test_the_control_lane_offers_model_before_effort_and_keeps_the_newest_of_eac
 
 def test_no_control_command_is_offered_while_a_claim_is_open_or_a_stop_runs(tmp_path: Path) -> None:
     tracker = _tracker(tmp_path)
-    tracker.hold_control_command(_model("grok-4.5"))
+    tracker.hold_control_command(model_command("grok-4.5"))
     _hold(tracker, "held")
 
     _block, claimed, generation = tracker.begin_tap_claim()
@@ -271,51 +263,51 @@ def test_no_control_command_is_offered_while_a_claim_is_open_or_a_stop_runs(tmp_
     assert tracker.next_control_command() is None
     tracker.resume_flushes()
 
-    assert tracker.next_control_command() == _model("grok-4.5")
+    assert tracker.next_control_command() == model_command("grok-4.5")
 
 
 def test_a_control_command_mngr_could_not_confirm_stays_held_until_its_attempts_are_spent(tmp_path: Path) -> None:
     tracker = _tracker(tmp_path)
-    tracker.hold_control_command(_effort("low"))
+    tracker.hold_control_command(effort_command("low"))
 
     for _attempt in range(MAX_DELIVERY_ATTEMPTS - 1):
-        tracker.settle_control_command(_effort("low"), is_delivered=False)
-        assert tracker.next_control_command() == _effort("low")
-    tracker.settle_control_command(_effort("low"), is_delivered=False)
+        tracker.settle_control_command(effort_command("low"), is_delivered=False)
+        assert tracker.next_control_command() == effort_command("low")
+    tracker.settle_control_command(effort_command("low"), is_delivered=False)
 
     assert tracker.next_control_command() is None
 
 
 def test_a_newer_pick_of_the_same_kind_survives_the_settle_of_the_one_it_replaced(tmp_path: Path) -> None:
     tracker = _tracker(tmp_path)
-    tracker.hold_control_command(_model("grok-4.6"))
+    tracker.hold_control_command(model_command("grok-4.6"))
     being_typed = tracker.next_control_command()
     assert being_typed is not None
-    tracker.hold_control_command(_model("grok-4.5"))
+    tracker.hold_control_command(model_command("grok-4.5"))
 
     tracker.settle_control_command(being_typed, is_delivered=True)
 
-    assert tracker.next_control_command() == _model("grok-4.5")
+    assert tracker.next_control_command() == model_command("grok-4.5")
 
 
 def test_a_newer_pick_starts_with_every_attempt_left(tmp_path: Path) -> None:
     tracker = _tracker(tmp_path)
-    tracker.hold_control_command(_effort("low"))
+    tracker.hold_control_command(effort_command("low"))
     for _attempt in range(MAX_DELIVERY_ATTEMPTS - 1):
-        tracker.settle_control_command(_effort("low"), is_delivered=False)
+        tracker.settle_control_command(effort_command("low"), is_delivered=False)
 
-    tracker.hold_control_command(_effort("low"))
-    tracker.settle_control_command(_effort("low"), is_delivered=False)
+    tracker.hold_control_command(effort_command("low"))
+    tracker.settle_control_command(effort_command("low"), is_delivered=False)
 
-    assert tracker.next_control_command() == _effort("low")
+    assert tracker.next_control_command() == effort_command("low")
 
 
 def test_the_control_lane_outlives_a_grok_relaunch_and_the_held_messages_stop_takes(tmp_path: Path) -> None:
     tracker = _tracker(tmp_path, token="session-1")
-    tracker.hold_control_command(_model("grok-4.5"))
+    tracker.hold_control_command(model_command("grok-4.5"))
     _hold(tracker, "held")
 
     assert tracker.take_unclaimed()[0] == "held"
     tracker.set_session("session-2")
 
-    assert tracker.next_control_command() == _model("grok-4.5")
+    assert tracker.next_control_command() == model_command("grok-4.5")
