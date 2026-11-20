@@ -36,7 +36,7 @@ the run. Give every browser test a `pytest.mark.timeout(120, func_only=False)`
 marker: under the repo-root conftest it is the only per-suite setup a browser test
 needs, since the repo-wide 10-second default does not cover a browser launch, and
 a user-built app's suite honours it through the `pytest-timeout` in its own dev
-group (`type-app.md`'s "On a phone"). Mark every browser test
+group. Mark every browser test
 `pytest.mark.browser`, and every test that reads an app's frontend source
 `pytest.mark.frontend`: when only the chat app's or the shell's frontend
 changed, the test gate runs just those two kinds of its tests (any other app
