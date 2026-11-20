@@ -1,7 +1,11 @@
 """Test utilities for the grok harness: the captured grok sessions under ``fixtures/``, a fake grok agent state
 dir in mngr's layout, written by hand, built from them, and grok account credential files."""
 
+import contextlib
+import fcntl
 import json
+import os
+from collections.abc import Generator
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
@@ -150,3 +154,19 @@ def write_grok_auth(account_dir: Path, scopes: Mapping[str, object]) -> None:
     """Write a grok account's ``auth.json`` holding ``scopes``."""
     account_dir.mkdir(parents=True, exist_ok=True)
     (account_dir / "auth.json").write_text(json.dumps(scopes))
+
+
+def take_grok_lock(auth_path: Path) -> int:
+    """Take the lock grok holds while it rewrites ``auth_path``; closing the returned fd releases it."""
+    lock_fd = os.open(auth_path.with_name("auth.json.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    return lock_fd
+
+
+@contextlib.contextmanager
+def grok_holds_its_lock(auth_path: Path) -> Generator[None, None, None]:
+    lock_fd = take_grok_lock(auth_path)
+    try:
+        yield
+    finally:
+        os.close(lock_fd)

@@ -7,16 +7,11 @@ only assert that our fake behaves like our fake. The one exception spawns a stan
 real PTY, because what it checks is the environment our spawn hands the child.
 """
 
-import contextlib
-import fcntl
 import itertools
 import json
-import os
 import re
 import stat
-import threading
 from collections.abc import Callable
-from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -36,6 +31,7 @@ from imbue.chat.harnesses.auth_flows import _auth_command_signatures
 from imbue.chat.harnesses.auth_flows import flow_shape
 from imbue.chat.harnesses.grok.account_binding import API_KEY_SCOPE as GROK_API_KEY_SCOPE
 from imbue.chat.harnesses.grok.testing import GROK_SESSION_SCOPE
+from imbue.chat.harnesses.grok.testing import grok_holds_its_lock
 from imbue.chat.harnesses.grok.testing import write_grok_auth
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import get_method
@@ -1011,22 +1007,6 @@ def _grok_session_account(tmp_path: Path) -> tuple[str, Path]:
     return account_id, folder / "auth.json"
 
 
-def _take_grok_lock(auth_path: Path) -> int:
-    """Take the lock grok holds while it rewrites ``auth_path``; closing the returned fd releases it."""
-    lock_fd = os.open(auth_path.with_name("auth.json.lock"), os.O_RDWR | os.O_CREAT, 0o600)
-    fcntl.flock(lock_fd, fcntl.LOCK_EX)
-    return lock_fd
-
-
-@contextlib.contextmanager
-def _grok_holds_its_lock(auth_path: Path) -> Generator[None, None, None]:
-    lock_fd = _take_grok_lock(auth_path)
-    try:
-        yield
-    finally:
-        os.close(lock_fd)
-
-
 @pytest.mark.parametrize(
     ("screen", "page"),
     [
@@ -1305,78 +1285,13 @@ def test_a_grok_key_is_refused_while_grok_holds_its_file_and_can_be_sent_again(t
     before = (path.read_bytes(), path.stat().st_ino)
     again = service.start("xai", "api_key", account_id=account_id)
 
-    with _grok_holds_its_lock(path):
+    with grok_holds_its_lock(path):
         with pytest.raises(FlowError, match="in use"):
             service.submit_key(again.flow_id, "xai-new-key")
         assert (path.read_bytes(), path.stat().st_ino) == before
 
     assert service.submit_key(again.flow_id, "xai-new-key").state is FlowState.OK
     assert json.loads(path.read_text())["xai::api_key"]["key"] == "xai-new-key"
-
-
-def test_a_grok_device_sign_in_leaves_the_key_while_grok_holds_its_file(tmp_path: Path) -> None:
-    """As grok's own scope removal does: the login just landed outranks the key anyway."""
-    process = FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)])
-    service = _grok_service(tmp_path, process, grok_auth_lock_wait_seconds=0.2)
-    flow_id, _account_id, auth_path = _start_device_reauth_over_a_pasted_key(service, tmp_path)
-    written = auth_path.read_bytes()
-    process.print_output(_GROK_SIGNED_IN)
-    process.exit(0)
-
-    with _grok_holds_its_lock(auth_path):
-        assert service.poll(flow_id).state is FlowState.OK
-
-    assert auth_path.read_bytes() == written
-
-
-def test_a_grok_device_sign_in_leaves_a_file_grok_took_the_key_out_of_meanwhile(tmp_path: Path) -> None:
-    process = FakePexpectProcess([(0, _GROK_DEVICE_SCREEN)])
-    service = _grok_service(tmp_path, process)
-    flow_id, _account_id, auth_path = _start_device_reauth_over_a_pasted_key(service, tmp_path)
-    process.print_output(_GROK_SIGNED_IN)
-    process.exit(0)
-    lock_fd = _take_grok_lock(auth_path)
-    inode_by_grok: list[int] = []
-
-    def grok_drops_the_key_and_unlocks() -> None:
-        write_grok_auth(auth_path.parent, {GROK_SESSION_SCOPE: _GROK_LOGIN})
-        inode_by_grok.append(auth_path.stat().st_ino)
-        os.close(lock_fd)
-
-    grok_write = threading.Timer(0.5, grok_drops_the_key_and_unlocks)
-    grok_write.start()
-    status = service.poll(flow_id)
-    grok_write.join()
-
-    assert status.state is FlowState.OK
-    assert json.loads(auth_path.read_text()) == {GROK_SESSION_SCOPE: _GROK_LOGIN}
-    assert [auth_path.stat().st_ino] == inode_by_grok
-
-
-def test_a_grok_key_waits_out_grok_s_own_write_to_the_file(service: AuthFlowService, tmp_path: Path) -> None:
-    """grok holds its lock from reading the file to writing it back. A paste that did not wait for it would
-    have its key overwritten by what grok read before the paste."""
-    first = service.start("xai", "api_key")
-    service.submit_key(first.flow_id, "xai-old-key")
-    (account,) = read_index(tmp_path).accounts
-    path = _grok_auth_path(tmp_path, account.id)
-    lock_fd = _take_grok_lock(path)
-    read_by_grok = json.loads(path.read_text())
-
-    def grok_writes_back_and_unlocks() -> None:
-        write_grok_auth(path.parent, {**read_by_grok, GROK_SESSION_SCOPE: _GROK_LOGIN})
-        os.close(lock_fd)
-
-    again = service.start("xai", "api_key", account_id=account.id)
-    grok_write = threading.Timer(0.5, grok_writes_back_and_unlocks)
-    grok_write.start()
-    status = service.submit_key(again.flow_id, "xai-new-key")
-    grok_write.join()
-
-    assert status.state is FlowState.OK
-    after = json.loads(path.read_text())
-    assert list(after) == ["xai::api_key"]
-    assert after["xai::api_key"]["key"] == "xai-new-key"
 
 
 def test_an_orphaned_grok_sign_in_is_one_the_boot_sweep_recognises() -> None:
