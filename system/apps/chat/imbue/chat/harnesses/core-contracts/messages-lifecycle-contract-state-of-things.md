@@ -44,8 +44,9 @@ than no entry, because the next person plans around it.
   its own queue, which leaves nothing on disk until the message runs, so a grok chat holds every
   message itself, as E11 describes for agy. `send` holds the message and answers NOT_READY only
   while grok is starting or mngr reports the agent dead. One flush worker on the grok watcher
-  types the held block only while the shared `resolve_is_turn_in_flight` reads no turn in
-  flight from mngr's lifecycle state and its `active` marker; RUNNING_BACKGROUND is no turn.
+  types the held block only while mngr reports the agent alive and the shared
+  `resolve_is_turn_in_flight` reads no turn in flight from mngr's lifecycle state and its
+  `active` marker; RUNNING_BACKGROUND is no turn, and UNKNOWN holds the block.
   queue = ours, journalled per grok process. delivered = mngr confirming grok took the block
   (the submission, or the block's queued row), or grok's session log gaining a user turn that
   ends with the block. stop = one Ctrl+C through mngr into a turn mngr reports in flight, then

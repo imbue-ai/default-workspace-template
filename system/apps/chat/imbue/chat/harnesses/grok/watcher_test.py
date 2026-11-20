@@ -458,6 +458,7 @@ def test_the_flush_types_the_held_block_once_and_its_chip_leaves_before_its_turn
         pytest.param("WAITING", True, id="the_active_marker_is_ahead_of_the_reported_state"),
         pytest.param("STOPPED", False, id="the_agent_is_stopped"),
         pytest.param(None, False, id="the_agent_is_not_tracked"),
+        pytest.param("UNKNOWN", True, id="mngr_cannot_observe_the_agent"),
     ],
 )
 def test_the_flush_types_nothing_while_a_turn_is_in_flight_or_the_agent_is_not_alive(

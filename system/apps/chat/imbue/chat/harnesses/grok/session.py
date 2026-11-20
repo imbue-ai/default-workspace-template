@@ -6,7 +6,7 @@ from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.harnesses.grok.queue_tracker import GrokQueueTracker
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
 from imbue.chat.harnesses.grok.queue_tracker import session_token
-from imbue.chat.harnesses.grok.turn_gate import is_turn_in_flight
+from imbue.chat.harnesses.grok.turn_gate import is_ready_to_type
 from imbue.chat.harnesses.queued_set import now_enqueue_timestamp
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
@@ -26,7 +26,7 @@ class GrokHarnessSession(FileHarnessSession):
             return SendOutcome.NOT_READY
         queue = self._queue()
         queue.set_session(session_token(self._deps.state_dir))
-        is_turn_open = lifecycle_state is None or is_turn_in_flight(lifecycle_state, self._deps.state_dir)
+        is_turn_open = not is_ready_to_type(lifecycle_state, self._deps.state_dir)
         queue.enqueue(text, now_enqueue_timestamp(), is_turn_open=is_turn_open)
         self._deps.notify_agents_changed()
         logger.debug("grok: holding message {} for the flush worker", message_id)

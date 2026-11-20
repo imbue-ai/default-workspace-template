@@ -66,6 +66,7 @@ def test_a_send_to_an_idle_grok_is_held_as_sending_for_the_worker(tmp_path: Path
         pytest.param("RUNNING", False, id="mngr_reports_running"),
         pytest.param("WAITING", True, id="the_active_marker_is_ahead_of_the_reported_state"),
         pytest.param(None, False, id="the_agent_is_not_tracked_yet"),
+        pytest.param("UNKNOWN", False, id="mngr_cannot_observe_the_agent"),
     ],
 )
 def test_a_send_during_a_turn_is_held_as_queued(

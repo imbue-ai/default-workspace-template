@@ -21,7 +21,6 @@ from typing import Final
 from loguru import logger
 from pydantic import Field
 
-from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.grok.queue_tracker import GrokQueueTracker
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
@@ -33,7 +32,7 @@ from imbue.chat.harnesses.grok.session_parser import UPDATES_FILENAME
 from imbue.chat.harnesses.grok.session_parser import detail_for
 from imbue.chat.harnesses.grok.session_parser import parse_record
 from imbue.chat.harnesses.grok.session_parser import record_timestamp
-from imbue.chat.harnesses.grok.turn_gate import is_turn_in_flight
+from imbue.chat.harnesses.grok.turn_gate import is_ready_to_type
 from imbue.chat.harnesses.session_watcher import FlushResentCallback
 from imbue.chat.harnesses.session_watcher import FlushSendCallback
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
@@ -422,12 +421,7 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         self._queue.republish()
         if not self._queue.has_entries():
             return
-        lifecycle_state = read_lifecycle_state()
-        if (
-            lifecycle_state is None
-            or is_lifecycle_dead(lifecycle_state)
-            or is_turn_in_flight(lifecycle_state, self._agent_state_dir)
-        ):
+        if not is_ready_to_type(read_lifecycle_state(), self._agent_state_dir):
             self._queue.demote_pending()
             return
         self._flush_held_block(send)
