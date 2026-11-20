@@ -340,8 +340,6 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         with self._lock:
             return session_id in self._root_session_ids
 
-    # the live emit
-
     def _emit_cycle(self) -> None:
         """Broadcast what the logs gained, unless a flush holds the emit until its entries have left the queue."""
         with self._lock:
@@ -361,8 +359,6 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         finally:
             with self._lock:
                 self._emit_embargo_until = 0.0
-
-    # the held queue
 
     def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
         self._queue_snapshot_callback = callback
@@ -406,8 +402,6 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         if callback is not None:
             callback(snapshot)
 
-    # the flush worker, the only typist
-
     def _run_flush_worker(self) -> None:
         while not self._flush_stopping.is_set():
             self._flush_wake.wait(timeout=_FLUSH_RETRY_SECONDS)
@@ -445,19 +439,14 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         logs it only once that turn ends. A block mngr could not confirm is delivered once a user turn holding it
         shows, and otherwise waits for a later attempt.
         """
+        with self._lock:
+            self._refresh_locked()
+            witness_start = self._store.total([MAIN_LANE])
         block, claimed, generation = self._queue.begin_flush()
         if not claimed:
             return
-        is_witness_start_read = False
-        try:
-            with self._lock:
-                self._refresh_locked()
-                witness_start = self._store.total([MAIN_LANE])
-                self._emit_embargo_until = time.monotonic() + _EMIT_EMBARGO_CEILING_SECONDS
-            is_witness_start_read = True
-        finally:
-            if not is_witness_start_read:
-                self._queue.release_claim(claimed, generation)
+        with self._lock:
+            self._emit_embargo_until = time.monotonic() + _EMIT_EMBARGO_CEILING_SECONDS
         earlier_flush_began_at = self._queue.note_flush_began(claimed, time.time())
         delivered: tuple[str, ...] = ()
         try:

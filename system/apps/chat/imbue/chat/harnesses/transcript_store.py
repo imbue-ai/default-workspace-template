@@ -186,8 +186,6 @@ class TranscriptStore:
         self._thinking_source_by_event_id = {}
         return self
 
-    # -- lanes ----------------------------------------------------------------------------
-
     def ensure_lane(self, lane_id: str, insert_index: int | None = None) -> None:
         """Register ``lane_id`` if new, at ``insert_index`` in the lane order (default: end)."""
         if lane_id in self._lane_by_id:
@@ -217,8 +215,6 @@ class TranscriptStore:
             self._thinking_source_by_event_id.pop(event_id, None)
         lane.events = []
         lane.emitted_count = 0
-
-    # -- writes ---------------------------------------------------------------------------
 
     def ingest(self, lane_id: str, event: dict[str, Any], source: EventSource | None = None) -> bool:
         """Add one parsed event: append a new id, supersede a changed one in place, refresh
@@ -277,8 +273,6 @@ class TranscriptStore:
         for lane in self._lane_by_id.values():
             lane.emitted_count = len(lane.events)
 
-    # -- payload sources ------------------------------------------------------------------
-
     def source_of(self, event_id: str) -> EventSource | None:
         return self._source_by_event_id.get(event_id)
 
@@ -287,8 +281,6 @@ class TranscriptStore:
 
     def set_thinking_source(self, event_id: str, source: EventSource) -> None:
         self._thinking_source_by_event_id[event_id] = source
-
-    # -- reads ----------------------------------------------------------------------------
 
     def get_event(self, event_id: str) -> dict[str, Any] | None:
         ref = self._ref_by_event_id.get(event_id)
@@ -440,8 +432,6 @@ class StoreBackedTranscriptLoader(TranscriptLoader, ABC):
         event["agent_id"] = self._agent_id
         return self._store.ingest(lane_id, event, source)
 
-    # -- per-harness hooks ----------------------------------------------------------------
-
     @abstractmethod
     def _refresh_locked(self) -> None:
         """Bring the store up to date with disk (discovery + incremental reads). Lock held."""
@@ -461,8 +451,6 @@ class StoreBackedTranscriptLoader(TranscriptLoader, ABC):
         """Scan for the event's source line when the recorded byte range went stale (the
         file was rewritten under us). Default: no fallback."""
         return None
-
-    # -- read API -------------------------------------------------------------------------
 
     def get_all_events(self, session_id: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
@@ -505,8 +493,6 @@ class StoreBackedTranscriptLoader(TranscriptLoader, ABC):
 
     def get_subagent_metadata(self, subagent_session_id: str) -> dict[str, str] | None:
         return None
-
-    # -- payload detail -------------------------------------------------------------------
 
     def get_event_detail(self, event_id: str) -> dict[str, Any] | None:
         """The full deferred payloads for one event, re-read statelessly from disk.
@@ -566,8 +552,6 @@ class StoreBackedWatcher(StoreBackedTranscriptLoader, AgentSessionWatcher, ABC):
     def set_watch_observer(self, watch_observer: SharedWatchObserver) -> None:
         self._watch_observer = watch_observer
 
-    # -- per-harness hooks ----------------------------------------------------------------
-
     @abstractmethod
     def _watch_paths(self) -> tuple[Path, ...]:
         """The paths whose changes should wake the emit cycle."""
@@ -583,8 +567,6 @@ class StoreBackedWatcher(StoreBackedTranscriptLoader, AgentSessionWatcher, ABC):
     def _after_broadcast(self) -> None:
         """Push side-channel state that must follow the event broadcast. Called outside the lock.
         No-op default."""
-
-    # -- lifecycle ------------------------------------------------------------------------
 
     def start(self) -> None:
         """Prime the backlog (unemitted -> emitted, no broadcast) and begin watching."""

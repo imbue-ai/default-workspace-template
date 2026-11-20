@@ -1,9 +1,9 @@
 """The messages the chat holds for a grok agent until grok can take them.
 
 grok parks a message typed during a turn in its own queue, which leaves nothing on disk until the message runs, so
-the chat never lets grok park one: every message waits here, and the watcher's flush worker, the only typist, types
-the held block once mngr reports no turn in flight. Entries are journalled under the current grok process's session
-token, so they survive a chat app restart and are dropped when grok relaunches (contract Part B).
+the chat holds every message itself: it waits here, and the watcher's flush worker, the only typist, types the held
+block once mngr reports no turn in flight. Entries are journalled under the current grok process's session token, so
+they survive a chat app restart and are dropped when grok relaunches (contract Part B).
 """
 
 import json
@@ -86,8 +86,6 @@ class GrokQueueTracker:
         self._replay()
         return self
 
-    # wiring
-
     def attach(self, *, publish: PublishCallback, wake: Callable[[], None]) -> None:
         """Bind the watcher's snapshot publisher and the flush worker's wake."""
         with self._lock:
@@ -106,8 +104,6 @@ class GrokQueueTracker:
             wake = self._wake
         if wake is not None:
             wake()
-
-    # journal
 
     def _replay(self) -> None:
         """Restore the entries journalled under the current session; a torn or foreign line is skipped."""
@@ -186,8 +182,6 @@ class GrokQueueTracker:
     def _block_of(entries: list[dict[str, str]]) -> str:
         return "\n".join(str(entry["content"]) for entry in entries)
 
-    # session identity
-
     def set_session(self, token: str) -> bool:
         """Adopt ``token``; on a change, drop every held message, which is never typed into a new grok.
 
@@ -203,8 +197,6 @@ class GrokQueueTracker:
             self._session_token = token
             self._settled_locked()
             return True
-
-    # held messages
 
     def enqueue(self, content: str, timestamp: str, *, is_turn_open: bool) -> str:
         """Hold ``content``, publish it and wake the worker; returns its queued id.
@@ -337,8 +329,6 @@ class GrokQueueTracker:
         with self._lock:
             if self._publish is not None:
                 self._publish(self._snapshot_locked())
-
-    # reads
 
     def snapshot(self) -> list[dict[str, Any]]:
         with self._lock:
