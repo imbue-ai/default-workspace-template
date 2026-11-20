@@ -1,0 +1,3 @@
+A grok chat's model bar now offers grok 1.0.62's built-in models, Grok 4.6 and Grok 4.5, each with the efforts grok declares for it, and switches the agent between them; grok is still not offered by any sign-in, so only a grok agent made through mngr shows it.
+
+A pick is held as grok's own `/model <id>` and `/effort <level>` on a control lane beside the messages the chat holds for grok. The flush worker types each command alone, ahead of the held messages, only while mngr reports the agent alive with no turn in flight, and types nothing for one the agent's `model_state.json` already records. The bar reconciles from that file.

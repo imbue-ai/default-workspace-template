@@ -51,7 +51,9 @@ than no entry, because the next person plans around it.
   (the submission, or the block's queued row), or grok's session log gaining a user turn that
   ends with the block. stop = one Ctrl+C through mngr into a turn mngr reports in flight, then
   handing back every held message the worker has not claimed, with flushes paused meanwhile;
-  grok is never restarted. tap = the same press, then the worker delivers.
+  grok is never restarted. tap = the same press, then the worker delivers. A model-bar pick is
+  held on a control lane the worker types first, each `/model` or `/effort` alone; it is no
+  message, so it is never shown as queued, journalled or handed back.
 
 The target is to make them converge on the clean, single-path shape; claude's heuristic
 path is what most needs to move toward it.

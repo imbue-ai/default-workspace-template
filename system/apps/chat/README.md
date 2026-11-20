@@ -390,7 +390,10 @@ gets the target account's models, for a handoff's successor and a rebound agent
 alike: the catalog for a static harness, and for codex the options an agent of
 the account was last offered. An antigravity pick is typed into the agent as
 `/model <slug>` by the same worker that delivers its held messages, once no turn
-is open, so a pick made mid-turn takes effect when that turn ends.
+is open, so a pick made mid-turn takes effect when that turn ends. A Grok Build
+pick works the same way as `/model <id>` and `/effort <level>`, each typed alone
+and ahead of the held messages; one the agent's `model_state.json` already
+records is not typed.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's

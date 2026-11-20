@@ -35,6 +35,10 @@ class GrokHarnessSession(FileHarnessSession):
     def is_sending(self) -> bool:
         return self._queue().is_sending() or super().is_sending()
 
+    def has_held_commands(self) -> bool:
+        """Whether the control lane holds a model bar pick."""
+        return self._queue().has_control_commands()
+
     def is_tap_available(self, *, has_queued: bool) -> bool:
         """Offered while a held message still has delivery attempts left and nothing is Sending."""
         return super().is_tap_available(has_queued=has_queued) and self._queue().has_deliverable_entries()

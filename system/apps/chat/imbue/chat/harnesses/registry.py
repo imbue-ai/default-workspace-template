@@ -57,6 +57,8 @@ from imbue.chat.harnesses.codex.watcher import CodexTranscriptLoader
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.grok.activity import GrokActivityTracker
 from imbue.chat.harnesses.grok.model import GROK_CATALOG
+from imbue.chat.harnesses.grok.model import GROK_STATE_RELATIVE_PATH
+from imbue.chat.harnesses.grok.model import GrokModelResolver
 from imbue.chat.harnesses.grok.session import GrokHarnessSession
 from imbue.chat.harnesses.grok.tap import GrokAtomicShoulderTap
 from imbue.chat.harnesses.grok.tap import GrokInterruptToComposer
@@ -676,9 +678,9 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         interrupt_to_composer_class=GrokInterruptToComposer,
         shoulder_tap_class=GrokAtomicShoulderTap,
         cancel_chord="C-c",
-        resolver_class=PlaceholderModelResolver,
+        resolver_class=GrokModelResolver,
         catalog_factory=lambda: GROK_CATALOG,
-        model_state_relative_path=Path("."),
+        model_state_relative_path=GROK_STATE_RELATIVE_PATH,
         special_kinds=frozenset(
             {
                 SpecialEventKind.TURN_STARTED,

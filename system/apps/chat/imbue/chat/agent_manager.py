@@ -6222,10 +6222,10 @@ class AgentManager:
         """Register the agent watcher's idle queue backstop.
 
         Called once when the watcher is created. ``_recompute_activity_state`` invokes it
-        on every recompute that finds the agent IDLE with something queued, not only on the
-        working->IDLE transition: the handler applies the harness queue populator's idle
-        backstop and returns the resulting snapshot, which the same broadcast that carries
-        the IDLE state also carries.
+        on every recompute that finds the agent IDLE with something queued or a command its
+        session holds, not only on the working->IDLE transition: the handler applies the
+        harness queue populator's idle backstop and returns the resulting snapshot, which the
+        same broadcast that carries the IDLE state also carries.
         """
         with self._lock:
             self._queue_idle_handler_by_agent[agent_id] = handler
@@ -6840,6 +6840,7 @@ class AgentManager:
             tracker = self._activity_tracker_by_agent.get(agent_id)
             recompute_agent_state = self._agents.get(agent_id)
             pending_compaction = self._compaction_pending_by_agent.get(agent_id)
+            session = self._session_by_agent.get(agent_id)
         # A positively-dead lifecycle is the one signal a live backend cannot self-observe (an
         # abrupt daemon kill emits no idle sweep), so tell the session -- level-triggered on
         # every recompute and idempotent (codex reaps its connection + ephemeral queue chips;
@@ -6859,6 +6860,8 @@ class AgentManager:
         # The turn-in-flight marker flips promptly at turn start/end, whereas the observe-reported
         # lifecycle state can miss a short turn -- so read it for a timely signal.
         is_active_marker_present = self._is_active_marker_present(agent_id, tracker)
+        # Outside the lock: a session's queue publishes under its own lock and then takes this one.
+        has_held_commands = session is not None and session.has_held_commands()
         live_compaction = self._resolve_live_compaction(
             agent_id, self._get_agent_state_dir(agent_id), type(tracker), pending_compaction
         )
@@ -6914,11 +6917,11 @@ class AgentManager:
             # the harness's own ledger (an enqueue with no matching leave), or a stale
             # entry re-surfaced by a backend restart's full replay (which sees no new
             # working->IDLE transition to sweep it). So run the backstop whenever the
-            # agent is idle with a non-empty queue, even if the activity state itself
-            # did not change this cycle -- an edge-only backstop leaves such survivors
-            # stranded on an idle agent forever.
+            # agent is idle with a non-empty queue or a command its session holds, even
+            # if the activity state itself did not change this cycle -- an edge-only
+            # backstop leaves such survivors stranded on an idle agent forever.
             is_idle = new_state == ActivityState.IDLE
-            has_idle_queue = is_idle and bool(self._queued_messages_by_agent.get(agent_id))
+            has_idle_queue = is_idle and (bool(self._queued_messages_by_agent.get(agent_id)) or has_held_commands)
             if (
                 old_state == new_state
                 and agent_state.activity_state == new_state.value

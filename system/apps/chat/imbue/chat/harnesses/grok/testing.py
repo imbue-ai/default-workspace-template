@@ -7,6 +7,8 @@ from typing import Final
 from uuid import uuid4
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.grok.queue_tracker import GrokControlCommand
+from imbue.chat.harnesses.grok.queue_tracker import GrokControlCommandKind
 from imbue.chat.harnesses.grok.session_parser import UPDATES_FILENAME
 from imbue.chat.harnesses.grok.watcher import SESSIONS_DIRNAME
 from imbue.chat.harnesses.harness_type import HarnessType
@@ -109,6 +111,16 @@ def make_grok_agent_state_dir(parent: Path) -> Path:
     agent_state_dir = parent / f"agent-{uuid4().hex}"
     agent_state_dir.mkdir(parents=True)
     return agent_state_dir
+
+
+def model_command(model_id: str) -> GrokControlCommand:
+    """The model bar's `/model <model_id>` for the control lane."""
+    return GrokControlCommand(kind=GrokControlCommandKind.MODEL, value=model_id)
+
+
+def effort_command(level: str) -> GrokControlCommand:
+    """The model bar's `/effort <level>` for the control lane."""
+    return GrokControlCommand(kind=GrokControlCommandKind.EFFORT, value=level)
 
 
 def user_prompt_line(session_id: str, text: str, prompt_index: int, timestamp_ms: int) -> bytes:

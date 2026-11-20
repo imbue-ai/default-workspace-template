@@ -6,7 +6,8 @@ child session, named by its parent's ``subagent_spawned`` record and found with
 ``find_local_session_dir``, is a lane of its own, kept out of the main stream.
 :class:`GrokTranscriptLoader` is the read half, which an archived chat segment is read through;
 :class:`GrokSessionWatcher` adds the live tail and the flush worker, the only code that types into
-grok, which types the messages the chat holds for it once mngr reports no turn in flight.
+grok, which types the model bar's held commands and the messages the chat holds for it once mngr reports no turn in
+flight.
 """
 
 import heapq
@@ -24,6 +25,9 @@ from pydantic import Field
 
 from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.grok.model import GROK_STATE_RELATIVE_PATH
+from imbue.chat.harnesses.grok.model import is_control_command_in_force
+from imbue.chat.harnesses.grok.queue_tracker import GrokControlCommand
 from imbue.chat.harnesses.grok.queue_tracker import GrokQueueTracker
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
 from imbue.chat.harnesses.grok.queue_tracker import session_token
@@ -35,6 +39,8 @@ from imbue.chat.harnesses.grok.session_parser import detail_for
 from imbue.chat.harnesses.grok.session_parser import parse_record
 from imbue.chat.harnesses.grok.session_parser import record_timestamp
 from imbue.chat.harnesses.grok.turn_gate import is_ready_to_type
+from imbue.chat.harnesses.model import model_state_path
+from imbue.chat.harnesses.model import read_model_identity
 from imbue.chat.harnesses.session_watcher import FlushResentCallback
 from imbue.chat.harnesses.session_watcher import FlushSendCallback
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
@@ -416,18 +422,22 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
                 logger.opt(exception=error).warning("grok: a flush attempt failed for {}", self._agent_id)
 
     def _attempt_flush(self) -> None:
-        """Type the held block while mngr reports grok alive with no turn in flight."""
+        """Type the next held control command, else the held block, while mngr reports grok ready to type."""
         send, read_lifecycle_state = self._flush_send, self._flush_read_lifecycle_state
         if send is None or read_lifecycle_state is None:
             return
         self._queue.set_session(session_token(self._agent_state_dir))
         self._queue.republish()
-        if not self._queue.has_entries():
+        if not self._queue.has_entries() and not self._queue.has_control_commands():
             return
         if not is_ready_to_type(read_lifecycle_state(), self._agent_state_dir):
             self._queue.demote_pending()
             return
         self._settle_interrupted_claim()
+        command = self._queue.next_control_command()
+        if command is not None:
+            self._send_control_command(send, command)
+            return
         self._flush_held_block(send)
 
     def _settle_interrupted_claim(self) -> None:
@@ -441,6 +451,24 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
             self._refresh_locked()
             texts = self._user_turn_texts_since_locked(0, logged_after=began_at - TRANSCRIPT_CLOCK_SLACK_SECONDS)
         self._queue.finish_flush(claimed, generation, delivered=claimed if _is_held_by_a_turn(texts, block) else ())
+
+    def _send_control_command(self, send: FlushSendCallback, command: GrokControlCommand) -> None:
+        """Type a held control command alone, unless grok already runs it by its model_state.json."""
+        identity = read_model_identity(model_state_path(self._agent_state_dir, GROK_STATE_RELATIVE_PATH))
+        if is_control_command_in_force(command, identity):
+            logger.debug("grok: {} already runs {!r}; not typing it", self._agent_id, command.text)
+            self._queue.settle_control_command(command, is_delivered=True)
+            self._flush_wake.set()
+            return
+        is_delivered = False
+        try:
+            is_delivered = send(command.text)
+        finally:
+            self._queue.settle_control_command(command, is_delivered=is_delivered)
+        if is_delivered:
+            self._flush_wake.set()
+        else:
+            self._queue.demote_pending()
 
     def _flush_held_block(self, send: FlushSendCallback) -> None:
         """Claim the held block, type it through mngr, and settle it by what mngr and grok's log show.

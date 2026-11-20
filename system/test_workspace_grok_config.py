@@ -14,7 +14,10 @@ from imbue.mngr.config.agent_config_registry import resolve_agent_type
 from imbue.mngr.config.loader import load_config
 from imbue.mngr.main import get_or_create_plugin_manager
 from imbue.mngr.primitives import AgentTypeName
-from imbue.mngr_grok.grok_config import build_config_toml
+from imbue.mngr_grok.grok_config import (
+    STATUS_LINE_SCRIPT_RELATIVE_PATH,
+    build_config_toml,
+)
 
 _REPO_ROOT = Path(__file__).parents[1]
 _SETTINGS_PATH = _REPO_ROOT / ".mngr" / "settings.toml"
@@ -30,6 +33,9 @@ _SUPERVISORD_ENVIRONMENT_RE = re.compile(r"^\s*environment\s*=(.*)$", re.MULTILI
 _SUPERVISORD_VARIABLE_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*=")
 _OOM_LAUNCHER_COMMAND = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py grok"
 _PRIVACY_BANNER_ACKED_AT = datetime(2026, 1, 1, tzinfo=timezone.utc)
+_AGENT_STATE_DIR = Path(
+    "/home/user/.mngr/agents/agent-00000000000000000000000000000000"
+)
 
 
 def _load_grok_agent_config(
@@ -66,6 +72,7 @@ def _render_grok_config_toml(settings_overrides: dict[str, Any]) -> dict[str, An
         settings_overrides=settings_overrides,
         is_settings_narrowing_allowed=False,
         previously_rendered_model_settings={},
+        status_line_command_path=_AGENT_STATE_DIR / STATUS_LINE_SCRIPT_RELATIVE_PATH,
     ).body
 
 

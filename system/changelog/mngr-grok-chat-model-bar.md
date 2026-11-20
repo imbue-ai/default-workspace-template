@@ -1,0 +1,1 @@
+`system/test_workspace_grok_config.py` renders a grok agent's `config.toml` with mngr's model-state status line, so it checks that the `[agent_types.grok]` settings overrides keep `[ui.status_line]`, the command that writes the `model_state.json` the chat's model bar reads. It needs an mngr pin with grok's model-state status line.

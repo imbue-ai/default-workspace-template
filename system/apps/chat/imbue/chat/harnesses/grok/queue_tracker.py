@@ -1,23 +1,28 @@
-"""The messages the chat holds for a grok agent until grok can take them.
+"""The messages the chat holds for a grok agent until grok can take them, and the model bar's control lane.
 
 grok parks a message typed during a turn in its own queue, which leaves nothing on disk until the message runs, so
 the chat holds every message itself: it waits here, and the watcher's flush worker, the only typist, types the held
 block once mngr reports no turn in flight. Entries are journalled, with the delivery attempts they spent, under the
 current grok process's session token, so they survive a chat app restart and are dropped when grok relaunches
-(contract Part B); one mngr confirmed typing leaves the journal at once.
+(contract Part B); one mngr confirmed typing leaves the journal at once. The control lane holds the model bar's newest
+`/model` and `/effort`, typed ahead of the held block; it is never published, journalled or handed back by stop.
 """
 
 import json
 import threading
 from collections.abc import Callable
+from enum import auto
 from pathlib import Path
 from typing import Any
 from typing import Final
+from typing import assert_never
 from uuid import uuid4
 
 from loguru import logger
 
 from imbue.chat.harnesses.queued_set import QueuedSet
+from imbue.imbue_common.enums import UpperCaseStrEnum
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.mngr.agents.tui_utils import is_slash_command_message
 from imbue.mngr_grok.grok_config import PROCESS_STARTED_MARKER_FILENAME
@@ -30,6 +35,30 @@ MAX_DELIVERY_ATTEMPTS: Final[int] = 3
 _QUEUED_ID_PREFIX: Final[str] = "grok-"
 
 PublishCallback = Callable[[list[dict[str, Any]]], None]
+
+
+class GrokControlCommandKind(UpperCaseStrEnum):
+    """Which grok slash command a control-lane entry is; the worker types them in this order."""
+
+    MODEL = auto()
+    EFFORT = auto()
+
+
+class GrokControlCommand(FrozenModel):
+    """A `/model <id>` or `/effort <level>` the model bar holds for the flush worker."""
+
+    kind: GrokControlCommandKind
+    value: str
+
+    @property
+    def text(self) -> str:
+        match self.kind:
+            case GrokControlCommandKind.MODEL:
+                return f"/model {self.value}"
+            case GrokControlCommandKind.EFFORT:
+                return f"/effort {self.value}"
+            case _ as unreachable:
+                assert_never(unreachable)
 
 
 def session_token(agent_state_dir: Path) -> str:
@@ -56,7 +85,7 @@ def _entries_of_one_block(entries: list[dict[str, str]]) -> list[dict[str, str]]
 
 
 class GrokQueueTracker:
-    """One grok agent's held messages: their journal, claims, delivery attempts and publisher.
+    """One grok agent's held messages (their journal, claims, delivery attempts and publisher) and control lane.
 
     A claim keeps its entries in the snapshot, shown as Sending, until it settles. One claim is open at a time, which
     keeps the flush worker, the tap and stop apart.
@@ -90,6 +119,9 @@ class GrokQueueTracker:
     _interrupted_claim_ids: tuple[str, ...]
     _publish: PublishCallback | None
     _wake: Callable[[], None] | None
+    # The newest held value of each control command kind, and the sends each has spent.
+    _control_values: dict[GrokControlCommandKind, str]
+    _control_attempts: dict[GrokControlCommandKind, int]
     # The answers of ``is_sending`` and ``has_deliverable_entries``, read without the lock, since another tracker's
     # publish reads them while it holds its own.
     _is_sending_now: bool
@@ -115,6 +147,8 @@ class GrokQueueTracker:
         self._interrupted_claim_ids = ()
         self._publish = None
         self._wake = None
+        self._control_values = {}
+        self._control_attempts = {}
         self._replay()
         self._refresh_lock_free_reads()
         return self
@@ -414,6 +448,45 @@ class GrokQueueTracker:
         with self._lock:
             self._clear_entries_locked()
             self._settled_locked()
+
+    def hold_control_command(self, command: GrokControlCommand) -> None:
+        """Hold ``command`` for the worker, replacing a held one of its kind, and wake the worker."""
+        with self._lock:
+            self._control_values[command.kind] = command.value
+            self._control_attempts.pop(command.kind, None)
+        self._wake_worker()
+
+    def next_control_command(self) -> GrokControlCommand | None:
+        """The held control command to type next, `/model` first; None while a claim is open or a stop runs."""
+        with self._lock:
+            if self._sending_ids or self._flush_pause_count:
+                return None
+            return next(
+                (
+                    GrokControlCommand(kind=kind, value=self._control_values[kind])
+                    for kind in GrokControlCommandKind
+                    if kind in self._control_values
+                ),
+                None,
+            )
+
+    def settle_control_command(self, command: GrokControlCommand, *, is_delivered: bool) -> None:
+        """Drop a delivered command, or one whose attempts are spent; a newer one of its kind stays held."""
+        with self._lock:
+            if self._control_values.get(command.kind) != command.value:
+                return
+            if not is_delivered:
+                attempts = self._control_attempts.get(command.kind, 0) + 1
+                if attempts < MAX_DELIVERY_ATTEMPTS:
+                    self._control_attempts[command.kind] = attempts
+                    return
+                logger.warning("grok: giving up on {!r} after {} attempts", command.text, attempts)
+            del self._control_values[command.kind]
+            self._control_attempts.pop(command.kind, None)
+
+    def has_control_commands(self) -> bool:
+        with self._lock:
+            return bool(self._control_values)
 
     def republish(self) -> None:
         """Announce the queue again unchanged, so a re-tracked chat gets its chips back."""
