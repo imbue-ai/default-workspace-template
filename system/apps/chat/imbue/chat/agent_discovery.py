@@ -427,6 +427,18 @@ def _is_worth_waiting_out(result: MessageResult) -> bool:
     return _is_every_failure_of_kind(result, SendFailureKind.NOT_READY, SendFailureKind.STATE_UNKNOWN)
 
 
+@pure
+def _is_unreached(result: MessageResult) -> bool:
+    """Whether a key press reached no agent: the agent was not where it was looked for, or was not running there.
+
+    Only then may the key be pressed at a freshly discovered location: pressed again at an agent already found, it
+    could cancel a turn the agent started meanwhile.
+    """
+    return _is_location_miss(result) or _is_every_failure_of_kind(
+        result, SendFailureKind.AGENT_NOT_FOUND, SendFailureKind.AGENT_UNREACHABLE
+    )
+
+
 class _SendAttempt(FrozenModel):
     """What one send through ``MngrMessenger`` came to, its repeats included."""
 
@@ -583,15 +595,19 @@ class MngrMessenger(FrozenModel):
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         """Press ``key`` into the agent with ``agent_id`` at ``known_locations``, else discovery.
 
-        The key-chord sibling of ``send_to_agent``: it tries the known location first, but
-        falls back to discovery whenever the press there reached no agent, not only on a
-        location miss. It delivers a keystroke rather than text and never auto-starts a
-        stopped agent. Returns True when the chord reached the agent.
+        The key-chord sibling of ``send_to_agent``: it tries the known location first, and
+        falls back to discovery only when the press there reached no agent (``_is_unreached``).
+        It delivers a keystroke rather than text and never auto-starts a stopped agent.
+        Returns True when the chord reached the agent.
         """
         mngr_ctx, cg = _get_mngr_context()
         try:
-            if known_locations and self.press(known_locations, key, mngr_ctx).successful_agents:
-                return True
+            if known_locations:
+                result = self.press(known_locations, key, mngr_ctx)
+                if result.successful_agents:
+                    return True
+                if not _is_unreached(result):
+                    return False
             matches = self.discover(agent_id, mngr_ctx)
             return bool(self.press(matches, key, mngr_ctx).successful_agents)
         finally:
