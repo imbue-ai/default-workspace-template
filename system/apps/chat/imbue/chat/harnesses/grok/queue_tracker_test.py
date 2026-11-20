@@ -129,7 +129,7 @@ def test_trackers_publishing_at_once_each_read_the_others_tap_state(tmp_path: Pa
     trackers = [_tracker(agent_dir) for agent_dir in agent_dirs]
     both_publishing = threading.Barrier(len(trackers), timeout=_RENDEZVOUS_SECONDS)
     tap_states: list[tuple[bool, bool]] = []
-    for tracker, other in zip(trackers, reversed(trackers)):
+    for tracker, other in zip(trackers, reversed(trackers), strict=True):
 
         def read_the_other(_snapshot: list[dict[str, Any]], other: GrokQueueTracker = other) -> None:
             both_publishing.wait()
