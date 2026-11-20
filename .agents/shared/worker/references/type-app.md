@@ -172,15 +172,15 @@ adds `user_id` and `email`; a visiting agent adds `agent_id`, `agent_name` and
 with no header is the owner's, which is safe only from loopback under a
 loopback `Host`. Every built-in app installs a guard for that and the scaffold
 does not, so add `install_request_guard(app, exempt_rules=frozenset())` from
-`app_schema.request_guard` right after the app is created, ahead of every
-other request hook (`system/libs/app_schema/README.md`; `exempt_rules` names a
+`imbue.app_sdk.request_guard` right after the app is created, ahead of every
+other request hook (`exempt_rules` names a
 route meant for pages of other origins). It answers 403 to a page of another
 origin and to a header-less request from anywhere else. A header that does
 not parse is never read as the owner's: `parse_identity_header` raises on it
 and the guard answers that with a 400, so a route that reads the identity
 answers 400, and a route that never reads it does not see the difference.
-Read the identity with `workspace_layout.identity`, as the shell and the chat
-app do; it comes with `app-schema`. Use `parse_identity_header`,
+Read the identity with `imbue.app_sdk.identity`, as the shell and the chat
+app do; it is part of the app SDK the app already depends on. Use `parse_identity_header`,
 `is_owner_participant`, and `participant_key_of`, which names the requester
 `user:<id>`, `agent:<id>`, or `owner`. Locally the header looks the same, so
 the test client exercises all of this without turning sharing on.
@@ -241,7 +241,7 @@ an owner-only route answers both 403 and still works for the owner and for a
 request with no header, a route that reads the identity answers 400 to a
 header that does not parse, saved markup comes back inert, a change records
 the visitor's participant key, and the access log gains its line. Assert the
-guard with `app_schema.testing`'s
+guard with `imbue.app_sdk.app_testing`'s
 `assert_request_guard_refuses_unknown_provenance` on one of the app's reads.
 
 ## Critical apps

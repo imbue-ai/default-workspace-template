@@ -495,7 +495,7 @@ investing in configuration or integration around it.
 
 Every app with an HTTP API serves an OpenAPI document of its routes at
 `/api/schema` (the manifest's `api_schema_path`), built by
-`app_schema.api_schema.register_api_schema_route(app, DEFAULT_API_SCHEMA_PATH, title=..., description=..., route_table=ROUTE_TABLE)`,
+`imbue.app_sdk.api_schema.register_api_schema_route(app, DEFAULT_API_SCHEMA_PATH, title=..., description=..., route_table=ROUTE_TABLE)`,
 which the scaffold already calls in `runner.py` with the manifest's
 `display_name` and `description` and a starting table. The document is built
 from the live url map on each request, so every route you add is listed
@@ -510,9 +510,9 @@ automatically; what each route owes it is:
   (plus `alternate_responses` for a second success under another status, or a
   failure whose answer is a model richer than the error shape),
   and the view reads its body only through
-  `app_schema.routes.parse_request_body(Model)` and answers only through
-  `app_schema.routes.model_response(model, status)`; a refusal or a failure is
-  `app_schema.routes.error_response(detail, status)`. A page, a file, a
+  `imbue.app_sdk.routes.parse_request_body(Model)` and answers only through
+  `imbue.app_sdk.routes.model_response(model, status)`; a refusal or a failure is
+  `imbue.app_sdk.routes.error_response(detail, status)`. A page, a file, a
   stream, a socket or a redirect gets `SchemalessRoute(reason=...)`. Define the
   models as `FrozenModel`s with a `Field(description=...)` per attribute; the
   descriptions are what the document shows.
