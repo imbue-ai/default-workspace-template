@@ -244,7 +244,7 @@ def _flushing_watcher(
             next_idx[0] += 1
         return True
 
-    watcher.set_flush_hooks(_send, lambda: is_alive, lambda text, sent_after: None)
+    watcher.set_flush_hooks(_send, lambda: "WAITING" if is_alive else "STOPPED", lambda text, sent_after: None)
     return watcher
 
 
@@ -336,7 +336,7 @@ def test_a_partial_commit_resolves_ENTRIES_not_lines(tmp_path: Path) -> None:
         append_step(_conv_db_path(tmp_path, conv), (2, _TYPE_USER, _STATUS_DONE, _user_payload("foo\nbar")))
         return True
 
-    watcher.set_flush_hooks(_send, lambda: True, lambda text, sent_after: None)
+    watcher.set_flush_hooks(_send, lambda: "WAITING", lambda text, sent_after: None)
     watcher._collect_new_events()
     watcher._publish_turn_state()
     watcher._queue.enqueue("foo\nbar", "t0")
@@ -450,7 +450,7 @@ def test_the_queue_entry_departs_before_its_turn_arrives(tmp_path: Path) -> None
         next_idx[0] += 1
         return True
 
-    watcher.set_flush_hooks(_send, lambda: True, lambda text, sent_after: None)
+    watcher.set_flush_hooks(_send, lambda: "WAITING", lambda text, sent_after: None)
     watcher.set_queue_snapshot_callback(lambda snap: order.append("queue-empty" if not snap else "queue-present"))
     watcher._on_events = lambda _agent_id, events: order.append("transcript")
 
@@ -512,7 +512,7 @@ def test_the_poll_loop_cannot_emit_the_turn_before_its_chip_departs(tmp_path: Pa
         order.append("transcript")
         emitted.extend(events)
 
-    watcher.set_flush_hooks(_send, lambda: True, lambda text, sent_after: None)
+    watcher.set_flush_hooks(_send, lambda: "WAITING", lambda text, sent_after: None)
     watcher.set_queue_snapshot_callback(lambda snap: order.append("queue-empty" if not snap else "queue-present"))
     watcher._on_events = _on_events
 
@@ -739,7 +739,7 @@ def _repick_while_typing(tmp_path: Path, watcher: AntigravitySessionWatcher) -> 
             _pick(tmp_path, "gemini-3.8-flash", "low")
         return send(text)
 
-    watcher.set_flush_hooks(_send_while_the_user_picks_again, lambda: True, lambda text, sent_after: None)
+    watcher.set_flush_hooks(_send_while_the_user_picks_again, lambda: "WAITING", lambda text, sent_after: None)
 
 
 def _parked_then_committed_watcher(
@@ -765,7 +765,7 @@ def _parked_then_committed_watcher(
             append_step(_conv_db_path(tmp_path, conv), (100, _TYPE_USER, _STATUS_DONE, _user_payload(text)))
         return True
 
-    watcher.set_flush_hooks(_send, lambda: True, lambda text, sent_after: resent.append((text, sent_after)))
+    watcher.set_flush_hooks(_send, lambda: "WAITING", lambda text, sent_after: resent.append((text, sent_after)))
     return watcher
 
 
@@ -798,7 +798,7 @@ def _raise_on_slash_commands(watcher: AntigravitySessionWatcher, sent: list[str]
             raise SendFailedError("the agent could not be found")
         return send(text)
 
-    watcher.set_flush_hooks(_send_raising_for_slash_commands, lambda: True, lambda text, sent_after: None)
+    watcher.set_flush_hooks(_send_raising_for_slash_commands, lambda: "WAITING", lambda text, sent_after: None)
 
 
 def _close_turn(tmp_path: Path, conv: str, watcher: AntigravitySessionWatcher) -> None:

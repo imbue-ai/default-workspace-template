@@ -34,6 +34,7 @@ from typing import Final
 
 from loguru import logger
 
+from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.antigravity.agy_transcript import TruncatedError
 from imbue.chat.harnesses.antigravity.agy_transcript import decode_step
@@ -118,7 +119,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
     _turn_state: TurnState
     _queue_snapshot_callback: Any
     _flush_send: Any
-    _flush_is_alive: Any
+    _flush_read_lifecycle_state: Any
     _flush_note_resent: Any
     _flush_wake: threading.Event
     _flush_thread: threading.Thread | None
@@ -168,7 +169,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         self._turn_state = get_turn_state(self._agent_id)
         self._queue_snapshot_callback = None
         self._flush_send = None
-        self._flush_is_alive = None
+        self._flush_read_lifecycle_state = None
         self._flush_note_resent = None
         self._flush_wake = threading.Event()
         self._flush_thread = None
@@ -508,10 +509,10 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
     def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
         self._queue_snapshot_callback = callback
 
-    def set_flush_hooks(self, send: Any, is_alive: Any, note_resent: Any) -> None:
-        """Receive the ability to deliver, to tell whether the agent is still alive, and to record a repeat."""
+    def set_flush_hooks(self, send: Any, read_lifecycle_state: Any, note_resent: Any) -> None:
+        """Receive the ability to deliver, to read the agent's lifecycle state, and to record a repeat."""
         self._flush_send = send
-        self._flush_is_alive = is_alive
+        self._flush_read_lifecycle_state = read_lifecycle_state
         self._flush_note_resent = note_resent
 
     def get_queued_messages(self) -> list[dict[str, Any]]:
@@ -632,13 +633,14 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
            departs the queue before it arrives in the transcript (A3b) no matter which thread
            happened to scan the row first.
         """
-        send, is_alive = self._flush_send, self._flush_is_alive
-        if send is None or is_alive is None:
+        send, read_lifecycle_state = self._flush_send, self._flush_read_lifecycle_state
+        if send is None or read_lifecycle_state is None:
             return
         self._queue.republish()
         if not self._queue.has_entries() and self._queue.model_command() is None:
             return
-        if not is_alive():
+        lifecycle_state = read_lifecycle_state()
+        if lifecycle_state is None or is_lifecycle_dead(lifecycle_state):
             # HELD, not taken. "Returned to the composer" is the RESPONSE to a stop request;
             # this is a background thread with no response, so taking the entries here would
             # not return them anywhere -- it would destroy them (never Delivered, never
