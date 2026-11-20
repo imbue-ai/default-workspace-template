@@ -1286,7 +1286,6 @@ dependencies = [
     { name = "loguru" },
     { name = "pydantic" },
     { name = "werkzeug" },
-    { name = "workspace-layout" },
     { name = "workspace-profile" },
     { name = "workspace-themes" },
 ]
@@ -1312,7 +1311,6 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "werkzeug", specifier = ">=3.0" },
-    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
     { name = "workspace-profile", editable = "system/libs/workspace_profile" },
     { name = "workspace-themes", editable = "system/libs/workspace_themes" },
 ]
@@ -4834,7 +4832,6 @@ dependencies = [
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "pydantic" },
-    { name = "workspace-layout" },
 ]
 
 [package.dev-dependencies]
@@ -4849,7 +4846,6 @@ requires-dist = [
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr-internal?subdirectory=libs%2Fimbue_common&rev=c4910d54bbbedc38bbf62b82e3a771e72af74472" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
 ]
 
 [package.metadata.requires-dev]
