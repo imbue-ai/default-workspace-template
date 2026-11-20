@@ -17,7 +17,7 @@ from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
 from imbue.chat.harnesses.interrupt import PressChord
 
 _SHORT_DEADLINE_SECONDS = 0.3
-# How long after mngr refuses a press into a turn grok has just ended its marker goes, well inside the wait.
+# How long the marker of a turn grok has just ended stays after mngr refuses a press into it; well inside the wait.
 _MARKER_LAG_SECONDS = 0.1
 
 

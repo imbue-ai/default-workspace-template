@@ -26,8 +26,8 @@ than no entry, because the next person plans around it.
   `turn/start`/`turn/steer`, stop = `turn/interrupt`, queue = pending steers observed via
   events, delivered = the committed `userMessage`, reconciliation by the minted `clientId`.
 
-- **antigravity (the queue is OURS, and one typist owns it):** agy is the only harness whose
-  queue cannot be observed at all -- it parks mid-turn input inside its TUI, invisible on disk,
+- **antigravity (the queue is OURS, and one typist owns it):** agy's queue cannot be
+  observed at all -- it parks mid-turn input inside its TUI, invisible on disk,
   and merges everything parked into one turn. So it is never allowed to park anything. `send`
   does not type: it enqueues, publishes the chip inside the POST, and wakes the ONE typist, a
   per-agent worker that delivers the whole block only when its bounded predicate says no turn
@@ -351,8 +351,8 @@ someone typed at grok's pane. Stop and the tap ask mngr to press only while the 
 `resolve_is_turn_in_flight` reads a turn, so they press nothing into a wake turn mngr still
 reports as RUNNING_BACKGROUND either. A turn still holding mngr's `active` marker at the deadline
 after a press, such as one whose foreground subagent grok's cancel leaves running, is left too.
-The held messages come back either way; grok restarts nothing, since a restart would also end its
-background work.
+The held messages come back either way; the stop never restarts grok, since a restart would also
+end its background work.
 
 ---
 

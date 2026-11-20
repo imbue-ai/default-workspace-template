@@ -687,7 +687,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
                 SpecialEventKind.TURN_ABORTED,
             }
         ),
-        # A typed `/logout` would delete the account's `auth.json`, which every agent on the account shares.
         popups=(
             HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=_AUTH_COMMANDS, action=PopupAction.OPEN_AUTH),
             HarnessPopup(

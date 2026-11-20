@@ -1,4 +1,4 @@
-"""Seeded message-conservation storms for the three harness stop/flush executors (invariant U1).
+"""Seeded message-conservation storms for the harness stop/flush executors (invariant U1).
 
 THE PROPERTY (system/apps/chat/imbue/chat/harnesses/core-contracts/messages-lifecycle-contract.md A1, U1): across any
 interleaving of send / park / stop / flush / restart, every accepted message ends in EXACTLY one
@@ -843,7 +843,7 @@ def test_claude_conservation_storm_tap_and_stop_executors(tmp_path: Path) -> Non
         )
 
 
-# agy is the only harness whose queue is OURS: it parks mid-turn input invisibly inside its
+# agy's queue is OURS: it parks mid-turn input invisibly inside its
 # TUI, so we never let it park anything and hold the messages backend-side instead (contract
 # Part C). That inverts what the storm has to simulate. The other storms replay the real bytes
 # an executor wrote, because their harness consumes a file. agy's executor writes tmux
@@ -1299,11 +1299,8 @@ def test_antigravity_tap_delivers_once_and_returns_nothing(tmp_path: Path) -> No
     assert not world.queue.has_entries()
 
 
-# grok parks a message typed mid-turn in its own queue, which leaves nothing on disk, so the chat holds every message
-# and one flush worker types it, as for agy; what tells that worker grok is busy is mngr's published state (its
-# lifecycle and its `active` marker), read through the shared resolve_is_turn_in_flight. The scripted world plays grok
-# and mngr, and everything on the chat's side of mngr is the real code: the session's send, the tracker, the
-# watcher's flush worker reading grok's session log, stop and the tap.
+# grok's own queue leaves nothing on disk, so the chat holds every message and one flush worker types it while mngr's
+# lifecycle and `active` marker show no turn. The scripted world plays grok and mngr; the chat's side is the real code.
 
 _GROK_SESSION = "01a156d6-f927-7091-91a4-f6692a5800da"
 _GROK_PROMPT_CLOCK_MS = 1_800_000_000_000
