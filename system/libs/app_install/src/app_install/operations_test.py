@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -31,10 +32,14 @@ from app_manifest.records import load_record
 from app_manifest.records import write_record
 
 
-def _git(repo_root: Path, *arguments: str) -> None:
+def _git(repo_root: Path, *arguments: str, committer_date: str | None = None) -> None:
+    environment = dict(os.environ)
+    if committer_date is not None:
+        environment["GIT_COMMITTER_DATE"] = committer_date
     subprocess.run(
         ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", *arguments],
         cwd=repo_root,
+        env=environment,
         check=True,
         capture_output=True,
     )
@@ -170,32 +175,20 @@ def test_regenerate_follows_a_manifest_that_gained_a_service_and_keeps_the_port(
 
 def test_two_apps_on_one_port_are_reported_and_the_one_recorded_later_is_moved(tmp_path: Path) -> None:
     _git(tmp_path, "init", "-q")
-    # Two branches each allocated 8080: the record committed first keeps it.
-    for name in ("zebra", "alpha"):
+    # Two branches each allocated 8080: the record committed first keeps it, whatever the names' order.
+    for name, committer_date in (("zebra", "2026-01-01T00:00:00+00:00"), ("alpha", "2026-01-02T00:00:00+00:00")):
         package = write_user_app(tmp_path, name)
         write_record(tmp_path, AppRecord(name=name, package=package, port=8080, origin=AppOrigin.LOCAL))
         _git(tmp_path, "add", "-A")
-        _git(
-            tmp_path,
-            "-c",
-            f"user.name={name}",
-            "commit",
-            "-q",
-            "-m",
-            f"add {name}",
-            "--date",
-            "2026-01-01T00:00:00" if name == "zebra" else "2026-01-02T00:00:00",
-        )
+        _git(tmp_path, "commit", "-q", "-m", f"add {name}", committer_date=committer_date)
 
     before = check(tmp_path)
     outcome = regenerate(tmp_path, None, never_bound)
 
     assert "port 8080 is recorded for more than one app: alpha, zebra" in before
-    assert outcome.port_by_reassigned_name == {"alpha": 8081} or outcome.port_by_reassigned_name == {"zebra": 8081}
-    assert sorted(record.port for record in (load_record(tmp_path, "alpha"), load_record(tmp_path, "zebra"))) == [
-        8080,
-        8081,
-    ]
+    assert outcome.port_by_reassigned_name == {"alpha": 8081}
+    assert load_record(tmp_path, "zebra").port == 8080
+    assert load_record(tmp_path, "alpha").port == 8081
     assert check(tmp_path) == ()
 
 
