@@ -11,8 +11,8 @@
  */
 
 import m from "mithril";
-import { icon } from "@imbue/workspace-ui/src/components/icons";
-import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
+import { icon, type IconName } from "@imbue/workspace-ui/src/components/icons";
+import { getExpansionVersion, isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import { MarkdownContent } from "../markdown";
 import { parseMessageAttachments } from "../models/attachments";
 import { withoutDictationNotes } from "../models/dictationNote";
@@ -33,6 +33,7 @@ import { classifyUserMessage, isHiddenUserMessage, isPersonsChipMessage } from "
 import type { UserMessageClass } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";
 import { renderToolBlock } from "./ToolCallBlock";
+import { MemoryChangeCard, memoryChangeCache } from "./memory-change-card";
 import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 
 /** The user rail's shared recipes, owned here and composed by the queued and
@@ -177,24 +178,39 @@ function renderSystemChip(label: string, body: string, expansionKey: string): m.
 
 /** A notice's lead when the backend's decision names none. */
 const NOTICE_FALLBACK_LABEL = "Background task completed";
+// The backend labels every memory-change notice; this covers one recorded without a label.
+const MEMORY_CHANGE_FALLBACK_LABEL = "Memory changed";
 
 /** The space below a notice's row when it stands outside a stretch (a notice not yet on the transcript). */
 export const NOTICE_ROW_SPACING_CLASS = "mb-2";
 
+/** What a caller can change about a notice's line: its icon (and whether it is muted), extra classes on the
+ *  row, and actions drawn after the summary. The memory-change card opens its line this way. */
+export interface NoticeOptions {
+  iconName?: IconName;
+  isIconFaint?: boolean;
+  extra?: string;
+  actions?: m.Children;
+}
+
 /** A one-line notice of the agent's: a tick, the lead, and the summary. The lead carries
  *  the weight because it is what the eye is scanning for down a long transcript; the summary is
  *  ordinary prose beside it. The tick is a stop on the stretch's line. */
-export function renderNotice(label: string, body: string): m.Vnode {
-  return m("div", { class: "message-notice flex items-start gap-1.5 text-(length:--font-size-helper)" }, [
+export function renderNotice(label: string, body: string, options: NoticeOptions = {}): m.Vnode {
+  return m("div", { class: `message-notice flex items-start gap-1.5 type-helper ${options.extra ?? ""}` }, [
     m(
       "span",
-      { class: "mt-px shrink-0 text-accent", ...railNodeAttrs("point") },
-      m.trust(icon("check", { size: 13, strokeWidth: 2.5 })),
+      {
+        class: `message-notice-icon mt-px shrink-0 ${options.isIconFaint ? "text-faint" : "text-accent"}`,
+        ...railNodeAttrs("point"),
+      },
+      m.trust(icon(options.iconName ?? "check", { size: 13, strokeWidth: 2.5 })),
     ),
-    m("span", { class: "min-w-0 text-secondary" }, [
-      m("span", { class: "font-medium text-primary" }, `${label}:`),
+    m("span", { class: "message-notice-text min-w-0 text-secondary" }, [
+      m("span", { class: "message-notice-lead font-medium text-primary" }, `${label}:`),
       body ? ` ${body}` : null,
     ]),
+    options.actions ?? null,
   ]);
 }
 
@@ -235,8 +251,19 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent; prev
   let renderedAuthorKey: string | null = null;
   let renderedAuthorName: string | null = null;
   let renderedIsContinued = false;
+  // A memory change's card keeps its state (loaded, undone, expanded) outside the row, so the row repaints when
+  // either of those versions moves.
+  let renderedMemoryChangeVersion = -1;
+  let renderedExpansionVersion = -1;
   return {
     onbeforeupdate(vnode) {
+      if (
+        vnode.attrs.event.memory_change_id &&
+        (memoryChangeCache.getVersion() !== renderedMemoryChangeVersion ||
+          getExpansionVersion() !== renderedExpansionVersion)
+      ) {
+        return true;
+      }
       const author = authorOfTurn(vnode.attrs.event);
       return (
         vnode.attrs.event.event_id !== renderedEventId ||
@@ -253,6 +280,8 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent; prev
       renderedAuthorName = author?.name ?? null;
       const isContinued = continuesSpeakerRun(event, vnode.attrs.previousTurn ?? null);
       renderedIsContinued = isContinued;
+      renderedMemoryChangeVersion = memoryChangeCache.getVersion();
+      renderedExpansionVersion = getExpansionVersion();
       const cls = classifyUserMessage(event);
       // Every branch below draws the classification's body, never the raw content: for a
       // message the backend wrapped, the two differ and the bubble owes the user their words.
@@ -265,6 +294,14 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent; prev
 
       if (cls.kind === UserMessageKind.SystemChip) {
         return renderSystemChip(cls.label ?? "System message", cls.body, `chip:${event.event_id}`);
+      }
+      if (cls.kind === UserMessageKind.Notice && event.memory_change_id) {
+        return m(MemoryChangeCard, {
+          key: event.memory_change_id,
+          changeId: event.memory_change_id,
+          label: cls.label ?? MEMORY_CHANGE_FALLBACK_LABEL,
+          summary: cls.body,
+        });
       }
       if (cls.kind === UserMessageKind.Notice) {
         return renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body);

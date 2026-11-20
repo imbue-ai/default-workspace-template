@@ -51,6 +51,16 @@ _CHAT_BACKGROUND_TASKS_SRC = (
     REPO_ROOT / "system" / "libs" / "chat_background_tasks" / "src"
 )
 _APP_REGISTRATION_SRC = REPO_ROOT / "system" / "libs" / "app_registration" / "src"
+# Only agent_memory's stdlib-only change log is bare; its notes module needs the venv.
+_AGENT_MEMORY_BARE_MODULE = (
+    REPO_ROOT
+    / "system"
+    / "libs"
+    / "agent_memory"
+    / "src"
+    / "agent_memory"
+    / "changes.py"
+)
 
 # The first-party modules each bare runtime context has on sys.path. update-self runs as a
 # staged copy that puts only its own python/ there (and loads oom_priority off the target
@@ -63,6 +73,7 @@ _SYSTEM_IMPORTABLE = frozenset(
         "oom_priority",
         "chat_background_tasks",
         "app_registration",
+        "agent_memory",
     }
 )
 
@@ -119,7 +130,7 @@ def _bare_files() -> list[Path]:
         for path in sorted(tree.rglob("*.py"))
         if not _is_test_support(path)
     ]
-    return sorted({*stubs, *modules})
+    return sorted({*stubs, *modules, _AGENT_MEMORY_BARE_MODULE})
 
 
 def _run_ty(

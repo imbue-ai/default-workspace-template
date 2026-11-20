@@ -47,6 +47,10 @@ Built-in apps:
   library, `system/libs/routines/`), each with its health, next run and history,
   and run-now, on/off, reschedule and fix controls. Served on port 8050 by the
   `routines-app` package; it stores nothing of its own.
+- `memory/` - Memory: the notes the agent remembers about the user across chats
+  (`data/memories/`), to view and edit, through the `agent_memory` library the
+  chat's memory cards (which show and undo the agent's changes) use too.
+  Served on port 8070 by the `memory-app` package; it stores nothing of its own.
 - `style_guide/` - Style Guide: the design system on one page, every colour
   token, type role and scale and every shared control of
   `system/libs/workspace_ui` in its variants, drawn by the library itself.

@@ -66,6 +66,7 @@ from imbue.chat import accounts_endpoints
 from imbue.chat import focus_chat
 from imbue.chat import keybindings_endpoints
 from imbue.chat import latchkey_endpoints
+from imbue.chat import memory_changes_endpoints
 from imbue.chat import mentions_endpoints
 from imbue.chat import secret_requests_endpoints
 from imbue.chat.account_labels import account_id_of
@@ -3270,6 +3271,7 @@ ROUTE_TABLE: Final[RouteTable] = merge_route_tables(
     focus_chat.ROUTE_TABLE,
     keybindings_endpoints.ROUTE_TABLE,
     secret_requests_endpoints.ROUTE_TABLE,
+    memory_changes_endpoints.ROUTE_TABLE,
     mentions_endpoints.ROUTE_TABLE,
     THEME_STATIC_ROUTE_TABLE,
 )
@@ -3409,6 +3411,7 @@ def create_application(state: ChatAppState) -> Flask:
     keybindings_endpoints.register_routes(application)
     state.secret_request_bridge = _ServerSecretRequestBridge()
     secret_requests_endpoints.register_routes(application)
+    memory_changes_endpoints.register_routes(application)
     state.mention_handler = MentionHandler(
         agent_manager=state.agent_manager,
         roster=state.roster,

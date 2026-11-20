@@ -70,6 +70,9 @@ BARE_SEARCH_PATHS = (
     REPO_ROOT / "system" / "services" / "oom_priority" / "src",
     REPO_ROOT / "system" / "libs" / "chat_background_tasks" / "src",
     REPO_ROOT / "system" / "libs" / "app_registration" / "src",
+    # Only its stdlib-only ``changes`` module is importable from bare code; ``notes`` needs the
+    # venv (pydantic, PyYAML), so no bare file may import it.
+    REPO_ROOT / "system" / "libs" / "agent_memory" / "src",
 )
 
 # Bare scripts outside the bare packages (standalone scripts, and stubs of stdlib-only

@@ -29,6 +29,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from agent_memory.changes import ChangeLog
+from agent_memory.changes import MAX_CHANGE_RECORDS
+from agent_memory.changes import STALE_SESSION_SECONDS
+from agent_memory.changes import format_agent_note
 from playwright.sync_api import Dialog
 from playwright.sync_api import Frame
 from playwright.sync_api import FrameLocator
@@ -3217,3 +3221,139 @@ def test_a_draft_typed_on_the_phone_is_back_after_a_reload(e2e_server: RunningWo
     expect(_shown_chat_of_root(page).locator(".message-input-textbox")).to_have_value(
         "Half a thought, typed on a phone", timeout=15000
     )
+
+
+def _hook_context_line(uuid: str, timestamp: str, text: str, tool_use_id: str) -> dict[str, Any]:
+    """The attachment Claude Code writes for a PostToolUse hook's additional context."""
+    return {
+        "type": "attachment",
+        "uuid": uuid,
+        "timestamp": timestamp,
+        "attachment": {
+            "type": "hook_additional_context",
+            "content": [text],
+            "hookName": "PostToolUse:Write",
+            "toolUseID": tool_use_id,
+            "hookEvent": "PostToolUse",
+        },
+    }
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_each_note_a_reply_changed_is_its_own_card_that_shows_its_lines_and_undoes_only_it(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reply that saved two notes, then their index lines, draws one card per note in the reply: plain-words lines
+    with no note bookkeeping, a link to the note in the Memory app, and an Undo that takes back only that note and
+    its index line (asking first when its line changed again since)."""
+    memory_dir = tmp_path / "memories"
+    memory_dir.mkdir()
+    monkeypatch.setenv("AGENT_MEMORY_DIR", str(memory_dir))
+    monkeypatch.setenv("AGENT_MEMORY_CHANGES_DIR", str(tmp_path / "memory-changes"))
+    log = ChangeLog(
+        changes_dir=tmp_path / "memory-changes",
+        memory_dir=memory_dir,
+        max_change_records=MAX_CHANGE_RECORDS,
+        stale_session_seconds=STALE_SESSION_SECONDS,
+    )
+    index = memory_dir / "MEMORY.md"
+    index.write_text("# Index\n")
+    log.start_turn("s1")
+    tea = memory_dir / "likes-tea.md"
+    tea.write_text(
+        "---\nname: likes-tea\ndescription: User likes tea\nmetadata:\n  type: user\n---\n\nThe user likes tea.\n"
+    )
+    [tea_change] = log.record_tool_call(
+        "s1", "toolu_m1", {"file_path": str(tea)}, chat_id=FIXTURE_AGENT_ID, agent_name=""
+    )
+    cake = memory_dir / "likes-cake.md"
+    cake.write_text("---\nname: likes-cake\ndescription: User likes cake\n---\n\nThe user likes cake.\n")
+    [cake_change] = log.record_tool_call(
+        "s1", "toolu_m2", {"file_path": str(cake)}, chat_id=FIXTURE_AGENT_ID, agent_name=""
+    )
+    index.write_text(
+        "# Index\n- [Likes tea](likes-tea.md) — user likes tea\n- [Likes cake](likes-cake.md) — user likes cake\n"
+    )
+    both = log.record_tool_call("s1", "toolu_m3", {"file_path": str(index)}, chat_id=FIXTURE_AGENT_ID, agent_name="")
+    assert sorted(change.id for change in both) == sorted([tea_change.id, cake_change.id])
+
+    def write_call(uuid: str, ts: str, call_id: str, path: Path) -> dict[str, Any]:
+        return _assistant_line(
+            uuid,
+            ts,
+            [{"type": "tool_use", "id": call_id, "name": "Write", "input": {"file_path": str(path)}}],
+            "tool_use",
+        )
+
+    events: list[dict[str, Any]] = [
+        {
+            "type": "user",
+            "uuid": "uuid-mc-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": "remember I like tea and cake"},
+        },
+        write_call("uuid-mc-2", "2026-01-01T00:00:01Z", "toolu_m1", tea),
+        _tool_result_line("uuid-mc-3", "2026-01-01T00:00:02Z", "toolu_m1", "File created"),
+        _hook_context_line(
+            "uuid-mc-4", "2026-01-01T00:00:02.5Z", format_agent_note(tea_change.id, tea_change.summary), "toolu_m1"
+        ),
+        write_call("uuid-mc-5", "2026-01-01T00:00:03Z", "toolu_m2", cake),
+        _tool_result_line("uuid-mc-6", "2026-01-01T00:00:04Z", "toolu_m2", "File created"),
+        _hook_context_line(
+            "uuid-mc-7", "2026-01-01T00:00:04.5Z", format_agent_note(cake_change.id, cake_change.summary), "toolu_m2"
+        ),
+        write_call("uuid-mc-8", "2026-01-01T00:00:05Z", "toolu_m3", index),
+        _tool_result_line("uuid-mc-9", "2026-01-01T00:00:06Z", "toolu_m3", "File edited"),
+        _hook_context_line(
+            "uuid-mc-10",
+            "2026-01-01T00:00:06.5Z",
+            "\n".join(format_agent_note(change.id, change.summary) for change in both),
+            "toolu_m3",
+        ),
+        _assistant_line(
+            "uuid-mc-11", "2026-01-01T00:00:07Z", [{"type": "text", "text": "I'll remember both."}], "end_turn"
+        ),
+    ]
+    memory_row = registry_row_toml("memory", "http://localhost:1", label="memory-abc")
+    with _running_e2e_server(tmp_path, session_events=events, extra_rows=(memory_row,)) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        cards = chat.locator(".memory-change-card")
+        expect(cards).to_have_count(2, timeout=15000)
+        tea_card = cards.filter(has_text="Likes tea")
+        cake_card = cards.filter(has_text="Likes cake")
+        expect(tea_card).to_contain_text('Memory changed: added the note "Likes tea" and its index line')
+        expect(cake_card).to_contain_text('Memory changed: added the note "Likes cake" and its index line')
+        expect(chat.locator("[data-machine-bubble]")).to_have_text("I'll remember both.")
+        expect(tea_card.locator(".memory-change-details")).to_have_attribute(
+            "href", "http://memory-abc.localhost/?note=likes-tea"
+        )
+
+        tea_card.locator(".memory-change-toggle").click()
+        expect(tea_card.locator(".memory-change-file")).to_have_count(2)
+        expect(tea_card.locator(".memory-change-line--added")).to_have_text(
+            ["Likes tea — user likes tea", "Summary: User likes tea", "", "The user likes tea."]
+        )
+        for not_shown in ("name: likes-tea", "metadata", "type: user", "---", "Likes cake", "Index"):
+            expect(tea_card).not_to_contain_text(not_shown)
+
+        # Its index line changed again since: Undo asks first in the card, and "Keep it" leaves everything as it is.
+        index.write_text(
+            "# Index\n- [Likes tea](likes-tea.md) — user loves tea\n- [Likes cake](likes-cake.md) — user likes cake\n"
+        )
+        tea_card.locator(".memory-change-undo").click()
+        confirm = tea_card.locator(".memory-change-confirm")
+        expect(confirm).to_contain_text("Changed again since: the index", timeout=10000)
+        confirm.locator(".memory-change-keep").click()
+        expect(confirm).to_have_count(0)
+        expect(tea_card.locator(".memory-change-undo")).to_be_enabled()
+        assert tea.exists()
+
+        tea_card.locator(".memory-change-undo").click()
+        tea_card.locator(".memory-change-undo-anyway").click()
+        expect(tea_card).to_contain_text("Memory change undone:", timeout=10000)
+        expect(tea_card.locator(".memory-change-undo")).to_have_count(0)
+        assert not tea.exists()
+        assert cake.exists()
+        assert index.read_text() == "# Index\n- [Likes cake](likes-cake.md) — user likes cake\n"
+        expect(cake_card.locator(".memory-change-undo")).to_be_visible()

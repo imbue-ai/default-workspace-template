@@ -58,6 +58,7 @@ _BUILTIN_SERVICE_ORDER = (
     "screen",
     "files",
     "routines",
+    "memory",
     "getting-started",
     "style-guide",
     "system-monitor",

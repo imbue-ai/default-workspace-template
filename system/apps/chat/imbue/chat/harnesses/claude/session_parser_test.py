@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 import pytest
+from agent_memory.changes import format_agent_note
 
 from imbue.chat.chat_handoffs import is_genuine_user_turn
 from imbue.chat.harnesses.claude.session_parser import _SYNTHETIC_MODEL
@@ -1304,3 +1305,65 @@ def test_chip_classification_survives_an_attachment_block() -> None:
     assert events[0]["display"] == "chip"
     assert events[0]["display_label"] == "Browser fleet"
     assert events[0]["display_body"] == "Browser foo-1 is free"
+
+
+def _make_hook_context_line(uuid: str, timestamp: str, text: str, tool_use_id: str = "toolu_1") -> str:
+    """A hook's additional context as Claude Code writes it: an attachment keyed to its tool call."""
+    return json.dumps(
+        {
+            "type": "attachment",
+            "uuid": uuid,
+            "timestamp": timestamp,
+            "attachment": {
+                "type": "hook_additional_context",
+                "content": [text],
+                "hookName": "PostToolUse:Write",
+                "toolUseID": tool_use_id,
+                "hookEvent": "PostToolUse",
+            },
+        }
+    )
+
+
+def test_the_memory_change_hook_note_becomes_a_notice_naming_its_change_and_tool_call() -> None:
+    """The memory change-log hook's note to the agent is drawn as a "Memory changed" notice the page opens
+    into the change's card, and is never a turn awaiting a reply or one the user took."""
+    note = format_agent_note("20261118T1-abc123", "added note 'tea' and its index line")
+    [event] = parse_lines([_make_hook_context_line("uuid-h", "2026-01-01T00:00:00Z", note, "toolu_9")])
+    assert event["type"] == "user_message"
+    assert event["display"] == DisplayKind.NOTICE.value
+    assert event["display_label"] == "Memory changed"
+    assert event["display_body"] == "added note 'tea' and its index line"
+    assert event["memory_change_id"] == "20261118T1-abc123"
+    assert event["tool_call_id"] == "toolu_9"
+    assert event["non_turn_tail"] is True
+    assert not is_genuine_user_turn(event)
+
+
+def test_another_hook_s_context_is_not_drawn() -> None:
+    assert parse_lines([_make_hook_context_line("uuid-h", "2026-01-01T00:00:00Z", "some other hook note")]) == []
+
+
+def test_a_hook_note_naming_two_changes_becomes_two_notices_at_the_same_tool_call() -> None:
+    """One tool call that touched two notes' changes (an index edit adding both lines) draws one card per change."""
+    text = "\n".join(
+        format_agent_note(change_id, summary)
+        for change_id, summary in (
+            ("c-tea", 'added the note "Tea" and its index line'),
+            ("c-coffee", 'added the note "Coffee" and its index line'),
+        )
+    )
+    events = parse_lines([_make_hook_context_line("uuid-h2", "2026-01-01T00:00:00Z", text, "toolu_3")])
+    assert [(e["memory_change_id"], e["display_body"], e["tool_call_id"]) for e in events] == [
+        ("c-tea", 'added the note "Tea" and its index line', "toolu_3"),
+        ("c-coffee", 'added the note "Coffee" and its index line', "toolu_3"),
+    ]
+    assert len({e["event_id"] for e in events}) == 2
+    # Re-reading the same line adds nothing.
+    assert (
+        parse_lines(
+            [_make_hook_context_line("uuid-h2", "2026-01-01T00:00:00Z", text, "toolu_3")],
+            {e["event_id"] for e in events},
+        )
+        == []
+    )

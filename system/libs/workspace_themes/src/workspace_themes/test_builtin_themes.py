@@ -16,6 +16,7 @@ _BUILT_IN_VISIBLE_APP_NAMES = frozenset(
         "datalib",
         "files",
         "getting-started",
+        "memory",
         "routines",
         "screen",
         "system-monitor",

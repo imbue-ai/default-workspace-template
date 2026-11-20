@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 import { buildMessageWithAttachments } from "../models/attachments";
 import { DICTATION_NOTE, withDictationNote } from "../models/dictationNote";
 import { setParticipantsForTesting, type Participant } from "../models/Participants";
 import { personFixture } from "../models/participantFixture";
 import type { UserMessageEvent } from "../models/Response";
+import { setBlockExpanded } from "./expansion-state";
+import { memoryChangeCache, memoryChangeExpansionKey } from "./memory-change-card";
 import { authorOfTurn, renderUserMessage, StableUserMessage } from "./user-message-display";
 
 function collectClasses(node: unknown): string[] {
@@ -419,5 +421,98 @@ describe("user-message-display sent-again line", () => {
 
     opened.querySelector<HTMLButtonElement>(".message-resent-note-help")!.click();
     expect(renderRow(true).querySelector(".message-resent-note-text")).toBeNull();
+  });
+});
+
+describe("user-message-display memory change notices", () => {
+  function memoryNotice(label: string | undefined): UserMessageEvent {
+    return {
+      timestamp: "2026-01-01T00:00:00Z",
+      type: "user_message",
+      event_id: "evt-memory",
+      source: "claude",
+      role: "user",
+      content: "Memory change chg-1",
+      display: "notice",
+      display_label: label,
+      display_body: 'added the note "Likes tea"',
+      memory_change_id: "chg-1",
+    };
+  }
+
+  afterEach(() => {
+    setBlockExpanded(memoryChangeExpansionKey("chg-1"), false);
+    memoryChangeCache.clearForTesting();
+    vi.unstubAllGlobals();
+  });
+
+  /** A fetch that never answers, so the card stays on the summary the notice carried. */
+  function stubPendingFetch(): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(() => new Promise<Response>(() => {})),
+    );
+  }
+
+  it("opens a notice naming a memory change into that change's card", () => {
+    stubPendingFetch();
+    const root = document.createElement("div");
+    m.render(root, renderInner(memoryNotice("Memory changed")));
+    const card = root.querySelector(".memory-change-card");
+    expect(card).not.toBeNull();
+    expect(card?.querySelector(".message-notice")?.textContent).toBe('Memory changed: added the note "Likes tea"');
+  });
+
+  it("leads with Memory changed when the notice carries no label", () => {
+    stubPendingFetch();
+    const root = document.createElement("div");
+    m.render(root, renderInner(memoryNotice(undefined)));
+    expect(root.querySelector(".message-notice-lead")?.textContent).toBe("Memory changed:");
+  });
+
+  it("repaints the memoized row when the card's change loads and when it is opened", async () => {
+    const change = {
+      id: "chg-1",
+      time: "2026-01-01T00:00:00Z",
+      summary: 'added the note "Likes tea"',
+      chat_id: "chat-1",
+      tool_use_ids: [],
+      files: [
+        {
+          name: "tea.md",
+          before: null,
+          after: "likes tea",
+          label: "New note: Likes tea",
+          before_text: null,
+          after_text: "likes tea",
+          note_id: "tea",
+          details_url: null,
+        },
+      ],
+      undone_at: null,
+      details_url: null,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(
+        async () =>
+          new Response(JSON.stringify(change), { status: 200, headers: { "Content-Type": "application/json" } }),
+      ),
+    );
+    const event = memoryNotice("Memory changed");
+    const root = document.createElement("div");
+    m.mount(root, { view: () => m(StableUserMessage, { event }) });
+    try {
+      await vi.waitFor(() => {
+        m.redraw.sync();
+        expect(root.querySelector(".memory-change-undo")).not.toBeNull();
+      });
+      expect(root.querySelector(".memory-change-diff")).toBeNull();
+      setBlockExpanded(memoryChangeExpansionKey("chg-1"), true);
+      m.redraw.sync();
+      expect(root.querySelector(".memory-change-diff")?.textContent).toBe("likes tea");
+    } finally {
+      m.mount(root, null);
+    }
   });
 });

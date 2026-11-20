@@ -537,9 +537,9 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
             "save-file",
         ],
     }
-    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, Routines, System Monitor, and the
-    # Style Guide stop once no window shows them; the Screen never stops for emptiness (the Screen spec, D3);
-    # and the critical ones (which the manifest refuses the field on) never stop.
+    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, Routines, System Monitor, the Style
+    # Guide, and Memory stop once no window shows them; the Screen never stops for emptiness (the Screen spec,
+    # D3); and the critical ones (which the manifest refuses the field on) never stop.
     assert {
         name: manifest.stop_when_no_windows for name, manifest in by_name.items()
     } == {
@@ -553,6 +553,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "routines": True,
         "system-monitor": True,
         "style-guide": True,
+        "memory": True,
     }
     # The composer's dictation (the workspace-voice-input spec in the mngr repository) is the one built-in that
     # listens, so the chat's frames alone are handed the microphone.
@@ -577,6 +578,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "routines": "system",
         "system-monitor": "system",
         "style-guide": "system",
+        "memory": "app",
     }
     # Getting Started (launcher-and-getting-started plan section 3.6): one window is what it is for, so its shortcut
     # focuses it like the Screen's; it declares no launch path, so the desktop synthesizes ``open`` at its root.
@@ -618,6 +620,22 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         (handler.type, handler.show) for handler in by_name["routines"].message_handlers
     ] == [("minds:show-routine", "/{routine_id}")]
     assert by_name["routines"].preview.env["ROUTINES_APP_PREVIEW"] == "1"
+    # Memory: the agent's notes and its changes to them, the one built-in listed up front in the Share tab (it is the
+    # user's own content, not part of the workspace); the chat's memory cards link a note in it as ``/?note=<id>``.
+    # Its preview runs over copies of the notes and the change log, never the real ones.
+    assert by_name["memory"].critical is False
+    assert by_name["memory"].program == "memory"
+    assert by_name["memory"].priority == "memory"
+    assert by_name["memory"].launch_paths == ()
+    assert [(shortcut.launch, shortcut.mode) for shortcut in by_name["memory"].default_shortcuts] == [
+        ("open", "focus")
+    ]
+    assert by_name["memory"].preview.copies == {
+        "notes": "data/memories",
+        "changes": "data/.apps/chat/memory_changes",
+    }
+    assert by_name["memory"].preview.env["AGENT_MEMORY_DIR"] == "{copy:notes}"
+    assert by_name["memory"].preview.env["AGENT_MEMORY_CHANGES_DIR"] == "{copy:changes}"
     # One order for the built-ins: the desktop seeds its shortcuts in it and the launcher lists its apps in it.
     assert sorted(
         (manifest.launcher_rank, manifest.name)
@@ -630,6 +648,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         (30, "screen"),
         (40, "terminal"),
         (45, "routines"),
+        (47, "memory"),
         (50, "system-monitor"),
     ]
     # Every seeded shortcut opens a new window of its app; the one Screen is focused instead (the Screen spec D2).

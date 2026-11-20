@@ -625,6 +625,20 @@ function autocompactNoticeAnchorId(events: readonly TranscriptEvent[]): string |
   return null;
 }
 
+/** The memory-change notices a later notice of the same change replaces: every one but the last per change. */
+export function supersededMemoryChangeNotices(events: readonly TranscriptEvent[]): Set<string> {
+  const lastByChange = new Map<string, string>();
+  const all: [string, string][] = [];
+  for (const e of events) {
+    if (e.type !== "user_message" || !e.memory_change_id) continue;
+    lastByChange.set(e.memory_change_id, e.event_id);
+    all.push([e.memory_change_id, e.event_id]);
+  }
+  return new Set(
+    all.filter(([changeId, eventId]) => lastByChange.get(changeId) !== eventId).map(([, eventId]) => eventId),
+  );
+}
+
 /** Walk the visible transcript into ordered sections. `toolResults` resolves tk
  *  command outputs (and is reused by the renderer). `isTailSettled` (see
  *  `isTailTurnSettled`) settles the spinner on the tail section. `liveCompaction` (see
@@ -655,6 +669,9 @@ export function buildSections(
   // for the same file can mark the earlier card superseded.
   const pendingSecretRequestByFile = new Map<string, string>();
   const secretNotesByRequestId = new Map<string, string>();
+  // A reply that changes memory twice (a note, then its index line) is ONE change, and the
+  // change-log hook notes it after each call: only the last note draws its card.
+  const supersededMemoryNotices = supersededMemoryChangeNotices(events);
   const ensureSection = (
     user_event: UserMessageEvent | null,
     key: string,
@@ -690,6 +707,7 @@ export function buildSections(
   // setup sends before the prompt (a model pick's slash commands) leave it armed.
   let lastSwitched: HandoffNode | null = null;
   for (const e of events) {
+    if (supersededMemoryNotices.has(e.event_id)) continue;
     if (e.type === "agent_switch" && e.from_harness === SEED_HARNESS) {
       // The chat's first agent taking over from the seed segment, which no agent wrote: nothing
       // was handed off, so no node marks it; the agent's first turn simply opens a section.
@@ -784,6 +802,14 @@ export function buildSections(
       ) {
         // The handoff node takes the retiring agent's whole summary turn, so a chip landing
         // inside it stays in that turn, at its spot after the node.
+        current.entries.push({ kind: "chip", event: e });
+        continue;
+      }
+      if (e.memory_change_id) {
+        // A memory change is something the agent did mid-reply, not a turn between two requests: its
+        // card stands at its spot in the reply (after the step it happened in) without breaking the
+        // section, so the step is not drawn again below it.
+        if (current === null) current = ensureSection(null, "section-pre");
         current.entries.push({ kind: "chip", event: e });
         continue;
       }

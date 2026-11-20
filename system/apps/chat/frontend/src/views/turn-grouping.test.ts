@@ -16,6 +16,7 @@ import {
   hasUserTurn,
   isTailTurnSettled,
   liveCompactionOf,
+  supersededMemoryChangeNotices,
   type LiveCompaction,
 } from "./turn-grouping";
 import { landedCompaction, runningCompaction } from "./compaction-chips";
@@ -2522,5 +2523,80 @@ describe("secret requests", () => {
     expect(live[0].is_carryover).toBe(true);
     expect(live[0].is_frontier).toBe(true);
     expect(live[0].events.map((e) => e.event_id)).toEqual(["a-w-after"]);
+  });
+});
+
+/** The memory change-log hook's note after a tool call, as the parser emits it: a notice carrying
+ *  the change record's id. */
+function memoryNotice(ts: string, id: string, changeId: string, callId: string): UserMessageEvent {
+  return userMsg(ts, `Memory change ${changeId}`, id, {
+    display: "notice",
+    display_label: "Memory changed",
+    display_body: 'added the note "Likes tea"',
+    non_turn_tail: true,
+    memory_change_id: changeId,
+    tool_call_id: callId,
+  });
+}
+
+// A memory change is the agent's own work mid-reply, not a turn between two requests: its card sits
+// in the reply where it happened, and the step it happened in is drawn once, not again below it.
+describe("memory change notices", () => {
+  it("keeps a memory notice inside its section without redrawing the step below it", () => {
+    const events = [
+      userMsg("t0", "remember I like tea"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Save it")),
+      workMsg("t2", "Write", "w1"),
+      result("t2", "w1", "ok"),
+      memoryNotice("t3", "m1", "chg-1", "w1"),
+      workMsg("t4", "Edit", "w2"),
+      result("t4", "w2", "ok"),
+      tkMsg("t5", "tk close s1", "k2"),
+      result("t5", "k2", closeOut("s1", "Save it", "Saved")),
+      assistantText("t6", "I'll remember that.", "reply"),
+    ];
+    const sections = run(events);
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u-t0"]);
+    const steps = stepItems(sections[0].items);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].ticket_id).toBe("s1");
+    expect(steps[0].is_carryover).toBe(false);
+    const chips = sections[0].items.filter((i) => i.kind === "chip");
+    expect(chips.map((i) => (i.kind === "chip" ? i.event.event_id : null))).toEqual(["m1"]);
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["reply"]);
+  });
+
+  it("draws only the last notice of a change the reply made in two calls", () => {
+    const events = [
+      userMsg("t0", "remember I like tea"),
+      workMsg("t1", "Write", "w1"),
+      result("t1", "w1", "ok"),
+      memoryNotice("t2", "m1", "chg-1", "w1"),
+      workMsg("t3", "Edit", "w2"),
+      result("t3", "w2", "ok"),
+      memoryNotice("t4", "m2", "chg-1", "w2"),
+      workMsg("t5", "Write", "w3"),
+      result("t5", "w3", "ok"),
+      memoryNotice("t6", "m3", "chg-2", "w3"),
+      assistantText("t7", "Saved.", "reply"),
+    ];
+    expect([...supersededMemoryChangeNotices(events)]).toEqual(["m1"]);
+    const sections = run(events);
+    expect(sections).toHaveLength(1);
+    const chipIds = sections[0].items.flatMap((i) => (i.kind === "chip" ? [i.event.event_id] : []));
+    expect(chipIds).toEqual(["m2", "m3"]);
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["reply"]);
+  });
+
+  it("opens a section for a memory notice that arrives before any request", () => {
+    const sections = run([memoryNotice("t0", "m1", "chg-1", "w1")]);
+    expect(sections).toHaveLength(1);
+    expect(sections[0].user_event).toBeNull();
+    expect(sections[0].items.map((i) => i.kind)).toEqual(["chip"]);
+  });
+
+  it("supersedes nothing when no event carries a memory change", () => {
+    expect(supersededMemoryChangeNotices([userMsg("t0", "hi"), notice("t1", "n1")]).size).toBe(0);
   });
 });

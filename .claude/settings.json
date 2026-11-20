@@ -79,6 +79,10 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PROJECT_DIR}\"/system/scripts/agent_resource_notice.sh"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/system/scripts/agent_memory_change_log.py sync || true"
           }
         ]
       }
@@ -93,6 +97,17 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/system/scripts/claude_background_task_hooks.py stop || true"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/system/scripts/agent_memory_change_log.py post || true"
           }
         ]
       }

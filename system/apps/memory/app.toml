@@ -1,0 +1,41 @@
+# The Memory app: the notes the agent remembers about the user (data/memories/, Claude's autoMemoryDirectory), to
+# view and edit. It reads and writes them through the agent_memory library, the same one the chat's "Memory changed"
+# cards and Claude's change-log hook use, and keeps nothing of its own. Its page lists the notes as the index
+# (MEMORY.md) does and edits one at a time; the chat's cards link a note here as ``/?note=<id>``, and the page reports
+# the note it shows the same way, so the shell reopens a window on it. The agent's changes to the notes are shown and
+# undone on the chat's cards, not here. It declares no launch path, so the desktop offers the synthesized ``open`` at its root; its shortcut
+# focuses the one window it is for.
+name = "memory"
+display_name = "Memory"
+# What the app is for, in the person's terms: what an agent reads to decide whether this app
+# does what it needs. The app's API document (served at api_schema_path) carries it too.
+description = "View and edit the notes the agent remembers about you across chats: preferences, feedback, projects and references."
+api_schema_path = "/api/schema"
+icon = "icon.svg"
+# The user's own content rather than part of the workspace, so unlike the other built-in pages it is not
+# ``system``: the Share tab offers it up front.
+critical = false
+# A page over files that are saved on every edit, so a shed costs one reload; its own band sits among the other
+# built-in pages, before Getting Started's.
+priority = "memory"
+program = "memory"
+# The shell stops it a minute after no window shows it and starts it again on the next request: it does no work
+# between requests.
+stop_when_no_windows = true
+# After Routines (45) and before System Monitor (50).
+launcher_rank = 47
+
+[default_shortcut]
+launch = "open"
+mode = "focus"
+
+# The page wears the workspace's look and follows its theme through the shared design tokens
+# (docs/system/themeable-apps.md), like Files and the Style Guide.
+[theming]
+mode = "tokens"
+
+# A preview serves the page on a free port over copies of the notes and of the change log, never the real ones.
+[preview]
+command = ["memory-app"]
+env = {MEMORY_APP_PORT = "{port:main}", MEMORY_APP_HOST = "{host}", AGENT_MEMORY_DIR = "{copy:notes}", AGENT_MEMORY_CHANGES_DIR = "{copy:changes}"}
+copies = {notes = "data/memories", changes = "data/.apps/chat/memory_changes"}
