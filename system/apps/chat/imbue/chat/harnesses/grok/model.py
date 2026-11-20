@@ -1,21 +1,38 @@
-"""grok's model catalog: grok 1.0.62's built-in model set, as its binary embeds it, each model with the efforts it
-declares."""
+"""grok's model catalog and its model resolver.
+
+The catalog is grok 1.0.62's built-in model set, as its binary embeds it, each model with the efforts it declares.
+A switch holds grok's `/model <id>` and `/effort <level>` on the agent's control lane, which the flush worker types
+once mngr reports no turn in flight; the bar reconciles from the ``model_state.json`` mngr writes for grok.
+"""
 
 import json
+from collections.abc import Callable
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from typing import Final
+from typing import assert_never
 
+from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.grok.queue_tracker import GrokControlCommand
+from imbue.chat.harnesses.grok.queue_tracker import GrokControlCommandKind
+from imbue.chat.harnesses.grok.queue_tracker import get_tracker
 from imbue.chat.harnesses.model import EffortChoice
 from imbue.chat.harnesses.model import HarnessCatalog
+from imbue.chat.harnesses.model import HarnessModelResolver
+from imbue.chat.harnesses.model import ModelAxis
+from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import PickerMode
 from imbue.chat.harnesses.model import SwitchMode
+from imbue.chat.harnesses.model import SwitchResult
 from imbue.imbue_common.pure import pure
 
 # `default_models.json` as the grok 1.0.62 binary embeds it.
 BINARY_DEFAULT_MODELS_PATH: Final[Path] = Path(__file__).parent / "binary_default_models_v1_0_62.json"
+
+# mngr writes grok's model_state.json at the agent state-dir root.
+GROK_STATE_RELATIVE_PATH: Final[Path] = Path(".")
 
 
 @pure
@@ -45,3 +62,42 @@ GROK_CATALOG: Final[HarnessCatalog] = HarnessCatalog(
     # The tap cancels the turn with one Ctrl+C and the flush worker types the held messages; nothing restarts.
     native_atomic_shoulder_tap_possible=True,
 )
+
+
+@pure
+def is_control_command_in_force(command: GrokControlCommand, identity: ModelIdentity | None) -> bool:
+    """Whether grok already runs what ``command`` asks for, by the identity its model_state.json records."""
+    if identity is None:
+        return False
+    match command.kind:
+        case GrokControlCommandKind.MODEL:
+            option = next((option for option in GROK_CATALOG.options if option.id == command.value), None)
+            reported_model_id = (
+                (option.harness_reported_model_id or option.id) if option is not None else command.value
+            )
+            return identity.model_id == reported_model_id
+        case GrokControlCommandKind.EFFORT:
+            return identity.effort == command.value
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+class GrokModelResolver(HarnessModelResolver):
+    """Switches a grok agent through its control lane."""
+
+    _agent_state_dir: Path
+
+    @classmethod
+    def build(cls, agent_info: AgentInfo) -> "GrokModelResolver":
+        self = cls.__new__(cls)
+        self._agent_state_dir = agent_info.agent_state_dir
+        return self
+
+    def switch(self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]) -> SwitchResult:
+        # Not typed through ``send``: the flush worker is grok's only typist.
+        queue = get_tracker(self._agent_state_dir)
+        if ModelAxis.MODEL in axes:
+            queue.hold_control_command(GrokControlCommand(kind=GrokControlCommandKind.MODEL, value=identity.model_id))
+        if ModelAxis.EFFORT in axes and identity.effort is not None:
+            queue.hold_control_command(GrokControlCommand(kind=GrokControlCommandKind.EFFORT, value=identity.effort))
+        return SwitchResult(ok=True)

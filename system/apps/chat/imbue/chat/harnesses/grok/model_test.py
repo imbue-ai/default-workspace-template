@@ -1,13 +1,23 @@
-"""Unit tests for grok's model catalog."""
+"""Unit tests for grok's model bar: its catalog and the switch through the control lane."""
 
 import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.chat.harnesses.grok.model import BINARY_DEFAULT_MODELS_PATH
 from imbue.chat.harnesses.grok.model import GROK_CATALOG
+from imbue.chat.harnesses.grok.model import GrokModelResolver
 from imbue.chat.harnesses.grok.model import build_catalog_options
+from imbue.chat.harnesses.grok.model import is_control_command_in_force
+from imbue.chat.harnesses.grok.queue_tracker import GrokControlCommand
+from imbue.chat.harnesses.grok.queue_tracker import GrokControlCommandKind
+from imbue.chat.harnesses.grok.queue_tracker import get_tracker
+from imbue.chat.harnesses.grok.testing import make_grok_agent_info
+from imbue.chat.harnesses.grok.testing import make_grok_agent_state_dir
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.model import PickerMode
 from imbue.chat.harnesses.model import SwitchMode
@@ -15,6 +25,7 @@ from imbue.chat.harnesses.model import match_option
 from imbue.chat.harnesses.model import read_model_identity
 from imbue.chat.harnesses.model import resolve_model_choice
 from imbue.chat.harnesses.model import validate_model_pick
+from imbue.chat.harnesses.registry import build_resolver
 from imbue.chat.harnesses.registry import get_catalog
 from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.mngr_grok.resources.grok_statusline import MODEL_STATE_FILENAME
@@ -22,6 +33,18 @@ from imbue.mngr_grok.resources.grok_statusline import MODEL_STATE_FILENAME
 
 def _binary_models() -> list[dict[str, Any]]:
     return json.loads(BINARY_DEFAULT_MODELS_PATH.read_text())["models"]
+
+
+def _model(model_id: str) -> GrokControlCommand:
+    return GrokControlCommand(kind=GrokControlCommandKind.MODEL, value=model_id)
+
+
+def _effort(level: str) -> GrokControlCommand:
+    return GrokControlCommand(kind=GrokControlCommandKind.EFFORT, value=level)
+
+
+def _unused_send(_line: str) -> bool:
+    raise AssertionError("grok's only typist is the flush worker")
 
 
 def test_the_catalog_is_grok_1_0_62_s_built_in_model_set() -> None:
@@ -87,3 +110,82 @@ def test_the_bar_reads_the_model_state_file_mngr_writes_for_grok(tmp_path: Path)
     identity = read_model_identity(model_state_path)
     assert identity == ModelIdentity(model_id="grok-4.6", effort="xhigh", fast=False)
     assert resolve_model_choice(identity, GROK_CATALOG.options).matched == GROK_CATALOG.options[0]
+
+
+def test_a_switch_holds_one_command_per_changed_axis_on_the_agents_control_lane(tmp_path: Path) -> None:
+    agent_state_dir = make_grok_agent_state_dir(tmp_path)
+    resolver = build_resolver(make_grok_agent_info(agent_state_dir, agent_state_dir.name, "grok-switch"))
+
+    result = resolver.switch(
+        ModelIdentity(model_id="grok-4.5", effort="low", fast=False),
+        frozenset({ModelAxis.MODEL, ModelAxis.EFFORT, ModelAxis.FAST}),
+        _unused_send,
+    )
+
+    assert result.ok is True
+    queue = get_tracker(agent_state_dir)
+    assert queue.snapshot() == []
+    first = queue.next_control_command()
+    assert first == _model("grok-4.5")
+    queue.settle_control_command(first, is_delivered=True)
+    second = queue.next_control_command()
+    assert second == _effort("low")
+    queue.settle_control_command(second, is_delivered=True)
+    assert queue.has_control_commands() is False
+
+
+@pytest.mark.parametrize(
+    ("identity", "axes"),
+    [
+        pytest.param(ModelIdentity(model_id="grok-4.6", effort=None, fast=False), {ModelAxis.EFFORT}, id="no_effort"),
+        pytest.param(ModelIdentity(model_id="grok-4.6", effort="low", fast=False), {ModelAxis.FAST}, id="fast_only"),
+        pytest.param(ModelIdentity(model_id="grok-4.6", effort="low", fast=False), set(), id="no_axis"),
+    ],
+)
+def test_a_switch_holds_nothing_for_an_axis_grok_cannot_change(
+    tmp_path: Path, identity: ModelIdentity, axes: set[ModelAxis]
+) -> None:
+    agent_state_dir = make_grok_agent_state_dir(tmp_path)
+
+    result = GrokModelResolver.build(make_grok_agent_info(agent_state_dir, agent_state_dir.name, "grok-noop")).switch(
+        identity, frozenset(axes), _unused_send
+    )
+
+    assert result.ok is True
+    assert get_tracker(agent_state_dir).has_control_commands() is False
+
+
+@pytest.mark.parametrize(
+    ("command", "identity", "is_in_force"),
+    [
+        pytest.param(
+            _model("grok-4.5"), ModelIdentity(model_id="grok-4.5", effort="high", fast=False), True, id="same_model"
+        ),
+        pytest.param(
+            _model("grok-4.5"), ModelIdentity(model_id="grok-4.6", effort="high", fast=False), False, id="other_model"
+        ),
+        pytest.param(
+            _model("stub-model-two"),
+            ModelIdentity(model_id="stub-model-two", effort=None, fast=False),
+            True,
+            id="same_model_outside_the_catalog",
+        ),
+        pytest.param(
+            _effort("high"), ModelIdentity(model_id="grok-4.6", effort="high", fast=False), True, id="same_effort"
+        ),
+        pytest.param(
+            _effort("low"), ModelIdentity(model_id="grok-4.6", effort="high", fast=False), False, id="other_effort"
+        ),
+        pytest.param(
+            _effort("low"),
+            ModelIdentity(model_id="stub-model-two", effort=None, fast=False),
+            False,
+            id="a_model_without_efforts",
+        ),
+        pytest.param(_model("grok-4.6"), None, False, id="no_model_state_yet"),
+    ],
+)
+def test_a_control_command_is_in_force_when_the_model_state_already_records_it(
+    command: GrokControlCommand, identity: ModelIdentity | None, is_in_force: bool
+) -> None:
+    assert is_control_command_in_force(command, identity) is is_in_force
