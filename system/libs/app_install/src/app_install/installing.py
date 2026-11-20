@@ -84,7 +84,11 @@ def scratch_worktree(repo_root: Path) -> Generator[Path, None, None]:
     parent = _SCRATCH_PARENT if _SCRATCH_PARENT.is_dir() else None
     directory = Path(tempfile.mkdtemp(prefix=_SCRATCH_PREFIX, dir=parent))
     worktree = directory / "worktree"
-    run_git(repo_root, ["worktree", "add", "--detach", str(worktree), "HEAD"])
+    try:
+        run_git(repo_root, ["worktree", "add", "--detach", str(worktree), "HEAD"])
+    except GitCommandError:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
     try:
         yield worktree
     finally:
