@@ -1,0 +1,1 @@
+The tool-call policy docs cover grok. `tool-call-policies.md` names grok's file tools and `spawn_subagent` under P9, and `tool-call-policies-state-of-things.md` adds grok's column (P7 live on the first tool call of a turn, P9 partial while grok's own `Read(**/.secrets/**)` deny rule is unset), its delivery channels, how its policy dispatcher attaches, and its known bypasses.
