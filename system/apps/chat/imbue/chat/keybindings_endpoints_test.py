@@ -37,7 +37,9 @@ def test_me_answers_the_defaults_when_no_profile_file_exists() -> None:
     }
 
 
-def test_me_resolves_the_owners_snapshot_value_but_never_a_visitors(tmp_path: Path, monkeypatch: Any) -> None:
+def test_me_resolves_the_owners_snapshot_value_but_never_a_visitors(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
     # The routes resolve against the working directory's profile files (cwd is
     # the workspace root in production), so the test stages one.
     monkeypatch.chdir(tmp_path)

@@ -184,9 +184,7 @@ def test_a_path_shaped_user_id_loads_no_overrides(tmp_path: Path) -> None:
     # A user id carrying a path separator must never make the read escape the
     # overrides directory, even when a file at the escaped path exists.
     outside_path = tmp_path / "outside.json"
-    outside_path.write_text(
-        json.dumps({"example_setting": "escaped"}), encoding="utf-8"
-    )
+    outside_path.write_text(json.dumps({"example_setting": "escaped"}), encoding="utf-8")
     (tmp_path / USER_OVERRIDES_RELATIVE_DIR).mkdir(parents=True, exist_ok=True)
 
     for path_shaped_id in ("../../../outside", "..", "a/b", "a\\b", ""):

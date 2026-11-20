@@ -3172,7 +3172,9 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("POST", "/api/uploads"): RouteModels(response_model=AttachmentUploadResponse, success_status=201),
     ("GET", "/api/uploads/{relative_path}"): SchemalessRoute(reason="The stored attachment itself"),
     ("DELETE", "/api/uploads/{relative_path}"): RouteModels(response_model=OkResponse),
-    ("POST", "/api/chats/{chat_id}/uploads"): RouteModels(response_model=AttachmentUploadResponse, success_status=201),
+    ("POST", "/api/chats/{chat_id}/uploads"): RouteModels(
+        response_model=AttachmentUploadResponse, success_status=201
+    ),
     ("GET", "/api/chats/{chat_id}/uploads/{relative_path}"): SchemalessRoute(reason="The stored attachment itself"),
     ("DELETE", "/api/chats/{chat_id}/uploads/{relative_path}"): RouteModels(response_model=OkResponse),
     ("GET", "/api/settings"): RouteModels(response_model=ChatSettingsResponse),

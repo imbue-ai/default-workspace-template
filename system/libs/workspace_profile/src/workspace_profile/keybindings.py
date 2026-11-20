@@ -137,9 +137,7 @@ def normalize_chord(spelled: str) -> str:
     modifiers, key = tokens[:-1], tokens[-1]
     if not _is_canonical_key(key):
         raise InvalidChordError(f"{spelled!r} does not end in a key the grammar knows")
-    if len(set(modifiers)) != len(modifiers) or any(
-        modifier not in CHORD_MODIFIER_ORDER for modifier in modifiers
-    ):
+    if len(set(modifiers)) != len(modifiers) or any(modifier not in CHORD_MODIFIER_ORDER for modifier in modifiers):
         raise InvalidChordError(f"{spelled!r} does not spell held modifiers")
     ordered = [modifier for modifier in CHORD_MODIFIER_ORDER if modifier in modifiers]
     return "+".join([*ordered, key])
@@ -161,10 +159,7 @@ def describe_keybindings_value_problem(value: object) -> str | None:
         if not isinstance(chords_by_action, Mapping):
             return f"the {app_name} entry must be an object of actions"
         for action_id, chords in chords_by_action.items():
-            if (
-                not isinstance(action_id, str)
-                or APP_OR_ACTION_ID_RE.match(action_id) is None
-            ):
+            if not isinstance(action_id, str) or APP_OR_ACTION_ID_RE.match(action_id) is None:
                 return f"{action_id!r} is not an action id"
             if isinstance(chords, str) or not isinstance(chords, (list, tuple)):
                 return f"{app_name}.{action_id} must assign a list of chords"
@@ -191,23 +186,15 @@ def parse_keybindings_value(raw: object) -> dict[str, dict[str, list[str]]]:
             continue
         actions: dict[str, list[str]] = {}
         for action_id, chords in chords_by_action.items():
-            if (
-                not isinstance(action_id, str)
-                or isinstance(chords, str)
-                or not isinstance(chords, Sequence)
-            ):
+            if not isinstance(action_id, str) or isinstance(chords, str) or not isinstance(chords, Sequence):
                 continue
             actions[action_id] = [chord for chord in chords if isinstance(chord, str)]
         parsed[app_name] = actions
     return parsed
 
 
-def _layer_assignment(
-    layer_value_by_key: Mapping[str, object], app_name: str, action_id: str
-) -> list[str] | None:
-    assignments = parse_keybindings_value(
-        layer_value_by_key.get(KEYBINDINGS_SETTING_KEY)
-    )
+def _layer_assignment(layer_value_by_key: Mapping[str, object], app_name: str, action_id: str) -> list[str] | None:
+    assignments = parse_keybindings_value(layer_value_by_key.get(KEYBINDINGS_SETTING_KEY))
     by_action = assignments.get(app_name)
     if by_action is None or action_id not in by_action:
         return None
@@ -227,13 +214,9 @@ def resolve_app_keybindings(
     """The chords of each declared action for this request, by the spec's per-assignment order."""
     user_id = resolve_request_user_id(identity, snapshot)
     override_by_key: Mapping[str, object] = (
-        load_user_override_values(workspace_root, user_id)
-        if user_id is not None
-        else {}
+        load_user_override_values(workspace_root, user_id) if user_id is not None else {}
     )
-    unsent_by_key: Mapping[str, object] = (
-        load_unsent_change_values(workspace_root) if identity.owner else {}
-    )
+    unsent_by_key: Mapping[str, object] = load_unsent_change_values(workspace_root) if identity.owner else {}
     snapshot_by_key: Mapping[str, object] = (
         snapshot.value_by_key if identity.owner and snapshot is not None else {}
     )
@@ -250,10 +233,7 @@ def resolve_app_keybindings(
 
 @pure
 def with_keybinding_assignment(
-    value_by_key: Mapping[str, object],
-    app_name: str,
-    action_id: str,
-    chords: Sequence[str],
+    value_by_key: Mapping[str, object], app_name: str, action_id: str, chords: Sequence[str]
 ) -> dict[str, object]:
     """A copy of one layer's flat map with the given assignment set under the keybindings key."""
     assignments = parse_keybindings_value(value_by_key.get(KEYBINDINGS_SETTING_KEY))
@@ -269,29 +249,17 @@ def without_keybinding_assignment(
 ) -> dict[str, object]:
     """A copy of one layer's flat map with the given assignment removed (empty levels dropped)."""
     assignments = parse_keybindings_value(value_by_key.get(KEYBINDINGS_SETTING_KEY))
-    by_action = {
-        action: chords
-        for action, chords in assignments.get(app_name, {}).items()
-        if action != action_id
-    }
-    remaining = {
-        app: actions for app, actions in assignments.items() if app != app_name
-    }
+    by_action = {action: chords for action, chords in assignments.get(app_name, {}).items() if action != action_id}
+    remaining = {app: actions for app, actions in assignments.items() if app != app_name}
     if by_action:
         remaining[app_name] = by_action
-    updated: dict[str, object] = {
-        key: value
-        for key, value in value_by_key.items()
-        if key != KEYBINDINGS_SETTING_KEY
-    }
+    updated: dict[str, object] = {key: value for key, value in value_by_key.items() if key != KEYBINDINGS_SETTING_KEY}
     if remaining:
         updated[KEYBINDINGS_SETTING_KEY] = remaining
     return updated
 
 
 @pure
-def keybinding_assignment(
-    value_by_key: Mapping[str, object], app_name: str, action_id: str
-) -> list[str] | None:
+def keybinding_assignment(value_by_key: Mapping[str, object], app_name: str, action_id: str) -> list[str] | None:
     """One layer's assignment for the action, or None when the layer holds none."""
     return _layer_assignment(value_by_key, app_name, action_id)
