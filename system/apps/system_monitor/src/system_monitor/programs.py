@@ -139,7 +139,9 @@ def is_code_checker(command: str) -> bool:
 
 
 def chat_agent_id(command: str) -> str | None:
-    """The agent id a command line names through its ``~/.mngr/agents/agent-...`` path, if any."""
+    """The agent id a command line names through its ``<host dir>/agents/agent-...`` path, if any.
+
+    The host dir is ``~/.mngr`` in a container and ``/mngr`` in a Modal sandbox."""
     found = _AGENT_DIR.search(command)
     return found.group(1) if found else None
 
