@@ -11,6 +11,7 @@ grok, which types the messages the chat holds for it once mngr reports no turn i
 
 import heapq
 import json
+import math
 import threading
 import time
 from operator import itemgetter
@@ -21,6 +22,7 @@ from typing import Final
 from loguru import logger
 from pydantic import Field
 
+from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.grok.queue_tracker import GrokQueueTracker
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
@@ -425,7 +427,20 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
         if not is_ready_to_type(read_lifecycle_state(), self._agent_state_dir):
             self._queue.demote_pending()
             return
+        self._settle_interrupted_claim()
         self._flush_held_block(send)
+
+    def _settle_interrupted_claim(self) -> None:
+        """Settle the flush claim the chat app stopped during: delivered if a user turn grok logged since its typing
+        began holds its block, else Queued for a later attempt."""
+        interrupted = self._queue.interrupted_claim()
+        if interrupted is None:
+            return
+        block, claimed, generation, began_at = interrupted
+        with self._lock:
+            self._refresh_locked()
+            texts = self._user_turn_texts_since_locked(0, logged_after=began_at - TRANSCRIPT_CLOCK_SLACK_SECONDS)
+        self._queue.finish_flush(claimed, generation, delivered=claimed if _is_held_by_a_turn(texts, block) else ())
 
     def _flush_held_block(self, send: FlushSendCallback) -> None:
         """Claim the held block, type it through mngr, and settle it by what mngr and grok's log show.
@@ -476,13 +491,16 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
             )
         return is_held
 
-    def _user_turn_texts_since_locked(self, start: int) -> list[str]:
-        """The text of every user turn the main lane gained from index ``start``, each complete or still growing."""
+    def _user_turn_texts_since_locked(self, start: int, logged_after: float = -math.inf) -> list[str]:
+        """The text of every user turn the main lane gained from index ``start``, each complete or still growing, that
+        grok logged at or after epoch ``logged_after``."""
         events = self._store.at_offset([MAIN_LANE], start, self._store.total([MAIN_LANE]) - start)
         return [
             str(event.get("content") or "")
             for event in events
-            if event.get("type") == "user_message" and event.get("role") == _USER_ROLE
+            if event.get("type") == "user_message"
+            and event.get("role") == _USER_ROLE
+            and (parse_iso_timestamp_to_epoch(event.get("timestamp")) or 0.0) >= logged_after
         ]
 
 

@@ -84,6 +84,10 @@ class GrokQueueTracker:
     _attempts: dict[str, int]
     # When the first flush of each entry still held began, in epoch seconds.
     _first_flushed_at: dict[str, float]
+    # When the open flush claim's typing began, in epoch seconds, journalled with its entries.
+    _claim_began_at: float | None
+    # The ids of a flush claim the journal replayed, until a flush settles it.
+    _interrupted_claim_ids: tuple[str, ...]
     _publish: PublishCallback | None
     _wake: Callable[[], None] | None
     # The answers of ``is_sending`` and ``has_deliverable_entries``, read without the lock, since another tracker's
@@ -107,6 +111,8 @@ class GrokQueueTracker:
         self._pending_send = set()
         self._attempts = {}
         self._first_flushed_at = {}
+        self._claim_began_at = None
+        self._interrupted_claim_ids = ()
         self._publish = None
         self._wake = None
         self._replay()
@@ -133,7 +139,8 @@ class GrokQueueTracker:
             wake()
 
     def _replay(self) -> None:
-        """Restore the entries journalled under the current session; a torn or foreign line is skipped."""
+        """Restore the entries journalled under the current session, and the flush claim open among them; a torn or
+        foreign line is skipped."""
         if not self._session_token:
             return
         try:
@@ -143,6 +150,7 @@ class GrokQueueTracker:
         except OSError as error:
             logger.opt(exception=error).warning("grok: could not read the queue journal {}", self._outbox_path)
             return
+        interrupted_claim_ids: list[str] = []
         for line in lines:
             try:
                 entry = json.loads(line)
@@ -157,29 +165,41 @@ class GrokQueueTracker:
             content = entry.get("content")
             timestamp = entry.get("timestamp")
             attempts = entry.get("attempts")
+            claim_began_at = entry.get("claim_began_at")
             if isinstance(queued_id, str) and isinstance(content, str) and isinstance(timestamp, str):
                 self._queued.add(queued_id, content, timestamp, False)
                 if isinstance(attempts, int) and attempts > 0:
                     self._attempts[queued_id] = attempts
+                if isinstance(claim_began_at, float):
+                    interrupted_claim_ids.append(queued_id)
+                    self._claim_began_at = claim_began_at
+        if self._claim_began_at is not None:
+            self._interrupted_claim_ids = tuple(interrupted_claim_ids)
+            self._sending_ids = set(interrupted_claim_ids)
+            self._first_flushed_at = dict.fromkeys(interrupted_claim_ids, self._claim_began_at)
 
     def _write_journal_locked(self) -> None:
         entries = [entry for entry in self._queued.snapshot() if entry["queued_id"] not in self._typed_ids]
         if not self._session_token or not entries:
             self._outbox_path.unlink(missing_ok=True)
             return
-        payload = "".join(
-            json.dumps(
-                {"session": self._session_token, **entry, "attempts": self._attempts.get(entry["queued_id"], 0)}
-            )
-            + "\n"
-            for entry in entries
-        )
+        payload = "".join(self._journal_line_locked(entry) for entry in entries)
         tmp_path = self._outbox_path.with_suffix(self._outbox_path.suffix + ".tmp")
         try:
             tmp_path.write_text(payload)
             tmp_path.replace(self._outbox_path)
         except OSError as error:
             logger.opt(exception=error).warning("grok: could not journal the queue to {}", self._outbox_path)
+
+    def _journal_line_locked(self, entry: dict[str, str]) -> str:
+        line: dict[str, Any] = {
+            "session": self._session_token,
+            **entry,
+            "attempts": self._attempts.get(entry["queued_id"], 0),
+        }
+        if self._claim_began_at is not None and entry["queued_id"] in self._sending_ids:
+            line["claim_began_at"] = self._claim_began_at
+        return json.dumps(line) + "\n"
 
     def _refresh_lock_free_reads(self) -> None:
         self._is_sending_now = bool(self._sending_ids or self._pending_send)
@@ -212,6 +232,8 @@ class GrokQueueTracker:
         self._pending_send.clear()
         self._attempts.clear()
         self._first_flushed_at.clear()
+        self._claim_began_at = None
+        self._interrupted_claim_ids = ()
         self._generation += 1
 
     def _drop_ids_locked(self, queued_ids: tuple[str, ...]) -> None:
@@ -277,6 +299,7 @@ class GrokQueueTracker:
             entries = _entries_of_one_block(entries)
             claimed = tuple(entry["queued_id"] for entry in entries)
             self._sending_ids = set(claimed)
+            self._claim_began_at = None
             self._settled_locked()
             return self._block_of(entries), claimed, self._generation
 
@@ -307,15 +330,26 @@ class GrokQueueTracker:
             self._settled_locked()
 
     def note_flush_began(self, claimed: tuple[str, ...], began_at: float) -> float | None:
-        """Record a flush of ``claimed`` beginning at epoch ``began_at``; returns when an earlier flush of any of them
-        began, or None."""
+        """Record and journal a flush of ``claimed`` beginning at epoch ``began_at``; returns when an earlier flush of
+        any of them began, or None."""
         with self._lock:
             earlier = [
                 self._first_flushed_at[queued_id] for queued_id in claimed if queued_id in self._first_flushed_at
             ]
             for queued_id in claimed:
                 self._first_flushed_at.setdefault(queued_id, began_at)
+            self._claim_began_at = began_at
+            self._write_journal_locked()
             return min(earlier, default=None)
+
+    def interrupted_claim(self) -> tuple[str, tuple[str, ...], int, float] | None:
+        """The flush claim the journal replayed, until a flush settles it: (block, claimed ids, generation, when its
+        typing began)."""
+        with self._lock:
+            if not self._interrupted_claim_ids or self._claim_began_at is None:
+                return None
+            entries = [entry for entry in self._queued.snapshot() if entry["queued_id"] in self._interrupted_claim_ids]
+            return self._block_of(entries), self._interrupted_claim_ids, self._generation, self._claim_began_at
 
     def note_typed(self, claimed: tuple[str, ...], generation: int) -> None:
         """Take the claimed entries mngr confirmed typing out of the journal; they show as Sending until the flush
@@ -350,6 +384,8 @@ class GrokQueueTracker:
                     self._attempts[queued_id] = self._attempts.get(queued_id, 0) + 1
                 self._stopped_claim_ids.discard(queued_id)
                 self._typed_ids.discard(queued_id)
+            self._claim_began_at = None
+            self._interrupted_claim_ids = ()
             self._settled_locked()
 
     def take_unclaimed(self) -> tuple[str, tuple[str, ...]]:

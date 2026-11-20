@@ -410,6 +410,17 @@ class _ScriptedSend:
         return self.is_confirmed
 
 
+def _plain_agent_state_dir(tmp_path: Path, *, is_launched: bool = False) -> Path:
+    """A grok agent with one finished turn; a launched one has grok's launch marker, so its queue is journalled."""
+    agent_state_dir = make_grok_agent_state_dir(tmp_path)
+    add_grok_session(
+        agent_state_dir, _PLAIN_ROOT, read_fixture_updates(find_fixture_scenario("plain"), _PLAIN_ROOT), is_root=True
+    )
+    if is_launched:
+        (agent_state_dir / PROCESS_STARTED_MARKER_FILENAME).touch()
+    return agent_state_dir
+
+
 def _flushing_watcher(
     tmp_path: Path,
     *,
@@ -418,17 +429,26 @@ def _flushing_watcher(
     is_logged: bool = True,
     is_launched: bool = False,
 ) -> tuple[GrokSessionWatcher, _ScriptedSend, list[tuple[str, Any]]]:
-    """A grok agent with one finished turn and a primed, unstarted watcher whose flush types into a scripted grok.
-
-    A launched agent has grok's launch marker, so its queue is journalled. The log records each queue snapshot the
-    watcher publishes and each event batch it broadcasts, in order.
-    """
-    agent_state_dir = make_grok_agent_state_dir(tmp_path)
-    add_grok_session(
-        agent_state_dir, _PLAIN_ROOT, read_fixture_updates(find_fixture_scenario("plain"), _PLAIN_ROOT), is_root=True
+    """A ``_plain_agent_state_dir`` and ``_watcher_flushing_into`` it."""
+    return _watcher_flushing_into(
+        _plain_agent_state_dir(tmp_path, is_launched=is_launched),
+        lifecycle_state=lifecycle_state,
+        is_confirmed=is_confirmed,
+        is_logged=is_logged,
     )
-    if is_launched:
-        (agent_state_dir / PROCESS_STARTED_MARKER_FILENAME).touch()
+
+
+def _watcher_flushing_into(
+    agent_state_dir: Path,
+    *,
+    lifecycle_state: str | None = "WAITING",
+    is_confirmed: bool = True,
+    is_logged: bool = True,
+) -> tuple[GrokSessionWatcher, _ScriptedSend, list[tuple[str, Any]]]:
+    """A primed, unstarted watcher over the agent whose flush types into a scripted grok.
+
+    The log records each queue snapshot the watcher publishes and each event batch it broadcasts, in order.
+    """
     log: list[tuple[str, Any]] = []
     watcher = GrokSessionWatcher.build(
         make_grok_agent_info(agent_state_dir, agent_state_dir.name, "grok-flush"),
@@ -561,6 +581,30 @@ def test_a_restart_while_the_flush_looks_for_a_block_mngr_confirmed_does_not_typ
     finally:
         watcher._flush_stopping.set()
         flush.join()
+
+
+@pytest.mark.parametrize(
+    ("is_logged", "expected_sent"),
+    [pytest.param(True, [], id="grok_logged_it"), pytest.param(False, ["held"], id="grok_logged_nothing")],
+)
+def test_after_a_restart_a_block_a_flush_was_typing_is_typed_again_only_if_grok_logged_no_turn_holding_it(
+    tmp_path: Path, is_logged: bool, expected_sent: list[str]
+) -> None:
+    agent_state_dir = _plain_agent_state_dir(tmp_path, is_launched=True)
+    stopped_app_queue = GrokQueueTracker.build(agent_state_dir / OUTBOX_FILENAME, session_token(agent_state_dir))
+    stopped_app_queue.enqueue("held", "t0", is_turn_open=False)
+    _block, claimed, _generation = stopped_app_queue.begin_flush()
+    stopped_app_queue.note_flush_began(claimed, time.time())
+    if is_logged:
+        logged_at_ms = round(time.time() * 1000)
+        append_grok_updates(agent_state_dir, _PLAIN_ROOT, user_prompt_line(_PLAIN_ROOT, "held", 1, logged_at_ms))
+
+    watcher, send, _log = _watcher_flushing_into(agent_state_dir)
+    assert [(entry["content"], entry["is_sending"]) for entry in watcher.get_queued_messages()] == [("held", True)]
+    watcher._attempt_flush()
+
+    assert send.sent == expected_sent
+    assert watcher.get_queued_messages() == []
 
 
 def test_a_block_mngr_confirmed_stays_delivered_when_grok_logs_cannot_be_read_after_the_send(tmp_path: Path) -> None:
