@@ -530,32 +530,41 @@ def test_the_manifest_and_the_pyproject_keep_a_description_with_quotes_and_chara
     assert pyproject["project"]["description"] == description
 
 
-def test_the_scaffold_refuses_a_manifest_the_library_would_skip(tmp_path: Path) -> None:
-    lib_dir = _write_inbox_status_lib(tmp_path)
-    scaffold_flask_lib._validate_manifest(tmp_path, "inbox_status")
-
-    (lib_dir / "icon.svg").unlink()
-    with pytest.raises(SystemExit) as refused:
-        scaffold_flask_lib._validate_manifest(tmp_path, "inbox_status")
-
-    assert str(refused.value).startswith(
-        "error: system/apps/inbox_status/app.toml is invalid:"
-    )
-    assert "icon" in str(refused.value)
-
-
-def test_the_scaffold_refuses_a_manifest_key_the_library_does_not_know(
+def test_the_scaffold_does_not_register_a_manifest_the_library_would_skip(
     tmp_path: Path,
 ) -> None:
-    """The scaffold's check is the authoring one: a reader would warn about the key and go on."""
+    lib_dir = _write_inbox_status_lib(tmp_path)
+    (lib_dir / "icon.svg").unlink()
+
+    with pytest.raises(SystemExit) as refused:
+        scaffold_flask_lib._register_app(
+            tmp_path, "inbox_status", None, _nothing_bound
+        )
+
+    assert str(refused.value).startswith(
+        "error: the workspace refused to register the app, so system/apps/inbox_status "
+        "was removed again:"
+    )
+    assert "icon" in str(refused.value)
+    assert not lib_dir.exists()
+    assert not (tmp_path / "system/config/apps/inbox-status.toml").exists()
+
+
+def test_the_scaffold_does_not_register_a_manifest_key_the_library_does_not_know(
+    tmp_path: Path,
+) -> None:
+    """Registration reads the manifest as its author: a reader would warn about the key and go on."""
     lib_dir = _write_inbox_status_lib(tmp_path)
     manifest_path = lib_dir / "app.toml"
     manifest_path.write_text('no_such_key = "x"\n' + manifest_path.read_text())
 
     with pytest.raises(SystemExit) as refused:
-        scaffold_flask_lib._validate_manifest(tmp_path, "inbox_status")
+        scaffold_flask_lib._register_app(
+            tmp_path, "inbox_status", None, _nothing_bound
+        )
 
     assert "no_such_key" in str(refused.value)
+    assert not lib_dir.exists()
 
 
 def test_the_scaffolded_preview_table_names_the_variables_the_runner_reads(

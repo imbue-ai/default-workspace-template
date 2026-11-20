@@ -185,20 +185,20 @@ Optional:
   (repeat `--secrets-variable`; the file needs at least one). They become the
   manifest's `[[secrets]]` block, which the generated program runs under (see
   below).
-- `--skip-uv-sync`: skip the final manifest check and the app's own lock and
-  venv (for fast iteration / dry runs). The app is still registered.
+- `--skip-uv-sync`: skip the app's own lock and venv (for fast iteration /
+  dry runs). The app is still registered.
 
 The scaffolder fails non-zero with a clear stderr message if the lib
 already exists, the name is reserved or invalid, the description is
 empty, spans lines or is over 200 characters, a secrets file is named
 without a variable, the workspace refuses to register the app, or the
-manifest check, the app's `uv lock` or its `uv sync` fails. A registration
-is refused when the app would take a name, a program, a console script or a
-port something in the workspace already holds; the message names every
-problem, and the app's directory is removed again, so fix what it names and
-run the scaffolder again. A failure after the registration (the manifest
-check, the lock, the sync) leaves the app registered, with its directory, its
-record and its generated program in place, and a second run is refused
+app's `uv lock` or its `uv sync` fails. A registration is refused when the
+app's manifest is not valid, or when the app would take a name, a program, a
+console script or a port something in the workspace already holds; the
+message names every problem, and the app's directory is removed again, so
+fix what it names and run the scaffolder again. A failure after the
+registration (the lock, the sync) leaves the app registered, with its
+directory, its record and its generated program in place, and a second run is refused
 because the directory exists: remove the app with
 `uv run --no-sync app-install uninstall <name>`, fix what the message names,
 and run the scaffolder again.

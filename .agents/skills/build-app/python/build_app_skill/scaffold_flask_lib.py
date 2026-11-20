@@ -732,21 +732,6 @@ def _run_checked(argv: list[str], repo_root: Path, description: str) -> None:
         sys.exit(f"error: `{description}` failed (exit {result.returncode})")
 
 
-def _validate_manifest(repo_root: Path, package: str) -> None:
-    # The written manifest is checked against the app_manifest library's authoring
-    # rules, so a scaffolded app never carries a manifest its readers would skip or a
-    # key they do not know. Imported here, so only a scaffold that validates pays for
-    # the library and its pydantic.
-    from app_manifest.errors import AppManifestError
-    from app_manifest.manifest import ManifestReadMode, load_manifest
-
-    manifest_path = repo_root / "system" / "apps" / package / "app.toml"
-    try:
-        load_manifest(manifest_path, mode=ManifestReadMode.STRICT)
-    except AppManifestError as error:
-        sys.exit(f"error: {manifest_path.relative_to(repo_root)} is invalid: {error}")
-
-
 def _register_app(
     repo_root: Path,
     package: str,
@@ -891,7 +876,7 @@ def main() -> None:
     parser.add_argument(
         "--skip-uv-sync",
         action="store_true",
-        help="skip the manifest check and the app's lock and venv after generation (for tests/dry runs)",
+        help="skip the app's lock and venv after generation (for tests/dry runs)",
     )
     parser.add_argument(
         "--start",
@@ -928,7 +913,6 @@ def main() -> None:
     port, registered_paths = _register_app(repo_root, package, args.port, is_port_bound)
 
     if not args.skip_uv_sync:
-        _validate_manifest(repo_root, package)
         _create_project_env(repo_root, package)
 
     if args.start:
