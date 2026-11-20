@@ -29,6 +29,7 @@ from pydantic import Field
 from app_install.collisions import find_collisions
 from app_install.derived import derive_files
 from app_install.derived import describe_differences
+from app_install.derived import program_names
 from app_install.derived import write_derived_files
 from app_install.errors import AppAlreadyRegisteredError
 from app_install.errors import AppNotFoundError
@@ -162,36 +163,42 @@ def _meaningful_lines(text: str) -> list[str]:
     return [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith(_COMMENT_PREFIXES)]
 
 
-def _program_file_problem(repo_root: Path, record: AppRecord, manifest: AppManifest) -> str | None:
-    """Why the app's existing program file cannot be replaced by the generated one, or None when it can: the two
-    must say the same thing, apart from comments and the port the generated one passes in the environment, which
-    an app built before the port left its code already has as its default."""
-    conf = program_conf_path(repo_root, str(manifest.program))
-    if not conf.is_file():
-        return None
-    relative_conf = conf.relative_to(repo_root).as_posix()
-    generated = derive_files(repo_root, record, manifest).text_by_path[relative_conf]
+def _program_file_problems(repo_root: Path, record: AppRecord, manifest: AppManifest) -> list[str]:
+    """Why each existing program file of the app cannot be replaced by the generated one; empty when all can: the
+    two must say the same thing, apart from comments and the port the main program's generated file passes in
+    the environment, which an app built before the port left its code already has as its default."""
+    generated_by_path = derive_files(repo_root, record, manifest).text_by_path
+    main_program = str(manifest.program)
     conventional_environment = f'environment={scaffold_env_prefix(manifest.name)}_PORT="{record.port}"'
-    generated_lines = [
-        line
-        for line in _meaningful_lines(generated)
-        if not (manifest.run is None and line == conventional_environment)
-    ]
-    existing_lines = _meaningful_lines(conf.read_text(encoding="utf-8"))
-    if existing_lines == generated_lines:
-        return None
-    differing = next(
-        (
-            existing
-            for existing, expected in zip(existing_lines, generated_lines, strict=False)
-            if existing != expected
-        ),
-        "a line the other does not have",
-    )
-    return (
-        f"{relative_conf} is not what the app's manifest generates, so it is kept as it is; say how the app runs "
-        f"in app.toml ([run], [[services]], [[secrets]]) and convert it again. It first differs at: {differing}"
-    )
+    problems: list[str] = []
+    for program in program_names(manifest):
+        conf = program_conf_path(repo_root, program)
+        if not conf.is_file():
+            continue
+        relative_conf = conf.relative_to(repo_root).as_posix()
+        is_port_passed_by_convention = program == main_program and manifest.run is None
+        generated_lines = [
+            line
+            for line in _meaningful_lines(generated_by_path[relative_conf])
+            if not (is_port_passed_by_convention and line == conventional_environment)
+        ]
+        existing_lines = _meaningful_lines(conf.read_text(encoding="utf-8"))
+        if existing_lines == generated_lines:
+            continue
+        differing = next(
+            (
+                existing
+                for existing, expected in zip(existing_lines, generated_lines, strict=False)
+                if existing != expected
+            ),
+            "a line the other does not have",
+        )
+        problems.append(
+            f"{relative_conf} is not what the app's manifest generates, so it is kept as it is; say how the app "
+            "runs in app.toml ([run], [[services]], [[secrets]]) and convert it again. It first differs at: "
+            f"{differing}"
+        )
+    return problems
 
 
 def plan_migration(repo_root: Path, package: str, is_bound: Callable[[int], bool]) -> MigrationPlan:
@@ -214,18 +221,18 @@ def plan_migration(repo_root: Path, package: str, is_bound: Callable[[int], bool
         port = allocate_port(repo_root, records, None, is_bound)
     record = AppRecord(name=manifest.name, package=package, port=port, origin=AppOrigin.LOCAL)
     app_relative = (APPS_DIRECTORY / package).as_posix()
-    # The program file the app was given by hand is the app's own; the generated one replaces it.
-    own_program_file = program_conf_path(repo_root, str(manifest.program)).relative_to(repo_root).as_posix()
-    problems: list[str] = list(find_collisions(repo_root, package, manifest, frozenset({own_program_file})))
+    # The program files the app was given by hand are the app's own; the generated ones replace them.
+    own_program_files = frozenset(
+        program_conf_path(repo_root, program).relative_to(repo_root).as_posix() for program in program_names(manifest)
+    )
+    problems: list[str] = list(find_collisions(repo_root, package, manifest, own_program_files))
     notes: list[str] = []
     if manifest.wiring.programs:
         problems.append(
             f"its manifest lists [wiring] programs {[str(program) for program in manifest.wiring.programs]}; "
             "declare each as a [[services]] entry and convert it again"
         )
-    program_file_problem = _program_file_problem(repo_root, record, manifest)
-    if program_file_problem is not None:
-        problems.append(program_file_problem)
+    problems.extend(_program_file_problems(repo_root, record, manifest))
 
     moves: list[tuple[str, str]] = []
     references: list[RecordReference] = []

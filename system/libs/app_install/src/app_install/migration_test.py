@@ -172,6 +172,54 @@ def test_declaring_how_the_app_runs_makes_the_same_app_convertible(tmp_path: Pat
     assert check(tmp_path) == ()
 
 
+def _write_old_layout_app_with_a_display_service(repo_root: Path, service_entry_point: str) -> str:
+    """The old-layout app with a background program an agent gave a program file by hand, now declared as a
+    service in its manifest."""
+    package = _write_old_layout_app(repo_root)
+    manifest = repo_root / "system" / "apps" / package / "app.toml"
+    manifest.write_text(manifest.read_text() + '\n[[services]]\nrole = "display"\ncommand = "notes-display"\n')
+    registration = (
+        f" && python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml "
+        "--url http://localhost:8087"
+    )
+    write_workspace_file(
+        repo_root,
+        "system/supervisord.conf.d/notes-display.conf",
+        _HAND_WRITTEN_CONF.format(
+            name="notes-display", package=package, port=8087, entry_point=service_entry_point
+        ).replace(registration, ""),
+    )
+    return package
+
+
+def test_a_hand_written_program_file_of_a_declared_service_is_replaced_with_the_apps_own(tmp_path: Path) -> None:
+    package = _write_old_layout_app_with_a_display_service(tmp_path, "system/apps/notes/.venv/bin/notes-display")
+
+    outcome = migrate_app(tmp_path, package, never_bound, is_dry_run=False)
+
+    assert (outcome.is_converted, outcome.problems) == (True, ())
+    assert check(tmp_path) == ()
+
+
+def test_a_services_program_file_that_is_not_what_the_manifest_generates_keeps_the_app_as_it_was(
+    tmp_path: Path,
+) -> None:
+    package = _write_old_layout_app_with_a_display_service(
+        tmp_path, "system/apps/notes/.venv/bin/notes-display --rotate"
+    )
+    before = _tree(tmp_path)
+
+    outcome = migrate_app(tmp_path, package, never_bound, is_dry_run=False)
+
+    assert outcome.is_converted is False
+    assert len(outcome.problems) == 1
+    assert outcome.problems[0].startswith(
+        "system/supervisord.conf.d/notes-display.conf is not what the app's manifest generates"
+    )
+    assert "notes-display --rotate" in outcome.problems[0]
+    assert _tree(tmp_path) == before
+
+
 def test_a_conversion_that_fails_part_way_is_taken_back_step_by_step(tmp_path: Path) -> None:
     package = _write_old_layout_app(tmp_path)
     # Something that is not a directory sits where the records are kept, so writing the record fails after the
