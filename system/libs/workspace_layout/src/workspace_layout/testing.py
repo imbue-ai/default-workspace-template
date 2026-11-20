@@ -102,7 +102,7 @@ def fake_window(
 def fake_desktop(
     desktop_id: str = FAKE_DESKTOP_ID,
     windows: Sequence[WindowView] = (),
-    shortcuts: Sequence[DesktopShortcut] = (),
+    shortcuts: Sequence[DesktopShortcut | ShortcutView] = (),
 ) -> DesktopView:
     """A desktop named for its id, with no wallpaper, as the shell's answers carry it."""
     return DesktopView(
@@ -112,7 +112,10 @@ def fake_desktop(
         glyph=0,
         wallpaper=None,
         shortcuts=tuple(
-            ShortcutView(target=shortcut.target, mode=shortcut.mode, cell=shortcut.cell) for shortcut in shortcuts
+            shortcut
+            if isinstance(shortcut, ShortcutView)
+            else ShortcutView(target=shortcut.target, mode=shortcut.mode, cell=shortcut.cell)
+            for shortcut in shortcuts
         ),
         windows=tuple(windows),
     )
