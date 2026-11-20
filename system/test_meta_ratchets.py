@@ -40,14 +40,15 @@ def _installed_app_directories(repo_root: Path) -> set[Path]:
     }
 
 
-def _get_all_project_dirs() -> list[Path]:
-    """Return all project directories (system/{libs,services,apps}/*) excluding vendored code."""
+def _get_all_project_dirs(repo_root: Path = _REPO_ROOT) -> list[Path]:
+    """Return all project directories (system/{libs,services,apps}/*) excluding vendored code
+    and installed apps."""
     project_dirs: list[Path] = []
-    installed_app_directories = _installed_app_directories(_REPO_ROOT)
+    installed_app_directories = _installed_app_directories(repo_root)
     for parent in (
-        _REPO_ROOT / "system" / "libs",
-        _REPO_ROOT / "system" / "services",
-        _REPO_ROOT / "system" / "apps",
+        repo_root / "system" / "libs",
+        repo_root / "system" / "services",
+        repo_root / "system" / "apps",
     ):
         if not parent.is_dir():
             continue
@@ -87,6 +88,22 @@ def _extract_test_function_names(file_path: Path) -> frozenset[str]:
 
 
 # Every project has ratchets.
+
+
+def test_an_installed_app_is_left_out_of_the_projects_and_an_owned_app_is_not(
+    tmp_path: Path,
+) -> None:
+    records = tmp_path / "system" / "config" / "apps"
+    records.mkdir(parents=True)
+    for name, origin in (("notes", "installed"), ("digest", "local")):
+        (records / f"{name}.toml").write_text(
+            f'name = "{name}"\npackage = "{name}"\nport = 8084\norigin = "{origin}"\n'
+        )
+        project = tmp_path / "system" / "apps" / name
+        project.mkdir(parents=True)
+        (project / "pyproject.toml").write_text(f'[project]\nname = "{name}"\n')
+
+    assert _get_all_project_dirs(tmp_path) == [tmp_path / "system" / "apps" / "digest"]
 
 
 def test_every_project_has_test_ratchets_file() -> None:
