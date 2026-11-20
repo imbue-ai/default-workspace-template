@@ -4,6 +4,7 @@ Usage, from the workspace repo's root::
 
     uv run --no-sync app-install add <package> [--port <n>]
     uv run --no-sync app-install regenerate [<name>]
+    uv run --no-sync app-install uninstall <name>
     uv run --no-sync app-install check
     uv run --no-sync app-install list
 
@@ -25,7 +26,9 @@ from app_install.operations import check
 from app_install.operations import install_lock
 from app_install.operations import list_apps
 from app_install.operations import regenerate
+from app_install.operations import uninstall_app
 from app_install.ports import is_port_bound
+from app_install.runtime import WorkspaceRuntime
 from app_manifest.errors import AppManifestError
 
 _EXIT_REFUSED: Final[int] = 1
@@ -92,6 +95,25 @@ def regenerate_command(repo_root: Path, name: str | None) -> None:
         "regenerated",
         changed_paths=list(outcome.changed_paths),
         reassigned_ports=dict(outcome.port_by_reassigned_name),
+    )
+
+
+@main.command("uninstall")
+@click.argument("name")
+@click.pass_obj
+def uninstall_command(repo_root: Path, name: str) -> None:
+    """Remove the app NAME and its generated files, keeping its stored data and its secret files."""
+    with install_lock(repo_root):
+        try:
+            outcome = uninstall_app(repo_root, name, WorkspaceRuntime(repo_root=repo_root))
+        except (AppInstallError, AppManifestError) as e:
+            _refuse("refused", name=name, detail=str(e))
+    _emit(
+        "uninstalled",
+        name=outcome.name,
+        removed_paths=list(outcome.removed_paths),
+        kept_paths=list(outcome.kept_paths),
+        problems=list(outcome.problems),
     )
 
 

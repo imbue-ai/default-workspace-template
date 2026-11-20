@@ -9,6 +9,7 @@ The command is deterministic and asks nothing; every run ends in one JSON line o
 ```bash
 uv run --no-sync app-install add <package> [--port <n>]
 uv run --no-sync app-install regenerate [<name>]
+uv run --no-sync app-install uninstall <name>
 uv run --no-sync app-install check
 uv run --no-sync app-install list
 ```
@@ -38,3 +39,9 @@ Two branches can each allocate the same port; `check` reports it and `regenerate
 
 An app is refused before anything is written when it would take a name something in the workspace already holds: the app's name, a program, a console script, a skill, a routine id, or an environment unit's file name.
 The result names every collision.
+
+## Removing an app
+
+`app-install uninstall <name>` removes the app's directory, its record, and its derived files, has supervisord drop its programs, removes its registry row, and commits the removal under the installer's own author.
+It keeps the app's stored data (`data/.apps/<name>/`) and its secret files, and names them in its result.
+What it could not do outside the tree, such as reaching a supervisord that is not running, is listed under `problems`; the app is removed from the tree all the same.

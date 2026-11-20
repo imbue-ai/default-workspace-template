@@ -9,6 +9,10 @@ SKILLS_DIRECTORY: Final[Path] = Path(".agents/skills")
 ROUTINES_DIRECTORY: Final[Path] = Path("system/routines")
 ENVIRONMENT_UNITS_DIRECTORY: Final[Path] = Path("system/scripts/env.d")
 INSTALL_LOCK_PATH: Final[Path] = Path("data/.state/app_install/lock")
+APP_DATA_DIRECTORY: Final[Path] = Path("data/.apps")
+SECRETS_DIRECTORY: Final[Path] = Path("data/.secrets")
+# The local ref that keeps the commit an installed app was last taken from alive in the workspace repository.
+UPSTREAM_REF_PREFIX: Final[str] = "refs/app-upstream/"
 MANIFEST_FILENAME: Final[str] = "app.toml"
 PYPROJECT_FILENAME: Final[str] = "pyproject.toml"
 APP_SKILLS_DIRNAME: Final[str] = "skills"

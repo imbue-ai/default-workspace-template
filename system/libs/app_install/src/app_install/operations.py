@@ -1,6 +1,7 @@
 """What the app-install command does: register an app, regenerate its derived files, check them, list the apps."""
 
 import fcntl
+import shutil
 import subprocess
 from collections.abc import Callable
 from collections.abc import Generator
@@ -16,11 +17,16 @@ from pydantic import Field
 from app_install.collisions import find_collisions
 from app_install.derived import derive_files
 from app_install.derived import describe_differences
+from app_install.derived import existing_derived_paths
 from app_install.derived import write_derived_files
 from app_install.errors import AppAlreadyRegisteredError
 from app_install.errors import AppNotFoundError
 from app_install.errors import CollisionError
+from app_install.interfaces import WorkspaceRuntimeInterface
+from app_install.paths import APP_DATA_DIRECTORY
 from app_install.paths import INSTALL_LOCK_PATH
+from app_install.paths import SECRETS_DIRECTORY
+from app_install.paths import UPSTREAM_REF_PREFIX
 from app_install.paths import app_directory
 from app_install.paths import manifest_path
 from app_install.ports import allocate_port
@@ -31,6 +37,7 @@ from app_manifest.manifest import load_manifest
 from app_manifest.records import AppOrigin
 from app_manifest.records import AppRecord
 from app_manifest.records import load_all_records
+from app_manifest.records import load_record
 from app_manifest.records import record_path
 from app_manifest.records import write_record
 
@@ -52,6 +59,20 @@ class RegenerateOutcome(FrozenModel):
     changed_paths: tuple[str, ...] = Field(description="Every file rewritten or removed, repo-relative")
     port_by_reassigned_name: dict[str, int] = Field(
         description="The new port of each app that shared one with an app whose record is older"
+    )
+
+
+class UninstallOutcome(FrozenModel):
+    """What removing an app did, and what it left for the user."""
+
+    name: str = Field(description="The app that was removed")
+    removed_paths: tuple[str, ...] = Field(description="Every path removed from the tree, repo-relative")
+    kept_paths: tuple[str, ...] = Field(
+        description="What was left on purpose: the app's stored data and its secret files, when it has any"
+    )
+    problems: tuple[str, ...] = Field(
+        description="What could not be done outside the tree (programs not reloaded, registry row not removed, "
+        "removal not committed); the app is removed from the tree all the same"
     )
 
 
@@ -210,6 +231,59 @@ def check(repo_root: Path) -> tuple[str, ...]:
         if len(names) > 1:
             problems.append(f"port {port} is recorded for more than one app: {', '.join(sorted(names))}")
     return tuple(problems)
+
+
+def uninstall_app(repo_root: Path, name: str, runtime: WorkspaceRuntimeInterface) -> UninstallOutcome:
+    """Remove the app registered as ``name``: its directory, its record, and its derived files, then have
+    supervisord drop its programs, remove its registry row, and commit the removal.
+
+    The app's stored data under ``data/.apps/<name>/`` and its secret files are kept, and its repositories are
+    left alone. Raises AppRecordNotFoundError when no app is registered under the name.
+    """
+    record = load_record(repo_root, name)
+    directory = app_directory(repo_root, record.package)
+    removed: list[str] = list(existing_derived_paths(repo_root, record.package))
+    for relative_path in removed:
+        (repo_root / relative_path).unlink()
+    if directory.is_dir():
+        secret_files = _declared_secret_files(repo_root, record)
+        shutil.rmtree(directory)
+        removed.append(directory.relative_to(repo_root).as_posix())
+    else:
+        secret_files = ()
+    record_file = record_path(repo_root, name)
+    record_file.unlink()
+    removed.append(record_file.relative_to(repo_root).as_posix())
+
+    problems: list[str] = []
+    reload_failure = runtime.reload_programs()
+    if reload_failure is not None:
+        problems.append(f"supervisord did not drop the app's programs: {reload_failure}")
+    registry_failure = runtime.remove_registry_row(name)
+    if registry_failure is not None:
+        problems.append(f"the app's registry row was not removed: {registry_failure}")
+    runtime.delete_ref(f"{UPSTREAM_REF_PREFIX}{name}")
+    commit_failure = runtime.commit_paths(removed, f"app-install: uninstall {name}")
+    if commit_failure is not None:
+        problems.append(f"the removal was not committed: {commit_failure}")
+
+    kept = [
+        path.relative_to(repo_root).as_posix()
+        for path in (repo_root / APP_DATA_DIRECTORY / name, *(repo_root / file for file in secret_files))
+        if path.exists()
+    ]
+    return UninstallOutcome(name=name, removed_paths=tuple(removed), kept_paths=tuple(kept), problems=tuple(problems))
+
+
+def _declared_secret_files(repo_root: Path, record: AppRecord) -> tuple[Path, ...]:
+    """The secret files the app's manifest declares, read before its directory goes; none when the manifest
+    cannot be read, since an app that cannot be read can still be removed."""
+    try:
+        manifest = load_app_manifest(repo_root, record.package, AppOrigin.INSTALLED)
+    except (AppNotFoundError, AppManifestError) as e:
+        logger.warning("Could not read the manifest of {} to name its secret files: {}", record.name, e)
+        return ()
+    return tuple(SECRETS_DIRECTORY / f"{secret.file}.env" for secret in manifest.secrets)
 
 
 def list_apps(repo_root: Path) -> tuple[ListedApp, ...]:

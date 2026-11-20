@@ -10,14 +10,18 @@ from app_install.errors import AppAlreadyRegisteredError
 from app_install.errors import AppNotFoundError
 from app_install.errors import CollisionError
 from app_install.errors import PortUnavailableError
+from app_install.mock_runtime_test import RecordingRuntime
 from app_install.operations import add_app
 from app_install.operations import check
 from app_install.operations import list_apps
 from app_install.operations import regenerate
+from app_install.operations import uninstall_app
+from app_install.runtime import WorkspaceRuntime
 from app_install.testing import never_bound
 from app_install.testing import write_app_file
 from app_install.testing import write_user_app
 from app_install.testing import write_workspace_file
+from app_manifest.errors import AppRecordNotFoundError
 from app_manifest.records import AppOrigin
 from app_manifest.records import AppRecord
 from app_manifest.records import load_record
@@ -275,3 +279,101 @@ def test_a_collision_is_reported_with_every_problem_by_the_command(tmp_path: Pat
         "package": "notes",
         "problems": ["the program 'notes' is already declared in system/supervisord.conf.d/notes.conf"],
     }
+
+
+_NOTES_WITH_A_SERVICE_AND_A_SECRET = (
+    '\n[[services]]\nrole = "indexer"\ncommand = "notes-indexer"\n'
+    '\n[[secrets]]\nfile = "notes"\nvariables = ["NOTES_API_KEY"]\n'
+)
+
+
+def test_uninstalling_removes_the_app_and_what_was_generated_for_it_and_keeps_its_data(tmp_path: Path) -> None:
+    package = write_user_app(tmp_path, "notes", _NOTES_WITH_A_SERVICE_AND_A_SECRET)
+    write_app_file(tmp_path, package, "skills/weekly-review/SKILL.md", "# Weekly review\n")
+    add_app(tmp_path, package, None, never_bound)
+    add_app(tmp_path, write_user_app(tmp_path, "digest"), None, never_bound)
+    write_workspace_file(tmp_path, "data/.apps/notes/notes.json", "[]")
+    write_workspace_file(tmp_path, "data/.secrets/notes.env", "NOTES_API_KEY='k'\n")
+    runtime = RecordingRuntime(repo_root=tmp_path)
+
+    outcome = uninstall_app(tmp_path, "notes", runtime)
+
+    assert sorted(outcome.removed_paths) == [
+        ".agents/skills/weekly-review",
+        "system/apps/notes",
+        "system/config/apps/notes.toml",
+        "system/supervisord.conf.d/notes-indexer.conf",
+        "system/supervisord.conf.d/notes.conf",
+    ]
+    assert all(not (tmp_path / path).exists() and not (tmp_path / path).is_symlink() for path in outcome.removed_paths)
+    assert outcome.kept_paths == ("data/.apps/notes", "data/.secrets/notes.env")
+    assert (tmp_path / "data" / ".apps" / "notes" / "notes.json").read_text() == "[]"
+    assert outcome.problems == ()
+    assert runtime.calls == [
+        "reload_programs",
+        "remove_registry_row notes",
+        "delete_ref refs/app-upstream/notes",
+        f"commit_paths {sorted(outcome.removed_paths)} 'app-install: uninstall notes'",
+    ]
+    # The neighbour is untouched and the tree is still consistent.
+    assert (tmp_path / "system" / "supervisord.conf.d" / "digest.conf").is_file()
+    assert check(tmp_path) == ()
+
+
+def test_an_uninstall_that_cannot_reach_the_running_workspace_still_removes_the_app_and_says_what_it_could_not_do(
+    tmp_path: Path,
+) -> None:
+    add_app(tmp_path, write_user_app(tmp_path, "notes"), None, never_bound)
+    runtime = RecordingRuntime(
+        repo_root=tmp_path,
+        reload_failure="unix:///var/run/supervisor.sock no such file",
+        registry_failure="no row named notes",
+        commit_failure="fatal: not a git repository",
+    )
+
+    outcome = uninstall_app(tmp_path, "notes", runtime)
+
+    assert not (tmp_path / "system" / "apps" / "notes").exists()
+    assert outcome.kept_paths == ()
+    assert outcome.problems == (
+        "supervisord did not drop the app's programs: unix:///var/run/supervisor.sock no such file",
+        "the app's registry row was not removed: no row named notes",
+        "the removal was not committed: fatal: not a git repository",
+    )
+
+
+def test_an_app_that_is_not_registered_cannot_be_uninstalled(tmp_path: Path) -> None:
+    with pytest.raises(AppRecordNotFoundError, match="notes"):
+        uninstall_app(tmp_path, "notes", RecordingRuntime(repo_root=tmp_path))
+
+
+def test_the_real_runtime_commits_exactly_the_removal_under_the_installers_own_author(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q")
+    package = write_user_app(tmp_path, "notes")
+    add_app(tmp_path, package, None, never_bound)
+    write_workspace_file(tmp_path, "README.md", "the workspace\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "a workspace with notes")
+    # Someone else's uncommitted work, which the removal must not sweep into its commit.
+    write_workspace_file(tmp_path, "README.md", "the workspace, edited\n")
+
+    outcome = uninstall_app(tmp_path, "notes", WorkspaceRuntime(repo_root=tmp_path))
+
+    log = subprocess.run(
+        ["git", "log", "-1", "--format=%an <%ae>%n%s", "--name-only"], cwd=tmp_path, capture_output=True, text=True
+    ).stdout.splitlines()
+    status = subprocess.run(["git", "status", "--porcelain"], cwd=tmp_path, capture_output=True, text=True).stdout
+    assert log[:2] == ["app-install <app-install@workspace.invalid>", "app-install: uninstall notes"]
+    assert sorted(line for line in log[2:] if line) == [
+        "system/apps/notes/app.toml",
+        "system/apps/notes/icon.svg",
+        "system/apps/notes/pyproject.toml",
+        "system/config/apps/notes.toml",
+        "system/supervisord.conf.d/notes.conf",
+    ]
+    assert status == " M README.md\n"
+    # No supervisord and no registry in a bare tree: both are reported, and neither stops the removal.
+    assert [problem.split(":")[0] for problem in outcome.problems] == [
+        "supervisord did not drop the app's programs",
+        "the app's registry row was not removed",
+    ]
