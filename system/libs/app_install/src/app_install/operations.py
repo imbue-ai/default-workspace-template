@@ -72,7 +72,7 @@ class UninstallOutcome(FrozenModel):
     )
     problems: tuple[str, ...] = Field(
         description="What could not be done outside the tree (programs not reloaded, registry row not removed, "
-        "removal not committed); the app is removed from the tree all the same"
+        "upstream ref not deleted, removal not committed); the app is removed from the tree all the same"
     )
 
 
@@ -257,7 +257,9 @@ def uninstall_app(repo_root: Path, name: str, runtime: WorkspaceRuntimeInterface
     registry_failure = runtime.remove_registry_row(name)
     if registry_failure is not None:
         problems.append(f"the app's registry row was not removed: {registry_failure}")
-    runtime.delete_ref(f"{UPSTREAM_REF_PREFIX}{name}")
+    ref_failure = runtime.delete_ref(f"{UPSTREAM_REF_PREFIX}{name}")
+    if ref_failure is not None:
+        problems.append(f"the app's upstream ref was not deleted: {ref_failure}")
     commit_failure = runtime.commit_paths(removed, f"app-install: uninstall {name}")
     if commit_failure is not None:
         problems.append(f"the removal was not committed: {commit_failure}")

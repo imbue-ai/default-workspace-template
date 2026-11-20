@@ -345,6 +345,7 @@ def test_an_uninstall_that_cannot_reach_the_running_workspace_still_removes_the_
         repo_root=tmp_path,
         reload_failure="unix:///var/run/supervisor.sock no such file",
         registry_failure="no row named notes",
+        ref_failure="fatal: not a git repository",
         commit_failure="fatal: not a git repository",
     )
 
@@ -355,6 +356,7 @@ def test_an_uninstall_that_cannot_reach_the_running_workspace_still_removes_the_
     assert outcome.problems == (
         "supervisord did not drop the app's programs: unix:///var/run/supervisor.sock no such file",
         "the app's registry row was not removed: no row named notes",
+        "the app's upstream ref was not deleted: fatal: not a git repository",
         "the removal was not committed: fatal: not a git repository",
     )
 

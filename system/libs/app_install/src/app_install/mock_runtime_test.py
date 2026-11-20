@@ -13,6 +13,7 @@ class RecordingRuntime(WorkspaceRuntimeInterface):
     calls: list[str] = Field(default_factory=list, description="Every call, in order, as one line each")
     reload_failure: str | None = Field(default=None, description="What reloading programs fails with, if it does")
     registry_failure: str | None = Field(default=None, description="What removing a row fails with, if it does")
+    ref_failure: str | None = Field(default=None, description="What deleting a ref fails with, if it does")
     commit_failure: str | None = Field(default=None, description="What a commit fails with, if it does")
     is_port_answering: bool = Field(default=True, description="Whether a started app answers on its port")
     relocked_lock_text: str = Field(default="relocked\n", description="What a relock writes as the app's lock")
@@ -61,5 +62,6 @@ class RecordingRuntime(WorkspaceRuntimeInterface):
         self.calls.append(f"commit_paths {sorted(relative_paths)} {message!r}")
         return self.commit_failure
 
-    def delete_ref(self, ref: str) -> None:
+    def delete_ref(self, ref: str) -> str | None:
         self.calls.append(f"delete_ref {ref}")
+        return self.ref_failure

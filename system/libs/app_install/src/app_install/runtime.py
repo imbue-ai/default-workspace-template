@@ -175,6 +175,5 @@ class WorkspaceRuntime(WorkspaceRuntimeInterface):
             return None
         return committed
 
-    def delete_ref(self, ref: str) -> None:
-        # A ref that does not exist is the state asked for.
-        self._run(["git", "update-ref", "-d", ref])
+    def delete_ref(self, ref: str) -> str | None:
+        return self._run(["git", "update-ref", "-d", ref])

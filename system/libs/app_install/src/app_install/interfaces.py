@@ -61,5 +61,6 @@ class WorkspaceRuntimeInterface(MutableModel, ABC):
         it could not, None when it did or when there was nothing to commit."""
 
     @abstractmethod
-    def delete_ref(self, ref: str) -> None:
-        """Delete a local ref of the repository if it exists."""
+    def delete_ref(self, ref: str) -> str | None:
+        """Delete a local ref of the repository if it exists; the reason when it could not, None when the ref is
+        gone."""
