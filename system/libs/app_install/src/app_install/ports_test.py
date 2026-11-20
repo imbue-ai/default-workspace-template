@@ -72,3 +72,13 @@ def test_a_registry_that_does_not_parse_names_no_port(tmp_path: Path, monkeypatc
     _write(tmp_path, "data/.state/apps.toml", "[[apps\n")
 
     assert allocate_port(tmp_path, (), None, _never_bound) == 8080
+
+
+@pytest.mark.parametrize("requested_port", [-1, 0, 65536, 70000])
+def test_a_requested_number_that_is_no_port_is_refused_before_it_is_probed(tmp_path: Path, requested_port: int) -> None:
+    probed: list[int] = []
+
+    with pytest.raises(PortUnavailableError, match="is not a port"):
+        allocate_port(tmp_path, (), requested_port, lambda port: bool(probed.append(port)))
+
+    assert probed == []

@@ -16,6 +16,7 @@ from typing import Final
 from app_install.errors import PortUnavailableError
 from app_install.paths import supervisord_conf_files
 from app_manifest.records import HIGHEST_PORT
+from app_manifest.records import LOWEST_PORT
 from app_manifest.records import AppRecord
 from app_manifest.registry_location import registry_path
 
@@ -80,9 +81,13 @@ def allocate_port(
     is_bound: Callable[[int], bool],
 ) -> int:
     """``requested_port`` when it is free, else the lowest free port; raises PortUnavailableError for a requested
-    port that is taken."""
+    port that is taken or is no port at all."""
     taken = ports_in_use(repo_root, records)
     if requested_port is not None:
+        if not LOWEST_PORT <= requested_port <= HIGHEST_PORT:
+            raise PortUnavailableError(
+                f"{requested_port} is not a port: a port is a number from {LOWEST_PORT} to {HIGHEST_PORT}"
+            )
         if requested_port in taken or is_bound(requested_port):
             raise PortUnavailableError(f"port {requested_port} is already in use by another app or service")
         return requested_port
