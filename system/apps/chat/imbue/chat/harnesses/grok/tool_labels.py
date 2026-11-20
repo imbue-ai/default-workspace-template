@@ -92,7 +92,7 @@ TOOL_LABELS: Final[dict[str, GrokToolLabel]] = {
     ),
 }
 
-_SUBAGENT_TOOL_NAME: Final[str] = "spawn_subagent"
+SUBAGENT_TOOL_NAME: Final[str] = "spawn_subagent"
 _SUBAGENT_HEADER: Final[str] = "Tool: Agent"
 _SUBAGENT_CAPTION: Final[str] = "Delegating to sub-agent…"
 
@@ -142,7 +142,7 @@ def tool_labels(tool_name: str, raw_input_json: str, native_label: str) -> tuple
     ``_meta["x.ai/tool"].label`` (``Run Command``, ``Search``), the caption of a tool the table
     does not name.
     """
-    if tool_name == _SUBAGENT_TOOL_NAME:
+    if tool_name == SUBAGENT_TOOL_NAME:
         return _SUBAGENT_HEADER, _SUBAGENT_CAPTION
     tool_input = parse_input_preview(raw_input_json)
     if tool_name == _USE_TOOL_NAME:

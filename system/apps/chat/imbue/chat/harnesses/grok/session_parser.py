@@ -40,6 +40,7 @@ from imbue.chat.harnesses.error_patterns import is_provider_fault
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
+from imbue.chat.harnesses.grok.tool_labels import SUBAGENT_TOOL_NAME
 from imbue.chat.harnesses.grok.tool_labels import shell_command
 from imbue.chat.harnesses.grok.tool_labels import tool_labels
 from imbue.chat.harnesses.message_display import classify_user_message
@@ -72,7 +73,6 @@ INTERNAL_MARKER_TYPES: Final[frozenset[str]] = frozenset({THINKING_SOURCE_MARKER
 _UNKNOWN_MODEL: Final[str] = "unknown"
 _TERMINAL_STATUSES: Final[frozenset[str]] = frozenset({"completed", "failed"})
 _FAILED_STATUS: Final[str] = "failed"
-_SPAWN_SUBAGENT_TOOL_NAME: Final[str] = "spawn_subagent"
 _INTERRUPTED_SNIPPET: Final[str] = "Interrupted."
 _UNSPECIFIED_TURN_ERROR: Final[str] = "The turn ended with an error."
 _SEND_NOW_PREFIX: Final[str] = "The user sent a message while you were working:"
@@ -381,7 +381,7 @@ def _on_tool_call(update: dict[str, Any], lane: GrokLaneState, offset: int, time
     if command is not None and is_tk_lifecycle_anywhere(command):
         tool_call["tk_command"] = command
     description = _as_text(_as_dict(update.get("rawInput")).get("description"))
-    if tool_name == _SPAWN_SUBAGENT_TOOL_NAME and description is not None:
+    if tool_name == SUBAGENT_TOOL_NAME and description is not None:
         tool_call["description"] = description
     lane.calls_by_tool_call_id[tool_call_id] = GrokOpenCall(
         offset=offset, tool_name=tool_name, description=description, is_resolved=False, is_subagent_linked=False
@@ -517,7 +517,7 @@ def _on_subagent_spawned(update: dict[str, Any], lane: GrokLaneState) -> list[di
     candidates = [
         (tool_call_id, call)
         for tool_call_id, call in lane.calls_by_tool_call_id.items()
-        if call.tool_name == _SPAWN_SUBAGENT_TOOL_NAME and not call.is_subagent_linked and not call.is_resolved
+        if call.tool_name == SUBAGENT_TOOL_NAME and not call.is_subagent_linked and not call.is_resolved
     ]
     matching = [candidate for candidate in candidates if candidate[1].description == description] or candidates
     call_event_id: str | None = None
