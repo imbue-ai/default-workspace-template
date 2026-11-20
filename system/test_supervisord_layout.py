@@ -2,8 +2,8 @@
 
 Programs live one per file there, reached via the ``[include] files`` glob in
 ``system/supervisord.conf``. Several readers depend on that -- the OOM band
-checks in ``system/services/oom_priority``, the ``build-app`` scaffolder's port
-pre-flight and duplicate-name guard, ``migrate-workspace``'s port scan,
+checks in ``system/services/oom_priority``, ``app-install``'s port scan and
+program-name collision check, ``migrate-workspace``'s port scan,
 ``app_manifest.scope``'s wiring lookup, and (cross-repo) the minds evals
 evidence capture, which joins each registered app to the program that supervises
 it. Neither ``configparser`` nor a plain ``cat`` follows supervisord's
