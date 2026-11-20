@@ -84,10 +84,8 @@ def is_control_command_in_force(command: GrokControlCommand, identity: ModelIden
     match command.kind:
         case GrokControlCommandKind.MODEL:
             option = next((option for option in GROK_CATALOG.options if option.id == command.value), None)
-            reported_model_id = (
-                (option.harness_reported_model_id or option.id) if option is not None else command.value
-            )
-            return identity.model_id == reported_model_id
+            reported_model_id = option.harness_reported_model_id if option is not None else None
+            return identity.model_id in (command.value, reported_model_id)
         case GrokControlCommandKind.EFFORT:
             return identity.effort == command.value
         case _ as unreachable:
