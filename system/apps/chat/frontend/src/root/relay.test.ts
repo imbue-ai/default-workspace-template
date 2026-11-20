@@ -6,7 +6,13 @@
  * from one of the root's own inner frames counts.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isForwardedToInnerFrames, isForwardedToShell, rootOpenDecision, startInnerFrameRelay } from "./relay";
+import {
+  handHandshakeDown,
+  isForwardedToInnerFrames,
+  isForwardedToShell,
+  rootOpenDecision,
+  startInnerFrameRelay,
+} from "./relay";
 
 /** Frame this window under a spy parent for the duration of the test. */
 function framed(): { postMessage: ReturnType<typeof vi.fn> } {
@@ -117,6 +123,42 @@ describe("startInnerFrameRelay", () => {
 
     expect(selected).toEqual(["agent-2", "agent-4"]);
     expect(parent.postMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("the workspace-wide chords", () => {
+  it("hands an inner page's workspace-wide shortcut up to the shell", () => {
+    expect(isForwardedToShell({ type: "shell:shortcut", chord: "alt+meta+w" })).toBe(true);
+  });
+
+  it("hands the shell's workspace-wide chords to every inner page, and to each one introduced later", () => {
+    const parent = framed();
+    const pageA = { postMessage: vi.fn() };
+    startInnerFrameRelay(
+      () => false,
+      () => [pageA] as unknown as Window[],
+      () => undefined,
+    );
+    const chords = { type: "shell:workspace-chords", chords: ["alt+meta+w"], surface: "desktop" };
+
+    deliver(chords, parent);
+    const pageB = { postMessage: vi.fn() };
+    handHandshakeDown(pageB as unknown as Window, {
+      clientId: "client-1",
+      windowId: "win-1",
+      desktopId: "home",
+      app: "chat",
+      path: "/",
+      opensLocalFiles: false,
+      isViewing: false,
+    });
+
+    expect(pageA.postMessage.mock.calls).toEqual([[chords, "*"]]);
+    expect(pageB.postMessage.mock.calls.map((call) => call[0].type)).toEqual([
+      "shell:handshake",
+      "shell:workspace-chords",
+    ]);
+    expect(pageB.postMessage.mock.calls[1]).toEqual([chords, "*"]);
   });
 });
 

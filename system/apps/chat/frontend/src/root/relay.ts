@@ -26,9 +26,12 @@
  * not the page that asked: those answers (``minds:provider-sign-in-ack``, and
  * ``minds:permission-resolutions``, the verdict on a permission request a page asked the chrome
  * to open, which the page's card flips on and whose activity strip covers the wait for the agent
- * to be told) are passed down to the root's inner frames, as is the shell's
- * ``shell:keybindings-changed`` (each inner page re-fetches its resolved chords). Everything else
- * the chrome sends is the root's own to handle.
+ * to be told) are passed down to the root's inner frames, as are the shell's
+ * ``shell:keybindings-changed`` (each inner page re-fetches its resolved chords) and
+ * ``shell:workspace-chords`` (the workspace-wide chords each inner page hands up as
+ * ``shell:shortcut``, which goes up unchanged, and where the workspace runs), the latter held and
+ * handed to every inner page introduced later, like the handshake. Everything else the chrome
+ * sends is the root's own to handle.
  *
  * Trust: a message going up counts only when its source is one of the root's own inner frames,
  * and is forwarded only to ``window.parent``; a message going down counts only when its source is
@@ -44,6 +47,8 @@ import {
   SHELL_MESSAGE,
   SHELL_OPEN,
   SHELL_OPEN_LINK,
+  SHELL_SHORTCUT,
+  SHELL_WORKSPACE_CHORDS,
 } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { PERMISSION_RESOLUTIONS, PROVIDER_SIGN_IN_ACK } from "@imbue/workspace-ui/src/embed";
@@ -57,12 +62,17 @@ const FORWARDED_SHELL_TYPES: ReadonlySet<string> = new Set([
   SHELL_DRAFT_TEXT,
   SHELL_MESSAGE,
   SHELL_OPEN_LINK,
+  SHELL_SHORTCUT,
 ]);
 const FORWARDED_TO_INNER_TYPES: ReadonlySet<string> = new Set([
   PROVIDER_SIGN_IN_ACK,
   PERMISSION_RESOLUTIONS,
   SHELL_KEYBINDINGS_CHANGED,
+  SHELL_WORKSPACE_CHORDS,
 ]);
+
+// The shell's last ``shell:workspace-chords``, handed to each inner page as it is introduced.
+let lastWorkspaceChords: unknown = null;
 
 /** Whether a posted message is one the root passes up to the shell. */
 export function isForwardedToShell(data: unknown): boolean {
@@ -113,6 +123,7 @@ export function startInnerFrameRelay(
   window.addEventListener("message", (event: MessageEvent) => {
     if (window.parent !== window && event.source === window.parent) {
       if (!isForwardedToInnerFrames(event.data)) return;
+      if ((event.data as { type: string }).type === SHELL_WORKSPACE_CHORDS) lastWorkspaceChords = event.data;
       for (const inner of innerWindows()) inner.postMessage(event.data, "*");
       return;
     }
@@ -127,7 +138,9 @@ export function startInnerFrameRelay(
   });
 }
 
-/** Hand the shell's handshake to the root to ``inner``, one of its inner pages, as the shell hands it to the root. */
+/** Hand the shell's handshake to the root to ``inner``, one of its inner pages, as the shell hands it to the root,
+ *  then the workspace-wide chords the shell last sent, when it has sent any. */
 export function handHandshakeDown(inner: Window, handshake: ShellHandshake): void {
   inner.postMessage({ type: SHELL_HANDSHAKE, ...handshake }, "*");
+  if (lastWorkspaceChords !== null) inner.postMessage(lastWorkspaceChords, "*");
 }

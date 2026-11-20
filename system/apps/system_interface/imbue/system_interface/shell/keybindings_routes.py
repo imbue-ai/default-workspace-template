@@ -76,6 +76,7 @@ class KeybindingActionView(FrozenModel):
         description="The chords a reset leaves: the resolution without the requester's override in this workspace"
     )
     source: str = Field(description="Which layer answered: default, account, unsent, or workspace")
+    scope: str = Field(description="Where the chord fires: 'app' (its own page) or 'workspace' (anywhere)")
 
 
 class KeybindingAppView(FrozenModel):
@@ -223,6 +224,7 @@ def get_keybindings_catalog() -> ResponseReturnValue:
                     identity=identity,
                     workspace_root=shell.repo_root,
                 ),
+                scope=str(action.scope),
             )
             for action in app_actions.actions
         )

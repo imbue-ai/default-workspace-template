@@ -53,6 +53,10 @@ declare module "@minds/embed-contract" {
   // The keyboard shortcuts page's state (contract v16). Probed like the ones above.
   export const KEYBOARD_SHORTCUTS_PAGE: "minds:keyboard-shortcuts-page";
   export const OPEN_KEYBOARD_SHORTCUTS: "minds:open-keyboard-shortcuts";
+  export const SHELL_SHORTCUTS: "minds:shell-shortcuts";
+  export const RUN_SHORTCUT: "minds:run-shortcut";
+  export const RUN_CHORD: "minds:run-chord";
+  export const RECORD_CHORD: "minds:record-chord";
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;

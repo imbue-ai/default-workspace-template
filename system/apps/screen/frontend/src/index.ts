@@ -580,6 +580,8 @@ function bootstrap(): void {
   let handshake: ShellHandshake | null = null;
   const connection = connectToShell({
     capabilities: { navigation: false, closeChord: true },
+    // The remote desktop owns every key: workspace-wide shortcuts are not taken from it.
+    ownsKeys: true,
     onHandshake: (received) => {
       handshake = received;
       viewer.attachShell((title) => connection.location(PAGE_PATH, title));

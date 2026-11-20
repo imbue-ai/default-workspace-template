@@ -1,0 +1,1 @@
+The dictation shortcut is one chord on every platform, `DICTATION_SHORTCUT_CHORD` (`shift+meta+m`), replacing `dictationShortcutChord(isApple)`: `meta` is Cmd on a Mac and Ctrl elsewhere, so it is still ⇧⌘M on a Mac and Ctrl+Shift+M on Windows and Linux, where the per-platform `ctrl+shift+m` would no longer match.

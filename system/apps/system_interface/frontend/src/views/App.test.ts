@@ -10,6 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import type { Desktop, DesktopShortcut } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
+import { shortcutsBridge } from "../store/embedderBridge";
+import { setResolvedShellKeybindingsForTest, setShellChordPlatformForTest } from "../model/keybindings";
+import { setShortcutRecording } from "../model/shortcutRecording";
 import { TourController } from "../model/tour";
 import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
@@ -100,6 +103,7 @@ async function mountApp(
       openInBrowser: (url) => openedOutside.push(`browser:${url}`),
       launchInSystemApp: (url) => openedOutside.push(`app:${url}`),
     },
+    shortcuts: shortcutsBridge,
   });
   await store.start(NO_LINK);
   socket.deliver().onAppsUpdated([appRecord("docs")]);
@@ -796,6 +800,41 @@ describe("the theme chooser", () => {
 
     await saveTheme(null, false);
     expect(themeCalls()).toHaveLength(3);
+  });
+});
+
+describe("workspace-wide shortcuts in the shell's own document", () => {
+  afterEach(() => {
+    setResolvedShellKeybindingsForTest(null);
+    setShellChordPlatformForTest(null);
+    setShortcutRecording(false);
+  });
+
+  it("runs the action a chord is bound to, once per press, and leaves every key to a listening recorder", async () => {
+    await mountApp();
+    setShellChordPlatformForTest("mac");
+    setResolvedShellKeybindingsForTest({ app: "system_interface", chords_by_action: { "open-launcher": ["meta+k"] } });
+    const pressCommandK = (init: KeyboardEventInit = {}): KeyboardEvent => {
+      const event = new KeyboardEvent("keydown", {
+        key: "k",
+        code: "KeyK",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      document.dispatchEvent(event);
+      m.redraw.sync();
+      return event;
+    };
+
+    setShortcutRecording(true);
+    expect(pressCommandK().defaultPrevented).toBe(false);
+    expect(store.isLauncherOpen()).toBe(false);
+    setShortcutRecording(false);
+
+    expect(pressCommandK().defaultPrevented).toBe(true);
+    expect(store.isLauncherOpen()).toBe(true);
   });
 });
 

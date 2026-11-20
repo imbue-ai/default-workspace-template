@@ -21,6 +21,9 @@ import {
   SHELL_SHOWN,
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
+  SHELL_CHORD,
+  SHELL_SHORTCUT,
+  SHELL_WORKSPACE_CHORDS,
   ShellContractError,
   connectToShell,
   followShellTheme,
@@ -294,6 +297,89 @@ describe("a framed page's input reports", () => {
     window.dispatchEvent(new Event("pointerdown"));
     expect(posted).not.toHaveBeenCalled();
     posted.mockRestore();
+  });
+});
+
+describe("a framed page's workspace-wide chords", () => {
+  // Alt+F1 spells the same chord on every platform, so the test runner's own platform does not matter.
+  const WORKSPACE_CHORDS = { type: SHELL_WORKSPACE_CHORDS, chords: ["alt+f1"], surface: "browser" };
+
+  function pressAltF1(init: KeyboardEventInit = {}): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", { key: "F1", code: "F1", altKey: true, cancelable: true, ...init });
+    document.body.dispatchEvent(event);
+    return event;
+  }
+
+  function shortcutsSent(parent: { postMessage: ReturnType<typeof vi.fn> }): unknown[] {
+    return sentAfterConnect(parent)
+      .map(([message]) => message)
+      .filter((message) => (message as { type?: string }).type === SHELL_SHORTCUT);
+  }
+
+  it("takes a workspace-wide chord before the page's own handlers and hands it to the shell, once per press", () => {
+    const parent = shellFramed();
+    deliver(WORKSPACE_CHORDS, parent);
+    const pageHandler = vi.fn();
+    document.body.addEventListener("keydown", pageHandler);
+    try {
+      const pressed = pressAltF1({ bubbles: true });
+      pressAltF1({ bubbles: true, repeat: true });
+
+      expect(pressed.defaultPrevented).toBe(true);
+      expect(pageHandler).not.toHaveBeenCalled();
+      expect(shortcutsSent(parent)).toEqual([{ type: SHELL_SHORTCUT, chord: "alt+f1" }]);
+    } finally {
+      document.body.removeEventListener("keydown", pageHandler);
+    }
+  });
+
+  it("leaves every other key to the page", () => {
+    const parent = shellFramed();
+    deliver(WORKSPACE_CHORDS, parent);
+    const event = new KeyboardEvent("keydown", {
+      key: "F2",
+      code: "F2",
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    document.body.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(shortcutsSent(parent)).toEqual([]);
+  });
+
+  it("leaves the keys of a page that owns them, such as a terminal's", () => {
+    const parent = framed();
+    connection = connectToShell({ ownsKeys: true });
+    deliver(HANDSHAKE, parent);
+    deliver(WORKSPACE_CHORDS, parent);
+
+    expect(pressAltF1({ bubbles: true }).defaultPrevented).toBe(false);
+    expect(shortcutsSent(parent)).toEqual([]);
+  });
+
+  it("tells the page where the workspace runs, and ignores a malformed message", () => {
+    const parent = framed();
+    const onChordSurface = vi.fn();
+    connection = connectToShell({ onChordSurface });
+    deliver(HANDSHAKE, parent);
+    deliver(WORKSPACE_CHORDS, parent);
+    deliver({ type: SHELL_WORKSPACE_CHORDS, chords: ["alt+f1"], surface: "tv" }, parent);
+    deliver({ type: SHELL_WORKSPACE_CHORDS, chords: "alt+f1", surface: "desktop" }, parent);
+
+    expect(onChordSurface.mock.calls).toEqual([["browser"]]);
+  });
+
+  it("hands the page a chord the desktop app intercepted for it", () => {
+    const parent = framed();
+    const onChord = vi.fn();
+    connection = connectToShell({ onChord });
+    deliver(HANDSHAKE, parent);
+    deliver({ type: SHELL_CHORD, chord: "alt+f4" }, parent);
+    deliver({ type: SHELL_CHORD, chord: 4 }, parent);
+
+    expect(onChord.mock.calls).toEqual([["alt+f4"]]);
   });
 });
 

@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from bootstrap.manager import (
     UPDATE_RECOVER_EXIT_EMERGENCY,
     WORKSPACE_ROOT_DIR,
     _apply_container_timezone,
+    _built_in_app_manifests,
     _configure_git_global,
     _ensure_git_identity,
     _initialize_workspace_main_branch,
@@ -37,6 +39,7 @@ from bootstrap.manager import (
     _read_host_name,
     _read_update_marker_dri_agent,
     _recover_interrupted_update,
+    _refresh_built_in_app_keybindings,
     _set_container_timezone,
     _supervisord_environment,
     _wake_update_dri_agent,
@@ -1128,3 +1131,125 @@ def test_routines_tick_cron_entry_tolerates_an_unwritable_target(
     _write_routines_tick_cron_entry(target_dir=tmp_path / "missing")
 
     assert not (tmp_path / "missing").exists()
+
+
+# _refresh_built_in_app_keybindings
+
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+
+
+def _write_app(directory: Path, *, has_manifest: bool = True) -> None:
+    directory.mkdir(parents=True)
+    (directory / "pyproject.toml").write_text(f'[project]\nname = "{directory.name}"\n')
+    if has_manifest:
+        (directory / "app.toml").write_text(f'name = "{directory.name}"\n')
+
+
+def test_the_built_in_apps_are_the_root_members_under_system_apps_with_a_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_app(tmp_path / "system/apps/files")
+    _write_app(tmp_path / "system/apps/chat")
+    _write_app(tmp_path / "system/apps/no_manifest", has_manifest=False)
+    _write_app(tmp_path / "system/libs/library")
+    _write_app(tmp_path / "system/apps/users_own_app")
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.uv.workspace]\n"
+        'members = ["system/libs/library", "system/apps/files", "system/apps/chat", "system/apps/no_manifest"]\n'
+    )
+
+    assert _built_in_app_manifests() == [
+        Path("system/apps/files/app.toml"),
+        Path("system/apps/chat/app.toml"),
+    ]
+
+
+def test_without_a_readable_root_pyproject_there_are_no_built_in_apps_to_refresh(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    stub = _StubSubprocess()
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    _refresh_built_in_app_keybindings()
+
+    assert stub.calls == []
+
+
+def test_the_boot_carries_a_stopped_built_in_apps_current_keybindings_onto_its_row(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Files' row as an earlier release left it (its pre-B1 Open chords) takes the manifest's
+    keybindings at boot, with nothing else on it changed, and a user's app is left alone."""
+    registry = tmp_path / "apps.toml"
+    stale_files_keybindings = (
+        '{id = "open", label = "Open", default_chords = ["enter", "ctrl+arrowdown", "meta+arrowdown", '
+        '"ctrl+o", "meta+o"]}'
+    )
+    users_keybindings = '{id = "go", label = "Go", default_chords = ["ctrl+g"]}'
+    registry.write_text(
+        "[[apps]]\n"
+        'name = "files"\n'
+        'url = "http://localhost:8300"\n'
+        'label = "files-abcd1234"\n'
+        "stop_when_no_windows = true\n"
+        f"keybindings = [{stale_files_keybindings}]\n"
+        "\n"
+        "[[apps]]\n"
+        'name = "users_own_app"\n'
+        'url = "http://localhost:8400"\n'
+        'label = "users-own-app-abcd1234"\n'
+        f"keybindings = [{users_keybindings}]\n"
+    )
+    monkeypatch.chdir(_REPO_ROOT)
+    monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
+
+    _refresh_built_in_app_keybindings()
+
+    rows = {row["name"]: row for row in tomllib.loads(registry.read_text())["apps"]}
+    assert set(rows) == {"files", "users_own_app"}
+    manifest_keybindings = tomllib.loads(
+        (_REPO_ROOT / "system/apps/files/app.toml").read_text()
+    )["keybindings"]
+    assert [
+        (action["id"], action["default_chords"])
+        for action in rows["files"]["keybindings"]
+    ] == [
+        (action["id"], action.get("default_chords", []))
+        for action in manifest_keybindings
+    ]
+    assert {
+        key: value for key, value in rows["files"].items() if key != "keybindings"
+    } == {
+        "name": "files",
+        "url": "http://localhost:8300",
+        "label": "files-abcd1234",
+        "stop_when_no_windows": True,
+    }
+    assert rows["users_own_app"]["keybindings"] == [
+        {"id": "go", "label": "Go", "default_chords": ["ctrl+g"]}
+    ]
+
+
+def test_a_keybindings_refresh_that_fails_is_a_warning_and_the_boot_goes_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(_REPO_ROOT)
+    stub = _StubSubprocess(returncode=2)
+    stub.stderr = "registry is not valid TOML"
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+    warnings: list[str] = []
+    sink = logger.add(lambda message: warnings.append(str(message)), level="WARNING")
+    try:
+        _refresh_built_in_app_keybindings()
+    finally:
+        logger.remove(sink)
+
+    assert stub.calls[0][:3] == [
+        "python3",
+        "system/scripts/forward_port.py",
+        "--refresh-keybindings",
+    ]
+    assert "system/apps/files/app.toml" in stub.calls[0]
+    assert any("registry is not valid TOML" in line for line in warnings)

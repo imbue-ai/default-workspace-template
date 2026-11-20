@@ -1,0 +1,1 @@
+Every workspace start rewrites the keybindings on each built-in app's registry row from its manifest before any program runs, so an app that stays stopped (Files, once no window shows it) lists the current release's default shortcuts on the shortcuts screen and in every app's resolved chords instead of the ones it last registered. A user's own app is left to its own registration.

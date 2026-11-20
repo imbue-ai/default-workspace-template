@@ -8,12 +8,19 @@ import { isShortcutRecording } from "../model/shortcutRecording";
 import { settle } from "../testing/fakeShell";
 import {
   KeyboardSettingsSection,
+  REFUSED_CHORD_NOTICE,
+  WORKSPACE_WIDE_CHORD_NOTICE,
   actionsSharingShortcuts,
+  clashCandidates,
   clashesOf,
+  hiddenChordsHint,
   isResetOffered,
-  reservedChordNotice,
   unsentEntryLabel,
 } from "./KeyboardSettingsSection";
+
+const MAC_DESKTOP = { platform: "mac", surface: "desktop" } as const;
+const WINDOWS_DESKTOP = { platform: "windows", surface: "desktop" } as const;
+const MAC_BROWSER = { platform: "mac", surface: "browser" } as const;
 
 const APP: KeybindingAppView = {
   app: "files",
@@ -26,6 +33,7 @@ const APP: KeybindingAppView = {
       chords: ["f2"],
       reset_chords: ["f2"],
       source: "default",
+      scope: "app",
     },
     {
       id: "delete",
@@ -34,6 +42,7 @@ const APP: KeybindingAppView = {
       chords: ["delete", "ctrl+backspace"],
       reset_chords: ["delete"],
       source: "workspace",
+      scope: "app",
     },
     {
       id: "new-folder",
@@ -42,6 +51,33 @@ const APP: KeybindingAppView = {
       chords: [],
       reset_chords: [],
       source: "account",
+      scope: "app",
+    },
+  ],
+};
+
+/** The shell's workspace-wide launcher action beside an app-local one of its own. */
+const SHELL: KeybindingAppView = {
+  app: "system_interface",
+  display_name: "Workspace",
+  actions: [
+    {
+      id: "open-launcher",
+      label: "Open the launcher",
+      default_chords: ["meta+k"],
+      chords: ["meta+k"],
+      reset_chords: ["meta+k"],
+      source: "default",
+      scope: "workspace",
+    },
+    {
+      id: "launcher-secondary-send",
+      label: "Launcher: send the typed text to a chosen chat",
+      default_chords: ["meta+enter"],
+      chords: ["meta+enter"],
+      reset_chords: ["meta+enter"],
+      source: "default",
+      scope: "app",
     },
   ],
 };
@@ -109,20 +145,67 @@ describe("actionsSharingShortcuts", () => {
 describe("isResetOffered", () => {
   it("offers a reset only for a change in this workspace that differs from what the reset restores", () => {
     const [rename, deleteAction, newFolder] = APP.actions;
-    expect(isResetOffered(deleteAction)).toBe(true);
-    expect(isResetOffered(rename)).toBe(false);
-    expect(isResetOffered(newFolder)).toBe(false);
-    expect(isResetOffered({ ...deleteAction, chords: ["delete"] })).toBe(false);
-    expect(isResetOffered({ ...deleteAction, chords: ["delete"], reset_chords: ["delete", "f2"] })).toBe(true);
+    expect(isResetOffered(deleteAction, MAC_DESKTOP)).toBe(true);
+    expect(isResetOffered(rename, MAC_DESKTOP)).toBe(false);
+    expect(isResetOffered(newFolder, MAC_DESKTOP)).toBe(false);
+    expect(isResetOffered({ ...deleteAction, chords: ["delete"] }, MAC_DESKTOP)).toBe(false);
+    expect(isResetOffered({ ...deleteAction, chords: ["delete"], reset_chords: ["delete", "f2"] }, MAC_DESKTOP)).toBe(
+      true,
+    );
+  });
+
+  it("compares only the shortcuts that can arrive in the context", () => {
+    // Delete's change adds ctrl+backspace, a Mac's Control chord: off a Mac the change shows as the default does.
+    const deleteAction = APP.actions[1];
+    expect(isResetOffered(deleteAction, WINDOWS_DESKTOP)).toBe(false);
+    const withMetaW = { ...deleteAction, chords: ["delete", "meta+w"] };
+    expect(isResetOffered(withMetaW, MAC_BROWSER)).toBe(false);
+    expect(isResetOffered(withMetaW, MAC_DESKTOP)).toBe(true);
   });
 });
 
-describe("reservedChordNotice", () => {
-  it("warns about a chord Imbue Studio or the browser takes, on the platform that takes it", () => {
-    expect(reservedChordNotice("meta+w", true)).toContain("Command+W");
-    expect(reservedChordNotice("ctrl+w", false)).toContain("Ctrl+W");
-    expect(reservedChordNotice("meta+w", false)).toBeNull();
-    expect(reservedChordNotice("ctrl+shift+n", true)).toBeNull();
+describe("clashCandidates", () => {
+  it("lets an app's own action collide with its app and with every workspace-wide action, and a workspace-wide one with everything", () => {
+    const loaded = catalogOf({ apps: [SHELL, APP] });
+    const keys = (app: KeybindingAppView, actionId: string): string[] =>
+      clashCandidates(loaded, app, actionId).map((candidate) => `${candidate.app.app}.${candidate.action.id}`);
+    expect(keys(APP, "rename")).toEqual(["system_interface.open-launcher", "files.delete", "files.new-folder"]);
+    expect(keys(SHELL, "open-launcher")).toEqual([
+      "system_interface.launcher-secondary-send",
+      "files.rename",
+      "files.delete",
+      "files.new-folder",
+    ]);
+    expect(keys(SHELL, "launcher-secondary-send")).toEqual(["system_interface.open-launcher"]);
+  });
+});
+
+describe("clashesOf in a context", () => {
+  it("counts only the chords that can arrive there, on either side", () => {
+    // Delete holds ctrl+backspace, a Mac's Control chord: off a Mac it runs nothing, so it clashes with nothing.
+    expect(clashesOf(APP, "rename", ["ctrl+backspace"], new Map(), MAC_DESKTOP)).toHaveLength(1);
+    expect(clashesOf(APP, "rename", ["ctrl+backspace"], new Map(), WINDOWS_DESKTOP)).toEqual([]);
+    const sharingMetaW = { ...APP, actions: [APP.actions[0], { ...APP.actions[1], chords: ["meta+w"] }] };
+    expect(clashesOf(sharingMetaW, "rename", ["meta+w"], new Map(), MAC_DESKTOP)).toHaveLength(1);
+    expect(clashesOf(sharingMetaW, "rename", ["meta+w"], new Map(), MAC_BROWSER)).toEqual([]);
+  });
+});
+
+describe("hiddenChordsHint", () => {
+  it("names the shortcuts that are set but cannot arrive here", () => {
+    expect(hiddenChordsHint(["meta+w", "meta+t"], MAC_BROWSER)).toBe(
+      "⌘W, ⌘T are set, but not available in a browser.",
+    );
+  });
+
+  it("names a Mac's Control shortcut with the Mac's symbols off a Mac, where Ctrl is another key", () => {
+    expect(hiddenChordsHint(["ctrl+k"], WINDOWS_DESKTOP)).toBe("⌃K is set, but not available on Windows.");
+  });
+
+  it("gives each hidden shortcut its own reason", () => {
+    expect(hiddenChordsHint(["ctrl+k", "meta+w"], { platform: "windows", surface: "browser" })).toBe(
+      "⌃K is set, but not available on Windows. Ctrl+W is set, but not available in a browser.",
+    );
   });
 });
 
@@ -166,9 +249,21 @@ async function flush(): Promise<void> {
   m.redraw.sync();
 }
 
-/** Mount the section on a Mac and let its catalog read land. */
-async function mountSection(): Promise<HTMLElement> {
-  const root = mountView(() => m(KeyboardSettingsSection, { isApple: true }));
+/** Mount the section in the desktop app on a Mac (unless told otherwise) and let its catalog read land. */
+// What records a chord the desktop app relays, as the last mounted section handed it over.
+let recordRelayedChord: ((chord: string) => void) | null = null;
+
+async function mountSection(
+  context: typeof MAC_DESKTOP | typeof WINDOWS_DESKTOP | typeof MAC_BROWSER = MAC_DESKTOP,
+): Promise<HTMLElement> {
+  const root = mountView(() =>
+    m(KeyboardSettingsSection, {
+      context,
+      onChordRelay: (record) => {
+        recordRelayedChord = record;
+      },
+    }),
+  );
   await flush();
   return root;
 }
@@ -356,7 +451,7 @@ describe("editing a shortcut", () => {
     const changes: boolean[] = [];
     const root = mountView(() =>
       m(KeyboardSettingsSection, {
-        isApple: true,
+        context: MAC_DESKTOP,
         onRecordingChange: (isRecording: boolean) => changes.push(isRecording),
       }),
     );
@@ -490,7 +585,7 @@ describe("editing a shortcut", () => {
     ]);
   });
 
-  it("warns when a staged shortcut is one Imbue Studio or the browser takes", async () => {
+  it("warns in the desktop app when a staged shortcut is one a browser would keep, and saves it", async () => {
     stubFetch(catalogOf());
     const root = await mountSection();
 
@@ -498,7 +593,145 @@ describe("editing a shortcut", () => {
     click(root.querySelector(".keybinding-add"));
     pressInRecorder(root, { key: "w", metaKey: true });
 
-    expect(root.querySelector(".keybinding-reserved")?.textContent).toContain("Command+W");
+    expect(root.querySelector(".keybinding-warning")?.textContent).toContain(
+      "⌘W is a shortcut the browser keeps for itself",
+    );
+    expect(buttonNamed(root, "Only in this workspace").disabled).toBe(false);
+  });
+
+  it("records a key the desktop app took from the OS while the recorder listened, and only then", async () => {
+    stubFetch(catalogOf());
+    const root = await mountSection(WINDOWS_DESKTOP);
+
+    click(row(root, "rename").querySelector(".keybinding-edit"));
+    recordRelayedChord?.("alt+f4");
+    m.redraw.sync();
+    click(root.querySelector(".keybinding-add"));
+    recordRelayedChord?.("alt+f4");
+    m.redraw.sync();
+
+    expect(
+      Array.from(root.querySelectorAll(".keybinding-staged [data-chord]")).map((k) => k.getAttribute("data-chord")),
+    ).toEqual(["f2", "alt+f4"]);
+    expect(root.querySelector(".keybinding-recorder")).toBeNull();
+    expect(root.querySelector(".keybinding-warning")?.textContent).toContain("normally used for closing the window");
+  });
+
+  it("refuses Ctrl+Alt+Delete and says why, staging nothing", async () => {
+    stubFetch(catalogOf());
+    const root = await mountSection();
+
+    click(row(root, "rename").querySelector(".keybinding-edit"));
+    click(root.querySelector(".keybinding-add"));
+    pressInRecorder(root, { key: "Delete", altKey: true, metaKey: true });
+
+    expect(root.querySelector(".keybinding-refused")?.textContent).toBe(REFUSED_CHORD_NOTICE);
+    expect(
+      Array.from(root.querySelectorAll(".keybinding-staged [data-chord]")).map((k) => k.getAttribute("data-chord")),
+    ).toEqual(["f2"]);
+  });
+
+  it("refuses a shortcut typing could trigger for a workspace-wide action", async () => {
+    stubFetch(catalogOf({ apps: [SHELL, APP] }));
+    const root = await mountSection();
+
+    click(root.querySelector('[data-keybinding-action="system_interface.open-launcher"] .keybinding-edit'));
+    click(root.querySelector(".keybinding-add"));
+    pressInRecorder(root, { key: "k", shiftKey: true });
+
+    expect(root.querySelector(".keybinding-refused")?.textContent).toBe(WORKSPACE_WIDE_CHORD_NOTICE);
+  });
+
+  it("asks before an app's action takes a workspace-wide shortcut, and on Replace saves both apps", async () => {
+    const posted = stubFetch(catalogOf({ apps: [SHELL, APP] }));
+    const root = await mountSection();
+
+    click(row(root, "rename").querySelector(".keybinding-edit"));
+    click(root.querySelector(".keybinding-add"));
+    pressInRecorder(root, { key: "k", metaKey: true });
+
+    expect(root.querySelector(".keybinding-clash")?.textContent).toContain(
+      'Command+K already runs "Open the launcher" (Workspace).',
+    );
+    click(root.querySelector(".keybinding-replace"));
+    expect(
+      root.querySelector('[data-keybinding-action="system_interface.open-launcher"] .keybinding-off')?.textContent,
+    ).toBe("Off");
+    click(buttonNamed(root, "Only in this workspace"));
+    await flush();
+
+    expect(posted).toEqual([
+      {
+        url: "/api/keybindings",
+        body: { app: "system_interface", action: "open-launcher", chords: [], scope: "workspace" },
+      },
+      {
+        url: "/api/keybindings",
+        body: { app: "files", action: "rename", chords: ["f2", "meta+k"], scope: "workspace" },
+      },
+    ]);
+  });
+
+  it("flags an app's row that shares a shortcut with a workspace-wide action", async () => {
+    const files = { ...APP, actions: [{ ...APP.actions[0], chords: ["meta+k"] }] };
+    stubFetch(catalogOf({ apps: [SHELL, files] }));
+    const root = await mountSection();
+
+    expect(row(root, "rename").querySelector(".keybinding-shared")?.textContent).toContain(
+      '"Open the launcher" (Workspace)',
+    );
+  });
+
+  it("hides a Mac's Control shortcut off a Mac: the row reads Off and names it on hover", async () => {
+    const macOnly = { ...APP, actions: [{ ...APP.actions[0], chords: ["ctrl+r"] }, APP.actions[1]] };
+    stubFetch(catalogOf({ apps: [macOnly] }));
+    const root = await mountSection(WINDOWS_DESKTOP);
+
+    const off = row(root, "rename").querySelector(".keybinding-off");
+    expect(off?.textContent).toBe("Off");
+    expect(off?.getAttribute("data-hidden-chords")).toBe("ctrl+r");
+    // Delete keeps its one visible shortcut, with no "or" left over for the hidden one.
+    const deleteKeycaps = Array.from(row(root, "delete").querySelectorAll("[data-chord]")).map((k) =>
+      k.getAttribute("data-chord"),
+    );
+    expect(deleteKeycaps).toEqual(["delete"]);
+    expect(row(root, "delete").textContent).not.toContain("or");
+  });
+
+  it("warns under a row about a shortcut a browser would keep, and leaves the warning to the editor while editing", async () => {
+    const withMetaW = { ...APP, actions: [{ ...APP.actions[0], chords: ["f2", "meta+w"] }] };
+    stubFetch(catalogOf({ apps: [withMetaW] }));
+    const root = await mountSection();
+
+    expect(row(root, "rename").querySelector(".keybinding-row-warning")?.textContent).toContain(
+      "⌘W is a shortcut the browser keeps for itself",
+    );
+    click(row(root, "rename").querySelector(".keybinding-edit"));
+    expect(row(root, "rename").querySelector(".keybinding-row-warning")).toBeNull();
+    expect(row(root, "rename").querySelector(".keybinding-warning")).not.toBeNull();
+  });
+
+  it("draws a hidden Mac Control shortcut in the editor with the Mac's symbols", async () => {
+    const macOnly = { ...APP, actions: [{ ...APP.actions[0], chords: ["f2", "ctrl+r"] }] };
+    stubFetch(catalogOf({ apps: [macOnly] }));
+    const root = await mountSection(WINDOWS_DESKTOP);
+
+    click(row(root, "rename").querySelector(".keybinding-edit"));
+    const removeLabels = Array.from(root.querySelectorAll(".keybinding-remove")).map((button) =>
+      button.getAttribute("aria-label"),
+    );
+    expect(removeLabels).toEqual(["Remove F2", "Remove Control+R"]);
+  });
+
+  it("hides what a browser keeps when the workspace runs in one", async () => {
+    const withMetaW = { ...APP, actions: [{ ...APP.actions[0], chords: ["f2", "meta+w"] }] };
+    stubFetch(catalogOf({ apps: [withMetaW] }));
+    const root = await mountSection(MAC_BROWSER);
+
+    const keycaps = Array.from(row(root, "rename").querySelectorAll("[data-chord]")).map((k) =>
+      k.getAttribute("data-chord"),
+    );
+    expect(keycaps).toEqual(["f2"]);
   });
 
   it("restores an action's default shortcuts when nothing else uses them", async () => {

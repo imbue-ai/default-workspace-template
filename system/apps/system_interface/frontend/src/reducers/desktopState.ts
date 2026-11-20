@@ -31,6 +31,7 @@ import {
   focusedWindowId,
   withWindowDetached,
   withWindowFrame,
+  withWindowLowered,
   withWindowMinimized,
   withWindowPlacedOnOpen,
   withWindowRaised,
@@ -149,6 +150,7 @@ export type DesktopEvent =
       readonly updatedAt: string | null;
     }
   | { readonly type: "window_raised"; readonly windowId: string }
+  | { readonly type: "window_lowered"; readonly windowId: string }
   | { readonly type: "window_minimized"; readonly windowId: string }
   | { readonly type: "window_restored"; readonly windowId: string }
   | { readonly type: "window_state_set"; readonly windowId: string; readonly state: WindowState }
@@ -325,6 +327,8 @@ export function reduceDesktopState(state: DesktopState, event: DesktopEvent): De
     }
     case "window_raised":
       return withLayoutEdited(state, withWindowRaised(state.layout, event.windowId));
+    case "window_lowered":
+      return withLayoutEdited(state, withWindowLowered(state.layout, event.windowId));
     case "window_minimized":
       return withLayoutEdited(state, withWindowMinimized(state.layout, event.windowId));
     case "window_restored":

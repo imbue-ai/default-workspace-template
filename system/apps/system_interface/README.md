@@ -106,7 +106,18 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   through the latchkey gateway's `minds-workspaces-account-settings` verb,
   whose first use files one permission request). Every save, and a watch on
   the account's profile snapshot (`data/.state/profile/account.json`, written
-  from outside the workspace), says `keybindings_changed`.
+  from outside the workspace), says `keybindings_changed`. The catalog answers
+  each action's `scope`; the shell's own `app.toml` declares the
+  workspace-wide actions (`scope = "workspace"`: Close window, Next and
+  Previous window, Open the launcher, Show the keyboard shortcuts, Show every
+  window), which no other app may declare. The frontend runs them for a key
+  in its own document, a page's `shell:shortcut`, and Imbue Studio's
+  `minds:run-shortcut`, hands their chords to every page with
+  `shell:workspace-chords`, and reports them and every app's chords to Imbue
+  Studio with `minds:shell-shortcuts` (the keyboard-shortcuts spec in the mngr
+  repo, section 6). The screen reads chords in a context, the platform and
+  whether the workspace runs in the desktop app or a browser (`canPopOut`),
+  and hides, warns about, and checks clashes among the chords by it.
 - The home-screen tile: `/apple-touch-icon.png` and `/manifest.webmanifest`,
   from the selected avatar design and the workspace's name, which also titles
   the page.

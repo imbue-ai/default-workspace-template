@@ -121,7 +121,7 @@ import { getSpeechModels, getVoiceQueryClient } from "@imbue/workspace-voice/src
 import type { SpeechModel, SpeechModelProgress } from "@imbue/workspace-voice/src/speechModel";
 import {
   describeHost,
-  dictationShortcutChord,
+  DICTATION_SHORTCUT_CHORD,
   dictationShortcutLabel,
   isApplePlatform,
   isDictationSupported,
@@ -1013,7 +1013,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
 
   function handleDictationShortcut(event: KeyboardEvent): void {
     if (handleLoadingEscape(event)) return;
-    if (!keydownMatchesChords(event, [dictationShortcutChord(isAppleKeyboard())])) return;
+    if (!keydownMatchesChords(event, [DICTATION_SHORTCUT_CHORD])) return;
     event.preventDefault();
     // A chord held down repeats: it stays the page's, and is one press.
     if (event.repeat) return;
@@ -1794,7 +1794,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         }
         // The fallback is the manifest's defaults, so sending works in the moment
         // before the resolved chords land; Shift+Enter stays the fixed line break.
-        if (matchesKeybinding(event, "send-message", ["enter", "ctrl+enter", "meta+enter"])) {
+        if (matchesKeybinding(event, "send-message", ["enter"])) {
           event.preventDefault();
           void handleSubmit();
         }

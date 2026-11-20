@@ -6,6 +6,7 @@
 
 import type { DesktopApi } from "../store/DesktopStore";
 import type {
+  KeybindingsCatalog,
   LaunchOutcome,
   LaunchRequest,
   PageShowOutcome,
@@ -56,6 +57,14 @@ export class FakeDesktopApi implements DesktopApi {
   /** The apps the inventory answers; the socket's ``apps_updated`` is delivered by hand. */
   apps: AppRecord[] = [];
   clients: ClientRecord[] = [];
+  /** The keybindings catalog the shell answers. */
+  keybindingsCatalog: KeybindingsCatalog = {
+    apps: [],
+    is_owner: true,
+    can_save_everywhere: false,
+    has_pending_permission: false,
+    unsent: [],
+  };
   /** Whose desktops a create makes and the order route moves: the shell reads the requester's identity; the fake
    *  is told (null for the workspace owner's). */
   participant: string | null = null;
@@ -629,6 +638,12 @@ export class FakeDesktopApi implements DesktopApi {
     this.refuse();
     this.relayedMessages.push({ type, clientId, payload, sender });
     return { deliveries: this.relayDeliveries };
+  }
+
+  async fetchKeybindingsCatalog(): Promise<KeybindingsCatalog> {
+    this.calls.push("fetchKeybindingsCatalog");
+    this.refuse();
+    return this.keybindingsCatalog;
   }
 }
 

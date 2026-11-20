@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetEmbedEndpointForTesting } from "@imbue/workspace-ui/src/embed";
 import { FakeDesktopApi, FakeDesktopSocket } from "../testing/fakeShell";
-import { themeMetricsRecord } from "../testing/records";
+import { appRecord, desktopRecord, placementRecord, themeMetricsRecord, windowRecord } from "../testing/records";
 import { DesktopStore } from "./DesktopStore";
 import { setShortcutRecording } from "../model/shortcutRecording";
 import { closeFocusedWindowUnlessRecording, connectEmbedderToStore, immersiveBridge } from "./embedderBridge";
@@ -19,6 +19,7 @@ async function postedToEmbedder(): Promise<unknown[]> {
 }
 
 let posted: unknown[];
+let api: FakeDesktopApi;
 let store: DesktopStore;
 const record = (event: MessageEvent): void => {
   if (event.source !== window) posted.push(event.data);
@@ -27,9 +28,10 @@ const record = (event: MessageEvent): void => {
 beforeEach(() => {
   resetEmbedEndpointForTesting();
   posted = [];
+  api = new FakeDesktopApi();
   store = new DesktopStore({
     clientId: "client-1",
-    api: new FakeDesktopApi(),
+    api,
     socket: new FakeDesktopSocket(),
     metrics: themeMetricsRecord(),
     modes: { isPhone: false, isTouch: false },
@@ -85,6 +87,36 @@ describe("connectEmbedderToStore", () => {
     expect(await postedToEmbedder()).toEqual([
       { type: "minds:immersive-request", windowId: "win-0123456789abcdef", on: true },
     ]);
+  });
+});
+
+describe("the shortcuts the chrome runs", () => {
+  it("runs a workspace-wide action the chrome asks for, and ignores an action the shell has not", () => {
+    embedderSays({ type: "minds:run-shortcut", action: "unknown-action" });
+    expect(store.isLauncherOpen()).toBe(false);
+    embedderSays({ type: "minds:run-shortcut", action: "open-launcher" });
+    expect(store.isLauncherOpen()).toBe(true);
+  });
+
+  it("hands a chord the chrome intercepted to the focused window's page", async () => {
+    api.apps = [appRecord("docs")];
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
+    api.writeLayout("home", "client-1", { updated_at: null, placements: [placementRecord("win-1")] });
+    await store.start({ desktopId: null, open: null, launch: null });
+    const sent: string[] = [];
+    store.setPageDriver({
+      reload: () => undefined,
+      reloadApp: () => undefined,
+      resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
+      requestClose: () => undefined,
+      ownsCloseChord: () => false,
+      sendWorkspaceChords: () => undefined,
+      sendChord: (windowId, chord) => void sent.push(`${windowId}:${chord}`),
+    });
+
+    embedderSays({ type: "minds:run-chord", chord: "alt+f4" });
+    expect(sent).toEqual(["win-1:alt+f4"]);
   });
 });
 

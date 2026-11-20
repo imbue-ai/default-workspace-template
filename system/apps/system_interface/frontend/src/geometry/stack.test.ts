@@ -11,6 +11,7 @@ import {
   placementOf,
   withWindowDetached,
   withWindowFrame,
+  withWindowLowered,
   withWindowMinimized,
   withWindowPlacedOnOpen,
   withWindowRaised,
@@ -86,6 +87,13 @@ describe("the verbs", () => {
     const raised = withWindowRaised(minimized, "win-1");
     expect(raised.placements.map((placement) => placement.window_id)).toEqual(["win-2", "win-1"]);
     expect(raised.placements[1].is_minimized).toBe(false);
+  });
+
+  it("lower sends the window to the back of the stack as it is, and lowering the backmost changes nothing", () => {
+    const lowered = withWindowLowered(layout, "win-2");
+    expect(lowered.placements.map((placement) => placement.window_id)).toEqual(["win-2", "win-1"]);
+    expect(lowered.placements[0]).toEqual(layout.placements[1]);
+    expect(withWindowLowered(layout, "win-1")).toBe(layout);
   });
 
   it("minimize leaves the placement where it stands", () => {

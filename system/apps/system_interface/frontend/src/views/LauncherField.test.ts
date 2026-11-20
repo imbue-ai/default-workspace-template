@@ -1,13 +1,18 @@
 // @vitest-environment jsdom
 import "../testing/dom";
-import { setResolvedShellKeybindingsForTest } from "../model/keybindings";
+import { setResolvedShellKeybindingsForTest, setShellChordPlatformForTest } from "../model/keybindings";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LauncherField, isLineBreakChord, isSecondaryChord } from "./LauncherField";
 import type { LauncherFieldAttrs } from "./LauncherField";
 
-afterEach(unmountViews);
+// Read chords the way a Mac does, whatever the test runner's browser says about itself.
+beforeEach(() => setShellChordPlatformForTest("mac"));
+afterEach(() => {
+  unmountViews();
+  setShellChordPlatformForTest(null);
+});
 
 function render(overrides: Partial<LauncherFieldAttrs> = {}): { root: HTMLElement; attrs: LauncherFieldAttrs } {
   const attrs: LauncherFieldAttrs = {
@@ -36,12 +41,19 @@ function press(input: HTMLTextAreaElement, init: KeyboardEventInit): KeyboardEve
 }
 
 describe("isSecondaryChord", () => {
-  it("is Enter with Ctrl or with Cmd by default, and nothing else", () => {
+  it("is Cmd+Enter by default on a Mac, and nothing else", () => {
+    const plain = { altKey: false, shiftKey: false };
+    expect(isSecondaryChord({ key: "Enter", ctrlKey: false, metaKey: true, ...plain })).toBe(true);
+    expect(isSecondaryChord({ key: "Enter", ctrlKey: true, metaKey: false, ...plain })).toBe(false);
+    expect(isSecondaryChord({ key: "Enter", ctrlKey: false, metaKey: false, ...plain })).toBe(false);
+    expect(isSecondaryChord({ key: "a", ctrlKey: false, metaKey: true, ...plain })).toBe(false);
+  });
+
+  it("off a Mac is Ctrl+Enter, where the Windows key is no modifier", () => {
+    setShellChordPlatformForTest("windows");
     const plain = { altKey: false, shiftKey: false };
     expect(isSecondaryChord({ key: "Enter", ctrlKey: true, metaKey: false, ...plain })).toBe(true);
-    expect(isSecondaryChord({ key: "Enter", ctrlKey: false, metaKey: true, ...plain })).toBe(true);
-    expect(isSecondaryChord({ key: "Enter", ctrlKey: false, metaKey: false, ...plain })).toBe(false);
-    expect(isSecondaryChord({ key: "a", ctrlKey: true, metaKey: false, ...plain })).toBe(false);
+    expect(isSecondaryChord({ key: "Enter", ctrlKey: false, metaKey: true, ...plain })).toBe(false);
   });
 
   it("follows a re-bound launcher-secondary-send chord", () => {
@@ -82,11 +94,12 @@ describe("the launcher field", () => {
     expect(attrs.onRunSecondary).not.toHaveBeenCalled();
   });
 
-  it("Ctrl+Enter and Cmd+Enter run the secondary action, never the highlight", () => {
+  it("Cmd+Enter runs the secondary action, never the highlight; off a Mac, Ctrl+Enter does", () => {
     const { root, attrs } = render();
     const input = inputOf(root);
+    expect(press(input, { key: "Enter", metaKey: true }).defaultPrevented).toBe(true);
+    setShellChordPlatformForTest("windows");
     expect(press(input, { key: "Enter", ctrlKey: true }).defaultPrevented).toBe(true);
-    press(input, { key: "Enter", metaKey: true });
     expect(attrs.onRunSecondary).toHaveBeenCalledTimes(2);
     expect(attrs.onRunHighlight).not.toHaveBeenCalled();
   });
