@@ -20,6 +20,9 @@ from app_manifest.manifest import load_manifest
 from app_manifest.manifest import manifest_icon_path
 from app_manifest.manifest import scaffold_preview_spec
 from app_manifest.primitives import AppName
+from app_manifest.records import AppOrigin
+from app_manifest.records import AppRecord
+from app_manifest.records import write_record
 from app_manifest.testing import APP_ICON_MARKUP
 from app_manifest.testing import captured_warnings
 from app_manifest.testing import write_app_manifest
@@ -1704,3 +1707,50 @@ def test_a_program_or_publish_declaration_off_its_rule_fails_to_load(
 
     with pytest.raises(ManifestLoadError, match=problem):
         load_manifest(manifest_path, mode=ManifestReadMode.STRICT)
+
+
+# An app with a record: its manifest's [[references]] and [wiring] are not read.
+
+_REFERENCING_A_MISSING_PATH = (
+    'name = "notes"\ndisplay_name = "Notes"\nicon = "icon.svg"\n'
+    '\n[[references]]\npath = ".agents/skills/somewhere-else"\nnote = "Left in by the publisher"\n'
+)
+
+
+def _write_notes_record(repo_root: Path) -> None:
+    write_record(repo_root, AppRecord(name=AppName("notes"), package="notes", port=8084, origin=AppOrigin.INSTALLED))
+
+
+def test_a_reference_to_a_path_this_workspace_lacks_fails_the_load_of_an_app_with_no_record(tmp_path: Path) -> None:
+    manifest_path = write_app_manifest(tmp_path, "notes", _REFERENCING_A_MISSING_PATH, is_icon_written=True)
+
+    with pytest.raises(ManifestLoadError, match="does not exist"):
+        load_manifest(manifest_path, repo_root=tmp_path)
+
+
+def test_an_app_with_a_record_loads_whatever_its_manifest_still_references(tmp_path: Path) -> None:
+    manifest_path = write_app_manifest(tmp_path, "notes", _REFERENCING_A_MISSING_PATH, is_icon_written=True)
+    _write_notes_record(tmp_path)
+
+    manifest = load_manifest(manifest_path, repo_root=tmp_path)
+
+    assert manifest.name == "notes"
+
+
+@pytest.mark.parametrize(
+    "leftover",
+    [
+        pytest.param('\n[[references]]\npath = "docs/notes.md"\n', id="references"),
+        pytest.param('\n[wiring]\nprograms = ["notes-display"]\n', id="wiring"),
+    ],
+)
+def test_the_authoring_check_refuses_references_and_wiring_in_an_app_with_a_record(
+    tmp_path: Path, leftover: str
+) -> None:
+    body = 'name = "notes"\ndisplay_name = "Notes"\nicon = "icon.svg"\n' + leftover
+    manifest_path = write_app_manifest(tmp_path, "notes", body, is_icon_written=True)
+    write_repo_file(tmp_path, "docs/notes.md", "# Notes\n")
+    _write_notes_record(tmp_path)
+
+    with pytest.raises(ManifestLoadError, match="an app with a record declares no"):
+        load_manifest(manifest_path, repo_root=tmp_path, mode=ManifestReadMode.STRICT)

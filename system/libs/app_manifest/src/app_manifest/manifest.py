@@ -36,6 +36,7 @@ from app_manifest.primitives import ReferenceNote
 from app_manifest.primitives import ReferencePath
 from app_manifest.primitives import SecretFileName
 from app_manifest.primitives import is_path_covered_by
+from app_manifest.records import record_path
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -1022,8 +1023,19 @@ def load_manifest(
     if manifest.icon is not None and not (path.parent / manifest.icon).is_file():
         raise ManifestLoadError(f"manifest {path} names icon {str(manifest.icon)!r}, which does not exist beside it")
     resolved_repo_root = repo_root.resolve() if repo_root is not None else repo_root_for_manifest(path)
-    if resolved_repo_root is not None:
+    if resolved_repo_root is None:
+        return manifest
+    if not record_path(resolved_repo_root, manifest.name).is_file():
         _check_references_against_repo_root(path, manifest, resolved_repo_root)
+        return manifest
+    # An app with a record lists what else uses it in the record, and names its programs as services. Tables
+    # its manifest still carries are not read, so an installed app's is not held to this workspace's tree; the
+    # authoring check refuses them, since a workspace that still writes them means something else by them.
+    if mode is ManifestReadMode.STRICT and (manifest.references or manifest.wiring.programs):
+        raise ManifestLoadError(
+            f"manifest {path} is invalid: an app with a record declares no [[references]] and no [wiring]; "
+            "what else uses the app is listed in its record, and its background programs are [[services]]"
+        )
     return manifest
 
 
