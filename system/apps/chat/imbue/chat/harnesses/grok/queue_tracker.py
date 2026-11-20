@@ -70,6 +70,8 @@ class GrokQueueTracker:
     _sending_ids: set[str]
     # The claimed ids a tap holds only to grey its button; stop still takes them.
     _tap_claimed_ids: set[str]
+    # Flush-claimed ids a stop passed over; one whose flush then settles undelivered is never typed again.
+    _stopped_claim_ids: set[str]
     # Bumped when claimed work becomes void: grok relaunched, or its session is gone.
     _generation: int
     # How many stops are running; while any is, nothing may be claimed for a flush.
@@ -95,6 +97,7 @@ class GrokQueueTracker:
         self._lock = threading.RLock()
         self._sending_ids = set()
         self._tap_claimed_ids = set()
+        self._stopped_claim_ids = set()
         self._generation = 0
         self._flush_pause_count = 0
         self._pending_send = set()
@@ -191,6 +194,7 @@ class GrokQueueTracker:
         self._queued.clear()
         self._sending_ids.clear()
         self._tap_claimed_ids.clear()
+        self._stopped_claim_ids.clear()
         self._pending_send.clear()
         self._attempts.clear()
         self._first_flushed_at.clear()
@@ -201,6 +205,7 @@ class GrokQueueTracker:
             self._queued.resolve(queued_id)
             self._sending_ids.discard(queued_id)
             self._tap_claimed_ids.discard(queued_id)
+            self._stopped_claim_ids.discard(queued_id)
             self._pending_send.discard(queued_id)
             self._attempts.pop(queued_id, None)
             self._first_flushed_at.pop(queued_id, None)
@@ -298,7 +303,8 @@ class GrokQueueTracker:
             return min(earlier, default=None)
 
     def finish_flush(self, claimed: tuple[str, ...], generation: int, *, delivered: tuple[str, ...]) -> None:
-        """Settle a claimed flush: ``delivered`` leave, and the rest wait on as Queued with one more attempt spent.
+        """Settle a claimed flush: ``delivered`` leave, and the rest wait on as Queued with one more attempt spent, or
+        every attempt when a stop passed them over.
 
         A stale ``generation`` (grok relaunched, or its session is gone) settles nothing.
         """
@@ -314,14 +320,18 @@ class GrokQueueTracker:
                     self._queued.resolve(queued_id)
                     self._attempts.pop(queued_id, None)
                     self._first_flushed_at.pop(queued_id, None)
+                elif queued_id in self._stopped_claim_ids:
+                    self._attempts[queued_id] = MAX_DELIVERY_ATTEMPTS
                 else:
                     self._attempts[queued_id] = self._attempts.get(queued_id, 0) + 1
+                self._stopped_claim_ids.discard(queued_id)
             self._settled_locked()
 
     def take_unclaimed(self) -> tuple[str, tuple[str, ...]]:
         """Remove and return every entry no flush has claimed as one block, for stop; a tap's claim keeps none."""
         with self._lock:
             flush_claimed_ids = self._sending_ids - self._tap_claimed_ids
+            self._stopped_claim_ids.update(flush_claimed_ids)
             entries = [entry for entry in self._queued.snapshot() if entry["queued_id"] not in flush_claimed_ids]
             taken = tuple(entry["queued_id"] for entry in entries)
             self._drop_ids_locked(taken)

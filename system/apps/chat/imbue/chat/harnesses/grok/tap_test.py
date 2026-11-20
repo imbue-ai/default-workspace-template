@@ -141,6 +141,23 @@ def test_stop_spares_the_block_a_flush_is_typing(tmp_path: Path) -> None:
     assert watcher.get_queued_messages() == []
 
 
+def test_a_block_a_stop_spared_is_never_typed_again_when_its_flush_fails_and_the_next_stop_returns_it(
+    tmp_path: Path,
+) -> None:
+    agent_info, watcher, grok = _setup(tmp_path)
+    grok.begin_turn()
+    _hold(agent_info, "unconfirmed")
+    queue = get_tracker(agent_info.agent_state_dir)
+    _block, claimed, generation = queue.begin_flush()
+
+    assert _stop(agent_info, watcher, grok, grok.cancelling_press) == ""
+    queue.finish_flush(claimed, generation, delivered=())
+
+    assert queue.begin_flush()[1] == ()
+    assert queue.has_deliverable_entries() is False
+    assert _stop(agent_info, watcher, grok, grok.cancelling_press) == "unconfirmed"
+
+
 def test_stop_returns_what_a_tap_claimed(tmp_path: Path) -> None:
     agent_info, watcher, grok = _setup(tmp_path)
     grok.begin_turn()
