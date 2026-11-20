@@ -88,7 +88,7 @@ def validate_manifest(manifest_path: Path, repo_root: Path | None) -> None:
     "for_path",
     default=None,
     help="Compute a skill footprint for this repo-root-relative path instead of an app's manifest. "
-    "A skill an app carries is part of that app, so its path is refused.",
+    "A skill an app carries is part of that app, so the link to it in the skills directory is refused.",
 )
 @_repo_root_option
 @click.option(
