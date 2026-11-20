@@ -57,7 +57,15 @@ import { applyPresence, getOwnIdentity, getOwnParticipant } from "../model/Prese
 import { applyRoster, getRoster } from "../model/Roster";
 import { isClientOf, isOwnDesktop, ownDesktops, ownerEntryOf } from "../model/Ownership";
 import { applyChatsActivity } from "../model/ChatsActivity";
-import { nextExpiryOf, withBubble, withoutChat, withoutExpired, withoutSpeaker } from "../model/Bubbles";
+import {
+  isMentionOf,
+  nextExpiryOf,
+  raisesBubble,
+  withBubble,
+  withoutChat,
+  withoutExpired,
+  withoutSpeaker,
+} from "../model/Bubbles";
 import type { BubbleStack } from "../model/Bubbles";
 import { labelForApp, pinPageOfLink, shareDomainOf, windowAtBackendUrl, windowAtLocalAppHost } from "../model/pageUrl";
 import type {
@@ -93,6 +101,7 @@ import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import { OwnIdMinter, PAGE_ID_PREFIX, REPORT_ID_PREFIX, SAVE_ID_PREFIX, mintHex } from "../model/ownIds";
 import { isPreviewShell } from "../model/PreviewShell";
 import { noticeFromWire } from "../model/UpdateNotice";
+import { applyResourceGauge, viewFromWire as resourceGaugeFromWire } from "../model/resourceGauge";
 import type { DeepLink } from "../model/deepLinks";
 import {
   backdropFrameOf,
@@ -134,6 +143,7 @@ import {
   activeFocusedWindowId,
   activePlacements,
   appByName,
+  avatarPinnedEntryOf,
   desktopById,
   detachedWindowsOf,
   draftTargetOf,
@@ -823,12 +833,12 @@ export class DesktopStore {
 
   /** The chrome reported a step of the drag it watches. "out": the window is detached where it stood, its
    *  frame untouched, and saved at once, so the chrome's own desktop window (which stands in for it under the
-   *  cursor from here) reads a placement that already says so, in this shell's stacking order; the ghost
-   *  stands where the drag began. "in": the chrome dropped that window, and this one is brought back and shown
-   *  again where the drag has it, saved at once too. "released": the button came up while out, and the gesture
-   *  is over; the placement is already what it is to be, so nothing is written. This shell is the one writer
-   *  during a drag; the chrome's window only reads. A word on a watched drag this shell already ended on its own
-   *  release still stands (``takeLateTearOut``). */
+   *  cursor from here) reads a placement that already says so, in this shell's stacking order. "in": the chrome
+   *  dropped that window, and this one is brought back and shown again where the drag has it, saved at once
+   *  too. "released": the button came up while out, and the gesture is over; the placement is already what it
+   *  is to be, so nothing is written. This shell is the one writer during a drag; the chrome's window only
+   *  reads. A word on a watched drag this shell already ended on its own release still stands
+   *  (``takeLateTearOut``). */
   setTearOut(windowId: string, phase: TearOutPhase): void {
     const gesture = this.moveGestureOf(windowId);
     if (gesture === null) {
@@ -850,8 +860,8 @@ export class DesktopStore {
     this.notifyListeners();
   }
 
-  /** Out: the window is detached where it stood, its frame untouched, so the ghost stands where the drag began
-   *  and a return lands there. Saved at once, since the chrome's window reads the placement as soon as it loads. */
+  /** Out: the window is detached where it stood, its frame untouched, so a return lands where the drag began.
+   *  Saved at once, since the chrome's window reads the placement as soon as it loads. */
   private detachDraggedWindow(windowId: string): void {
     this.dispatch({ type: "window_detached", windowId });
     void this.flushPendingSave();
@@ -1242,6 +1252,10 @@ export class DesktopStore {
       },
       onUpdateNoticeChanged: (wire) =>
         this.dispatch({ type: "update_notice_changed", notice: wire === null ? null : noticeFromWire(wire) }),
+      onResourceGaugeChanged: (view) => {
+        applyResourceGauge(resourceGaugeFromWire(view), this.deps.redraw);
+        this.deps.redraw();
+      },
       onThemesChanged: (catalog) => {
         this.themeCatalogChanges += 1;
         this.takeThemeCatalog(catalog);
@@ -1423,8 +1437,8 @@ export class DesktopStore {
     return this.bubbles;
   }
 
-  /** The tray entries hopping now: they just became connected, or a bubble of theirs just appeared (the
-   *  multiplayer spec, sections 6.2 and 6.5). */
+  /** The tray entries hopping now: they just became connected, or just said something (the multiplayer spec,
+   *  sections 6.2 and 6.5). */
   getHopping(): ReadonlySet<string> {
     return this.hopping;
   }
@@ -1452,15 +1466,20 @@ export class DesktopStore {
     }, TRAY_HOP_MS);
   }
 
-  /** Somebody just said something: their bubble is raised or refreshed (S11), their entry hops, and the next
-   *  timeout is armed. A bubble for the chat the user is looking at says nothing they cannot already see, so it
-   *  is not raised -- unless it mentions the viewer, whose mark must not be missable. */
+  /** Somebody just said something, or a chat notified the user: their entry hops, and when it is a notification
+   *  or mentions the viewer their bubble is raised or refreshed (S11) and the next timeout is armed. A bubble for
+   *  the chat the user is looking at says nothing they cannot already see, so it is not raised -- unless it
+   *  mentions the viewer, whose mark must not be missable. */
   private takeBubble(bubble: BubbleWire): void {
     this.hop([bubble.speaker]);
     const viewer = getOwnParticipant();
-    const isMentionOfViewer = viewer !== null && bubble.mentions.includes(viewer);
-    if (!isMentionOfViewer && isChatOnScreen(this.state, bubble.chat_id)) return;
-    this.setBubbles(withBubble(this.bubbles, bubble, viewer, Date.now()));
+    const isRaised =
+      raisesBubble(bubble, viewer) && (isMentionOf(bubble, viewer) || !isChatOnScreen(this.state, bubble.chat_id));
+    if (isRaised) {
+      this.setBubbles(withBubble(this.bubbles, bubble, viewer, Date.now()));
+    } else {
+      this.deps.redraw();
+    }
   }
 
   /** Put a speaker's bubble away: it was dismissed, or clicked. */
@@ -1728,10 +1747,16 @@ export class DesktopStore {
     return this.launchPinnedFirst(row.app.name, row.launchPath.id, mentionParams(row.launchPath, `@${handle} `));
   }
 
-  /** A click on the agent's tray entry: the main chat opens, with its composer focused, through the primary text
-   *  action with nothing to send (the chat app's "Send to main chat" with no text opens the main chat). */
-  async openMainChat(): Promise<boolean> {
-    return this.startWithText("");
+  /** A click on the agent's tray entry (the multiplayer spec, section 6.2): the avatar's pinned window on the
+   *  active desktop is put on screen on whatever chat it holds, never put away; with no such window the main chat
+   *  opens, through the primary text action with nothing to send. Refused while viewing somebody else's desktop,
+   *  whose pinned window is theirs. False when refused or when nothing opened. */
+  async openAgentChat(): Promise<boolean> {
+    if (this.refuseWhileViewing("show the agent's chat")) return false;
+    const pinned = avatarPinnedEntryOf(this.state);
+    if (pinned === null) return this.startWithText("");
+    this.showWindow(pinned.window.id);
+    return true;
   }
 
   /** A window's "Chat about this app" (the multiplayer spec, section 9.2): the window's app is named to the first
@@ -2072,12 +2097,18 @@ export class DesktopStore {
       await this.focusOrOpenWindowAt(app.name, path);
       return;
     }
+    await this.showAppPage(app.name, path, [pinPage]);
+  }
+
+  /** Put a page of ``app`` on this client's screen through the shell's ``show``: a window already there is raised,
+   *  else the app's window on one of the ``repoint`` pages (or its pinned window) is pointed at it, else one opens. */
+  async showAppPage(app: string, path: string, repoint: readonly string[]): Promise<void> {
     await this.flushPendingSave();
     let outcome: PageShowOutcome;
     try {
-      outcome = await this.deps.api.showPage(this.deps.clientId, { app: app.name, path, repoint: [pinPage] });
+      outcome = await this.deps.api.showPage(this.deps.clientId, { app, path, repoint });
     } catch (error) {
-      this.toast(`Could not open ${app.name}: ${(error as Error).message}`);
+      this.toast(`Could not open ${app}: ${(error as Error).message}`);
       return;
     }
     if (outcome.hasNoDesktopWindow) this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);
@@ -2927,12 +2958,6 @@ export class DesktopStore {
     this.showDetachedWindow(windowId);
   }
 
-  /** Show the ghost of a pulled-out window again where it stood, after ``minimizeWindow`` hid it (the ghost's
-   *  "Hide"); the window itself stays in the chrome's desktop window. */
-  showWindowGhost(windowId: string): void {
-    this.dispatch({ type: "window_detached", windowId });
-  }
-
   /** Raise (or reopen) the desktop window a pulled-out window is shown in, at the size the window renders here. */
   showDetachedWindow(windowId: string): void {
     if (findWindow(this.state, windowId) === null) return;
@@ -2959,11 +2984,11 @@ export class DesktopStore {
     this.popOut.beginWindowDrag({ ...this.popOutRequestFor(windowId, rect), grabX: grab.x, grabY: grab.y });
   }
 
-  /** Bring a pulled-out window back to the desktop (``minds:reattach-window``, the ghost's "Bring back", the
-   *  entry's menu): shown and raised, at ``frame`` when a drop back onto the desktop named one. The window's own
-   *  desktop is shown first when the client has moved to another meanwhile (the chrome names a window, not a
-   *  desktop). Saved at once, and in a solo shell reported only once saved: the chrome closes that shell's
-   *  desktop window on the report, which would abort a save still on its way. */
+  /** Bring a pulled-out window back to the desktop (``minds:reattach-window``, the entry's menu): shown and
+   *  raised, at ``frame`` when a drop back onto the desktop named one. The window's own desktop is shown first
+   *  when the client has moved to another meanwhile (the chrome names a window, not a desktop). Saved at once,
+   *  and in a solo shell reported only once saved: the chrome closes that shell's desktop window on the report,
+   *  which would abort a save still on its way. */
   async reattachWindow(windowId: string, frame: Frame | null): Promise<void> {
     if (!this.isPopOutVerbOwn(windowId)) return;
     const found = findWindow(this.state, windowId);
@@ -2983,17 +3008,21 @@ export class DesktopStore {
     return this.soloWindowId === null || windowId === this.soloWindowId;
   }
 
-  /** A taskbar entry's click: for a pulled-out window, show its ghost again when the ghost is hidden, else its
-   *  own desktop window; otherwise restore and raise when minimized, minimize when focused, raise otherwise. */
+  /** A taskbar entry's click: minimize the focused window, else show it as ``showWindow`` does. */
   toggleTaskbarEntry(windowId: string): void {
+    if (activeFocusedWindowId(this.state) === windowId) this.minimizeWindow(windowId);
+    else this.showWindow(windowId);
+  }
+
+  /** Put a window on screen without ever putting it away: for a pulled-out window, its own desktop window; otherwise
+   *  restore and raise when minimized, raise otherwise. */
+  private showWindow(windowId: string): void {
     const placement = placementOf(this.state.layout, windowId);
     if (placement.is_detached) {
-      if (placement.is_minimized) this.showWindowGhost(windowId);
-      else this.showDetachedWindow(windowId);
+      this.showDetachedWindow(windowId);
       return;
     }
     if (placement.is_minimized) this.restoreWindow(windowId);
-    else if (activeFocusedWindowId(this.state) === windowId) this.minimizeWindow(windowId);
     else this.raiseWindow(windowId);
   }
 

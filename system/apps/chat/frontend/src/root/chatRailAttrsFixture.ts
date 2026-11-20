@@ -10,6 +10,7 @@ export function chatRailAttrsFixture(overrides: Partial<ChatRailAttrs> = {}): Ch
     isInDrawer: false,
     isTouch: false,
     onPick: () => undefined,
+    onDeleteRefused: () => undefined,
     onNew: () => undefined,
     referenceScope: scopeOfHandshake(null),
     onDraftReference: () => undefined,

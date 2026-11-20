@@ -175,7 +175,7 @@ describe("the verbs", () => {
     expect(withWindowRestored(detached, "win-2").placements[2].is_detached).toBe(false);
     expect(withWindowState(detached, "win-2", "MAXIMIZED").placements[2].is_detached).toBe(false);
     expect(withWindowFrame(detached, "win-2", cascadeFrame(3)).placements[2].is_detached).toBe(false);
-    // Minimize shows nothing: the window stays out, and its ghost goes out of sight until detach shows it again.
+    // Minimize keeps the window out.
     const hidden = withWindowMinimized(detached, "win-2");
     expect(hidden.placements[1]).toMatchObject({ is_detached: true, is_minimized: true });
     expect(focusedWindowId(hidden.placements)).toBe("win-3");

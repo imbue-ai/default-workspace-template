@@ -14,7 +14,12 @@ vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => 
 const createChat = vi.fn();
 const getChatById = vi.fn();
 const addChatsUpdatedListener = vi.fn();
-vi.mock("./models/Chats", () => ({ createChat, getChatById, addChatsUpdatedListener }));
+vi.mock("./models/Chats", () => ({
+  createChat,
+  getChatById,
+  addChatsUpdatedListener,
+  addHeldSendFailedListener: () => undefined,
+}));
 vi.mock("./presence", () => ({
   startPresenceReporting: vi.fn(),
   reportPresence: vi.fn(),

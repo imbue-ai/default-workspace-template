@@ -1,1 +1,0 @@
-- Pin mngr to the public mirror of the Imbue Studio 0.9.5 release commit, so workspaces built from the `minds-v0.9.5` tag run the mngr the 0.9.5 desktop app ships with.

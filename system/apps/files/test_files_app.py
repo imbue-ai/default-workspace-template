@@ -3,11 +3,14 @@
 Every change a test makes goes through the app's own controls and is read back off the disk.
 """
 
+import math
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
+from playwright.sync_api import Browser
+from playwright.sync_api import FloatRect
 from playwright.sync_api import Locator
 from playwright.sync_api import Page
 from playwright.sync_api import Request
@@ -696,6 +699,189 @@ def test_an_image_page_draws_the_image(open_files_page: OpenFilesPage) -> None:
     expect(image).to_be_visible()
     assert image.evaluate("img => img.naturalWidth") == 1
     expect(page.locator(".edit-file")).to_have_count(0)
+
+
+_WIDE_PICTURE_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900">'
+    '<rect width="1600" height="900" fill="white"/><circle cx="1200" cy="600" r="100" fill="red"/></svg>'
+)
+
+# Whether the stage is drawn fitted: at a zoom of 1 and no offset, within rounding.
+_IS_FITTED_JS = """() => {
+    const m = new DOMMatrix(getComputedStyle(document.querySelector('.files-image-stage')).transform);
+    return Math.abs(m.a - 1) < 0.001 && Math.abs(m.e) < 0.5 && Math.abs(m.f) < 0.5;
+}"""
+
+
+def _wide_picture_page(open_files_page: OpenFilesPage, files_root: Path) -> Page:
+    (files_root / "wide.svg").write_text(_WIDE_PICTURE_SVG)
+    page = open_files_page("/wide.svg?view")
+    expect(page.locator(".files-file-image")).to_be_visible()
+    return page
+
+
+def _image_box(page: Page) -> FloatRect:
+    box = page.locator(".files-file-image").bounding_box()
+    assert box is not None
+    return box
+
+
+def _is_fitted(page: Page) -> bool:
+    return page.evaluate(_IS_FITTED_JS)
+
+
+def _wait_for_stage_transform(page: Page, is_fitted: bool) -> None:
+    page.wait_for_function(f"() => ({_IS_FITTED_JS})() === {'true' if is_fitted else 'false'}")
+
+
+def _wait_for_stage_scale(page: Page, scale: float) -> None:
+    """Wait until the stage is drawn at ``scale``, within a hundredth of it."""
+    page.wait_for_function(
+        """scale => {
+            const transform = getComputedStyle(document.querySelector('.files-image-stage')).transform;
+            return Math.abs(new DOMMatrix(transform).a - scale) < scale / 100;
+        }""",
+        arg=scale,
+    )
+
+
+def _point_at(page: Page, x_fraction: float, y_fraction: float) -> tuple[float, float]:
+    """Rest the pointer on the picture at the given fractions of its size, and return that point. A hover, because
+    Fortress glides the cursor to a point after a plain move returns, so input sent at once lands along the way."""
+    box = _image_box(page)
+    page.locator(".files-file-image").hover(position={"x": box["width"] * x_fraction, "y": box["height"] * y_fraction})
+    return (box["x"] + box["width"] * x_fraction, box["y"] + box["height"] * y_fraction)
+
+
+def _wheel(page: Page, point: tuple[float, float], deltas_y: list[float], is_ctrl: bool) -> None:
+    """Send wheel events at `point`, held with Ctrl as a trackpad pinch reaches the page or plain as a scroll does, one
+    per animation frame as the browser hands wheel input on. Dispatched in the page, since Fortress (CI's browser) does
+    not hand Playwright's wheel input on as sent."""
+    page.evaluate(
+        """async ([x, y, deltas, ctrlKey]) => {
+            for (const deltaY of deltas) {
+                document.elementFromPoint(x, y).dispatchEvent(
+                    new WheelEvent('wheel', {clientX: x, clientY: y, deltaY, ctrlKey, bubbles: true, cancelable: true})
+                );
+                await new Promise((resolve) => requestAnimationFrame(resolve));
+            }
+        }""",
+        [point[0], point[1], deltas_y, is_ctrl],
+    )
+
+
+def test_a_pinch_zooms_an_image_around_the_pointer_and_pinching_back_fits_it_again(
+    open_files_page: OpenFilesPage, files_root: Path
+) -> None:
+    page = _wide_picture_page(open_files_page, files_root)
+    fitted = _image_box(page)
+    pointer = _point_at(page, 0.75, 0.7)
+
+    # A plain scroll leaves the picture alone (read as a pinch, it would carry the zoom below past e); a trackpad
+    # pinch reaches the page as Ctrl+wheel events, each one Panzoom's zoom step.
+    _wheel(page, pointer, [-120], is_ctrl=False)
+    _wheel(page, pointer, [-10] * 10, is_ctrl=True)
+    _wait_for_stage_scale(page, math.e)
+
+    zoomed = _image_box(page)
+    assert zoomed["width"] / fitted["width"] == pytest.approx(math.e, rel=0.01)
+    assert (pointer[0] - zoomed["x"]) / zoomed["width"] == pytest.approx(0.75, abs=0.005)
+    assert (pointer[1] - zoomed["y"]) / zoomed["height"] == pytest.approx(0.7, abs=0.005)
+
+    _wheel(page, pointer, [10] * 10, is_ctrl=True)
+    _wait_for_stage_transform(page, is_fitted=True)
+    assert _image_box(page) == pytest.approx(fitted, abs=1)
+
+
+def test_a_drag_moves_an_image_only_while_it_is_zoomed(open_files_page: OpenFilesPage, files_root: Path) -> None:
+    page = _wide_picture_page(open_files_page, files_root)
+    centre = _point_at(page, 0.5, 0.5)
+
+    page.mouse.down()
+    page.mouse.move(centre[0] - 100, centre[1] - 50, steps=5)
+    page.mouse.up()
+    assert _is_fitted(page)
+
+    _wheel(page, centre, [-10] * 10, is_ctrl=True)
+    _wait_for_stage_scale(page, math.e)
+    zoomed = _image_box(page)
+    _point_at(page, 0.5, 0.5)
+    page.mouse.down()
+    page.mouse.move(centre[0] - 100, centre[1] - 50, steps=5)
+    page.mouse.up()
+    moved = _image_box(page)
+    assert (moved["x"] - zoomed["x"], moved["y"] - zoomed["y"]) == pytest.approx((-100, -50), abs=1)
+
+
+def test_a_zoomed_image_dragged_far_still_covers_its_frame(open_files_page: OpenFilesPage, files_root: Path) -> None:
+    page = _wide_picture_page(open_files_page, files_root)
+    centre = _point_at(page, 0.5, 0.5)
+    _wheel(page, centre, [-10] * 10, is_ctrl=True)
+    _wait_for_stage_scale(page, math.e)
+
+    # Three times from the middle towards the bottom right: further than the zoomed picture reaches past its frame.
+    for _ in range(3):
+        page.mouse.move(*centre)
+        page.mouse.down()
+        page.mouse.move(centre[0] + 500, centre[1] + 300, steps=10)
+        page.mouse.up()
+
+    stage = page.locator(".files-image-stage").bounding_box()
+    frame = page.locator(".files-image-frame").bounding_box()
+    assert stage is not None and frame is not None
+    assert stage["x"] <= frame["x"] + 1 and stage["y"] <= frame["y"] + 1
+
+
+def test_a_touch_pinch_out_past_the_fit_around_another_point_leaves_the_image_fitted(
+    module_browser: Browser, files_origin: str, files_root: Path
+) -> None:
+    (files_root / "wide.svg").write_text(_WIDE_PICTURE_SVG)
+    context = module_browser.new_context(viewport={"width": 390, "height": 760}, has_touch=True, is_mobile=True)
+    try:
+        page = context.new_page()
+        page.goto(f"{files_origin}/wide.svg?view")
+        expect(page.locator(".files-file-image")).to_be_visible()
+        fitted = _image_box(page)
+        touch = context.new_cdp_session(page)
+
+        def fingers(kind: str, centre_x: float, spread: float) -> None:
+            points = [{"x": centre_x - spread, "y": 380, "id": 1}, {"x": centre_x + spread, "y": 380, "id": 2}]
+            touch.send("Input.dispatchTouchEvent", {"type": kind, "touchPoints": [] if kind == "touchEnd" else points})
+
+        # Pinch in around the middle, then lift and pinch out past the fit around a point to its left.
+        fingers("touchStart", 195, 30)
+        for spread in range(35, 160, 5):
+            fingers("touchMove", 195, spread)
+        fingers("touchEnd", 195, 0)
+        _wait_for_stage_transform(page, is_fitted=False)
+        fingers("touchStart", 160, 130)
+        for spread in range(125, 0, -5):
+            fingers("touchMove", 160, spread)
+        fingers("touchEnd", 160, 0)
+
+        _wait_for_stage_transform(page, is_fitted=True)
+        assert _image_box(page) == pytest.approx(fitted, abs=1)
+    finally:
+        context.close()
+
+
+def test_a_press_on_an_image_keeps_its_default_so_it_focuses_the_page(
+    open_files_page: OpenFilesPage, files_root: Path
+) -> None:
+    """The shell raises a window behind others when a press puts the focus in its page."""
+    page = _wide_picture_page(open_files_page, files_root)
+    page.evaluate(
+        """() => {
+            window.pressDefaults = [];
+            window.addEventListener('pointerdown', (event) => window.pressDefaults.push(event.defaultPrevented));
+        }"""
+    )
+
+    _point_at(page, 0.5, 0.5)
+    page.mouse.down()
+    page.mouse.up()
+
+    assert page.evaluate("window.pressDefaults") == [False]
 
 
 def test_deleting_a_file_from_its_page_leaves_the_window_saying_so(

@@ -1,1 +1,0 @@
-New stdlib-only library: the archive rule for an append-only `events.jsonl` stream a workspace program writes forever (`stage_oversized_stream`, `compress_staged_streams`, `staged_streams`), lifted from the shell's app announcements so the share gateway's request counts share it.

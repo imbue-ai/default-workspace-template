@@ -7,7 +7,9 @@ What is paused: every chat (``user_created=true``) and background worker
 command's report would start the agent's next turn in the middle of the apply. Left alone: the
 lead running the update, every member of its chat, every worker it launched (the update's own
 ``update-self`` worker), and the ``is_primary=true`` services agent. A lead may also name agents
-to pause for memory earlier in the run; those are paused whatever their state.
+to pause for memory earlier in the run; those are paused whatever their state, and one that was
+idle when paused stays stopped through the resume, untold: starting it would take back the
+memory, and the next message to it starts it anyway.
 
 The workspace's main chat is stopped like any other busy chat, but the chat app starts it again
 as soon as it finds it stopped, without a resume prompt, so it is interrupted rather than held:
@@ -184,6 +186,7 @@ class PauseTarget:
     runners: tuple[BackgroundRunner, ...]
     lead_chat_id: str
     is_main_chat: bool
+    is_busy: bool
 
 
 def read_main_chat_id(repo_root: Path) -> str | None:
@@ -407,21 +410,26 @@ def select_pause_targets(
             if by_name[name].is_live
         ]
     else:
-        chosen = [
-            agent
-            for agent in candidates
-            if agent.state in (STATE_RUNNING, STATE_BACKGROUND)
-            or (agent.state == STATE_WAITING and agent.chat_id in runners_by_chat)
-        ]
+        chosen = [agent for agent in candidates if _is_busy(agent, runners_by_chat)]
     return [
         PauseTarget(
             agent=agent,
             runners=tuple(runners_by_chat.get(agent.chat_id, ())),
             lead_chat_id=_lead_chat_id(agent, agents) if agent.is_worker else "",
             is_main_chat=agent.chat_id == main_chat_id,
+            is_busy=_is_busy(agent, runners_by_chat),
         )
         for agent in chosen
     ]
+
+
+def _is_busy(
+    agent: ListedAgent, runners_by_chat: Mapping[str, Sequence[BackgroundRunner]]
+) -> bool:
+    """Whether ``agent`` is mid-turn, or waiting on a background command that will start its next turn."""
+    return agent.state in (STATE_RUNNING, STATE_BACKGROUND) or (
+        agent.state == STATE_WAITING and agent.chat_id in runners_by_chat
+    )
 
 
 def pause(
@@ -467,6 +475,7 @@ def pause(
                 lead_chat_id=target.lead_chat_id,
                 interrupted_tasks=tasks,
                 is_restarted=target.is_main_chat,
+                is_idle_when_paused=not target.is_busy,
             )
         )
         if target.is_main_chat:
@@ -491,8 +500,8 @@ def stop_runner(pid: int) -> None:
 def merge_stopped(existing: list[StoppedAgent], stopped: StoppedAgent) -> None:
     """Add ``stopped`` to the record, or reopen its entry when an earlier round already paused it.
 
-    The earlier round's interrupted commands ride along only until a resume has told the chat
-    about them.
+    The earlier round's interrupted commands, and its claim on a note, ride along only until a
+    resume has told the chat about them.
     """
     for index, entry in enumerate(existing):
         if entry.id == stopped.id:
@@ -501,6 +510,9 @@ def merge_stopped(existing: list[StoppedAgent], stopped: StoppedAgent) -> None:
                     dict.fromkeys(
                         [*entry.interrupted_tasks, *stopped.interrupted_tasks]
                     )
+                )
+                stopped.is_idle_when_paused = (
+                    stopped.is_idle_when_paused and entry.is_idle_when_paused
                 )
             existing[index] = stopped
             return
@@ -518,6 +530,19 @@ def _is_agent_listed(run: CommandRunner, agent_id: str) -> bool:
         )
         return True
     return any(agent.id == agent_id for agent in agents)
+
+
+def _live_agent_ids(run: CommandRunner) -> frozenset[str]:
+    """The ids of the agents ``mngr list`` shows running or waiting; a listing that fails shows none."""
+    try:
+        agents = list_agents(run)
+    except AgentListingError as exc:
+        print(
+            f"warning: could not tell whether a chat left stopped was started again: {exc}",
+            file=sys.stderr,
+        )
+        return frozenset()
+    return frozenset(agent.id for agent in agents if agent.is_live)
 
 
 def send_note(
@@ -554,9 +579,29 @@ def resume(
     save: Callable[[], None],
 ) -> list[str]:
     """Start every paused agent again, then send each chat concerned one note, saving progress
-    after each step so a re-run picks up only what is left. Returns the problems, one line each."""
+    after each step so a re-run picks up only what is left. Returns the problems, one line each.
+
+    An agent that was idle when paused is left stopped and untold.
+    """
     problems: list[str] = []
+    live_ids = (
+        _live_agent_ids(run)
+        if any(entry.is_idle_when_paused for entry in stopped)
+        else frozenset()
+    )
     for entry in stopped:
+        if entry.is_idle_when_paused:
+            if entry.id in live_ids:
+                print(
+                    f"Left {entry.name} as it is: it was idle when paused to free memory, and has"
+                    " been started again since."
+                )
+            else:
+                print(
+                    f"Left {entry.name} stopped: it was idle when paused to free memory, and the"
+                    " next message to it starts it."
+                )
+            continue
         if entry.is_restarted:
             continue
         completed = run(["mngr", "start", entry.id], MNGR_STOP_START_TIMEOUT_SECONDS)
@@ -576,6 +621,7 @@ def resume(
             )
             continue
         entry.is_restarted = True
+        entry.is_started_after_landing = landed_ref is not None
         save()
         print(f"Started {entry.name} ({entry.id}) again.")
 
