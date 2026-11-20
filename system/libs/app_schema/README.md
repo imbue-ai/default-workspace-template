@@ -5,6 +5,7 @@ The names of the app SDK ([`imbue-app-sdk`](https://github.com/imbue-ai/mngr/tre
 An app's request guard, its route helpers, the OpenAPI document built from its routes, and the assertions its tests make about them now live in the SDK, so that an app can lock and run outside a workspace.
 Every built-in app imports the SDK directly.
 This package stays for apps a workspace's agent built before the SDK: each module here re-exports the SDK's own objects, so such an app keeps working unchanged until the workspace's update converts it.
+A newly scaffolded app depends on it as well, though it imports the SDK alone: until `imbue-app-sdk` is on PyPI, this package is how the SDK reaches the app's environment at the commit the workspace pins.
 
 | Old import | Now |
 | --- | --- |
