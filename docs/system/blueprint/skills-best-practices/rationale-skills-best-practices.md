@@ -12,6 +12,7 @@ Read it before changing a rule.
 - What the vendors agree on for descriptions
 - Published guidance on content two skills need
 - Rule by rule
+- What four harnesses keep after a compaction
 - Considered and not adopted
 - Not traced
 
@@ -109,8 +110,10 @@ A reference has no size limit. That was decided against: the contents-list rule 
 | Standing instructions and the step list first | Claude Code skills: "put the most important instructions near the top of SKILL.md". |
 | Standing instructions are rules, not steps | Claude Code skills: the file is not re-read on later turns, "so write guidance that should apply throughout a task as standing instructions rather than one-time steps". |
 | A copyable step list | Anthropic and agentskills.io: numbered steps and a checklist for a multi-step flow. |
-| Each step names its reference | Only the invoked SKILL.md is re-attached after a compaction, so detail moved to a reference is protected only if the step says what to re-read. |
-| The after-compaction rule lives in the instructions file | An instruction to re-read that sits in a reference is lost with the reference, so it cannot live there. A line in every SKILL.md spends each skill's 14 KB on the same sentence. Claude Code reloads the instructions file after a compaction whether or not it re-attaches the skill, so one statement there reaches every skill. That reload was confirmed for Claude Code only. |
+| Each step names its reference | At best only the invoked SKILL.md is re-attached after a compaction, so detail moved to a reference is protected only if the step says what to re-read. |
+| The after-compaction rule lives in the instructions file | An instruction to re-read that sits in a reference is lost with the reference, so it cannot live there. A line in every SKILL.md spends each skill's 14 KB on the same sentence. Every harness tested still had the instructions file after a compaction, so one statement there reaches every skill. |
+| The rule names the reference first, and SKILL.md only when its text is gone | The harness test below: Claude Code re-attaches a compliant SKILL.md whole, so re-reading it there is a wasted call, while Pi and Codex re-attach nothing. A condition the agent can check for itself (is the text still in front of it) holds on each of them, and each agent's own report of what it could see was accurate. |
+| The rule sits near the top of the instructions file | The same test: Codex gives the agent the first 32,768 bytes of `AGENTS.md` (`project_doc_max_bytes`) and Antigravity about the first 24 to 27 KB, of a file that is 44 KB. A rule further down reaches neither. |
 | One term per concept; one default with an escape hatch | Anthropic, agentskills.io. |
 
 ### Step lists and contents lists
@@ -166,7 +169,7 @@ A second motive, raised on 2026-11-17 and deferred to a later pass: every tool c
 |---|---|
 | Version-bound text lives in one reference, out of the live path | Anthropic (an "old patterns" section) and agentskills.io (no time-sensitive information). |
 | One such reference for each reader | The worker never reads the lead's file, so each reader's items are in the file that reader is sent to. |
-| Each item opens with an observable test for whether it applies | An agent cannot reliably tell which release a workspace came from, but it can see that a script is missing or a field is absent. A test it can run decides the matter where a version would have to be inferred. |
+| The step that points at an item states an observable test for whether it applies | An agent cannot reliably tell which release a workspace came from, but it can see that a script is missing or a field is absent. A test it can run decides the matter where a version would have to be inferred. The test is at the pointing step so that an agent opens the file only when it applies ("The condition is at the link"). |
 | `CLEANUP:` markers | The repository's existing convention for rollout-bridging code. |
 
 Only `update-self` got this treatment. No version floor was set, because the shims that pay to remove are tied to a release that was not yet on the stable channel.
@@ -195,6 +198,31 @@ A flow never restructures a user's existing skills: splitting prose into referen
 | The guide is in mngr, vendored here | People work on mngr without this repository cloned (2026-11-05). |
 | A validator for what a script can decide, a review category for the rest | Not every rule can be checked deterministically (2026-11-05). |
 | Vendor-neutral terms in the guide's glossary, product vocabulary in this repository's | So the guide does not overfit to one harness or one product. |
+
+## What four harnesses keep after a compaction
+
+Measured on 2026-11-20 in a live workspace on minds-v0.10.5, one run per harness (two for Claude Code), each on the harness's default model.
+A throwaway skill carried a marker word in each of its 40 steps (a 12.5 KB `SKILL.md`), and its one reference a marker word in each of 20 items (4.9 KB).
+Each chat was asked to use the skill and do its first step (read the reference), then to print about 140 KB of unrelated text through 16 shell calls, and was then compacted with the harness's own command.
+It was then asked, with tools forbidden, for every marker word and for two facts from `AGENTS.md` (one 15 KB into the file, one 43 KB in), and finally to carry out step 23.
+
+| Harness | How it loaded the skill | SKILL.md after | Reference after | `AGENTS.md` | Step 23 |
+|---|---|---|---|---|---|
+| Claude Code 2.1.227 | The Skill tool | Whole text, 40 of 40 | Whole text when it was among the files most recently modified, 20 of 20. After the agent wrote six newer files it was not re-attached; its words survived only because the summary copied them | Both facts | Right, from context |
+| Codex 0.169.0 | `cat` in the shell | No plain text; an encrypted compaction item, from which it still gave 40 of 40 | The same, 20 of 20 | The first fact only | Wrong (the next step's word), without re-reading |
+| Pi 0.87.1 | Its `read` tool | Lost, 3 of 40, and it said so | Lost, 7 of 20 | Both facts | Right, after re-reading `SKILL.md` unprompted |
+| Antigravity 1.5.8 | Its `read_file` tool | 40 of 40 | 20 of 20 | The first fact only | Right, from context |
+
+What follows from it:
+
+- Claude Code behaved as its documentation says: an invoked skill of at most 5,000 tokens comes back whole, and a file comes back only among the five most recently modified.
+- Only Claude Code has an invoked skill. The other three read `SKILL.md` as a file, so on them a skill has no more protection than any file read.
+- Pi keeps the newest 20,000 tokens and a summary. Codex keeps the user's messages and an opaque item the provider wrote. Both runs were small (about 60,000 tokens), so what the summary or the opaque item carried here is an upper bound: Codex answered step 23 wrongly from it without re-reading.
+- No agent invented a word. Each one's own account of what it could still see (asked as "yes, partly or no") matched what it then recalled, which is what lets the rule be conditional on it.
+- Codex and Antigravity never had the end of `AGENTS.md`, compaction or not. A fresh chat on each, asked for the file's top-level headings with tools forbidden, listed them through "Using crystallized skills" (Codex, the 32,768-byte default of `project_doc_max_bytes`) and through "Communication" (Antigravity, a cut between byte 23,334 and byte 27,732).
+
+OpenCode 1.19.5 was not measured: its agent did not launch in that workspace.
+Its documentation and source say a compaction keeps a summary and a recent tail, with tool results in the tail cut short, and rebuilds the instructions from the files on each request.
 
 ## Considered and not adopted
 
