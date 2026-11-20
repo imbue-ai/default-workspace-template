@@ -128,12 +128,12 @@ def test_a_paused_queue_refuses_a_flush_claim_until_it_resumes(tmp_path: Path) -
     assert tracker.begin_flush()[1] != ()
 
 
-def test_take_all_voids_the_open_claim_so_its_settle_changes_nothing(tmp_path: Path) -> None:
-    tracker = _tracker(tmp_path)
+def test_a_relaunch_voids_the_open_claim_so_its_settle_changes_nothing(tmp_path: Path) -> None:
+    tracker = _tracker(tmp_path, token="session-1")
     _hold(tracker, "first")
     _block, claimed, generation = tracker.begin_flush()
 
-    assert tracker.take_all()[0] == "first"
+    tracker.set_session("session-2")
     _hold(tracker, "after")
     tracker.finish_flush(claimed, generation, delivered=())
 

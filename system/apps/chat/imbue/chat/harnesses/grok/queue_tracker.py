@@ -60,7 +60,7 @@ class GrokQueueTracker:
     _sending_ids: set[str]
     # The claimed ids a tap holds only to grey its button; stop still takes them.
     _tap_claimed_ids: set[str]
-    # Bumped when claimed work becomes void: a restart took the entries, or grok relaunched.
+    # Bumped when claimed work becomes void: grok relaunched, or its session is gone.
     _generation: int
     # How many stops are running; while any is, nothing may be claimed for a flush.
     _flush_pause_count: int
@@ -277,7 +277,7 @@ class GrokQueueTracker:
     def finish_flush(self, claimed: tuple[str, ...], generation: int, *, delivered: tuple[str, ...]) -> None:
         """Settle a claimed flush: ``delivered`` leave, and the rest wait on as Queued with one more attempt spent.
 
-        A stale ``generation`` (a restart or a relaunch took the entries) settles nothing.
+        A stale ``generation`` (grok relaunched, or its session is gone) settles nothing.
         """
         with self._lock:
             if generation != self._generation:
@@ -304,14 +304,6 @@ class GrokQueueTracker:
             self._drop_ids_locked(taken)
             self._settled_locked()
             return self._block_of(entries), taken
-
-    def take_all(self) -> tuple[str, tuple[str, ...]]:
-        """Remove and return every entry, claimed included, and void the claim: a restart kills its send."""
-        with self._lock:
-            entries = self._queued.snapshot()
-            self._clear_entries_locked()
-            self._settled_locked()
-            return self._block_of(entries), tuple(entry["queued_id"] for entry in entries)
 
     def demote_pending(self) -> bool:
         """Show the unclaimed Sending entries as Queued: something is in the way. True if any changed."""
