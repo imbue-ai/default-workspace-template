@@ -176,9 +176,10 @@ def _resolve_duplicate_ports(
 def regenerate(repo_root: Path, name: str | None, is_bound: Callable[[int], bool]) -> RegenerateOutcome:
     """Rewrite the derived files of the app registered as ``name``, or of every app, after giving a new port to any
     app that shares one."""
-    records, reassigned = _resolve_duplicate_ports(repo_root, load_all_records(repo_root), is_bound)
-    if name is not None and all(str(record.name) != name for record in records):
+    recorded = load_all_records(repo_root)
+    if name is not None and all(str(record.name) != name for record in recorded):
         raise AppNotFoundError(f"no app record for {name!r}")
+    records, reassigned = _resolve_duplicate_ports(repo_root, recorded, is_bound)
     changed: list[str] = [
         record_path(repo_root, reassigned_name).relative_to(repo_root).as_posix()
         for reassigned_name in sorted(reassigned)

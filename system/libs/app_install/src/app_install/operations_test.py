@@ -199,6 +199,17 @@ def test_two_apps_on_one_port_are_reported_and_the_one_recorded_later_is_moved(t
     assert check(tmp_path) == ()
 
 
+def test_regenerating_an_app_that_has_no_record_is_refused_before_any_port_is_moved(tmp_path: Path) -> None:
+    for name in ("alpha", "zebra"):
+        package = write_user_app(tmp_path, name)
+        write_record(tmp_path, AppRecord(name=name, package=package, port=8080, origin=AppOrigin.LOCAL))
+
+    with pytest.raises(AppNotFoundError, match="nowhere"):
+        regenerate(tmp_path, "nowhere", never_bound)
+
+    assert [load_record(tmp_path, name).port for name in ("alpha", "zebra")] == [8080, 8080]
+
+
 def test_an_installed_app_with_a_key_this_workspace_does_not_know_still_regenerates(tmp_path: Path) -> None:
     package = write_user_app(tmp_path, "notes", "\nfuture_flag = true\n")
     write_record(tmp_path, AppRecord(name="notes", package=package, port=8084, origin=AppOrigin.INSTALLED))
