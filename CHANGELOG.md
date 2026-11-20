@@ -15,6 +15,7 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 - Added: `preview_app.py up --private` boots a preview with no window, for an agent to drive on its loopback port.
 - Added: `memory_candidates.py` reports how much free memory is left before the memory guard acts (`shed_line_kib` / `room_kib` in its JSON).
 - Added: `workspace_ui` exports `sendFailureKindOf`, which reads a send-failure kind reported by the chat app.
+- Added: An image open in Files zooms with a pinch or Ctrl+scroll and pans by dragging while zoomed.
 
 ### Changed
 
@@ -34,6 +35,8 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 - Changed: The resource gauge warns by default when CPU averages 90% or more over five minutes, shown on the taskbar's CPU bar with no notification; short bursts no longer count.
 - Changed: update-self's `resume-chats` restarts and messages only chats that were busy when paused, the apply stops its own idle worker before merging, and a pre-flight boot stopped by the memory guard is named in the failure.
 - Changed: `preview_app.py`, `mock_frame.py` and `serve_isolated_instance.py` refuse to register a window from a git worktree, and a preview's default title is `<App> (preview)`.
+- Changed: Skills, hooks and docs that pointed at `CLAUDE.md` for agent instructions now point at `AGENTS.md`; `migrate-workspace` ports an old workspace's instruction edits into `AGENTS.md`.
+- Changed: The OOM drill (`oom_priority/bin/oom_drill.py`) uses the shed policy's own bands by default, stops the Screen's desktop and watcher before its run and restarts the watcher after; the oom_priority README has a policy change run it.
 
 ### Removed
 
@@ -51,6 +54,9 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 - Fixed: An isolated instance or preview booted from a git worktree runs over copies of the user's live app data and secrets instead of an empty store.
 - Fixed: Clicking a link to a file already open in Files reloads its window, so a rewritten file shows its new content.
 - Fixed: The `crystallize-creation`, `heal-creation` and `update-creation` skills start their ticket with a standalone `tk start`, so the tk-standalone hook no longer rejects their ticket block.
+- Fixed: A newly built app's harden pass can run its browser tests: `build-app`'s scaffold gives the app's test environment Playwright and pytest-timeout.
+- Fixed: Preview and UI-sketch frames load their app on a shared workspace; `preview_wrapper_server.py` takes `--apps-file` and reads the service's registered origin label.
+- Fixed: A Claude browser sign-in retries with a fresh callback port, up to three in all, when the port is already in use, instead of dropping to the paste-a-code flow.
 
 ## [minds-v0.10.5] - 2026-11-17
 
