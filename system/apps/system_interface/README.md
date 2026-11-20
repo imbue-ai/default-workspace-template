@@ -53,6 +53,9 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   `imbue/system_interface/static/`; `/assets/<path>` for its bundle.
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update
   apply and the preview flow poll.
+- `/recovery/desktops` and `POST /api/recovery/launch`: the recovery page for
+  desktops that couldn't be loaded, and the launches it and the rebuild page run
+  (see "The recovery page").
 - `GET /api/schema`: the OpenAPI document of the shell's routes, built from its
   url map (`system/libs/app_schema`); the manifest's `api_schema_path`.
 - `/_static/app_contract.js` and `/_static/context_menu.js`: the browser-side
@@ -222,7 +225,7 @@ The backend is the `imbue/system_interface/shell/` subpackage (inventory and
 liveness, desktops, placements, wallpapers, clients, users and the request
 identity, client activity, the pure desktop document editor, the
 routes with their shared helpers, state); the package root holds the process
-(`main.py`, `server.py`), the not-built placeholder, and the update-staleness
+(`main.py`, `server.py`), the recovery page (`recovery_page.py`), and the update-staleness
 check. The frontend
 (`frontend/`) is one member of the npm workspace rooted at
 `system/package.json`; the design system, the base helpers, and the contract
@@ -817,7 +820,7 @@ live build, a pre-flight boot of the merged shell and chat on throwaway
 ports), restarts the services agent, then probes: the shell's `/api/health`,
 the `/api/health` of every critical app the user can open (at the URL its
 registry row names, re-read as the app re-registers), and that
-the frontend really serves (the "not built" placeholder and an unserved
+the frontend really serves (the recovery page served while it is not built and an unserved
 `/assets` path are both HTTP 200, so the probe reads the `X-Frontend-Built`
 header and checks that the module script comes back as JavaScript). Only then
 does it ask every open view to reload, through
@@ -830,16 +833,38 @@ the outcome (`0` applied, `2` rolled back, `3` emergency, `1` precondition).
 The `update_self_skill` package in `.agents/skills/update-self/python/` and that
 skill's `SKILL.md` are the reference.
 
-## When the bundle is missing
+## The recovery page
+
+The shell serves its recovery page (`recovery_page.py`) in place of the desktop
+for two reasons: the interface is not built, or the read of the desktops and
+apps the desktop boots from failed. It is a string in the backend rather than
+part of the bundle, so it still works when nothing else does.
 
 `static/` is gitignored build output, produced at workspace creation
 (`system/scripts/build_workspace.sh`) and by the apply above. Nothing rebuilds
 it at service start, so a code refresh that replaces the tree can leave the
-backend with nothing to serve. In that state `/` serves a placeholder, and
-because the placeholder is a string in the backend rather than part of the
-bundle, it still works when nothing else does.
+backend with nothing to serve. In that state `/` serves the recovery page:
+"This workspace's interface needs to be rebuilt".
 
-The placeholder is the workspace's general recovery surface, so it hands over
+When the page's startup read (`GET /api/inventory`) gets an error answer from
+the shell (its own 500, or a full disk while it seeds the first desktop), the
+frontend replaces the page with `/recovery/desktops` (under the base path, with
+the page's query, so a pulled-out window's own page comes back as itself). That
+page runs the same read itself, so what it shows is the shell's own failure,
+not something a URL carries, and it redirects back to the desktop at once when
+the read succeeds. It says "This workspace's desktops couldn't be loaded.", or
+on a full disk "This workspace is out of space, so its desktops couldn't be
+loaded." with "Ask an agent to free up space" in place of "Ask an agent to fix
+this", offers Reload (back to the desktop), and keeps the failure's details
+first behind "See details". Its agent and its command are told the sentence and
+the details as every ask of the desktop's is worded (workspace_ui's
+`assistRequest(agentFixTask(...))`, which `recovery_page.py` words again in
+Python; a `frontend` test pins the two). A read nothing answered stays on the
+desktop's spinner, which tries again on its own. The page offers no "Report a
+bug": the embed endpoint that opens Imbue Studio's bug report is part of the
+frontend.
+
+The page is the workspace's general recovery surface, so it hands over
 an **agent** and a **terminal** rather than a repair. "Ask an agent to fix
 this" sends the message the command below carries through the workspace's
 primary text action (the main chat on a stock workspace: the failure is the
@@ -859,12 +884,19 @@ it needs no Chat app and is there for when an agent can't be asked from the
 page. With no app to ask an agent
 through, the button is not offered and the details and the terminal start
 open; with no terminal, the details say so. The page cannot post to another app's origin,
-so both launches go through the shell's `POST /api/not-built/launch` (desktop
-contracts.md section 5.1), which answers where the launched page is. The command:
+so both launches go through the shell's `POST /api/recovery/launch` (desktop
+contracts.md section 5.1), which answers where the launched page is; for the
+desktops it reads them again, so the agent is told the failure as it stands. The
+command, for an interface that is not built:
 
 ```
 env -u TMUX mngr create --connect --template chat --label user_created=true --message "/assist Imbue Studio showed the user this failure: This workspace's interface needs to be rebuilt. Find out why it failed and fix it, then tell the user what was wrong and what you changed."
 ```
+
+The desktops' line carries their message the same way: in double quotes, with
+what a shell would expand inside them (the details are the shell's own text, a
+traceback among them) escaped, and a `!` written as `'!'`, which an interactive
+shell would otherwise expand from its history.
 
 `--template chat` is what makes the result a chat, and it carries everything
 that is not a choice: the shared work directory, the output style, and running
@@ -889,7 +921,8 @@ places:
   agent in a worktree would repair a copy of the workspace instead of the
   workspace -- so a test reads the template and fails if that setting ever
   leaves it.
-- **A `--message` carrying the page's own heading**, so the agent opens already
+- **A `--message` carrying the page's own heading** (and the desktops' details),
+  so the agent opens already
   knowing what the reader is looking at, worded as the desktop's asks are
   (Imbue Studio telling the agent what the user was shown, never the user
   speaking) behind `/assist`, so the agent runs the workspace's assist flow. The
@@ -932,17 +965,19 @@ rollback (or a build run in that terminal) needs no further action. It polls the
 `X-Frontend-Built` header rather than reloading on a timer: a whole-page refresh
 would destroy the terminal session every few seconds, right while it is being
 typed into. The timer-based reload survives only inside `<noscript>`, where
-there is no terminal to protect.
+there is no terminal to protect. The desktops' page polls `GET /api/inventory`
+the same way, every ten seconds, and replaces itself with the desktop once a
+read answers.
 
 Two things make that state recoverable rather than terminal. Every app-shell
-response carries an `X-Frontend-Built` header, so the placeholder is
+response carries an `X-Frontend-Built` header, so the recovery page is
 distinguishable from the real app without pattern-matching its markup -- that is
 what the apply's frontend probe reads. And `/assets/<path>` is registered
 unconditionally rather than only when the bundle exists at startup: a route
 decided at construction time can never notice a bundle that appears later, and
 without it asset requests fall through to the SPA catch-all and come back as
 `index.html` with a `text/html` type, which the browser refuses as a module
-script -- a blank screen instead of the placeholder. A genuinely missing asset
+script -- a blank screen instead of the recovery page. A genuinely missing asset
 gets a plain 404.
 
 ## When the served code is behind the tree

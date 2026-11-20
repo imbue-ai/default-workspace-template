@@ -289,9 +289,6 @@ export const OTHER_WORKSPACE_LINK_NOTICE = "That link belongs to another workspa
 export const SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE =
   "It opened on your desktop. Reopen the main Imbue Studio window to see it.";
 
-/** What failed when the startup read of the desktops and apps did, as the backdrop says it. */
-export const BOOT_READ_WHAT_FAILED = "This workspace's desktops couldn't be loaded";
-
 /** What the startup read's line says while nothing has answered it and it is being tried again. */
 export const BOOT_STILL_TRYING_SENTENCE = "The workspace didn't answer. Still trying\u2026";
 
@@ -344,11 +341,10 @@ interface AskedFor {
   readonly isAboutApp?: boolean;
 }
 
-/** Why the startup read has not answered, as the backdrop shows it. */
+/** Why the startup read has not answered, as the backdrop shows it beside its spinner: nothing answered it, and it is
+ *  being tried again. */
 export interface BootFailure {
   readonly notice: FailureNotice;
-  /** Nothing answered and the read is being tried again: drawn with a spinner, and with no Reload. */
-  readonly isRetrying: boolean;
 }
 
 /** How a launch's failure is told: what failed, as a sentence stem for ``failureSentence`` (by default that the app
@@ -543,6 +539,9 @@ export interface StoreDependencies {
   readonly redraw: () => void;
   /** Reload the whole interface (the ``reload_system_interface`` op). */
   readonly reloadInterface: () => void;
+  /** Send the page to the shell's recovery page for desktops that couldn't be loaded, which says why, offers an agent,
+   *  and comes back once they load. */
+  readonly openDesktopsRecoveryPage: () => void;
   /** The pull-out conversation with the embedder; absent means no embedder. */
   readonly popOut?: PopOutBridge;
   /** Where external links open when no app takes them; absent opens none. */
@@ -730,7 +729,7 @@ export class DesktopStore {
   /** Whether the page was out of sight since the socket last connected: a reconnect then reloads the phone's page,
    *  whose own connection most likely went down with the shell's. */
   private isHiddenSinceConnect = false;
-  /** Why the startup read of the desktops and apps failed, shown in the backdrop until a read succeeds. */
+  /** Why nothing has answered the startup read of the desktops and apps, shown in the backdrop until a read does. */
   private bootFailure: Failure | null = null;
   /** Since when nothing has answered the startup read (null while something has, or nothing failed). */
   private bootUnansweredSince: number | null = null;
@@ -1125,28 +1124,15 @@ export class DesktopStore {
     return this.isBooted;
   }
 
-  /** Why the startup read of the desktops and apps has not answered, while no read has: nothing answered it (and it
-   *  is being tried again, ``isRetrying``: "Still trying…", and "Report a bug" once that has gone on for a while, a
-   *  wait with no end owing a way out), or the shell answered with an error (with Reload, the only retry); null
-   *  before the first answer and once a read has answered. */
+  /** Why the startup read of the desktops and apps has not answered, while no read has and nothing answered it (it is
+   *  being tried again: "Still trying…", and "Report a bug" once that has gone on for a while, a wait with no end
+   *  owing a way out); null before the first answer and once a read has answered. */
   getBootFailure(): BootFailure | null {
     const failure = this.bootFailure;
     if (failure === null) return null;
-    if (failure.cause === "not_answered") {
-      const isLong =
-        this.bootUnansweredSince !== null && Date.now() - this.bootUnansweredSince >= BOOT_REPORT_AFTER_MS;
-      return {
-        isRetrying: true,
-        notice: { message: BOOT_STILL_TRYING_SENTENCE, details: failure.details, isReportable: isLong, actions: [] },
-      };
-    }
+    const isLong = this.bootUnansweredSince !== null && Date.now() - this.bootUnansweredSince >= BOOT_REPORT_AFTER_MS;
     return {
-      isRetrying: false,
-      notice: this.noticeOf(
-        failureSentence(failure, BOOT_READ_WHAT_FAILED),
-        [{ label: "Reload", run: () => this.deps.reloadInterface() }],
-        { agent: "withheld" },
-      ),
+      notice: { message: BOOT_STILL_TRYING_SENTENCE, details: failure.details, isReportable: isLong, actions: [] },
     };
   }
 
@@ -1787,8 +1773,8 @@ export class DesktopStore {
     return this.bootRead;
   }
 
-  /** Arrive (until an arrival has been answered), read the inventory, and land; a read that fails is told in the
-   *  backdrop, and one nothing answered is tried again. */
+  /** Arrive (until an arrival has been answered), read the inventory, and land; a read nothing answered is told in
+   *  the backdrop and tried again, and one the shell answered with an error sends the page to the recovery page. */
   private async readAndLand(): Promise<void> {
     this.clearBootRetry();
     const entryPushesBefore = this.entryPushes;
@@ -1817,21 +1803,25 @@ export class DesktopStore {
     await this.land(inventory, this.bootArrival, entryPushesBefore);
   }
 
-  /** Tell why the startup read failed until a read answers; when nothing answered it, try it again after a wait
-   *  that grows to ``BOOT_RETRY_CAP_MS`` (a reconnect of the socket tries it at once). */
+  /** Tell why nothing answered the startup read until a read answers, trying it again after a wait that grows to
+   *  ``BOOT_RETRY_CAP_MS`` (a reconnect of the socket tries it at once); a read the shell answered with an error goes
+   *  to the recovery page, which reads the desktops itself and says why they couldn't be loaded. */
   private takeBootFailure(failure: Failure): void {
-    this.bootFailure = failure;
-    if (failure.cause === "not_answered") {
-      this.bootUnansweredSince ??= Date.now();
-      const delay = this.bootRetryDelayMs;
-      this.bootRetryDelayMs = Math.min(delay * 2, BOOT_RETRY_CAP_MS);
-      this.bootRetryTimer = setTimeout(() => {
-        this.bootRetryTimer = null;
-        void this.boot();
-      }, delay);
-    } else {
+    if (failure.cause !== "not_answered") {
+      this.bootFailure = null;
       this.bootUnansweredSince = null;
+      this.deps.openDesktopsRecoveryPage();
+      this.notifyListeners();
+      return;
     }
+    this.bootFailure = failure;
+    this.bootUnansweredSince ??= Date.now();
+    const delay = this.bootRetryDelayMs;
+    this.bootRetryDelayMs = Math.min(delay * 2, BOOT_RETRY_CAP_MS);
+    this.bootRetryTimer = setTimeout(() => {
+      this.bootRetryTimer = null;
+      void this.boot();
+    }, delay);
     this.notifyListeners();
   }
 
@@ -1886,7 +1876,7 @@ export class DesktopStore {
     if (this.soloWindowId !== null) this.deps.socket.reportPopOut();
     const wasHidden = this.isHiddenSinceConnect;
     this.isHiddenSinceConnect = false;
-    if (!this.isBooted && this.bootFailure?.cause === "not_answered") void this.boot();
+    if (!this.isBooted && this.bootFailure !== null) void this.boot();
     if (this.hasSocketConnected) {
       // Before a startup read has answered there is nothing to resynchronise: that read lands the window.
       if (!this.isBooted) return;

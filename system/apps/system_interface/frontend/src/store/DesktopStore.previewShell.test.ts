@@ -28,6 +28,7 @@ beforeEach(async () => {
     modes: { isPhone: false, isTouch: false },
     redraw: () => undefined,
     reloadInterface: () => undefined,
+    openDesktopsRecoveryPage: () => undefined,
   });
   await store.start(NO_LINK);
   socket.deliver().onAppsUpdated([appRecord("docs", { program: "docs" })]);

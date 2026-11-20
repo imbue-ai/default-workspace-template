@@ -1,5 +1,6 @@
 """Tests for the Flask server."""
 
+import errno
 import html
 import json
 import os
@@ -10,7 +11,6 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 import httpx
 import pytest
@@ -25,6 +25,7 @@ from workspace_layout.identity import ANONYMOUS_OWNER
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 
+from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.avatar.primitives import DesignId
@@ -36,27 +37,31 @@ from imbue.system_interface.documents import THEME_GALLERY_ROUTE
 from imbue.system_interface.presence import PRESENCE_CONNECTED_WINDOW
 from imbue.system_interface.presence import utc_now
 from imbue.system_interface.profiles import ProfileResolver
-from imbue.system_interface.server import NOT_BUILT_LAUNCH_PATH
+from imbue.system_interface.recovery_page import DESKTOPS_RECOVERY_PATH
+from imbue.system_interface.recovery_page import INTERFACE_NOT_BUILT_PAGE
+from imbue.system_interface.recovery_page import INTERFACE_NOT_BUILT_REPAIR_ARGV
+from imbue.system_interface.recovery_page import INTERFACE_NOT_BUILT_REPAIR_MESSAGE
+from imbue.system_interface.recovery_page import INTERFACE_NOT_BUILT_REPAIR_MNGR_COMMAND
+from imbue.system_interface.recovery_page import RECOVERY_LAUNCH_PATH
+from imbue.system_interface.recovery_page import render_recovery_page
 from imbue.system_interface.server import THEME_GALLERY_FILENAME
-from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
-from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
-from imbue.system_interface.server import _NOT_BUILT_REPAIR_MESSAGE
-from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import create_application
-from imbue.system_interface.server import render_frontend_not_built_page
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
+from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
 from imbue.system_interface.shell.launches import LaunchPostOutcome
+from imbue.system_interface.shell.testing import DesktopStoreWhoseReadFails
 from imbue.system_interface.shell.testing import TEST_PAGE_ID
 from imbue.system_interface.shell.testing import client_report
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import identity_headers
-from imbue.system_interface.shell.testing import not_built_shell
+from imbue.system_interface.shell.testing import recovery_shell
 from imbue.system_interface.shell.tour import ONBOARDING_MEDIA_ORIGIN
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
 from imbue.system_interface.testing import serve_app
+from imbue.system_interface.testing import words_a_shell_splits
 from imbue.system_interface.ws_broadcaster import ConnectionRegistration
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -454,7 +459,7 @@ def test_not_built_placeholder_renders_without_a_terminal_to_offer(
 
     # The shell prefix is not part of the argv the CLI validates, but it is what
     # makes the connect half work from the workspace's own tmux-backed terminals.
-    assert _NOT_BUILT_REPAIR_COMMAND == "env -u TMUX " + _NOT_BUILT_REPAIR_MNGR_COMMAND
+    assert INTERFACE_NOT_BUILT_PAGE.repair_command == "env -u TMUX " + INTERFACE_NOT_BUILT_REPAIR_MNGR_COMMAND
 
 
 def test_not_built_repair_message_names_the_heading_the_reader_is_looking_at_behind_the_assist_command() -> None:
@@ -466,13 +471,13 @@ def test_not_built_repair_message_names_the_heading_the_reader_is_looking_at_beh
     every ask of the desktop's is, Imbue Studio telling the agent what the user was shown, and it starts with the
     assist command, which a chat runs only at the start of its first message.
     """
-    message = _NOT_BUILT_REPAIR_ARGV[_NOT_BUILT_REPAIR_ARGV.index("--message") + 1]
-    heading = re.search(r"<h1>(.*?)</h1>", render_frontend_not_built_page(None, True, ""), re.DOTALL)
+    message = INTERFACE_NOT_BUILT_REPAIR_ARGV[INTERFACE_NOT_BUILT_REPAIR_ARGV.index("--message") + 1]
+    heading = re.search(r"<h1>(.*?)</h1>", render_recovery_page(INTERFACE_NOT_BUILT_PAGE, None, True, ""), re.DOTALL)
     assert heading is not None, "the page no longer carries a heading"
 
     assert message.startswith("/assist ")
     assert f"Imbue Studio showed the user this failure: {heading.group(1).strip()}." in message
-    assert message == _NOT_BUILT_REPAIR_MESSAGE
+    assert message == INTERFACE_NOT_BUILT_REPAIR_MESSAGE
 
 
 def _repair_line_shown_on(page: str) -> str:
@@ -496,8 +501,10 @@ def test_not_built_repair_command_reaches_the_page_as_text_not_markup() -> None:
     the copy button reads ``textContent``, so it would put that other line on
     the reader's clipboard.
     """
-    with patch("imbue.system_interface.server._NOT_BUILT_REPAIR_COMMAND", 'mngr create --message "a & b <c>"'):
-        page = render_frontend_not_built_page(None, True, "")
+    content = INTERFACE_NOT_BUILT_PAGE.model_copy_update(
+        to_update(INTERFACE_NOT_BUILT_PAGE.field_ref().repair_command, 'mngr create --message "a & b <c>"')
+    )
+    page = render_recovery_page(content, None, True, "")
 
     assert 'mngr create --message "a &amp; b &lt;c&gt;"' in page
     assert "<c>" not in page
@@ -507,8 +514,8 @@ def test_not_built_repair_command_reaches_the_page_as_text_not_markup() -> None:
     # reader reads and copies, and it has to be the one the CLI check and the
     # shell split validated. The assertions above only show that escaping
     # happens; this is what says the real command survives it.
-    shown = _repair_line_shown_on(render_frontend_not_built_page(None, True, ""))
-    assert shown == _NOT_BUILT_REPAIR_COMMAND
+    shown = _repair_line_shown_on(render_recovery_page(INTERFACE_NOT_BUILT_PAGE, None, True, ""))
+    assert shown == INTERFACE_NOT_BUILT_PAGE.repair_command
 
 
 def test_not_built_repair_line_splits_the_way_a_shell_splits_it() -> None:
@@ -529,19 +536,19 @@ def test_not_built_repair_line_splits_the_way_a_shell_splits_it() -> None:
     reported, so it is refused before a shell ever sees the line.
     """
     for substitution in ("`", "$("):
-        assert substitution not in _NOT_BUILT_REPAIR_MNGR_COMMAND, (
+        assert substitution not in INTERFACE_NOT_BUILT_REPAIR_MNGR_COMMAND, (
             f"the suggested line contains a command substitution ({substitution}), which the shell below "
             "would execute rather than report: word it out of the message"
         )
 
     printed_words = subprocess.run(
-        ["sh", "-c", f'set -- {_NOT_BUILT_REPAIR_MNGR_COMMAND}\nprintf "%s\\n" "$@"'],
+        ["sh", "-c", f'set -- {INTERFACE_NOT_BUILT_REPAIR_MNGR_COMMAND}\nprintf "%s\\n" "$@"'],
         capture_output=True,
         text=True,
         check=True,
         timeout=30,
     )
-    assert printed_words.stdout.splitlines() == list(_NOT_BUILT_REPAIR_ARGV)
+    assert printed_words.stdout.splitlines() == list(INTERFACE_NOT_BUILT_REPAIR_ARGV)
 
 
 def test_the_not_built_page_asks_an_agent_through_the_primary_text_action_and_opens_a_terminal_session(
@@ -550,7 +557,7 @@ def test_the_not_built_page_asks_an_agent_through_the_primary_text_action_and_op
     """The placeholder's "Ask an agent to fix this" sends the repair message through the launcher's primary text
     action, the main chat rather than a new one, and answers where that chat's page is; its "See details" terminal is
     a session of its own."""
-    app, posts = not_built_shell(
+    app, posts = recovery_shell(
         tmp_path,
         [
             LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-1"}),
@@ -562,35 +569,185 @@ def test_the_not_built_page_asks_an_agent_through_the_primary_text_action_and_op
     assert page.headers[FRONTEND_BUILT_HEADER] == "false"
     assert "var isAgentOffered = true;" in page.text
 
-    asked = client.post(NOT_BUILT_LAUNCH_PATH, json={"purpose": "repair_agent"})
+    asked = client.post(RECOVERY_LAUNCH_PATH, json={"reason": "interface_not_built", "purpose": "repair_agent"})
     assert asked.status_code == 200, asked.get_json()
     assert asked.get_json() == {"label": "helper-y2", "path": "/?chat=agent-1", "display_name": "Helper"}
     (post,) = posts
     assert post.url == "http://localhost:7002/api/intake"
-    assert post.body == {"target": "main_chat", "message": _NOT_BUILT_REPAIR_MESSAGE}
+    assert post.body == {"target": "main_chat", "message": INTERFACE_NOT_BUILT_REPAIR_MESSAGE}
 
     # A launch that fails answers as the launch route does: the app's own words, and no sentence of the shell's, for
     # the page to word.
-    failed = client.post(NOT_BUILT_LAUNCH_PATH, json={"purpose": "repair_agent"})
+    failed = client.post(RECOVERY_LAUNCH_PATH, json={"reason": "interface_not_built", "purpose": "repair_agent"})
     assert failed.status_code == 502
     assert failed.get_json() == {"detail": "helper answered the launch with 500: boom"}
 
-    terminal = client.post(NOT_BUILT_LAUNCH_PATH, json={"purpose": "terminal"})
+    terminal = client.post(RECOVERY_LAUNCH_PATH, json={"reason": "interface_not_built", "purpose": "terminal"})
     assert terminal.status_code == 200, terminal.get_json()
     assert terminal.get_json() == {"label": "terminal-x1", "path": "/new", "display_name": "Terminal"}
 
 
 def test_the_not_built_page_offers_no_agent_without_an_app_to_ask_and_a_preview_asks_nothing(tmp_path: Path) -> None:
-    app, posts = not_built_shell(tmp_path / "bare", [], is_chat_registered=False)
+    app, posts = recovery_shell(tmp_path / "bare", [], is_chat_registered=False)
     client = app.test_client()
     assert "var isAgentOffered = false;" in client.get("/").text
-    assert client.post(NOT_BUILT_LAUNCH_PATH, json={"purpose": "repair_agent"}).status_code == 404
+    assert (
+        client.post(
+            RECOVERY_LAUNCH_PATH, json={"reason": "interface_not_built", "purpose": "repair_agent"}
+        ).status_code
+        == 404
+    )
 
-    preview, preview_posts = not_built_shell(tmp_path / "preview", [], is_preview=True)
-    refused = preview.test_client().post(NOT_BUILT_LAUNCH_PATH, json={"purpose": "repair_agent"})
+    preview, preview_posts = recovery_shell(tmp_path / "preview", [], is_preview=True)
+    refused = preview.test_client().post(
+        RECOVERY_LAUNCH_PATH, json={"reason": "interface_not_built", "purpose": "repair_agent"}
+    )
     assert refused.status_code == 403
     assert refused.get_json()["user_facing_message"] == refused.get_json()["detail"]
     assert posts == [] and preview_posts == []
+
+
+def _without_temp_names(text: str) -> str:
+    """``text`` with the random names of the shell's temporary state files masked, which each failed write mints."""
+    return re.sub(r"\.tmp-[0-9a-f]{32}", ".tmp-*", text)
+
+
+def _launch_message_on(page: str, working_directory: Path) -> str:
+    """The ``--message`` of the repair line a page offers, as a shell hands it to mngr."""
+    words = words_a_shell_splits(_repair_line_shown_on(page), working_directory)
+    return words[words.index("--message") + 1]
+
+
+def test_the_desktops_recovery_page_says_what_the_read_of_the_desktops_raised_and_asks_an_agent_with_it(
+    tmp_path: Path,
+) -> None:
+    """The page reads the desktops itself, so what it shows is the shell's own failure, the one the inventory route
+    answered the frontend with; its agent and its command are told that failure behind ``/assist``."""
+    app, posts = recovery_shell(tmp_path, [LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-2"})])
+    # A directory where the desktops file should be: the read cannot seed the first desktop.
+    (tmp_path / "state" / DESKTOPS_FILENAME).mkdir(parents=True)
+    client = app.test_client()
+    inventory = client.get("/api/inventory")
+    assert inventory.status_code == 500
+    detail = inventory.get_json()["detail"]
+
+    page = client.get(DESKTOPS_RECOVERY_PATH)
+
+    assert page.status_code == 200
+    assert page.headers[FRONTEND_BUILT_HEADER] == "false"
+    assert "<h1>This workspace's desktops couldn't be loaded.</h1>" in page.text
+    shown_details = re.search(r'<pre id="failure-details">(.*?)</pre>', page.text, re.DOTALL)
+    assert shown_details is not None
+    assert _without_temp_names(html.unescape(shown_details.group(1))) == _without_temp_names(detail)
+    assert ">Ask an agent to fix this</button>" in page.text
+    assert 'id="reload"' in page.text
+    assert "var isAgentOffered = true;" in page.text
+    assert 'var reason = "desktops_not_loaded";' in page.text
+    # The page polls the read the frontend boots from.
+    assert 'fetch("/api/inventory"' in page.text
+
+    asked = client.post(RECOVERY_LAUNCH_PATH, json={"reason": "desktops_not_loaded", "purpose": "repair_agent"})
+    assert asked.status_code == 200, asked.get_json()
+    assert asked.get_json() == {"label": "helper-y2", "path": "/?chat=agent-2", "display_name": "Helper"}
+    (post,) = posts
+    assert post.body["target"] == "main_chat"
+    assert _without_temp_names(post.body["message"]) == _without_temp_names(
+        "/assist Imbue Studio showed the user this failure: This workspace's desktops couldn't be loaded.\n\n"
+        f"Details:\n```\n{detail}\n```\n\n"
+        "Find out why it failed and fix it, then tell the user what was wrong and what you changed."
+    )
+    assert _without_temp_names(_launch_message_on(page.text, tmp_path)) == _without_temp_names(post.body["message"])
+    terminal = client.post(RECOVERY_LAUNCH_PATH, json={"reason": "desktops_not_loaded", "purpose": "terminal"})
+    assert terminal.get_json() == {"label": "terminal-x1", "path": "/new", "display_name": "Terminal"}
+
+
+def test_the_desktops_recovery_page_goes_back_to_the_desktop_once_they_load_and_asks_no_agent_about_them(
+    tmp_path: Path,
+) -> None:
+    app, posts = recovery_shell(tmp_path, [])
+    unreadable = tmp_path / "state" / DESKTOPS_FILENAME
+    unreadable.mkdir(parents=True)
+    client = app.test_client()
+    assert client.get(DESKTOPS_RECOVERY_PATH).status_code == 200
+
+    unreadable.rmdir()
+
+    # Back to the desktop, keeping the query a pulled-out window's own page is opened with, under the shell's prefix.
+    loaded = client.get(f"{DESKTOPS_RECOVERY_PATH}?solo=win-1", base_url="http://localhost/shell")
+    assert loaded.status_code == 302
+    assert loaded.headers["Location"] == "/shell/?solo=win-1"
+    assert client.get(DESKTOPS_RECOVERY_PATH).headers["Location"] == "/"
+    # A page still open asks about a failure that has gone: there is nothing to ask, and the page is told so.
+    refused = client.post(RECOVERY_LAUNCH_PATH, json={"reason": "desktops_not_loaded", "purpose": "repair_agent"})
+    assert refused.status_code == 409
+    assert refused.get_json()["user_facing_message"] == "This workspace's desktops load now."
+    assert posts == []
+
+
+def test_the_desktops_recovery_page_on_a_full_disk_says_so_and_asks_an_agent_to_free_up_space(tmp_path: Path) -> None:
+    app, posts = recovery_shell(
+        tmp_path,
+        [LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-3"})],
+        desktops=DesktopStoreWhoseReadFails(state_directory=tmp_path / "state", failing_errno=errno.ENOSPC),
+    )
+    client = app.test_client()
+    assert client.get("/api/inventory").get_json()["kind"] == "out_of_space"
+
+    page = client.get(DESKTOPS_RECOVERY_PATH)
+
+    assert "<h1>This workspace is out of space, so its desktops couldn't be loaded.</h1>" in page.text
+    assert ">Ask an agent to free up space</button>" in page.text
+    assert (
+        client.post(
+            RECOVERY_LAUNCH_PATH, json={"reason": "desktops_not_loaded", "purpose": "repair_agent"}
+        ).status_code
+        == 200
+    )
+    (post,) = posts
+    assert post.body["message"].startswith(
+        "/assist Imbue Studio showed the user this failure: This workspace is out of space, so its desktops couldn't "
+        "be loaded.\n\nDetails:\n```\ncannot write shell state file "
+    )
+    assert _launch_message_on(page.text, tmp_path) == post.body["message"]
+
+
+def test_the_desktops_recovery_page_shows_an_unexpected_error_with_its_traceback(tmp_path: Path) -> None:
+    """An error that is no refusal of the shell's is the inventory route's bare 500, and the page shows where it was
+    raised, which is what an agent needs to fix it."""
+    app, _posts = recovery_shell(
+        tmp_path,
+        [],
+        desktops=DesktopStoreWhoseReadFails(state_directory=tmp_path / "state", failing_bug="the record lost its id"),
+    )
+    client = app.test_client()
+    assert client.get("/api/inventory").get_json()["detail"] == "Internal server error: the record lost its id"
+
+    page = client.get(DESKTOPS_RECOVERY_PATH)
+
+    assert "<h1>This workspace's desktops couldn't be loaded.</h1>" in page.text
+    shown_details = re.search(r'<pre id="failure-details">(.*?)</pre>', page.text, re.DOTALL)
+    assert shown_details is not None
+    details = html.unescape(shown_details.group(1))
+    assert details.startswith("Traceback (most recent call last):\n")
+    assert "in ensure_default" in details
+    assert details.endswith("DesktopsReadBugError: the record lost its id")
+
+
+def test_the_recovery_launch_asks_nothing_from_a_preview_and_no_agent_without_an_app_to_ask(tmp_path: Path) -> None:
+    preview, preview_posts = recovery_shell(tmp_path / "preview", [], is_preview=True)
+    (tmp_path / "preview" / "state" / DESKTOPS_FILENAME).mkdir(parents=True)
+    refused = preview.test_client().post(
+        RECOVERY_LAUNCH_PATH, json={"reason": "desktops_not_loaded", "purpose": "repair_agent"}
+    )
+    assert refused.status_code == 403
+
+    bare, bare_posts = recovery_shell(tmp_path / "bare", [], is_chat_registered=False)
+    (tmp_path / "bare" / "state" / DESKTOPS_FILENAME).mkdir(parents=True)
+    client = bare.test_client()
+    assert "var isAgentOffered = false;" in client.get(DESKTOPS_RECOVERY_PATH).text
+    unoffered = client.post(RECOVERY_LAUNCH_PATH, json={"reason": "desktops_not_loaded", "purpose": "repair_agent"})
+    assert unoffered.status_code == 404
+    assert preview_posts == [] and bare_posts == []
 
 
 def test_assets_404_rather_than_falling_through_to_the_spa_shell(tmp_path: Path) -> None:
@@ -1242,7 +1399,7 @@ def test_not_built_page_coordinate_regex_matches_the_canonical_one() -> None:
     canonical = re.search(r"WORKSPACE_COORDINATE_LABEL = (/.+/i);", app_contract_ts.read_text())
     assert canonical is not None, f"the canonical regex is no longer declared in {app_contract_ts}"
 
-    page = render_frontend_not_built_page("terminal-x7k9q2w1", True, "")
+    page = render_recovery_page(INTERFACE_NOT_BUILT_PAGE, "terminal-x7k9q2w1", True, "")
     in_page = re.findall(r"(/\^\(\?:.+?/i)\.test\(", page)
     assert in_page == [canonical.group(1)], (
         f"the placeholder's coordinate regex has drifted from {app_contract_ts}: "

@@ -1,8 +1,7 @@
-import html
 import json
 import queue
 import re
-import shlex
+import traceback
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -24,6 +23,7 @@ from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import Response
+from flask import redirect
 from flask import request
 from flask import send_file
 from flask import send_from_directory
@@ -50,7 +50,6 @@ from imbue.system_interface.avatar.routes import icon_png_response
 from imbue.system_interface.avatar.routes import register_avatar_routes
 from imbue.system_interface.avatar.routes import selected_design_id
 from imbue.system_interface.avatar.status import avatar_status_wire_json
-from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
 from imbue.system_interface.documents import MANIFEST_PATH
 from imbue.system_interface.documents import SHELL_BACKGROUND_COLOR
 from imbue.system_interface.documents import THEME_GALLERY_ROUTE
@@ -64,6 +63,14 @@ from imbue.system_interface.presence import PresentUser
 from imbue.system_interface.presence import present_users_wire_json
 from imbue.system_interface.presence import reported_input_moment
 from imbue.system_interface.presence import utc_now
+from imbue.system_interface.recovery_page import DESKTOPS_RECOVERY_PATH
+from imbue.system_interface.recovery_page import DesktopsLoadFailure
+from imbue.system_interface.recovery_page import INTERFACE_NOT_BUILT_PAGE
+from imbue.system_interface.recovery_page import INTERFACE_NOT_BUILT_REPAIR_MESSAGE
+from imbue.system_interface.recovery_page import RECOVERY_LAUNCH_PATH
+from imbue.system_interface.recovery_page import desktops_not_loaded_page
+from imbue.system_interface.recovery_page import desktops_repair_message
+from imbue.system_interface.recovery_page import render_recovery_page
 from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.route_table import PRESENCE_HEARTBEAT_PATH
 from imbue.system_interface.route_table import PRESENCE_PATH
@@ -71,16 +78,21 @@ from imbue.system_interface.route_table import ROSTER_ROUTE
 from imbue.system_interface.route_table import SHELL_ROUTE_TABLE
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import PopOutStateReport
+from imbue.system_interface.shell.desktop_routes import inventory_document
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import InvalidShellValueError
+from imbue.system_interface.shell.errors import RefusalKind
+from imbue.system_interface.shell.errors import ShellError
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.keybindings_routes import register_keybindings_routes
-from imbue.system_interface.shell.not_built_launches import NotBuiltLaunchAnswer
-from imbue.system_interface.shell.not_built_launches import NotBuiltLaunchPurpose
-from imbue.system_interface.shell.not_built_launches import NotBuiltLaunchRequest
-from imbue.system_interface.shell.not_built_launches import TERMINAL_APP_NAME
-from imbue.system_interface.shell.not_built_launches import repair_agent_launch
-from imbue.system_interface.shell.not_built_launches import terminal_launch
+from imbue.system_interface.shell.recovery_launches import RecoveryLaunchAnswer
+from imbue.system_interface.shell.recovery_launches import RecoveryLaunchPurpose
+from imbue.system_interface.shell.recovery_launches import RecoveryLaunchRequest
+from imbue.system_interface.shell.recovery_launches import RecoveryReason
+from imbue.system_interface.shell.recovery_launches import TERMINAL_APP_NAME
+from imbue.system_interface.shell.recovery_launches import repair_agent_launch
+from imbue.system_interface.shell.recovery_launches import terminal_launch
+from imbue.system_interface.shell.route_helpers import HTTP_CONFLICT
 from imbue.system_interface.shell.route_helpers import HTTP_FORBIDDEN
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
 from imbue.system_interface.shell.route_helpers import IMAGE_CONTENT_SECURITY_POLICY
@@ -102,6 +114,8 @@ _ORIGIN_LABEL_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9](?:[a-z0-9
 
 logger = _loguru_logger
 
+_DESKTOPS_LOAD_NOW_SENTENCE: Final[str] = "This workspace's desktops load now."
+
 
 def _shell() -> ShellState:
     return get_state().shell
@@ -113,400 +127,6 @@ def _terminal_origin_label() -> str | None:
     if entry is None or not _ORIGIN_LABEL_PATTERN.match(entry.row.label):
         return None
     return entry.row.label
-
-
-# How often the placeholder asks whether the bundle is back. Also the interval
-# of the scriptless fallback below, so both routes behave the same.
-_NOT_BUILT_POLL_SECONDS = 10
-
-# The ``mngr`` invocation the placeholder offers for standing up an agent to
-# repair the workspace. It mirrors what the chat app's ``_build_chat_create_command``
-# runs for a chat -- ``--template chat`` for the shared work directory, the output
-# style, and running in the workspace tree rather than a worktree of it, plus the
-# ``user_created`` label that puts the agent in the dynamic chat memory band.
-# Where it differs from that builder:
-#
-# No ``--type``, which is the one thing that builder cannot leave out: it is
-# serving a menu entry, so the harness is a choice the user already made. This
-# page has no such choice to carry, so leaving the flag off lets ``mngr`` resolve
-# the harness from ``[commands.create] type`` -- whatever this workspace is
-# configured to open chats as, rather than whatever it was when this string was
-# written. ``--template chat`` supplies the rest either way: it is harness-
-# agnostic (``output_style`` is honored by the claude, codex and pi plugins
-# alike), so it does not pick one and must not be relied on to.
-#
-# No ``--transfer none`` either, for a different reason: the ``chat`` template
-# already sets it, and the builder spells it out only because it is assembling
-# an argv rather than a line for a reader. It is not optional the way the harness
-# is -- an agent in a worktree would repair a copy of the workspace instead of
-# the workspace -- so ``test_chat_system.py`` reads the template and fails if that
-# setting ever leaves it, rather than trusting this comment.
-#
-# ``--connect`` instead of its ``--no-connect``, which exists to keep a headless
-# caller from attaching. Someone typing this wants the opposite, and connecting
-# is what turns the create into a conversation. Not merely explicit for the
-# reader's sake: the workspace's own ``[commands.create] connect = false`` is
-# the default this overrides.
-#
-# ``--message`` so the agent opens already knowing what the reader is looking at:
-# the page's own heading, which is the one detail a reader on this page can be
-# certain of and the one the agent can act on without being told anything else,
-# worded as every ask of the desktop's is (workspace_ui's ``agentFixTask``):
-# Imbue Studio telling the agent what the user was shown, never the user
-# speaking, behind ``/assist`` (``assistRequest``), so the agent runs the
-# workspace's assist flow, which also reports a fault in built-in code to Imbue.
-#
-# No name, so mngr mints one. A reload, a second tab, or a first attempt that did
-# not finish therefore starts a fresh conversation rather than rejoining an
-# earlier one.
-#
-# Written as the shell line a reader sees and copies, because that string is the
-# artifact; the argv is derived from it by the same parse a shell performs, so
-# what is offered cannot drift from what runs. Quoted with ``"`` rather than as
-# ``shlex.join`` would (``'workspace'"'"'s ...``): the message carries apostrophes, and
-# this is the one line on the page a reader has to be able to read in full.
-#
-# Kept in sync with that builder by ``test_chat_system.py``, which also validates it
-# against the live CLI. The server never runs it: the page's "Ask an agent to fix
-# this" sends the same message through the workspace's primary text action
-# instead (``_not_built_launch``), so an agent is asked only if the reader
-# presses it.
-_NOT_BUILT_REPAIR_MNGR_COMMAND: Final[str] = (
-    "mngr create --connect --template chat --label user_created=true "
-    "--message \"/assist Imbue Studio showed the user this failure: This workspace's interface needs to be rebuilt. "
-    'Find out why it failed and fix it, then tell the user what was wrong and what you changed."'
-)
-
-_NOT_BUILT_REPAIR_ARGV: Final[tuple[str, ...]] = tuple(shlex.split(_NOT_BUILT_REPAIR_MNGR_COMMAND))
-
-# ``mngr connect`` refuses to attach from inside tmux unless ``is_nested_tmux_allowed``
-# is set (see ``mngr.api.connect``, which gates purely on ``$TMUX``), and it is the
-# connect half of the create above that would hit it. The workspace's own terminal
-# tabs are tmux sessions, so a reader who runs this in one gets a created agent and
-# an error instead of a conversation. Dropping ``TMUX`` for this one command is
-# exactly what mngr does for itself once the check passes, and scoping it with
-# ``env -u`` leaves the reader's own shell alone.
-_NOT_BUILT_REPAIR_COMMAND: Final[str] = "env -u TMUX " + _NOT_BUILT_REPAIR_MNGR_COMMAND
-
-# What the repair agent is told: the command's own message, so the button and the line behind "See details" ask
-# for the same thing.
-_NOT_BUILT_REPAIR_MESSAGE: Final[str] = _NOT_BUILT_REPAIR_ARGV[_NOT_BUILT_REPAIR_ARGV.index("--message") + 1]
-
-# The route the placeholder runs its launches through: the shell posts them to the apps over loopback, since the
-# page cannot post across origins itself.
-NOT_BUILT_LAUNCH_PATH: Final[str] = "/api/not-built/launch"
-
-# Served in place of the app whenever the compiled bundle is missing. The bundle
-# is gitignored build output, so a code refresh that replaces the tree can leave
-# the workspace here. The page offers a way out and returns to the interface on
-# its own once there is one, so a bundle restored by anything else -- most often
-# the reveal flow's rollback -- brings the reader back without them having to
-# know to retry.
-#
-# The way out is an agent, and a terminal behind "See details", not a "rebuild"
-# button. A button has to be right about what went wrong; the states that strand
-# a workspace here are dominated by ones where a build dispatched from the server
-# would fail too (no registry, no memory, a lockfile that does not resolve), and
-# it would fail with nowhere to say so, on a page with no application to render
-# the failure. It would also inherit the server's memory band, which puts it
-# ahead of the user's chats and agents in a shed. An agent and a shell are the
-# general case of every repair rather than one of them, and both run in apps
-# that are already running and already *more* protected than this server: the
-# page asks them, through the shell's launches, rather than building anything.
-#
-# Nothing here is part of the compiled bundle -- this is a string in the
-# backend -- so the script below ships whether or not the frontend has ever
-# been built. That is what lets the page be more than static text in exactly
-# the state where the frontend is missing.
-_FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Interface not built</title>
-<style>
-  body { font-family: system-ui, sans-serif; margin: 0; display: flex;
-         align-items: center; justify-content: center; min-height: 100vh;
-         background: #14161a; color: #e6e8eb; }
-  main { max-width: 48rem; padding: 2rem; width: 100%; box-sizing: border-box; }
-  h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.75rem; }
-  p { line-height: 1.5; margin: 0 0 1rem; color: #b6bcc4; max-width: 34rem; }
-  code { background: #1d2026; border-radius: 4px; padding: 0.1rem 0.3rem;
-         font-size: 0.9em; }
-  /* The command wraps rather than scrolling: a horizontal scrollbar hides
-     most of it behind a control nobody looks for, and this is the one line on
-     the page a reader has to be able to read in full. */
-  #repair { position: relative; }
-  pre { background: #1d2026; border-radius: 6px; padding: 0.75rem 1rem;
-        margin: 0 0 1rem; font-size: 0.85em; color: #e6e8eb;
-        white-space: pre-wrap; overflow-wrap: anywhere; }
-  /* Room for the copy button, so the last line never runs underneath it. */
-  #repair-command { padding-right: 5.5rem; }
-  #copy-repair { position: absolute; top: 0.5rem; right: 0.5rem;
-                 font: inherit; font-size: 0.8em; padding: 0.25rem 0.6rem;
-                 color: #e6e8eb; background: #2a2f37; border: 1px solid #3a414b;
-                 border-radius: 4px; cursor: pointer; }
-  #copy-repair:hover { background: #333a44; }
-  #copy-repair[hidden] { display: none; }
-  [hidden] { display: none; }
-  #terminal { width: 100%; height: 24rem; border: 1px solid #2a2f37;
-              border-radius: 6px; background: #000; }
-  #agent-chat { width: 100%; height: 24rem; border: 1px solid #2a2f37;
-                border-radius: 6px; background: #fff; }
-  .action { font: inherit; padding: 0.4rem 1rem; color: #e6e8eb; background: #2a2f37;
-            border: 1px solid #3a414b; border-radius: 6px; cursor: pointer; }
-  .action:hover { background: #333a44; }
-  .action:disabled { cursor: default; opacity: 0.6; }
-  details { margin-top: 1.5rem; color: #8a929c; }
-  summary { cursor: pointer; margin-bottom: 0.75rem; }
-</style>
-<!-- The scriptless fallback for the poll at the end of the body. Whole-page
-     reloads and a live terminal cannot coexist -- a refresh every ten seconds
-     would destroy the session the reader is typing into -- so this runs only
-     where there is no script to poll with, and therefore no terminal either. -->
-<noscript><meta http-equiv="refresh" content="__POLL_SECONDS__"></noscript>
-</head>
-<body>
-<main>
-  <h1>This workspace's interface needs to be rebuilt</h1>
-  <p>The compiled interface is missing, so there is nothing to show yet. Your
-     work and your agents are untouched -- only the interface itself is gone,
-     and this page returns to the interface on its own once it is back.</p>
-  <!-- Shown only when the workspace has an app to ask an agent through. -->
-  <div id="ask-agent" hidden>
-    <p>If it isn't back in a few minutes, an agent can fix it.</p>
-    <p><button id="ask-agent-button" class="action" type="button">Ask an agent to fix this</button></p>
-    <p id="ask-agent-failure-message" hidden></p>
-    <!-- Once an ask failed, the way out the reader is left with: the command, and the terminal to run it in. -->
-    <div id="ask-agent-fallback" hidden></div>
-    <p id="agent-started" hidden></p>
-    <div id="agent-chat-slot" hidden>
-      <iframe id="agent-chat" title="The chat the agent was asked in"></iframe>
-    </div>
-  </div>
-  <details id="repair-details">
-    <summary>See details</summary>
-    <div id="ask-agent-failure-reason" hidden>
-      <p>Why the agent couldn't be asked:</p>
-      <p id="ask-agent-failure-sentence"></p>
-      <pre id="ask-agent-failure-details"></pre>
-    </div>
-    <p id="repair-intro">Run in a terminal, this starts a new chat with an agent and tells it what you are looking
-       at, for when an agent can't be asked from this page:</p>
-    <div id="repair">
-      <pre id="repair-command">__REPAIR_COMMAND__</pre>
-      <!-- Hidden until the script confirms it can actually copy, so the page
-           never shows a button that does nothing. -->
-      <button id="copy-repair" type="button" hidden>Copy</button>
-    </div>
-    <p id="no-terminal">The workspace's terminal isn't running yet, so there is
-       nowhere to run this here.</p>
-    <details id="terminal-details" hidden>
-      <summary>Open this workspace's terminal</summary>
-      <!-- The lead-in belongs to the terminal, not to the command: the command
-           stands on its own wherever the reader finds a shell, so it keeps its own
-           introduction above and is never left orphaned when there is no terminal
-           to offer. -->
-      <p id="terminal-intro" hidden>You can run that -- or do the repair yourself --
-         in this workspace's terminal, below.</p>
-      <p id="terminal-failure" hidden></p>
-      <div id="terminal-slot" hidden>
-        <iframe id="terminal" title="Workspace terminal"></iframe>
-      </div>
-    </details>
-  </details>
-</main>
-<script>
-(function () {
-  // The terminal's hostname label, minted per workspace, or "" when there is
-  // no terminal registered to offer.
-  var terminalLabel = __TERMINAL_LABEL__;
-  // Whether an app takes the text an agent is asked with (Chat, on a stock workspace).
-  var isAgentOffered = __IS_AGENT_OFFERED__;
-  var launchUrl = __LAUNCH_URL__;
-
-  // Mirrors deriveAppOrigin in system/libs/workspace_ui/src/origin.ts and workspaceHostCoordinate
-  // in system/libs/workspace_ui/src/app_contract.ts, which are canonical: an app origin is its label
-  // prefixed onto the workspace COORDINATE -- the first host-<hex> (or, on a
-  // workspace-keyed share domain, bare 32-hex share) label and everything
-  // after it -- and never onto this page's host verbatim, which
-  // would nest the app under the shell's own label and route back here.
-  //
-  // It differs from them in one way, deliberately: no coordinate label
-  // means no origin, rather than falling back to the host unchanged. The shell
-  // can assume it is running inside a workspace; this page cannot (a direct
-  // hit on the loopback port has no coordinate), and a made-up origin would
-  // show the reader a broken frame instead of the prose that still helps them.
-  function appOrigin(label) {
-    var labels = window.location.host.split(".");
-    for (var index = 0; index < labels.length; index++) {
-      // The port rides on whichever label is last, so it is stripped before
-      // matching -- otherwise a coordinate that happens to BE the last label
-      // reads as an ordinary one and the terminal is silently not offered.
-      // The slice below keeps it, which is what the origin needs.
-      if (/^(?:(?:host|agent)-[a-f0-9]+|[a-f0-9]{32})$/i.test(labels[index].split(":")[0])) {
-        return window.location.protocol + "//" + label + "." +
-               labels.slice(index).join(".") + "/";
-      }
-    }
-    return null;
-  }
-
-  // The command is long enough to be worth not retyping, and the reader may be
-  // copying it into a terminal on the far side of a share. Shown only when the
-  // clipboard is actually reachable: it needs a secure context, which every
-  // workspace origin is (``*.localhost`` locally, https on a share) but which a
-  // direct hit on the loopback port is not.
-  var copyButton = document.getElementById("copy-repair");
-  if (navigator.clipboard && window.isSecureContext) {
-    copyButton.hidden = false;
-    copyButton.addEventListener("click", function () {
-      navigator.clipboard
-        .writeText(document.getElementById("repair-command").textContent)
-        .then(function () {
-          copyButton.textContent = "Copied";
-          setTimeout(function () {
-            copyButton.textContent = "Copy";
-          }, 2000);
-        })
-        // A denied permission is the realistic failure. Selecting the text puts
-        // the reader one keystroke from the same result rather than leaving a
-        // button that silently did nothing.
-        .catch(function () {
-          window.getSelection().selectAllChildren(document.getElementById("repair-command"));
-          copyButton.textContent = "Press to copy";
-        });
-    });
-  }
-
-  // Run one of the placeholder's launches: the app's origin label, the page's path and its name, or a failure whose
-  // ``sentence`` follows workspace_ui's failureSentence, which this page cannot import (the frontend is not built).
-  function launch(purpose, whatFailed) {
-    return fetch(launchUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ purpose: purpose }),
-    }).then(function (response) {
-      return response.json().catch(function () { return {}; }).then(function (body) {
-        if (response.ok) return body;
-        var failure = new Error(["HTTP " + response.status, body.detail || ""].join("\\n").trim());
-        failure.sentence = body.user_facing_message ||
-          (response.status < 500 ? whatFailed + "." : whatFailed + ". Try again. If this persists, report a bug.");
-        throw failure;
-      });
-    }, function (error) {
-      // The request may have reached the workspace before the answer was lost.
-      var failure = new Error(error && error.message ? error.message : String(error));
-      failure.sentence = "The workspace didn't answer, so Imbue Studio can't tell whether this went through.";
-      throw failure;
-    });
-  }
-
-  function pageAt(answer) {
-    var origin = appOrigin(answer.label);
-    return origin ? origin + String(answer.path).replace(/^\\//, "") : null;
-  }
-
-  // The terminal is a session of its own, made when the reader first opens its section rather than on every load
-  // of this page or every look at the details, so a page left open or reloaded does not pile up sessions nobody
-  // looks at.
-  var details = document.getElementById("repair-details");
-  var terminalDetails = document.getElementById("terminal-details");
-  var isTerminalOffered = Boolean(terminalLabel && appOrigin(terminalLabel));
-  if (isTerminalOffered) {
-    document.getElementById("no-terminal").hidden = true;
-    terminalDetails.hidden = false;
-  }
-  var isTerminalAsked = false;
-  terminalDetails.addEventListener("toggle", function () {
-    if (!terminalDetails.open || !isTerminalOffered || isTerminalAsked) return;
-    isTerminalAsked = true;
-    launch("terminal", "The workspace's terminal couldn't be opened here").then(function (answer) {
-      var page = pageAt(answer);
-      if (!page) return;
-      document.getElementById("terminal").src = page;
-      document.getElementById("terminal-slot").hidden = false;
-      document.getElementById("terminal-intro").hidden = false;
-    }, function (failure) {
-      var line = document.getElementById("terminal-failure");
-      line.textContent = failure.sentence + " (" + failure.message.replace(/\\n/g, ": ") + ")";
-      line.hidden = false;
-    });
-  });
-  // A failed ask leaves the reader the command and the terminal in the open, rather than behind "See details",
-  // which keeps only why the ask failed.
-  function showFallback() {
-    var fallback = document.getElementById("ask-agent-fallback");
-    fallback.appendChild(document.getElementById("repair"));
-    fallback.appendChild(document.getElementById("no-terminal"));
-    fallback.appendChild(terminalDetails);
-    document.getElementById("repair-intro").hidden = true;
-    fallback.hidden = false;
-    if (isTerminalOffered) terminalDetails.open = true;
-  }
-
-  var askButton = document.getElementById("ask-agent-button");
-  if (isAgentOffered) {
-    document.getElementById("ask-agent").hidden = false;
-    var askLabel = askButton.textContent;
-    askButton.addEventListener("click", function () {
-      askButton.disabled = true;
-      askButton.textContent = "Asking an agent\u2026";
-      document.getElementById("ask-agent-failure-message").hidden = true;
-      document.getElementById("ask-agent-failure-reason").hidden = true;
-      launch("repair_agent", "Couldn't ask an agent").then(function (answer) {
-        var page = pageAt(answer);
-        askButton.hidden = true;
-        var started = document.getElementById("agent-started");
-        started.textContent = page
-          ? "An agent is on it. Follow along below."
-          : "An agent is on it. Follow along in " + answer.display_name + ".";
-        started.hidden = false;
-        if (page) {
-          document.getElementById("agent-chat").src = page;
-          document.getElementById("agent-chat-slot").hidden = false;
-        }
-      }, function (failure) {
-        askButton.disabled = false;
-        askButton.textContent = askLabel;
-        var message = document.getElementById("ask-agent-failure-message");
-        message.textContent = "Couldn't ask an agent. You can start one yourself: run this command in " +
-          (isTerminalOffered ? "the terminal below." : "a terminal.");
-        message.hidden = false;
-        document.getElementById("ask-agent-failure-sentence").textContent = failure.sentence;
-        document.getElementById("ask-agent-failure-details").textContent = failure.message;
-        document.getElementById("ask-agent-failure-reason").hidden = false;
-        showFallback();
-      });
-    });
-  }
-
-  // With no agent to offer, what is behind the details is the only way out, so it starts open, the terminal too.
-  if (!isAgentOffered) {
-    details.open = true;
-    if (isTerminalOffered) terminalDetails.open = true;
-  }
-
-  // Ask whether the bundle is back rather than reloading blind. The reply
-  // carries the same header the reveal flow's own health check reads, so a
-  // rebuild by ANY route -- a rollback, a build run in the terminal above --
-  // brings the interface back with no further action. Asking (rather than
-  // refreshing) is what lets the terminal stay alive between checks.
-  setInterval(function () {
-    fetch(window.location.pathname, { method: "HEAD", cache: "no-store" })
-      .then(function (response) {
-        if (response.headers.get("__BUILT_HEADER__") === "true") {
-          window.location.reload();
-        }
-      })
-      // The backend restarting is the expected way for this to fail, and it is
-      // also a moment when the bundle may be arriving. Say nothing and ask again.
-      .catch(function () {});
-  }, __POLL_SECONDS__ * 1000);
-})();
-</script>
-</body>
-</html>
-"""
 
 
 def _inject_update_staleness_meta_tag(html_content: str, staleness: str | None) -> str:
@@ -565,43 +185,11 @@ def _index() -> Response:
     return _frontend_not_built_response(index_path)
 
 
-def render_frontend_not_built_page(terminal_label: str | None, is_agent_offered: bool, root_path: str) -> str:
-    """Fill the not-built placeholder in, given the terminal's origin label, whether an agent can be asked to repair
-    the interface, and the path prefix the shell is served under (where its launch route is).
-
-    Takes the label rather than reading the registry itself so the page can be
-    rendered for a workspace with no terminal (pass ``None``) without touching
-    the filesystem, which is the case worth testing and the one hardest to
-    arrange for real.
-
-    The label is substituted as a JSON literal, so the script receives a string
-    however it is spelled, and ``""`` -- which the script treats as "no
-    terminal" -- when there is none. ``_terminal_origin_label`` has already
-    rejected anything that is not a single DNS label, so no value that reaches
-    here can close the script element.
-
-    The repair command goes in as HTML text rather than markup. It is a shell
-    line written for a reader, so ``&`` and ``<`` are ordinary characters in it
-    that the browser would otherwise take as an entity reference or a tag --
-    which would show something other than the command, and hand the copy button
-    (which reads ``textContent``) something other than what the tests validated.
-    Quotes are left alone: this is text content, and the line is full of them.
-    """
-    return (
-        _FRONTEND_NOT_BUILT_TEMPLATE.replace("__TERMINAL_LABEL__", json.dumps(terminal_label or ""))
-        .replace("__IS_AGENT_OFFERED__", json.dumps(is_agent_offered))
-        .replace("__LAUNCH_URL__", json.dumps(root_path + NOT_BUILT_LAUNCH_PATH))
-        .replace("__REPAIR_COMMAND__", html.escape(_NOT_BUILT_REPAIR_COMMAND, quote=False))
-        .replace("__BUILT_HEADER__", FRONTEND_BUILT_HEADER)
-        .replace("__POLL_SECONDS__", str(_NOT_BUILT_POLL_SECONDS))
-    )
-
-
 def _frontend_not_built_response(missing_page: Path) -> Response:
-    """Render the placeholder shown when there is no compiled bundle to serve; ``missing_page`` is the built page
+    """Render the recovery page shown when there is no compiled bundle to serve; ``missing_page`` is the built page
     the request wanted.
 
-    A ``HEAD`` gets the header and nothing else. That is the placeholder's own
+    A ``HEAD`` gets the header and nothing else. That is the page's own
     poll asking whether the bundle is back yet -- every ten seconds, for every
     open tab, for as long as the outage lasts -- and answering it in full would
     re-read the app registry and re-render the page each time, and bury the one
@@ -613,34 +201,93 @@ def _frontend_not_built_response(missing_page: Path) -> Response:
     # Logged with the resolved directory because the usual cause is that the
     # served tree was replaced under a running service, which is otherwise
     # invisible from the supervisor logs.
-    _loguru_logger.warning("Served the not-built placeholder: no frontend bundle at {}", missing_page)
-    is_agent_offered = repair_agent_launch(_shell().inventory.entries(), _NOT_BUILT_REPAIR_MESSAGE) is not None
-    page = render_frontend_not_built_page(_terminal_origin_label(), is_agent_offered, _root_path())
+    _loguru_logger.warning("Served the recovery page: no frontend bundle at {}", missing_page)
+    is_agent_offered = (
+        repair_agent_launch(_shell().inventory.entries(), INTERFACE_NOT_BUILT_REPAIR_MESSAGE) is not None
+    )
+    page = render_recovery_page(INTERFACE_NOT_BUILT_PAGE, _terminal_origin_label(), is_agent_offered, _root_path())
     return document_response(page, is_frontend_built=False)
 
 
-def _not_built_launch() -> ResponseReturnValue:
-    """``POST /api/not-built/launch``: run one of the placeholder's launches -- a terminal session, or the repair
-    agent asked through the primary text action -- and answer where its page is: the app's origin label, the
-    path, and the app's display name. 404 when no app offers it; a launch's own failures answer as the launch
-    route's do. A preview refuses, since either would act on the live workspace."""
+def _read_desktops_failure() -> DesktopsLoadFailure | None:
+    """Run the read ``GET /api/inventory`` answers, and say why it failed; None when it succeeds."""
+    try:
+        inventory_document(_shell())
+    except ShellError as e:
+        _loguru_logger.opt(exception=e).warning("Failed to read the desktops and apps for the recovery page")
+        return DesktopsLoadFailure(details=str(e), is_out_of_space=e.kind == RefusalKind.OUT_OF_SPACE)
+    # Whatever else the read raises is what the inventory route answered with its 500, and this page exists to show it
+    # and hand it to an agent; it is logged with its traceback, as the shell's unhandled-exception handler logs it.
+    except Exception as e:
+        _loguru_logger.opt(exception=e).error("Failed to read the desktops and apps for the recovery page")
+        return DesktopsLoadFailure(details="".join(traceback.format_exception(e)).rstrip(), is_out_of_space=False)
+    return None
+
+
+def _desktop_with_query() -> str:
+    """The shell's root, with this request's query (a pulled-out window's own page keeps its own)."""
+    query = request.query_string.decode()
+    return f"{_root_path()}/" + (f"?{query}" if query else "")
+
+
+def _desktops_recovery_page() -> ResponseReturnValue:
+    """``GET /recovery/desktops``: where the frontend sends its page when the shell answered the read of the desktops
+    and apps with an error. The page reads them again itself, so what it says is the shell's own failure rather than
+    anything a URL could carry, and sends the page back to the desktop at once when the read succeeds."""
+    failure = _read_desktops_failure()
+    if failure is None:
+        return redirect(_desktop_with_query())
+    is_agent_offered = repair_agent_launch(_shell().inventory.entries(), desktops_repair_message(failure)) is not None
+    page = render_recovery_page(
+        desktops_not_loaded_page(failure), _terminal_origin_label(), is_agent_offered, _root_path()
+    )
+    return document_response(page, is_frontend_built=False)
+
+
+def _recovery_repair_message(reason: RecoveryReason) -> str | None:
+    """What the repair agent is told about ``reason``; None when there is nothing left to repair (the desktops load)."""
+    match reason:
+        case RecoveryReason.INTERFACE_NOT_BUILT:
+            return INTERFACE_NOT_BUILT_REPAIR_MESSAGE
+        case RecoveryReason.DESKTOPS_NOT_LOADED:
+            failure = _read_desktops_failure()
+            return None if failure is None else desktops_repair_message(failure)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def _recovery_launch() -> ResponseReturnValue:
+    """``POST /api/recovery/launch``: run one of the recovery page's launches -- a terminal session, or the repair
+    agent asked through the primary text action about what the page is about -- and answer where its page is: the
+    app's origin label, the path, and the app's display name. 404 when no app offers it; 409 when the desktops the
+    agent would be asked about load now; a launch's own failures answer as the launch route's do. A preview refuses,
+    since either would act on the live workspace."""
     if get_state().is_preview:
         return detail_response(PREVIEW_REFUSAL_DETAIL, HTTP_FORBIDDEN, user_facing_message=PREVIEW_REFUSAL_DETAIL)
-    purpose = parse_request_body(NotBuiltLaunchRequest).purpose
+    launch_request = parse_request_body(RecoveryLaunchRequest)
     shell = _shell()
     entries = shell.inventory.entries()
-    match purpose:
-        case NotBuiltLaunchPurpose.TERMINAL:
+    match launch_request.purpose:
+        case RecoveryLaunchPurpose.TERMINAL:
             found = terminal_launch(entries)
-        case NotBuiltLaunchPurpose.REPAIR_AGENT:
-            found = repair_agent_launch(entries, _NOT_BUILT_REPAIR_MESSAGE)
+        case RecoveryLaunchPurpose.REPAIR_AGENT:
+            message = _recovery_repair_message(launch_request.reason)
+            if message is None:
+                return detail_response(
+                    "the desktops and apps load now, so there is nothing to ask an agent about",
+                    HTTP_CONFLICT,
+                    user_facing_message=_DESKTOPS_LOAD_NOW_SENTENCE,
+                )
+            found = repair_agent_launch(entries, message)
         case _ as unreachable:
             assert_never(unreachable)
     if found is None:
-        return detail_response(f"No app in this workspace offers a {purpose.value} launch", HTTP_NOT_FOUND)
+        return detail_response(
+            f"No app in this workspace offers a {launch_request.purpose.value} launch", HTTP_NOT_FOUND
+        )
     path = shell.launch_destination(found.entry, found.launch_path, found.params, None, None, None)
     return model_response(
-        NotBuiltLaunchAnswer(label=str(found.entry.row.label), path=str(path), display_name=found.entry.display_name)
+        RecoveryLaunchAnswer(label=str(found.entry.row.label), path=str(path), display_name=found.entry.display_name)
     )
 
 
@@ -1125,7 +772,8 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(TOUCH_ICON_PATH, view_func=_touch_icon, methods=["GET"])
     application.add_url_rule(MANIFEST_PATH, view_func=_web_manifest, methods=["GET"])
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
-    application.add_url_rule(NOT_BUILT_LAUNCH_PATH, view_func=_not_built_launch, methods=["POST"])
+    application.add_url_rule(RECOVERY_LAUNCH_PATH, view_func=_recovery_launch, methods=["POST"])
+    application.add_url_rule(DESKTOPS_RECOVERY_PATH, view_func=_desktops_recovery_page, methods=["GET"])
     application.add_url_rule(THEME_GALLERY_ROUTE, view_func=_theme_gallery, methods=["GET"])
     register_api_schema_route(
         application,

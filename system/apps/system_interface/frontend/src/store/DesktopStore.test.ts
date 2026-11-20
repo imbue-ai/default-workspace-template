@@ -38,6 +38,7 @@ import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
 import {
   BOOT_REPORT_AFTER_MS,
   BOOT_RETRY_CAP_MS,
+  BOOT_RETRY_FIRST_MS,
   DesktopStore,
   IMMERSIVE_REFUSED_NOTICE,
   NO_CHAT_APP_REASON,
@@ -113,6 +114,7 @@ let api: FakeDesktopApi;
 let socket: FakeDesktopSocket;
 let stores: DesktopStore[];
 let reloads: number;
+let recoveryPagesOpened: number;
 let bugReports: number;
 
 /** The toasts every store of the test has on screen, oldest first. */
@@ -135,6 +137,7 @@ function makeStore(
     modes: MODES,
     redraw,
     reloadInterface: () => void (reloads += 1),
+    openDesktopsRecoveryPage: () => void (recoveryPagesOpened += 1),
     reportBug: () => void (bugReports += 1),
     ...extra,
   });
@@ -177,6 +180,7 @@ beforeEach(() => {
   socket = new FakeDesktopSocket();
   stores = [];
   reloads = 0;
+  recoveryPagesOpened = 0;
   bugReports = 0;
   api.apps = [appRecord("docs"), appRecord("notes")];
   api.desktops = [
@@ -328,34 +332,41 @@ describe("bootstrap", () => {
     expect(store.getState().isLayoutLoaded).toBe(true);
   });
 
-  it("says in the backdrop, not a passing toast, when the shell answers the startup read with an error", async () => {
+  it("sends the page to the shell's recovery page when the shell answers the startup read with an error", async () => {
     api.refusal = "the shell is restarting";
     const store = makeStore();
     await store.start(NO_LINK);
+    // The recovery page says what failed, so the backdrop says nothing of it and keeps its spinner until the page goes.
+    expect(recoveryPagesOpened).toBe(1);
     expect(notices()).toEqual([]);
-    const failure = store.getBootFailure();
-    expect(failure?.isRetrying).toBe(false);
-    expect(failure?.notice).toMatchObject({
-      message: "This workspace's desktops couldn't be loaded.",
-      details: "HTTP 400\nthe shell is restarting",
-    });
+    expect(store.getBootFailure()).toBeNull();
+    expect(store.hasBootAnswered()).toBe(false);
     expect(store.getState().activeDesktopId).toBeNull();
-    expect(store.getState().isAppsLoaded).toBe(false);
-    // Reloading the window is the retry it offers, and nothing tries the read again on its own.
-    expect(failure?.notice.actions.map((action) => action.label)).toEqual(["Reload"]);
-    failure?.notice.actions[0].run();
-    expect(reloads).toBe(1);
+    // Nothing tries the read again meanwhile: the recovery page does that.
     const reads = (): number => api.calls.filter((call) => call === "fetchInventory").length;
     vi.advanceTimersByTime(BOOT_RETRY_CAP_MS * 4);
     await settle();
     expect(reads()).toBe(1);
-    expect(store.getBootFailure()).not.toBeNull();
-    // A read that answers (here, the page coming back into sight) lands the window.
-    api.refusal = null;
-    store.onVisibilityChange(true);
+    expect(recoveryPagesOpened).toBe(1);
+  });
+
+  it("sends the page to the recovery page for a shell error that follows reads nothing answered", async () => {
+    api.refusal = new HttpError(readFailure({ status: 0, body: null, rawText: null, requestKind: "read" }));
+    const store = makeStore();
+    await store.start(NO_LINK);
+    expect(store.getBootFailure()?.notice.message).toBe("The workspace didn't answer. Still trying\u2026");
+    expect(recoveryPagesOpened).toBe(0);
+    api.refusal = new HttpError(
+      readFailure({ status: 500, body: { detail: "desktops.json unreadable" }, rawText: null, requestKind: "read" }),
+    );
+    vi.advanceTimersByTime(BOOT_RETRY_FIRST_MS);
     await settle();
+    expect(recoveryPagesOpened).toBe(1);
     expect(store.getBootFailure()).toBeNull();
-    expect(store.getState().activeDesktopId).toBe("home");
+    // The retry timer went with the read the shell answered.
+    vi.advanceTimersByTime(BOOT_RETRY_CAP_MS * 4);
+    await settle();
+    expect(api.calls.filter((call) => call === "fetchInventory")).toHaveLength(2);
   });
 
   it("keeps trying a startup read nothing answered, on a timer that grows, until one answers, and then stops", async () => {
@@ -368,7 +379,6 @@ describe("bootstrap", () => {
     const reads = (): number => api.calls.filter((call) => call === "fetchInventory").length;
     // A spinner and "Still trying…", the reason behind See details, and no button: the retry is the timer's.
     expect(store.getBootFailure()).toEqual({
-      isRetrying: true,
       notice: {
         message: "The workspace didn't answer. Still trying\u2026",
         details: "HTTP 502\nBackend connection lost",
@@ -413,7 +423,7 @@ describe("bootstrap", () => {
     const store = makeStore();
     await store.start(NO_LINK);
     const reads = (): number => api.calls.filter((call) => call === "fetchInventory").length;
-    expect(store.getBootFailure()?.isRetrying).toBe(true);
+    expect(store.getBootFailure()).not.toBeNull();
     expect(reads()).toBe(1);
 
     api.refusal = null;
@@ -4800,6 +4810,7 @@ describe("the backdrop size report (the multiplayer spec, section 8.3)", () => {
       modes: MODES,
       redraw: () => undefined,
       reloadInterface: () => undefined,
+      openDesktopsRecoveryPage: () => undefined,
     });
     stores.push(store);
     await store.start(NO_LINK);

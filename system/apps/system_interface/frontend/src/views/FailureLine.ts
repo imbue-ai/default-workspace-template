@@ -70,8 +70,8 @@ export interface BootFailureNoticeAttrs {
   readonly onReportBug: ReportBug;
 }
 
-/** Why the startup read of the desktops and apps has not answered, where the desktop would be, until a read does:
- *  over a spinner while the read is being tried again. */
+/** Why nothing has answered the startup read of the desktops and apps, where the desktop would be, under the spinner
+ *  of the read being tried again, until a read answers. */
 export const BootFailureNotice: m.Component<BootFailureNoticeAttrs> = {
   view(vnode) {
     const { failure, onReportBug } = vnode.attrs;
@@ -79,13 +79,12 @@ export const BootFailureNotice: m.Component<BootFailureNoticeAttrs> = {
       "div",
       {
         "data-boot-failure": "",
-        "data-retrying": failure.isRetrying ? "true" : null,
         class:
           "boot-failure mx-4 flex max-w-md flex-col items-center gap-3 rounded-lg bg-surface px-5 py-4 text-left " +
           "shadow-raised",
       },
       [
-        failure.isRetrying ? bootSpinner() : null,
+        bootSpinner(),
         m(FailureLine, {
           notice: failure.notice,
           onReportBug,

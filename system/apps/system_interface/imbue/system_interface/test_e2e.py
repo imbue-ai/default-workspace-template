@@ -53,7 +53,9 @@ from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
 from imbue.system_interface.profiles import DEFAULT_SHARE_ENV_PATH
+from imbue.system_interface.recovery_page import DESKTOPS_RECOVERY_PATH
 from imbue.system_interface.server import create_application
+from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
 from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
 from imbue.system_interface.shell.testing import files_registry_row
 from imbue.system_interface.shell.testing import identity_headers
@@ -902,6 +904,30 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
         poll_interval=0.2,
         error_message="the shell never registered the client on the home desktop",
     )
+
+
+def test_a_startup_read_the_shell_answers_with_an_error_goes_to_the_recovery_page_whose_reload_lands_the_desktop(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """The shell answering the read of the desktops and apps with an error sends the page to the recovery page, which
+    says so from its own read of them; once they load, its Reload lands the desktop."""
+    desktops_file = e2e_server.state_dir / DESKTOPS_FILENAME
+    set_aside = desktops_file.with_name("desktops.json.aside")
+    if desktops_file.exists():
+        desktops_file.rename(set_aside)
+    # A directory where the desktops file should be: the shell cannot seed the first desktop, so its read fails.
+    desktops_file.mkdir()
+
+    page.goto(f"{e2e_server.base_url}/")
+
+    page.wait_for_url(f"{e2e_server.base_url}{DESKTOPS_RECOVERY_PATH}", timeout=15000)
+    expect(page.get_by_role("heading")).to_have_text("This workspace's desktops couldn't be loaded.")
+    desktops_file.rmdir()
+    if set_aside.exists():
+        set_aside.rename(desktops_file)
+    page.get_by_role("button", name="Reload").click()
+    page.wait_for_url(f"{e2e_server.base_url}/", timeout=15000)
+    expect(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible(timeout=15000)
 
 
 @pytest.mark.timeout(60, func_only=False)

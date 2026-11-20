@@ -83,6 +83,7 @@ beforeEach(async () => {
     modes: { isPhone: false, isTouch: false },
     redraw: () => m.redraw(),
     reloadInterface: () => undefined,
+    openDesktopsRecoveryPage: () => undefined,
   });
   await store.start(NO_LINK);
   socket

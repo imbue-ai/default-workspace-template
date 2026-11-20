@@ -1247,8 +1247,8 @@ export function App(): m.Component<AppAttrs> {
     });
   }
 
-  /** The backdrop with no desktop to draw: why the startup read failed (until a read succeeds), else a spinner while
-   *  the desktops are loading, or that there is none. */
+  /** The backdrop with no desktop to draw: why nothing has answered the startup read (until a read does), else a
+   *  spinner while the desktops are loading, or that there is none. */
   function emptyBackdrop(current: DesktopStore): m.Vnode {
     const bootFailure = current.getBootFailure();
     return m(

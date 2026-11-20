@@ -28,7 +28,6 @@ import {
   themeRecord,
   windowRecord,
 } from "../testing/records";
-import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { readFailure } from "@imbue/workspace-ui/src/models/failure";
 import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { AVATAR_DESIGN_PROMPT } from "./AvatarChooserDialog";
@@ -75,9 +74,6 @@ async function mountApp(
     isDetached?: boolean;
     soloWindowId?: string;
     laterWindowIds?: readonly string[];
-    /** What every route raises while the store starts (cleared once it has). */
-    startRefusal?: Error;
-    reportBug?: (failure: ReportedFailure | null) => void;
   } = {},
 ): Promise<void> {
   api = new FakeDesktopApi();
@@ -107,17 +103,15 @@ async function mountApp(
     modes: { isPhone: false, isTouch: false },
     redraw: () => m.redraw(),
     reloadInterface: () => undefined,
+    openDesktopsRecoveryPage: () => undefined,
     soloWindowId: options.soloWindowId ?? null,
     outsideLinks: {
       openInEmbedder: (url) => openedOutside.push(`embedder:${url}`),
       openInBrowser: (url) => openedOutside.push(`browser:${url}`),
       launchInSystemApp: (url) => openedOutside.push(`app:${url}`),
     },
-    reportBug: options.reportBug,
   });
-  api.refusal = options.startRefusal ?? null;
   await store.start(NO_LINK);
-  api.refusal = null;
   socket.deliver().onAppsUpdated([appRecord("docs")]);
   tour = new TourController({
     api: new FakeTourApi({ isSeen: true }),
@@ -142,6 +136,8 @@ afterEach(() => {
 describe("the startup read", () => {
   /** A store over a fake shell whose startup read is held open (or refused with ``refusal``), with the App mounted
    *  over it before it answers. */
+  let recoveryPagesOpened = 0;
+
   async function mountBeforeTheRead(refusal: Error | null): Promise<() => void> {
     unmountViews();
     vi.stubGlobal(
@@ -159,7 +155,9 @@ describe("the startup read", () => {
       modes: { isPhone: false, isTouch: false },
       redraw: () => m.redraw(),
       reloadInterface: () => undefined,
+      openDesktopsRecoveryPage: () => void (recoveryPagesOpened += 1),
     });
+    recoveryPagesOpened = 0;
     const answer = refusal === null ? api.holdReads() : () => undefined;
     api.refusal = refusal;
     void store.start(NO_LINK);
@@ -189,7 +187,6 @@ describe("the startup read", () => {
       new HttpError(readFailure({ status: 504, body: null, rawText: "Gateway Timeout", requestKind: "read" })),
     );
     const failure = document.querySelector("[data-boot-failure]") as HTMLElement;
-    expect(failure.getAttribute("data-retrying")).toBe("true");
     expect(failure.querySelector("[data-boot-spinner]")).not.toBeNull();
     expect(failure.querySelector(".boot-failure-line-message")?.textContent).toBe(
       "The workspace didn't answer. Still trying\u2026",
@@ -204,34 +201,16 @@ describe("the startup read", () => {
     expect(document.querySelector("[data-boot-failure]")).toBeNull();
     expect(store.getState().activeDesktopId).toBe("home");
   });
-});
 
-describe("the startup read's Report a bug", () => {
-  it("appears on the backdrop's failure once the embedder says it opens a bug report, and files that failure", async () => {
-    unmountViews();
-    // A failed start leaves the default avatar, the animated character, which reads the reduced-motion setting.
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+  it("keeps the spinner, with no line, while the page goes to the recovery page for a read the shell refused", async () => {
+    await mountBeforeTheRead(
+      new HttpError(
+        readFailure({ status: 500, body: { detail: "inventory unreadable" }, rawText: null, requestKind: "read" }),
+      ),
     );
-    const reportBug = vi.fn();
-    const startRefusal = new HttpError(
-      readFailure({ status: 500, body: { detail: "inventory unreadable" }, rawText: null, requestKind: "read" }),
-    );
-    await mountApp({ startRefusal, reportBug });
-    m.redraw.sync();
-    const failure = (): HTMLElement => document.querySelector("[data-boot-failure]") as HTMLElement;
-    const labels = (): (string | null)[] =>
-      [...failure().querySelectorAll(".boot-failure-line-action")].map((button) => button.textContent);
-    const message = "This workspace's desktops couldn't be loaded. Try again. If this persists, report a bug.";
-    expect(failure().querySelector(".boot-failure-line-message")?.textContent).toBe(message);
-    expect(labels()).toEqual(["Reload"]);
-
-    store.setCanReportBug(true);
-    m.redraw.sync();
-    expect(labels()).toEqual(["Reload", "Report a bug"]);
-    failure().querySelectorAll<HTMLButtonElement>(".boot-failure-line-action")[1].click();
-    expect(reportBug).toHaveBeenCalledWith({ message, details: "HTTP 500\ninventory unreadable" });
+    expect(recoveryPagesOpened).toBe(1);
+    expect(document.querySelector("[data-boot-spinner]")).not.toBeNull();
+    expect(document.querySelector("[data-boot-failure]")).toBeNull();
   });
 });
 

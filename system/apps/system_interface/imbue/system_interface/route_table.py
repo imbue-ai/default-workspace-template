@@ -52,6 +52,7 @@ from imbue.system_interface.avatar.selection import AvatarSelection
 from imbue.system_interface.documents import MANIFEST_PATH
 from imbue.system_interface.documents import THEME_GALLERY_ROUTE
 from imbue.system_interface.documents import TOUCH_ICON_PATH
+from imbue.system_interface.recovery_page import DESKTOPS_RECOVERY_PATH
 from imbue.system_interface.shell.api_models import AppRunningState
 from imbue.system_interface.shell.api_models import ClientArrivalResponse
 from imbue.system_interface.shell.api_models import DesktopDeletedResponse
@@ -90,8 +91,8 @@ from imbue.system_interface.shell.keybindings_routes import KeybindingsCatalogRe
 from imbue.system_interface.shell.keybindings_routes import ResetKeybindingRequest
 from imbue.system_interface.shell.keybindings_routes import SaveKeybindingRequest
 from imbue.system_interface.shell.keybindings_routes import SaveKeybindingResponse
-from imbue.system_interface.shell.not_built_launches import NotBuiltLaunchAnswer
-from imbue.system_interface.shell.not_built_launches import NotBuiltLaunchRequest
+from imbue.system_interface.shell.recovery_launches import RecoveryLaunchAnswer
+from imbue.system_interface.shell.recovery_launches import RecoveryLaunchRequest
 from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_ROUTE
 from imbue.system_interface.shell.resource_gauge import RESOURCE_GAUGE_SETTINGS_ROUTE
 from imbue.system_interface.shell.resource_gauge import ResourceGaugeSettings
@@ -208,6 +209,7 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ("GET", f"{WALLPAPER_ROUTE_PREFIX}/{{kind}}/{{name}}"): _IMAGE,
     # The workspace-themes plan: the gallery, the catalog and its default, each desktop's theme, icons, and theme files
     ("GET", THEME_GALLERY_ROUTE): SchemalessRoute(reason="the theme gallery page"),
+    ("GET", DESKTOPS_RECOVERY_PATH): SchemalessRoute(reason="the recovery page for desktops that couldn't be loaded"),
     ("GET", "/api/themes"): RouteModels(response_model=ThemeCatalogWire),
     ("POST", "/api/themes/default"): RouteModels(
         request_model=ThemeChoiceRequest, response_model=DefaultThemeResponse
@@ -224,9 +226,9 @@ SHELL_ROUTE_TABLE: RouteTable = {
         response_model=EmbedderMessageRelayResponse,
         alternate_responses=(AlternateResponse(status=HTTP_BAD_GATEWAY, model=EmbedderMessageRelayResponse),),
     ),
-    # Section 5.1: the not-built placeholder's launches
-    ("POST", "/api/not-built/launch"): RouteModels(
-        request_model=NotBuiltLaunchRequest, response_model=NotBuiltLaunchAnswer
+    # Section 5.1: the recovery page's launches
+    ("POST", "/api/recovery/launch"): RouteModels(
+        request_model=RecoveryLaunchRequest, response_model=RecoveryLaunchAnswer
     ),
     # The update notice
     ("GET", "/api/updates/pending"): RouteModels(response_model=PendingUpdateResponse),
