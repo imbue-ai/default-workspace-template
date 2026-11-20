@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 import pytest
-from loguru import logger
 
 from app_manifest.errors import RecordLoadError
 from app_manifest.errors import ScopeComputationError
@@ -361,12 +360,8 @@ def test_the_reverse_lookup_skips_an_app_directory_with_no_manifest(tmp_path: Pa
 def test_the_reverse_lookup_skips_a_manifest_it_cannot_load_and_warns(tmp_path: Path) -> None:
     build_news_workspace(tmp_path)
     write_app_manifest(tmp_path, "broken", 'name = "broken"\n', is_icon_written=False)
-    captured: list[str] = []
-    sink_id = logger.add(lambda message: captured.append(str(message)), level="WARNING")
-    try:
+    with captured_warnings() as captured:
         matches = find_referencing_manifests(tmp_path, RepoRelativePath(".agents/skills/news-refresh"))
-    finally:
-        logger.remove(sink_id)
 
     # One app's stale manifest must not hide every other app's claim on the skill.
     assert [match.manifest.name for match in matches] == ["news"]
