@@ -189,8 +189,8 @@ def test_a_deleted_directory_is_unwatched_for_every_subscriber_and_a_new_subscri
     watched_dir.mkdir()
     shared = SharedWatchObserver.build()
     first = WakeOnChangeHandler(threading.Event())
-    second_changed = threading.Event()
-    second = WakeOnChangeHandler(second_changed)
+    second = WakeOnChangeHandler(threading.Event())
+    later_changed = threading.Event()
     try:
         assert shared.subscribe(watched_dir, True, first)
         assert shared.subscribe(watched_dir, True, second)
@@ -200,13 +200,12 @@ def test_a_deleted_directory_is_unwatched_for_every_subscriber_and_a_new_subscri
         wait_until_true(
             lambda: not shared.is_watching(watched_dir, True, first), 5.0, "the deleted directory's watch stopping"
         )
-        assert not shared.is_watching(watched_dir, True, second)
 
         watched_dir.mkdir()
-        assert shared.subscribe(watched_dir, True, second)
-        second_changed.clear()
+        assert shared.subscribe(watched_dir, True, WakeOnChangeHandler(later_changed))
         (watched_dir / "written-73028.txt").write_text("x")
-        assert second_changed.wait(timeout=5.0)
+        assert later_changed.wait(timeout=5.0)
+        assert not shared.is_watching(watched_dir, True, second)
     finally:
         shared.close()
 
