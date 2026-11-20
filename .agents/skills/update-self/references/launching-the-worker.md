@@ -7,8 +7,7 @@ workspace's own launcher, which may be the oldest supported release's. So
 every command here is held to what that launcher has
 (`python/update_self_skill/launcher_contract_test.py` pins them), and the
 task file writes its report address itself. Do not swap a command for a
-newer launcher subcommand. `older-workspaces.md` ("The launcher is the
-workspace's own") has the detail.
+newer launcher subcommand.
 
 Do not open a window for your own chat while the pass runs: teardown opens it
 once the results are ready.

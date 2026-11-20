@@ -202,9 +202,7 @@ boundary and the staging path must stay.
 ## 3. Dispatch the worker
 
 If another copy of this skill sent you here, and it had no "Standing
-instructions" section, read that section above and
-`references/older-workspaces.md` before 3a: that file says what differs on a
-workspace older than this document.
+instructions" section, read that section above before 3a.
 
 ### 3a. Re-check the ceiling from the staged copy (first, before anything else)
 
@@ -218,7 +216,8 @@ cat /tmp/update-self-recheck.json
 
 Set `PINNED_CEILING` as Step 2 does. **A non-zero exit: stop** and follow
 what it printed (an `error:` line is a Step 2 error; exit 75 prints its own
-procedure). If `exceeds_ceiling` is `true`, follow
+procedure, and `references/older-workspaces.md`, "A system Python older than
+3.12", has the rest). If `exceeds_ceiling` is `true`, follow
 `references/version-ceiling.md` ("When Step 3a finds the target above the
 ceiling") before going on.
 

@@ -22,9 +22,11 @@ where it says so. The fourth always ends the pass with a decision for them.
 
 For the first three kinds: reply with `create_worker.py reply --task-file
 data/.tasks/update-self/task.md -m "..."`, re-arm the poll
-(`launching-the-worker.md`, section 5) and end your turn. Where the launcher
-has no `reply` subcommand, or the report file is still in place after the
-poll delivered it, `older-workspaces.md` has what to do first.
+(`launching-the-worker.md`, section 5) and end your turn. If the report file
+is still in place after the poll delivered it, consume it before you reply
+(`older-workspaces.md`, "Consuming a report by hand"). If `reply` is rejected
+as an invalid choice, send the reply as `older-workspaces.md` ("Sending the
+worker a message without `message_chat.py`") says.
 
 ## 1. A genuine, unresolvable merge conflict
 

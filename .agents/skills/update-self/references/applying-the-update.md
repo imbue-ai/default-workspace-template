@@ -183,9 +183,12 @@ refusal at exit 1). This step takes them again right before the next apply.
 
 ## 5. Run the apply
 
-Before the first apply of a pass, check whether an interrupted apply could
-heal itself here: `older-workspaces.md` ("The first apply that lands the
-recovery machinery") has the test.
+Before the first apply of a pass, ask the workspace's own copy of the
+script, which the apply replaces, for its `recover` subcommand: run
+`.agents/skills/update-self/scripts/update_self.py recover --help` under
+`python3`. If that fails, an interrupted apply cannot heal itself on this
+workspace: read `older-workspaces.md` ("The first apply that lands the
+recovery machinery") before you go on.
 
 From the staged copy, in the **foreground**: its output (refusal and resume
 messages, any provisioner warning, the `apply phase timings:` line) is what

@@ -2,29 +2,24 @@
 
 Your worktree is a checkout of a workspace whose own tree, launcher and
 installed tools are whatever release it is still on, while the guide you
-follow is the target release's. Everything here is true only for a workspace
-older than some release. Nothing else in your guide carries such text: a step
-that has a difference points at its section here in one line.
+follow is the target release's. Each section here is what to do about one
+difference such a workspace shows. The step that found the difference sent
+you to its section, and nothing else in your guide carries such text.
 
-Each item opens with the test for whether it applies. Its `CLEANUP:` line
-names what to remove, and the floor at which that can go: the floor is the
-oldest release a workspace updates from in one pass. Its value, and the
-release at which every item goes, are in the lead's
+Each item's `CLEANUP:` line names what to remove, and the floor at which that
+can go: the floor is the oldest release a workspace updates from in one pass.
+Its value, and the release at which every item goes, are in the lead's
 `references/older-workspaces.md`.
 
 ## Contents
 
 - A shallow clone
-- Delivering the report by hand
 - Cron entries from before routines
 - Apps from before the app model
 - Python from before the packaged layout
 - A user app on the Screen's ports
 
 ## A shallow clone
-
-**Applies when:** the git common dir holds a `shallow` file. The guarded fetch
-in the worker guide's Step 1 tests it for itself.
 
 A workspace made from a pool host baked before the full-history bake fix
 carries a `--depth 1` clone, in which `git log` dead-ends at a parentless
@@ -38,28 +33,7 @@ is what gives it a merge base, and nothing more is asked of you.
 CLEANUP: remove this section and the guarded fetch in the worker guide's Step
 1 once no supported workspace predates the bake fix.
 
-## Delivering the report by hand
-
-**Applies when:** on every pass, since the launcher in your checkout is the
-workspace's own whatever its release. `LEAD_WORK_DIR` coming back unset from
-the task file means that launcher stamps no `lead_work_dir` either.
-
-The shared reporting reference delivers a report with the
-launcher's `report` subcommand, which a launcher from before minds-v0.6.2
-does not have. So the worker guide's Step 6 writes the report file and copies it into
-place itself, which is all `report` does. A launcher from before minds-v0.6.1
-also stamps no `lead_work_dir`, so `LEAD_WORK_DIR` may be unset: the lead's
-checkout is then the main worktree of this same repo.
-
-CLEANUP: at a floor of minds-v0.6.2, the worker guide's Step 6 and the task
-file in `launching-the-worker.md` may deliver through `report` as the shared
-reference says, and the `LEAD_WORK_DIR` fallbacks (the cron listing of the
-worker guide's Step 4a, and its Step 6) can go.
-
 ## Cron entries from before routines
-
-**Applies when:** the listing of the lead's `data/.state/cron.d` in the worker
-guide's Step 4a shows an entry.
 
 From minds-v0.9.0 a scheduled task is a routine, a tracked
 `system/routines/<id>.toml`. `routines migrate-cron` moved the cron drop-ins
@@ -80,29 +54,16 @@ cron drop-in (a floor of minds-v0.9.0, and a fleet check for leftovers).
 
 ## Apps from before the app model
 
-**Applies when:** an app directory under `system/apps/` has no `app.toml`. The
-`--package app-manifest` form is on every call whatever the workspace holds.
-
 From minds-v0.5.1 an app has an `app.toml` and the `app-manifest` library
-computes its footprint. Two leftovers of the time before:
+computes its footprint. An app directory with no `app.toml` has no footprint
+the library can compute. Its directory is its footprint: read `git diff` over
+it by hand for the two ranges `footprint-ranges` names.
 
-- Your `app-manifest` calls carry `--package app-manifest`, which
-  installs the library from the merged tree. A workspace from before the app
-  model has none of it, and the root project does not depend on it.
-- An app directory with no `app.toml` has no footprint the library can
-  compute. Its directory is its footprint: read `git diff` over it by hand for
-  the two ranges `footprint-ranges` names.
-
-CLEANUP: remove the second item, and its pointer in
-`worker/impact-analysis.md`, once no supported workspace holds an app without
-a manifest (a floor of minds-v0.5.1, and a fleet check). The `--package` form
-stays while you read the merged tree's library.
+CLEANUP: remove this section, and its pointer in `worker/impact-analysis.md`,
+once no supported workspace holds an app without a manifest (a floor of
+minds-v0.5.1, and a fleet check).
 
 ## Python from before the packaged layout
-
-**Applies when:** `system/test_user_packages_are_standalone.py` names a user
-package, or the environment gate or a suite fails on the workspace's own
-skills, apps, services or docs over a rule the update's changelog changed.
 
 minds-v0.10.0 moved every skill's Python into a package, made each user app,
 service and lib a standalone uv project, and changed how commands are launched. The rules
@@ -135,9 +96,6 @@ worker guide's Step 4b go when
 it goes when the last of them stops naming it.
 
 ## A user app on the Screen's ports
-
-**Applies when:** a workspace-added app's program line (`--url`) or its
-runner's `PORT` default uses port 8090 or 8091.
 
 Those are the Screen's service and neko ports, which older scaffolds could
 hand out, breaking the Screen. Move the app to a free port in your branch

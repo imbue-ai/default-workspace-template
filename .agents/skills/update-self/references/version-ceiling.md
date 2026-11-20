@@ -107,9 +107,8 @@ pass as "When no target resolves" ends one.
 
 Step 3a resolves nothing: it either clears the target Step 2 chose or hands
 the pass back to Step 2a with the ceiling's answer. Step 3a must stay in
-every version of this skill (`handoff-contract.md`); `older-workspaces.md`
-has the workspaces it protects. If its output has `"exceeds_ceiling": true`,
-it matters who chose `$REF`:
+every version of this skill (`handoff-contract.md`). If its output has
+`"exceeds_ceiling": true`, it matters who chose `$REF`:
 
 - **Step 2 chose it, without `--override`.** The user never asked for it. Do
   not name it. Set `$REF` to the capped ref: re-run the Step 3a command

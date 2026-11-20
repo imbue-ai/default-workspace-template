@@ -185,10 +185,10 @@ built-in, restarted by the apply and tested upstream, so do only this:
    `skill` against the removed and renamed skills. Then list the lead's
    `data/.state/cron.d`, which git does not show (`ls
    "$LEAD_WORK_DIR/data/.state/cron.d"`; under the main worktree of this same
-   repo when `LEAD_WORK_DIR` is unset), and grep the lines of any entry it
-   holds the same way; `references/worker/older-workspaces.md` ("Cron entries from
-   before routines") says why one may be there. A hit in either is a
-   user-created consumer: run the analysis in full after all.
+   repo when `LEAD_WORK_DIR` is unset). If it holds an entry, grep its lines
+   the same way, per `references/worker/older-workspaces.md` ("Cron entries
+   from before routines"). A hit in either is a user-created consumer: run
+   the analysis in full after all.
 3. Work the provisioning files and global-dependency bumps, which always
    count as impacted, per `references/worker/provisioning-changes.md`.
 4. Record the footprint evidence in your report: `has_local_footprint: false`
@@ -367,9 +367,9 @@ report. Read a long file in parts.
 Take the frontmatter parse, the report frontmatter, and the body shapes from
 `data/.tasks/update-self/skill-at-target/.agents/shared/references/worker-reporting.md`
 (`<TASK_FILE>` -> `data/.tasks/update-self/task.md`). Deliver the report **by
-hand**, not with that reference's `report` subcommand: write the file and
-copy it into place yourself (`references/worker/older-workspaces.md`,
-"Delivering the report by hand", says why).
+hand**, not with that reference's `report` subcommand, which the
+workspace's launcher may not have: write the file and copy it into place
+yourself.
 
 ```bash
 mkdir -p data/.tasks/update-self/reports
