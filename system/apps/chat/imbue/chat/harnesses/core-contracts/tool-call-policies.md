@@ -168,8 +168,8 @@ runs the wrapper passes, and judges the command the wrapper runs after its `--` 
 rule, so the wrapper does not launder a `cat` of the file; the file-tool half refuses claude's
 `Read`/`Grep`/`Glob`/`Edit`/`Write`, pi's `read`/`edit`/`write`/`grep`/`find`, grok's
 `read_file`/`search_replace`/`write`/`grep`, and a codex `apply_patch` whose file lines point
-under the directory, and a grok `spawn_subagent` whose `cwd` is there, as a `cd` there is.
-Unlike the other blockers, this one therefore polices every tool call, not only shell calls. The
+under the directory. A tool that starts work in a directory under it (grok's `spawn_subagent`,
+by its `cwd`) is refused as a `cd` there is. Unlike the other blockers, this one therefore polices every tool call, not only shell calls. The
 checker never prints the command or a path back, since either may carry a value.
 
 What it guarantees is narrower than "the value never leaves the file": the checker judges the
