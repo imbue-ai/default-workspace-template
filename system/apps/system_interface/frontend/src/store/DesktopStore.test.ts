@@ -1067,6 +1067,95 @@ describe("workspace-wide actions", () => {
     });
   });
 
+  it("hands a pages layer built after the chords were read the chords already published", async () => {
+    setResolvedShellKeybindingsForTest({ app: "system_interface", chords_by_action: { "open-launcher": ["meta+k"] } });
+    const store = makeStore();
+    await store.start(NO_LINK);
+    const sentToPages: unknown[] = [];
+
+    store.setPageDriver({
+      reload: () => undefined,
+      reloadApp: () => undefined,
+      resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
+      requestClose: () => undefined,
+      ownsCloseChord: () => false,
+      sendWorkspaceChords: (chords, surface) => sentToPages.push({ chords, surface }),
+      sendChord: () => undefined,
+    });
+
+    expect(sentToPages).toEqual([{ chords: ["meta+k"], surface: "browser" }]);
+  });
+
+  it("reports nothing to the chrome until the shell's own chords are read, so it keeps its close-tab chord", async () => {
+    const reported: unknown[] = [];
+    const store = makeStore(undefined, {
+      shortcuts: {
+        openKeyboardShortcuts: () => undefined,
+        reportShellShortcuts: (chordsByAction, claimed) => reported.push({ chordsByAction, claimed }),
+      },
+    });
+    await store.start(NO_LINK);
+    setResolvedShellKeybindingsForTest(null);
+
+    store.setEmbedderPresent(true);
+    await settle();
+    expect(reported).toEqual([]);
+
+    setResolvedShellKeybindingsForTest({ app: "system_interface", chords_by_action: { "open-launcher": ["meta+k"] } });
+    store.setCanPopOut(true);
+    await settle();
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toMatchObject({ chordsByAction: { "open-launcher": ["meta+k"] } });
+  });
+
+  it("still reports the workspace-wide chords to the chrome, claiming no app's, when the catalog cannot be read", async () => {
+    const reported: unknown[] = [];
+    const store = makeStore(undefined, {
+      shortcuts: {
+        openKeyboardShortcuts: () => undefined,
+        reportShellShortcuts: (chordsByAction, claimed) => reported.push({ chordsByAction, claimed }),
+      },
+    });
+    await store.start(NO_LINK);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    api.pendingKeybindingsCatalogs.push(Promise.reject(new Error("catalog unavailable")));
+
+    setResolvedShellKeybindingsForTest({ app: "system_interface", chords_by_action: { "open-launcher": ["meta+k"] } });
+    store.setEmbedderPresent(true);
+    await settle();
+    warn.mockRestore();
+
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toMatchObject({ chordsByAction: { "open-launcher": ["meta+k"] }, claimed: [] });
+  });
+
+  it("reports only the newest shortcuts to the chrome when two catalog reads answer out of order", async () => {
+    const reported: unknown[] = [];
+    const store = makeStore(undefined, {
+      shortcuts: {
+        openKeyboardShortcuts: () => undefined,
+        reportShellShortcuts: (chordsByAction, claimed) => reported.push({ chordsByAction, claimed }),
+      },
+    });
+    await store.start(NO_LINK);
+    const answers: ((catalog: typeof api.keybindingsCatalog) => void)[] = [];
+    for (let read = 0; read < 2; read++) {
+      api.pendingKeybindingsCatalogs.push(new Promise((resolve) => answers.push(resolve)));
+    }
+
+    setResolvedShellKeybindingsForTest({ app: "system_interface", chords_by_action: { "open-launcher": ["meta+k"] } });
+    store.setEmbedderPresent(true);
+    store.setCanPopOut(true);
+    answers[1](api.keybindingsCatalog);
+    await settle();
+    answers[0](api.keybindingsCatalog);
+    await settle();
+
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toMatchObject({ chordsByAction: { "open-launcher": ["meta+k"] } });
+  });
+
   it("hands a chord the chrome intercepted to the focused window's page", async () => {
     const store = await startedStore();
     const sent: string[] = [];
@@ -1083,6 +1172,29 @@ describe("workspace-wide actions", () => {
 
     store.forwardChordToFocusedWindow("alt+f4");
     expect(sent).toEqual(["win-4:alt+f4"]);
+  });
+
+  it("hands a solo shell's chord to its own window, which the desktop holds pulled out", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-2"), placementRecord("win-1", { is_detached: true })],
+    });
+    const store = makeStore(() => undefined, { soloWindowId: "win-1" });
+    await store.start(NO_LINK);
+    const sent: string[] = [];
+    store.setPageDriver({
+      reload: () => undefined,
+      reloadApp: () => undefined,
+      resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
+      requestClose: () => undefined,
+      ownsCloseChord: () => false,
+      sendWorkspaceChords: () => undefined,
+      sendChord: (windowId, chord) => sent.push(`${windowId}:${chord}`),
+    });
+
+    store.forwardChordToFocusedWindow("alt+f4");
+    expect(sent).toEqual(["win-1:alt+f4"]);
   });
 });
 

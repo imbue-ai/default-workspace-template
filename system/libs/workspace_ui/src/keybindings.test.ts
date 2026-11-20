@@ -150,6 +150,14 @@ describe("chordNotices", () => {
     expect(chordNotices("meta+w", MAC_BROWSER)).toEqual([]);
   });
 
+  it("leaves out the browser's keeping a chord for a binding no browser runs, and keeps the rest", () => {
+    const desktopOnly = { isBrowserReservedNoticed: false };
+    expect(chordNotices("meta+n", MAC_DESKTOP, desktopOnly)).toEqual([]);
+    expect(chordNotices("meta+tab", MAC_DESKTOP, desktopOnly)).toEqual([
+      "macOS uses ⌘⇥ for the app switcher, so this may never reach Imbue Studio unless you change that in System Settings.",
+    ]);
+  });
+
   it("warns about a chord the OS keeps, with the Mac's remedy", () => {
     expect(chordNotices("meta+tab", MAC_DESKTOP)).toEqual([
       "macOS uses ⌘⇥ for the app switcher, so this may never reach Imbue Studio unless you change that in System Settings.",
@@ -169,14 +177,14 @@ describe("chordNotices", () => {
 });
 
 describe("chordKeycapLabels", () => {
-  it("draws the modifiers as Apple's symbols in the grammar's order on an Apple platform", () => {
+  it("draws the modifiers as Apple's symbols, in Apple's order, on an Apple platform", () => {
     expect(chordKeycapLabels("ctrl+alt+shift+meta+n", true)).toEqual(["⌃", "⌥", "⇧", "⌘", "N"]);
     expect(chordKeycapLabels("meta+enter", true)).toEqual(["⌘", "↩"]);
     expect(chordKeycapLabels("meta+backspace", true)).toEqual(["⌘", "⌫"]);
   });
 
   it("spells the modifiers out elsewhere, where meta is the Control key", () => {
-    expect(chordKeycapLabels("shift+meta+n", false)).toEqual(["Shift", "Ctrl", "N"]);
+    expect(chordKeycapLabels("shift+meta+n", false)).toEqual(["Ctrl", "Shift", "N"]);
     expect(chordKeycapLabels("meta+enter", false)).toEqual(["Ctrl", "Enter"]);
     expect(chordKeycapLabels("meta+backspace", false)).toEqual(["Ctrl", "Backspace"]);
   });
@@ -191,13 +199,16 @@ describe("chordKeycapLabels", () => {
 });
 
 describe("chordDisplayLabel", () => {
-  it("runs Apple's symbols together, the way a Mac menu writes a shortcut", () => {
+  it("runs Apple's symbols together, Command first", () => {
     expect(chordDisplayLabel("shift+meta+n", true)).toBe("⇧⌘N");
+    expect(chordDisplayLabel("ctrl+alt+shift+meta+k", true)).toBe("⌃⌥⇧⌘K");
     expect(chordDisplayLabel("meta+enter", true)).toBe("⌘↩");
     expect(chordDisplayLabel("f2", true)).toBe("F2");
   });
 
-  it("joins the names with plus signs elsewhere", () => {
+  it("joins the names with plus signs elsewhere, Ctrl first", () => {
+    expect(chordDisplayLabel("shift+meta+n", false)).toBe("Ctrl+Shift+N");
+    expect(chordDisplayLabel("alt+shift+meta+w", false)).toBe("Ctrl+Alt+Shift+W");
     expect(chordDisplayLabel("ctrl+shift+n", false)).toBe("Ctrl+Shift+N");
     expect(chordDisplayLabel("alt+arrowup", false)).toBe("Alt+↑");
   });
@@ -206,6 +217,7 @@ describe("chordDisplayLabel", () => {
 describe("chordSpokenLabel", () => {
   it("names each key in words, joined with plus signs", () => {
     expect(chordSpokenLabel("shift+meta+n", true)).toBe("Shift+Command+N");
+    expect(chordSpokenLabel("alt+meta+]", false)).toBe("Ctrl+Alt+]");
     expect(chordSpokenLabel("alt+arrowleft", true)).toBe("Option+Left Arrow");
     expect(chordSpokenLabel("ctrl+enter", false)).toBe("Ctrl+Enter");
     expect(chordSpokenLabel("delete", false)).toBe("Delete");

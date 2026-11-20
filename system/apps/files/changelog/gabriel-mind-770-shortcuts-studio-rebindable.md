@@ -1,0 +1,1 @@
+Files' shortcuts follow where the workspace runs, as the chat's do: a shortcut a browser keeps for itself never runs in a browser, even in one that delivers it to the page, matching the Keyboard shortcuts screen, which shows such a row as Off there.

@@ -1,8 +1,10 @@
 /**
  * The keyboard shortcuts dialog (user-profile-state spec, section 10.3): the Keyboard settings
  * section in a modal of its own, opened from "Keyboard shortcuts..." on the backdrop's context
- * menu. Imbue Studio's Workspace settings shows the same section on the `/keyboard-shortcuts` page;
- * this is the entry from inside the workspace, which a visitor or a share link has too. Shortcuts
+ * menu or the Show the keyboard shortcuts action when the embedder does not show them itself.
+ * Imbue Studio's Workspace settings shows the same section on the `/keyboard-shortcuts` page, and
+ * opens there instead when it says it can (`opensKeyboardShortcuts`); this is the entry from inside
+ * the workspace, which a visitor or a share link has too. Shortcuts
  * are the viewer's, not a desktop's, so the dialog names no desktop and stays available while
  * viewing somebody else's.
  */

@@ -59,6 +59,19 @@ label = "Undo"
 default_chords = ["Control+Z"]
 """
 
+_WORKSPACE_WIDE_ROW = """
+[[apps]]
+name = "sketch"
+url = "http://127.0.0.1:9"
+program = "sketch"
+
+[[apps.keybindings]]
+id = "open-sketch"
+label = "Open sketch"
+default_chords = ["alt+meta+s"]
+scope = "workspace"
+"""
+
 
 def _client(tmp_path: Path, *extra_rows: str) -> FlaskClient:
     broadcaster = WebSocketBroadcaster()
@@ -156,6 +169,28 @@ def test_the_catalog_lists_a_stopped_apps_declared_actions_from_its_registry_row
     ]
 
 
+def _keybinding_row(name: str, launcher_rank: int | None) -> str:
+    rank = "" if launcher_rank is None else f"launcher_rank = {launcher_rank}\n"
+    return f"""
+[[apps]]
+name = "{name}"
+url = "http://127.0.0.1:9"
+{rank}
+[[apps.keybindings]]
+id = "act"
+label = "Act"
+default_chords = ["f6"]
+"""
+
+
+def test_the_catalog_lists_the_apps_in_the_launchers_order_not_the_registrys(tmp_path: Path) -> None:
+    rows = (_keybinding_row("unranked", None), _keybinding_row("zeta", 20), _keybinding_row("alpha", 10))
+
+    catalog = _client(tmp_path, *rows).get("/api/keybindings/catalog").get_json()
+
+    assert [app["app"] for app in catalog["apps"]] == ["system_interface", "alpha", "zeta", "unranked"]
+
+
 def test_the_catalog_answers_what_a_reset_restores_beside_the_override_in_force(tmp_path: Path) -> None:
     client = _client(tmp_path, _STOPPED_NOTES_ROW)
     client.post(
@@ -250,6 +285,12 @@ def test_the_catalog_skips_a_row_whose_default_chords_are_off_the_grammar(tmp_pa
     assert [app["app"] for app in catalog["apps"]] == ["system_interface", "notes"]
 
 
+def test_the_catalog_skips_a_row_that_claims_a_workspace_wide_action(tmp_path: Path) -> None:
+    catalog = _client(tmp_path, _STOPPED_NOTES_ROW, _WORKSPACE_WIDE_ROW).get("/api/keybindings/catalog").get_json()
+
+    assert [app["app"] for app in catalog["apps"]] == ["system_interface", "notes"]
+
+
 def test_a_workspace_save_normalizes_the_chords_into_the_requesters_override(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
@@ -307,8 +348,10 @@ def test_a_visitor_cannot_save_everywhere(tmp_path: Path) -> None:
         ({"chords": ["banana+x"]}, "does not spell"),
         ({"action": "no-such-action"}, "no app declares"),
         ({"app": "no-such-app"}, "no app declares"),
+        ({"action": "open-launcher", "chords": ["shift+k"]}, "needs a modifier other than shift"),
+        ({"chords": [f"meta+{n}" for n in range(10)] + list("abcdefg")}, "at most 16 chords"),
     ],
-    ids=["bad-chord", "unknown-action", "unknown-app"],
+    ids=["bad-chord", "unknown-action", "unknown-app", "workspace-wide-without-modifier", "too-many-chords"],
 )
 def test_a_save_refuses_what_it_cannot_store(tmp_path: Path, body_patch: dict[str, Any], detail_fragment: str) -> None:
     body: dict[str, Any] = {

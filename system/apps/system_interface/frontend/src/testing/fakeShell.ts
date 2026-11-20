@@ -65,6 +65,9 @@ export class FakeDesktopApi implements DesktopApi {
     has_pending_permission: false,
     unsent: [],
   };
+  /** Answers the next catalog reads take in turn, ahead of ``keybindingsCatalog``, so a test can settle them in any
+   *  order. */
+  readonly pendingKeybindingsCatalogs: Promise<KeybindingsCatalog>[] = [];
   /** Whose desktops a create makes and the order route moves: the shell reads the requester's identity; the fake
    *  is told (null for the workspace owner's). */
   participant: string | null = null;
@@ -643,7 +646,7 @@ export class FakeDesktopApi implements DesktopApi {
   async fetchKeybindingsCatalog(): Promise<KeybindingsCatalog> {
     this.calls.push("fetchKeybindingsCatalog");
     this.refuse();
-    return this.keybindingsCatalog;
+    return this.pendingKeybindingsCatalogs.shift() ?? this.keybindingsCatalog;
   }
 }
 

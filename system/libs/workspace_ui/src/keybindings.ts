@@ -347,17 +347,28 @@ export function readsChordAsApple(chord: string, platform: ChordPlatform): boole
   return platform === "mac" || holdsControl(chord);
 }
 
+/** Which of the notices a chord's binding has a use for. */
+export interface ChordNoticeOptions {
+  /** Whether a browser keeping the chord matters: not for a desktop app binding a browser never runs. */
+  readonly isBrowserReservedNoticed?: boolean;
+}
+
 /**
  * What to tell the user about a chord in the context, none of it blocking: that a browser would keep
  * it from the workspace, that the OS is known to keep it from every app, or that the desktop app takes
  * it from the OS to run the binding.
  */
-export function chordNotices(chord: string, context: ChordContext): string[] {
+export function chordNotices(chord: string, context: ChordContext, options: ChordNoticeOptions = {}): string[] {
   const isApple = context.platform === "mac";
   const label = chordDisplayLabel(chord, readsChordAsApple(chord, context.platform));
   const os = OS_NAMES[context.platform];
   const notices: string[] = [];
-  if (context.surface === "desktop" && BROWSER_RESERVED_CHORDS[context.platform].includes(chord)) {
+  const isBrowserReservedNoticed = options.isBrowserReservedNoticed ?? true;
+  if (
+    isBrowserReservedNoticed &&
+    context.surface === "desktop" &&
+    BROWSER_RESERVED_CHORDS[context.platform].includes(chord)
+  ) {
     notices.push(
       `${label} is a shortcut the browser keeps for itself, so this won't work when the workspace is open in a browser.`,
     );
@@ -418,27 +429,40 @@ function labelsOfToken(token: string): KeyLabels {
   return sameOnEveryPlatform(printed, printed);
 }
 
-/** The keycaps one canonical chord is drawn as, modifiers first in the grammar's order. */
+/** A chord's tokens in the order its labels write them. On an Apple platform that is the grammar's own order, which
+ *  is Apple's (⌃⌥⇧⌘, as the macOS menu bar writes the same shortcut); elsewhere the primary modifier (`meta`, Ctrl)
+ *  comes first, as Windows and Linux write it, then the other held modifiers in the grammar's order, then the key. */
+function tokensInLabelOrder(chord: string, isApple: boolean): string[] {
+  const tokens = chord.split("+");
+  if (isApple) return tokens;
+  const modifiers = tokens.slice(0, -1);
+  return [
+    ...modifiers.filter((token) => token === "meta"),
+    ...modifiers.filter((token) => token !== "meta"),
+    ...tokens.slice(-1),
+  ];
+}
+
+/** The keycaps one canonical chord is drawn as, in label order (`tokensInLabelOrder`). */
 export function chordKeycapLabels(chord: string, isApple: boolean): string[] {
-  return chord.split("+").map((token) => {
+  return tokensInLabelOrder(chord, isApple).map((token) => {
     const labels = labelsOfToken(token);
     return isApple ? labels.appleKeycap : labels.otherKeycap;
   });
 }
 
 /**
- * One canonical chord as a single label, the way a menu writes a shortcut: Apple's symbols run together on an
- * Apple platform ("⇧⌘N", the grammar's modifier order being Apple's own), the names joined with `+` elsewhere
- * ("Ctrl+Shift+N").
+ * One canonical chord as a single label, the way a menu writes it: Apple's symbols run together in Apple's order on an
+ * Apple platform ("⇧⌘N"), the names joined with `+` and the primary modifier first elsewhere ("Ctrl+Shift+N").
  */
 export function chordDisplayLabel(chord: string, isApple: boolean): string {
   return chordKeycapLabels(chord, isApple).join(isApple ? "" : "+");
 }
 
-/** One canonical chord in words ("Command+Shift+N"), for tooltips, screen readers, and messages. */
+/** One canonical chord in words ("Shift+Command+N" on an Apple platform), in label order, for tooltips, screen
+ *  readers, and messages. */
 export function chordSpokenLabel(chord: string, isApple: boolean): string {
-  return chord
-    .split("+")
+  return tokensInLabelOrder(chord, isApple)
     .map((token) => {
       const labels = labelsOfToken(token);
       return isApple ? labels.appleWord : labels.otherWord;

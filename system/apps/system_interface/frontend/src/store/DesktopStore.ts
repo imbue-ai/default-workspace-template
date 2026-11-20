@@ -31,6 +31,7 @@ import type { ChordSurface } from "@imbue/workspace-ui/src/keybindings";
 import { StalePlacementsSaveError } from "../model/api";
 import {
   type WorkspaceActionId,
+  areShellKeybindingsLoaded,
   claimedChordsOf,
   refreshShellKeybindings,
   setShellChordSurface,
@@ -310,7 +311,7 @@ export interface PageDriver {
   resendTheme(appName: string): void;
   /** Tell every greeted page somebody changed a keybinding, so it re-fetches its resolved chords. */
   broadcastKeybindingsChanged(): void;
-  /** Send the page ``shell:close-request`` (the Imbue Studio close chord). */
+  /** Send the page ``shell:close-request`` (the workspace's Close window). */
   requestClose(windowId: string): void;
   /** Send every greeted page the workspace-wide chords and where the workspace runs (``shell:workspace-chords``),
    *  and every page greeted from now on the same. */
@@ -627,6 +628,8 @@ export class DesktopStore {
   private opensKeyboardShortcuts = false;
   /** Whether the shell's own keyboard shortcuts dialog is open (no embedder shows them). */
   private isKeyboardShortcutsDialogOpenNow = false;
+  /** Bumped by every report of the shortcuts to the chrome, so a catalog read answered after a newer one's is dropped. */
+  private shellShortcutsReportGeneration = 0;
   /** Whether the embedder takes immersive-mode requests; off until it says so (an older chrome, a plain browser). */
   private canImmerse = false;
   /** Immersive mode while the chrome says it is on; never persisted (the integration spec, S4). */
@@ -977,6 +980,9 @@ export class DesktopStore {
 
   setPageDriver(driver: PageDriver | null): void {
     this.pageDriver = driver;
+    // A pages layer is built once the first layout lands, often after the keybindings were read, and again on a
+    // switch between the phone and desktop layouts: it starts with the chords already published.
+    if (driver !== null) this.sendWorkspaceChordsTo(driver, workspaceChordsByAction());
   }
 
   dispatch(event: DesktopEvent): void {
@@ -2839,8 +2845,8 @@ export class DesktopStore {
     this.dispatch({ type: "window_closed_here", desktopId: found.desktop.id, windowId });
   }
 
-  /** The Imbue Studio close chord: the focused window is told, then closed for everyone; a pinned window, which is never
-   *  closed, is minimized instead. */
+  /** The workspace's Close window (its shortcut, or the chrome's close-tab chord): the focused window is told, then
+   *  closed for everyone; a pinned window, which is never closed, is minimized instead. */
   async closeFocusedWindow(): Promise<void> {
     // In a solo shell the chord belongs to the chrome, which closes the desktop window instead; the focused
     // window here would be some other window of the desktop.
@@ -3069,14 +3075,29 @@ export class DesktopStore {
    *  chords by action and every app's, all filtered for where the workspace runs. */
   private publishWorkspaceChords(): void {
     const chordsByAction = workspaceChordsByAction();
-    const chords = [...new Set(Object.values(chordsByAction).flat())];
-    this.pageDriver?.sendWorkspaceChords(chords, shellChordContext().surface);
-    if (!this.isEmbedderPresent) return;
+    if (this.pageDriver !== null) this.sendWorkspaceChordsTo(this.pageDriver, chordsByAction);
+    // A report ends the chrome's own close-tab chord, so none goes before the shell's chords are read: an empty one
+    // would leave the chrome running no workspace-wide chord at all.
+    if (!this.isEmbedderPresent || !areShellKeybindingsLoaded()) return;
+    const generation = ++this.shellShortcutsReportGeneration;
+    const isLatest = (): boolean => generation === this.shellShortcutsReportGeneration;
     void this.deps.api.fetchKeybindingsCatalog().then(
-      (catalog) => this.shortcutsBridge.reportShellShortcuts(chordsByAction, claimedChordsOf(catalog)),
-      // Without the catalog the chrome still runs the workspace-wide chords; it intercepts no app's chord for it.
-      () => this.shortcutsBridge.reportShellShortcuts(chordsByAction, []),
+      (catalog) => {
+        if (isLatest()) this.shortcutsBridge.reportShellShortcuts(chordsByAction, claimedChordsOf(catalog));
+      },
+      (error: unknown) => {
+        console.warn("[si] could not read the keybindings catalog for the chrome", error);
+        // Without the catalog the chrome still runs the workspace-wide chords; it intercepts no app's chord for it.
+        if (isLatest()) this.shortcutsBridge.reportShellShortcuts(chordsByAction, []);
+      },
     );
+  }
+
+  private sendWorkspaceChordsTo(
+    driver: PageDriver,
+    chordsByAction: Readonly<Record<WorkspaceActionId, readonly string[]>>,
+  ): void {
+    driver.sendWorkspaceChords([...new Set(Object.values(chordsByAction).flat())], shellChordContext().surface);
   }
 
   /** Run one of the shell's workspace-wide actions (the keyboard-shortcuts spec in the mngr repo, section 6.2), from
@@ -3120,9 +3141,12 @@ export class DesktopStore {
     this.dispatch({ type: "window_lowered", windowId: shown[shown.length - 1].window_id });
   }
 
-  /** Hand the focused window's page a chord the chrome intercepted for it (``minds:run-chord``). */
+  /** Hand the focused window's page a chord the chrome intercepted for it (``minds:run-chord``): a solo shell's own
+   *  window, the window a phone shows, else the active desktop's focused window. */
   forwardChordToFocusedWindow(chord: string): void {
-    const focused = this.isPhoneLayout() ? (shownWindowOf(this.state)?.id ?? null) : activeFocusedWindowId(this.state);
+    const focused =
+      this.soloWindowId ??
+      (this.isPhoneLayout() ? (shownWindowOf(this.state)?.id ?? null) : activeFocusedWindowId(this.state));
     if (focused !== null) this.pageDriver?.sendChord(focused, chord);
   }
 

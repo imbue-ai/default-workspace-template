@@ -46,9 +46,13 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   `reload_when_raised`, whether a window the message raises at the `show` page
   itself has its page reloaded, both only beside `show`), `KeybindingAction`
   (`id`, a `KeybindingActionId` unique within the manifest; `label`, a
-  `KeybindingActionLabel`; and
+  `KeybindingActionLabel`;
   `default_chords`, the chords that trigger it out of the box, whose grammar
-  the `workspace_profile` library checks),
+  the `workspace_profile` library checks; and `scope`, a `KeybindingScope` of
+  `app` (the default: the chord fires in the app's own page) or `workspace`
+  (it fires anywhere in the workspace), which only the shell
+  (`WORKSPACE_WIDE_KEYBINDINGS_APP`) may declare: another manifest declaring a
+  workspace-wide action fails validation),
   `DefaultShortcut`
   (`launch`, `mode`; the manifest's `default_shortcut` is one table or an
   array of them, read as `default_shortcuts`), `ShortcutMode`,

@@ -20,6 +20,7 @@ from workspace_layout.identity import RequestIdentity
 
 from workspace_profile.errors import InvalidKeybindingDeclarationError
 from workspace_profile.keybindings import (
+    MAX_CHORDS_PER_ACTION,
     is_canonical_chord,
     is_refused_chord,
     is_workspace_wide_chord,
@@ -50,8 +51,13 @@ def _is_invalid_default_chord(action: KeybindingAction, chord: str) -> bool:
 def find_invalid_default_chords(actions: Sequence[KeybindingAction]) -> list[str]:
     """The declared default chords no action may have, as ``<action>: <chord>`` lines: one not in the canonical
     spelling, a refused one, or on a workspace-wide action one that typing could trigger (no modifier beyond Shift
-    and no function key)."""
-    return [
+    and no function key); and an action declaring more than ``MAX_CHORDS_PER_ACTION`` of them."""
+    too_many = [
+        f"{action.id}: more than {MAX_CHORDS_PER_ACTION} chords"
+        for action in actions
+        if len(action.default_chords) > MAX_CHORDS_PER_ACTION
+    ]
+    return too_many + [
         f"{action.id}: {chord}"
         for action in actions
         for chord in action.default_chords

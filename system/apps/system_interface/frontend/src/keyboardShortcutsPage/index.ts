@@ -1,26 +1,32 @@
 /**
  * The keyboard shortcuts page, served at `/keyboard-shortcuts`: the Keyboard settings section on a page of its own,
  * which Imbue Studio's Workspace settings frames. The page tells Imbue Studio its height, which the frame takes so
- * the settings pane scrolls it with everything else, and whether its recorder is listening, while which Imbue
- * Studio closes nothing on Escape and runs no shortcut, handing the recorder instead the keys the OS would act on
- * (`minds:record-chord`). Its first word also says the page has loaded, which tells a workspace that serves the page
- * from one too old to (whose shell answers the path with the desktop).
+ * the settings pane scrolls it with everything else, and whether its recorder is listening. While it listens, Imbue
+ * Studio closes nothing on Escape and runs no shortcut, handing the recorder every key instead
+ * (`minds:record-chord`). The page's first report also says it has loaded, which is how Imbue Studio tells a
+ * workspace that serves the page from one too old to serve it (whose shell answers the path with the desktop).
  *
  * The chrome says what it is with `minds:embedder-capabilities`, as it does to the main workspace frame: one that
  * can pull a window out is the desktop app, any other is a browser, which keeps its own shortcuts from the page.
- * Until it says, the page reads as the desktop app, which hides nothing.
+ * Until it says, the page reads as the desktop app, which hides no chord a browser keeps.
+ *
+ * The desktop app also hands the page Imbue Studio's own shortcuts (`minds:chrome-shortcuts`), which the section lists
+ * last, and saves one when the page asks (`minds:save-chrome-shortcut`), sending them again after.
  */
 
 import "../style.css";
 import m from "mithril";
 import {
+  CHROME_SHORTCUTS,
   EMBEDDER_CAPABILITIES,
   KEYBOARD_SHORTCUTS_PAGE,
   RECORD_CHORD,
+  SAVE_CHROME_SHORTCUT,
   sendToEmbedder,
   setEmbedderMessageHandler,
 } from "@imbue/workspace-ui/src/embed";
 import { type ChordContext, detectChordPlatform } from "@imbue/workspace-ui/src/keybindings";
+import { type ChromeShortcuts, readChromeShortcuts } from "../model/chromeShortcuts";
 import { KeyboardSettingsSection } from "../views/KeyboardSettingsSection";
 
 function start(): void {
@@ -31,6 +37,7 @@ function start(): void {
   let lastSentIsRecording = false;
   let context: ChordContext = { platform: detectChordPlatform(), surface: "desktop" };
   let recordRelayedChord: ((chord: string) => void) | null = null;
+  let chromeShortcuts: ChromeShortcuts | null = null;
 
   function reportState(): void {
     const height = Math.ceil(root?.getBoundingClientRect().height ?? 0);
@@ -47,6 +54,14 @@ function start(): void {
   setEmbedderMessageHandler(RECORD_CHORD, (message) => {
     if (typeof message.chord === "string") recordRelayedChord?.(message.chord);
   });
+  setEmbedderMessageHandler(CHROME_SHORTCUTS, (message) => {
+    const sent = readChromeShortcuts(message);
+    if (sent === null) return;
+    chromeShortcuts = sent;
+    // Synchronously: the section settles one pending save per answer it renders, and two answers coalesced into
+    // one frame would read as one.
+    m.redraw.sync();
+  });
 
   m.mount(root, {
     view: () =>
@@ -59,6 +74,10 @@ function start(): void {
           },
           onChordRelay: (record) => {
             recordRelayedChord = record;
+          },
+          chromeShortcuts,
+          onSaveChromeShortcut: (id: string, chords: readonly string[]) => {
+            sendToEmbedder(SAVE_CHROME_SHORTCUT, { id, chords: [...chords] });
           },
         }),
       ]),

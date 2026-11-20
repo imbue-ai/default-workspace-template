@@ -50,6 +50,7 @@ function loadPage(chatId: string): { [K in keyof ChatPageEmbedApi | "posted"]: R
     hintComposer: vi.fn(),
     setCompact: vi.fn(),
     focus: vi.fn(),
+    stopAgent: vi.fn(),
   };
   const frame = frameOf(chatId);
   const contentWindow = frame.contentWindow;
@@ -197,5 +198,19 @@ describe("InnerFramePool", () => {
     pool.setCompact(false);
     expect(pageA.setCompact).toHaveBeenLastCalledWith(false);
     expect(pageB.setCompact).toHaveBeenLastCalledWith(false);
+  });
+
+  it("presses the Stop button of the named chat's page only, and of none still loading", () => {
+    pool.show("agent-a");
+    const pageA = loadPage("agent-a");
+    pool.show("agent-b");
+    const pageB = loadPage("agent-b");
+    pool.show("agent-c");
+
+    pool.stopAgent("agent-b");
+    pool.stopAgent("agent-c");
+
+    expect(pageB.stopAgent).toHaveBeenCalledOnce();
+    expect(pageA.stopAgent).not.toHaveBeenCalled();
   });
 });

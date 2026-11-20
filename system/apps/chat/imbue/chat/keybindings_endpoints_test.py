@@ -21,7 +21,7 @@ def test_the_app_toml_declares_the_chat_actions_with_their_default_chords() -> N
     assert [action.model_dump(mode="json") for action in chat_keybinding_actions()] == [
         {"id": "send-message", "label": "Send the message", "default_chords": ["enter"], "scope": "app"},
         {"id": "new-chat", "label": "Start a new chat", "default_chords": ["alt+meta+n"], "scope": "app"},
-        {"id": "interrupt-agent", "label": "Interrupt the agent", "default_chords": ["meta+."], "scope": "app"},
+        {"id": "stop-agent", "label": "Stop the agent", "default_chords": ["meta+."], "scope": "app"},
     ]
 
 
@@ -31,7 +31,7 @@ def test_me_answers_the_defaults_when_no_profile_file_exists() -> None:
     assert answered.status_code == 200
     assert answered.get_json() == {
         "app": "chat",
-        "chords_by_action": {"send-message": ["enter"], "new-chat": ["alt+meta+n"], "interrupt-agent": ["meta+."]},
+        "chords_by_action": {"send-message": ["enter"], "new-chat": ["alt+meta+n"], "stop-agent": ["meta+."]},
     }
 
 

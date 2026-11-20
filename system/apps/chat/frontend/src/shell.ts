@@ -7,8 +7,8 @@
  * chat in place instead, see root/relay.ts).
  *
  * The chat's shortcuts run here too, since a keystroke in this page never reaches the root that
- * frames it: Interrupt the agent ends this page's chat's turn, and New chat starts one and asks for it
- * as a sibling.
+ * frames it, and so does one the desktop app took from the OS for them (``shell:chord``): Stop the
+ * agent presses this page's Stop button, and New chat starts one and asks for it as a sibling.
  */
 
 import m from "mithril";
@@ -16,11 +16,11 @@ import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdenti
 import { addChatsUpdatedListener, createChat, getChatById } from "./models/Chats";
 import {
   type ChatShortcut,
-  chatShortcutOfKeydown,
+  listenForChatShortcutKeys,
   refreshKeybindings,
+  runChatShortcutOfChord,
   setKeybindingSurface,
 } from "./models/keybindings";
-import { interruptAgent } from "./models/Response";
 import { startNewChat } from "./root/newChat";
 import type { CreatedChat } from "./models/Chats";
 import type { ModelIdentity } from "./models/ModelSettings";
@@ -32,7 +32,13 @@ import { currentPresenceState, reportFocusChange, reportPresence, startPresenceR
 import type { ChatPageEmbedApi } from "./embedApi";
 import { setCompactFromRoot } from "./compactLayout";
 import { rootPathFor } from "./root/selection";
-import { focusComposer, prependToComposer, setComposerHint, stopDictationWhenHidden } from "./views/MessageInput";
+import {
+  focusComposer,
+  prependToComposer,
+  setComposerHint,
+  stopComposerAgent,
+  stopDictationWhenHidden,
+} from "./views/MessageInput";
 import { mirrorParentTheme, wearThemeFromMessage } from "@imbue/workspace-ui/src/themes/themeClient";
 
 /** The path of a sub-agent view: the chat, the agent whose session it is, and the session. */
@@ -128,15 +134,10 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
     onKeybindingsChanged: () => void refreshKeybindings(),
     onChordSurface: setKeybindingSurface,
+    onChord: (chord) => runChatShortcutOfChord(chord, runChatShortcut),
   });
   void refreshKeybindings();
-  document.addEventListener("keydown", (event) => {
-    if (event.defaultPrevented) return;
-    const shortcut = chatShortcutOfKeydown(event);
-    if (shortcut === null) return;
-    event.preventDefault();
-    if (!event.repeat) runChatShortcut(chatId, shortcut);
-  });
+  listenForChatShortcutKeys(runChatShortcut);
   mirrorParentTheme();
   if (connection.isFramed) {
     // The chat root frames chat pages from this same origin and drives them by calling in
@@ -154,6 +155,7 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
       focus: () => {
         if (!focusComposer()) window.focus();
       },
+      stopAgent: stopComposerAgent,
     };
     window.chatPageEmbed = embedApi;
   }
@@ -184,10 +186,11 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   return connection;
 }
 
-/** Run a chat shortcut pressed in this page: interrupt this chat's agent, or start a new chat beside this one. */
-function runChatShortcut(chatId: string, shortcut: ChatShortcut): void {
-  if (shortcut === "interrupt-agent") {
-    void interruptAgent(chatId);
+/** Run a chat shortcut pressed in this page: stop this chat's agent as its Stop button does, or start a new chat
+ *  beside this one. */
+function runChatShortcut(shortcut: ChatShortcut): void {
+  if (shortcut === "stop-agent") {
+    stopComposerAgent();
     return;
   }
   void startNewChat().then((outcome) => {

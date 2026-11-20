@@ -682,8 +682,9 @@ def desktop_seeded_from(
 def launcher_order(rows: Sequence[RegistryRow]) -> tuple[RegistryRow, ...]:
     """The rows in the order the workspace lists their apps: every row declaring a ``launcher_rank``, lowest first
     and registry order breaking a tie, then every row declaring none, in registry order. The launcher orders its
-    rows this way in the frontend (``model/launch.ts``); the desktop seeds its shortcuts in it too, so one manifest
-    key decides where an app sits in both and neither depends on the order the apps happened to register in."""
+    rows this way in the frontend (``model/launch.ts``); the desktop seeds its shortcuts in it and the keyboard
+    shortcuts screen lists its apps in it too, so one manifest key decides where an app sits in each and none depends
+    on the order the apps happened to register in."""
     ranked = [(row.launcher_rank, row) for row in rows if row.launcher_rank is not None]
     return (
         *(row for _, row in sorted(ranked, key=lambda entry: entry[0])),
