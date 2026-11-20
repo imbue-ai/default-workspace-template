@@ -343,7 +343,7 @@ def test_name_too_long(tmp_path: Path) -> None:
     assert "length" in error
 
 
-# --- Runnability check (check_runnable) -------------------------------------
+# The runnability check (check_runnable).
 
 
 class _RecordingRunner:
