@@ -813,6 +813,15 @@ def test_presence_heartbeat_records_the_requester_and_answers_their_identity(cli
     }
 
 
+def test_presence_heartbeat_refuses_a_user_id_that_could_not_name_a_file(client: FlaskClient) -> None:
+    headers = identity_headers(RequestIdentity(owner=False, user_id="bob smith/.."))
+
+    response = client.post("/api/presence/heartbeat", json={}, headers=headers)
+
+    assert response.status_code == 400
+    assert response.get_json() == {"detail": "invalid user id 'bob smith/..'"}
+
+
 def test_presence_heartbeat_ignores_whatever_body_an_older_page_still_sends(client: FlaskClient) -> None:
     response = client.post(
         "/api/presence/heartbeat", json={"session_id": "tab-0001-aaaa"}, headers=identity_headers(_VISITOR_IDENTITY)

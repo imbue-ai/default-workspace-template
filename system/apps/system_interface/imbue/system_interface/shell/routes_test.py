@@ -2604,6 +2604,15 @@ _BOB = RequestIdentity(owner=False, user_id="user-bob", email="bob@example.com")
 _OWNER = RequestIdentity(owner=True, user_id="user-owner", email="owner@example.com")
 
 
+def test_a_client_arriving_under_a_user_id_that_could_not_name_a_file_is_refused(client: FlaskClient) -> None:
+    headers = identity_headers(RequestIdentity(owner=False, user_id="bob smith/.."))
+
+    response = client.post("/api/clients/bob-laptop/arrive", headers=headers)
+
+    assert response.status_code == 400
+    assert response.get_json() == {"detail": "invalid user id 'bob smith/..'"}
+
+
 def _arrive(client: FlaskClient, client_id: str, identity: RequestIdentity | None) -> dict[str, Any]:
     headers = {} if identity is None else identity_headers(identity)
     response = client.post(f"/api/clients/{client_id}/arrive", headers=headers)
