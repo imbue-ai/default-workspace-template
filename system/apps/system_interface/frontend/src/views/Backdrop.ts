@@ -32,7 +32,7 @@ import { Overview } from "./Overview";
 import type { OverviewAttrs } from "./Overview";
 import { ShortcutIcon } from "./ShortcutIcon";
 import { SnapPreview } from "./SnapPreview";
-import { Window } from "./Window";
+import { Window, stoppedInstanceActionsOf } from "./Window";
 import type { WindowControl } from "./TitleBar";
 
 export interface BackdropAttrs {
@@ -223,6 +223,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                           sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
                           isShielded: attrs.isOverlayOpen || (state.modes.isTouch && window.id !== focusedWindowId),
                           isStopped: isAppShownStopped(state, app),
+                          stoppedInstance: stoppedInstanceActionsOf(store, app, window.id),
                           immersive: store.getCanImmerse()
                             ? {
                                 isOn: immersive !== null,

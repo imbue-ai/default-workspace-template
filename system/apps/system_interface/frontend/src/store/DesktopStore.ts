@@ -32,6 +32,8 @@ import {
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
   appChatLaunchOf,
+  chatDraftLaunchOf,
+  chatDraftParams,
   appChatParams,
   appShortcutsOf,
   draftRowsOf,
@@ -86,6 +88,8 @@ import type {
   WindowRecord,
   WindowState,
 } from "../model/records";
+import { IDLE_REVIVAL } from "../model/instanceRevival";
+import type { InstanceRevival } from "../model/instanceRevival";
 import { isSameCell, isSameWindowPaths, shortcutKey } from "../model/records";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import { OwnIdMinter, PAGE_ID_PREFIX, REPORT_ID_PREFIX, SAVE_ID_PREFIX, mintHex } from "../model/ownIds";
@@ -244,6 +248,7 @@ export interface DesktopApi {
   /** Record the backdrop size this client's desktop layout draws its frames in (section 8.3). */
   reportViewport(clientId: string, viewport: PixelSize): Promise<ClientRecord>;
   quitApp(appName: string): Promise<void>;
+  reviveApp(appName: string): Promise<void>;
   setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord>;
   fetchAvatars(): Promise<AvatarCatalog>;
   selectAvatar(design: string): Promise<void>;
@@ -557,6 +562,8 @@ export class DesktopStore {
   private hasSocketConnected = false;
   // The path each window's page reported last, so a report answered out of order is not applied.
   private readonly latestReportedPaths = new Map<string, string>();
+  /** How starting each stopped preview or UI sketch again stands; an app absent here was never asked, or started. */
+  private readonly revivalByApp = new Map<string, InstanceRevival>();
   /** The one navigation this client asked for itself and has not yet followed (``navigateOwnWindow``). */
   private ownNavigation: OwnNavigation | null = null;
   // Bumped by every desktops record the shell hands over (the bootstrap's read, each broadcast, its answer to a
@@ -895,6 +902,12 @@ export class DesktopStore {
    *  not from a preview shell, whose stop and start would reach the live workspace's supervisord. */
   canStopApp(app: AppRecord): boolean {
     return !isPreviewShell() && isAppStoppable(this.state, app);
+  }
+
+  /** Whether this shell can start the app again once it stops: a preview or UI sketch, and not from a preview
+   *  shell, whose revive would boot processes in the live workspace. */
+  canReviveApp(app: AppRecord): boolean {
+    return !isPreviewShell() && app.instance_kind !== null;
   }
 
   /** The rectangle a placement renders at, in backdrop pixels (the fit applied; the whole viewport for a
@@ -1352,6 +1365,7 @@ export class DesktopStore {
   private takeApps(apps: readonly AppRecord[]): void {
     const themingBefore = new Map(this.state.apps.map((app) => [app.name, app.theming]));
     this.dispatch({ type: "apps_updated", apps });
+    this.forgetFailedRevivalsOfRunningApps(apps);
     this.markAppsLoaded();
     for (const app of apps) {
       const before = themingBefore.get(app.name);
@@ -2640,6 +2654,24 @@ export class DesktopStore {
     return (await this.launchAt(appName, launchId, params, { kind: "new" })) !== null;
   }
 
+  /** A stopped preview's or UI sketch's "Ask in chat": ``text`` is drafted, unsent, into the chat that booted it,
+   *  shown beside its window; with no such chat, or one the chat app no longer has, it is drafted where any draft
+   *  goes (``draftText``). */
+  async askInChat(app: AppRecord, windowId: string, text: string): Promise<boolean> {
+    const launch = app.instance_chat === null ? null : chatDraftLaunchOf(openableApps(this.state));
+    if (app.instance_chat !== null && launch !== null) {
+      const shown = await this.launchAt(
+        launch.app.name,
+        launch.launchPath.id,
+        chatDraftParams(launch.launchPath, app.instance_chat, text),
+        { kind: "show", besideWindowId: windowId },
+        true,
+      );
+      if (shown !== null) return true;
+    }
+    return this.draftText(text);
+  }
+
   /** A page's ``shell:draft-text`` (element-reference-menu plan section 6): the text is drafted into the pinned
    *  window that takes a draft, else through the first draft row of the machine; with neither the user is told. */
   async draftText(text: string): Promise<boolean> {
@@ -2710,12 +2742,14 @@ export class DesktopStore {
    *  page (built for a GET launch path, asked of the app for a POST one) and opens a window there, points the
    *  named window at it, or shows it by the show rule. An opened, focused, or shown window is taken as an open
    *  is; a navigated one (the named window, or the pinned window a show pointed at the page) as this client's own
-   *  navigation, so the page follows. Answers the window's id, or null when the shell refused (told to the user). */
+   *  navigation, so the page follows. Answers the window's id, or null when the shell refused (told to the user, or
+   *  with ``isRefusalQuiet`` only logged, for a caller that falls back on a refusal). */
   async launchAt(
     app: string,
     launchId: string,
     params: Readonly<Record<string, string>>,
     target: LaunchTarget,
+    isRefusalQuiet = false,
   ): Promise<string | null> {
     if (this.refuseWhileViewing(`open ${app}`)) return null;
     // A launch into a named window runs on that window's desktop, a show beside one on that window's; any other on
@@ -2741,7 +2775,8 @@ export class DesktopStore {
         isMinimized,
       });
     } catch (error) {
-      this.toast(`Could not open ${app}: ${(error as Error).message}`);
+      if (isRefusalQuiet) console.warn(`[si] the launch ${app}:${launchId} was refused`, error);
+      else this.toast(`Could not open ${app}: ${(error as Error).message}`);
       return null;
     }
     if (target.kind === "window") {
@@ -2967,6 +3002,34 @@ export class DesktopStore {
 
   refreshWindow(windowId: string): void {
     this.pageDriver?.reload(windowId);
+  }
+
+  /** A failed start is about the instance that was stopped then: once the app runs again, its next stop starts
+   *  afresh. */
+  private forgetFailedRevivalsOfRunningApps(apps: readonly AppRecord[]): void {
+    const runningNames = new Set(apps.filter((app) => app.is_running).map((app) => app.name));
+    for (const [appName, revival] of this.revivalByApp) {
+      if (revival.kind === "failed" && runningNames.has(appName)) this.revivalByApp.delete(appName);
+    }
+  }
+
+  /** How starting a stopped preview or UI sketch again stands. */
+  instanceRevival(appName: string): InstanceRevival {
+    return this.revivalByApp.get(appName) ?? IDLE_REVIVAL;
+  }
+
+  /** Start a stopped preview or UI sketch again; its window's page comes back once the inventory says it runs. */
+  async reviveApp(appName: string): Promise<void> {
+    if (this.instanceRevival(appName).kind === "starting") return;
+    this.revivalByApp.set(appName, { kind: "starting" });
+    this.notifyListeners();
+    try {
+      await this.deps.api.reviveApp(appName);
+      this.revivalByApp.delete(appName);
+    } catch (error) {
+      this.revivalByApp.set(appName, { kind: "failed", reason: (error as Error).message });
+    }
+    this.notifyListeners();
   }
 
   /** A page reported where it is; posted to the window's location route when it differs from the stored

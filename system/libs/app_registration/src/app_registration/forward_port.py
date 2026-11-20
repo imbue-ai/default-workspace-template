@@ -25,7 +25,7 @@ and copies its static fields onto the row: ``display_name``, ``description``, ``
 ``stop_when_no_windows``, ``uses_microphone``, ``priority``, ``program`` (default: the name), ``internal``, ``system``, ``launcher_rank``,
 ``default_shortcut`` (one table or an array of them, as ``default_shortcuts``: each one's launch and mode),
 ``launch_paths`` (id, label, path, the names of the params, and ``method``, ``presets``, ``text_param``,
-``draft_param``, ``mention_param``, and ``app_params`` when given), ``pin`` (path, and style, scope, and
+``draft_param``, ``mention_param``, ``app_params``, and ``chat_draft_params`` when given), ``pin`` (path, and style, scope, and
 default_mode when given), ``window_closed_path``, ``message_handlers`` (type, and path or show with showing and
 reload_when_raised), ``keybindings`` (id, label, and default_chords), and ``theming_mode`` (the ``[theming]``
 table's mode, when the manifest has one); the icon is read from the file the manifest names, relative to the manifest.
@@ -78,7 +78,7 @@ import tomllib
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 _logger = logging.getLogger(__name__)
 
@@ -239,6 +239,7 @@ _MANIFEST_OWNED_KEYS = (
     "message_handlers",
     "keybindings",
     "theming_mode",
+    "isolated_instance",
 )
 
 # The optional keys of a manifest's ``[pin]`` table, each a string when present; ``path`` is
@@ -745,8 +746,9 @@ def _copied_launch_path(
 ) -> tuple[dict[str, object] | None, str | None]:
     """One manifest launch path as the registry row carries it: ``id``, ``label``, ``path``, ``method`` when
     given, ``params`` (the param names) when it declares any, ``presets`` when it declares any,
-    ``text_param``, ``draft_param``, and ``mention_param`` when it names them, and ``app_params`` (the ``name``
-    and ``display_name`` pair) when it declares one. Returns ``(copied, None)``, or ``(None, error)``
+    ``text_param``, ``draft_param``, and ``mention_param`` when it names them, ``app_params`` (the ``name``
+    and ``display_name`` pair) when it declares one, and ``chat_draft_params`` (the ``chat_id`` and ``text``
+    pair) when it declares one. Returns ``(copied, None)``, or ``(None, error)``
     when the entry is not shaped as the manifest requires."""
     if not (
         isinstance(launch_path, dict)
@@ -804,6 +806,19 @@ def _copied_launch_path(
                 "'display_name'",
             )
         copied["app_params"] = dict(app_params)
+    chat_draft_params = launch_path.get("chat_draft_params")
+    if chat_draft_params is not None:
+        if not (
+            isinstance(chat_draft_params, dict)
+            and set(chat_draft_params) == {"chat_id", "text"}
+            and all(isinstance(value, str) for value in chat_draft_params.values())
+        ):
+            return (
+                None,
+                f"manifest {str(path)!r}: a launch path's chat_draft_params is a table of the strings 'chat_id' "
+                "and 'text'",
+            )
+        copied["chat_draft_params"] = dict(chat_draft_params)
     return copied, None
 
 
@@ -917,6 +932,17 @@ _MANIFEST_TABLE_ARRAY_COPIERS: tuple[tuple[str, _TableCopier], ...] = (
 )
 
 
+class IsolatedInstanceTag(TypedDict):
+    """The isolated instance a row's window shows (a preview, or a mock's frame), so the shell can offer to start it again."""
+
+    # The app it previews or frames.
+    app: str
+    # What the frame shows, as ``preview_wrapper_server.FrameKind`` spells it: ``change`` or ``mock``.
+    kind: str
+    # The chat that booted it, which its window's "Ask in chat" drafts into; absent when no chat booted it.
+    chat: NotRequired[str]
+
+
 def _upsert(
     path: Path,
     name: str,
@@ -927,6 +953,7 @@ def _upsert(
     display_name: str | None = None,
     manifest_fields: dict[str, object] | None = None,
     theming_mode: str | None = None,
+    isolated_instance: IsolatedInstanceTag | None = None,
 ) -> None:
     """Register ``name`` at ``url``, optionally setting its icon markup.
 
@@ -949,7 +976,8 @@ def _upsert(
     ``display_name`` is what users read instead of the raw service name, for a
     row with no manifest to carry one, and is authoritative the same way.
     ``theming_mode`` is the ``[theming]`` mode of the app such a row serves (a
-    preview of it), authoritative the same way.
+    preview of it), and ``isolated_instance`` the instance behind such a row's
+    window, both authoritative the same way.
 
     ``manifest_fields`` (a ``--manifest`` registration) is authoritative for
     every manifest-owned key the same way: each is set to the manifest's value
@@ -962,6 +990,7 @@ def _upsert(
         program=program,
         display_name=display_name,
         theming_mode=theming_mode,
+        isolated_instance=isolated_instance,
     )
 
     # Update an existing entry's URL in place, minting a label only if one was
@@ -1006,6 +1035,7 @@ def _manifest_owned_values(
     program: str | None,
     display_name: str | None,
     theming_mode: str | None = None,
+    isolated_instance: IsolatedInstanceTag | None = None,
 ) -> dict[str, object]:
     """The manifest-owned keys a registration sets, from the manifest or from the plain flags."""
     if manifest_fields is not None:
@@ -1027,6 +1057,8 @@ def _manifest_owned_values(
         values["display_name"] = display_name
     if theming_mode is not None:
         values["theming_mode"] = theming_mode
+    if isolated_instance is not None:
+        values["isolated_instance"] = dict(isolated_instance)
     return values
 
 
@@ -1068,6 +1100,7 @@ def register(
     display_name: str | None = None,
     manifest_fields: dict[str, object] | None = None,
     theming_mode: str | None = None,
+    isolated_instance: IsolatedInstanceTag | None = None,
 ) -> None:
     """Register ``name`` at ``url`` in the registry at ``path``; raises RegistrationError when refused.
 
@@ -1121,6 +1154,7 @@ def register(
             display_name=display_name,
             manifest_fields=manifest_fields,
             theming_mode=theming_mode,
+            isolated_instance=isolated_instance,
         )
 
 

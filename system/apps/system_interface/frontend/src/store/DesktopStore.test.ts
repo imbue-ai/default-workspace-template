@@ -4201,3 +4201,115 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect([...store.viewedOwnerKeys()]).toEqual([]);
   });
 });
+
+describe("a stopped preview or UI sketch", () => {
+  const STOPPED_PREVIEW = appRecord("today-preview", { program: "", is_running: false, instance_kind: "change" });
+
+  async function storeWithStoppedPreview(): Promise<DesktopStore> {
+    api.apps = [appRecord("docs"), STOPPED_PREVIEW];
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-3", "today-preview", "/")],
+      }),
+    ];
+    return startedStore();
+  }
+
+  it("is started once while a start is under way", async () => {
+    const store = await storeWithStoppedPreview();
+    let release: () => void = () => undefined;
+    api.reviveGate = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    void store.reviveApp("today-preview");
+    void store.reviveApp("today-preview");
+
+    expect(api.calls.filter((call) => call.startsWith("reviveApp"))).toEqual(["reviveApp:today-preview"]);
+    expect(store.instanceRevival("today-preview").kind).toBe("starting");
+    release();
+    await vi.waitFor(() => expect(store.instanceRevival("today-preview").kind).toBe("idle"));
+  });
+
+  it("keeps the shell's reason when it did not start", async () => {
+    const store = await storeWithStoppedPreview();
+    api.reviveRefusal = "This preview didn't start.";
+
+    await store.reviveApp("today-preview");
+
+    expect(store.instanceRevival("today-preview")).toEqual({ kind: "failed", reason: "This preview didn't start." });
+  });
+
+  it("forgets a failed start once the app runs again, so its next stop starts afresh", async () => {
+    const store = await storeWithStoppedPreview();
+    api.reviveRefusal = "This preview didn't start.";
+    await store.reviveApp("today-preview");
+
+    offerApps(api, socket, [appRecord("docs"), { ...STOPPED_PREVIEW, is_running: true }]);
+
+    expect(store.instanceRevival("today-preview").kind).toBe("idle");
+  });
+
+  describe("Ask in chat", () => {
+    const CHAT = appRecord("chat", {
+      launch_paths: [
+        launchPathRecord({
+          id: "draft",
+          path: "/api/chats/intake",
+          method: "POST",
+          params: ["message"],
+          presets: { target: "current_chat", is_draft: "true" },
+          draft_param: "message",
+        }),
+        launchPathRecord({
+          id: "draft-into-chat",
+          path: "/api/chats/intake",
+          method: "POST",
+          params: ["chat_id", "message"],
+          presets: { target: "chat", is_draft: "true" },
+          chat_draft_params: { chat_id: "chat_id", text: "message" },
+        }),
+      ],
+    });
+    const FROM_A_CHAT = { ...STOPPED_PREVIEW, instance_chat: "agent-lead" };
+
+    function launches(): string[] {
+      return api.calls.filter((call) => call.startsWith("launch:"));
+    }
+
+    it("drafts into the chat that booted the preview, beside its window", async () => {
+      const store = await storeWithStoppedPreview();
+      offerApps(api, socket, [CHAT, FROM_A_CHAT]);
+
+      expect(await store.askInChat(FROM_A_CHAT, "win-3", "It stopped.")).toBe(true);
+
+      expect(launches()).toEqual([
+        `launch:home:chat:draft-into-chat:{"chat_id":"agent-lead","message":"It stopped."}:show:beside:win-3`,
+      ]);
+    });
+
+    it("drafts where any draft goes when no chat booted it, or the chat app no longer has that chat", async () => {
+      const store = await storeWithStoppedPreview();
+      offerApps(api, socket, [CHAT, STOPPED_PREVIEW]);
+
+      await store.askInChat(STOPPED_PREVIEW, "win-3", "It stopped.");
+      api.refusedLaunches.add("chat:draft-into-chat");
+      await store.askInChat(FROM_A_CHAT, "win-3", "It stopped.");
+
+      expect(launches()).toEqual([
+        `launch:home:chat:draft:{"message":"It stopped."}:new`,
+        `launch:home:chat:draft-into-chat:{"chat_id":"agent-lead","message":"It stopped."}:show:beside:win-3`,
+        `launch:home:chat:draft:{"message":"It stopped."}:new`,
+      ]);
+      expect(notices()).toEqual([]);
+    });
+  });
+
+  it("is not started by its window's refresh", async () => {
+    const store = await storeWithStoppedPreview();
+
+    store.refreshWindow("win-3");
+
+    expect(api.calls.filter((call) => call.startsWith("reviveApp"))).toEqual([]);
+  });
+});

@@ -47,4 +47,13 @@ describe("a preview shell", () => {
 
     expect(store.canStopApp(docs)).toBe(false);
   });
+
+  it("offers no Start it again for a stopped preview, since its revive boots processes in the live workspace", () => {
+    const preview = appRecord("today-preview", { program: "", is_running: false, instance_kind: "change" });
+    expect(store.canReviveApp(preview)).toBe(true);
+
+    unmarkPreview = markPageAsPreviewShell();
+
+    expect(store.canReviveApp(preview)).toBe(false);
+  });
 });

@@ -458,11 +458,12 @@ window's "Chat about this app"; the intake is held with a `hint` the root puts
 on the composer); or `chat` with a `chat_id`),
 and whether the text is sent or drafted (`is_draft`), plus the sender's
 `client_id` and `desktop_id` for the shell's activity log. The chat's manifest
-declares the desktop's `main`, `new`, `send`, `draft`, `lounge`, and `app-chat`
-launch paths as POSTs onto it with those fields preset, so the launcher's rows, the
-Getting Started tiles, the avatar dialog's "Design your own...", a click on a
-person in the tray, and `workspace-layout open chat --launch new --param
-message=...` all arrive here through the shell. The route
+declares the desktop's `main`, `new`, `send`, `draft`, `lounge`, `app-chat`, and
+`draft-into-chat` launch paths as POSTs onto it with those fields preset, so the
+launcher's rows, the Getting Started tiles, the avatar dialog's "Design your
+own...", a click on a person in the tray, a stopped preview's or UI sketch's "Ask
+in chat" (a draft into the chat that booted it), and `workspace-layout open chat
+--launch new --param message=...` all arrive here through the shell. The route
 answers the pure path the shell opens or navigates a window at: `/?chat=<id>` for
 a send or a create it finished on the server (a send is delivered in the
 background unless `is_delivery_awaited`), `/?chat=<id>&intake=<token>` for a

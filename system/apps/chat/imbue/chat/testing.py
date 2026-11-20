@@ -1551,7 +1551,7 @@ def running_workspace(
 
     registry_path = tmp_path / "registry" / "apps.toml"
     # The chat's row as ``forward_port.py`` writes it from ``system/apps/chat/app.toml``: the chat list at ``/`` and
-    # the five POST launch paths onto the intake route (post-launch-paths plan section 7.1; the multiplayer spec,
+    # its POST launch paths onto the intake route (post-launch-paths plan section 7.1; the multiplayer spec,
     # section 7.5, for the mention into the Lounge).
     write_registry(
         registry_path,
@@ -1569,6 +1569,7 @@ def running_workspace(
                 ("draft", "Draft into chat", "/api/chats/intake"),
                 ("lounge", "Mention in the Lounge", "/api/chats/intake"),
                 ("app-chat", "Chat about this app", "/api/chats/intake"),
+                ("draft-into-chat", "Draft into a chat", "/api/chats/intake"),
             ),
             launch_params={
                 "main": ("message",),
@@ -1577,11 +1578,13 @@ def running_workspace(
                 "draft": ("message",),
                 "lounge": ("message",),
                 "app-chat": ("app", "app_display_name"),
+                "draft-into-chat": ("chat_id", "message"),
             },
             launch_text_params={"main": "message", "new": "message", "send": "message"},
             launch_draft_params={"draft": "message"},
             launch_mention_params={"lounge": "message"},
             launch_app_params={"app-chat": ("app", "app_display_name")},
+            launch_chat_draft_params={"draft-into-chat": ("chat_id", "message")},
             launch_methods={
                 "main": "POST",
                 "new": "POST",
@@ -1589,6 +1592,7 @@ def running_workspace(
                 "draft": "POST",
                 "lounge": "POST",
                 "app-chat": "POST",
+                "draft-into-chat": "POST",
             },
             launch_presets={
                 "main": {"target": "main_chat"},
@@ -1597,6 +1601,7 @@ def running_workspace(
                 "draft": {"target": "current_chat", "is_draft": "true"},
                 "lounge": {"target": "lounge", "is_draft": "true"},
                 "app-chat": {"target": "app_chat"},
+                "draft-into-chat": {"target": "chat", "is_draft": "true"},
             },
         ),
         *extra_rows,

@@ -23,6 +23,11 @@ from app_manifest.primitives import (
     DisplayName,
     describe_app_name_problem,
 )
+from app_manifest.registry import (
+    IsolatedInstanceKind,
+    IsolatedInstanceRef,
+    read_registry,
+)
 from build_app_skill import scaffold_flask_lib
 
 from app_registration import forward_port
@@ -792,6 +797,15 @@ params = [{name = "app", label = "App", required = true}, {name = "app_display_n
 presets = {target = "app_chat"}
 app_params = {name = "app", display_name = "app_display_name"}
 
+[[launch_paths]]
+id = "draft-into-chat"
+label = "Draft into a chat"
+path = "/api/intake"
+method = "POST"
+params = [{name = "chat_id", label = "Chat", required = true}, {name = "message", label = "Draft message", required = false}]
+presets = {target = "chat", is_draft = "true"}
+chat_draft_params = {chat_id = "chat_id", text = "message"}
+
 [pin]
 path = "/"
 style = "avatar"
@@ -889,6 +903,15 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
             "params": ["app", "app_display_name"],
             "presets": {"target": "app_chat"},
             "app_params": {"name": "app", "display_name": "app_display_name"},
+        },
+        {
+            "id": "draft-into-chat",
+            "label": "Draft into a chat",
+            "path": "/api/intake",
+            "method": "POST",
+            "params": ["chat_id", "message"],
+            "presets": {"target": "chat", "is_draft": "true"},
+            "chat_draft_params": {"chat_id": "chat_id", "text": "message"},
         },
     ]
     assert row["pin"] == {
@@ -1587,6 +1610,33 @@ def test_register_and_remove_in_process_edit_the_same_registry_as_the_script(
     forward_port.remove(apps_file, "preview-2")
     forward_port.remove(apps_file, "never-registered")
     assert _read_apps(apps_file) == []
+
+
+def test_the_isolated_instance_tag_reaches_the_shells_reader_and_is_cleared_by_a_registration_without_it(
+    tmp_path: Path,
+) -> None:
+    apps_file = tmp_path / "apps.toml"
+    forward_port.register(
+        apps_file,
+        "inbox-sketch",
+        "http://localhost:9001",
+        is_icon_declined=True,
+        display_name="Inbox (UI sketch)",
+        isolated_instance={"app": "inbox", "kind": "mock"},
+    )
+
+    [row] = read_registry(apps_file)
+    assert row.isolated_instance == IsolatedInstanceRef(
+        app="inbox", kind=IsolatedInstanceKind.MOCK
+    )
+
+    forward_port.register(
+        apps_file, "inbox-sketch", "http://localhost:9002", is_icon_declined=True
+    )
+
+    [raw_row] = _read_apps(apps_file)
+    assert "isolated_instance" not in raw_row
+    assert read_registry(apps_file)[0].isolated_instance is None
 
 
 def test_register_refuses_what_the_script_refuses(tmp_path: Path) -> None:

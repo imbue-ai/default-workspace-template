@@ -1,5 +1,6 @@
 import time
 import tomllib
+from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
@@ -14,6 +15,7 @@ from pydantic import field_validator
 from app_manifest.errors import AppRegistrationError
 from app_manifest.errors import RegistryReadError
 from app_manifest.manifest import AppParams
+from app_manifest.manifest import ChatDraftParams
 from app_manifest.manifest import DEFAULT_PRIORITY
 from app_manifest.manifest import DefaultShortcut
 from app_manifest.manifest import KeybindingAction
@@ -98,6 +100,29 @@ class RegistryLaunchPath(FrozenModel):
         description="The params the shell fills with an app's name and display name when its window's \"Chat about "
         'this app" button is pressed; absent means the path is about no app',
     )
+    chat_draft_params: ChatDraftParams | None = Field(
+        default=None,
+        description="The params the shell fills with a chat's id and the text it drafts there; absent means the "
+        "path drafts into no named chat",
+    )
+
+
+class IsolatedInstanceKind(StrEnum):
+    """What an isolated instance's frame shows, spelled as the preview wrapper's ``FrameKind``."""
+
+    CHANGE = "change"
+    MOCK = "mock"
+
+
+class IsolatedInstanceRef(FrozenModel):
+    """The isolated instance a row's window shows, as ``serve_isolated_instance`` registered it."""
+
+    app: NonEmptyStr = Field(description="The app it previews or frames, which its flow's ``revive --app`` takes")
+    kind: IsolatedInstanceKind = Field(description="Whether it previews a change or frames a mock")
+    chat: NonEmptyStr | None = Field(
+        default=None,
+        description='The chat that booted it, which its window\'s "Ask in chat" drafts into; None when no chat did',
+    )
 
 
 class RegistryRow(FrozenModel):
@@ -181,6 +206,11 @@ class RegistryRow(FrozenModel):
         default=None,
         description="How the app takes part in workspace themes, when its manifest declares [theming]; absent means "
         "the app does not wear them yet and can be made themeable",
+    )
+    isolated_instance: IsolatedInstanceRef | None = Field(
+        default=None,
+        description="The isolated instance (a preview, or a mock's frame) this row's window shows, which the shell can "
+        "start again once it stops; absent for every other row",
     )
 
     @field_validator("default_shortcuts", mode="before")

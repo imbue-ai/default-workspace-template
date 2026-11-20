@@ -153,6 +153,7 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ("POST", "/api/apps/{name}/stop"): RouteModels(response_model=AppRunningState),
     ("POST", "/api/apps/{name}/start"): RouteModels(response_model=AppRunningState),
     ("POST", "/api/apps/{name}/quit"): RouteModels(response_model=AppRunningState),
+    ("POST", "/api/apps/{name}/revive"): RouteModels(response_model=AppRunningState),
     # Section 5.2: desktops
     ("GET", DESKTOPS_ROUTE): RouteModels(response_model=DesktopsListing),
     ("POST", DESKTOPS_ROUTE): RouteModels(
