@@ -5,11 +5,14 @@ lane, merged by record time, because ``/new`` and ``--resume`` interleave them; 
 child session, named by its parent's ``subagent_spawned`` record and found with
 ``find_local_session_dir``, is a lane of its own, kept out of the main stream.
 :class:`GrokTranscriptLoader` is the read half, which an archived chat segment is read through;
-:class:`GrokSessionWatcher` adds the live tail.
+:class:`GrokSessionWatcher` adds the live tail and the flush worker, the only code that types into
+grok, which types the messages the chat holds for it once mngr reports no turn in flight.
 """
 
 import heapq
 import json
+import threading
+import time
 from operator import itemgetter
 from pathlib import Path
 from typing import Any
@@ -18,7 +21,11 @@ from typing import Final
 from loguru import logger
 from pydantic import Field
 
+from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.grok.queue_tracker import GrokQueueTracker
+from imbue.chat.harnesses.grok.queue_tracker import get_tracker
+from imbue.chat.harnesses.grok.queue_tracker import session_token
 from imbue.chat.harnesses.grok.session_parser import GrokLaneState
 from imbue.chat.harnesses.grok.session_parser import SUBAGENT_SPAWNED_MARKER_TYPE
 from imbue.chat.harnesses.grok.session_parser import THINKING_SOURCE_MARKER_TYPE
@@ -26,13 +33,21 @@ from imbue.chat.harnesses.grok.session_parser import UPDATES_FILENAME
 from imbue.chat.harnesses.grok.session_parser import detail_for
 from imbue.chat.harnesses.grok.session_parser import parse_record
 from imbue.chat.harnesses.grok.session_parser import record_timestamp
+from imbue.chat.harnesses.grok.turn_gate import is_turn_in_flight
+from imbue.chat.harnesses.session_watcher import FlushResentCallback
+from imbue.chat.harnesses.session_watcher import FlushSendCallback
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
+from imbue.chat.harnesses.session_watcher import QueueSnapshotCallback
+from imbue.chat.harnesses.session_watcher import ReadLifecycleStateCallback
+from imbue.chat.harnesses.session_watcher import TRANSCRIPT_CLOCK_SLACK_SECONDS
 from imbue.chat.harnesses.transcript_store import EventSource
 from imbue.chat.harnesses.transcript_store import StoreBackedTranscriptLoader
 from imbue.chat.harnesses.transcript_store import StoreBackedWatcher
 from imbue.chat.harnesses.transcript_store import iter_line_spans
 from imbue.chat.harnesses.transcript_store import split_at_last_complete_line
 from imbue.imbue_common.mutable_model import MutableModel
+from imbue.imbue_common.pure import pure
+from imbue.mngr.errors import MngrError
 from imbue.mngr_grok.grok_config import get_grok_home
 from imbue.mngr_grok.grok_sessions import find_local_session_dir
 from imbue.mngr_grok.grok_sessions import list_local_root_session_dirs
@@ -41,6 +56,16 @@ from imbue.mngr_grok.grok_sessions import list_local_root_session_dirs
 MAIN_LANE: Final[str] = "main"
 # Grok's directory of session logs under its home.
 SESSIONS_DIRNAME: Final[str] = "sessions"
+
+# The flush worker's wait between attempts while anything is held.
+_FLUSH_RETRY_SECONDS: Final[float] = 5.0
+_FLUSH_JOIN_SECONDS: Final[float] = 10.0
+# How long after a send the worker looks for grok's user turn holding the sent block.
+_DELIVERY_WITNESS_SECONDS: Final[float] = 15.0
+_DELIVERY_POLL_SECONDS: Final[float] = 0.25
+# The longest a flush keeps the live emit muted, should the flush thread die before lifting it.
+_EMIT_EMBARGO_CEILING_SECONDS: Final[float] = 120.0
+_USER_ROLE: Final[str] = "user"
 
 # One complete line of a session log: (record time, byte offset, byte length, record).
 _LogRecord = tuple[str, int, int, dict[str, Any]]
@@ -250,14 +275,59 @@ class GrokTranscriptLoader(StoreBackedTranscriptLoader):
 
 
 class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
-    """Watches a grok agent's session logs and emits parsed UI events."""
+    """Watches a grok agent's session logs, emits parsed UI events, and types the messages the chat holds."""
+
+    # The messages the chat holds for the agent, shared with its session and the stop and tap executors.
+    _queue: GrokQueueTracker
+    _queue_snapshot_callback: QueueSnapshotCallback | None
+    _flush_send: FlushSendCallback | None
+    _flush_read_lifecycle_state: ReadLifecycleStateCallback | None
+    _flush_note_resent: FlushResentCallback | None
+    _flush_wake: threading.Event
+    _flush_stopping: threading.Event
+    _flush_thread: threading.Thread | None
+    # Until when the live emit holds back, so a delivered message's chip leaves before its turn arrives.
+    _emit_embargo_until: float
+    delivery_witness_seconds: float
 
     @classmethod
     def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "GrokSessionWatcher":
         watcher = cls.__new__(cls)
         watcher._init_store_watcher(agent_info.id, on_events)
         watcher._init_grok_state(agent_info.agent_state_dir)
+        watcher._queue = get_tracker(agent_info.agent_state_dir)
+        watcher._queue_snapshot_callback = None
+        watcher._flush_send = None
+        watcher._flush_read_lifecycle_state = None
+        watcher._flush_note_resent = None
+        watcher._flush_wake = threading.Event()
+        watcher._flush_stopping = threading.Event()
+        watcher._flush_thread = None
+        watcher._emit_embargo_until = 0.0
+        watcher.delivery_witness_seconds = _DELIVERY_WITNESS_SECONDS
         return watcher
+
+    def start(self) -> None:
+        if self._flush_thread is not None:
+            return
+        self._queue.attach(publish=self._publish_snapshot, wake=self._flush_wake.set)
+        super().start()
+        self._flush_stopping.clear()
+        self._flush_thread = threading.Thread(
+            target=self._run_flush_worker, name=f"grok-flush-{self._agent_id}", daemon=True
+        )
+        self._flush_thread.start()
+
+    def stop(self) -> None:
+        self._flush_stopping.set()
+        self._flush_wake.set()
+        if self._flush_thread is not None:
+            self._flush_thread.join(timeout=_FLUSH_JOIN_SECONDS)
+            if self._flush_thread.is_alive():
+                logger.warning("grok: the flush worker of {} outlived its watcher; detaching it", self._agent_id)
+            self._flush_thread = None
+        self._queue.detach(self._publish_snapshot)
+        super().stop()
 
     def _watch_paths(self) -> tuple[Path, ...]:
         return (get_grok_home(self._agent_state_dir) / SESSIONS_DIRNAME,)
@@ -269,3 +339,170 @@ class GrokSessionWatcher(GrokTranscriptLoader, StoreBackedWatcher):
             return True
         with self._lock:
             return session_id in self._root_session_ids
+
+    # the live emit
+
+    def _emit_cycle(self) -> None:
+        """Broadcast what the logs gained, unless a flush holds the emit until its entries have left the queue."""
+        with self._lock:
+            if time.monotonic() < self._emit_embargo_until:
+                return
+            self._refresh_locked()
+            to_send = self._filter_broadcast(self._store.take_unemitted())
+        self._broadcast(to_send)
+
+    def _emit_held_events(self) -> None:
+        """Broadcast what the logs gained during a flush, then lift its embargo, so the live emit cannot go first."""
+        try:
+            with self._lock:
+                self._refresh_locked()
+                to_send = self._filter_broadcast(self._store.take_unemitted())
+            self._broadcast(to_send)
+        finally:
+            with self._lock:
+                self._emit_embargo_until = 0.0
+
+    # the held queue
+
+    def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
+        self._queue_snapshot_callback = callback
+
+    def set_flush_hooks(
+        self,
+        send: FlushSendCallback,
+        read_lifecycle_state: ReadLifecycleStateCallback,
+        note_resent: FlushResentCallback,
+    ) -> None:
+        self._flush_send = send
+        self._flush_read_lifecycle_state = read_lifecycle_state
+        self._flush_note_resent = note_resent
+
+    def get_queued_messages(self) -> list[dict[str, Any]]:
+        return self._queue.snapshot()
+
+    def get_queued_block(self) -> str:
+        return self._queue.concatenated_block()
+
+    def clear_queue(self) -> None:
+        """Drop the held messages; only for a grok session that no longer exists."""
+        self._queue.clear()
+
+    def take_unclaimed_queue(self) -> tuple[str, tuple[str, ...]]:
+        return self._queue.take_unclaimed()
+
+    def claim_queue_for_tap(self) -> tuple[str, tuple[str, ...], int]:
+        return self._queue.begin_tap_claim()
+
+    def release_tap_claim(self, claimed: tuple[str, ...], generation: int) -> None:
+        self._queue.release_claim(claimed, generation)
+
+    def notify_idle(self) -> list[dict[str, Any]]:
+        """Wake the flush worker; it types on its own thread, never on the caller's."""
+        self._flush_wake.set()
+        return self._queue.snapshot()
+
+    def _publish_snapshot(self, snapshot: list[dict[str, Any]]) -> None:
+        callback = self._queue_snapshot_callback
+        if callback is not None:
+            callback(snapshot)
+
+    # the flush worker, the only typist
+
+    def _run_flush_worker(self) -> None:
+        while not self._flush_stopping.is_set():
+            self._flush_wake.wait(timeout=_FLUSH_RETRY_SECONDS)
+            self._flush_wake.clear()
+            if self._flush_stopping.is_set():
+                return
+            try:
+                self._attempt_flush()
+            except (MngrError, OSError) as error:
+                logger.opt(exception=error).warning("grok: a flush attempt failed for {}", self._agent_id)
+
+    def _attempt_flush(self) -> None:
+        """Type the held block while mngr reports grok alive with no turn in flight."""
+        send, read_lifecycle_state = self._flush_send, self._flush_read_lifecycle_state
+        if send is None or read_lifecycle_state is None:
+            return
+        self._queue.set_session(session_token(self._agent_state_dir))
+        self._queue.republish()
+        if not self._queue.has_entries():
+            return
+        lifecycle_state = read_lifecycle_state()
+        if (
+            lifecycle_state is None
+            or is_lifecycle_dead(lifecycle_state)
+            or is_turn_in_flight(lifecycle_state, self._agent_state_dir)
+        ):
+            self._queue.demote_pending()
+            return
+        self._flush_held_block(send)
+
+    def _flush_held_block(self, send: FlushSendCallback) -> None:
+        """Claim the held block, type it through mngr, and settle it by what mngr and grok's log show.
+
+        A block mngr confirmed grok took is delivered, even when grok queued it behind a turn that started first and
+        logs it only once that turn ends. A block mngr could not confirm is delivered once a user turn holding it
+        shows, and otherwise waits for a later attempt.
+        """
+        block, claimed, generation = self._queue.begin_flush()
+        if not claimed:
+            return
+        is_witness_start_read = False
+        try:
+            with self._lock:
+                self._refresh_locked()
+                witness_start = self._store.total([MAIN_LANE])
+                self._emit_embargo_until = time.monotonic() + _EMIT_EMBARGO_CEILING_SECONDS
+            is_witness_start_read = True
+        finally:
+            if not is_witness_start_read:
+                self._queue.release_claim(claimed, generation)
+        earlier_flush_began_at = self._queue.note_flush_began(claimed, time.time())
+        delivered: tuple[str, ...] = ()
+        try:
+            is_confirmed = send(block)
+            is_witnessed = self._await_turn_holding(witness_start, block)
+            if is_confirmed or is_witnessed:
+                delivered = claimed
+        finally:
+            self._queue.finish_flush(claimed, generation, delivered=delivered)
+            if delivered and earlier_flush_began_at is not None and self._flush_note_resent is not None:
+                self._flush_note_resent(block, earlier_flush_began_at - TRANSCRIPT_CLOCK_SLACK_SECONDS)
+            if not delivered:
+                logger.info("grok: {} did not show that it took the sent block", self._agent_id)
+            self._emit_held_events()
+
+    def _await_turn_holding(self, witness_start: int, block: str) -> bool:
+        """Whether a user turn grok logged since the send holds the block, looking until the witness window ends."""
+        deadline = time.monotonic() + self.delivery_witness_seconds
+        is_held = False
+        is_looking = True
+        while is_looking:
+            with self._lock:
+                self._refresh_locked()
+                texts = self._user_turn_texts_since_locked(witness_start)
+            is_held = _is_held_by_a_turn(texts, block)
+            is_looking = (
+                not is_held and time.monotonic() < deadline and not self._flush_stopping.wait(_DELIVERY_POLL_SECONDS)
+            )
+        return is_held
+
+    def _user_turn_texts_since_locked(self, start: int) -> list[str]:
+        """The text of every user turn the main lane gained from index ``start``, each complete or still growing."""
+        events = self._store.at_offset([MAIN_LANE], start, self._store.total([MAIN_LANE]) - start)
+        return [
+            str(event.get("content") or "")
+            for event in events
+            if event.get("type") == "user_message" and event.get("role") == _USER_ROLE
+        ]
+
+
+@pure
+def _is_held_by_a_turn(user_turn_texts: list[str], block: str) -> bool:
+    """Whether a logged user turn holds the block: alone, or after a draft someone left in grok's composer.
+
+    grok logs a typed block as one user turn; mngr types it after any draft it finds in the composer.
+    """
+    sent = block.strip()
+    return any(text.strip().endswith(sent) for text in user_turn_texts)

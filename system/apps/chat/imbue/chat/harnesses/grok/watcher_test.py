@@ -1,21 +1,30 @@
 """Tests for the grok transcript loader and session watcher, over grok 1.0.62's own session logs."""
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from imbue.chat.activity_state import ACTIVE_MARKER_FILENAME
+from imbue.chat.harnesses.grok.queue_tracker import MAX_DELIVERY_ATTEMPTS
 from imbue.chat.harnesses.grok.testing import add_grok_session
 from imbue.chat.harnesses.grok.testing import append_grok_updates
 from imbue.chat.harnesses.grok.testing import find_fixture_scenario
 from imbue.chat.harnesses.grok.testing import get_fake_session_dir
 from imbue.chat.harnesses.grok.testing import make_grok_agent_info
+from imbue.chat.harnesses.grok.testing import make_grok_agent_state_dir
 from imbue.chat.harnesses.grok.testing import read_fixture_root_ids
 from imbue.chat.harnesses.grok.testing import read_fixture_updates
 from imbue.chat.harnesses.grok.testing import record_root_session
+from imbue.chat.harnesses.grok.testing import user_prompt_line
 from imbue.chat.harnesses.grok.testing import write_grok_agent_state
 from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
 from imbue.chat.harnesses.grok.watcher import GrokTranscriptLoader
+from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
+from imbue.mngr_grok.grok_config import PROCESS_STARTED_MARKER_FILENAME
 from imbue.mngr_grok.grok_sessions import find_local_session_dir
 from imbue.mngr_grok.grok_sessions import list_local_root_session_dirs
 
@@ -29,6 +38,9 @@ _SUBAGENT_ENDS_MID_REPLY_CHILD = "01a16809-3142-7c61-82ac-f493c95a71d0"
 # Byte offset of the background_subagent root's subagent_spawned record.
 _SUBAGENT_SPAWNED_OFFSET = 3737
 _LIVE_TAIL_TIMEOUT_SECONDS = 10.0
+_SHORT_WITNESS_SECONDS = 0.3
+# A record time after every captured session's, for the prompts the scripted grok logs.
+_PROMPT_CLOCK_MS = 1_800_000_000_000
 
 
 def _build_watcher(agent_state_dir: Path) -> tuple[GrokSessionWatcher, list[dict[str, Any]]]:
@@ -367,3 +379,218 @@ def test_an_agent_with_no_session_yet_reads_empty(tmp_path: Path) -> None:
     assert watcher.get_event_offset("grok-anything") == -1
     watcher._emit_cycle()
     assert broadcast == []
+
+
+class _ScriptedSend:
+    """mngr's send of the held block to a scripted grok: whether mngr confirms it, and whether grok logs it."""
+
+    def __init__(self, agent_state_dir: Path, *, is_confirmed: bool, is_logged: bool) -> None:
+        self.agent_state_dir = agent_state_dir
+        self.is_confirmed = is_confirmed
+        self.is_logged = is_logged
+        self.draft = ""
+        self.sent: list[str] = []
+        self.after_send: Callable[[], None] = lambda: None
+
+    def __call__(self, text: str) -> bool:
+        self.sent.append(text)
+        if self.is_logged:
+            prompt_line = user_prompt_line(
+                _PLAIN_ROOT, self.draft + text, len(self.sent), _PROMPT_CLOCK_MS + len(self.sent)
+            )
+            append_grok_updates(self.agent_state_dir, _PLAIN_ROOT, prompt_line)
+        self.after_send()
+        return self.is_confirmed
+
+
+def _flushing_watcher(
+    tmp_path: Path, *, lifecycle_state: str | None = "WAITING", is_confirmed: bool = True, is_logged: bool = True
+) -> tuple[GrokSessionWatcher, _ScriptedSend, list[tuple[str, Any]]]:
+    """A grok agent with one finished turn and a primed, unstarted watcher whose flush types into a scripted grok.
+
+    The log records each queue snapshot the watcher publishes and each event batch it broadcasts, in order.
+    """
+    agent_state_dir = make_grok_agent_state_dir(tmp_path)
+    add_grok_session(
+        agent_state_dir, _PLAIN_ROOT, read_fixture_updates(find_fixture_scenario("plain"), _PLAIN_ROOT), is_root=True
+    )
+    log: list[tuple[str, Any]] = []
+    watcher = GrokSessionWatcher.build(
+        make_grok_agent_info(agent_state_dir, agent_state_dir.name, "grok-flush"),
+        lambda _agent_id, events: log.append(("events", [_summary(event) for event in events])),
+    )
+    watcher._prime()
+    watcher.delivery_witness_seconds = _SHORT_WITNESS_SECONDS
+    watcher.set_queue_snapshot_callback(
+        lambda snapshot: log.append(("queue", [entry["content"] for entry in snapshot]))
+    )
+    watcher._queue.attach(publish=watcher._publish_snapshot, wake=lambda: None)
+    send = _ScriptedSend(agent_state_dir, is_confirmed=is_confirmed, is_logged=is_logged)
+    watcher.set_flush_hooks(send, lambda: lifecycle_state, lambda text, sent_after: log.append(("resent", text)))
+    return watcher, send, log
+
+
+def _hold(watcher: GrokSessionWatcher, *texts: str) -> None:
+    for text in texts:
+        watcher._queue.enqueue(text, "t0", is_turn_open=False)
+
+
+def test_the_flush_types_the_held_block_once_and_its_chip_leaves_before_its_turn_shows(tmp_path: Path) -> None:
+    watcher, send, log = _flushing_watcher(tmp_path)
+    _hold(watcher, "first", "second")
+    log.clear()
+
+    watcher._attempt_flush()
+    watcher._attempt_flush()
+
+    assert send.sent == ["first\nsecond"]
+    assert watcher.get_queued_messages() == []
+    chip_gone_at = log.index(("queue", []))
+    turn_shown_at = next(index for index, entry in enumerate(log) if entry[0] == "events")
+    assert chip_gone_at < turn_shown_at
+    assert log[turn_shown_at] == ("events", [("special", "turn_started"), ("user", "first\nsecond")])
+
+
+@pytest.mark.parametrize(
+    ("lifecycle_state", "is_marker_present"),
+    [
+        pytest.param("RUNNING", False, id="mngr_reports_running"),
+        pytest.param("WAITING", True, id="the_active_marker_is_ahead_of_the_reported_state"),
+        pytest.param("STOPPED", False, id="the_agent_is_stopped"),
+        pytest.param(None, False, id="the_agent_is_not_tracked"),
+    ],
+)
+def test_the_flush_types_nothing_while_a_turn_is_in_flight_or_the_agent_is_not_alive(
+    tmp_path: Path, lifecycle_state: str | None, is_marker_present: bool
+) -> None:
+    watcher, send, _log = _flushing_watcher(tmp_path, lifecycle_state=lifecycle_state)
+    if is_marker_present:
+        (send.agent_state_dir / ACTIVE_MARKER_FILENAME).touch()
+    _hold(watcher, "held")
+
+    watcher._attempt_flush()
+
+    assert send.sent == []
+    assert [(entry["content"], entry["is_sending"]) for entry in watcher.get_queued_messages()] == [("held", False)]
+
+
+def test_the_flush_types_into_a_grok_that_runs_only_background_work(tmp_path: Path) -> None:
+    watcher, send, _log = _flushing_watcher(tmp_path, lifecycle_state="RUNNING_BACKGROUND")
+    _hold(watcher, "next")
+
+    watcher._attempt_flush()
+
+    assert send.sent == ["next"]
+    assert watcher.get_queued_messages() == []
+
+
+def test_a_block_mngr_confirmed_is_delivered_though_grok_logged_no_turn_for_it(tmp_path: Path) -> None:
+    """grok queued it behind a turn that started first, and logs it only once that turn ends: typing it again would
+    run it twice."""
+    watcher, send, _log = _flushing_watcher(tmp_path, is_logged=False)
+    _hold(watcher, "queued inside grok")
+
+    watcher._attempt_flush()
+
+    assert send.sent == ["queued inside grok"]
+    assert watcher.get_queued_messages() == []
+
+
+def test_a_block_mngr_could_not_confirm_is_delivered_once_grok_logs_it_after_a_draft(tmp_path: Path) -> None:
+    watcher, send, _log = _flushing_watcher(tmp_path, is_confirmed=False)
+    send.draft = "someone typed this at the pane "
+    _hold(watcher, "held")
+
+    watcher._attempt_flush()
+
+    assert send.sent == ["held"]
+    assert watcher.get_queued_messages() == []
+
+
+def test_a_block_no_sign_shows_grok_took_is_typed_again_later_and_noted_as_sent_again(tmp_path: Path) -> None:
+    watcher, send, log = _flushing_watcher(tmp_path, is_confirmed=False, is_logged=False)
+    _hold(watcher, "held")
+
+    watcher._attempt_flush()
+    assert [(entry["content"], entry["is_sending"]) for entry in watcher.get_queued_messages()] == [("held", False)]
+
+    send.is_confirmed = True
+    send.is_logged = True
+    watcher._attempt_flush()
+
+    assert send.sent == ["held", "held"]
+    assert watcher.get_queued_messages() == []
+    assert ("resent", "held") in log
+
+
+def test_a_block_that_never_shows_stops_being_typed_after_its_attempts(tmp_path: Path) -> None:
+    watcher, send, _log = _flushing_watcher(tmp_path, is_confirmed=False, is_logged=False)
+    _hold(watcher, "held")
+
+    for _attempt in range(MAX_DELIVERY_ATTEMPTS + 2):
+        watcher._attempt_flush()
+
+    assert send.sent == ["held"] * MAX_DELIVERY_ATTEMPTS
+    assert [entry["content"] for entry in watcher.get_queued_messages()] == ["held"]
+
+
+def test_the_live_emit_holds_back_while_a_flush_waits_to_see_its_block(tmp_path: Path) -> None:
+    watcher, send, log = _flushing_watcher(tmp_path)
+    emitted_during_the_send: list[list[tuple[str, Any]]] = []
+
+    def emit_during_the_send() -> None:
+        before = len(log)
+        watcher._emit_cycle()
+        emitted_during_the_send.append(log[before:])
+
+    send.after_send = emit_during_the_send
+    _hold(watcher, "held")
+
+    watcher._attempt_flush()
+
+    assert emitted_during_the_send == [[]]
+    assert [entry for entry in log if entry[0] == "events"] == [
+        ("events", [("special", "turn_started"), ("user", "held")])
+    ]
+
+
+def test_the_flush_drops_the_messages_held_for_a_grok_that_relaunched(tmp_path: Path) -> None:
+    watcher, send, _log = _flushing_watcher(tmp_path)
+    _hold(watcher, "for the old grok")
+    (send.agent_state_dir / PROCESS_STARTED_MARKER_FILENAME).touch()
+
+    watcher._attempt_flush()
+
+    assert send.sent == []
+    assert watcher.get_queued_messages() == []
+
+
+def test_a_started_watchers_worker_types_a_held_message_once_mngr_reports_the_turn_over(tmp_path: Path) -> None:
+    lifecycle = ["RUNNING"]
+    agent_state_dir = make_grok_agent_state_dir(tmp_path)
+    add_grok_session(
+        agent_state_dir, _PLAIN_ROOT, read_fixture_updates(find_fixture_scenario("plain"), _PLAIN_ROOT), is_root=True
+    )
+    watcher = GrokSessionWatcher.build(
+        make_grok_agent_info(agent_state_dir, agent_state_dir.name, "grok-worker"), lambda _agent_id, _events: None
+    )
+    send = _ScriptedSend(agent_state_dir, is_confirmed=True, is_logged=True)
+    watcher.set_flush_hooks(send, lambda: lifecycle[0], lambda text, sent_after: None)
+    watcher.start()
+    try:
+        _hold(watcher, "held")
+        watcher.notify_idle()
+        assert not poll_until(lambda: bool(send.sent), timeout=0.5, poll_interval=0.05)
+
+        lifecycle[0] = "WAITING"
+        watcher.notify_idle()
+        wait_for(
+            lambda: not watcher.get_queued_messages(),
+            timeout=_LIVE_TAIL_TIMEOUT_SECONDS,
+            poll_interval=0.05,
+            error_message="the worker never delivered the held message",
+        )
+    finally:
+        watcher.stop()
+
+    assert send.sent == ["held"]
