@@ -1,0 +1,1 @@
+The app worker guide now says the request guard is added with the sharing checks after the first milestone; "right after the app is created" names its place in the code. Workers had read it as a timing rule and added sharing code before the core tests passed, which delayed the first hardened build the user gets.
