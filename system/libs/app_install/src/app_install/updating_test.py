@@ -145,6 +145,28 @@ def test_a_conflict_in_the_apps_code_waits_in_a_worktree_and_is_finished_with_co
     assert check(workspace) == ()
 
 
+def test_a_waiting_update_is_given_up_by_removing_its_worktree(tmp_path: Path) -> None:
+    workspace, published = _installed_notes(tmp_path)
+    _app_file(workspace, "notes.py").write_text(_notes_py("hi there", 10))
+    commit_all(workspace, "a friendlier greeting")
+    _publish(published, "0.2.0", _notes_py("good morning", 10), "lock of 0.1.0\n")
+    before = run_git(workspace, ["rev-parse", "HEAD"])
+    runtime = RecordingRuntime(repo_root=workspace)
+    update_app(workspace, "notes", None, False, runtime)
+    worktree = update_worktree_path(workspace, "notes")
+
+    run_git(workspace, ["worktree", "remove", "--force", str(worktree)])
+
+    with pytest.raises(UpdateInProgressError, match="no update of notes is waiting"):
+        update_app(workspace, "notes", None, True, runtime)
+    # The next update starts afresh, and stops where the first one did.
+    again = update_app(workspace, "notes", None, False, runtime)
+    assert again.result is UpdateResult.CONFLICT
+    assert again.conflicted_paths == ("system/apps/notes/notes.py",)
+    assert worktree.is_dir()
+    assert run_git(workspace, ["rev-parse", "HEAD"]) == before
+
+
 def test_a_conflict_in_the_lock_alone_takes_the_publishers_and_makes_it_again(tmp_path: Path) -> None:
     workspace, published = _installed_notes(tmp_path)
     # The workspace's update pass relocked the app; the publisher relocked it too.

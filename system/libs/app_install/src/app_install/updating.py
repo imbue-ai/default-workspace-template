@@ -290,6 +290,7 @@ def update_app(
 
     Raises AppRecordNotFoundError for an app with no record, NotInstalledAppError for an app this workspace
     built, UpdateInProgressError when an update of the app is already waiting (or, when continuing, none is),
+    where a waiting update whose worktree has been removed was given up and no longer waits,
     NoSnapshotError when the app's data cannot be kept safe, and CollisionError when the new version would take a
     name something in the workspace holds. The primary checkout is unchanged unless the result is UPDATED.
     """
@@ -306,11 +307,15 @@ def update_app(
         except ValueError as e:
             raise AppInstallError(f"the waiting update of {name} cannot be read: {e}") from e
         return _finish(repo_root, record, pending, runtime)
-    if pending_file.exists() or worktree.exists():
+    if pending_file.exists() and worktree.exists():
         raise UpdateInProgressError(
             f"an update of {name} is waiting at {worktree.relative_to(repo_root).as_posix()}; resolve it there and "
-            "run the update again with --continue"
+            "run the update again with --continue, or remove that worktree to give the update up"
         )
+    if pending_file.exists() or worktree.exists():
+        # Half of a waiting update: its worktree was removed to give it up, or the run that made the worktree
+        # ended before it recorded what it was bringing in. Neither can be continued.
+        _remove_worktree(repo_root, name)
     ref = resolve_ref(repo_root, record.upstream_url, requested_ref)
     commit = fetch_commit(repo_root, record.upstream_url, ref)
     if commit == record.upstream_commit:
