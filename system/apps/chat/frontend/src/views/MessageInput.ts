@@ -63,6 +63,7 @@ import {
   accountForFirstSend,
   areAccountsLoaded,
   isAccountSignedOut,
+  isFirstRunProviderStepPending,
   loadAccounts,
   openProviderChooser,
   whenAccountsReadyToChoose,
@@ -2307,13 +2308,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       /** In place of the composer while nothing is signed in that a new chat could start on. The chooser opens as the
-       *  notice appears, and its button opens it again once dismissed. */
+       *  notice appears, and its button opens it again once dismissed. On a first-run workspace the shell's cover
+       *  is asking the same thing over the whole desktop, so the chooser stays shut until its button is pressed. */
       function renderNoProviderNotice(awaitingChatId: string): m.Children {
         return providerNotice(
           "message-input-no-provider",
           "Connect an AI provider to start chatting.",
           () => openProviderChooserForFirstSend(awaitingChatId),
-          () => openProviderChooserForFirstSend(awaitingChatId),
+          isFirstRunProviderStepPending() ? undefined : () => openProviderChooserForFirstSend(awaitingChatId),
         );
       }
 

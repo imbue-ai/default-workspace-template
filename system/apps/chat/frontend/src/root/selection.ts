@@ -15,6 +15,8 @@ export const CHAT_QUERY_KEY = "chat";
 export const INTAKE_QUERY_KEY = "intake";
 export const OPEN_QUERY_KEY = "open";
 export const OPEN_PROVIDERS = "providers";
+const VIEW_QUERY_KEY = "view";
+const VIEW_FIRST_RUN = "first-run";
 
 /** The chat the URL selects, or null for none (or an id that cannot be a chat's). */
 export function selectionFromSearch(search: string): string | null {
@@ -32,6 +34,11 @@ export function intakeTokenFromSearch(search: string): string | null {
 /** Whether the URL asks the root to open the provider chooser on arrival. */
 export function isProviderChooserRequested(search: string): boolean {
   return new URLSearchParams(search).get(OPEN_QUERY_KEY) === OPEN_PROVIDERS;
+}
+
+/** Whether the URL asks for the first run's provider page in place of the chats (the shell's cover frames it). */
+export function isFirstRunProvidersViewRequested(search: string): boolean {
+  return new URLSearchParams(search).get(VIEW_QUERY_KEY) === VIEW_FIRST_RUN;
 }
 
 /** The root's path for a selection: what it reports to the shell and writes into its own URL. */

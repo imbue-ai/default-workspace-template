@@ -4048,6 +4048,34 @@ def test_a_first_run_seed_opens_main_on_the_welcome_and_carries_the_users_words_
     assert "I want to use Studio for: Writing." not in json.dumps(events)
 
 
+def test_a_first_run_seed_owes_the_provider_page_until_the_owner_leaves_it(tmp_path: Path) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+    assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is False
+
+    client.post("/api/chats/seed", json={"turns": [], "is_first_run": True})
+    assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is True
+
+    assert client.post("/api/first-run/provider-step/done").status_code == 200
+    assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is False
+    # Finished for good: a manager built over the same files, as after a restart, still reads it finished.
+    assert (
+        AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path).is_first_run_provider_step_pending()
+        is False
+    )
+
+
+def test_an_ordinary_seed_owes_no_provider_page(tmp_path: Path) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+    client.post("/api/chats/seed", json=_seed_body())
+
+    assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is False
+
+
 def test_seeding_a_chat_refuses_a_body_without_turns(client: FlaskClient) -> None:
     response = client.post("/api/chats/seed", json={"title": "Empty", "turns": []})
     assert response.status_code == 400

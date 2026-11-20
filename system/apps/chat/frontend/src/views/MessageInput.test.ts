@@ -102,6 +102,7 @@ const mocks = vi.hoisted(() => {
     selectedAccount: null as { id: string } | null,
     // Whether this page has read the account list; until it has, no account reads as missing.
     accountsLoaded: true,
+    isFirstRunProviderStepPending: false,
     listeners,
     agent,
     // Whether the page offers dictation, and the dictation the composer made: a stand-in whose state the test
@@ -285,6 +286,7 @@ vi.mock("../models/Providers", () => ({
   // The seeded chats these tests launch name no account of their own, so the selected one decides.
   accountForFirstSend: () => mocks.selectedAccount,
   areAccountsLoaded: () => mocks.accountsLoaded,
+  isFirstRunProviderStepPending: () => mocks.isFirstRunProviderStepPending,
   isAccountSignedOut: (accountId: string | null | undefined) =>
     !!accountId && mocks.signedOutAccountIds.has(accountId),
   loadAccounts: () => mocks.loadAccounts(),
@@ -2529,6 +2531,20 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
     (notice!.attrs!.oncreate as () => void)();
 
     expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the chooser shut as the notice appears while the first run's provider page is owed, its button still opening it", () => {
+    mocks.isFirstRunProviderStepPending = true;
+    try {
+      mocks.openProviderChooser.mockClear();
+      const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+
+      expect(findByClass(tree, "message-input-no-provider")!.attrs!.oncreate).toBeUndefined();
+      (findButton(tree, "Choose a provider")!.attrs!.onclick as () => void)();
+      expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
+    } finally {
+      mocks.isFirstRunProviderStepPending = false;
+    }
   });
 
   it("launches the awaiting chat with no message as the chooser's sign-in completes, from the button or on appearing", async () => {

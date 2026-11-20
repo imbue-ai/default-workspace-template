@@ -122,6 +122,9 @@ from imbue.chat.compaction_status import read_compaction_request
 from imbue.chat.compaction_status import read_compaction_signal
 from imbue.chat.compaction_status import shown_compaction_cause
 from imbue.chat.compaction_status import write_compaction_request
+from imbue.chat.first_run import finish_provider_step
+from imbue.chat.first_run import is_provider_step_pending
+from imbue.chat.first_run import mark_provider_step_pending
 from imbue.chat.harnesses.account_binding import BindingError
 from imbue.chat.harnesses.activity import HarnessActivityTracker
 from imbue.chat.harnesses.agent_file_poll import AgentFilePoller
@@ -4658,7 +4661,18 @@ class AgentManager:
             raise AgentNameConflictError(f"A chat named '{explicit_name}' already exists; pick another name")
         return explicit_name
 
-    def seed_chat(self, title: str, turns: tuple[SeedTurn, ...], first_run_context: str = "") -> CreatedChat:
+    def is_first_run_provider_step_pending(self) -> bool:
+        """Whether the workspace still owes its owner the first run's "pick your AI" page (``first_run.py``)."""
+        return is_provider_step_pending(self._chat_files_root)
+
+    def finish_first_run_provider_step(self) -> None:
+        """The owner left the first run's provider page: it is never shown again, and every page reads that."""
+        finish_provider_step(self._chat_files_root)
+        self._broadcaster.broadcast_accounts_updated()
+
+    def seed_chat(
+        self, title: str, turns: tuple[SeedTurn, ...], first_run_context: str = "", is_first_run: bool = False
+    ) -> CreatedChat:
         """Open a chat on a conversation that happened before the workspace existed (``chat_seed.py``).
 
         The Imbue Studio app's onboarding continues here as the workspace's first chat: the turns become
@@ -4677,9 +4691,12 @@ class AgentManager:
         empty title mints the first free "Chat N".
 
         ``first_run_context`` is what the user told Imbue Studio's first run; it rides the first send with the
-        seed and is never shown.
+        seed and is never shown. ``is_first_run`` owes the owner the first run's provider page, marked before the
+        chat is published so the first page to load already knows.
         """
         explicit_title = explicit_chat_name(title)
+        if is_first_run:
+            mark_provider_step_pending(self._chat_files_root)
         with self._lock:
             provisional = self._seed_chat_locked(
                 explicit_title, turns, is_recorded_as_main_first=self._main_chat.read() is None

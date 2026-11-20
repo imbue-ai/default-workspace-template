@@ -2302,7 +2302,7 @@ def _seed_chat() -> Response:
     try:
         if seed_request.is_first_run:
             created = agent_manager.seed_chat(
-                MAIN_CHAT_NAME, FIRST_RUN_WELCOME, first_run_context=seed_request.context
+                MAIN_CHAT_NAME, FIRST_RUN_WELCOME, first_run_context=seed_request.context, is_first_run=True
             )
         else:
             created = agent_manager.seed_chat(MAIN_CHAT_NAME, seed_request.turns)

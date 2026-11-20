@@ -48,7 +48,9 @@ import {
 import type { AppliedIntake, PendingIntake } from "../models/Chats";
 import {
   accountForFirstSend,
+  areAccountsLoaded,
   closeProviderChooser,
+  isFirstRunProviderStepPending,
   isProviderChooserOpen,
   loadAccountsWithRetry,
   openProviderChooser,
@@ -71,10 +73,12 @@ import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
 import { ensureParticipants } from "../models/Participants";
 import { hasPendingDelete, settlePendingDeletes, withoutPendingDeletes } from "./pendingDeletes";
 import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
+import { FirstRunProvidersPage } from "../views/FirstRunProvidersPage";
 import { groupedRows, provisionalTitle, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
 import {
   intakeTokenFromSearch,
+  isFirstRunProvidersViewRequested,
   isProviderChooserRequested,
   rootPathFor,
   selectionFromSearch,
@@ -337,6 +341,19 @@ function openRequestedProviderChooser(accountsLoaded: Promise<void>): void {
   void accountsLoaded.then(() => openProviderChooser());
 }
 
+// What the shell was last told about the first run's provider page, so a redraw with nothing new says nothing.
+let reportedFirstRunProviderStep: boolean | null = null;
+
+/** Tell the shell whether the first run's provider page is owed, once the accounts say; it covers the desktop
+ *  with the page while it is. */
+function reportFirstRunProviderStep(shell: ShellConnection): void {
+  if (!areAccountsLoaded()) return;
+  const isPending = isFirstRunProviderStepPending();
+  if (isPending === reportedFirstRunProviderStep) return;
+  reportedFirstRunProviderStep = isPending;
+  shell.firstRunProviderStep(isPending);
+}
+
 function pickFor(chatId: string): void {
   const pick = pendingPick;
   pendingPick = null;
@@ -383,6 +400,7 @@ const ChatRoot: m.Component = {
     reportLocation();
   },
   view() {
+    if (connection !== null) reportFirstRunProviderStep(connection);
     const rows = railRows();
     const isCompact = compactQuery.matches;
     const rail = railAttrs(rows, isCompact);
@@ -505,6 +523,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
       // Whatever went up before the shell was listening is told again.
       reportedLocation = null;
       reportLocation();
+      reportedFirstRunProviderStep = null;
       m.redraw();
     },
     onShown: () => {
@@ -560,14 +579,20 @@ function bootstrap(): void {
     m.redraw();
   });
   touchQuery.addEventListener("change", () => m.redraw());
+  const rootElement = document.getElementById("app");
+  if (rootElement === null) return;
+  if (isFirstRunProvidersViewRequested(window.location.search)) {
+    // The shell's cover over a first-run workspace: the provider page alone, with no chats behind it.
+    const cover = connectToShell({ capabilities: { navigation: false, closeChord: false } });
+    m.mount(rootElement, { view: () => m(FirstRunProvidersPage, { shell: cover }) });
+    return;
+  }
   const shell = connectRootToShell(accountsLoaded);
   startInnerFrameRelay(
     (source) => pool?.isInnerWindow(source) ?? false,
     () => pool?.innerWindows() ?? [],
     (chatId) => select(chatId),
   );
-  const rootElement = document.getElementById("app");
-  if (rootElement === null) return;
   selectedChatId = selectionFromSearch(window.location.search);
   isDrawerOpen = selectedChatId === null;
   pendingToken = intakeTokenFromSearch(window.location.search);

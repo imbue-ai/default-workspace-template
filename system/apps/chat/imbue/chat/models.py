@@ -34,6 +34,10 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 
 
+class EmptySeedError(ValueError):
+    """A seed that is not a first-run arrival came with no turns."""
+
+
 class AgentCreationError(ValueError):
     """Raised when agent creation fails due to invalid input."""
 
@@ -963,7 +967,7 @@ class SeedChatRequest(FrozenModel):
     @model_validator(mode="after")
     def _require_turns_unless_first_run(self) -> "SeedChatRequest":
         if not self.is_first_run and len(self.turns) == 0:
-            raise ValueError("A seeded chat needs at least one turn unless it is a first-run arrival")
+            raise EmptySeedError("A seeded chat needs at least one turn unless it is a first-run arrival")
         return self
 
 

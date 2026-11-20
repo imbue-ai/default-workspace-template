@@ -1,0 +1,1 @@
+The workspace shell covers the desktop with the chat app's first-run provider page while the chat app says it is owed (a new `shell:first-run-provider-step` message in the app contract), and holds the show-around tour until the cover is down.
