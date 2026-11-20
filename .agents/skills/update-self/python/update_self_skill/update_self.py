@@ -226,6 +226,7 @@ from update_self_skill.update_chat_pause import (
 )
 from update_self_skill.update_classification import (
     AGY_INSTALLER_NAME,
+    GROK_INSTALLER_PATH,
     MNGR_SETTINGS_PATH,
     HarnessPinFiles,
     agent_restart_verdict,
@@ -458,6 +459,7 @@ def _harness_pin_files_at(ref: str, repo_root: Path) -> HarnessPinFiles:
         agy_installer=_file_at(ref, agy_installers[0], repo_root)
         if agy_installers
         else "",
+        grok_installer=_file_at(ref, GROK_INSTALLER_PATH, repo_root),
     )
 
 

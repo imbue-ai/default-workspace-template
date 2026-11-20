@@ -430,7 +430,11 @@ _PIN_DEFAULT_LINE = re.compile(r'^:\s*"\$\{(\w+):=([^}]*)\}"', re.MULTILINE)
 # Antigravity's version authority is the ``AGY_VERSION`` its installer pins. The installer is
 # ``agy_install.sh``; a tree from before its rename carries ``agy_install-<version>.sh``.
 AGY_INSTALLER_NAME = re.compile(r"^system/scripts/agy_install(-[^/]+)?\.sh$")
-_AGY_VERSION_LINE = re.compile(r'^(AGY_VERSION)="([^"]*)"', re.MULTILINE)
+# Grok Build's version authority is the ``GROK_VERSION`` its installer pins.
+GROK_INSTALLER_PATH = "system/scripts/install_grok.sh"
+_INSTALLER_VERSION_LINE = re.compile(
+    r'^(AGY_VERSION|GROK_VERSION)="([^"]*)"', re.MULTILINE
+)
 # Code a harness loads into its process when it starts.
 _HARNESS_EXTENSION_DIRS = (".pi/extensions/",)
 
@@ -441,6 +445,7 @@ class HarnessPinFiles(NamedTuple):
     setup_system: str
     mngr_settings: str
     agy_installer: str
+    grok_installer: str
 
 
 class AgentRestartVerdict(NamedTuple):
@@ -456,9 +461,9 @@ def harness_version_pins(setup_system_text: str) -> dict[str, str]:
     return {var: pins[var] for var in HARNESS_VERSION_PIN_VARS if var in pins}
 
 
-def agy_installer_pin(agy_installer_text: str) -> dict[str, str]:
-    """The ``AGY_VERSION`` the Antigravity installer pins, by variable."""
-    return dict(_AGY_VERSION_LINE.findall(agy_installer_text))
+def installer_version_pin(installer_text: str) -> dict[str, str]:
+    """The version a harness's own installer pins, by variable."""
+    return dict(_INSTALLER_VERSION_LINE.findall(installer_text))
 
 
 def agent_type_versions(mngr_settings_text: str) -> dict[str, str]:
@@ -488,17 +493,19 @@ def agent_restart_verdict(
 ) -> AgentRestartVerdict:
     """Whether an update changes what a running agent's harness loaded when it started.
 
-    Covers what can be read off the diff: a harness version pin (Antigravity's in its
-    installer) and a harness extension tree. Harness config whose loading the diff cannot
-    place is the worker guide's to judge.
+    Covers what can be read off the diff: a harness version pin (Antigravity's and Grok
+    Build's in their installers) and a harness extension tree. Harness config whose loading
+    the diff cannot place is the worker guide's to judge.
     """
     triggers = [
         *_changed_values(
             "{}",
             harness_version_pins(before.setup_system)
-            | agy_installer_pin(before.agy_installer),
+            | installer_version_pin(before.agy_installer)
+            | installer_version_pin(before.grok_installer),
             harness_version_pins(after.setup_system)
-            | agy_installer_pin(after.agy_installer),
+            | installer_version_pin(after.agy_installer)
+            | installer_version_pin(after.grok_installer),
         ),
         *_changed_values(
             "agent_types.{}.version",

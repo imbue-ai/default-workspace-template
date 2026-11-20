@@ -9497,10 +9497,12 @@ def test_a_rollback_whose_restored_app_serves_no_page_is_an_emergency_that_keeps
 _SETUP_BEFORE = ': "${TTYD_VERSION:=1.7.7}"\n: "${CLAUDE_CODE_VERSION:=2.1.269}"\n: "${PI_VERSION:=0.87.1}"\n'
 _SETTINGS_BEFORE = '[agent_types.claude]\nparent_type = "claude"\nversion = "2.1.269"\n\n[agent_types.chat]\nparent_type = "claude"\n'
 _AGY_INSTALLER_BEFORE = '#!/usr/bin/env bash\nAGY_VERSION="1.4.3"\n'
+_GROK_INSTALLER_BEFORE = '#!/bin/bash\nGROK_VERSION="1.0.62"\n'
 _PINS_BEFORE = update_classification.HarnessPinFiles(
     setup_system=_SETUP_BEFORE,
     mngr_settings=_SETTINGS_BEFORE,
     agy_installer=_AGY_INSTALLER_BEFORE,
+    grok_installer=_GROK_INSTALLER_BEFORE,
 )
 
 
@@ -9526,6 +9528,13 @@ _PINS_BEFORE = update_classification.HarnessPinFiles(
             ("AGY_VERSION: 1.4.3 -> 1.4.7",),
         ),
         (
+            [update_classification.GROK_INSTALLER_PATH],
+            _PINS_BEFORE._replace(
+                grok_installer=_GROK_INSTALLER_BEFORE.replace("1.0.62", "1.0.70")
+            ),
+            ("GROK_VERSION: 1.0.62 -> 1.0.70",),
+        ),
+        (
             [".pi/extensions/policy_guards.ts", ".pi/extensions/pi_extensions_test.py"],
             _PINS_BEFORE,
             ("harness extension: .pi/extensions/policy_guards.ts",),
@@ -9537,15 +9546,17 @@ _PINS_BEFORE = update_classification.HarnessPinFiles(
                 "system/scripts/setup_system.sh",
                 "system/scripts/agent_block_pipe_tail_head.sh",
                 "system/scripts/agy_install.sh",
+                update_classification.GROK_INSTALLER_PATH,
             ],
             _PINS_BEFORE._replace(
                 setup_system=_SETUP_BEFORE.replace("1.7.7", "1.7.8"),
                 agy_installer=_AGY_INSTALLER_BEFORE + "# a comment\n",
+                grok_installer=_GROK_INSTALLER_BEFORE + "# a comment\n",
             ),
             (),
         ),
     ],
-    ids=["claude-bump", "agy-bump", "pi-extension", "unrelated"],
+    ids=["claude-bump", "agy-bump", "grok-bump", "pi-extension", "unrelated"],
 )
 def test_agent_restart_verdict_names_what_a_running_harness_would_miss(
     changed_paths: list[str],
@@ -9558,6 +9569,23 @@ def test_agent_restart_verdict_names_what_a_running_harness_would_miss(
 
     assert verdict.triggers == expected_triggers
     assert verdict.is_needed is bool(expected_triggers)
+
+
+@pytest.mark.parametrize(
+    "installer, variable",
+    [
+        ("system/scripts/agy_install.sh", "AGY_VERSION"),
+        (update_classification.GROK_INSTALLER_PATH, "GROK_VERSION"),
+    ],
+)
+def test_the_shipped_installers_pin_a_version_the_verdict_reads(
+    installer: str, variable: str
+) -> None:
+    pins = update_classification.installer_version_pin(
+        (_WORKSPACE_ROOT / installer).read_text()
+    )
+
+    assert list(pins) == [variable]
 
 
 def test_agent_restart_verdict_cli_reads_both_trees_from_git(tmp_path, capsys) -> None:
@@ -9573,6 +9601,7 @@ def test_agent_restart_verdict_cli_reads_both_trees_from_git(tmp_path, capsys) -
     _git_in(tmp_path, "config", "user.name", "test")
     _write(update_layout.PROVISIONER_SCRIPT, _SETUP_BEFORE)
     _write("system/scripts/agy_install-1.4.3.sh", _AGY_INSTALLER_BEFORE)
+    _write(update_classification.GROK_INSTALLER_PATH, _GROK_INSTALLER_BEFORE)
     _git_in(tmp_path, "add", "-A")
     _git_in(tmp_path, "commit", "-q", "-m", "before")
     _git_in(
@@ -9584,6 +9613,10 @@ def test_agent_restart_verdict_cli_reads_both_trees_from_git(tmp_path, capsys) -
     _write(
         "system/scripts/agy_install.sh",
         _AGY_INSTALLER_BEFORE.replace("1.4.3", "1.4.7"),
+    )
+    _write(
+        update_classification.GROK_INSTALLER_PATH,
+        _GROK_INSTALLER_BEFORE.replace("1.0.62", "1.0.70"),
     )
     _write(
         update_layout.PROVISIONER_SCRIPT,
@@ -9612,6 +9645,7 @@ def test_agent_restart_verdict_cli_reads_both_trees_from_git(tmp_path, capsys) -
         "triggers": [
             "AGY_VERSION: 1.4.3 -> 1.4.7",
             "CLAUDE_CODE_VERSION: 2.1.269 -> 2.1.280",
+            "GROK_VERSION: 1.0.62 -> 1.0.70",
             "agent_types.claude.version: unset -> 2.1.269",
             "harness extension: .pi/extensions/policy_guards.ts",
         ],
