@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -268,6 +269,29 @@ def test_only_the_newest_snapshot_of_an_apps_data_is_kept(tmp_path: Path) -> Non
     assert first.snapshot != second.snapshot
     assert not (workspace / first.snapshot).exists()
     assert (workspace / second.snapshot / "notes.json").read_text() == '["first", "second"]'
+
+
+def test_a_copy_of_the_data_that_fails_refuses_the_update_and_keeps_the_earlier_snapshot(tmp_path: Path) -> None:
+    workspace, published = _installed_notes(tmp_path)
+    write_workspace_file(workspace, "data/.apps/notes/notes.json", '["first"]')
+    _publish(published, "0.2.0", _notes_py("hello", 11), "lock of 0.1.0\n")
+    first = update_app(workspace, "notes", None, False, RecordingRuntime(repo_root=workspace))
+    _publish(published, "0.3.0", _notes_py("hello", 12), "lock of 0.1.0\n")
+    updated_to = load_record(workspace, "notes")
+    # A file a copy cannot take: copying a named pipe is refused.
+    os.mkfifo(workspace / "data" / ".apps" / "notes" / "live.pipe")
+    runner = CliRunner()
+
+    with pytest.raises(NoSnapshotError, match="could not be copied aside"):
+        update_app(workspace, "notes", None, False, RecordingRuntime(repo_root=workspace))
+    refused = runner.invoke(main, ["--repo-root", str(workspace), "update", "notes"])
+
+    assert (refused.exit_code, json.loads(refused.output)["result"]) == (1, "no_snapshot")
+    snapshots = workspace / first.snapshot
+    assert (snapshots / "notes.json").read_text() == '["first"]'
+    assert sorted(path.name for path in snapshots.parent.iterdir()) == [".nobackup", snapshots.name]
+    assert load_record(workspace, "notes") == updated_to
+    assert not update_worktree_path(workspace, "notes").exists()
 
 
 def test_an_app_with_no_stored_data_updates_without_a_snapshot(tmp_path: Path) -> None:

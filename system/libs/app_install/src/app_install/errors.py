@@ -52,5 +52,5 @@ class UpdateInProgressError(AppInstallError):
 
 
 class NoSnapshotError(AppInstallError):
-    """The app's stored data could not be kept safe before an update: it does not fit beside itself, and the
-    workspace has no recent backup."""
+    """The app's stored data could not be kept safe before an update: it does not fit beside itself and the
+    workspace has no recent backup, or copying it aside failed."""

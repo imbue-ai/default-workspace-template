@@ -54,6 +54,7 @@ _WORKTREES_DIRNAME: Final[str] = "worktrees"
 _SNAPSHOTS_DIRNAME: Final[str] = "snapshots"
 _NOBACKUP_MARKER: Final[str] = ".nobackup"
 _SNAPSHOT_LABEL_LENGTH: Final[int] = 12
+_INCOMING_SUFFIX: Final[str] = ".incoming"
 # A snapshot must leave the disk room to work in.
 _SNAPSHOT_HEADROOM_FACTOR: Final[float] = 1.2
 
@@ -113,7 +114,8 @@ def snapshot_app_data(repo_root: Path, record: AppRecord, runtime: WorkspaceRunt
 
     Only the newest snapshot of an app is kept, and the snapshots stay out of the workspace's backup. An app
     with no stored data has nothing to copy. Raises NoSnapshotError when the data does not fit on the disk and
-    the workspace has no recent backup to fall back on.
+    the workspace has no recent backup to fall back on, and when the copy fails, which leaves the earlier
+    snapshot in place.
     """
     data_directory = repo_root / APP_DATA_DIRECTORY / str(record.name)
     if not data_directory.is_dir():
@@ -131,11 +133,22 @@ def snapshot_app_data(repo_root: Path, record: AppRecord, runtime: WorkspaceRunt
     (snapshots_directory / _NOBACKUP_MARKER).touch()
     # Named for the version the data belongs to, so a second update from the same version replaces it.
     label = record.upstream_commit[:_SNAPSHOT_LABEL_LENGTH] or "unversioned"
+    # Copied beside the earlier snapshot, which goes only once this one is whole.
+    incoming = snapshots_directory / f"{label}{_INCOMING_SUFFIX}"
+    shutil.rmtree(incoming, ignore_errors=True)
+    try:
+        shutil.copytree(data_directory, incoming, symlinks=True)
+    except OSError as e:
+        shutil.rmtree(incoming, ignore_errors=True)
+        raise NoSnapshotError(
+            f"the data of {record.name} could not be copied aside, so there would be no way back from the "
+            f"update: {e}"
+        ) from e
     for previous in snapshots_directory.iterdir():
-        if previous.is_dir():
+        if previous.is_dir() and previous != incoming:
             shutil.rmtree(previous)
     destination = snapshots_directory / label
-    shutil.copytree(data_directory, destination, symlinks=True)
+    incoming.rename(destination)
     return destination.relative_to(repo_root).as_posix()
 
 
