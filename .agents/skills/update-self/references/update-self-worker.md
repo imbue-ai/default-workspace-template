@@ -493,10 +493,12 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 
 Its `triggers` name every change it knows makes a restart **needed**: a
 harness version pin in `system/scripts/setup_system.sh`, an
-`[agent_types.*]` `version` in `.mngr/settings.toml`, or the `AGY_VERSION`
-the Antigravity installer (`system/scripts/agy_install.sh`) pins (the apply's
-provisioner installs the new binary, but a running agent keeps executing the
-old one), and code a harness loads into its process at start
+`[agent_types.*]` `version` in `.mngr/settings.toml`, or the version the
+Antigravity or Grok Build installer pins (`AGY_VERSION` in
+`system/scripts/agy_install.sh`, `GROK_VERSION` in
+`system/scripts/install_grok.sh`; the apply's provisioner installs the new
+binary, but a running agent keeps executing the old one), and code a harness
+loads into its process at start
 (`.pi/extensions/**`). When `needed` is `true`, the verdict is `needed`, and
 its triggers are the evidence. When it is `false`, read the rest of the diff
 (`git diff

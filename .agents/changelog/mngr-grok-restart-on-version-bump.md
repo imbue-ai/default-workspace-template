@@ -1,0 +1,1 @@
+`update-self` restarts running agents when an update changes the Grok Build version: `agent-restart-verdict` reads the `GROK_VERSION` that `system/scripts/install_grok.sh` pins, as it reads Antigravity's `AGY_VERSION`, and the worker guide's restart rule names it.
