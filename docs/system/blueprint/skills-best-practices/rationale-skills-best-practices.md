@@ -113,7 +113,7 @@ A reference has no size limit. That was decided against: the contents-list rule 
 | Each step names its reference | At best only the invoked SKILL.md is re-attached after a compaction, so detail moved to a reference is protected only if the step says what to re-read. |
 | The after-compaction rule lives in the instructions file | An instruction to re-read that sits in a reference is lost with the reference, so it cannot live there. A line in every SKILL.md spends each skill's 14 KB on the same sentence. Every harness tested still had the instructions file after a compaction, so one statement there reaches every skill. |
 | The rule names the reference first, and SKILL.md only when its text is gone | The harness test below: Claude Code re-attaches a compliant SKILL.md whole, so re-reading it there is a wasted call, while Pi and Codex re-attach nothing. A condition the agent can check for itself (is the text still in front of it) holds on each of them, and each agent's own report of what it could see was accurate. |
-| The rule sits near the top of the instructions file | The same test: Codex gives the agent the first 32,768 bytes of `AGENTS.md` (`project_doc_max_bytes`) and Antigravity about the first 24 to 27 KB, of a file that is 44 KB. A rule further down reaches neither. |
+| The rule sits near the top of the instructions file | The same test: Codex gives the agent the first 32,768 bytes of `AGENTS.md` (`project_doc_max_bytes`) and Antigravity the first 24,000 bytes (its documented limit on one rule file), of a file that is 44 KB. A rule further down reaches neither. |
 | One term per concept; one default with an escape hatch | Anthropic, agentskills.io. |
 
 ### Step lists and contents lists
@@ -219,7 +219,7 @@ What follows from it:
 - Only Claude Code has an invoked skill. The other three read `SKILL.md` as a file, so on them a skill has no more protection than any file read.
 - Pi keeps the newest 20,000 tokens and a summary. Codex keeps the user's messages and an opaque item the provider wrote. Both runs were small (about 60,000 tokens), so what the summary or the opaque item carried here is an upper bound: Codex answered step 23 wrongly from it without re-reading.
 - No agent invented a word. Each one's own account of what it could still see (asked as "yes, partly or no") matched what it then recalled, which is what lets the rule be conditional on it.
-- Codex and Antigravity never had the end of `AGENTS.md`, compaction or not. A fresh chat on each, asked for the file's top-level headings with tools forbidden, listed them through "Using crystallized skills" (Codex, the 32,768-byte default of `project_doc_max_bytes`) and through "Communication" (Antigravity, a cut between byte 23,334 and byte 27,732).
+- Codex and Antigravity never had the end of `AGENTS.md`, compaction or not. A fresh chat on each, asked for the file's top-level headings with tools forbidden, listed them through "Using crystallized skills" (Codex, the 32,768-byte default of `project_doc_max_bytes`) and through "Communication" (Antigravity, whose rules documentation, <https://antigravity.google/docs/rules>, read 2026-11-20, cuts a rule file at 24,000 bytes; that heading starts at byte 23,334 and the next at byte 27,732).
 
 OpenCode 1.19.5 was not measured: its agent did not launch in that workspace.
 Its documentation and source say a compaction keeps a summary and a recent tail, with tool results in the tail cut short, and rebuilds the instructions from the files on each request.
