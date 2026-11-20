@@ -352,7 +352,9 @@ in your report.
   error in a user skill or app) is fixed by following
   `references/python-packaging-migration.md`.
   The workspace's own apps are brought to the layout this template expects in
-  the same gate, once the venv is synced (below), and each command here prints
+  the same gate, once the venv is synced (below). These steps run on every
+  update, whether or not a manifest or lockfile is in the merged set: a change
+  to what is generated for an app touches neither. Each command here prints
   one JSON line whose `result` says what happened:
   - An app the workspace's agent built before apps had records (a directory
     under `system/apps/` that holds an `app.toml`, has no
