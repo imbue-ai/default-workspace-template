@@ -53,8 +53,12 @@ uv run --no-sync app-install install <url> --branch <ref>   # a particular versi
 
 The command asks nothing and ends in one JSON line. Act on its `result`:
 
-- `installed` -- the app is in the workspace and its programs were started.
-  Go to step 2 with the `needs` it lists.
+- `installed` -- the app is in the workspace. `problems` lists anything that
+  could not be done once it was (supervisord could not start its programs,
+  say), and `is_answering` says whether the app's port answered; it is false
+  while the app waits on a secret file, and otherwise means the app did not
+  come up, so read its log (the `check-app-errors` skill) before you call it
+  running. Go to step 2 with the `needs` it lists.
 - `collision` -- something here already has a name the app would take;
   `problems` names each one. Nothing was changed. Tell the user what clashes
   and ask whether to remove the thing already here or leave the app out. There
@@ -87,7 +91,9 @@ app was already installed).
    entry's `file` and `variables`, and its `note` in your rationale, each in a
    tool call of its own, then end the turn. When a `Secret stored:` message
    arrives, start the app's programs (the `programs` the installer listed):
-   `uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart`.
+   `uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart`
+   starts the one named after the app, and `supervisorctl start <program>`
+   each of the others (`<name>-<role>`).
    A `Secret declined:` message leaves the app unstarted; say so, and why.
 3. **A model.** When `needs.llm` is present, the app calls a model. Follow the
    `use-ai-integration` skill to give it what its `method` needs.
