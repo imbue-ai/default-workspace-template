@@ -112,6 +112,12 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   are reserved by the scaffolder, and registering the app refuses a name
   that another app, a program in `system/supervisord.conf` or any
   `system/supervisord.conf.d/*.conf`, or a console script already holds).
+  The name also must not be another app's name with a hyphen and more after
+  it, and no other app's name may be this one extended that way: beside the
+  built-in `chat`, `chat-export` is refused, and so is `notes` beside an
+  existing `notes-sync`. An app's background programs are named
+  `<name>-<role>`, so one of the two apps would be taken for a program of the
+  other.
 - **Draw the app's icon** -- a 216 by 216 two-layer tile specific to what
   *this* app does, built to the rules in `docs/system/app-icons.md` (a
   flat background under one fill-only glyph inside a centred 144 box, in
@@ -193,9 +199,10 @@ already exists, the name is reserved or invalid, the description is
 empty, spans lines or is over 200 characters, a secrets file is named
 without a variable, the workspace refuses to register the app, or the
 app's `uv lock` or its `uv sync` fails. A registration is refused when the
-app's manifest is not valid, or when the app would take a name, a program, a
-console script or a port something in the workspace already holds; the
-message names every problem, and the app's directory is removed again, so
+app's manifest is not valid, when the app would take a name, a program, a
+console script or a port something in the workspace already holds, or when
+its name and another app's differ only by a hyphenated suffix (pre-flight
+above); the message names every problem, and the app's directory is removed again, so
 fix what it names and run the scaffolder again. A failure after the
 registration (the lock, the sync) leaves the app registered, with its
 directory, its record and its generated program in place, and a second run is refused
