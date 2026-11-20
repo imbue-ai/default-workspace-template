@@ -18,7 +18,7 @@ throwaway copy can run beside the live one, and a change to it is verified live.
 
 ## The service
 
-Identity comes from `X-Imbue-Identity`, read as every app reads it (`workspace_layout.identity`;
+Identity comes from `X-Imbue-Identity`, read as every app reads it (`imbue.app_sdk.identity`;
 a present header that does not parse is refused with 400). A header-less request is the owner's,
 but only once the request guard every app installs ahead of its routes (`imbue.app_sdk.request_guard`)
 has admitted it: the browser on the Screen is on loopback too, so a header-less request counts

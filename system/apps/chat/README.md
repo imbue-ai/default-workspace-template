@@ -1170,7 +1170,7 @@ agent, off the request thread).
 ## Who said what
 
 Every request reaches the chat app with the shell's `X-Imbue-Identity` header
-(`identity.py`; the keys are `workspace_layout.identity`): the owner, a signed-in
+(`identity.py`; the keys are `imbue.app_sdk.identity`): the owner, a signed-in
 person the workspace is shared with (`user:<id>`), or a visiting agent
 (`agent:<id>`). A present header that does not parse is refused with 400; only a
 missing or blank one reads as the owner (an in-workspace caller, such as a
