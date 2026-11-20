@@ -78,10 +78,11 @@ def _grok_composer_actions() -> dict[str, tuple[PopupAction, str | None]]:
     }
 
 
-def test_grok_opens_the_sign_in_for_login_and_logout_and_declines_its_model_alias_like_model() -> None:
+def test_grok_points_login_and_logout_at_its_terminal_and_declines_its_model_alias_like_model() -> None:
+    """No sign-in lane offers xAI, so the provider list cannot sign a grok agent in."""
     actions = _grok_composer_actions()
-    assert actions["/login"] == (PopupAction.OPEN_AUTH, None)
-    assert actions["/logout"] == (PopupAction.OPEN_AUTH, None)
+    assert actions["/login"] == (PopupAction.NOTICE, None)
+    assert actions["/logout"] == (PopupAction.NOTICE, None)
     assert actions["/m"] == actions["/model"]
     assert actions["/quit"] == (PopupAction.NOTICE, None)
 

@@ -1,7 +1,9 @@
 """Unit tests for the messages the chat holds for a grok agent: claims, settles, the stop's pause, and the journal."""
 
 import os
+import threading
 from pathlib import Path
+from typing import Any
 
 from imbue.chat.harnesses.grok.queue_tracker import GrokQueueTracker
 from imbue.chat.harnesses.grok.queue_tracker import MAX_DELIVERY_ATTEMPTS
@@ -9,6 +11,9 @@ from imbue.chat.harnesses.grok.queue_tracker import OUTBOX_FILENAME
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
 from imbue.chat.harnesses.grok.queue_tracker import session_token
 from imbue.mngr_grok.grok_config import PROCESS_STARTED_MARKER_FILENAME
+
+_RENDEZVOUS_SECONDS = 3.0
+_MANY_HELD_MESSAGES = 150
 
 
 def _tracker(tmp_path: Path, token: str = "session-1") -> GrokQueueTracker:
@@ -113,6 +118,32 @@ def test_stop_takes_what_a_tap_claimed_but_not_what_a_flush_is_typing(tmp_path: 
     assert flushed.snapshot() == []
 
 
+def test_trackers_publishing_at_once_each_read_the_others_tap_state(tmp_path: Path) -> None:
+    """A tracker publishes under its lock, and the chat-list push its publish runs reads every grok chat's tap state."""
+    agent_dirs = [tmp_path / "first", tmp_path / "second"]
+    for agent_dir in agent_dirs:
+        agent_dir.mkdir()
+    trackers = [_tracker(agent_dir) for agent_dir in agent_dirs]
+    both_publishing = threading.Barrier(len(trackers), timeout=_RENDEZVOUS_SECONDS)
+    tap_states: list[tuple[bool, bool]] = []
+    for tracker, other in zip(trackers, reversed(trackers)):
+
+        def read_the_other(_snapshot: list[dict[str, Any]], other: GrokQueueTracker = other) -> None:
+            both_publishing.wait()
+            tap_states.append((other.is_sending(), other.has_deliverable_entries()))
+
+        tracker.attach(publish=read_the_other, wake=lambda: None)
+    holds = [threading.Thread(target=_hold, args=(tracker, "held"), daemon=True) for tracker in trackers]
+
+    for hold in holds:
+        hold.start()
+    for hold in holds:
+        hold.join(timeout=_RENDEZVOUS_SECONDS)
+
+    assert not any(hold.is_alive() for hold in holds)
+    assert tap_states == [(False, True), (False, True)]
+
+
 def test_a_paused_queue_refuses_a_flush_claim_until_it_resumes(tmp_path: Path) -> None:
     woken: list[bool] = []
     tracker = _tracker(tmp_path)
@@ -182,6 +213,44 @@ def test_no_session_journals_nothing(tmp_path: Path) -> None:
 
     assert _contents(tracker) == ["held"]
     assert not (tmp_path / OUTBOX_FILENAME).exists()
+
+
+def test_every_held_message_survives_a_chat_app_restart(tmp_path: Path) -> None:
+    texts = [f"message {index}" for index in range(_MANY_HELD_MESSAGES)]
+    _hold(_tracker(tmp_path), *texts)
+
+    assert _contents(_tracker(tmp_path)) == texts
+
+
+def test_an_entry_mngr_typed_shows_as_sending_until_its_flush_settles_but_a_restart_does_not_replay_it(
+    tmp_path: Path,
+) -> None:
+    tracker = _tracker(tmp_path)
+    _hold(tracker, "typed")
+    _block, claimed, generation = tracker.begin_flush()
+    _hold(tracker, "held during the flush")
+
+    tracker.note_typed(claimed, generation)
+
+    assert [(entry["content"], entry["is_sending"]) for entry in tracker.snapshot()] == [
+        ("typed", True),
+        ("held during the flush", False),
+    ]
+    assert _contents(_tracker(tmp_path)) == ["held during the flush"]
+
+
+def test_spent_delivery_attempts_survive_a_chat_app_restart(tmp_path: Path) -> None:
+    tracker = _tracker(tmp_path)
+    _hold(tracker, "never seen")
+    for _attempt in range(MAX_DELIVERY_ATTEMPTS):
+        _block, claimed, generation = tracker.begin_flush()
+        tracker.finish_flush(claimed, generation, delivered=())
+
+    restarted = _tracker(tmp_path)
+
+    assert _contents(restarted) == ["never seen"]
+    assert restarted.has_deliverable_entries() is False
+    assert restarted.begin_flush()[1] == ()
 
 
 def test_a_torn_journal_line_is_skipped(tmp_path: Path) -> None:
