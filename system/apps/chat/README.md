@@ -696,7 +696,8 @@ describes is not used here, since the sweep is the timer.
 Idle compaction applies to the harnesses mngr can compact: Claude, Codex and Pi
 (`supports_compaction` in `harnesses/registry.py`, shipped on `/api/harnesses`).
 Antigravity, Grok Build and OpenCode chats are never compacted or passed to the plugin, and
-their model menu has no Auto-compact row.
+their model menu has no Auto-compact row. A Grok Build chat's composer also declines `/compact`
+with a notice, since grok would compact on its own without the chat showing it.
 
 **The Auto-compact setting.** Each chat is On or Off, chosen in the model menu's
 Auto-compact submenu, which ends with a "New chats start with" row whose On /
