@@ -146,7 +146,7 @@ from imbue.chat.testing import VanishedAgentMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
 from imbue.chat.testing import compact_summary_record
-from imbue.chat.testing import drain_is_connecting_pushes
+from imbue.chat.testing import drain_connecting_pushes
 from imbue.chat.testing import drain_pushes
 from imbue.chat.testing import is_chat_connecting
 from imbue.chat.testing import make_agent_fixture
@@ -928,7 +928,7 @@ def test_a_stopped_chat_read_after_its_stop_is_released_once_nobody_streams_it(t
 
         # So does a send reviving it, which built the watcher before starting the agent.
         with state.agent_manager.track_connecting_send("stopped-agent", "reviving-send", "hello") as mark_connecting:
-            mark_connecting()
+            mark_connecting(True)
             state.release_unviewed_stopped_transcripts()
             assert set(state.watchers) == {"stopped-agent", "running-agent"}
 
@@ -1724,7 +1724,7 @@ class _ReleasingAsEachSendEndsAgentManager(AgentManager):
     @contextmanager
     def track_connecting_send(
         self, agent_id: str, message_id: str, text: str
-    ) -> Generator[Callable[[], None], None, None]:
+    ) -> Generator[Callable[[bool], None], None, None]:
         with super().track_connecting_send(agent_id, message_id, text) as mark_connecting:
             yield mark_connecting
         if self.release is not None:
@@ -1750,9 +1750,11 @@ def test_a_send_reviving_a_stopped_chat_keeps_the_chats_watcher(tmp_path: Path) 
         state.shutdown()
 
 
-def _send_and_record_connecting_pushes(state: str, *, is_ready_marker_written: bool) -> tuple[int, list[bool]]:
+def _send_and_record_connecting_pushes(
+    state: str, *, is_ready_marker_written: bool
+) -> tuple[int, list[tuple[bool, bool]]]:
     """Send one message to a claude agent in ``state`` and return the response status and every
-    ``is_connecting`` the page was pushed for its chat, in order."""
+    ``(is_connecting, is_waking_up)`` the page was pushed for its chat, in order."""
     agent_id = f"agent-{uuid4().hex}"
     state_dir = agent_state_dir(Path(os.environ["MNGR_HOST_DIR"]), agent_id)
     state_dir.mkdir(parents=True)
@@ -1776,7 +1778,7 @@ def _send_and_record_connecting_pushes(state: str, *, is_ready_marker_written: b
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
         response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello", "message_id": "m-1"})
-    return response.status_code, drain_is_connecting_pushes(pushes, agent_id)
+    return response.status_code, drain_connecting_pushes(pushes, agent_id)
 
 
 def test_a_send_to_a_claude_agent_still_starting_reads_as_connecting_until_it_resolves() -> None:
@@ -1786,24 +1788,26 @@ def test_a_send_to_a_claude_agent_still_starting_reads_as_connecting_until_it_re
     status, connecting_pushes = _send_and_record_connecting_pushes("RUNNING", is_ready_marker_written=False)
 
     assert status == 200
-    assert True in connecting_pushes
-    assert connecting_pushes[-1] is False
+    assert (True, False) in connecting_pushes
+    assert connecting_pushes[-1] == (False, False)
+    # The harness was already starting: nothing was woken up.
+    assert (True, True) not in connecting_pushes
 
 
 def test_a_send_to_a_ready_claude_agent_never_reads_as_connecting() -> None:
     status, connecting_pushes = _send_and_record_connecting_pushes("RUNNING", is_ready_marker_written=True)
 
     assert status == 200
-    assert True not in connecting_pushes
+    assert all(not is_connecting for is_connecting, _is_waking_up in connecting_pushes)
 
 
-def test_a_send_to_a_stopped_agent_reads_as_connecting_while_the_send_starts_it() -> None:
+def test_a_send_to_a_stopped_agent_reads_as_waking_up_while_the_send_starts_it() -> None:
     """A stopped agent is started by the send itself, whatever its markers say from its last run."""
     status, connecting_pushes = _send_and_record_connecting_pushes("STOPPED", is_ready_marker_written=True)
 
     assert status == 200
-    assert True in connecting_pushes
-    assert connecting_pushes[-1] is False
+    assert (True, True) in connecting_pushes
+    assert connecting_pushes[-1] == (False, False)
 
 
 class _FakeCodexLedger(CodexMessageLedger):

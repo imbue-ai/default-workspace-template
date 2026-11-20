@@ -161,9 +161,11 @@ from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingGateway
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
+from imbue.chat.testing import drain_connecting_pushes
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import is_chat_connecting
 from imbue.chat.testing import is_chat_resending_after_sign_in
+from imbue.chat.testing import is_chat_waking_up
 from imbue.chat.testing import make_agent_fixture
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
@@ -8411,9 +8413,9 @@ def test_a_chat_reads_as_connecting_while_any_of_its_sends_waits_on_the_agent(
     pushes = broadcaster.register()
 
     with agent_manager.track_connecting_send(agent_id, "m-1", "hello") as mark_first:
-        mark_first()
+        mark_first(False)
         with agent_manager.track_connecting_send(agent_id, "m-2", "hello") as mark_second:
-            mark_second()
+            mark_second(False)
             assert is_chat_connecting(agent_manager, agent_id)
         # The second send resolved; the first still waits on the agent.
         assert is_chat_connecting(agent_manager, agent_id)
@@ -8421,6 +8423,49 @@ def test_a_chat_reads_as_connecting_while_any_of_its_sends_waits_on_the_agent(
 
     # The page hears the change twice -- on, then off -- not once per mark.
     assert drain_is_connecting_pushes(pushes, agent_id) == [True, False]
+
+
+def test_a_chat_reads_as_waking_up_while_a_send_starts_its_stopped_agent(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(agent_manager, agent_id, name="waking-agent", state="STOPPED")
+    pushes = broadcaster.register()
+
+    with agent_manager.track_connecting_send(agent_id, "m-1", "hello") as mark_connecting:
+        mark_connecting(True)
+        assert is_chat_waking_up(agent_manager, agent_id)
+        # A retry that marks the send again, not knowing it started the agent, keeps it waking.
+        mark_connecting(False)
+        assert is_chat_waking_up(agent_manager, agent_id)
+    assert not is_chat_connecting(agent_manager, agent_id)
+    assert not is_chat_waking_up(agent_manager, agent_id)
+
+    assert drain_connecting_pushes(pushes, agent_id) == [(True, True), (False, False)]
+
+
+def test_a_send_waiting_on_a_starting_agent_reads_as_connecting_not_waking_up(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(agent_manager, agent_id, name="starting-agent")
+    pushes = broadcaster.register()
+
+    with agent_manager.track_connecting_send(agent_id, "m-1", "hello") as mark_connecting:
+        mark_connecting(False)
+        assert not is_chat_waking_up(agent_manager, agent_id)
+
+    assert drain_connecting_pushes(pushes, agent_id) == [(True, False), (False, False)]
+
+
+def test_stop_taking_back_a_waking_send_ends_the_waking_up(agent_manager: AgentManager) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(agent_manager, agent_id, name="withdrawn-agent", state="STOPPED")
+
+    with agent_manager.track_connecting_send(agent_id, "m-1", "hello") as mark_connecting:
+        mark_connecting(True)
+        agent_manager.withdraw_connecting_sends(agent_id)
+        assert not is_chat_waking_up(agent_manager, agent_id)
 
 
 def test_a_send_that_never_waits_on_the_agent_leaves_the_chat_alone(
@@ -8442,7 +8487,7 @@ def test_a_send_that_fails_while_connecting_still_clears_the_mark(agent_manager:
 
     with pytest.raises(SendFailedError):
         with agent_manager.track_connecting_send(agent_id, "m-1", "hello") as mark_connecting:
-            mark_connecting()
+            mark_connecting(False)
             raise SendFailedError("the agent is in shell mode")
 
     assert not is_chat_connecting(agent_manager, agent_id)

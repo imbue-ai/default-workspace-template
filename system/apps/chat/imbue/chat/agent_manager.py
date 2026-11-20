@@ -1191,6 +1191,7 @@ def chat_snapshot_for_active_agent(
     is_permission_pending: bool,
     shoulder_tap_available: bool,
     is_connecting: bool,
+    is_waking_up: bool,
     is_resending_after_sign_in: bool,
     last_messaged_at: float | None,
     background_tasks: tuple[BackgroundTask, ...],
@@ -1241,6 +1242,7 @@ def chat_snapshot_for_active_agent(
             queued_messages=agent.queued_messages,
             shoulder_tap_available=shoulder_tap_available,
             is_connecting=is_connecting,
+            is_waking_up=is_waking_up,
             is_resending_after_sign_in=is_resending_after_sign_in,
             is_busy=is_busy,
             background_tasks=tuple(background_task_snapshot(task) for task in background_tasks),
@@ -1608,6 +1610,9 @@ class AgentManager:
     # non-empty set, less the withdrawn ones, is the snapshot's ``is_connecting``; the whole set
     # keeps the chat reading as revived while a send's start is still running.
     _connecting_message_ids_by_agent: dict[str, set[str]]
+    # The connecting sends that started their stopped agent, by send-time id, until their send ends:
+    # the snapshot's ``is_waking_up``.
+    _waking_message_ids: set[str]
     # Per agent, the connecting sends that have not been handed to it yet, by send-time id, in
     # the order they were sent: the ones Stop can still take back.
     _withdrawable_sends_by_agent: dict[str, dict[str, str]]
@@ -1808,6 +1813,7 @@ class AgentManager:
         manager._is_agent_list_known = False
         manager._pending_permission_ids_by_agent = {}
         manager._connecting_message_ids_by_agent = {}
+        manager._waking_message_ids = set()
         manager._withdrawable_sends_by_agent = {}
         manager._abandoned_creates = set()
         manager._withdrawn_message_ids = set()
@@ -2352,6 +2358,7 @@ class AgentManager:
                 agent.id: bool(self._pending_permission_ids_by_agent.get(agent.id)) for agent, _chat in listed
             }
             connecting_by_agent = {agent.id: self._is_connecting_locked(agent.id) for agent, _chat in listed}
+            waking_by_agent = {agent.id: self._is_waking_up_locked(agent.id) for agent, _chat in listed}
             resending = set(self._pending_resends_after_sign_in_by_agent)
             tasks_by_chat = dict(self._background_tasks_by_chat)
             compaction_cause_by_agent = {
@@ -2366,6 +2373,7 @@ class AgentManager:
                     pending_by_agent[agent.id],
                     self._shoulder_tap_available(agent),
                     connecting_by_agent[agent.id],
+                    waking_by_agent[agent.id],
                     agent.id in resending,
                     last_messaged.get(chat.chat_id),
                     tasks_by_chat.get(chat.chat_id, ()),
@@ -2390,6 +2398,7 @@ class AgentManager:
             agent = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
             is_pending = agent is not None and bool(self._pending_permission_ids_by_agent.get(agent.id))
             is_connecting = agent is not None and self._is_connecting_locked(agent.id)
+            is_waking_up = agent is not None and self._is_waking_up_locked(agent.id)
             is_resending = agent is not None and agent.id in self._pending_resends_after_sign_in_by_agent
             background_tasks = () if chat is None else self._background_tasks_by_chat.get(chat.chat_id, ())
             compaction_cause = None if agent is None else self._compaction_cause_by_agent.get(agent.id)
@@ -2401,6 +2410,7 @@ class AgentManager:
             is_pending,
             self._shoulder_tap_available(agent),
             is_connecting,
+            is_waking_up,
             is_resending,
             self._message_stamps.read().get(chat.chat_id),
             background_tasks,
@@ -4152,31 +4162,42 @@ class AgentManager:
     @contextmanager
     def track_connecting_send(
         self, agent_id: str, message_id: str, text: str
-    ) -> Generator[Callable[[], None], None, None]:
+    ) -> Generator[Callable[[bool], None], None, None]:
         """Scope one send's delivery. The yielded callable marks the send as waiting for the agent to
         come up (the snapshot's ``is_connecting``), which also lets Stop take it back
-        (``withdraw_connecting_sends``) until ``claim_send_for_delivery``; leaving the scope clears both."""
+        (``withdraw_connecting_sends``) until ``claim_send_for_delivery``; leaving the scope clears both.
+        Its argument says whether the send is starting a stopped agent (the snapshot's ``is_waking_up``);
+        a later mark without it keeps the send waking."""
         try:
-            yield lambda: self._set_send_connecting(agent_id, message_id, text)
+            yield lambda is_waking_up: self._set_send_connecting(agent_id, message_id, text, is_waking_up)
         finally:
             self._end_connecting_send(agent_id, message_id)
 
     def _is_connecting_locked(self, agent_id: str) -> bool:
         return bool(self._connecting_message_ids_by_agent.get(agent_id, set()) - self._withdrawn_message_ids)
 
-    def _set_send_connecting(self, agent_id: str, message_id: str, text: str) -> None:
+    def _is_waking_up_locked(self, agent_id: str) -> bool:
+        connecting = self._connecting_message_ids_by_agent.get(agent_id, set()) - self._withdrawn_message_ids
+        return not connecting.isdisjoint(self._waking_message_ids)
+
+    def _set_send_connecting(self, agent_id: str, message_id: str, text: str, is_waking_up: bool) -> None:
         with self._lock:
             if message_id in self._withdrawn_message_ids:
                 return
             was_connecting = self._is_connecting_locked(agent_id)
+            was_waking_up = self._is_waking_up_locked(agent_id)
             self._connecting_message_ids_by_agent.setdefault(agent_id, set()).add(message_id)
             self._withdrawable_sends_by_agent.setdefault(agent_id, {})[message_id] = text
-        if not was_connecting:
+            if is_waking_up:
+                self._waking_message_ids.add(message_id)
+            is_changed = not was_connecting or was_waking_up != self._is_waking_up_locked(agent_id)
+        if is_changed:
             self._broadcast_chats_updated()
 
     def _end_connecting_send(self, agent_id: str, message_id: str) -> None:
         with self._lock:
             was_connecting = self._is_connecting_locked(agent_id)
+            was_waking_up = self._is_waking_up_locked(agent_id)
             message_ids = self._connecting_message_ids_by_agent.get(agent_id, set()) - {message_id}
             if message_ids:
                 self._connecting_message_ids_by_agent[agent_id] = message_ids
@@ -4184,8 +4205,12 @@ class AgentManager:
                 self._connecting_message_ids_by_agent.pop(agent_id, None)
             self._release_withdrawable_locked(agent_id, message_id)
             self._withdrawn_message_ids.discard(message_id)
-            is_connecting = self._is_connecting_locked(agent_id)
-        if is_connecting != was_connecting:
+            self._waking_message_ids.discard(message_id)
+            is_changed = (
+                self._is_connecting_locked(agent_id) != was_connecting
+                or self._is_waking_up_locked(agent_id) != was_waking_up
+            )
+        if is_changed:
             self._broadcast_chats_updated()
 
     def _release_withdrawable_locked(self, agent_id: str, message_id: str) -> None:

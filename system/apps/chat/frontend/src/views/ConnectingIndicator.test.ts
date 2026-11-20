@@ -118,6 +118,37 @@ describe("Connecting, on the status row at the end of the transcript", () => {
     expect(connectingLabel(starting)).toBe("Connecting to Anthropic…");
   });
 
+  it("says 'Waking up' while the send is starting a stopped agent, naming what it knows", () => {
+    const chatId = uniqueChatId();
+    chats.set(
+      chatId,
+      chatSnapshotFixture(chatId, {
+        active_agent: {
+          is_connecting: true,
+          is_waking_up: true,
+          account_id: "acct-1",
+          model_choice: { matched: { label: "Opus 5.5" } } as never,
+        },
+      }),
+    );
+    expect(
+      renderStatusRow(chatId).querySelector(`${CONNECTING_ROW} .agent-activity-indicator__label`)?.textContent,
+    ).toBe("Waking up Opus 5.5 on Anthropic…");
+
+    const providerOnly = uniqueChatId();
+    chats.set(
+      providerOnly,
+      chatSnapshotFixture(providerOnly, {
+        active_agent: { is_connecting: true, is_waking_up: true, account_id: "acct-1" },
+      }),
+    );
+    expect(connectingLabel(providerOnly)).toBe("Waking up the agent on Anthropic…");
+
+    const unknown = uniqueChatId();
+    chats.set(unknown, chatSnapshotFixture(unknown, { active_agent: { is_connecting: true, is_waking_up: true } }));
+    expect(connectingLabel(unknown)).toBe("Waking up the agent…");
+  });
+
   it("reads a chat still being created that holds a message from another page as connecting", () => {
     const chatId = uniqueChatId();
     provisionalChats.set(
