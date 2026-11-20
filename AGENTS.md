@@ -17,6 +17,7 @@ IF YOU FAIL TO FOLLOW ONE, YOU MUST EXPLICITLY CALL THAT OUT IN YOUR RESPONSE.
 - When adding a new app, use the `build-app` skill, which sets up a new package under `system/apps/` + a supervisord program entry + `forward_port.py` registration on its own port. Every app icon -- a new one or an edit to an existing one -- is built to `docs/system/app-icons.md`: a 216x216 two-layer tile, one fill-only glyph in a centred 144x144 box, coloured from the pair palette that doc carries. Do NOT edit `system/apps/system_interface/` for this -- that's the top-level workspace UI, not a template for new apps.
 - A user can right-click anything on their screen and attach a description of it to a message as a `REF-<id>.json` file ("Explain what I attached in REF-..."). `.agents/shared/references/element-references.md` says what the file holds and how to find the element it names.
 - **`uv run --no-sync workspace-layout open` puts a window on the user's screen the moment it returns.** It is not setup -- it is the act of showing them something, and it applies to the live workspace they are looking at right now. So open a window only when you are ready for the user to see what's in it; do everything you want to check privately *before* that call, not after; and never tell the user to open a window you opened yourself. The same goes for every other mutating `workspace-layout` op (`close`, `focus`, `place`, `refresh`, ...) -- they all change the user's view live. See the `manage-desktop` skill.
+- **After a compaction, re-read what your current step needs before you go on.** When you are following a skill, re-read the reference its current step names: a compaction may keep none of the files you read. Re-read the skill's `SKILL.md` first unless its whole text is still in front of you.
 
 # Continuing a chat that moved to you
 
@@ -155,7 +156,7 @@ checking first. Use the `find-transcripts` skill to find and read them.
 You can (and should) modify your own configuration to improve yourself:
 
 - **AGENTS.md**: (this file) update these instructions if you discover better ways to operate. Only Claude-specific notes go in **CLAUDE.md**.
-- **.agents/skills/**: Create new skills or modify existing ones. Each skill is a directory with a SKILL.md file. (Also symlinked from `.claude/skills/`.)
+- **.agents/skills/**: Create new skills or modify existing ones. Each skill is a directory with a SKILL.md file. (Also symlinked from `.claude/skills/`.) Whenever you edit a skill, run `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name> --edited` (`--no-exemptions` in its place for a skill you just created) and change the skill until it prints `ok`; `docs/system/skill_authoring_guide.md` has the rules, and `.agents/shared/references/glossary.md` the terms to use for this workspace's own things. A built-in skill may carry an `awaiting-restructure` exemption, which an update clears: leave it, and do not restructure that skill yourself.
 - **system/supervisord.conf.d/**: Add, modify, or remove background services -- one file per program. See the `update-app` skill.
 - **system/scripts/**: Add utility scripts that help you accomplish your purpose.
 

@@ -4,9 +4,19 @@ description: Search and mirror the user's own personal data (chat history, Slack
 compatibility: Nothing of datalib is installed until this skill is first used; scripts/install_datalib.sh then downloads the binaries and datalib's own Node runtime (about 160 MB together). Needs curl and the latchkey gateway (present in a default-workspace-template agent).
 metadata:
   author: imbue
+  exempt-checks: size
+  exempt-reason: awaiting-restructure
 ---
 
 # datalib
+
+## Contents
+
+- Instructions
+- Driving datalib: start at `datalib-step help`
+- Authorizing a source
+- Supported sources (inside Imbue Studio)
+- Notes
 
 ## Instructions
 

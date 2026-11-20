@@ -7,6 +7,14 @@ port). This reference describes what an app *is*; for how to
 run and test a web frontend in isolation, see
 `.agents/shared/worker/references/web-frontend-testing.md`.
 
+## Contents
+
+- Where the source lives
+- Running and testing
+- Working in isolation
+- Phone and sharing checks
+- Critical apps
+
 ## Where the source lives
 
 An app's footprint is its own directory, the supervisord program blocks that

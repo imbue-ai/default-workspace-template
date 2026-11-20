@@ -17,6 +17,17 @@ There are two shapes, selected by which creation you are crystallizing:
 - **Pre-existing, confirmed-live**: nothing is reconstructed and there
   is no outline gate; harden it and report `done`.
 
+## Contents
+
+- Valid report `name:` values
+- Stage 1: Reconstruct (reconstruct shape only)
+- Stage 2: Propose an outline, then Gate 1 (reconstruct shape only)
+- Stage 3: Build / harden the creation
+- Stage 4: Scenarios
+- Stage 5: Review gates
+- Stage 6: Final gate, then commit and hand off
+- If you need to give up
+
 ## Valid report `name:` values
 
 - Gates (reconstruct shape only): `outline-approval` (Stage 2),
@@ -95,7 +106,7 @@ data parsing). Fix the creation when a scenario fails; fix the scenario when the
 creation is right but the scenario was wrong.
 
 **Reconstruct shape (skill):** once the scenarios pass and
-`uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name>` prints
+`uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name> --no-exemptions` prints
 `ok`, commit and declare a **milestone** per `worker-reporting.md`'s "Milestone
 reports (non-blocking)". Name it for what is true at that commit; its
 `## Tested` section lists the scenarios you ran and their results, the

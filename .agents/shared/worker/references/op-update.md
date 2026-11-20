@@ -23,6 +23,15 @@ Read the toggle from the task file's `## Change origin` marker (`ORIGIN:
 committed` or `ORIGIN: emergent`). The marker is required -- fail loudly if
 absent or unrecognized.
 
+## Contents
+
+- Valid report `name:` values
+- Emergent path
+- Committed path
+- Both paths
+- If no change is needed
+- If you need to give up
+
 ## Valid report `name:` values
 
 - Gates: `outline-approval` (emergent only -- the design gate), `final-creation`

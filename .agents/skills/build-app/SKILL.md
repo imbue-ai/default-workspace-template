@@ -4,6 +4,8 @@ description: "Use when you want to create a new app for the user -- a page, dash
 metadata:
   author: imbue
   crystallized: true
+  exempt-checks: size depth paths contents
+  exempt-reason: awaiting-restructure
 ---
 
 # How to build an app

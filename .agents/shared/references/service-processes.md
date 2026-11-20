@@ -15,11 +15,21 @@ foreground; supervisord starts and supervises every program. supervisord
 does **not** watch the config file -- you apply changes with
 `supervisorctl`.
 
+## Contents
+
+- Program format
+- OOM priority (memory-pressure shedding)
+- Adding a service
+- Removing a service
+- Modifying a service
+- Inspecting services
+- Important
+
 ## Program format
 
 ```ini
-[program:my-service]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/services/my_service && uv sync --locked --project system/services/my_service && exec system/services/my_service/.venv/bin/my-service"
+[program:<name>]
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/services/<package> && uv sync --locked --project system/services/<package> && exec system/services/<package>/.venv/bin/<name>"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -28,8 +38,8 @@ autorestart=true
 startretries=1000000
 stopasgroup=true
 killasgroup=true
-stdout_logfile=/var/log/supervisor/my-service-stdout.log
-stderr_logfile=/var/log/supervisor/my-service-stderr.log
+stdout_logfile=/var/log/supervisor/<name>-stdout.log
+stderr_logfile=/var/log/supervisor/<name>-stderr.log
 stdout_logfile_maxbytes=10MB
 stderr_logfile_maxbytes=10MB
 stdout_logfile_backups=3
@@ -46,7 +56,7 @@ Key fields:
   other shell syntax must be wrapped in `bash -c "..."`:
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/apps/foo && uv sync --locked --project system/apps/foo && python3 system/scripts/forward_port.py --manifest system/apps/foo/app.toml --url http://localhost:8090 && exec system/apps/foo/.venv/bin/foo"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/apps/<package> && uv sync --locked --project system/apps/<package> && python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:8090 && exec system/apps/<package>/.venv/bin/<name>"
   ```
 
   The `python3 system/services/oom_priority/bin/oom_tag_service.py user` prefix is the **OOM band tag**
@@ -61,8 +71,8 @@ Key fields:
   (underscores are tolerated only for legacy names like `system_interface`),
   not `localhost`, and not starting with `host-` or `agent-`. The app then
   execs its entry point from a venv, never through `uv run`: a built-in from the
-  root venv (`.venv/bin/foo`), and a user-built app or service from its own,
-  after syncing it (`system/apps/foo/.venv/bin/foo`; see "User packages are
+  root venv (`.venv/bin/<name>`), and a user-built app or service from its own,
+  after syncing it (`system/apps/<package>/.venv/bin/<name>`; see "User packages are
   standalone projects" in [running-python.md](running-python.md)). A registration with no app directory (a preview, an isolated test
   server, the owner-exec service) keeps the manifest-less
   `forward_port.py --name <name> --url <url>` form with `--internal` or
