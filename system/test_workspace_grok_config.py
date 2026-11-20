@@ -1,18 +1,4 @@
-"""Pin the invariants of the ``[agent_types.grok]`` block in ``.mngr/settings.toml``.
-
-The block is read the way the workspace's mngr reads it: through mngr's own config loader, over a copy
-of the committed file, resolved to the grok plugin's config.
-
-1. ``share_auth`` stays true: with ``share_auth = false`` mngr_grok removes ``GROK_AUTH_PATH`` from
-   grok's environment, so no stored login reaches the agent.
-2. ``command`` is the OOM band launcher running ``grok``.
-3. No ``version`` is pinned: ``system/scripts/install_grok.sh`` is the only grok version authority.
-4. ``settings_overrides`` folds onto mngr's rendered ``config.toml`` without dropping any key mngr
-   writes there.
-5. grok's file tools are denied the secrets directory.
-6. No workspace-wide export names a grok credential or home variable: one inherited by every agent
-   would override each agent's own login and grok home.
-"""
+"""Invariants of the ``[agent_types.grok]`` block in ``.mngr/settings.toml``, loaded through mngr's own config loader."""
 
 from __future__ import annotations
 
@@ -64,7 +50,7 @@ def _load_grok_agent_config(
 
 
 def _render_grok_config_toml(settings_overrides: dict[str, Any]) -> dict[str, Any]:
-    """The config.toml body mngr renders for a new grok agent with no login of its own."""
+    """The config.toml body mngr renders for a new grok agent."""
     return build_config_toml(
         model=None,
         reasoning_effort=None,
@@ -141,7 +127,7 @@ def _exported_names(value: Any) -> list[str]:
 
 
 def _settings_export_names(value: Any) -> list[str]:
-    """Every variable name an env, host_env, pass_env or pass_host_env key (or its `__extend`) sets, at any depth."""
+    """Every variable name an ``_EXPORT_KEYS`` key, or its ``__extend``, sets at any depth."""
     if isinstance(value, dict):
         names: list[str] = []
         for key, child in value.items():
@@ -155,6 +141,7 @@ def _settings_export_names(value: Any) -> list[str]:
 
 
 def test_no_workspace_wide_export_names_a_grok_account_variable() -> None:
+    """A grok account variable exported workspace-wide would override the login and grok home mngr gives each agent."""
     settings_names = _settings_export_names(tomllib.loads(_SETTINGS_PATH.read_text()))
     dockerfile_names = _DOCKERFILE_EXPORT_RE.findall(_DOCKERFILE_PATH.read_text())
     supervisord_names = [
