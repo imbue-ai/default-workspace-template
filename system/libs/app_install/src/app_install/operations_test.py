@@ -229,7 +229,7 @@ def test_an_owned_app_with_an_unknown_key_is_a_problem_check_names(tmp_path: Pat
 def test_a_record_whose_directory_is_gone_is_a_problem_check_names(tmp_path: Path) -> None:
     write_record(tmp_path, AppRecord(name="notes", package="notes", port=8084, origin=AppOrigin.LOCAL))
 
-    assert check(tmp_path) == ("notes: 'no app at system/apps/notes'",)
+    assert check(tmp_path) == ("notes: no app at system/apps/notes",)
 
 
 def test_the_command_says_what_it_did_in_one_json_line_and_exits_non_zero_when_refused(tmp_path: Path) -> None:
@@ -244,6 +244,8 @@ def test_the_command_says_what_it_did_in_one_json_line_and_exits_non_zero_when_r
     (tmp_path / "system" / "supervisord.conf.d" / "notes.conf").unlink()
     inconsistent = runner.invoke(main, [*root, "check"])
     regenerated = runner.invoke(main, [*root, "regenerate"])
+    unknown = runner.invoke(main, [*root, "regenerate", "digest"])
+    missing = runner.invoke(main, [*root, "add", "digest"])
 
     assert (added.exit_code, json.loads(added.output)) == (
         0,
@@ -256,6 +258,12 @@ def test_the_command_says_what_it_did_in_one_json_line_and_exits_non_zero_when_r
         },
     )
     assert (again.exit_code, json.loads(again.output)["result"]) == (1, "refused")
+    assert json.loads(unknown.output) == {"result": "refused", "detail": "no app record for 'digest'"}
+    assert json.loads(missing.output) == {
+        "result": "refused",
+        "package": "digest",
+        "detail": "no app at system/apps/digest",
+    }
     assert [app["name"] for app in json.loads(listed.output)["apps"]] == ["notes"]
     assert json.loads(listed.output)["apps"][0]["state"] == "owned"
     assert (consistent.exit_code, json.loads(consistent.output)) == (0, {"result": "consistent"})

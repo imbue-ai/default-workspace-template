@@ -68,8 +68,9 @@ def test_a_record_reads_back_as_the_record_that_was_written(tmp_path: Path) -> N
 
 def test_a_workspace_with_no_records_directory_has_no_user_apps(tmp_path: Path) -> None:
     assert load_all_records(tmp_path) == ()
-    with pytest.raises(AppRecordNotFoundError, match="notes"):
+    with pytest.raises(AppRecordNotFoundError, match="notes") as raised:
         load_record(tmp_path, "notes")
+    assert str(raised.value) == "no app record for 'notes' (expected system/config/apps/notes.toml)"
 
 
 def test_records_are_listed_by_name(tmp_path: Path) -> None:

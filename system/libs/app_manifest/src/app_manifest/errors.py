@@ -44,3 +44,7 @@ class RecordLoadError(AppManifestError, ValueError):
 
 class AppRecordNotFoundError(AppManifestError, KeyError):
     """No app record answers to the given name."""
+
+    def __str__(self) -> str:
+        # A KeyError's own text is the repr of its argument, which would put the message in quotes.
+        return str(self.args[0]) if self.args else ""

@@ -5,6 +5,10 @@ class AppInstallError(Exception):
 class AppNotFoundError(AppInstallError, KeyError):
     """No app directory, or no app record, answers to the given name."""
 
+    def __str__(self) -> str:
+        # A KeyError's own text is the repr of its argument, which would put the message in quotes.
+        return str(self.args[0]) if self.args else ""
+
 
 class AppAlreadyRegisteredError(AppInstallError, ValueError):
     """The app already has a record."""
