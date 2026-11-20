@@ -44,13 +44,29 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   `describeRequestError`): the server's own reason, else our sentence. The status and the
   server's own text go behind "See details" (`src/components/SeeDetails.ts`,
   which `NoticeDialog` draws from its `details`).
+- A failure's "Report a bug", through the shell that frames the page
+  (`src/components/FailureButtons.ts`): `ReportBugButton` asks the
+  shell to open Imbue Studio's bug report about the failure it is given (a
+  `ReportedFailure`: the sentence on screen and what its "See details" holds,
+  sent as `shell:report-bug {message, details}`), and renders only where the
+  shell's handshake said `canReportBug` (the embedder's `opensHelp`, which
+  only the shell hears; it hands every page a fresh handshake when that
+  changes). It reads the connection as it renders, so the page redraws on a
+  handshake. The shell opens the report directly (`src/report-bug.ts`), with
+  the sentence and details attached as the report's `errorDetails`, capped at
+  the embed contract's `MAX_HELP_ERROR_DETAILS_LENGTH`.
 - Toasts (`src/models/toasts.ts`, drawn by `src/components/toasts.ts`):
   the caller of `ToastQueue.show` says which kind it shows. A plain note goes
   after five seconds; a lasting one (`isLasting: true`) stays until
   dismissed, with a close control, its details behind "See details" and its
-  buttons ("Try again", ...), at most three on screen, and pressing one of
-  its buttons dismisses it. A toast that says the same as one already up
-  (message and details) replaces it. A plain toast may carry
+  buttons ("Try again", ...), at most three on screen. A toast that says the
+  same as one already up (message and details) replaces it. A lasting toast
+  says whether its message asks for a bug report (`isReportable`), and
+  `Toasts` draws "Report a bug" on it while the page passes `onReportBug`,
+  decided at each draw, so a toast shown before the page learned it can open
+  a bug report gains the button once it does. Pressing a button dismisses
+  its toast, except "Report a bug", after which the toast's other buttons
+  still apply. A plain toast may carry
   details too: it then takes presses, shows "See details" and a close
   button, and stays once its details are opened (`ToastQueue.hold`, which
   `Toasts` calls through `onHold`).
@@ -61,7 +77,23 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   its own origin, and which follows the link clicks and script popups of a
   page a shell frames (its handshake has arrived) by one rule
   (desktop-interface contracts.md section 7, "Link rule"),
-  so no app carries link code of its own; `src/element_reference.ts`, `src/context_menu_rows.ts`, and
+  so no app carries link code of its own. A page without Mithril (the
+  terminal's and the browser's server-rendered pages) builds its "Report a
+  bug" button from the same module, in a `<script type="module">` (a dynamic
+  `import()` works too: the shell greets a page again when it connects, even
+  after its frame's `load`):
+
+  ```js
+  import { connectToShell } from "/_static/app_contract.js";
+
+  const connection = connectToShell({ onHandshake: showReportButton });
+  function showReportButton() {
+    reportButton.hidden = !connection.canReportBug();
+  }
+  reportButton.onclick = () => connection.reportBug({ message: sentence, details: output });
+  ```
+
+  `src/element_reference.ts`, `src/context_menu_rows.ts`, and
   `src/context_menu.ts`: the element context menu
   (`docs/system/blueprint/element-reference-menu/`): the JSON description of
   a right-clicked element under a random `REF-<id>`, the menu's rows (the

@@ -1421,6 +1421,7 @@ export function App(): m.Component<AppAttrs> {
             placementClass: "fixed bottom-(--desk-toast-gap)",
             onDismiss: (id) => current.toasts.dismiss(id),
             onHold: (id) => current.toasts.hold(id),
+            onReportBug: current.reportBugAction(),
           }),
         ]);
       }
@@ -1644,6 +1645,7 @@ export function App(): m.Component<AppAttrs> {
             placementClass: "fixed bottom-[calc(var(--desk-taskbar-height)+var(--desk-toast-gap))]",
             onDismiss: (id) => current.toasts.dismiss(id),
             onHold: (id) => current.toasts.hold(id),
+            onReportBug: current.reportBugAction(),
           }),
           menuRows === null ? null : menu.view(menuRows),
           wallpaperDialogDesktopId === null ? null : wallpaperDialogView(current, wallpaperDialogDesktopId),

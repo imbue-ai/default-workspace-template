@@ -5,9 +5,9 @@
  * stacking order, interactive (inert unless focused on a touch client), hidden when minimized,
  * parked while the windows in front cover them, destroyed when closed; they are greeted after
  * every load, told shown and hidden, and follow their windows' stored paths in place or by
- * reload; their own ``shell:location``, ``shell:focused``, ``shell:open``, and
- * ``shell:start-with-text`` reach the store; and the window whose page the document's focus lands
- * in is raised.
+ * reload; their own ``shell:location``, ``shell:focused``, ``shell:open``,
+ * ``shell:start-with-text``, and ``shell:report-bug`` reach the store; and the window whose page
+ * the document's focus lands in is raised.
  */
 import "../testing/dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,10 +24,12 @@ import {
   SHELL_MESSAGE,
   SHELL_OPEN,
   SHELL_OPEN_LINK,
+  SHELL_REPORT_BUG,
   SHELL_SHOWN,
   SHELL_THEME,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
+import type { ReportedFailure } from "@imbue/workspace-ui/src/app_contract";
 import { BOTTOM_RIGHT_QUARTER_FRAME } from "../geometry/frames";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
 import { pendingInputReportsForTesting, resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
@@ -68,6 +70,7 @@ let host: HTMLElement;
 let windows: HTMLElement;
 let overviewTiles: HTMLElement;
 let layer: LivePagesLayer;
+let bugReportsOpened: (ReportedFailure | null)[];
 /** Longer than the schedule the shell posts a raised window's page its focus grants over. */
 const FOCUS_GRANT_SCHEDULE_MS = 2000;
 
@@ -226,7 +229,9 @@ beforeEach(async () => {
     modes: { isPhone: false, isTouch: false },
     redraw: () => undefined,
     reloadInterface: () => undefined,
+    reportBug: (failure) => void bugReportsOpened.push(failure),
   });
+  bugReportsOpened = [];
   store.setBackdropSize({ width: 1000, height: 800 });
   backdrop = document.createElement("div");
   backdrop.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 800 }) as DOMRect;
@@ -770,6 +775,7 @@ describe("the contract", () => {
         desktopId: "home",
         app: "docs",
         path: "/?doc=1",
+        canReportBug: false,
         opensLocalFiles: false,
         isViewing: false,
       },
@@ -790,6 +796,7 @@ describe("the contract", () => {
         desktopId: "home",
         app: "docs",
         path: "/?doc=1",
+        canReportBug: false,
         opensLocalFiles: false,
         isViewing: false,
       },
@@ -825,6 +832,60 @@ describe("the contract", () => {
     messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: false });
     layer.reconcile();
     expect(spy.mock.calls.map((call) => call[0].type)).toEqual([SHELL_HANDSHAKE, SHELL_THEME, SHELL_HIDDEN]);
+  });
+
+  it("hands every loaded page a fresh handshake when the embedder's word on Report a bug changes", () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    spy.mockClear();
+
+    store.setCanReportBug(true);
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([
+      {
+        type: SHELL_HANDSHAKE,
+        clientId: CLIENT,
+        windowId: "win-1",
+        desktopId: "home",
+        app: "docs",
+        path: "/?doc=1",
+        canReportBug: true,
+        opensLocalFiles: false,
+        isViewing: false,
+      },
+      { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
+    ]);
+    store.setCanReportBug(true);
+    expect(spy).toHaveBeenCalledTimes(2);
+    store.setCanReportBug(false);
+    expect(spy.mock.calls[2][0]).toMatchObject({ type: SHELL_HANDSHAKE, windowId: "win-1", canReportBug: false });
+  });
+
+  it("greets a page that loads after the embedder spoke with its word on Report a bug, and none before it loads", () => {
+    const spy = spyOnFrame("win-1");
+    store.setCanReportBug(true);
+    expect(spy).not.toHaveBeenCalled();
+    load("win-1");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, windowId: "win-1", canReportBug: true });
+  });
+
+  it("opens the bug report about a page's shell:report-bug failure only while the embedder opens one", () => {
+    const failure = { message: "Docs couldn't save. Try again. If this persists, report a bug.", details: "HTTP 500" };
+    messageFromPage("win-1", { type: SHELL_REPORT_BUG, ...failure });
+    expect(bugReportsOpened).toEqual([]);
+    store.setCanReportBug(true);
+    messageFromPage("win-1", { type: SHELL_REPORT_BUG, ...failure });
+    messageFromPage("win-1", { type: SHELL_REPORT_BUG, message: "Docs couldn't save.", details: null });
+    expect(bugReportsOpened).toEqual([failure, { message: "Docs couldn't save.", details: null }]);
+  });
+
+  it("opens the bug report with nothing attached for a shell:report-bug whose payload holds no failure", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    store.setCanReportBug(true);
+    messageFromPage("win-1", { type: SHELL_REPORT_BUG });
+    messageFromPage("win-1", { type: SHELL_REPORT_BUG, message: "Docs couldn't save.", details: 42 });
+    messageFromPage("win-1", { type: SHELL_REPORT_BUG, message: "  ", details: "HTTP 500" });
+    expect(bugReportsOpened).toEqual([null, null, null]);
+    warn.mockRestore();
   });
 
   it("tells a page in its handshake whether the embedder opens its settings for the files shared from the computer", () => {
