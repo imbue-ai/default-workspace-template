@@ -197,6 +197,7 @@ Exit 0 is `succeeded`; anything else is `failed`.
 
 `skill = "<name>"` runs the wake below in the runner's own process; `routines wake <name>` is the same wake as a command, which is what the Caretaker's check calls.
 Inside a run (`ROUTINES_RUN_ID` set) the wake attaches the chat to that run and records an agent that waits on the user on it exactly as a skill run does (`run_blocked`, the state, the notification); outside one it is a plain wake that only keeps the chat, with its own exit code.
+The agent in the chat is handed none of the run's environment, so a skill that behaves differently for a run started by hand reads the trigger from the ledger: the newest record of `routines runs <id> --limit 1 --format json` is the run in flight (`outcome` null, `trigger` `SCHEDULED` or `MANUAL`).
 
 1. **Find the chat.** The routine's chat id is in its state.
    With none, or one the chat app no longer knows, take up an agent that still carries the routine (`mngr list --include 'labels.routine == "<id>" || labels.automation == "<id>"'`, the second being the retired runner's label) when the chat app lists it: a migrated automation's agent, or the chat of a routine removed and added again, is named after the routine, and `mngr create` refuses a name an agent already has.
