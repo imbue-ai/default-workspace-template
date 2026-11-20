@@ -154,9 +154,11 @@ def third_party_skills(agents_dir: Path) -> dict[str, str]:
 def _agents_dir_of(skill_dir: Path) -> Path:
     """The ``.agents`` directory a skill belongs to, whether it is named by its entry under ``skills/`` or by the
     directory inside an app that the entry links to."""
+    apps_parts = _APPS_DIRECTORY.parts
     if (
         skill_dir.parent.name == _APP_SKILLS_DIRNAME
-        and skill_dir.parent.parent.parent.name == _APPS_DIRECTORY.name
+        and len(skill_dir.parents) > 2
+        and skill_dir.parents[2].parts[-len(apps_parts) :] == apps_parts
     ):
         return skill_dir.parents[4] / ".agents"
     return skill_dir.parent.parent

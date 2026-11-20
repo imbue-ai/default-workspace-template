@@ -558,5 +558,15 @@ def test_an_installed_apps_skills_are_kept_as_they_came_and_an_owned_apps_are_no
     assert validate_skill.is_third_party_skill((agents_dir / "skills" / "morning-digest").resolve()) is False
 
 
+def test_a_listed_skill_is_kept_as_it_came_in_a_checkout_whose_directory_is_named_apps(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "apps" / ".agents"
+    (agents_dir / "skills" / "pdf").mkdir(parents=True)
+    (agents_dir / "third-party-skills.toml").write_text(
+        '[skills]\npdf = "https://github.com/anthropics/skills/tree/main/skills/pdf"\n'
+    )
+
+    assert validate_skill.is_third_party_skill(agents_dir / "skills" / "pdf") is True
+
+
 def test_a_tree_with_no_app_records_and_no_listing_keeps_no_skill_as_it_came(tmp_path: Path) -> None:
     assert validate_skill.third_party_skills(tmp_path / ".agents") == {}
