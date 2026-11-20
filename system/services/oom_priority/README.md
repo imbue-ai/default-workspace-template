@@ -65,9 +65,17 @@ answer: no cgroup v2 memory controller (lima's root cgroup, gVisor's own
 cgroupfs) or a counter it cannot read, so the gen-2 VM's file is never
 disturbed and earlyoom otherwise logs once and uses `/proc/meminfo` alone.
 Under gVisor it exits at once, since the VM publishes the file. earlyoom's swap gate is
-held open (`-s 100,100`): a workspace container can never swap, but under runc
-it sees the host's swap as its own, which would otherwise keep earlyoom from
-ever acting on a laptop with swap.
+held open (`-s 100,100`): under runc the container sees the host's swap as its
+own, which would otherwise keep earlyoom from ever acting on a laptop with swap.
+A docker workspace can in fact swap: its `memory.swap.max` is docker's default,
+equal to its memory cap, and a workspace pushed past its memory cap spills into
+swap rather than being OOM-killed. So the publisher also writes the cgroup's own
+swap, as `SwapTotal` (`memory.swap.max`, never more than the host's swap, and
+the host's when the cap reads `max`) and `SwapFree` (that less
+`memory.swap.current`, never more than the host has free). A cgroup with no
+swap accounting is published without them. The pinned earlyoom ignores the two
+lines; a release that reads them (imbue-ai/earlyoom, swap-aware
+`--host-meminfo`) lets the swap gate take a real threshold.
 
 - **`bands`** -- the `oom_score_adj` value per band and the helper that writes
   it. From least- to most-expendable: never-kill infrastructure (0) < built-in

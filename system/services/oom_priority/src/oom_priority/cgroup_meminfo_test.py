@@ -212,3 +212,84 @@ def test_the_published_path_is_the_one_earlyoom_reads() -> None:
     match = re.search(r"--host-meminfo\s+(\S+)", command_line)
     assert match is not None, command_line
     assert Path(match.group(1)) == cgroup_meminfo.HOST_MEMINFO_PATH
+
+
+def _write_swap(cgroup_dir: Path, swap_max: str, swap_used: str) -> None:
+    (cgroup_dir / "memory.swap.max").write_text(f"{swap_max}\n")
+    (cgroup_dir / "memory.swap.current").write_text(f"{swap_used}\n")
+
+
+def _write_host_meminfo(path: Path, swap_total: int, swap_free: int) -> Path:
+    path.write_text(
+        "MemTotal:       16000000 kB\n"
+        f"SwapTotal:      {swap_total // 1024} kB\n"
+        f"SwapFree:       {swap_free // 1024} kB\n"
+    )
+    return path
+
+
+def test_swap_is_the_cgroups_cap_less_its_use_not_the_hosts_swap(
+    tmp_path: Path,
+) -> None:
+    _write_swap(tmp_path, str(4 * _GIB), str(_GIB))
+    host = _write_host_meminfo(tmp_path / "meminfo", 35 * _GIB, 29 * _GIB)
+    assert cgroup_meminfo.read_cgroup_swap(tmp_path, host) == (4 * _GIB, 3 * _GIB)
+
+
+def test_swap_free_never_exceeds_what_the_host_has_free(tmp_path: Path) -> None:
+    _write_swap(tmp_path, str(4 * _GIB), "0")
+    host = _write_host_meminfo(tmp_path / "meminfo", 35 * _GIB, _GIB)
+    assert cgroup_meminfo.read_cgroup_swap(tmp_path, host) == (4 * _GIB, _GIB)
+
+
+def test_an_uncapped_swap_or_a_cap_above_the_host_is_the_hosts_swap(
+    tmp_path: Path,
+) -> None:
+    host = _write_host_meminfo(tmp_path / "meminfo", 2 * _GIB, 2 * _GIB)
+    _write_swap(tmp_path, "max", "0")
+    assert cgroup_meminfo.read_cgroup_swap(tmp_path, host) == (2 * _GIB, 2 * _GIB)
+    _write_swap(tmp_path, str(4 * _GIB), "0")
+    assert cgroup_meminfo.read_cgroup_swap(tmp_path, host) == (2 * _GIB, 2 * _GIB)
+
+
+def test_a_cgroup_with_no_swap_allowed_reports_zero_swap(tmp_path: Path) -> None:
+    _write_swap(tmp_path, "0", "0")
+    host = _write_host_meminfo(tmp_path / "meminfo", 35 * _GIB, 29 * _GIB)
+    assert cgroup_meminfo.read_cgroup_swap(tmp_path, host) == (0, 0)
+
+
+def test_no_swap_accounting_or_an_unreadable_counter_gives_no_swap(
+    tmp_path: Path,
+) -> None:
+    host = _write_host_meminfo(tmp_path / "meminfo", 35 * _GIB, 29 * _GIB)
+    assert cgroup_meminfo.read_cgroup_swap(tmp_path, host) is None
+    _write_swap(tmp_path, str(4 * _GIB), "garbage")
+    assert cgroup_meminfo.read_cgroup_swap(tmp_path, host) is None
+    _write_swap(tmp_path, str(4 * _GIB), "0")
+    assert cgroup_meminfo.read_cgroup_swap(tmp_path, tmp_path / "missing") is None
+
+
+def test_render_adds_the_swap_lines_only_when_swap_is_known() -> None:
+    assert cgroup_meminfo.render_host_meminfo(
+        8 * _GIB, 3 * _GIB, 1760000000, (4 * _GIB, _GIB)
+    ) == (
+        "MemTotal: 8388608 kB\nMemAvailable: 3145728 kB\n"
+        "SwapTotal: 4194304 kB\nSwapFree: 1048576 kB\nTimestamp: 1760000000\n"
+    )
+    assert "Swap" not in cgroup_meminfo.render_host_meminfo(8 * _GIB, 3 * _GIB, 1)
+
+
+def test_publish_includes_the_cgroups_swap(tmp_path: Path) -> None:
+    cgroup_dir = tmp_path / "cgroup"
+    write_fake_cgroup(cgroup_dir, str(4 * _GIB), str(4 * _GIB), {"anon": 4 * _GIB})
+    _write_swap(cgroup_dir, str(4 * _GIB), str(3 * _GIB))
+    host = _write_host_meminfo(tmp_path / "meminfo", 35 * _GIB, 29 * _GIB)
+    target = tmp_path / "vol" / ".host-meminfo"
+    outcome = cgroup_meminfo.publish_once(
+        cgroup_dir, target, "7.0.0-38-generic", 1760000000, host
+    )
+    assert outcome is cgroup_meminfo.PublishOutcome.PUBLISHED
+    assert target.read_text() == (
+        "MemTotal: 4194304 kB\nMemAvailable: 0 kB\n"
+        "SwapTotal: 4194304 kB\nSwapFree: 1048576 kB\nTimestamp: 1760000000\n"
+    )

@@ -34,6 +34,16 @@ file, and a stale file costs nothing, since earlyoom ignores one older than
 5 s. Under gVisor the publisher has nothing to add at all (``uname -r`` names
 it), so it reports that and the program exits.
 
+Swap is published too, as ``SwapTotal`` and ``SwapFree``, when the cgroup has
+swap accounting (``memory.swap.max``): under runc ``/proc/meminfo`` reports
+the whole host's swap, not the share this cgroup may use, so earlyoom's swap
+gate would be measured against the wrong pool. ``SwapTotal`` is the cgroup's
+swap cap (the host's own swap when the cap reads ``max``, and never more than
+it), and ``SwapFree`` what is left of it, never more than the host has free.
+A cgroup with no swap accounting, or whose swap counters cannot be read, is
+published without the swap lines, which leaves earlyoom on ``/proc/meminfo``'s
+swap as before.
+
 Stdlib-only (see ``paths``): run by a supervisord program under a plain
 ``python3``.
 """
@@ -47,6 +57,8 @@ from typing import Final
 # the host volume mount and the VM writes the file; on local docker it is a
 # plain directory this publisher creates.
 HOST_MEMINFO_PATH: Final[Path] = Path("/mngr-vol/.host-meminfo")
+# The host's swap totals under runc; the ceiling on what a cgroup's swap cap can give.
+PROC_MEMINFO_PATH: Final[Path] = Path("/proc/meminfo")
 # The container's own cgroup v2 memory controller, as the cgroup namespace shows it.
 CGROUP_DIR: Final[Path] = Path("/sys/fs/cgroup")
 # Well inside the 5 s staleness earlyoom tolerates, and what the gen-2 VM uses.
@@ -134,13 +146,69 @@ def read_cgroup_memory_headroom(cgroup_dir: Path) -> tuple[int, int] | PublishOu
     return limit, available
 
 
+def _read_host_swap_kib(proc_meminfo_path: Path) -> tuple[int, int] | None:
+    """``(SwapTotal, SwapFree)`` in KiB from ``/proc/meminfo``, or None when either cannot be read."""
+    try:
+        lines = proc_meminfo_path.read_text().splitlines()
+    except OSError:
+        return None
+    kib_by_key: dict[str, int] = {}
+    for line in lines:
+        key, _, rest = line.partition(":")
+        fields = rest.split()
+        if fields and fields[0].isdigit():
+            kib_by_key[key.strip()] = int(fields[0])
+    if "SwapTotal" not in kib_by_key or "SwapFree" not in kib_by_key:
+        return None
+    return kib_by_key["SwapTotal"], kib_by_key["SwapFree"]
+
+
+def read_cgroup_swap(
+    cgroup_dir: Path, proc_meminfo_path: Path
+) -> tuple[int, int] | None:
+    """``(swap_total_bytes, swap_free_bytes)`` this cgroup may still use, or None when it cannot be told.
+
+    The total is ``memory.swap.max``, or the host's ``SwapTotal`` when that
+    reads ``max``, and never more than the host's ``SwapTotal``. The free part
+    is the total less ``memory.swap.current``, never more than the host's
+    ``SwapFree`` (other cgroups share the device), clamped to ``[0, total]``.
+    None when the cgroup has no swap accounting or a counter cannot be read.
+    """
+    swap_max_text = _read_first_line(cgroup_dir / "memory.swap.max")
+    swap_used_text = _read_first_line(cgroup_dir / "memory.swap.current")
+    if swap_max_text is None or swap_used_text is None or not swap_used_text.isdigit():
+        return None
+    if swap_max_text != _UNCAPPED_LIMIT and not swap_max_text.isdigit():
+        return None
+    host_swap_kib = _read_host_swap_kib(proc_meminfo_path)
+    if host_swap_kib is None:
+        return None
+    host_total = host_swap_kib[0] * 1024
+    host_free = host_swap_kib[1] * 1024
+    total = host_total if swap_max_text == _UNCAPPED_LIMIT else min(int(swap_max_text), host_total)
+    free = max(0, min(total - int(swap_used_text), host_free, total))
+    return total, free
+
+
 def render_host_meminfo(
-    limit_bytes: int, available_bytes: int, timestamp_seconds: int
+    limit_bytes: int,
+    available_bytes: int,
+    timestamp_seconds: int,
+    swap: tuple[int, int] | None = None,
 ) -> str:
-    """The file in the ``/proc/meminfo`` subset earlyoom's ``--host-meminfo`` reads."""
+    """The file in the ``/proc/meminfo`` subset earlyoom's ``--host-meminfo`` reads.
+
+    ``swap`` is ``(total_bytes, free_bytes)``; None leaves the swap lines out.
+    """
+    swap_lines = (
+        ""
+        if swap is None
+        else f"SwapTotal: {swap[0] // 1024} kB\nSwapFree: {swap[1] // 1024} kB\n"
+    )
     return (
         f"MemTotal: {limit_bytes // 1024} kB\n"
         f"MemAvailable: {available_bytes // 1024} kB\n"
+        f"{swap_lines}"
         f"Timestamp: {timestamp_seconds}\n"
     )
 
@@ -154,7 +222,11 @@ def write_replacing(target_path: Path, content: str) -> None:
 
 
 def publish_once(
-    cgroup_dir: Path, target_path: Path, kernel_release: str, now_seconds: int
+    cgroup_dir: Path,
+    target_path: Path,
+    kernel_release: str,
+    now_seconds: int,
+    proc_meminfo_path: Path = PROC_MEMINFO_PATH,
 ) -> PublishOutcome:
     """One publishing round: write the headroom, remove the file of an uncapped container, or leave it be.
 
@@ -169,7 +241,9 @@ def publish_once(
     if isinstance(headroom, PublishOutcome):
         return headroom
     limit_bytes, available_bytes = headroom
+    swap = read_cgroup_swap(cgroup_dir, proc_meminfo_path)
     write_replacing(
-        target_path, render_host_meminfo(limit_bytes, available_bytes, now_seconds)
+        target_path,
+        render_host_meminfo(limit_bytes, available_bytes, now_seconds, swap),
     )
     return PublishOutcome.PUBLISHED
