@@ -4,6 +4,7 @@ Usage, from the workspace repo's root::
 
     uv run --no-sync app-install add <package> [--port <n>]
     uv run --no-sync app-install install <url> [--branch <ref>]
+    uv run --no-sync app-install update <name> [--branch <ref>] [--continue]
     uv run --no-sync app-install regenerate [<name>]
     uv run --no-sync app-install uninstall <name>
     uv run --no-sync app-install migrate <package> [--dry-run]
@@ -23,6 +24,7 @@ import click
 
 from app_install.errors import AppInstallError
 from app_install.errors import CollisionError
+from app_install.errors import NoSnapshotError
 from app_install.errors import NotAnAppError
 from app_install.errors import RepositoryUnreachableError
 from app_install.installing import InstallOutcome
@@ -37,6 +39,9 @@ from app_install.operations import regenerate
 from app_install.operations import uninstall_app
 from app_install.ports import is_port_bound
 from app_install.runtime import WorkspaceRuntime
+from app_install.updating import UpdateOutcome
+from app_install.updating import UpdateResult
+from app_install.updating import update_app
 from app_manifest.errors import AppManifestError
 
 _EXIT_REFUSED: Final[int] = 1
@@ -140,6 +145,48 @@ def install_command(repo_root: Path, url: str, ref: str | None) -> None:
         except (AppInstallError, AppManifestError) as e:
             _refuse("refused", url=url, detail=str(e))
     _emit("installed", **_install_fields(outcome))
+
+
+def _update_fields(outcome: UpdateOutcome) -> dict[str, object]:
+    return {
+        "name": str(outcome.record.name),
+        "ref": outcome.ref,
+        "previous_version": outcome.previous_version,
+        "version": outcome.record.upstream_version,
+        "upstream_commit": outcome.record.upstream_commit,
+        "conflicted_paths": list(outcome.conflicted_paths),
+        "worktree": outcome.worktree,
+        "snapshot": outcome.snapshot,
+        "detail": outcome.detail,
+        "problems": list(outcome.problems),
+    }
+
+
+@main.command("update")
+@click.argument("name")
+@click.option("--branch", "ref", default=None, help="The tag or branch to update to; the latest version otherwise")
+@click.option(
+    "--continue", "is_continuing", is_flag=True, help="Finish an update that stopped on a conflict or failing checks"
+)
+@click.pass_obj
+def update_command(repo_root: Path, name: str, ref: str | None, is_continuing: bool) -> None:
+    """Update the installed app NAME from the repository it came from, over the workspace's own changes to it."""
+    with install_lock(repo_root):
+        try:
+            outcome = update_app(
+                repo_root, name, ref, is_continuing, WorkspaceRuntime(repo_root=repo_root), is_port_bound
+            )
+        except CollisionError as e:
+            _refuse("collision", name=name, problems=list(e.problems))
+        except RepositoryUnreachableError as e:
+            _refuse("needs_github_access" if e.is_access_needed else "unreachable", name=name, detail=str(e))
+        except NoSnapshotError as e:
+            _refuse("no_snapshot", name=name, detail=str(e))
+        except (AppInstallError, AppManifestError) as e:
+            _refuse("refused", name=name, detail=str(e))
+    if outcome.result in (UpdateResult.CONFLICT, UpdateResult.TESTS_FAILED):
+        _refuse(outcome.result.value, **_update_fields(outcome))
+    _emit(outcome.result.value, **_update_fields(outcome))
 
 
 @main.command("regenerate")

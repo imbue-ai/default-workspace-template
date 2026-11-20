@@ -9,6 +9,7 @@ The command is deterministic and asks nothing; every run ends in one JSON line o
 ```bash
 uv run --no-sync app-install add <package> [--port <n>]
 uv run --no-sync app-install install <url> [--branch <ref>]
+uv run --no-sync app-install update <name> [--branch <ref>] [--continue]
 uv run --no-sync app-install regenerate [<name>]
 uv run --no-sync app-install uninstall <name>
 uv run --no-sync app-install migrate <package> [--dry-run]
@@ -75,3 +76,16 @@ The repository is read anonymously first, and with the workspace's GitHub access
 After landing, the command installs the system packages and tools the app's `[environment]` declares, has supervisord start the app's programs, and waits for the app's port to answer.
 Its result lists what the app still needs from the user under `needs`: the permissions and secret files it declares (and whether each file exists yet), whether it calls a model, its adaptation notes, the apps it expects that are not here, and anything of its environment that could not be installed.
 A program that runs under a secret file that does not exist yet cannot start, so its port is not waited for.
+
+## Updating an installed app
+
+`app-install update <name>` brings a newer version of an installed app in from the repository it came from, over the workspace's own changes to the app, with `git subtree merge --squash`.
+The live app is untouched until the result lands.
+
+- The app's stored data is copied to `data/.state/app_install/snapshots/<name>/` first, out of the backup, and only the newest copy is kept. When the data does not fit on the disk beside itself, the update goes ahead only if the workspace has a recent backup (`no_snapshot` otherwise).
+- A conflict in `uv.lock` alone is settled by taking the publisher's lock and making it again. Any other conflict ends the run with `conflict`, the files, and the worktree the merge waits in, `data/.state/app_install/worktrees/<name>`: resolve it there, commit, and run the update again with `--continue`.
+- The merged app is registered and regenerated on the port it already has, and its checks are run (its environment syncs from its lock and its tests pass). `tests_failed` leaves the worktree for a fix, and `--continue` picks it up.
+- Then the result lands as one commit, the record takes the new commit, tree, and version, anything new in `[environment]` is installed, and the app's programs are restarted.
+
+`up_to_date` means the app is already at the version asked for.
+An app this workspace built has nothing to update from.

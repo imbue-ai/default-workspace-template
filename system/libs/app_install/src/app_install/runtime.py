@@ -1,10 +1,12 @@
 """The installer's hands on the running workspace: supervisorctl, the registration script, and git."""
 
+import shutil
 import socket
 import subprocess
 import threading
 import time
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Final
 
 from app_install.git import COMMITTER_EMAIL
@@ -84,6 +86,32 @@ class WorkspaceRuntime(WorkspaceRuntimeInterface):
             if failure is not None:
                 unresolved.append(f"{label} ({failure.splitlines()[-1] if failure else 'failed'})")
         return tuple(unresolved)
+
+    def restart_programs(self, programs: Sequence[str]) -> str | None:
+        return self._run(["supervisorctl", "restart", *programs])
+
+    def _run_in(self, directory: Path, argv: Sequence[str]) -> str | None:
+        return WorkspaceRuntime(repo_root=directory)._run(argv)
+
+    def relock_app(self, worktree: Path, package: str) -> str | None:
+        relative = f"system/apps/{package}"
+        if not (worktree / relative / "pyproject.toml").is_file():
+            return None
+        return self._run_in(worktree, ["uv", "lock", "--project", relative])
+
+    def verify_app(self, worktree: Path, package: str) -> str | None:
+        relative = f"system/apps/{package}"
+        if not (worktree / relative / "pyproject.toml").is_file():
+            return None
+        return self._run_in(worktree, ["uv", "sync", "--locked", "--project", relative]) or self._run_in(
+            worktree / relative, ["uv", "run", "--no-sync", "pytest", "-q", "-p", "no:cacheprovider"]
+        )
+
+    def free_disk_bytes(self, directory: Path) -> int:
+        return shutil.disk_usage(directory).free
+
+    def has_recent_backup(self) -> bool:
+        return self._run(["uv", "run", "--no-sync", "host-backup-now", "--check"]) is None
 
     def remove_registry_row(self, name: str) -> str | None:
         return self._run(["python3", _FORWARD_PORT, "--remove", "--name", name])

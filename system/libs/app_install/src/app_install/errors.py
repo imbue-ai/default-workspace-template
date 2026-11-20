@@ -37,3 +37,16 @@ class RepositoryUnreachableError(AppInstallError):
 
 class NotAnAppError(AppInstallError, ValueError):
     """The repository holds no app: it has no ``app.toml`` at its root, or one that cannot be read."""
+
+
+class NotInstalledAppError(AppInstallError, ValueError):
+    """The app was built in this workspace: it has no repository it came from."""
+
+
+class UpdateInProgressError(AppInstallError):
+    """An update of the app is already waiting for a person, or none is when one was to be continued."""
+
+
+class NoSnapshotError(AppInstallError):
+    """The app's stored data could not be kept safe before an update: it does not fit beside itself, and the
+    workspace has no recent backup."""
