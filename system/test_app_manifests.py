@@ -21,13 +21,14 @@ from app_manifest.manifest import (
     load_manifest,
 )
 from app_manifest.primitives import RESERVED_APP_NAMES
+from app_manifest.records import AppOrigin, AppRecord, load_all_records, write_record
 from app_manifest.scope import (
     APP_CONVENTIONS,
     SERVICE_CONVENTIONS,
     SKILL_CONVENTIONS,
     compute_app_scope,
 )
-from app_manifest.testing import write_app_manifest, write_repo_file
+from app_manifest.testing import write_app_manifest
 from oom_priority import bands
 from oom_priority.supervisord_testing import supervisord_commands
 from workspace_bare_scripts import user_packages
@@ -36,11 +37,6 @@ from workspace_profile.manifest import find_off_grammar_default_chords
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _APPS_DIR = _REPO_ROOT / "system" / "apps"
 _SUPERVISORD_CONF = _REPO_ROOT / "system" / "supervisord.conf"
-
-# Where each user app's record sits, as ``<name>.toml``: its ``package`` (its directory
-# under system/apps) and its ``origin``, among other things.
-_APP_RECORDS_DIRECTORY = Path("system") / "config" / "apps"
-_INSTALLED_ORIGIN = "installed"
 
 _MANIFEST_FLAG = re.compile(r"--manifest\s+(\S+)")
 
@@ -81,12 +77,10 @@ def _installed_app_packages(repo_root: Path) -> frozenset[str]:
     """The directories under system/apps of the apps installed from someone else's
     repository: the ``package`` of every app record whose ``origin`` says so. A tree with
     no record directory has no installed app."""
-    records = [
-        tomllib.loads(record_path.read_text())
-        for record_path in sorted((repo_root / _APP_RECORDS_DIRECTORY).glob("*.toml"))
-    ]
     return frozenset(
-        record["package"] for record in records if record["origin"] == _INSTALLED_ORIGIN
+        record.package
+        for record in load_all_records(repo_root)
+        if record.origin is AppOrigin.INSTALLED
     )
 
 
@@ -282,11 +276,9 @@ def test_manifests_sharing_a_name_are_reported_with_the_name_and_each_path(
     ]
 
 
-def _write_app_record(repo_root: Path, name: str, origin: str) -> None:
-    write_repo_file(
-        repo_root,
-        (_APP_RECORDS_DIRECTORY / f"{name}.toml").as_posix(),
-        f'name = "{name}"\npackage = "{name}"\norigin = "{origin}"\n',
+def _write_app_record(repo_root: Path, name: str, origin: AppOrigin) -> None:
+    write_record(
+        repo_root, AppRecord(name=name, package=name, port=8080, origin=origin)
     )
 
 
@@ -302,8 +294,8 @@ def test_only_an_installed_apps_manifest_may_carry_a_key_this_template_does_not_
         )
         for name in ("notes", "journal", "news")
     }
-    _write_app_record(tmp_path, "notes", _INSTALLED_ORIGIN)
-    _write_app_record(tmp_path, "journal", "local")
+    _write_app_record(tmp_path, "notes", AppOrigin.INSTALLED)
+    _write_app_record(tmp_path, "journal", AppOrigin.LOCAL)
 
     assert _load_manifest(manifest_paths["notes"], tmp_path).name == "notes"
     # An app built here, and one with no record (a built-in), are checked strictly.
