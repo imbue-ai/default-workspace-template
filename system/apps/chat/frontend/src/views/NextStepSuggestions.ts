@@ -62,6 +62,8 @@ export function NextStepSuggestions(): m.Component<{ chatId: string }> {
   let currentChatId: string | null = null;
   let isOffNoticeShown = false;
   let offNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+  // How many times the link or Undo has changed the switch, so a write can tell whether it is still the latest.
+  let switchChangeCount = 0;
 
   function hideOffNotice(): void {
     isOffNoticeShown = false;
@@ -70,9 +72,11 @@ export function NextStepSuggestions(): m.Component<{ chatId: string }> {
   }
 
   function disable(): void {
+    const change = ++switchChangeCount;
     // The chrome's settings read the switches as they open, so they are opened only once the write has answered,
-    // and not at all when it was refused.
+    // and not at all when it was refused or Undo was clicked while it was out.
     void updateSuggestionSwitches({ [NEXT_STEP_SWITCH]: false }).then(() => {
+      if (change !== switchChangeCount) return;
       if (isSuggestionSwitchOn(NEXT_STEP_SWITCH) === false && opensWorkspaceSettings()) {
         openWorkspaceSettings(SUGGESTIONS_SETTINGS_GROUP);
       }
@@ -86,6 +90,7 @@ export function NextStepSuggestions(): m.Component<{ chatId: string }> {
   }
 
   function undo(): void {
+    switchChangeCount++;
     hideOffNotice();
     void updateSuggestionSwitches({ [NEXT_STEP_SWITCH]: true });
   }

@@ -94,6 +94,8 @@ const START_SET: SuggestionsAnswer = {
 
 /** What the backend holds, which the page's requests read and write. */
 let stored: { settings: ChatSettings; suggestions: SuggestionsAnswer; isWriteRefused: boolean };
+/** While a list, each settings write waits here once the backend has taken it, until the test lets it answer. */
+let heldWriteAnswers: (() => void)[] | null;
 let requests: { method: string; url: string; body?: unknown }[];
 let root: HTMLElement;
 
@@ -140,6 +142,7 @@ beforeEach(() => {
   resetChatSettingsForTests();
   setParticipantsForTesting("owner", []);
   stored = { settings: { ...DEFAULT_CHAT_SETTINGS }, suggestions: START_SET, isWriteRefused: false };
+  heldWriteAnswers = null;
   requests = [];
   root = document.createElement("div");
   mocks.isLaunchInFlight = false;
@@ -156,7 +159,10 @@ beforeEach(() => {
     if (options.url === "/api/settings/suggestions") {
       if (stored.isWriteRefused) throw new Error("400");
       stored.settings = { ...stored.settings, ...(options.body as Partial<ChatSettings>) };
-      return { settings: stored.settings };
+      const answer = { settings: stored.settings };
+      const held = heldWriteAnswers;
+      if (held !== null) await new Promise<void>((release) => held.push(release));
+      return answer;
     }
     return stored.suggestions;
   }) as unknown as typeof m.request);
@@ -417,6 +423,27 @@ describe("the link that switches next-step suggestions off", () => {
     expect(mocks.openWorkspaceSettings).toHaveBeenCalledTimes(1);
     expect(mocks.openWorkspaceSettings).toHaveBeenCalledWith("suggestions");
     expect(writes()).toEqual([["/api/settings/suggestions", { is_next_step_suggestions_enabled: false }]]);
+  });
+
+  it("opens no settings when Undo is clicked before the write has answered", async () => {
+    mocks.opensWorkspaceSettings = true;
+    await load();
+    heldWriteAnswers = [];
+
+    click(".suggestion-strip-disable");
+    click(".suggestions-off-undo");
+    expect(heldWriteAnswers).toHaveLength(2);
+    heldWriteAnswers[0]();
+    await settle();
+    heldWriteAnswers[1]();
+    await settle();
+
+    expect(mocks.openWorkspaceSettings).not.toHaveBeenCalled();
+    expect(writes()).toEqual([
+      ["/api/settings/suggestions", { is_next_step_suggestions_enabled: false }],
+      ["/api/settings/suggestions", { is_next_step_suggestions_enabled: true }],
+    ]);
+    expect(pillLabels()).toHaveLength(2);
   });
 
   it("puts the strip back, with no line and no settings opened, when the backend refuses the write", async () => {
