@@ -4,6 +4,44 @@ Full, unedited changelog entries consolidated nightly from the individual files 
 
 For a concise summary, see [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-19
+
+### .agents
+
+A newly built app's harden pass can now run its browser tests.
+
+- `build-app`'s scaffold gives each new app's own test environment Playwright and pytest-timeout, and registers the `browser` and `frontend` test marks. Before, an app's suite had neither package, so a harden worker's phone browser test failed with `No module named 'playwright'` or `No module named 'pytest_timeout'` and never ran.
+
+- The worker guides `type-app.md` and `web-frontend-testing.md` say the scaffold provides these, and give the one `uv add --dev playwright pytest-timeout` an app scaffolded earlier needs.
+
+Skills and shared agent references that pointed at `CLAUDE.md` for content that lives in `AGENTS.md` (the preserve-and-surface principle, the shared instruction sections) now point at `AGENTS.md`. `migrate-workspace` ports an old workspace's instruction edits into `AGENTS.md`, keeping only Claude-specific notes for `CLAUDE.md`.
+
+Preview and UI-sketch frames now load their framed app on a shared workspace. The frame pointed its inner page at `<service name>.<workspace host>`, but a share routes only a service's registered `<name>-<rand>` origin label, so the inner page never loaded there: the bare name is refused when connecting, or answered with "Not shared with you". Locally the forwarder's name fallback hid this. `preview_wrapper_server.py` takes `--apps-file` and reads the inner service's label from the app registry on each request, so a service registered again under a fresh label is followed. It answers 503 when the service has no valid label or the registry cannot be read. `serve_isolated_instance.py` passes the registry it registers into.
+
+### system
+
+The step reminder hooks (including the pi harness extension) now say "See AGENTS.md > Task management", since `CLAUDE.md` only imports `AGENTS.md`. `README.md`, `docs/system/workspace-internals.md` and `.gitignore` point at `AGENTS.md` for the agent instructions as well. `AGENTS.md`'s self-modification note names `AGENTS.md` as the file to update, and the `docker_runsc` template comment in `.mngr/settings.toml` drops its pointer to `CLAUDE.md`, which never covered installing gVisor.
+
+The earlyoom shed-order plan (`docs/system/blueprint/earlyoom-gvisor-shed-order/plan-earlyoom-gvisor-shed-order.md`) no longer plans a release test of its own for the OOM drill; the drill's recurring run in a real workspace is the Imbue Studio smoke journey's step 3c.
+
+The npm workspace's lockfile adds `@panzoom/panzoom` 4.6.2 (MIT, no dependencies), which Files uses to zoom and move an image on its view page.
+
+### system/apps/chat
+
+A Claude browser sign-in no longer drops to the paste-a-code flow just because the port Claude's CLI drew for its callback is already in use on the user's machine, often by a Docker container's published SSH port. When Imbue Studio says the port is taken, the chooser starts the same sign-in again, which draws a fresh port, trying up to three ports in all before it falls back as before. ChatGPT's CLI listens on a fixed port, so a ChatGPT sign-in falls back to the one-time code as soon as a fresh start lands on the same taken port. Any other reason the desktop app cannot relay still falls back at once.
+
+### system/apps/files
+
+An image open in a Files window zooms: pinch on a trackpad or a touch screen (or Ctrl+scroll) to zoom around the pointer, and drag to move around while zoomed. The picture always covers its window and never moves past its own edges.
+
+### system/apps/screen
+
+The Screen's acceptance test hands Imbue Studio its throwaway roots as `STUDIO_ROOTS_OVERRIDE` instead of the retired `MINDS_DATA_HOME`, which an mngr checkout from after the override's rename no longer honors, so the run's state stays under its own temporary directory.
+
+### system/services/oom_priority
+
+The OOM drill (`bin/oom_drill.py`) puts its sleepers at the shed policy's own scores unless `--bands` names others: an aged chat (1000), Chromium's tabs (960), its GPU and utility processes (943) and main process (910), an agent's commands (900), the Screen's stack (850), a worker agent (600), a fresh chat (560) and a user agent (300). It stops the Screen's desktop and its watcher before its sleepers start and starts the watcher again when it ends, so a run needs only the chats stopped, and it counts every built-in service, up to 86, as one that must not be shed while an agent's command or a browser process remains. Tests hold the bands, that limit and the two Screen programs to the template's own definitions. The README's "Changing the policy" has a policy change run the drill (`just dwt-oom-drill` from an mngr checkout), and `OOM_DRILL.md` covers that command, the drill's run in the Imbue Studio smoke journey, running it by hand in a local Docker workspace (`docker exec --privileged`), and checking Chromium's scores.
+
 ## 2026-11-18
 
 ### .agents
