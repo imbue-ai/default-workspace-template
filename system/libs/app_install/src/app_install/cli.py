@@ -16,6 +16,7 @@ Usage, from the workspace repo's root::
     uv run --no-sync app-install publish assemble <name> [--commit <rev>]
     uv run --no-sync app-install publish push <name> [--repo-name <repository>]
     uv run --no-sync app-install publish record <name>
+    uv run --no-sync app-install verify <name> [--template <version>]
     uv run --no-sync app-install check
     uv run --no-sync app-install list
 
