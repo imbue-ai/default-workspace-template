@@ -36,7 +36,7 @@ class SuggestionsStatus(LowerCaseStrEnum):
     """Where a chat's next-step suggestions stand, as the read route reports it (a wire value)."""
 
     READY = auto()
-    # A set for the chat's last reply is being worked out; a ``suggestions_updated`` push follows it.
+    # A set for the chat's last reply is being worked out; a ``suggestions_updated`` push follows when one is stored.
     PENDING = auto()
     NONE = auto()
 

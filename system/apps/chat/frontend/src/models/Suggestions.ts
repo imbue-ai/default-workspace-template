@@ -44,8 +44,8 @@ export interface SuggestionSet {
 }
 
 /** What ``GET /api/chats/<chat-id>/suggestions`` answers: ``ready`` with the stored set, ``pending`` while one is being
- *  worked out (a ``suggestions_updated`` push follows), or ``none``. An ``action`` marks a suggestion whose click does
- *  something other than send its label. */
+ *  worked out (a ``suggestions_updated`` push follows when one is stored), or ``none``. An ``action`` marks a
+ *  suggestion whose click does something other than send its label. */
 export interface SuggestionsAnswer {
   status: string;
   after_event_id: string | null;
