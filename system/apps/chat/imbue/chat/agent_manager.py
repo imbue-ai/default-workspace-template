@@ -106,10 +106,12 @@ from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_records import is_seed_entry
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import is_slash_command
+from imbue.chat.chat_seed import read_seed_first_message
 from imbue.chat.chat_seed import seed_agent_info
 from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_seed import seed_events
 from imbue.chat.chat_seed import write_seed_file
+from imbue.chat.chat_seed import write_seed_first_message
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.compaction_status import COMPACTION_CAUSE_FIELD
 from imbue.chat.compaction_status import COMPACTION_REQUEST_FILENAME
@@ -3752,16 +3754,15 @@ class AgentManager:
         account: Account | None,
         harness: HarnessType,
         is_seed_carried_by_first_send: bool,
-        is_first_message_taken: bool,
     ) -> ChatAgentEntry:
         """Mint a seeded chat's first agent and name it on the record ahead of its ``mngr create``. Lock held.
 
         Named before the create, as a handoff names its successor: the observe stream lists an
         agent as soon as mngr provisions it, well before the create returns, and an agent no
         record names would be listed as a chat of its own until then. A launch with no message
-        marks the seed as pending, for the first send to carry. A launch that sends the seed's
-        first message is named as the one that took it, in the same write, so a restart of this
-        app after it never sends the message again.
+        marks the seed as pending, for the first send to carry. Naming the agent is also what
+        takes the seed's first message (``seed_chat``): only a chat with no agent on its record
+        has one left to send.
         """
         entry = ChatAgentEntry(
             seq=len(seed_record.agents) + 1,
@@ -3775,10 +3776,6 @@ class AgentManager:
             seed_record.model_copy_update(
                 to_update(seed_record.field_ref().agents, (*seed_record.agents, entry)),
                 to_update(seed_record.field_ref().is_seed_pending, is_seed_carried_by_first_send),
-                to_update(
-                    seed_record.field_ref().seed_first_message_agent_id,
-                    entry.agent_id if is_first_message_taken else None,
-                ),
             )
         )
         return entry
@@ -3840,18 +3837,10 @@ class AgentManager:
         if record is not None and record.entry_for(record_entry.agent_id) is not None:
             remaining = tuple(entry for entry in record.agents if entry.agent_id != record_entry.agent_id)
             # A seed pending for the withdrawn member is pending for nobody: the next launch decides again.
-            # The seed's first message, when this member's launch took it, never reached an agent that
-            # stayed, so it waits for the next launch again.
             self._write_record_locked(
                 record.model_copy_update(
                     to_update(record.field_ref().agents, remaining),
                     to_update(record.field_ref().is_seed_pending, False),
-                    to_update(
-                        record.field_ref().seed_first_message_agent_id,
-                        None
-                        if record.seed_first_message_agent_id == record_entry.agent_id
-                        else record.seed_first_message_agent_id,
-                    ),
                 )
             )
         if record_entry.agent_id not in self._agents:
@@ -4692,9 +4681,9 @@ class AgentManager:
 
         ``first_message`` is a message the chat sends as the user's own when its first agent launches
         (a workspace created from an app is seeded with ``/install-app <url>``); blank for none. It is
-        kept on the record with the seed, so it survives a restart of this app, and the launch that
-        sends it is named there as having taken it (``create_chat``), so it is sent once. With an
-        account signed in the chat is launched here, at once; otherwise the sign-in's launch sends it.
+        kept in a file beside the seed, so it survives a restart of this app, and is sent by the launch
+        that gives the chat its first agent (``create_chat``), so it is sent once. With an account
+        signed in the chat is launched here, at once; otherwise the sign-in's launch sends it.
         """
         explicit_title = explicit_chat_name(title)
         seed_first_message = first_message.strip()
@@ -4716,8 +4705,8 @@ class AgentManager:
         """Launch a chat seeded with a first message on the signed-in account, so the message is sent at once.
 
         With nothing signed in the chat waits as any seeded chat does, and the launch the sign-in makes sends the
-        message. Any other refusal is logged rather than raised: the seed has been taken, and the message stays on
-        the record for the next launch.
+        message. Any other refusal is logged rather than raised: the seed has been taken, and the message stays
+        beside it for the next launch.
         """
         try:
             self.create_chat("", chat_id=str(chat_id))
@@ -4737,7 +4726,7 @@ class AgentManager:
     ) -> ProvisionalChat:
         """Write a seeded chat's seed and record and list it as provisional, for ``_publish_seeded_chat`` to announce.
         ``is_recorded_as_main_first`` makes it the main chat before any of its files are written, and
-        ``first_message`` is kept on the record for the chat's first launch to send. Raises
+        ``first_message`` is kept beside the seed for the chat's first launch to send. Raises
         ``AgentNameConflictError`` for a title already in use. Lock held."""
         chat_id = ChatId(str(AgentId()))
         now = datetime.now(timezone.utc)
@@ -4760,9 +4749,10 @@ class AgentManager:
                 ),
             ),
             seed_title=display_name,
-            seed_first_message=first_message,
         )
         write_seed_file(self._chat_files_root / chat_id, events)
+        if first_message:
+            write_seed_first_message(self._chat_files_root / chat_id, first_message)
         self._write_record_locked(record)
         provisional = ProvisionalChat(
             chat_id=chat_id,
@@ -5014,12 +5004,13 @@ class AgentManager:
         message is exactly what the launch brings: the user's first words, or nothing when the sign-in
         that made an account launches it ahead of them, in which case the first send carries the seeded
         conversation (``carry_pending_seed``). A seeded chat that was given a first message of its own
-        (``seed_chat``) sends that one first, whoever launches it, and exactly once: the launch is named on the
-        record as having taken it, a failed create hands it back for the retry, and the words the launch itself
-        brought follow it through the send path once the agent is up. That message is delivered like the user's
-        first words, the seeded conversation ahead of it, except that a slash command goes as it is and leaves
-        the conversation for the first send after it. A room takes no such message: it has no agent to act on
-        one.
+        (``seed_chat``) sends that one first, whoever launches it, and exactly once: it is read only for a chat
+        whose record names no agent yet, so the launch that names one takes it, a failed create (which takes its
+        agent back off the record) leaves it for the retry, and nothing after a landed create reads it again. The
+        words the launch itself brought follow it through the send path once the agent is up. That message is
+        delivered like the user's first words, the seeded conversation ahead of it, except that a slash command
+        goes as it is and leaves the conversation for the first send after it. A room takes no such message: it
+        has no agent to act on one.
 
         ``labels`` ride the create as extra ``--label``s, for a caller outside the workspace
         that wants the chat's window surfaced (``auto_open``); one that restates a label the app
@@ -5080,8 +5071,8 @@ class AgentManager:
                                 f"Chat {chat_id} keeps the first message it was minted with; a launch cannot reseed it"
                             )
                         message = provisional.message
-                    if seed_record.is_seed_first_message_pending and harness is not HarnessType.ROOM:
-                        seed_first_message = seed_record.seed_first_message
+                    if harness is not HarnessType.ROOM:
+                        seed_first_message = read_seed_first_message(self._chat_files_root / provisional.chat_id)
                 elif provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND:
                     # An unseeded chat awaiting its first send (an intake that could not launch at once,
                     # ``chat_intakes.py``) is launched by whatever its launch brings: the first message, or
@@ -5118,7 +5109,6 @@ class AgentManager:
                     harness,
                     is_seed_carried_by_first_send=not launch_words
                     or (bool(seed_first_message) and is_slash_command(seed_first_message)),
-                    is_first_message_taken=bool(seed_first_message),
                 )
             )
             provisional = ProvisionalChat(

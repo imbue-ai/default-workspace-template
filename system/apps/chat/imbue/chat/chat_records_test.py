@@ -1,12 +1,15 @@
 """The chat record store: round trips, the version guard, and the per-record skip on a bad file."""
 
 import json
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
+from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import FileChatRecordStore
@@ -200,42 +203,63 @@ def test_a_record_carries_whether_its_seed_is_pending_and_an_older_file_reads_it
     assert read_older is not None and read_older.is_seed_pending is False
 
 
-def test_a_record_carries_a_seeds_first_message_and_which_agent_took_it(tmp_path: Path) -> None:
-    """The message a seed asked the chat to send is on the record, pending until a launch is named as having
-    taken it; a file from before the field reads as a seed that asked for none."""
+# A seeded chat's record exactly as the chat app of minds-v0.10 wrote it. Earlier chat apps refuse a record that
+# carries a key they do not know, so a change to this text makes every chat written after it unreadable to them.
+_SEEDED_RECORD_AS_EARLIER_CHAT_APPS_WROTE_IT = """{
+  "agents": [
+    {
+      "account_id": "",
+      "agent_id": "agent-seeded",
+      "archived_name": null,
+      "ended_at": "2026-11-21T12:00:00Z",
+      "final_event_count": 2,
+      "harness": "seed",
+      "is_fresh_start": false,
+      "lane": "",
+      "opening_message": null,
+      "opening_message_id": null,
+      "seq": 1,
+      "started_at": "2026-11-21T12:00:00Z"
+    }
+  ],
+  "chat_id": "agent-seeded",
+  "chosen_name": null,
+  "handoff": null,
+  "is_seed_pending": false,
+  "rebind": null,
+  "seed_title": "Main",
+  "version": 2
+}
+"""
+
+
+def test_a_record_is_written_byte_for_byte_as_earlier_chat_apps_wrote_it(tmp_path: Path) -> None:
+    """A workspace can be rolled back to the chat app it ran before an update, and that app refuses any record
+    with a key it does not know: the file this build writes is the file that one wrote, and it reads it back."""
     store = FileChatRecordStore(root=tmp_path / "chats")
-    first, second = _agent_id(), _agent_id()
-    plain = two_member_record(first, second)
-    waiting = plain.model_copy_update(to_update(plain.field_ref().seed_first_message, "/install-app https://x.test/a"))
-    assert waiting.is_seed_first_message_pending is True
-    taken = waiting.model_copy_update(to_update(waiting.field_ref().seed_first_message_agent_id, second))
-    assert taken.is_seed_first_message_pending is False
+    seeded_at = datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc)
+    record = ChatRecord(
+        chat_id=ChatId("agent-seeded"),
+        agents=(
+            ChatAgentEntry(
+                seq=1,
+                agent_id="agent-seeded",
+                lane="",
+                account_id="",
+                harness=HarnessType.SEED,
+                started_at=seeded_at,
+                ended_at=seeded_at,
+                final_event_count=2,
+            ),
+        ),
+        seed_title="Main",
+    )
 
-    store.write(taken)
-    assert store.read(ChatId(first)) == taken
+    store.write(record)
 
-    older = plain.model_dump(mode="json")
-    del older["seed_first_message"]
-    del older["seed_first_message_agent_id"]
-    (tmp_path / "chats" / first / "record.json").write_text(json.dumps(older))
-    read_older = store.read(ChatId(first))
-    assert read_older is not None
-    assert read_older.seed_first_message == "" and read_older.is_seed_first_message_pending is False
-
-
-def test_a_record_refuses_a_first_message_taken_by_an_agent_it_does_not_name() -> None:
-    first, second = _agent_id(), _agent_id()
-    plain = two_member_record(first, second)
-    with pytest.raises(ValidationError, match="first message was taken"):
-        ChatRecord.model_validate(
-            {
-                **plain.model_dump(mode="json"),
-                "seed_first_message": "hello",
-                "seed_first_message_agent_id": _agent_id(),
-            }
-        )
-    with pytest.raises(ValidationError, match="first message was taken"):
-        ChatRecord.model_validate({**plain.model_dump(mode="json"), "seed_first_message_agent_id": second})
+    record_path = tmp_path / "chats" / "agent-seeded" / "record.json"
+    assert record_path.read_text() == _SEEDED_RECORD_AS_EARLIER_CHAT_APPS_WROTE_IT
+    assert store.read(ChatId("agent-seeded")) == record
 
 
 def test_a_file_store_raises_when_a_record_cannot_be_removed(tmp_path: Path) -> None:

@@ -15,7 +15,9 @@ record as its second member when the user's first message launches it.
 
 A seed can name a first message for the chat to send as the user's own once that agent launches
 (the app sends ``/install-app <url>`` for a workspace created from an app). It is no turn of the
-seed: the record keeps it until a launch takes it (``AgentManager.seed_chat``).
+seed and no part of the chat's record: it is a file of its own beside the seed file, read by the
+launch of a chat that has its seed and no agent yet (``AgentManager.create_chat``), so the record
+keeps the shape every earlier chat app reads.
 """
 
 import json
@@ -41,6 +43,7 @@ from imbue.imbue_common.pure import pure
 logger = _loguru_logger
 
 SEED_FILENAME: Final[str] = "seed.jsonl"
+SEED_FIRST_MESSAGE_FILENAME: Final[str] = "seed_first_message.txt"
 # The ``source`` every seed event carries, so a reader can tell a seeded turn from a harness's.
 SEED_SOURCE: Final[str] = "seed"
 # The pseudo-agent's mngr name, shown on the terminal back face of a chat that has no agent yet.
@@ -166,6 +169,24 @@ def read_seed_events(chat_dir: Path) -> list[dict[str, Any]]:
             continue
         events.append(parsed)
     return events
+
+
+def write_seed_first_message(chat_dir: Path, message: str) -> Path:
+    """Keep the message a seed asked its chat to send first, whole (a temp file renamed into place)."""
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    path = chat_dir / SEED_FIRST_MESSAGE_FILENAME
+    temp_path = path.with_suffix(".txt.tmp")
+    temp_path.write_text(message, encoding="utf-8")
+    temp_path.replace(path)
+    return path
+
+
+def read_seed_first_message(chat_dir: Path) -> str:
+    """The message a seed asked its chat to send first; empty when it named none."""
+    path = chat_dir / SEED_FIRST_MESSAGE_FILENAME
+    if not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8")
 
 
 @pure

@@ -554,19 +554,22 @@ the record does; discarding the chat before its first send drops both.
 The seed body takes one more, optional, field: `first_message`, a message the
 chat sends as the user's own when its first agent launches (a workspace created
 from an app is seeded with `/install-app <url>`, so the agent's first turn sets
-the app up). It is kept on the record with the seed (`seed_first_message`), so
-it survives a restart of this app between the seed and the launch. With an
+the app up). It is kept in a file of its own beside the seed
+(`data/.apps/chat/chats/<chat-id>/seed_first_message.txt`), so it survives a
+restart of this app between the seed and the launch, and the chat's record
+stays the one a seed without it writes, which a chat app from before the field
+still reads. With an
 account signed in, the seed route launches the chat itself, at once, and the
 create carries the message; with nothing signed in the chat waits like any
 seeded chat, and the launch the sign-in makes sends it. Whoever launches the
 chat first sends it: when the user signed in elsewhere and typed before
 anything had launched the chat, the seed's message rides the create and the
 user's words follow it through the send path once the agent is up. It is
-sent once. The launch that sends it is named on the record
-(`seed_first_message_agent_id`) in the same write that names the agent, so no
-later launch, restart, or handoff sends it again; a create that fails takes its
-agent back off the record and the message waits again, for the page's "Try
-again" or for the launch after a restart. It reaches the agent as the user's
+sent once. It is read only by the launch of a chat whose record names no agent
+yet, and that launch names one before its create starts, so no later launch,
+restart, or handoff sends it again; a create that fails takes its agent back
+off the record, which leaves the message for the page's "Try again" or for the
+launch after a restart. It reaches the agent as the user's
 first words would, the seeded conversation ahead of it, except that a slash
 command goes as it is and leaves the conversation pending for the first send
 after it. A chat launched as a room is not sent it: a room has no agent to act

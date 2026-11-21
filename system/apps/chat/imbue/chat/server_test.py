@@ -81,6 +81,7 @@ from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import FileChatRecordStore
+from imbue.chat.chat_seed import SEED_FIRST_MESSAGE_FILENAME
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_settings import FastModeMode
@@ -4073,8 +4074,10 @@ def test_seeding_a_chat_with_a_first_message_launches_it_at_once_with_that_messa
         (create_line,) = _logged_creates(log_path)
         assert create_line.endswith(f"--message {_SEED_FIRST_MESSAGE}")
         record = manager._chat_record_store.read(ChatId(created["chat_id"]))
-        assert record is not None and record.seed_first_message == _SEED_FIRST_MESSAGE
-        assert record.is_seed_first_message_pending is False
+        assert record is not None and [entry.harness for entry in record.agents] == [
+            HarnessType.SEED,
+            HarnessType.CLAUDE,
+        ]
     finally:
         manager.stop()
 
@@ -4126,7 +4129,7 @@ def test_seeding_a_chat_without_a_first_message_launches_nothing(
         assert awaiting is not None and awaiting.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
         record = manager._chat_record_store.read(ChatId(chat_id))
         assert record is not None and record.is_seed_only
-        assert record.seed_first_message == "" and record.is_seed_first_message_pending is False
+        assert not (tmp_path / "chats" / chat_id / SEED_FIRST_MESSAGE_FILENAME).exists()
         assert _logged_creates(log_path) == []
     finally:
         manager.stop()

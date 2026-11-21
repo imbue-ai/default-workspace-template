@@ -95,6 +95,7 @@ from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import read_seed_events
+from imbue.chat.chat_seed import read_seed_first_message
 from imbue.chat.chat_seed import seed_event_id
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_settings import ChatSettingsStore
@@ -1223,11 +1224,12 @@ def _wait_until_launched(manager: AgentManager, chat_id: str) -> None:
     wait_until_true(lambda: manager.get_provisional_chat(chat_id) is None, 10, "the provisional chat's completion")
 
 
-def test_a_seeds_first_message_is_kept_on_its_record_and_waits_while_nothing_is_signed_in(
+def test_a_seeds_first_message_is_kept_beside_its_seed_and_waits_while_nothing_is_signed_in(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A workspace created from an app is seeded with the command that sets the app up, before the user has
-    signed in to anything: the message is stored with the seed and nothing is launched."""
+    signed in to anything: the message is stored with the seed and nothing is launched. The record is the one a
+    seed without a message writes, so a chat app from before the field reads it."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
     _sign_out_of_every_account()
@@ -1238,8 +1240,11 @@ def test_a_seeds_first_message_is_kept_on_its_record_and_waits_while_nothing_is_
 
         record = store.read(ChatId(seeded.chat_id))
         assert record is not None and record.is_seed_only
-        assert record.seed_first_message == _SEED_FIRST_MESSAGE
-        assert record.is_seed_first_message_pending is True
+        assert read_seed_first_message(_seed_files_root(tmp_path) / seeded.chat_id) == _SEED_FIRST_MESSAGE
+        plain = manager.seed_chat("Another", _seed_turns())
+        plain_record = store.read(ChatId(plain.chat_id))
+        assert plain_record is not None
+        assert set(record.model_dump()) == set(plain_record.model_dump())
         awaiting = manager.get_provisional_chat(seeded.chat_id)
         assert awaiting is not None and awaiting.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
         assert _create_lines(argv_log) == []
@@ -1264,8 +1269,7 @@ def test_a_chat_seeded_with_a_first_message_is_launched_at_once_on_the_signed_in
         record = store.read(ChatId(seeded.chat_id))
         assert record is not None
         _seed, agent = record.agents
-        assert record.seed_first_message_agent_id == agent.agent_id
-        assert record.is_seed_first_message_pending is False
+        assert agent.seq == 2 and agent.ended_at is None
         assert record.is_seed_pending is True
         (create_line,) = _create_lines(argv_log)
         assert create_line.endswith(f"--message {_SEED_FIRST_MESSAGE}")
@@ -1315,7 +1319,7 @@ def test_a_seeds_first_message_is_sent_by_the_launch_the_sign_in_makes(
         (create_line,) = _create_lines(argv_log)
         assert create_line.endswith(f"--message {_SEED_FIRST_MESSAGE}")
         record = store.read(ChatId(seeded.chat_id))
-        assert record is not None and record.is_seed_first_message_pending is False
+        assert record is not None and not record.is_seed_only
     finally:
         manager.stop()
 
@@ -1323,8 +1327,8 @@ def test_a_seeds_first_message_is_sent_by_the_launch_the_sign_in_makes(
 def test_a_seeds_first_message_is_sent_once_across_restarts_of_the_app(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The message is on the record, so a restart between the seed and the launch keeps it for the launch; and
-    the launch is named on the record as having taken it, so a restart after it sends nothing again."""
+    """The message is on disk beside the seed, so a restart between the seed and the launch keeps it for the
+    launch; and it is read only for a chat with no agent yet, so a restart after the launch sends nothing again."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
     _sign_out_of_every_account()
@@ -1348,8 +1352,6 @@ def test_a_seeds_first_message_is_sent_once_across_restarts_of_the_app(
     third, _ = _seed_manager(broadcaster, tmp_path, store=store, mngr_binary=mngr_binary)
     try:
         assert third.get_provisional_chat(seeded.chat_id) is None
-        record = store.read(ChatId(seeded.chat_id))
-        assert record is not None and record.is_seed_first_message_pending is False
         with pytest.raises(AgentCreationError, match="not waiting to be launched"):
             third.create_chat("", chat_id=seeded.chat_id)
     finally:
@@ -1383,8 +1385,8 @@ def _is_launch_failed(manager: AgentManager, chat_id: str) -> bool:
 def test_a_seeds_first_message_goes_back_to_wait_when_its_launch_fails_and_the_retry_sends_it(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A create that failed left no agent holding the message, so the record says it waits again, and the page's
-    "Try again" sends it: once, since the failed create never ran a turn."""
+    """A create that failed left no agent holding the message: the chat is back to its seed alone, so the page's
+    "Try again" sends the message, once, since the failed create never ran a turn."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
     mngr_binary, fixed_path, argv_log = _write_mngr_binary_failing_creates_until_fixed(tmp_path / "mngr")
@@ -1396,7 +1398,7 @@ def test_a_seeds_first_message_goes_back_to_wait_when_its_launch_fails_and_the_r
 
         withdrawn = store.read(chat_id)
         assert withdrawn is not None and withdrawn.is_seed_only
-        assert withdrawn.is_seed_first_message_pending is True
+        assert _create_lines(argv_log) == []
 
         fixed_path.touch()
         manager.create_chat("", chat_id=seeded.chat_id)
@@ -1405,7 +1407,7 @@ def test_a_seeds_first_message_goes_back_to_wait_when_its_launch_fails_and_the_r
         (create_line,) = _create_lines(argv_log)
         assert create_line.endswith(f"--message {_SEED_FIRST_MESSAGE}")
         relaunched = store.read(chat_id)
-        assert relaunched is not None and relaunched.is_seed_first_message_pending is False
+        assert relaunched is not None and len(relaunched.agents) == 2
     finally:
         manager.stop()
 
@@ -1413,7 +1415,7 @@ def test_a_seeds_first_message_goes_back_to_wait_when_its_launch_fails_and_the_r
 def test_a_seeds_first_message_outlives_a_restart_after_its_launch_failed(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The failed chat's retry state is in memory, but the message went back onto the record: after a restart
+    """The failed chat's retry state is in memory, but the message is on disk beside the seed: after a restart
     the chat awaits its launch again and that launch sends the message."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
@@ -1504,7 +1506,7 @@ def test_a_room_launched_on_a_seed_with_a_first_message_is_not_sent_it(
         (create_line,) = _create_lines(argv_log)
         assert "--message" not in create_line.split() and "/install-app" not in create_line
         record = store.read(ChatId(seeded.chat_id))
-        assert record is not None and record.seed_first_message_agent_id is None
+        assert record is not None and record.agents[-1].harness is HarnessType.ROOM
     finally:
         manager.stop()
 
@@ -1529,7 +1531,6 @@ def test_a_handoff_of_a_chat_that_sent_its_seeds_first_message_does_not_send_it_
         record = _wait_until_settled(store, chat_id)
 
         assert [entry.harness for entry in record.agents] == [HarnessType.SEED, HarnessType.CLAUDE, HarnessType.CODEX]
-        assert record.seed_first_message_agent_id == record.agents[1].agent_id
         first_create, successor_create = _create_lines(argv_log)
         assert first_create.endswith(f"--message {_SEED_FIRST_MESSAGE}")
         assert "/install-app" not in successor_create
