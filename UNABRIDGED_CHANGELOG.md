@@ -4,6 +4,22 @@ Full, unedited changelog entries consolidated nightly from the individual files 
 
 For a concise summary, see [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-20
+
+### .agents
+
+The datalib skill is written as the skill it will be once datalib is announced, with the dark-launch gating confined to its frontmatter description and one paragraph between `<!-- dark-launch -->` markers, so an eval can derive the announced skill from it by stripping that block and replacing the description. Its body now tells the agent to read how a sync ended before answering from the store (a `failed` request leaves a conversation missing until the next sync), to size a source's `since` to the data the user wants kept rather than to the question and to set `refresh_every_minutes = 0` for a copy refreshed on demand, and that a mechanical question is a SQL query over the raw store with `datalib-doltlite -readonly`. Linear joins the list of sources that work through the gateway, with its scope in the permission-request example.
+
+### system
+
+- The interactive-shell line that sources mngr's host env, written into `.bashrc` at provisioning, names the provisioning run's own host dir rather than always `/home/user/.mngr`, so a terminal on a Modal-hosted workspace (host dir `/mngr`) gets the agent environment.
+
+- The apt hook that refreshes the environment record looks for the host dir named in `MNGR_HOST_DIR`, falling back to `/home/user/.mngr`.
+
+### system/apps/system_monitor
+
+On a host that keeps mngr's host dir somewhere other than `/home/user/.mngr` (a Modal-hosted workspace keeps it at `/mngr`), the System Monitor names chats and attributes their processes to them: it reads the agent records from `MNGR_HOST_DIR` and recognises agent paths under `/mngr/agents/`.
+
 ## 2026-11-19
 
 ### .agents

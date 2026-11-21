@@ -37,6 +37,7 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 - Changed: `preview_app.py`, `mock_frame.py` and `serve_isolated_instance.py` refuse to register a window from a git worktree, and a preview's default title is `<App> (preview)`.
 - Changed: Skills, hooks and docs that pointed at `CLAUDE.md` for agent instructions now point at `AGENTS.md`; `migrate-workspace` ports an old workspace's instruction edits into `AGENTS.md`.
 - Changed: The OOM drill (`oom_priority/bin/oom_drill.py`) uses the shed policy's own bands by default, stops the Screen's desktop and watcher before its run and restarts the watcher after; the oom_priority README has a policy change run it.
+- Changed: The `datalib` skill has the agent check how a sync ended before answering from the store, size a source's `since` to the data the user wants kept (`refresh_every_minutes = 0` for on-demand refresh), and answer mechanical questions with SQL via `datalib-doltlite -readonly`; Linear is listed as a gateway source.
 
 ### Removed
 
@@ -57,6 +58,7 @@ For the full, unedited changelog entries, see [UNABRIDGED_CHANGELOG.md](UNABRIDG
 - Fixed: A newly built app's harden pass can run its browser tests: `build-app`'s scaffold gives the app's test environment Playwright and pytest-timeout.
 - Fixed: Preview and UI-sketch frames load their app on a shared workspace; `preview_wrapper_server.py` takes `--apps-file` and reads the service's registered origin label.
 - Fixed: A Claude browser sign-in retries with a fresh callback port, up to three in all, when the port is already in use, instead of dropping to the paste-a-code flow.
+- Fixed: On a workspace whose mngr host dir is not `/home/user/.mngr` (Modal keeps it at `/mngr`), the System Monitor names chats and attributes their processes, terminals get the agent environment, and the apt hook refreshes the environment record; each now reads `MNGR_HOST_DIR`.
 
 ## [minds-v0.10.5] - 2026-11-17
 
