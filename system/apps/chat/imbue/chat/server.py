@@ -21,6 +21,7 @@ from typing import assert_never
 from uuid import uuid4
 
 import httpx
+from app_manifest.built_assets import send_built_asset
 from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
@@ -44,7 +45,6 @@ from flask import Response
 from flask import current_app
 from flask import request
 from flask import send_file
-from flask import send_from_directory
 from flask.ctx import AppContext
 from loguru import logger as _loguru_logger
 from pydantic import Field
@@ -110,6 +110,7 @@ from imbue.chat.chat_intakes import app_chat_title
 from imbue.chat.chat_intakes import chat_id_selected_by_window_path
 from imbue.chat.chat_intakes import intake_path
 from imbue.chat.chat_intakes import most_recently_messaged_chat_id
+from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
@@ -2298,8 +2299,21 @@ def _seed_chat() -> Response:
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
     seed_request = parse_request_body(SeedChatRequest)
+    if seed_request.is_first_run:
+        # Handed over again as the user enters the workspace: the chat is there already, and only what they
+        # said about themselves may have changed.
+        updated = agent_manager.update_first_run_context(seed_request.context)
+        if updated is not None:
+            return model_response(
+                CreateChatResponse(chat_id=updated.chat_id, name=updated.name, display_name=updated.display_name), 201
+            )
     try:
-        created = agent_manager.seed_chat(MAIN_CHAT_NAME, seed_request.turns)
+        if seed_request.is_first_run:
+            created = agent_manager.seed_chat(
+                MAIN_CHAT_NAME, FIRST_RUN_WELCOME, first_run_context=seed_request.context, is_first_run=True
+            )
+        else:
+            created = agent_manager.seed_chat(MAIN_CHAT_NAME, seed_request.turns)
     except AgentNameConflictError as e:
         return error_response(str(e), 409)
     except AgentCreationError as e:
@@ -2986,14 +3000,15 @@ def _favicon() -> Response:
 
 
 def _serve_asset(filename: str) -> Response:
-    """The chat page's built bundle (``static/assets/``), by the hashed name the document links."""
+    """The chat page's built bundle (``static/assets/``), by the hashed name the document links; one named from its
+    content is cached for good, so a load (a phone over a slow link above all) does not ask for it again."""
     assets_directory = get_state().static_directory / "assets"
     # A missing asset is a plain 404 rather than the HTML error page ``send_from_directory``
     # would raise. Existence and safety are both left to ``send_from_directory``: ``filename``
     # arrives with any ``..`` segments intact, so joining it onto the directory ourselves would
     # stat paths outside it -- an existence oracle for the whole filesystem.
     try:
-        return send_from_directory(assets_directory, filename)
+        return send_built_asset(assets_directory, filename)
     except NotFound:
         return Response(status=404)
 
@@ -3172,9 +3187,7 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("POST", "/api/uploads"): RouteModels(response_model=AttachmentUploadResponse, success_status=201),
     ("GET", "/api/uploads/{relative_path}"): SchemalessRoute(reason="The stored attachment itself"),
     ("DELETE", "/api/uploads/{relative_path}"): RouteModels(response_model=OkResponse),
-    ("POST", "/api/chats/{chat_id}/uploads"): RouteModels(
-        response_model=AttachmentUploadResponse, success_status=201
-    ),
+    ("POST", "/api/chats/{chat_id}/uploads"): RouteModels(response_model=AttachmentUploadResponse, success_status=201),
     ("GET", "/api/chats/{chat_id}/uploads/{relative_path}"): SchemalessRoute(reason="The stored attachment itself"),
     ("DELETE", "/api/chats/{chat_id}/uploads/{relative_path}"): RouteModels(response_model=OkResponse),
     ("GET", "/api/settings"): RouteModels(response_model=ChatSettingsResponse),

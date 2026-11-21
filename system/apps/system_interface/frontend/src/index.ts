@@ -1,4 +1,6 @@
 import m from "mithril";
+
+import { SHELL_FIRST_RUN_PROVIDER_STEP } from "@imbue/workspace-ui/src/app_contract";
 import { getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import {
@@ -18,7 +20,7 @@ import {
 } from "@imbue/workspace-ui/src/embed";
 import "./style.css";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
-import { PERMISSION_RESOLUTIONS } from "@imbue/workspace-ui/src/embed";
+import { IS_CHAT_ROOT_FOCUS_ACCEPTED, PERMISSION_RESOLUTIONS } from "@imbue/workspace-ui/src/embed";
 import { refreshShellKeybindings } from "./model/keybindings";
 import { permissionResolutionEntries } from "./model/permissionResolutions";
 import * as api from "./model/api";
@@ -26,6 +28,7 @@ import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/dee
 import type { DeepLink } from "./model/deepLinks";
 import { connectEmbedderToStore, immersiveBridge } from "./store/embedderBridge";
 import { parseSoloMode } from "./model/soloMode";
+import { isFirstRunProviderStepPending, setFirstRunProviderStep } from "./model/firstRunCover";
 import { isPreviewShell } from "./model/PreviewShell";
 import type { Frame } from "./model/records";
 import { frameFromViewportFractions } from "./geometry/frames";
@@ -35,7 +38,7 @@ import { getOwnIdentity, onOwnIdentityChanged, startPresenceHeartbeat } from "./
 import { TOUR_API, TourController, tourStartDelayFromSearch } from "./model/tour";
 import type { TourAction } from "./model/tourCards";
 import { avatarPinnedWindow } from "./reducers/desktopState";
-import { initEmbedderRelay, setEmbedderAppMessageHandler } from "./relay";
+import { initEmbedderRelay, setChildFrameMessageHandler, setEmbedderAppMessageHandler } from "./relay";
 import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
 import { ShellSocket } from "./store/socket";
@@ -215,12 +218,19 @@ function bootstrap(): void {
       !desktopStore.isPhoneLayout() &&
       desktopStore.getSoloWindowId() === null &&
       !isPreviewShell() &&
+      !isFirstRunProviderStepPending() &&
       (getOwnIdentity()?.owner ?? true),
     performAction: runTourAction,
     startAfterWorkingMs: tourStartDelayFromSearch(window.location.search),
     redraw: () => m.redraw(),
   });
   desktopStore.subscribe(() => tour.noteAgentWorking(desktopStore.getState().avatar.status.mood === "working"));
+  // The chat app says whether the first run's provider page is owed; the cover follows it (views/FirstRunCover.ts).
+  setChildFrameMessageHandler(SHELL_FIRST_RUN_PROVIDER_STEP, (frame, payload) => {
+    if (typeof payload.isPending !== "boolean") return;
+    const origin = new URL(frame.src, window.location.href).origin;
+    if (setFirstRunProviderStep(payload.isPending, origin)) m.redraw();
+  });
   const rootElement = document.getElementById("app");
   if (rootElement) {
     m.mount(rootElement, {
@@ -241,7 +251,12 @@ function bootstrap(): void {
   // registered: relaying a message needs the apps (which of them take it), and the embedder sends
   // what it held the moment this lands.
   void loaded.then(() =>
-    announceReadyToEmbedder({ opensLinks: true, opensCustomSchemeLinks: true, reportsChatOnScreen: true }),
+    announceReadyToEmbedder({
+      opensLinks: true,
+      opensCustomSchemeLinks: true,
+      reportsChatOnScreen: true,
+      reportsProviderChooserOnScreen: IS_CHAT_ROOT_FOCUS_ACCEPTED,
+    }),
   );
 }
 

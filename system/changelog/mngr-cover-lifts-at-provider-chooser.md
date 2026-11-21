@@ -1,0 +1,1 @@
+The post-launch-paths plan now says the chat root opens the provider chooser for a chat waiting for its first message with nothing signed in, and the desktop-interface contracts list `reportsProviderChooserOnScreen` in the shell's `minds:workspace-ready` and the chat list's `minds:provider-chooser-on-screen {}` report that the shell forwards up (embed contract v16).

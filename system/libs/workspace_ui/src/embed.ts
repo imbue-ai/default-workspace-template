@@ -39,7 +39,8 @@ export const OPEN_SHARE_SETTINGS: "minds:open-share-settings" =
 // whose manifest registers the type.
 const FOCUS_CHAT: "minds:focus-chat" = "FOCUS_CHAT" in embedContract ? embedContract.FOCUS_CHAT : "minds:focus-chat";
 // Workspace -> embedder: this page's endpoint is listening. Payload:
-// { opensLinks, opensCustomSchemeLinks, reportsChatOnScreen } (see ReadyAnnouncement). The
+// { opensLinks, opensCustomSchemeLinks, reportsChatOnScreen, reportsProviderChooserOnScreen } (see
+// ReadyAnnouncement). The
 // embedder holds a focus-chat ask until it arrives, rather than guessing when
 // a freshly-mounted frame's page is live.
 export const WORKSPACE_READY: "minds:workspace-ready" =
@@ -48,6 +49,18 @@ export const WORKSPACE_READY: "minds:workspace-ready" =
 // { chatId }. The Imbue Studio creation page keeps its wash over a new workspace until the welcome chat says this.
 export const CHAT_ON_SCREEN: "minds:chat-on-screen" =
   "CHAT_ON_SCREEN" in embedContract ? embedContract.CHAT_ON_SCREEN : "minds:chat-on-screen";
+// Workspace -> embedder (contract v16): the chat list's provider chooser is drawn in a window the user can see.
+// Payload: {}. Accounts are the workspace's, so it names no chat; the Imbue Studio creation page lifts its wash over a
+// new workspace with nothing signed in on it, without waiting for the welcome chat.
+export const PROVIDER_CHOOSER_ON_SCREEN: "minds:provider-chooser-on-screen" =
+  "PROVIDER_CHOOSER_ON_SCREEN" in embedContract
+    ? embedContract.PROVIDER_CHOOSER_ON_SCREEN
+    : "minds:provider-chooser-on-screen";
+// Whether the vendored contract lets a FOCUS_CHAT without a chatId through (v16, the contract that also defines
+// PROVIDER_CHOOSER_ON_SCREEN). An older one drops that message before any handler sees it, so the chat root could not
+// be raised on entry; the shell promises reportsProviderChooserOnScreen, which covers taking that message, only when
+// this holds.
+export const IS_CHAT_ROOT_FOCUS_ACCEPTED: boolean = "PROVIDER_CHOOSER_ON_SCREEN" in embedContract;
 // The pull-out window set (contract v6, the pull-out-window spec), probed the same way.
 // Workspace -> embedder: show one pulled-out window in a desktop window of the chrome's own, opened
 // if it has none. Payload: { windowId, title, width, height } (the window's rendered size in CSS px).
@@ -212,6 +225,9 @@ export interface ReadyAnnouncement {
   readonly opensCustomSchemeLinks: boolean;
   /** Whether a chat of this workspace reports itself with CHAT_ON_SCREEN once it is drawn. */
   readonly reportsChatOnScreen: boolean;
+  /** Whether the chat list reports its provider chooser with PROVIDER_CHOOSER_ON_SCREEN once it is drawn (and so
+   * opens it on a workspace with nothing signed in before any chat exists). */
+  readonly reportsProviderChooserOnScreen: boolean;
 }
 
 /** Tell the embedder this page is listening, so it can send what it held, and what it handles.
@@ -221,12 +237,18 @@ export function announceReadyToEmbedder(announcement: ReadyAnnouncement): void {
     opensLinks: announcement.opensLinks,
     opensCustomSchemeLinks: announcement.opensCustomSchemeLinks,
     reportsChatOnScreen: announcement.reportsChatOnScreen,
+    reportsProviderChooserOnScreen: announcement.reportsProviderChooserOnScreen,
   });
 }
 
 /** Tell the embedder this chat's transcript is drawn in a window the user can see. */
 export function reportChatOnScreen(chatId: string): void {
   sendToEmbedder(CHAT_ON_SCREEN, { chatId });
+}
+
+/** Tell the embedder the chat list's provider chooser is drawn in a window the user can see. */
+export function reportProviderChooserOnScreen(): void {
+  sendToEmbedder(PROVIDER_CHOOSER_ON_SCREEN, {});
 }
 
 /** Clear the handler for one embedder->workspace type. */
