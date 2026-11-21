@@ -12,6 +12,10 @@ a main chat (``main_chat.py``).
 The seed's pseudo-agent id is the chat's id (a chat's id is its first agent's), so a seeded
 chat's record is well-formed before it has any real agent; the first real agent joins the
 record as its second member when the user's first message launches it.
+
+A seed can name a first message for the chat to send as the user's own once that agent launches
+(the app sends ``/install-app <url>`` for a workspace created from an app). It is no turn of the
+seed: the record keeps it until a launch takes it (``AgentManager.seed_chat``).
 """
 
 import json

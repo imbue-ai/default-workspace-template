@@ -551,6 +551,28 @@ out as typed, since a harness runs a command only when the slash leads the
 message, and leaves a pending seed for the next message. The seed survives a restart of this app because
 the record does; discarding the chat before its first send drops both.
 
+The seed body takes one more, optional, field: `first_message`, a message the
+chat sends as the user's own when its first agent launches (a workspace created
+from an app is seeded with `/install-app <url>`, so the agent's first turn sets
+the app up). It is kept on the record with the seed (`seed_first_message`), so
+it survives a restart of this app between the seed and the launch. With an
+account signed in, the seed route launches the chat itself, at once, and the
+create carries the message; with nothing signed in the chat waits like any
+seeded chat, and the launch the sign-in makes sends it. Whoever launches the
+chat first sends it: when the user signed in elsewhere and typed before
+anything had launched the chat, the seed's message rides the create and the
+user's words follow it through the send path once the agent is up. It is
+sent once. The launch that sends it is named on the record
+(`seed_first_message_agent_id`) in the same write that names the agent, so no
+later launch, restart, or handoff sends it again; a create that fails takes its
+agent back off the record and the message waits again, for the page's "Try
+again" or for the launch after a restart. It reaches the agent as the user's
+first words would, the seeded conversation ahead of it, except that a slash
+command goes as it is and leaves the conversation pending for the first send
+after it. A chat launched as a room is not sent it: a room has no agent to act
+on one. A blank or absent `first_message` is a seed as it always was, and
+launches nothing.
+
 The workspace has one **main chat**, where a text with no chat of its own goes
 (`main_chat.py`). It is a pointer, like a star on one chat, kept in
 `data/.apps/chat/main_chat.json`; no chat is special in itself, so a handoff, a

@@ -2292,14 +2292,16 @@ def _seed_chat() -> Response:
     turns as its transcript (``chat_seed.py``), named ``MAIN_CHAT_NAME``: it is the workspace's first
     main chat (``main_chat.py``). Like every create, 503 until the agent list has been read from
     mngr once, so the Imbue Studio app's seeding retries rather than being refused; 409 when a chat
-    already wears that name.
+    already wears that name. A body with a ``first_message`` has the chat send it as the user's own
+    when its first agent launches (``AgentManager.seed_chat``): the answer is the same either way,
+    and the launch, when an account is signed in to make it on, goes on after it.
     """
     agent_manager: AgentManager = get_state().agent_manager
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
     seed_request = parse_request_body(SeedChatRequest)
     try:
-        created = agent_manager.seed_chat(MAIN_CHAT_NAME, seed_request.turns)
+        created = agent_manager.seed_chat(MAIN_CHAT_NAME, seed_request.turns, seed_request.first_message)
     except AgentNameConflictError as e:
         return error_response(str(e), 409)
     except AgentCreationError as e:

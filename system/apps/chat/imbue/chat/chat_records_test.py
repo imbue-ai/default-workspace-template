@@ -200,6 +200,44 @@ def test_a_record_carries_whether_its_seed_is_pending_and_an_older_file_reads_it
     assert read_older is not None and read_older.is_seed_pending is False
 
 
+def test_a_record_carries_a_seeds_first_message_and_which_agent_took_it(tmp_path: Path) -> None:
+    """The message a seed asked the chat to send is on the record, pending until a launch is named as having
+    taken it; a file from before the field reads as a seed that asked for none."""
+    store = FileChatRecordStore(root=tmp_path / "chats")
+    first, second = _agent_id(), _agent_id()
+    plain = two_member_record(first, second)
+    waiting = plain.model_copy_update(to_update(plain.field_ref().seed_first_message, "/install-app https://x.test/a"))
+    assert waiting.is_seed_first_message_pending is True
+    taken = waiting.model_copy_update(to_update(waiting.field_ref().seed_first_message_agent_id, second))
+    assert taken.is_seed_first_message_pending is False
+
+    store.write(taken)
+    assert store.read(ChatId(first)) == taken
+
+    older = plain.model_dump(mode="json")
+    del older["seed_first_message"]
+    del older["seed_first_message_agent_id"]
+    (tmp_path / "chats" / first / "record.json").write_text(json.dumps(older))
+    read_older = store.read(ChatId(first))
+    assert read_older is not None
+    assert read_older.seed_first_message == "" and read_older.is_seed_first_message_pending is False
+
+
+def test_a_record_refuses_a_first_message_taken_by_an_agent_it_does_not_name() -> None:
+    first, second = _agent_id(), _agent_id()
+    plain = two_member_record(first, second)
+    with pytest.raises(ValidationError, match="first message was taken"):
+        ChatRecord.model_validate(
+            {
+                **plain.model_dump(mode="json"),
+                "seed_first_message": "hello",
+                "seed_first_message_agent_id": _agent_id(),
+            }
+        )
+    with pytest.raises(ValidationError, match="first message was taken"):
+        ChatRecord.model_validate({**plain.model_dump(mode="json"), "seed_first_message_agent_id": second})
+
+
 def test_a_file_store_raises_when_a_record_cannot_be_removed(tmp_path: Path) -> None:
     """A delete that leaves the record on disk must not look like a delete: the next build would
     read the record back and resurrect a destroyed chat."""

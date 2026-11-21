@@ -954,6 +954,11 @@ class SeedChatRequest(FrozenModel):
     # CLEANUP: drop ``title`` once no Imbue Studio app in use sends it (released ones send "Welcome").
     title: str = Field(default="", description="Ignored: the seeded chat is named ``MAIN_CHAT_NAME``")
     turns: tuple[SeedTurn, ...] = Field(min_length=1, description="The turns, in order")
+    first_message: str = Field(
+        default="",
+        description="A message the chat sends as the user's own when its first agent launches, after the turns: at "
+        "once when a provider account is signed in, else when the sign-in launches the chat; sent once; empty for none",
+    )
 
 
 class IntakeTarget(LowerCaseStrEnum):

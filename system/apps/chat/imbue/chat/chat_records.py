@@ -42,7 +42,7 @@ logger = _loguru_logger
 
 # Bumped when the on-disk shape changes. A record whose version is newer than this refuses to
 # load, so an older build never reads a newer record wrong.
-RECORD_VERSION: Final[int] = 2
+RECORD_VERSION: Final[int] = 3
 
 # The records' directory inside the chat app's data directory.
 CHAT_RECORDS_DIRNAME: Final[str] = "chats"
@@ -322,6 +322,16 @@ class ChatRecord(FrozenModel):
         description="Whether the seeded conversation has yet to reach the chat's first agent: it was launched with no "
         "message as the user signed in, so the first send carries the conversation ahead of the user's words",
     )
+    seed_first_message: str = Field(
+        default="",
+        description="The message a seeded chat was asked to send as the user's own when its first agent launches; "
+        "empty for none",
+    )
+    seed_first_message_agent_id: str | None = Field(
+        default=None,
+        description="The member whose launch took the seed's first message, so no later launch sends it again; None "
+        "while it waits for a launch",
+    )
 
     @model_validator(mode="after")
     def _check_agents_are_the_chats_in_order(self) -> Self:
@@ -353,6 +363,13 @@ class ChatRecord(FrozenModel):
                 raise InvalidChatRecordError(
                     f"chat {self.chat_id}: the seed segment can only be the chat's first, already ended, member"
                 )
+        if self.seed_first_message_agent_id is not None and (
+            not self.seed_first_message or self.seed_first_message_agent_id not in self.mngr_agent_ids
+        ):
+            raise InvalidChatRecordError(
+                f"chat {self.chat_id}: the seed's first message was taken by {self.seed_first_message_agent_id}, "
+                "but the chat has no such message or no such agent"
+            )
         for entry in self.agents[:-1]:
             if entry.ended_at is None:
                 raise InvalidChatRecordError(
@@ -393,6 +410,11 @@ class ChatRecord(FrozenModel):
     def is_seed_only(self) -> bool:
         """Whether the chat has its seed segment and no agent yet: it waits for the user's first message."""
         return self.is_seeded and len(self.agents) == 1
+
+    @property
+    def is_seed_first_message_pending(self) -> bool:
+        """Whether the seed's first message still waits for the launch that sends it."""
+        return bool(self.seed_first_message) and self.seed_first_message_agent_id is None
 
     @property
     def active_entry(self) -> ChatAgentEntry | None:
