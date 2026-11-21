@@ -148,4 +148,3 @@ def test_a_ref_that_is_spelled_like_an_option_is_read_as_a_ref_and_runs_nothing(
         fetch_commit(workspace, str(published), "--upload-pack=touch injected")
 
     assert not (workspace / "injected").exists()
-

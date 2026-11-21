@@ -192,7 +192,7 @@ def _skill_link_collisions(repo_root: Path, derived_by_record: Sequence[tuple[Ap
         )
         for relative_link in sorted(derived.link_target_by_path):
             claimant = claimant_by_link.setdefault(relative_link, str(record.name))
-            # A link that is there already has its one holder, and the other app is refused above.
+            # Only a link not yet written: one already in place is the skill collision check's to report.
             is_link_new = not (repo_root / relative_link).is_symlink() and not (repo_root / relative_link).exists()
             if is_link_new and claimant != str(record.name):
                 problems.append(f"{record.name}: {relative_link} is also the link to a skill of {claimant}")

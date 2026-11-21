@@ -818,7 +818,7 @@ def test_the_runner_serves_the_shell_modules_and_nothing_else(
     assert client.get("/_static/context_menu.js").status_code == 404
     assert client.get("/_static/runner.py").status_code == 404
     assert client.get("/_static/..%2Frunner.py").status_code == 404
-    # Only the two modules are ever asked of the shell, so the route cannot be made to fetch another path.
+    # Nothing but the modules is ever asked of the shell, so the route cannot be made to fetch another path.
     assert shell_stand_in.requested_paths == [
         "/_static/app_contract.js",
         "/_static/context_menu.js",

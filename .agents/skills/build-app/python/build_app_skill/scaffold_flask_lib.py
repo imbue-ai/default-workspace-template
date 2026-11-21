@@ -394,7 +394,7 @@ app = Flask("{package}", static_folder=None)
 register_api_schema_route(
     app, DEFAULT_API_SCHEMA_PATH, title={title_literal}, description={description_literal}, route_table=ROUTE_TABLE
 )
-# The two browser-side modules the workspace shell builds, served from this app's
+# The browser-side modules the workspace shell builds, served from this app's
 # own origin at ``/_static/``: the app contract (how a page talks to the shell
 # framing it) and the element context menu. A module import is a fetch without
 # cookies, which the forwarder refuses across origins, so the page cannot load
