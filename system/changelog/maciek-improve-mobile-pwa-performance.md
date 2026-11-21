@@ -1,0 +1,1 @@
+The phone interface plan now describes landing without a home-screen flash, the provisional home shown when there is nothing to land on, and how the shell revives its connection when the page comes back into sight.
