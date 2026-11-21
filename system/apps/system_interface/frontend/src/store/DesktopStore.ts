@@ -3491,6 +3491,12 @@ export class DesktopStore {
     return gesture !== null && (gesture.kind === "move" || gesture.kind === "resize") ? gesture : null;
   }
 
+  /** The window a drag is moving, else null. */
+  movingWindowId(): string | null {
+    const gesture = this.gesture;
+    return gesture !== null && gesture.kind === "move" ? gesture.windowId : null;
+  }
+
   /** The frame a placement renders at while a gesture moves or resizes it, else its own. */
   gestureRectFor(windowId: string): PixelRect | null {
     const gesture = this.windowGesture();
