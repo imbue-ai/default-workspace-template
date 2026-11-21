@@ -60,9 +60,9 @@ aside first so the update can be undone, then end the turn and wait for their
 go-ahead. For any other version, carry on unless the user only asked what is
 available.
 
-An app with no version (it was installed from a branch) has nothing to
-compare: an update is there whenever the repository's newest commit differs
-from `upstream_commit`.
+An app whose `upstream_version` is empty (its manifest names no version) has
+nothing to compare: an update is there whenever the repository's newest
+commit differs from `upstream_commit`.
 
 ## 2. Update
 
@@ -275,16 +275,19 @@ keeps only that one.
 
    Anything the user added through the app since the update is only in the
    set-aside copy. Say so, and ask before deleting it.
-3. Reinstall the earlier version, by the values noted in step 0:
+3. Reinstall the earlier version, by the `upstream_commit` noted in step 0,
+   in full:
 
    ```bash
-   uv run --no-sync app-install update <name> --branch v<the earlier upstream_version>
+   uv run --no-sync app-install update <name> --branch <the earlier upstream_commit>
    ```
 
-   For an app that had no version, pass the earlier `upstream_commit` in full
-   as the `--branch` value. The results are step 2's; `updated` here means
-   the app is back on the earlier version, with this workspace's own changes
-   to it still in place, and its programs started again.
+   The commit works wherever the app came from. A tag `v<upstream_version>`
+   exists only in a published repository, so it is not there for an app
+   taken from someone's dev repository or from a branch. The results are
+   step 2's; `updated` here means the app is back on the earlier version,
+   with this workspace's own changes to it still in place, and its programs
+   started again.
 4. Check it as in step 3, then tell the user they are back on the version
    they had, what went wrong with the new one, and that you can try again
    when a later version comes out.
