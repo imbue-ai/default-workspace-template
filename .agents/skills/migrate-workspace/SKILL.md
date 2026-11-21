@@ -400,14 +400,20 @@ them over before the agents, per "Accounts" in
 [references/agent-recreation.md](references/agent-recreation.md), and tell the
 user which account was the old workspace's default.
 
-**Creations.** Each app lands under `system/apps/<package>/` and gets a
-`[program:<name>]` block in `system/supervisord.conf.d/<name>.conf` that runs
-`system/scripts/forward_port.py` before its own start command, and re-registers its
-port that way -- never by copying the old registry file, which is runtime state.
-Land the app in the shape `build-app` writes today, a standalone uv project with its
-own lock and venv. Once every app, service and library is in place, convert them with
-update-self's user-package migration, dry run first, seeding each lock from the source
-workspace's `uv.lock` (the versions they ran on):
+**Creations.** Each app lands under `system/apps/<package>/` in the shape
+`build-app` writes today: a standalone uv project with its own lock and venv,
+registered with `app-install`, which keeps the app's record
+(`system/config/apps/<name>.toml`), gives it its port, and generates the
+program file that registers it through `system/scripts/forward_port.py` and
+starts it. Never write or edit an app's `[program:<name>]` block by hand, and
+never re-register an app by copying the old registry file, which is runtime
+state. Bring each app's directory over together with what it owned elsewhere
+in the old workspace, at the same paths: its program file under
+`system/supervisord.conf.d/`, the skills its `app.toml` names under
+`[[references]]`, and its routines. Once every app, service and library is in
+place, convert them with update-self's user-package migration, dry run first,
+seeding each lock from the source workspace's `uv.lock` (the versions they
+ran on):
 
 ```bash
 uv run --no-sync .agents/skills/migrate-workspace/python/migrate_workspace_skill/migrate_workspace.py \
@@ -422,11 +428,22 @@ root venv, and never adds it to the root `pyproject.toml`
 (`.agents/skills/update-self/references/python-packaging-migration.md`, "A user
 app, service or lib", covers an undeclared import it surfaces). The same goes for a
 user service or library the source workspace had under `system/`, which the same
-command converts. Then
+command converts.
+
+Then register each app with `app-install`, one at a time, by the case it is
+in ([references/registering-apps.md](references/registering-apps.md)): an app
+that came with a record is regenerated, an app with an `app.toml` and a
+hand-written program file is converted with `app-install migrate`, and any
+other app is registered with `app-install add`. Each command prints one JSON
+line whose `result` says what happened; quote it in your report.
+
+Finish with `uv run --no-sync app-install check`, which must answer
+`consistent`, and
 `supervisorctl reread && supervisorctl update`. An app that will not come up gets
 a **bounded** repair attempt (read its stderr log, fix the obvious break, retry
 once or twice); whatever is still broken becomes an explicit summary item naming
-what you tried.
+what you tried. A background service with no app (one under
+`system/services/`) keeps its own hand-written program file, as before.
 
 **Skills.** Rewrite the mechanical references, then **read each rewritten skill
 end to end** to confirm it still means what it meant:
@@ -453,7 +470,8 @@ user skill with scripts" in the same reference; until it does,
 **Template-file edits.** Port them *semantically* into their new counterparts and
 report each port: additions to the old `AGENTS.md` or `CLAUDE.md` appended to
 this `AGENTS.md` (only Claude-specific notes go in this `CLAUDE.md`), settings
-keys set in the new settings file, supervisord program blocks re-added. Never
+keys set in the new settings file, supervisord program blocks re-added (a
+service's own; an app's program is generated, above). Never
 overwrite a template file with the old one wholesale.
 
 **`.mngr/settings.toml` edits.** Follow `update-self`'s taxonomy. Live-applicable
