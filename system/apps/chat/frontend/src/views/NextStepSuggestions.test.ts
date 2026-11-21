@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   submitSuggestion: vi.fn(),
   opensWorkspaceSettings: false,
   openWorkspaceSettings: vi.fn(),
+  suggestionsUpdatedListeners: [] as ((chatId: string) => void)[],
 }));
 
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
@@ -22,6 +23,12 @@ vi.mock("../models/Chats", async (importOriginal) => ({
   getProvisionalChat: () => mocks.provisional,
   isLaunchInFlight: () => mocks.isLaunchInFlight,
   isRoomChat: () => mocks.isRoom,
+  addSuggestionsUpdatedListener: (listener: (chatId: string) => void) => {
+    mocks.suggestionsUpdatedListeners.push(listener);
+  },
+  removeSuggestionsUpdatedListener: (listener: (chatId: string) => void) => {
+    mocks.suggestionsUpdatedListeners = mocks.suggestionsUpdatedListeners.filter((entry) => entry !== listener);
+  },
 }));
 vi.mock("../models/Response", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Response")>()),
@@ -131,6 +138,11 @@ function seededAndAwaiting(): void {
   mocks.chat = undefined;
   mocks.provisional = provisionalChatFixture(CHAT, { phase: "awaiting_first_send", is_seeded: true, account_id: "" });
   mocks.events = [reply(`${CHAT}:seed:0`), reply(SEED_END)];
+}
+
+/** The chat app saying, over the page's socket, that a chat's stored set was replaced or removed. */
+function announceSuggestionsUpdated(chatId: string): void {
+  for (const listener of mocks.suggestionsUpdatedListeners) listener(chatId);
 }
 
 function writes(): unknown[] {
@@ -272,6 +284,25 @@ describe("the next-step strip", () => {
 
     expect(pillLabels()).toEqual(["One", "Two", "Three", "Four", "Five"]);
     expect(root.querySelector(".suggestion-strip-more")).toBeNull();
+  });
+
+  it("draws a set the chat app says was stored after the page had read none", async () => {
+    stored.suggestions = { status: "pending", after_event_id: SEED_END, source: null, suggestions: [] };
+    await load();
+    expect(pillLabels()).toEqual([]);
+
+    stored.suggestions = START_SET;
+    announceSuggestionsUpdated("agent-some-other-chat");
+    await settle();
+    expect(pillLabels()).toEqual([]);
+
+    announceSuggestionsUpdated(CHAT);
+    await settle();
+
+    expect(pillLabels()).toEqual(["Describe what you want to make", "See what Studio can do"]);
+
+    m.render(root, null);
+    expect(mocks.suggestionsUpdatedListeners).toEqual([]);
   });
 
   it("sends a clicked suggestion's label through the composer", async () => {

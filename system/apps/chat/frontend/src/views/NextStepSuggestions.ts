@@ -2,14 +2,22 @@
  * The next-step strip above the composer: the suggested replies to the agent's last reply (``models/Suggestions.ts``
  * decides which set is drawn, from what this view reads of the chat on every draw).
  *
- * A click on a suggestion sends it through the composer. The strip's link switches next-step suggestions off for the
+ * The chat app says when the chat's stored set changes, and the strip reads it again. A click on a suggestion sends
+ * it through the composer. The strip's link switches next-step suggestions off for the
  * whole workspace, which only the workspace's owner is offered: the strip goes, a line saying so takes its place for
  * a few seconds with a way back, and an Imbue Studio chrome that opens its workspace settings is asked to.
  */
 
 import m from "mithril";
 import { ensureChatSettings, isSuggestionSwitchOn, updateSuggestionSwitches } from "../models/ChatSettings";
-import { getChatById, getProvisionalChat, isLaunchInFlight, isRoomChat } from "../models/Chats";
+import {
+  addSuggestionsUpdatedListener,
+  getChatById,
+  getProvisionalChat,
+  isLaunchInFlight,
+  isRoomChat,
+  removeSuggestionsUpdatedListener,
+} from "../models/Chats";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
 import { isViewerOwner } from "../models/Participants";
 import { addMessageSentListener, getEventsForChat, hasMoreAfter, removeMessageSentListener } from "../models/Response";
@@ -17,6 +25,7 @@ import {
   collapseNextStepSuggestions,
   getNextStepSuggestions,
   reconcileNextStepSuggestions,
+  rereadNextStepSuggestions,
   SUGGESTION_SWITCHES,
   toggleNextStepSuggestions,
 } from "../models/Suggestions";
@@ -101,13 +110,20 @@ export function NextStepSuggestions(): m.Component<{ chatId: string }> {
     if (chatId === currentChatId) collapseNextStepSuggestions(chatId);
   };
 
+  // A set worked out since the turn ended arrives this way, seconds after the read the turn's end asked for.
+  const rereadOnPush = (chatId: string): void => {
+    if (chatId === currentChatId) rereadNextStepSuggestions(chatId);
+  };
+
   return {
     oninit() {
       addMessageSentListener(collapseOnSend);
+      addSuggestionsUpdatedListener(rereadOnPush);
     },
 
     onremove() {
       removeMessageSentListener(collapseOnSend);
+      removeSuggestionsUpdatedListener(rereadOnPush);
       hideOffNotice();
     },
 

@@ -7,12 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providers = vi.hoisted(() => ({ loadAccounts: vi.fn(async () => undefined) }));
 const chatSettings = vi.hoisted(() => ({ rereadChatSettings: vi.fn() }));
-const suggestions = vi.hoisted(() => ({ rereadNextStepSuggestions: vi.fn() }));
 
 vi.mock("mithril", () => ({ default: { redraw: vi.fn(), request: vi.fn() } }));
 vi.mock("./Providers", () => ({ loadAccounts: providers.loadAccounts }));
 vi.mock("./ChatSettings", () => ({ rereadChatSettings: chatSettings.rereadChatSettings }));
-vi.mock("./Suggestions", () => ({ rereadNextStepSuggestions: suggestions.rereadNextStepSuggestions }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({
   apiUrl: (path: string) => path,
   wsUrl: (path: string) => `ws://test${path}`,
@@ -340,13 +338,18 @@ describe("the settings over the socket", () => {
     expect(chatSettings.rereadChatSettings).toHaveBeenCalledOnce();
   });
 
-  it("reads a chat's suggestions again when the app says its stored set changed", () => {
+  it("tells its listeners which chat's stored suggestions changed, until they stop listening", () => {
+    const listener = vi.fn();
+    manager.addSuggestionsUpdatedListener(listener);
     open();
-    expect(suggestions.rereadNextStepSuggestions).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
 
     push({ type: "suggestions_updated", chat_id: "agent-suggested" });
+    expect(listener).toHaveBeenCalledExactlyOnceWith("agent-suggested");
 
-    expect(suggestions.rereadNextStepSuggestions).toHaveBeenCalledExactlyOnceWith("agent-suggested");
+    manager.removeSuggestionsUpdatedListener(listener);
+    push({ type: "suggestions_updated", chat_id: "agent-suggested" });
+    expect(listener).toHaveBeenCalledOnce();
   });
 
   it("reads the settings again on a reconnect, since a change while it was down reached no one", () => {

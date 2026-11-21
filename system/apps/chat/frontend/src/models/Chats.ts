@@ -15,7 +15,6 @@ import type { CompactionCause, UserMessageEvent } from "./Response";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
 import { loadAccounts } from "./Providers";
 import { rereadChatSettings } from "./ChatSettings";
-import { rereadNextStepSuggestions } from "./Suggestions";
 
 /** The agent-level facts about a chat's active agent that the pages render (the backend's
  *  ``ActiveAgentSnapshot``). */
@@ -245,6 +244,9 @@ type WsEvent =
  *  send-time id, why (in the harness's words when it gave any) and mngr's classification of it. */
 export type HeldSendFailedListener = (chatId: string, messageId: string, detail: string, kind: string) => void;
 
+/** Notified when the chat app says a chat's stored next-step suggestions were replaced or removed. */
+export type SuggestionsUpdatedListener = (chatId: string) => void;
+
 export type ChatsUpdatedListener = (chats: ChatSnapshot[]) => void;
 /**
  * Notified when a chat's active agent's ``activity_state`` changes between two consecutive
@@ -281,6 +283,7 @@ const launchesInFlight = new Set<string>();
 let chatsUpdatedListeners: ChatsUpdatedListener[] = [];
 let mentionsUpdatedListeners: (() => void)[] = [];
 const heldSendFailedListeners: HeldSendFailedListener[] = [];
+let suggestionsUpdatedListeners: SuggestionsUpdatedListener[] = [];
 let chatActivityListeners: ChatActivityListener[] = [];
 let chatActiveAgentListeners: ChatActiveAgentListener[] = [];
 let ws: WebSocket | null = null;
@@ -374,7 +377,7 @@ function handleEvent(event: WsEvent): void {
       rereadChatSettings();
       break;
     case "suggestions_updated":
-      rereadNextStepSuggestions(event.chat_id);
+      for (const listener of suggestionsUpdatedListeners) listener(event.chat_id);
       break;
     case "mentions_updated":
       notifyMentionsUpdated();
@@ -568,6 +571,14 @@ export function removeMentionsUpdatedListener(listener: () => void): void {
 
 export function addHeldSendFailedListener(listener: HeldSendFailedListener): void {
   heldSendFailedListeners.push(listener);
+}
+
+export function addSuggestionsUpdatedListener(listener: SuggestionsUpdatedListener): void {
+  suggestionsUpdatedListeners.push(listener);
+}
+
+export function removeSuggestionsUpdatedListener(listener: SuggestionsUpdatedListener): void {
+  suggestionsUpdatedListeners = suggestionsUpdatedListeners.filter((entry) => entry !== listener);
 }
 
 /** Every chat the app has minted that is not an agent yet, for the root's list. */
