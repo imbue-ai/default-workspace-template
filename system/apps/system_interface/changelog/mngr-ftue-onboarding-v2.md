@@ -1,0 +1,1 @@
+A first-run workspace opens with the chat app's "Your own cloud computer, any AI" page covering the whole desktop, for the workspace's owner, until they connect an AI provider or skip. The show-around tour waits until the cover is down.
