@@ -70,14 +70,19 @@ export function NextStepSuggestions(): m.Component<{ chatId: string }> {
   }
 
   function disable(): void {
-    void updateSuggestionSwitches({ [NEXT_STEP_SWITCH]: false });
+    // The chrome's settings read the switches as they open, so they are opened only once the write has answered,
+    // and not at all when it was refused.
+    void updateSuggestionSwitches({ [NEXT_STEP_SWITCH]: false }).then(() => {
+      if (isSuggestionSwitchOn(NEXT_STEP_SWITCH) === false && opensWorkspaceSettings()) {
+        openWorkspaceSettings(SUGGESTIONS_SETTINGS_GROUP);
+      }
+    });
     hideOffNotice();
     isOffNoticeShown = true;
     offNoticeTimer = setTimeout(() => {
       hideOffNotice();
       m.redraw();
     }, SUGGESTIONS_OFF_NOTICE_MS);
-    if (opensWorkspaceSettings()) openWorkspaceSettings(SUGGESTIONS_SETTINGS_GROUP);
   }
 
   function undo(): void {

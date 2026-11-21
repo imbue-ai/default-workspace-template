@@ -95,7 +95,7 @@ from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_seed import FIRST_RUN_SKILL_PATH
 from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import START_DESCRIBE_LABEL
-from imbue.chat.chat_seed import START_TOUR_LABEL
+from imbue.chat.chat_seed import START_FEATURES_LABEL
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import read_seed_events
@@ -995,12 +995,12 @@ def test_a_first_run_chat_started_as_its_owner_leaves_the_provider_page_is_sent_
 
         delivered: list[str] = []
         assert (
-            manager.carry_pending_seed(chat_id, START_TOUR_LABEL, _delivering(delivered, SendOutcome.OK))
+            manager.carry_pending_seed(chat_id, START_FEATURES_LABEL, _delivering(delivered, SendOutcome.OK))
             is SendOutcome.OK
         )
         (carried,) = delivered
         assert carried.startswith(f"<{SEED_CONTEXT_TAG}>")
-        assert carried.endswith(f"</{SEED_CONTEXT_TAG}>\n{START_TOUR_LABEL}")
+        assert carried.endswith(f"</{SEED_CONTEXT_TAG}>\n{START_FEATURES_LABEL}")
         for turn in FIRST_RUN_WELCOME:
             assert turn.text in carried
         assert "I want to use Studio for: Music." in carried
@@ -1028,7 +1028,7 @@ def test_a_first_run_seed_offers_the_start_suggestions_under_the_welcomes_last_t
             source=SuggestionSource.FIXED,
             suggestions=(
                 Suggestion(suggestion_id="start-describe", label=START_DESCRIBE_LABEL, is_recommended=False),
-                Suggestion(suggestion_id="start-tour", label=START_TOUR_LABEL, is_recommended=False),
+                Suggestion(suggestion_id="start-features", label=START_FEATURES_LABEL, is_recommended=False),
             ),
         )
         assert manager.get_chat_suggestions(ChatId(ordinary.chat_id)) is None

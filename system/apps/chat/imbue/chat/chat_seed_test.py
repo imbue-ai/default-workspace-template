@@ -10,7 +10,7 @@ from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import INLINE_SEED_MAX_BYTES
 from imbue.chat.chat_seed import SEED_FILENAME
 from imbue.chat.chat_seed import SEED_SOURCE
-from imbue.chat.chat_seed import START_TOUR_LABEL
+from imbue.chat.chat_seed import START_FEATURES_LABEL
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import first_run_start_suggestions
@@ -218,7 +218,7 @@ def test_the_start_suggestions_follow_the_welcomes_last_turn_and_recommend_neith
     assert suggestions.after_event_id == seed_events(_CHAT_ID, FIRST_RUN_WELCOME, _CREATED_AT)[-1]["event_id"]
     assert [(each.suggestion_id, each.label, each.is_recommended) for each in suggestions.suggestions] == [
         ("start-describe", "Describe what you want to make", False),
-        ("start-tour", "See what Studio can do", False),
+        ("start-features", "See what Studio can do", False),
     ]
 
 
@@ -228,7 +228,7 @@ def test_a_first_run_chats_first_send_tells_the_agent_to_follow_the_onboarding_s
     chat_dir = _seeded_chat_dir(tmp_path, FIRST_RUN_WELCOME)
     write_first_run_context(chat_dir, "")
 
-    launch = seed_context_message(chat_dir, START_TOUR_LABEL)
+    launch = seed_context_message(chat_dir, START_FEATURES_LABEL)
 
     paragraph = (
         "This is the user's first conversation in a new workspace. Before replying, read "

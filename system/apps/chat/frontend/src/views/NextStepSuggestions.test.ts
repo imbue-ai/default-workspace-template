@@ -88,7 +88,7 @@ const START_SET: SuggestionsAnswer = {
   source: "fixed",
   suggestions: [
     { suggestion_id: "start-describe", label: "Describe what you want to make", is_recommended: false },
-    { suggestion_id: "start-tour", label: "See what Studio can do", is_recommended: false },
+    { suggestion_id: "start-features", label: "See what Studio can do", is_recommended: false },
   ],
 };
 
@@ -410,13 +410,18 @@ describe("the link that switches next-step suggestions off", () => {
 
     click(".suggestion-strip-disable");
 
+    // The settings read the switch as they open, so they are asked for only once the write has answered.
+    expect(mocks.openWorkspaceSettings).not.toHaveBeenCalled();
+    await settle();
+
     expect(mocks.openWorkspaceSettings).toHaveBeenCalledTimes(1);
     expect(mocks.openWorkspaceSettings).toHaveBeenCalledWith("suggestions");
     expect(writes()).toEqual([["/api/settings/suggestions", { is_next_step_suggestions_enabled: false }]]);
   });
 
-  it("puts the strip back, with no line, when the backend refuses the write", async () => {
+  it("puts the strip back, with no line and no settings opened, when the backend refuses the write", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mocks.opensWorkspaceSettings = true;
     stored.isWriteRefused = true;
     await load();
 
@@ -426,5 +431,6 @@ describe("the link that switches next-step suggestions off", () => {
 
     expect(root.querySelector(".suggestions-off-notice")).toBeNull();
     expect(pillLabels()).toHaveLength(2);
+    expect(mocks.openWorkspaceSettings).not.toHaveBeenCalled();
   });
 });

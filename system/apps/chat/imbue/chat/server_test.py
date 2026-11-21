@@ -4254,7 +4254,7 @@ def test_a_first_run_chat_awaiting_its_first_agent_answers_its_start_suggestions
         "source": "fixed",
         "suggestions": [
             {"suggestion_id": "start-describe", "label": "Describe what you want to make", "is_recommended": False},
-            {"suggestion_id": "start-tour", "label": "See what Studio can do", "is_recommended": False},
+            {"suggestion_id": "start-features", "label": "See what Studio can do", "is_recommended": False},
         ],
     }
 

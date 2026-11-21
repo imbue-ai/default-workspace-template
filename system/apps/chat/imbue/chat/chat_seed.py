@@ -57,7 +57,7 @@ FIRST_RUN_SKILL_PATH: Final[str] = ".agents/skills/first-run-onboarding/SKILL.md
 # The replies offered under the first-run welcome. The skill names the same words, so a click and its reply
 # stay matched only while the two are edited together.
 START_DESCRIBE_LABEL: Final[str] = "Describe what you want to make"
-START_TOUR_LABEL: Final[str] = "See what Studio can do"
+START_FEATURES_LABEL: Final[str] = "See what Studio can do"
 
 
 class SeedRole(LowerCaseStrEnum):
@@ -95,7 +95,7 @@ def first_run_start_suggestions(chat_id: ChatId, turns: tuple[SeedTurn, ...]) ->
         source=SuggestionSource.FIXED,
         suggestions=(
             Suggestion(suggestion_id="start-describe", label=START_DESCRIBE_LABEL),
-            Suggestion(suggestion_id="start-tour", label=START_TOUR_LABEL),
+            Suggestion(suggestion_id="start-features", label=START_FEATURES_LABEL),
         ),
     )
 

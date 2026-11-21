@@ -18,7 +18,7 @@ def _fixed_set() -> ChatSuggestions:
         source=SuggestionSource.FIXED,
         suggestions=(
             Suggestion(suggestion_id="start-describe", label="Describe what you want to make"),
-            Suggestion(suggestion_id="start-tour", label="See what Studio can do", is_recommended=True),
+            Suggestion(suggestion_id="start-features", label="See what Studio can do", is_recommended=True),
         ),
     )
 
@@ -43,7 +43,7 @@ def test_the_suggestions_file_holds_the_set_in_the_shape_the_pages_read(tmp_path
         "source": "fixed",
         "suggestions": [
             {"suggestion_id": "start-describe", "label": "Describe what you want to make", "is_recommended": False},
-            {"suggestion_id": "start-tour", "label": "See what Studio can do", "is_recommended": True},
+            {"suggestion_id": "start-features", "label": "See what Studio can do", "is_recommended": True},
         ],
     }
 

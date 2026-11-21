@@ -7,7 +7,7 @@ import { SuggestionStrip, type SuggestionStripAttrs, suggestionsOffNotice } from
 const START: Suggestion[] = [
   { suggestion_id: "start-describe", label: "Describe what you want to make", is_recommended: false },
   { suggestion_id: "start-ideas", label: "Get ideas for what to make", is_recommended: false },
-  { suggestion_id: "start-tour", label: "See what Studio can do", is_recommended: false },
+  { suggestion_id: "start-features", label: "See what Studio can do", is_recommended: false },
 ];
 
 function renderStrip(overrides: Partial<SuggestionStripAttrs> = {}): {
