@@ -13,6 +13,7 @@ import m from "mithril";
 import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 import type { Lane, ProviderAccount } from "../models/Providers";
 import {
+  areLanesLoaded,
   closeProviderChooser,
   finishFirstRunProviderStep,
   getAccounts,
@@ -22,6 +23,7 @@ import {
   loadLanesAndAccountsWithRetry,
   openProviderChooser,
 } from "../models/Providers";
+import { reportProviderChooserOnScreenOnce } from "../shell";
 import { ProviderChooserModal } from "./ProviderChooserModal";
 import { providerMark } from "./providerMarks";
 
@@ -48,6 +50,11 @@ const MARK_SIZE = 26;
 
 export interface FirstRunProvidersPageAttrs {
   shell: ShellConnection;
+}
+
+/** Tell the chrome the provider ask is on screen, once its tiles are drawn. */
+function reportOnScreen(): void {
+  if (areLanesLoaded()) reportProviderChooserOnScreenOnce(true);
 }
 
 export function FirstRunProvidersPage(): m.Component<FirstRunProvidersPageAttrs> {
@@ -117,6 +124,9 @@ export function FirstRunProvidersPage(): m.Component<FirstRunProvidersPageAttrs>
     oninit() {
       void loadLanesAndAccountsWithRetry().then(() => m.redraw());
     },
+    // The chrome keeps its cover over a new workspace until a provider ask is on screen: this page is that ask.
+    oncreate: reportOnScreen,
+    onupdate: reportOnScreen,
     view(vnode) {
       const { shell } = vnode.attrs;
       // Finished here or in another window: nothing is drawn while the shell takes its cover down.

@@ -8,7 +8,10 @@
  * pending intake an ``intake=<token>`` in its URL names (a draft into a composer, a choice of
  * chat through the picker, or a first message that launches a chat) exactly once and then
  * reports the selection alone, opens the provider chooser once when its URL carries
- * ``open=providers`` (the Imbue Studio app's sign-in button), and drives its inner pages
+ * ``open=providers`` (the Imbue Studio app's sign-in button), whenever the chat it shows awaits
+ * its first send with nothing signed in, and once with no chat to show while nothing is signed in
+ * (``models/firstSendChooser.ts``), tells the Imbue Studio chrome once when a chooser of its is on
+ * screen (``minds:provider-chooser-on-screen``), and drives its inner pages
  * directly (they share an origin) with its shown and hidden states, so each page's presence
  * reports key on the chat it shows. The shell's handshake goes down to the inner pages, and their
  * messages for the shell and the minds chrome go up, through ``relay.ts``, which says which
@@ -45,10 +48,13 @@ import {
   launchChat,
   removeChatsUpdatedListener,
 } from "../models/Chats";
+import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
+import { isNothingSignedIn, makeRootFirstSendChooser } from "../models/firstSendChooser";
 import type { AppliedIntake, PendingIntake } from "../models/Chats";
 import {
   accountForFirstSend,
   areAccountsLoaded,
+  areLanesLoaded,
   closeProviderChooser,
   isFirstRunProviderStepPending,
   isProviderChooserOpen,
@@ -56,6 +62,8 @@ import {
   openProviderChooser,
   whenAccountsReadyToChoose,
 } from "../models/Providers";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { reportProviderChooserOnScreenOnce } from "../shell";
 import { ProviderChooserModal } from "../views/ProviderChooserModal";
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { COMPACT_MEDIA_QUERY } from "../compactLayout";
@@ -157,20 +165,26 @@ function railRows(): ChatRow[] {
   return groupedRows(withoutPendingDeletes(allRows()), startedHere);
 }
 
+function isIntakeUnderWay(): boolean {
+  return pendingToken !== null || pendingPick !== null;
+}
+
 function slotFillFor(chatId: string | null): SlotFill {
   return slotFill({
     selectedChatId: chatId,
     chatIds: railRows().map((row) => row.chatId),
     isChatListKnown: hasReceivedChatList(),
-    isChoosing: pendingToken !== null || pendingPick !== null,
+    isChoosing: isIntakeUnderWay(),
     isCompact: compactQuery.matches,
     isShown: isRootShown,
     isDeletePending: hasPendingDelete(),
+    canStartNew: areAccountsLoaded() && !isNothingSignedIn() && !firstSendChooser.isLaunchPending(),
   });
 }
 
 /** Show ``chatId``: the URL, the frame, the shell's location, and the unread mark follow. Asked to show nothing, the
- *  root shows the main chat instead (else the most recent), or with no chats one awaiting its first send (``slotFill``). */
+ *  root shows the main chat instead (else the most recent), or with no chats and an account signed in one awaiting
+ *  its first send (``slotFill``). */
 function select(chatId: string | null): void {
   const fill = slotFillFor(chatId);
   const shown = fill.kind === "select" ? fill.chatId : chatId;
@@ -184,8 +198,8 @@ function select(chatId: string | null): void {
   if (fill.kind === "open_new") openChatForEmptyList();
 }
 
-/** Fill an empty slot now that something it depends on changed (the chat list arrived, the root came on screen, the
- *  layout left the phone width, a delete was refused). */
+/** Fill an empty slot now that something it depends on changed (the chat list or the accounts arrived, the root came
+ *  on screen, the layout left the phone width, a delete was refused). */
 function fillSlot(): void {
   if (selectedChatId === null && slotFillFor(null).kind !== "keep") select(null);
 }
@@ -208,16 +222,17 @@ function openChatForEmptyList(): void {
     });
 }
 
-// Why the last click on New chat started nothing, shown as a notice until dismissed; null otherwise.
-let newChatRefusal: string | null = null;
-const newChatRefusalNotice = makeNoticeDialog();
+// Why the last thing started from the root's own chrome (New chat, the chooser's room row) did not start, shown as a
+// notice until dismissed; null otherwise.
+let refusal: { title: string; detail: string } | null = null;
+const refusalNotice = makeNoticeDialog();
 
 /** The New chat button: a chat on the account the chat app picks, or with nothing signed in the chat awaiting its
  *  first send, whose page asks for a provider. A create the chat app refuses says why rather than opening a chat. */
 async function openNewChat(): Promise<void> {
   const outcome = await startNewChat();
   if (outcome.kind === "refused") {
-    newChatRefusal = outcome.detail;
+    refusal = { title: "Couldn't start a new chat", detail: outcome.detail };
     m.redraw();
     return;
   }
@@ -354,6 +369,52 @@ function reportFirstRunProviderStep(shell: ShellConnection): void {
   shell.firstRunProviderStep(isPending);
 }
 
+/** The chooser's room row: the chat on screen, awaiting its first send, becomes a room with nothing said yet; with no
+ *  chat on screen, a new one does. */
+async function makeRoom(chatId: string | null): Promise<void> {
+  try {
+    const roomId = chatId ?? (await awaitingChatForEmptyList());
+    if (chatId === null) {
+      awaitingListing.add(roomId);
+      select(roomId);
+    }
+    await launchChat(roomId, "", "", "room");
+  } catch (error) {
+    refusal = { title: "Couldn't make a room", detail: describeRequestError(error) };
+  }
+  m.redraw();
+}
+
+// The chooser for a chat on screen that awaits its first send with nothing signed in, or for the chat still to come
+// while the slot is empty. Over the whole root, so it stays up, sign-in and all, when the selection moves (the seeded
+// welcome chat arriving).
+const firstSendChooser = makeRootFirstSendChooser({
+  shownChatId: () => selectedChatId,
+  isIntakeUnderWay,
+  makeRoom: (chatId) => void makeRoom(chatId),
+});
+
+/** After every draw of the root: the chooser it owes, and the chrome's report once one of its choosers is drawn with
+ *  its providers listed in a shown window. */
+function afterRootDraw(): void {
+  if (isProviderChooserOpen() && areLanesLoaded()) reportProviderChooserOnScreenOnce(isRootShown);
+  firstSendChooser.afterDraw();
+}
+
+/** What the empty slot says: with nothing signed in, that a provider comes first, and the button that opens the
+ *  chooser again once dismissed. */
+function emptySlotContent(): m.Children {
+  if (!isNothingSignedIn()) return "Pick a chat, or start a new one.";
+  return m("div", { class: "flex flex-col items-center gap-3" }, [
+    m("span", "Connect an AI provider to start chatting."),
+    m(
+      Button,
+      { variant: "primary", sm: true, extra: "chat-root-choose-provider", onclick: () => firstSendChooser.open() },
+      "Choose a provider",
+    ),
+  ]);
+}
+
 function pickFor(chatId: string): void {
   const pick = pendingPick;
   pendingPick = null;
@@ -395,9 +456,11 @@ function onChatsUpdated(): void {
 }
 
 const ChatRoot: m.Component = {
+  oncreate: afterRootDraw,
   onupdate() {
     // A rename reaches the window's title as it reaches the list, ahead of any chat list carrying it.
     reportLocation();
+    afterRootDraw();
   },
   view() {
     if (connection !== null) reportFirstRunProviderStep(connection);
@@ -448,7 +511,7 @@ const ChatRoot: m.Component = {
                   class:
                     "chat-root-empty absolute inset-0 flex items-center justify-center text-(length:--font-size-body) text-secondary",
                 },
-                "Pick a chat, or start a new one.",
+                emptySlotContent(),
               )
             : null,
         ]),
@@ -461,14 +524,14 @@ const ChatRoot: m.Component = {
               },
             })
           : null,
-        newChatRefusal === null
+        refusal === null
           ? null
-          : m(newChatRefusalNotice, {
-              title: "Couldn't start a new chat",
-              body: [newChatRefusal],
+          : m(refusalNotice, {
+              title: refusal.title,
+              body: [refusal.detail],
               dismissLabel: "OK",
               onDismiss: () => {
-                newChatRefusal = null;
+                refusal = null;
               },
             }),
         pendingPick === null
@@ -480,7 +543,8 @@ const ChatRoot: m.Component = {
               onPick: pickFor,
               onDismiss: dismissPick,
             }),
-        // Opened over the whole root when its URL asks for it; a chat page opens its own from its composer.
+        // Opened over the whole root when its URL asks for it, and for a chat on screen with no provider to start on;
+        // a chat page opens its own for its other asks (the model bar's "+ Add a provider", a provider-fault notice).
         isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
       ],
     );
@@ -565,6 +629,8 @@ function bootstrap(): void {
   initRailWidth();
   initChats();
   const accountsLoaded = loadAccountsWithRetry();
+  // An empty list starts a chat only once an account is signed in.
+  void accountsLoaded.then(fillSlot);
   addChatsUpdatedListener(onChatsUpdated);
   // The rows' ``@`` marks: the viewer's unseen mentions, re-read on every push that changes them.
   void watchPendingMentions().then(() => m.redraw());
@@ -593,6 +659,7 @@ function bootstrap(): void {
     () => pool?.innerWindows() ?? [],
     (chatId) => select(chatId),
   );
+  window.chatRootEmbed = { chooseProviderForFirstSend: () => firstSendChooser.open() };
   selectedChatId = selectionFromSearch(window.location.search);
   isDrawerOpen = selectedChatId === null;
   pendingToken = intakeTokenFromSearch(window.location.search);

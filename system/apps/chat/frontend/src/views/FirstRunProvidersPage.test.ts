@@ -6,9 +6,12 @@ const mocks = vi.hoisted(() => ({
   isPending: true,
   finish: vi.fn(() => Promise.resolve()),
   open: vi.fn(),
+  reportOnScreen: vi.fn(),
 }));
 
+vi.mock("../shell", () => ({ reportProviderChooserOnScreenOnce: mocks.reportOnScreen }));
 vi.mock("../models/Providers", () => ({
+  areLanesLoaded: () => true,
   closeProviderChooser: vi.fn(),
   finishFirstRunProviderStep: mocks.finish,
   getAccounts: () => mocks.accounts,
@@ -79,6 +82,14 @@ describe("FirstRunProvidersPage", () => {
     expect(text(tiles[1])).toContain("Its own line");
     expect(byId(tree, "first-run-next").attrs.disabled).toBe(true);
     expect(byId(tree, "first-run-skip").attrs.disabled).toBe(false);
+  });
+
+  it("tells the chrome the provider ask is on screen once its tiles are drawn", () => {
+    const page = FirstRunProvidersPage();
+
+    (page.oncreate as () => void)();
+
+    expect(mocks.reportOnScreen).toHaveBeenCalledWith(true);
   });
 
   it("opens the chooser on the tile's lane", () => {
