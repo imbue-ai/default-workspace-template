@@ -1,0 +1,1 @@
+The publish-template skill's `github_repo.py` creates and closes a repository through `github_sync.repositories`, the library `app-install link` uses for an app's dev repository, instead of carrying its own copy of those requests. Its commands, output and exit codes are unchanged.
