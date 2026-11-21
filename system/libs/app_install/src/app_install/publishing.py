@@ -88,6 +88,8 @@ _REPOSITORY_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9._][A
 _VERSION_CORE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$")
 _NON_FAST_FORWARD_MARKERS: Final[tuple[str, ...]] = ("(non-fast-forward)", "(fetch first)")
 _ALREADY_EXISTS_MARKER: Final[str] = "already exists"
+# How many paths one git command is given, so that its arguments stay within what a command line can hold.
+_PATHS_PER_COMMAND: Final[int] = 200
 
 
 class ChangeKind(LowerCaseStrEnum):
@@ -122,7 +124,10 @@ class PendingPublish(FrozenModel):
     version: str = Field(description="The version the tree's manifest names")
     description: str = Field(default="", description="The app's one-line description, for a new repository")
     verified_template: str = Field(default="", description="The template version the tree's manifest names")
-    pushed_commit: str = Field(default="", description="The commit that reached the repository's main branch")
+    commit: str = Field(
+        default="", description="The commit made from the tree, which a push that is run again pushes again"
+    )
+    is_commit_pushed: bool = Field(default=False, description="Whether the commit reached the repository's main")
     is_tag_pushed: bool = Field(default=False, description="Whether the version's tag reached the repository")
 
 
@@ -272,12 +277,14 @@ def _build_published_tree(repo_root: Path, record: AppRecord, revision: str, ind
     all_paths = [path for path in listed.split("\0") if path]
     spec = pathspec.PathSpec.from_lines(_EXCLUDE_PATTERN_STYLE, excludes)
     excluded = [path for path in all_paths if spec.match_file(path)]
-    if excluded:
-        run_git(repo_root, ["update-index", "--force-remove", "--", *excluded], extra_environment=index)
+    for start in range(0, len(excluded), _PATHS_PER_COMMAND):
+        batch = excluded[start : start + _PATHS_PER_COMMAND]
+        run_git(repo_root, ["update-index", "--force-remove", "--", *batch], extra_environment=index)
+    excluded_set = set(excluded)
     return PublishedTree(
         source_commit=source_commit,
         tree=run_git(repo_root, ["write-tree"], extra_environment=index),
-        paths=tuple(path for path in all_paths if path not in set(excluded)),
+        paths=tuple(path for path in all_paths if path not in excluded_set),
         excluded_paths=tuple(excluded),
     )
 
@@ -432,7 +439,14 @@ def _check_is_this_workspaces_to_publish(repo_root: Path, record: AppRecord, pub
     if record.origin is not AppOrigin.INSTALLED:
         return
     app_tree = run_git(repo_root, ["rev-parse", f"{published.source_commit}:{app_directory_prefix(record)}"])
-    differing = run_git(repo_root, ["diff", "--name-only", "--no-renames", record.upstream_tree, app_tree])
+    try:
+        differing = run_git(repo_root, ["diff", "--name-only", "--no-renames", record.upstream_tree, app_tree])
+    except GitCommandError as e:
+        # Without the installed tree the app cannot be shown to be unchanged, as when its state is listed.
+        logger.warning(
+            "Could not compare {} with the tree it was installed from, so it is taken as modified: {}", record.name, e
+        )
+        return
     if not modifying_paths(differing.splitlines()):
         raise NotModifiedAppError(
             f"{record.name} was installed from {record.upstream_url} and is unchanged, so there is nothing of "
@@ -448,7 +462,7 @@ def _check_nothing_pushed_is_unrecorded(repo_root: Path, name: str) -> None:
     except NotAssembledError as e:
         logger.debug("Nothing of {} is waiting between two steps of a publish: {}", name, e)
         return
-    if pending.pushed_commit:
+    if pending.is_commit_pushed:
         raise PublishError(
             f"{name} {_VERSION_TAG_PREFIX}{pending.version} was pushed and is not recorded yet: run "
             f"`app-install publish record {name}` before assembling the next version"
@@ -541,6 +555,28 @@ def _push(repo_root: Path, repo_url: str, refspec: str) -> None:
         raise PublishError(f"the push to {repo_url} failed: {e}" + (f" -- {hint}" if hint else "")) from e
 
 
+def _commit_assembled_tree(repo_root: Path, record: AppRecord, pending: PendingPublish, derived_from: str) -> str:
+    """Make the commit a publish pushes: the assembled tree, on the commit last published when there is one,
+    with a message that names the version and what the app was derived from. Raises NotAssembledError when the
+    repository no longer holds the tree."""
+    name = str(record.name)
+    try:
+        run_git(repo_root, ["cat-file", "-e", f"{pending.tree}^{{tree}}"])
+    except GitCommandError as e:
+        raise NotAssembledError(
+            f"the tree assembled for {name} is no longer in the workspace repository: run "
+            f"`app-install publish assemble {name}` again"
+        ) from e
+    parent_arguments: list[str] = []
+    if record.published_commit:
+        _ensure_published_commit_present(repo_root, record)
+        parent_arguments = ["-p", record.published_commit]
+    message = f"{name} {_VERSION_TAG_PREFIX}{pending.version}"
+    if derived_from:
+        message = f"{message}\n\n{_DERIVED_FROM_TRAILER}: {derived_from}"
+    return run_git(repo_root, ["commit-tree", pending.tree, *parent_arguments, "-m", message])
+
+
 def push_app(
     repo_root: Path, name: str, repository_name: str | None, runtime: WorkspaceRuntimeInterface
 ) -> PushOutcome:
@@ -553,12 +589,12 @@ def push_app(
     what it was derived from. The commit goes to the repository's ``main`` as a fast-forward and the tag
     ``v<version>`` after it, both through the latchkey gateway and neither forced.
 
-    A run that was interrupted is finished by running it again: a commit that reached ``main`` is not pushed
-    twice. Raises AppRecordNotFoundError for an app with
-    no record, NotAssembledError when no tree is waiting, PublishedNameTakenError when the account already has a
-    repository of that name, PushRefusedError when the repository holds commits this publish does not continue,
-    and PublishError otherwise. A tag that does not reach the repository is a problem in the outcome: the
-    version is published all the same.
+    A run that was interrupted is finished by running it again: the commit is made once and kept, so a second
+    run pushes the same one, which changes nothing in a repository that already has it. Raises
+    AppRecordNotFoundError for an app with no record, NotAssembledError when no tree is waiting,
+    PublishedNameTakenError when the account already has a repository of that name, PushRefusedError when the
+    repository holds commits this publish does not continue, and PublishError otherwise. A tag that does not
+    reach the repository is a problem in the outcome: the version is published all the same.
     """
     record = load_record(repo_root, name)
     pending = _load_pending(repo_root, name)
@@ -590,44 +626,34 @@ def push_app(
             problems.append(f"{repo_url} was not given the topic published apps are found by: {created.topic_problem}")
 
     derived_from = _derived_from(record)
-    if not pending.pushed_commit:
-        try:
-            run_git(repo_root, ["cat-file", "-e", f"{pending.tree}^{{tree}}"])
-        except GitCommandError as e:
-            raise NotAssembledError(
-                f"the tree assembled for {name} is no longer in the workspace repository: run "
-                f"`app-install publish assemble {name}` again"
-            ) from e
-        parent_arguments: list[str] = []
-        if record.published_commit:
-            _ensure_published_commit_present(repo_root, record)
-            parent_arguments = ["-p", record.published_commit]
-        message = f"{name} {_VERSION_TAG_PREFIX}{pending.version}"
-        if derived_from:
-            message = f"{message}\n\n{_DERIVED_FROM_TRAILER}: {derived_from}"
-        commit = run_git(repo_root, ["commit-tree", pending.tree, *parent_arguments, "-m", message])
-        _push(repo_root, repo_url, f"{commit}:refs/heads/{DEFAULT_BRANCH}")
-        pending = pending.model_copy_update(to_update(pending.field_ref().pushed_commit, commit))
+    if not pending.is_commit_pushed:
+        if not pending.commit:
+            pending = pending.model_copy_update(
+                to_update(pending.field_ref().commit, _commit_assembled_tree(repo_root, record, pending, derived_from))
+            )
+            _write_pending(repo_root, name, pending)
+            # Keeps the published commit's objects in the workspace repository for the next publish to follow.
+            run_git(repo_root, ["update-ref", f"{PUBLISHED_REF_PREFIX}{name}", pending.commit])
+        _push(repo_root, repo_url, f"{pending.commit}:refs/heads/{DEFAULT_BRANCH}")
+        pending = pending.model_copy_update(to_update(pending.field_ref().is_commit_pushed, True))
         _write_pending(repo_root, name, pending)
-        # Keeps the published commit's objects in the workspace repository for the next publish to follow.
-        run_git(repo_root, ["update-ref", f"{PUBLISHED_REF_PREFIX}{name}", commit])
 
     tag = f"{_VERSION_TAG_PREFIX}{pending.version}"
     if not pending.is_tag_pushed:
         try:
-            _push(repo_root, repo_url, f"{pending.pushed_commit}:refs/tags/{tag}")
+            _push(repo_root, repo_url, f"{pending.commit}:refs/tags/{tag}")
         except PublishError as e:
             if _ALREADY_EXISTS_MARKER in str(e):
                 problems.append(f"{repo_url} already has a tag {tag}, which is never moved: {e}")
             else:
-                problems.append(f"{pending.pushed_commit} is published, but its tag {tag} was not pushed: {e}")
+                problems.append(f"{pending.commit} is published, but its tag {tag} was not pushed: {e}")
         else:
             pending = pending.model_copy_update(to_update(pending.field_ref().is_tag_pushed, True))
             _write_pending(repo_root, name, pending)
     return PushOutcome(
         record=record,
         repo_url=repo_url,
-        commit=pending.pushed_commit,
+        commit=pending.commit,
         parent=record.published_commit,
         version=pending.version,
         tag=tag,
@@ -650,13 +676,13 @@ def record_publish(repo_root: Path, name: str, runtime: WorkspaceRuntimeInterfac
     """
     record = load_record(repo_root, name)
     pending = _load_pending(repo_root, name)
-    if not pending.pushed_commit:
+    if not pending.is_commit_pushed:
         raise NotPushedError(
             f"the tree assembled for {name} has not been pushed, so there is nothing to record: run "
             f"`app-install publish push {name}` first"
         )
     updated = record.model_copy_update(
-        to_update(record.field_ref().published_commit, pending.pushed_commit),
+        to_update(record.field_ref().published_commit, pending.commit),
         to_update(record.field_ref().published_version, pending.version),
         to_update(record.field_ref().verified_template, pending.verified_template or record.verified_template),
     )

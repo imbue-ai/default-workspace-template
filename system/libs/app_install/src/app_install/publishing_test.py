@@ -418,6 +418,29 @@ def test_a_repository_that_was_created_is_not_created_again_when_the_push_is_run
     assert run_git(published, ["rev-list", "--count", "main"]) == "1"
 
 
+def test_a_push_that_reached_the_repository_before_that_was_noted_is_finished_by_running_it_again(
+    tmp_path: Path,
+) -> None:
+    workspace, published, runtime = _publisher(tmp_path, is_python=False)
+    _versioned(workspace, runtime, "0.1.0")
+    assemble_app(workspace, "notes", "HEAD", runtime)
+    pushed = push_app(workspace, "notes", None, runtime)
+    # As if the run had been cut off right after git pushed: the commit is noted, that it arrived is not.
+    pending_file = pending_publish_path(workspace, "notes")
+    noted = json.loads(pending_file.read_text())
+    assert noted["commit"] == pushed.commit
+    pending_file.write_text(json.dumps({**noted, "is_commit_pushed": False, "is_tag_pushed": False}))
+
+    again = push_app(workspace, "notes", None, runtime)
+
+    # The same commit is pushed again, which the repository already has, so nothing is refused or doubled.
+    assert again.commit == pushed.commit
+    assert again.is_tag_pushed
+    assert again.problems == ()
+    assert run_git(published, ["rev-list", "main"]) == pushed.commit
+    assert record_publish(workspace, "notes", runtime).record.published_commit == pushed.commit
+
+
 def test_only_the_first_publish_of_an_app_installed_and_changed_here_says_what_it_was_derived_from(
     tmp_path: Path,
 ) -> None:

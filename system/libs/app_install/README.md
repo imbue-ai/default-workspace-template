@@ -215,8 +215,8 @@ A tag that does not reach the repository is listed under `problems`; the version
 The ref `refs/app-published/<name>` keeps the published commit in the workspace repository for the next publish to follow; a workspace that lost it fetches it from the published repository.
 
 **Between the steps.**
-What `assemble` built waits in `data/.state/app_install/publish/<name>.json`, and `push` adds the commit it pushed.
-So a step that was interrupted is finished by running it again: `push` does not push a commit twice, and `record`, run alone, finishes a publish whose record was not written.
+What `assemble` built waits in `data/.state/app_install/publish/<name>.json`, and `push` adds the commit it made and whether that commit and its tag have arrived.
+So a step that was interrupted is finished by running it again: `push` makes the commit once and pushes the same one again, which changes nothing in a repository that already has it, and `record`, run alone, finishes a publish whose record was not written.
 `push` and `record` without a waiting tree are `not_assembled`, and `record` before a push is `not_pushed`.
 `assemble` is `refused` while a version that was pushed still waits to be recorded, since assembling the next one would forget which commit that was.
 `record` lists under `problems` a published version made from a commit that is not in the checkout's history yet, which means the branch that holds it still has to be merged.
