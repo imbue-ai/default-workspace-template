@@ -9,6 +9,7 @@ sync pass both ask the questions here, so they give one answer.
 """
 
 import os
+import shutil
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -27,6 +28,8 @@ from github_sync.config import GithubSyncError
 # A split walks every workspace commit made since the app's last join marker.
 GIT_TIMEOUT_SECONDS = 600.0
 _SUBTREE_COMMAND_FILENAME = "git-subtree"
+# Where `git subtree split` keeps its scratch files, under the git directory.
+_SPLIT_CACHE_DIRNAME = "subtree-cache"
 
 
 class AppHistoryError(GithubSyncError):
@@ -156,6 +159,37 @@ def is_app_modified(repo_root: Path, record: AppRecord) -> bool:
     return bool(modifying_paths(differing.splitlines()))
 
 
+def _is_process_running(process_id: int) -> bool:
+    try:
+        os.kill(process_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # It runs as another user.
+        return True
+    return True
+
+
+def _remove_finished_split_caches(cache_root: Path) -> None:
+    """Delete the scratch directory of every split that is no longer running.
+
+    `git subtree split` keeps one per run, named by its process id and holding
+    a file per commit it walked, and never deletes it. One whose process is
+    still running is another split's, and is left alone.
+    """
+    if not cache_root.is_dir():
+        return
+    for entry in cache_root.iterdir():
+        if not entry.name.isdigit() or _is_process_running(int(entry.name)):
+            continue
+        try:
+            shutil.rmtree(entry)
+        except OSError as e:
+            logger.warning(
+                "Could not remove the finished split's scratch {}: {}", entry, e
+            )
+
+
 def split_app(repo_root: Path, record: AppRecord) -> str:
     """The commit of the app's own history that the checked-out commit splits
     to. Writes loose objects only: no ref moves and nothing is committed.
@@ -164,10 +198,14 @@ def split_app(repo_root: Path, record: AppRecord) -> str:
     AppHistoryError when the split fails (no commit holds the app's directory).
     """
     require_git_subtree(repo_root)
-    output = run_git(
-        repo_root,
-        ["subtree", "split", "--quiet", f"--prefix={app_directory_prefix(record)}"],
-    )
+    git_directory = Path(run_git(repo_root, ["rev-parse", "--absolute-git-dir"]))
+    try:
+        output = run_git(
+            repo_root,
+            ["subtree", "split", "--quiet", f"--prefix={app_directory_prefix(record)}"],
+        )
+    finally:
+        _remove_finished_split_caches(git_directory / _SPLIT_CACHE_DIRNAME)
     lines = output.splitlines()
     if not lines:
         raise AppHistoryError(

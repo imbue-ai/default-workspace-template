@@ -1,6 +1,7 @@
 """What the workspace history says about an app, against real local repositories."""
 
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -132,6 +133,25 @@ def test_a_split_is_the_same_commit_again_and_a_longer_history_continues_it(
     second = split_app(workspace, record)
     assert second != first
     run_git(workspace, "merge-base", "--is-ancestor", first, second)
+
+
+def test_a_split_leaves_no_scratch_behind_and_keeps_that_of_a_split_still_running(
+    tmp_path: Path,
+) -> None:
+    workspace = init_workspace(tmp_path / "workspace")
+    record = add_owned_app(workspace, "notes")
+    cache_root = workspace / ".git" / "subtree-cache"
+    # git subtree names its scratch directory by its process id: one of a
+    # process still running, and one a process that has ended left behind.
+    (cache_root / str(os.getpid())).mkdir(parents=True)
+    ended = subprocess.Popen(["git", "--version"], stdout=subprocess.DEVNULL)
+    ended.wait()
+    (cache_root / str(ended.pid)).mkdir()
+
+    split_app(workspace, record)
+    split_app(workspace, record)
+
+    assert [entry.name for entry in cache_root.iterdir()] == [str(os.getpid())]
 
 
 def test_an_app_no_commit_holds_has_no_tree_and_does_not_split(tmp_path: Path) -> None:
