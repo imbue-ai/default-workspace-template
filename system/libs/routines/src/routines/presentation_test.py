@@ -15,9 +15,12 @@ from routines.data_types import RoutineState
 from routines.data_types import RunBlockedEvent
 from routines.data_types import RunStartedEvent
 from routines.data_types import ScheduleOverride
+from routines.presentation import app_schedule_text
 from routines.presentation import build_listing
 from routines.presentation import build_row
 from routines.presentation import fold_run_events
+from routines.presentation import has_schedule_override
+from routines.presentation import is_schedule_only
 from routines.primitives import Duration
 from routines.primitives import RUN_EVENTS_SOURCE
 from routines.primitives import RoutineHealth
@@ -220,3 +223,38 @@ def test_a_row_reads_the_schedule_the_user_gave_a_routine_an_app_owns() -> None:
     assert (by_the_user.schedule_text, by_the_user.health) == ("Every day at 9:00 am", RoutineHealth.WORKING)
     assert by_the_user.next_due_at == datetime(2026, 10, 21, 9, 0, tzinfo=TEST_ZONE)
     assert by_the_user.next_run_text == "tomorrow 9:00 am"
+
+
+def test_only_a_routine_in_an_apps_directory_is_schedule_only_whatever_its_definition_names() -> None:
+    """The directory the file is in decides it: a definition's own ``app`` field is for grouping, and a routine
+    under system/routines that names an app is still the workspace's to edit and remove."""
+    named = _loaded(app="inbox-status")
+    unnamed_in_an_app = loaded_routine(TEST_ROUTINE_ID, named.definition, app_package="inbox_status")
+    broken_in_an_app = loaded_routine(TEST_ROUTINE_ID, None, error="what: Field required", app_package="inbox_status")
+
+    assert not is_schedule_only(named)
+    assert is_schedule_only(unnamed_in_an_app)
+    assert is_schedule_only(broken_in_an_app)
+
+
+def test_an_override_is_in_place_only_for_a_readable_routine_an_app_owns_whose_state_keeps_one() -> None:
+    definition = RoutineDefinition.model_validate(
+        {"title": "Inbox status", "what": "Checks mail.", "every": "1h", "command": ["true"]}
+    )
+    rescheduled = RoutineState(schedule_override=ScheduleOverride(every=Duration("1d"), at=TimeOfDay("09:00")))
+    in_an_app = loaded_routine(TEST_ROUTINE_ID, definition, app_package="inbox_status")
+    in_the_workspace = loaded_routine(TEST_ROUTINE_ID, definition)
+    broken_in_an_app = loaded_routine(TEST_ROUTINE_ID, None, error="what: Field required", app_package="inbox_status")
+
+    assert has_schedule_override(in_an_app, rescheduled)
+    assert app_schedule_text(in_an_app, rescheduled, TEST_ZONE) == "Every hour"
+    # The row itself reads the user's schedule, so the two together say what was changed from what.
+    assert build_row(in_an_app, rescheduled, TEST_NOW, TEST_ZONE).schedule_text == "Every day at 9:00 am"
+
+    assert not has_schedule_override(in_an_app, RoutineState())
+    assert app_schedule_text(in_an_app, RoutineState(), TEST_ZONE) is None
+    # A routine under system/routines never reads the field, and a broken one has no schedule to go back to.
+    assert not has_schedule_override(in_the_workspace, rescheduled)
+    assert app_schedule_text(in_the_workspace, rescheduled, TEST_ZONE) is None
+    assert not has_schedule_override(broken_in_an_app, rescheduled)
+    assert app_schedule_text(broken_in_an_app, rescheduled, TEST_ZONE) is None

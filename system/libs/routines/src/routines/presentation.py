@@ -225,6 +225,28 @@ def build_row(loaded: LoadedRoutine, state: RoutineState, now: datetime, zone: t
 
 
 @pure
+def is_schedule_only(loaded: LoadedRoutine) -> bool:
+    """Whether the routine's schedule and its on/off switch are all that can be changed here: its definition file
+    is in an app's directory, so anything else, removing it included, is a change to that app."""
+    return loaded.app_package is not None
+
+
+@pure
+def has_schedule_override(loaded: LoadedRoutine, state: RoutineState) -> bool:
+    """Whether the routine runs on a schedule its user gave it in place of the one its app gives it."""
+    return loaded.app_package is not None and loaded.definition is not None and state.schedule_override is not None
+
+
+@pure
+def app_schedule_text(loaded: LoadedRoutine, state: RoutineState, zone: tzinfo) -> str | None:
+    """The schedule the routine's app gives it, in the words the rows show, while the user's own is in its place;
+    None for a routine that runs on its definition's schedule."""
+    if loaded.definition is None or not has_schedule_override(loaded, state):
+        return None
+    return describe_schedule(loaded.definition, zone)
+
+
+@pure
 def sort_rows(rows: Sequence[RoutineRow]) -> list[RoutineRow]:
     return sorted(rows, key=lambda row: (_HEALTH_RANK[row.health], row.title.lower()))
 
