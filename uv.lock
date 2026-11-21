@@ -778,6 +778,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "app-schema", extra = ["testing"] },
+    { name = "bootstrap" },
     { name = "coverage" },
     { name = "inline-snapshot" },
     { name = "mngr-cli-contract" },
@@ -830,6 +831,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "app-schema", extras = ["testing"], editable = "system/libs/app_schema" },
+    { name = "bootstrap", editable = "system/libs/bootstrap" },
     { name = "coverage" },
     { name = "inline-snapshot", specifier = ">=0.13" },
     { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },

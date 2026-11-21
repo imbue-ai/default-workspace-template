@@ -17,6 +17,7 @@ which is what the persistent marker and ``recover`` are for.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import fcntl
 import json
@@ -52,13 +53,17 @@ from update_self_skill.update_apply_contract import (
     clear_marker,
     clear_provision_incomplete,
     default_is_pid_a_live_apply,
+    emergency_path,
+    marker_path,
     provision_incomplete_path,
+    read_emergency,
     read_last_good,
     read_marker,
     read_run_status,
     rollback_lock_path,
     snapshots_root,
     write_emergency,
+    write_emergency_record,
     write_last_good,
     write_marker,
     write_provision_incomplete,
@@ -2386,14 +2391,14 @@ def recover(
             # The copies stay, for the same reason the emergency path keeps
             # them: a restore that failed for anything other than a missing
             # copy (a full disk, a permission fault) leaves the copy sitting
-            # right there, and putting it back by hand is the way out. Deleting
-            # them here would destroy the only remaining route.
+            # right there, and `finish-restore` puts it back from the record
+            # below. Deleting them here would destroy the only remaining route.
             reason = (
                 f"could not restore: {', '.join(sorted(failed))}. The tree is "
                 "rolled back but the pre-apply state is NOT -- the copies are kept at "
-                f"{snapshots_root(repo_root)}, so copying one back by hand is the "
-                "quickest repair; whatever has no copy left has to be rebuilt. "
-                "Services will boot against that mismatch."
+                f"{snapshots_root(repo_root)}, and `finish-restore` puts them back once "
+                "what stopped the restore is fixed; whatever has no copy left has to be "
+                "rebuilt. Services will boot against that mismatch."
             )
             sys.stderr.write(f"recover: {reason}\n")
             # Nothing is running to probe, so this is the boot path's emergency:
@@ -2406,6 +2411,7 @@ def recover(
                 f"but {reason}",
                 marker.dri_agent,
                 now,
+                unrestored=[s for s in marker.snapshots if s.name in failed],
             )
             return 3
         discard_snapshots(repo_root)
@@ -2471,3 +2477,101 @@ def recover(
         now,
     )
     return 3
+
+
+def _report_still_unrestored(
+    repo_root: Path, remaining: Sequence[SnapshotRecord]
+) -> None:
+    """Name what finish-restore still could not put back: a kept copy waits for another run,
+    and one whose copy is gone has to be rebuilt."""
+    gone = sorted(s.name for s in remaining if not Path(s.copy).exists())
+    kept = sorted(s.name for s in remaining if s.name not in gone)
+    if kept:
+        sys.stderr.write(
+            f"still could not restore: {', '.join(kept)}; the copies stay at "
+            f"{snapshots_root(repo_root)}, and the emergency record still names them.\n"
+        )
+    if gone:
+        sys.stderr.write(
+            f"no copy is left of: {', '.join(gone)}, so another run cannot put it "
+            "back; rebuild it instead.\n"
+        )
+
+
+def finish_restore(repo_root: Path) -> int:
+    """Put back the pre-apply copies a boot-time rollback could not, from the emergency record.
+
+    The boot path's ``recover`` restores the tree but can fail to put a copy back (a full
+    disk, a permission fault), and the marker that named where each copy belongs is gone by
+    then; the emergency record keeps that list. Run once what stopped the restore is fixed.
+    The restore is the one ``recover`` attempted, so a tool environment gets its entrypoints
+    back too. Health is not probed here, so the record stays: the agent clears it once the
+    workspace is confirmed healthy. Returns 0 when every copy is back (or there is no
+    emergency and no copy left over), and 3 when some still would not restore, which stay named.
+
+    Returns 1, touching nothing, when it cannot tell what to put back: the record is
+    unreadable, it keeps no readable list of unrestored copies (an emergency from anything
+    but a boot-time partial restore), or there is no record but copies no kept rollback point
+    owns are left behind, which is a repair by hand. Refused (1) too while an apply's
+    marker exists, or a later apply's rollback point is kept: that apply took its copies at the
+    same paths, so restoring from them would put its pre-apply state over the live tree, and
+    discarding them would take away its way back. That check follows the record's: the
+    interrupted apply cleared any earlier rollback point before it began, so once the record
+    is a boot-time partial restore's, a point kept now is always a later apply's (a failed
+    rollback of a kept point leaves no list, and is a repair by hand as above).
+    """
+    if marker_path(repo_root).exists():
+        sys.stderr.write(
+            "error: an apply is in flight (its marker exists); finish or `recover` it "
+            "before putting back an earlier rollback's copies.\n"
+        )
+        return 1
+    record = read_emergency(repo_root)
+    if record is None:
+        if emergency_path(repo_root).exists():
+            sys.stderr.write(
+                "error: the emergency record cannot be read, so what to put back is "
+                f"unknown; the copies are at {snapshots_root(repo_root)}: repair by hand.\n"
+            )
+            return 1
+        # ``recover`` writes the record best-effort, so the full disk that failed the restore
+        # can fail the record too: copies no kept rollback point owns are then that restore's.
+        root = snapshots_root(repo_root)
+        if read_last_good(repo_root) is None and root.is_dir() and any(root.iterdir()):
+            sys.stderr.write(
+                "error: no emergency is recorded, but pre-apply copies are kept at "
+                f"{root} with nothing naming where they belong: repair by hand.\n"
+            )
+            return 1
+        sys.stderr.write("no emergency is recorded; nothing to put back.\n")
+        return 0
+    snapshots = record.unrestored
+    if snapshots is None:
+        sys.stderr.write(
+            "error: the emergency record keeps no readable list of unrestored copies (it "
+            "is not from a boot-time rollback's partial restore); the copies are at "
+            f"{snapshots_root(repo_root)}: repair by hand.\n"
+        )
+        return 1
+    if not snapshots:
+        sys.stderr.write("every recorded copy is already back; nothing to put back.\n")
+        return 0
+    if read_last_good(repo_root) is not None:
+        sys.stderr.write(
+            "error: a later apply kept its rollback point, and its copies are at the "
+            "paths the emergency record names, so putting them back would undo part of "
+            f"that apply; the copies are at {snapshots_root(repo_root)}: repair by hand.\n"
+        )
+        return 1
+    failed = set(restore_snapshots(snapshots))
+    remaining = [s for s in snapshots if s.name in failed]
+    write_emergency_record(repo_root, dataclasses.replace(record, unrestored=remaining))
+    if remaining:
+        _report_still_unrestored(repo_root, remaining)
+        return 3
+    discard_snapshots(repo_root)
+    sys.stderr.write(
+        f"restored: {', '.join(sorted(s.name for s in snapshots))}. Confirm the workspace "
+        "is healthy, then delete the emergency record.\n"
+    )
+    return 0

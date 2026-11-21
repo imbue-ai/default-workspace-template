@@ -1,0 +1,1 @@
+- The chat app's tests now also pin the note bootstrap sends after a restart rolls an apply back, which the chat shows as its existing "Workspace update not applied" notice rather than as a message bubble of agent instructions.

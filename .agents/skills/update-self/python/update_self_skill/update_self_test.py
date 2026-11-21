@@ -5634,8 +5634,10 @@ def test_every_bands_attribute_the_script_reads_is_declared_required() -> None:
         (["--repo-root", "/w", "apply", "--merge-ref", "x"], "/w"),
         (["apply", "--repo-root", "/w", "--merge-ref", "x"], "/w"),
         (["apply", "--repo-root=/w"], "/w"),
-        # Only the two motions that can be interrupted half-way through
-        # replacing what the workspace runs band themselves.
+        (["rollback-last"], "cwd"),
+        (["finish-restore", "--repo-root", "/w"], "/w"),
+        # Only the motions that can be interrupted half-way through replacing
+        # what the workspace runs band themselves.
         (["resolve-target", "--local-tags"], None),
         (["classify-merge", "--target", "main"], None),
         ([], None),
@@ -5649,13 +5651,15 @@ def test_every_bands_attribute_the_script_reads_is_declared_required() -> None:
         "repo-root-before",
         "repo-root-after",
         "repo-root-equals",
+        "rollback-last",
+        "finish-restore",
         "resolve-target",
         "classify-merge",
         "no-args",
         "apply-as-a-flag-value",
     ],
 )
-def test_only_apply_and_recover_band_themselves(
+def test_only_the_restoring_motions_band_themselves(
     argv: list[str], expected: str | None
 ) -> None:
     # Getting this wrong runs the apply unbanded, so a memory shed can kill the
@@ -7597,23 +7601,13 @@ def test_recover_no_restart_removes_the_bundle_a_pre_split_tree_does_not_serve(
     assert not _marker_exists(apply_repo)
 
 
-def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
-    apply_repo: Path, capsys
-) -> None:
-    """A copy that would not restore is kept, and the report says so.
-
-    Deleting it would destroy the only remaining way back -- a restore that
-    failed for anything but a missing copy leaves the copy sitting right there.
-    """
-    snapshots_root = (
-        apply_repo
-        / update_apply_contract.STATE_DIR_REL
-        / update_apply_contract.SNAPSHOTS_DIRNAME
-    )
-    copy = snapshots_root / "bundle"
+def _recover_over_an_unrestorable_bundle(apply_repo: Path) -> tuple[int, Path]:
+    """A boot-path ``recover`` whose one pre-apply copy cannot be put back: the
+    destination's own parent is a regular file (``blocked``). Returns its exit code and
+    the kept copy."""
+    copy = update_apply_contract.snapshots_root(apply_repo) / "bundle"
     copy.mkdir(parents=True)
     (copy / "index.html").write_text("the pre-apply bundle")
-    # The restore cannot land: the destination's own parent is a regular file.
     (apply_repo / "blocked").write_text("not a directory")
     _plant_marker(
         apply_repo,
@@ -7626,8 +7620,20 @@ def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
         ],
     )
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    return _recover(runner, _FakeHttp(_all_healthy), apply_repo, no_restart=True), copy
 
-    code = _recover(runner, _FakeHttp(_all_healthy), apply_repo, no_restart=True)
+
+def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
+    apply_repo: Path, capsys
+) -> None:
+    """A copy that would not restore is kept, and the report says so.
+
+    Deleting it would destroy the only remaining way back -- a restore that
+    failed for anything but a missing copy leaves the copy sitting right there.
+    """
+    snapshots_root = update_apply_contract.snapshots_root(apply_repo)
+
+    code, copy = _recover_over_an_unrestorable_bundle(apply_repo)
 
     # The boot path's emergency: nothing is running to probe, the marker is
     # gone, and the services are about to boot over a non-restored bundle --
@@ -7644,6 +7650,188 @@ def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
     assert record["dri_agent"] == "the-lead"
     assert "could not restore: bundle" in record["reason"]
     assert record["snapshots_dir"] == str(snapshots_root)
+    # The marker that said where the copy belongs is gone, so the record says it.
+    assert record["unrestored"] == [
+        {
+            "name": "bundle",
+            "source": str(apply_repo / "blocked" / "static"),
+            "copy": str(copy),
+        }
+    ]
+
+
+def _finish_restore(apply_repo: Path) -> int:
+    return update_self.main(["finish-restore", "--repo-root", str(apply_repo)])
+
+
+def _unrestored_names(apply_repo: Path) -> list[str]:
+    return [entry["name"] for entry in _read_emergency(apply_repo)["unrestored"]]
+
+
+def test_finish_restore_puts_back_what_a_boot_rollback_could_not_once_the_cause_is_fixed(
+    apply_repo: Path, capsys
+) -> None:
+    code, copy = _recover_over_an_unrestorable_bundle(apply_repo)
+    assert code == 3
+    destination = apply_repo / "blocked" / "static"
+    recorded_at = _read_emergency(apply_repo)["recorded_at"]
+
+    # The cause is still there: the copy stays, and so does its entry in the record.
+    assert _finish_restore(apply_repo) == 3
+    assert (copy / "index.html").exists()
+    assert _unrestored_names(apply_repo) == ["bundle"]
+
+    (apply_repo / "blocked").unlink()
+    assert _finish_restore(apply_repo) == 0
+
+    assert (destination / "index.html").read_text() == "the pre-apply bundle"
+    assert not update_apply_contract.snapshots_root(apply_repo).exists()
+    # Health is the agent's to confirm, so the record stays, now naming nothing left.
+    record = _read_emergency(apply_repo)
+    assert record["unrestored"] == []
+    assert "could not restore: bundle" in record["reason"]
+    assert record["recorded_at"] == recorded_at
+    assert "restored: bundle" in capsys.readouterr().err
+
+
+def test_finish_restore_names_a_copy_that_is_gone_as_one_to_rebuild(
+    apply_repo: Path, capsys
+) -> None:
+    _, copy = _recover_over_an_unrestorable_bundle(apply_repo)
+    (apply_repo / "blocked").unlink()
+    shutil.rmtree(copy)
+    capsys.readouterr()
+
+    assert _finish_restore(apply_repo) == 3
+
+    err = capsys.readouterr().err
+    assert "no copy is left of: bundle" in err
+    assert "the copies stay at" not in err
+    assert _unrestored_names(apply_repo) == ["bundle"]
+
+
+def test_finish_restore_leaves_a_record_without_an_unrestored_list_to_a_hand_repair(
+    apply_repo: Path, capsys
+) -> None:
+    """Every other emergency keeps no list of what to put back; reading that as "every copy
+    is back" would have the agent clear the record over copies nobody restored."""
+    copy = update_apply_contract.snapshots_root(apply_repo) / "bundle"
+    copy.mkdir(parents=True)
+    update_apply_contract.write_emergency(
+        apply_repo,
+        "the live workspace could not be confirmed healthy",
+        "the-lead",
+        time.time,
+    )
+
+    assert "unrestored" not in _read_emergency(apply_repo)
+    assert _finish_restore(apply_repo) == 1
+    assert "repair by hand" in capsys.readouterr().err
+    assert copy.exists()
+
+    # A failed rollback of a kept point leaves this kind of record with the point still
+    # kept; no later apply is involved, so the refusal must not name one.
+    _keep_a_later_apply_rollback_point(apply_repo)
+    assert _finish_restore(apply_repo) == 1
+    err = capsys.readouterr().err
+    assert "keeps no readable list of unrestored copies" in err
+    assert "a later apply" not in err
+    assert copy.exists()
+
+    update_apply_contract.emergency_path(apply_repo).write_text("not json {")
+    assert _finish_restore(apply_repo) == 1
+    assert copy.exists()
+
+    # A list it cannot read whole is no list: restoring the readable entries and discarding
+    # the copies would take away the one the unreadable entry named.
+    update_apply_contract.emergency_path(apply_repo).write_text(
+        json.dumps(
+            {
+                "unrestored": [
+                    {
+                        "name": "bundle",
+                        "source": str(apply_repo / "static"),
+                        "copy": str(copy),
+                    },
+                    {"name": "venv"},
+                ]
+            }
+        )
+    )
+    assert _finish_restore(apply_repo) == 1
+    assert copy.exists()
+    assert not (apply_repo / "static").exists()
+
+
+def test_finish_restore_refuses_left_over_copies_whose_record_never_got_written(
+    apply_repo: Path, capsys
+) -> None:
+    """``recover`` writes the record best-effort, and the full disk that failed the restore can
+    fail that write too; "nothing to put back" over the copies would end the repair there."""
+    _, copy = _recover_over_an_unrestorable_bundle(apply_repo)
+    update_apply_contract.emergency_path(apply_repo).unlink()
+    (apply_repo / "blocked").unlink()
+    capsys.readouterr()
+
+    assert _finish_restore(apply_repo) == 1
+
+    assert "repair by hand" in capsys.readouterr().err
+    assert (copy / "index.html").exists()
+    assert not (apply_repo / "blocked").exists()
+
+    # Copies a kept rollback point owns are that point's, not a failed restore's.
+    _keep_a_later_apply_rollback_point(apply_repo)
+    assert _finish_restore(apply_repo) == 0
+    assert "nothing to put back" in capsys.readouterr().err
+    assert (copy / "index.html").exists()
+
+
+def _keep_a_later_apply_rollback_point(apply_repo: Path) -> None:
+    update_apply_contract.write_last_good(
+        update_apply_contract.LastGoodRecord(
+            merge_sha="fedcba9876543",
+            rollback_to=_ROLLBACK,
+            applied_at=1.0,
+            driven_by="lead",
+            snapshots=[],
+            programs=[],
+            apps=[],
+            needs_system_services_restart=False,
+        ),
+        apply_repo,
+    )
+
+
+@pytest.mark.parametrize(
+    ("later_apply", "refusal"),
+    [
+        (
+            lambda repo: _plant_marker(repo, merge_ref="mngr/update-retry"),
+            "an apply is in flight",
+        ),
+        (_keep_a_later_apply_rollback_point, "a later apply kept its rollback point"),
+    ],
+    ids=["in-flight", "rollback-point-kept"],
+)
+def test_finish_restore_refuses_once_a_later_apply_holds_the_copy_paths(
+    apply_repo: Path,
+    capsys,
+    later_apply: Callable[[Path], None],
+    refusal: str,
+) -> None:
+    """A later apply takes its copies at the paths the record names, so restoring from
+    them, or discarding them, would undercut that apply's own way back."""
+    _, copy = _recover_over_an_unrestorable_bundle(apply_repo)
+    (apply_repo / "blocked").unlink()
+    later_apply(apply_repo)
+
+    code = _finish_restore(apply_repo)
+
+    assert code == 1
+    assert refusal in capsys.readouterr().err
+    assert (copy / "index.html").exists()
+    assert not (apply_repo / "blocked").exists()
+    assert _unrestored_names(apply_repo) == ["bundle"]
 
 
 def test_recover_reaches_the_same_end_state_as_the_in_process_rollback(

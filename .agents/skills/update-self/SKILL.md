@@ -810,8 +810,8 @@ could not start or tell, and the same command finishes the rest.
 
 What each outcome means for the user, the `provision-incomplete` and
 `emergency.json` records, an interrupted apply (re-run the same command; it
-resumes), and how to honor a rollback request are in
-`references/apply-outcomes.md`.
+resumes -- but never retry one a restart rolled back unless the user asks),
+and how to honor a rollback request are in `references/apply-outcomes.md`.
 
 ### 5c. Carry out the report-driven remainder
 

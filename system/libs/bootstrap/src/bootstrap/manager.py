@@ -25,6 +25,7 @@ from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
@@ -33,6 +34,7 @@ from bootstrap.claude_state_migration import (
     LEGACY_ROOT_HOME,
     migrate_legacy_claude_state,
 )
+from bootstrap.rollback_note import BootRollback, compose_rollback_note
 
 # Path (relative to the repo root, which is bootstrap's cwd) of the supervisord
 # config that defines every background service.
@@ -676,8 +678,17 @@ def _run_env_converge_fast_phase() -> None:
         )
 
 
-def _read_update_marker_dri_agent() -> str:
-    """The DRI agent recorded in the update-apply marker, or "" when unreadable.
+class _MarkerFacts(NamedTuple):
+    """What the update-apply marker says about the apply a rollback would undo."""
+
+    dri_agent: str
+    merge_ref: str
+    # The release an update-self apply was landing, or None for any other apply.
+    release: str | None
+
+
+def _read_update_marker() -> _MarkerFacts:
+    """The facts the update-apply marker records; a ``dri_agent`` of "" when unreadable.
 
     ``ValueError`` rather than ``json.JSONDecodeError`` alone: a torn write is
     the failure mode being defended against here (an interrupted apply is why
@@ -693,43 +704,47 @@ def _read_update_marker_dri_agent() -> str:
             UPDATE_APPLY_MARKER,
             e,
         )
-        return ""
-    dri_agent = raw.get("dri_agent") if isinstance(raw, dict) else None
-    if isinstance(dri_agent, str):
-        # "" is ordinary, not corruption: an apply driven outside an agent
-        # records no name. _recover_interrupted_update reports that case.
-        return dri_agent
-    logger.warning(
-        "The update-apply marker at {} carries no usable dri_agent ({!r}); the "
-        "rollback still runs, but nobody will be re-engaged afterwards",
-        UPDATE_APPLY_MARKER,
-        dri_agent,
+        return _MarkerFacts(dri_agent="", merge_ref="", release=None)
+    if not isinstance(raw, dict):
+        raw = {}
+    dri_agent = raw.get("dri_agent")
+    # "" is ordinary, not corruption: an apply driven outside an agent records no
+    # name. _recover_interrupted_update reports that case.
+    if not isinstance(dri_agent, str):
+        logger.warning(
+            "The update-apply marker at {} carries no usable dri_agent ({!r}); the "
+            "rollback still runs, but nobody will be re-engaged afterwards",
+            UPDATE_APPLY_MARKER,
+            dri_agent,
+        )
+        dri_agent = ""
+    merge_ref = raw.get("merge_ref")
+    release = raw.get("target_ref")
+    return _MarkerFacts(
+        dri_agent=dri_agent,
+        merge_ref=merge_ref if isinstance(merge_ref, str) else "",
+        release=release if isinstance(release, str) else None,
     )
-    return ""
 
 
-def _wake_update_dri_agent(agent_name: str) -> None:
-    """Re-engage the agent that was driving the rolled-back update. Best-effort.
+def _wake_update_dri_agent(rollback: BootRollback) -> None:
+    """Re-engage the agent that was driving the rolled-back apply. Best-effort.
 
-    The recovered workspace is back on its pre-update revision, but only an
-    agent can verify state and talk to the user about retrying -- so start the
-    DRI agent the marker named and hand it the finding. Failures are logged and
-    swallowed: the rollback already restored the workspace, so the cost of a
-    failed wake is that nobody tells the user about it. There is no other
-    channel on this path -- the system interface's interrupted-update banner
-    keys off the marker, which a successful rollback has already cleared -- so
-    the warning below is what a human has to find in the boot log.
+    The recovered workspace is back on its pre-apply revision, but only an
+    agent can verify state and talk to the user -- so start the DRI agent the
+    marker named and hand it the note (``rollback_note``), whose one summary
+    line is all the chat shows the user. Failures are logged and swallowed: the
+    rollback already restored the workspace, so the cost of a failed wake is
+    that nobody tells the user about it. After a complete rollback there is no
+    other channel -- the system interface's interrupted-update banner keys off
+    the marker, which the rollback has already cleared, and only an incomplete
+    one leaves the emergency record its emergency banner keys off -- so the
+    warning below is what a human has to find in the boot log.
     """
-    message = (
-        "A workspace update you were applying was interrupted (the container "
-        "restarted mid-apply), and the boot-time recovery rolled it back to the "
-        "pre-update state. Verify the workspace is healthy, then follow the "
-        "update-self skill's post-rollback guidance to tell the user and offer "
-        "the retry (the worker branch and report are kept)."
-    )
+    agent_name = rollback.dri_agent
     for argv in (
         ["mngr", "start", agent_name],
-        ["mngr", "message", agent_name, "-m", message],
+        ["mngr", "message", agent_name, "-m", compose_rollback_note(rollback)],
     ):
         try:
             result = subprocess.run(
@@ -756,17 +771,18 @@ def _wake_update_dri_agent(agent_name: str) -> None:
     logger.info("Re-engaged update DRI agent {}", agent_name)
 
 
-def _recover_interrupted_update() -> str:
+def _recover_interrupted_update() -> BootRollback | None:
     """Roll back an update apply the previous container run left mid-motion.
 
-    Returns the DRI agent to re-engage afterwards, or ``""`` when there is
-    nobody to wake (no marker, the guard declined, the rollback failed, or the
-    marker named no agent). A rollback that restored the tree but not the
-    pre-apply state (exit ``UPDATE_RECOVER_EXIT_EMERGENCY``) still names the
-    agent: the marker is gone and the workspace is booting over that mismatch,
-    which is precisely the state that wants a person. Waking is the caller's
-    job and deliberately not done here: it starts a live agent, which must not
-    happen until the workspace venv has been converged.
+    Returns the rollback to tell the DRI agent about afterwards, or ``None``
+    when there is nobody to wake (no marker, the guard declined, the rollback
+    failed, or the marker named no agent). A rollback that restored the tree
+    but not the pre-apply state (exit ``UPDATE_RECOVER_EXIT_EMERGENCY``) is
+    still reported, as incomplete: the marker is gone and the workspace is
+    booting over that mismatch, which is precisely the state that wants a
+    person. Waking is the caller's job and deliberately not done here: it
+    starts a live agent, which must not happen until the workspace venv has
+    been converged.
 
     The apply's marker persisting across a boot means the container stopped (or
     died) between the merge landing and the apply finishing -- the half-applied
@@ -787,8 +803,8 @@ def _recover_interrupted_update() -> str:
     loudly but never blocks boot.
     """
     if not UPDATE_APPLY_MARKER.exists():
-        return ""
-    dri_agent = _read_update_marker_dri_agent()
+        return None
+    marker = _read_update_marker()
     logger.warning(
         "An interrupted update apply left a marker at {}; asking the recovery "
         "guard to roll it back",
@@ -812,7 +828,7 @@ def _recover_interrupted_update() -> str:
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.error("update-apply recovery could not run ({}); continuing boot", e)
-        return ""
+        return None
     recovery_output = result.stderr.strip()[-1000:]
     if result.returncode == UPDATE_RECOVER_EXIT_EMERGENCY:
         logger.error(
@@ -822,7 +838,7 @@ def _recover_interrupted_update() -> str:
             UPDATE_APPLY_MARKER,
             recovery_output,
         )
-        return dri_agent
+        return _rollback_to_report(marker, is_restore_complete=False)
     if result.returncode != 0:
         logger.error(
             "update-apply recovery failed (rc={}); continuing boot with the "
@@ -830,7 +846,7 @@ def _recover_interrupted_update() -> str:
             result.returncode,
             recovery_output,
         )
-        return ""
+        return None
     # A cleared marker is what distinguishes "rolled back" from the guard's
     # silent no-op; only a real rollback warrants re-engaging the DRI agent.
     if UPDATE_APPLY_MARKER.exists():
@@ -839,17 +855,30 @@ def _recover_interrupted_update() -> str:
             "still there); continuing boot with the workspace as it was left",
             UPDATE_APPLY_MARKER,
         )
-        return ""
+        return None
     # A rollback really happened, so the whole of what it did belongs in the boot
     # log at a level someone scanning for trouble will see: a partial restore is
     # reported in that output and nowhere else.
     logger.warning("Rolled back an interrupted update apply: {}", recovery_output)
-    if not dri_agent:
+    return _rollback_to_report(marker, is_restore_complete=True)
+
+
+def _rollback_to_report(
+    marker: _MarkerFacts, *, is_restore_complete: bool
+) -> BootRollback | None:
+    """The rollback to hand the marker's DRI agent, or None when it named none."""
+    if not marker.dri_agent:
         logger.warning(
-            "That apply's marker named no agent to re-engage, so nothing will tell "
-            "the user the update was undone"
+            "That apply's marker named no agent to re-engage, so no agent will tell "
+            "the user the apply was rolled back"
         )
-    return dri_agent
+        return None
+    return BootRollback(
+        dri_agent=marker.dri_agent,
+        merge_ref=marker.merge_ref,
+        release=marker.release,
+        is_restore_complete=is_restore_complete,
+    )
 
 
 def _migrate_legacy_claude_state_best_effort() -> None:
@@ -944,7 +973,7 @@ def main() -> None:
     # before any service or agent starts from half-applied state. The agent to
     # re-engage afterwards is woken further down, once the venv is converged.
     with _bootstrap_step("recover_update", "Checking for an interrupted update"):
-        update_dri_agent = _recover_interrupted_update()
+        update_rollback = _recover_interrupted_update()
 
     # Every boot, not once: `pool_bake` unsets the repo identity on finalize and expects the
     # adopted workspace to supply it again. Only-if-unset, so it never overwrites the user's.
@@ -978,8 +1007,8 @@ def main() -> None:
     # Re-engage the agent whose update the boot-time rollback undid. Held until
     # here on purpose: waking it starts a live agent running `uv run`, which
     # must not race _sync_workspace_venv's rewrite of the venv above.
-    if update_dri_agent:
-        _wake_update_dri_agent(update_dri_agent)
+    if update_rollback is not None:
+        _wake_update_dri_agent(update_rollback)
 
     # Lay down the update-recovery guard, convert any cron entries left from
     # before routines existed, lay down the routines tick, then reinstall what
