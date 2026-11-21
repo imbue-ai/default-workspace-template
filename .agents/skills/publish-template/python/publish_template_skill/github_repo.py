@@ -33,12 +33,10 @@ import sys
 from pathlib import Path
 
 from github_sync.repositories import (
-    GITHUB_API_URL,
     GithubRequestError,
     create_repository,
-    explain_refusal,
     lock_down_repository,
-    request_github,
+    set_repository_topics,
 )
 
 from publish_template_skill.validate_template import REPO_URL_PLACEHOLDER
@@ -79,12 +77,7 @@ def point_readme_at(worktree: Path, repo: str) -> bool:
 
 
 def set_template_topic(repo: str) -> None:
-    response = request_github(
-        "PUT", f"{GITHUB_API_URL}/repos/{repo}/topics", {"names": [_TEMPLATE_TOPIC]}
-    )
-    names = response.get("names")
-    if not isinstance(names, list) or _TEMPLATE_TOPIC not in names:
-        raise GithubRequestError(f"the topic was not set: {explain_refusal(response)}")
+    set_repository_topics(repo, [_TEMPLATE_TOPIC])
 
 
 def main(argv: list[str] | None = None) -> int:

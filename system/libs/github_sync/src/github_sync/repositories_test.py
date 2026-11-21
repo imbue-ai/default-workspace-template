@@ -9,7 +9,9 @@ from github_sync.repositories import (
     GithubRequestError,
     RepositoryNameTakenError,
     create_repository,
+    hint_for_push_failure,
     lock_down_repository,
+    set_repository_topics,
 )
 from github_sync.testing import install_fake_latchkey
 
@@ -105,3 +107,38 @@ def test_locking_down_closes_every_surface_and_reports_what_did_not_take(
 
     _answer(fake_latchkey_bin, {"message": "Server Error"}, log)
     assert lock_down_repository("octo/notes-dev") == '{"message": "Server Error"}'
+
+
+def test_topics_are_set_and_a_refusal_is_raised(
+    fake_latchkey_bin: Path, tmp_path: Path
+) -> None:
+    log = tmp_path / "latchkey-arguments"
+    _answer(fake_latchkey_bin, {"names": ["imbue-studio-app"]}, log)
+
+    set_repository_topics("octo/notes", ["imbue-studio-app"])
+
+    arguments = log.read_text().splitlines()
+    assert arguments[3:5] == ["PUT", "https://api.github.com/repos/octo/notes/topics"]
+    assert json.loads(arguments[-1]) == {"names": ["imbue-studio-app"]}
+
+    _answer(fake_latchkey_bin, {"message": "Not Found"}, log)
+    with pytest.raises(GithubRequestError, match="the topic was not set"):
+        set_repository_topics("octo/notes", ["imbue-studio-app"])
+
+
+def test_a_refused_push_is_explained_only_by_what_git_itself_said() -> None:
+    refused = (
+        " ! [rejected]        abc123 -> main (non-fast-forward)\n"
+        "error: failed to push some refs to 'https://github.com/octo/notes.git'"
+    )
+    hint = hint_for_push_failure(refused)
+    assert hint is not None and "never force-push" in hint
+
+    # The remote's URL is in git's output too, so a repository's name must never read as a cause.
+    assert (
+        hint_for_push_failure(
+            "fatal: unable to access 'https://github.com/octo/non-fast-forward.git/': "
+            "Could not resolve host: github.com"
+        )
+        is None
+    )

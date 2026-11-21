@@ -26,6 +26,31 @@ LOCKDOWN_SETTINGS = {
 _LATCHKEY_CURL_TIMEOUT_SECONDS = 120
 _NAME_TAKEN_MARKER = "already exists"
 _NOT_PERMITTED_MARKER = "not permitted"
+# What a refused push most likely means, matched against git's stderr. Ordered so
+# the specific causes win: GitHub's workflow-scope refusal is also printed as a
+# "[remote rejected]" line. The stderr also carries the remote URL, so no needle
+# may be something a repo name can contain.
+_PUSH_FAILURE_HINTS = (
+    (
+        ("create or update workflow", "`workflow` scope"),
+        "the stored GitHub credential cannot push .github/workflows/ files; tell the "
+        "user and stop -- never strip files to get the push through",
+    ),
+    (
+        (_NOT_PERMITTED_MARKER,),
+        "the github-git-write permission is missing; request it again",
+    ),
+    (
+        ("http 413", "too large"),
+        "the user's Imbue Studio app is older than the gateway's raised body cap and "
+        "cannot proxy a push this size; tell the user and stop",
+    ),
+    (
+        ("(non-fast-forward)", "fetch first"),
+        "the published main moved since its tip was read; someone else pushed there. "
+        "Stop and tell the user -- never force-push over it",
+    ),
+)
 
 
 class GithubRequestError(GithubSyncError):
@@ -126,4 +151,28 @@ def lock_down_repository(repository: str) -> str | None:
         return str(e)
     if "name" not in response:
         return explain_refusal(response)
+    return None
+
+
+def set_repository_topics(repository: str, names: list[str]) -> None:
+    """Replace the topics of `<owner>/<repo>` with `names`, which is how
+    published repositories of one kind are found as a group.
+
+    Raises GithubRequestError when the topics were not set.
+    """
+    response = request_github(
+        "PUT", f"{GITHUB_API_URL}/repos/{repository}/topics", {"names": names}
+    )
+    answered = response.get("names")
+    if not isinstance(answered, list) or any(name not in answered for name in names):
+        raise GithubRequestError(f"the topic was not set: {explain_refusal(response)}")
+
+
+def hint_for_push_failure(output: str) -> str | None:
+    """What to do about a push git refused with `output`, when the refusal is
+    one of the known ones; None otherwise."""
+    lowered = output.lower()
+    for needles, hint in _PUSH_FAILURE_HINTS:
+        if any(needle in lowered for needle in needles):
+            return hint
     return None
