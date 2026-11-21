@@ -102,3 +102,55 @@ describe("the catch-up triggers", () => {
     expect(catchUpCursors()).toEqual([]);
   });
 });
+
+class OpenableEventSource extends FakeEventSource {
+  static latest: OpenableEventSource | null = null;
+
+  constructor(url: string) {
+    super(url);
+    OpenableEventSource.latest = this;
+  }
+}
+
+// A snapshot can be read before the server registers the page's stream (the chat root reads it as it creates the
+// frame), so whatever the two land in, the page asks once both have.
+describe("the catch-up once the snapshot and the open stream have both landed", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    mockRequest.mockReset();
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal("EventSource", OpenableEventSource);
+    (await import("./Chats")).initChats();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    FakeSocket.latest = null;
+    OpenableEventSource.latest = null;
+  });
+
+  it("asks when the stream opens after the snapshot landed", async () => {
+    mockRequest.mockResolvedValueOnce({ events: [userTurn("turn-1")], offset: 0, total: 1 });
+    await (await import("./StreamingMessage")).loadSnapshotWithStream(CHAT_ID);
+    mockRequest.mockResolvedValue({ events: [], offset: 1, total: 1 });
+    expect(catchUpCursors()).toEqual([]);
+
+    OpenableEventSource.latest?.onopen?.();
+
+    expect(catchUpCursors()).toEqual(["turn-1"]);
+  });
+
+  it("asks when the snapshot lands after the stream opened, and not before", async () => {
+    let landSnapshot: (value: unknown) => void = () => undefined;
+    mockRequest.mockReturnValueOnce(new Promise((resolve) => (landSnapshot = resolve)));
+    const loaded = (await import("./StreamingMessage")).loadSnapshotWithStream(CHAT_ID);
+    OpenableEventSource.latest?.onopen?.();
+    expect(catchUpCursors()).toEqual([]);
+
+    mockRequest.mockResolvedValue({ events: [], offset: 1, total: 1 });
+    landSnapshot({ events: [userTurn("turn-1")], offset: 0, total: 1 });
+    await loaded;
+
+    expect(catchUpCursors()).toEqual(["turn-1"]);
+  });
+});

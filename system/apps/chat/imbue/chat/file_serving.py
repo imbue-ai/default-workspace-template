@@ -36,7 +36,7 @@ from flask import send_file
 # entirely, so a re-render (or a re-download) never refetches while a new
 # message -- carrying a fresh URL -- always fetches the file's current bytes.
 _FILE_CACHE_MAX_AGE_SECONDS = 31_536_000
-_IMMUTABLE_CACHE_CONTROL = f"public, max-age={_FILE_CACHE_MAX_AGE_SECONDS}, immutable"
+IMMUTABLE_CACHE_CONTROL = f"public, max-age={_FILE_CACHE_MAX_AGE_SECONDS}, immutable"
 
 # Image extensions, each mapped to an explicit Content-Type so the
 # wire result does not depend on the host's mimetypes registry (macOS and Linux
@@ -73,8 +73,8 @@ def _serve_image(file_path: Path, mime_type: str, is_download: bool) -> Response
     response = send_file(file_path, mimetype=mime_type, as_attachment=is_download)
     # send_file's default cache policy is conservative; override it so the
     # browser caches aggressively (each message's URL is unique -- see the
-    # module comment on _IMMUTABLE_CACHE_CONTROL).
-    response.headers["Cache-Control"] = _IMMUTABLE_CACHE_CONTROL
+    # module comment on IMMUTABLE_CACHE_CONTROL).
+    response.headers["Cache-Control"] = IMMUTABLE_CACHE_CONTROL
     if file_path.suffix.lower() == _SVG_EXTENSION:
         response.headers["Content-Security-Policy"] = _SVG_CONTENT_SECURITY_POLICY
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -94,7 +94,7 @@ def _serve_download(file_path: Path) -> Response:
     """
     response = send_file(file_path, mimetype="application/octet-stream", as_attachment=True)
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Cache-Control"] = _IMMUTABLE_CACHE_CONTROL
+    response.headers["Cache-Control"] = IMMUTABLE_CACHE_CONTROL
     return response
 
 

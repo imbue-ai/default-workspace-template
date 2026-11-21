@@ -130,6 +130,7 @@ from imbue.chat.documents import inject_primary_agent_id_meta_tag
 from imbue.chat.documents import inject_terminal_label_meta_tag
 from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
+from imbue.chat.file_serving import IMMUTABLE_CACHE_CONTROL
 from imbue.chat.file_serving import try_serve_file
 from imbue.chat.harnesses.account_binding import BindingError
 from imbue.chat.harnesses.binding import resolve_binding
@@ -2993,9 +2994,15 @@ def _serve_asset(filename: str) -> Response:
     # arrives with any ``..`` segments intact, so joining it onto the directory ourselves would
     # stat paths outside it -- an existence oracle for the whole filesystem.
     try:
-        return send_from_directory(assets_directory, filename)
+        response = send_from_directory(assets_directory, filename)
     except NotFound:
         return Response(status=404)
+    # Vite names each file it emits directly under ``assets/`` by a hash of its content, so a page opened again uses
+    # its cached bundle without asking, sparing a chat's open a round trip before it can read its transcript. The
+    # voice runtime's files under ``assets/voice/`` keep fixed names, so they are revalidated as before.
+    if "/" not in filename:
+        response.headers["Cache-Control"] = IMMUTABLE_CACHE_CONTROL
+    return response
 
 
 def _health_endpoint() -> Response:

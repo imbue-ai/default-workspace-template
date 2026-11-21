@@ -1,0 +1,3 @@
+Opening a chat shows its messages sooner, most noticeably on a remote workspace: the chat list starts reading the chat's latest messages the moment it is clicked, alongside loading the chat's page, rather than after the page has loaded, and the page's code is cached for good instead of being checked with the workspace on every open. With 200 ms of network latency, a chat that was not already open went from about 645 ms to about 225 ms from click to messages.
+
+Any message written between that early read and the chat's live updates connecting is fetched as soon as they connect, so nothing is missed.

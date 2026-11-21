@@ -65,7 +65,9 @@ import { SendPicker } from "./SendPicker";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
 import { initRailWidth } from "./railWidth";
 import { startNewChat } from "./newChat";
+import { requestTailEvents } from "../models/Response";
 import { InnerFramePool } from "./framePool";
+import { TranscriptPrefetch } from "./transcriptPrefetch";
 import { startInnerFrameRelay } from "./relay";
 import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
 import { ensureParticipants } from "../models/Participants";
@@ -91,6 +93,7 @@ let connection: ShellConnection | null = null;
 let handshake: ShellHandshake | null = null;
 let isRootShown = true;
 let pool: InnerFramePool | null = null;
+const transcripts = new TranscriptPrefetch(requestTailEvents, (chatId) => getChatById(chatId) !== undefined);
 // The intake the root's URL named and has not yet applied or given up (waiting for the chats, fetched, offered
 // through the picker); null otherwise. While one is pending the shell holds the window at the token path it put it
 // at, and the root reports no other location, so a reload or another client finds the token too.
@@ -412,7 +415,7 @@ const ChatRoot: m.Component = {
             class: "chat-root-frames absolute inset-0",
             // The frames are the pool's DOM, not mithril's: never reconciled.
             oncreate: ({ dom }: m.VnodeDOM) => {
-              pool = new InnerFramePool(dom as HTMLElement);
+              pool = new InnerFramePool(dom as HTMLElement, transcripts);
               pool.setCompact(isCompact);
               if (handshake !== null) pool.setHandshake(handshake);
               pool.setRootShown(isRootShown);
@@ -560,6 +563,7 @@ function bootstrap(): void {
     m.redraw();
   });
   touchQuery.addEventListener("change", () => m.redraw());
+  window.chatRootEmbed = { takeTranscriptSnapshot: (chatId) => transcripts.take(chatId) };
   const shell = connectRootToShell(accountsLoaded);
   startInnerFrameRelay(
     (source) => pool?.isInnerWindow(source) ?? false,
