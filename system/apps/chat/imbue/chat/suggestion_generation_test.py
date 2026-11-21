@@ -1,4 +1,5 @@
 import re
+from collections.abc import Callable
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -15,6 +16,7 @@ from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
 from imbue.chat.harnesses.one_shot import OneShotModelTier
+from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import ChatAccountBinding
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import HandoffPhase
@@ -287,37 +289,30 @@ def _switching_agents() -> ChatSnapshot:
     return snapshot.model_copy_update(to_update(snapshot.field_ref().handoff, handoff))
 
 
+def _with_active_agent(
+    snapshot: ChatSnapshot, change: Callable[[ActiveAgentSnapshot], ActiveAgentSnapshot]
+) -> ChatSnapshot:
+    """The snapshot with its active agent as ``change`` leaves it."""
+    return snapshot.model_copy_update(to_update(snapshot.field_ref().active_agent, change(snapshot.active_agent)))
+
+
 def _with_a_message_queued() -> ChatSnapshot:
-    snapshot = _idle_snapshot()
-    agent = snapshot.active_agent
     queued = (QueuedMessageState(queued_id="q-1", content="and another thing", timestamp=_STARTED_AT.isoformat()),)
-    return snapshot.model_copy_update(
-        to_update(
-            snapshot.field_ref().active_agent,
-            agent.model_copy_update(to_update(agent.field_ref().queued_messages, queued)),
-        )
+    return _with_active_agent(
+        _idle_snapshot(), lambda agent: agent.model_copy_update(to_update(agent.field_ref().queued_messages, queued))
     )
 
 
 def _connecting() -> ChatSnapshot:
-    snapshot = _idle_snapshot()
-    agent = snapshot.active_agent
-    return snapshot.model_copy_update(
-        to_update(
-            snapshot.field_ref().active_agent,
-            agent.model_copy_update(to_update(agent.field_ref().is_connecting, True)),
-        )
+    return _with_active_agent(
+        _idle_snapshot(), lambda agent: agent.model_copy_update(to_update(agent.field_ref().is_connecting, True))
     )
 
 
 def _resending_after_sign_in() -> ChatSnapshot:
-    snapshot = _idle_snapshot()
-    agent = snapshot.active_agent
-    return snapshot.model_copy_update(
-        to_update(
-            snapshot.field_ref().active_agent,
-            agent.model_copy_update(to_update(agent.field_ref().is_resending_after_sign_in, True)),
-        )
+    return _with_active_agent(
+        _idle_snapshot(),
+        lambda agent: agent.model_copy_update(to_update(agent.field_ref().is_resending_after_sign_in, True)),
     )
 
 
@@ -596,13 +591,9 @@ def test_an_answer_is_dropped_when_a_turn_started_while_the_model_answered(tmp_p
     harness = _GenerationHarness(tmp_path, [_TWO_SUGGESTIONS])
 
     def start_a_turn() -> None:
-        working = _with_status(ChatStatus.WORKING)
-        agent = working.active_agent
-        harness.snapshot = working.model_copy_update(
-            to_update(
-                working.field_ref().active_agent,
-                agent.model_copy_update(to_update(agent.field_ref().activity_state, ActivityState.THINKING)),
-            )
+        harness.snapshot = _with_active_agent(
+            _with_status(ChatStatus.WORKING),
+            lambda agent: agent.model_copy_update(to_update(agent.field_ref().activity_state, ActivityState.THINKING)),
         )
 
     harness.completion.on_call = start_a_turn
