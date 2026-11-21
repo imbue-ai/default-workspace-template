@@ -377,6 +377,8 @@ class _GenerationHarness:
         self.completion = ScriptedOneShotCompletion(answers)
         self.is_harness_answering_questions = True
         self.pushed_chat_ids: list[ChatId] = []
+        # The reply the generator held as pending at each push, which is what a page's read on that push is answered.
+        self.pending_reply_event_id_at_each_push: list[str | None] = []
         self.generator = SuggestionGenerator(
             chat_files_root=self.chat_files_root,
             read_chat_settings=lambda: self.settings,
@@ -384,9 +386,13 @@ class _GenerationHarness:
             read_tail_events=lambda _chat_id, _limit: self.events,
             resolve_chat_account_binding=lambda _chat_id: self.binding,
             build_one_shot_completion=self._build_completion,
-            broadcast_suggestions_updated=self.pushed_chat_ids.append,
+            broadcast_suggestions_updated=self._push,
             executor=InlineExecutor(),
         )
+
+    def _push(self, chat_id: ChatId) -> None:
+        self.pushed_chat_ids.append(chat_id)
+        self.pending_reply_event_id_at_each_push.append(self.generator.get_pending_reply_event_id(chat_id))
 
     def _build_completion(self, _harness: HarnessType) -> OneShotCompletion | None:
         return self.completion if self.is_harness_answering_questions else None
@@ -628,6 +634,7 @@ def test_a_set_is_pending_for_its_reply_only_while_the_model_answers(tmp_path: P
     harness.end_turn()
 
     assert pending_during_call == ["a1"]
+    assert harness.pending_reply_event_id_at_each_push == [None]
     assert harness.generator.get_pending_reply_event_id(_CHAT_ID) is None
 
 

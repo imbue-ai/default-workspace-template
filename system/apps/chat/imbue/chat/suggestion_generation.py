@@ -366,23 +366,25 @@ class SuggestionGenerator(MutableModel):
         if end is None or ask is None:
             self._store(chat_id, None)
             return
+        # The mark covers the call alone: a page reads the route on the push the store sends, and the route answers
+        # a marked chat as pending ahead of its stored set.
         with self._marked_pending(chat_id, end.reply_event_id):
             try:
                 answer = ask()
             except OneShotCompletionError as e:
                 logger.warning("Failed to work out suggestions for chat {}: {}", chat_id, e)
                 answer = ""
-            if self._is_answer_overtaken(chat_id, end.reply_event_id):
-                return
-            suggestions = parse_generated_suggestions(answer)
-            generated = (
-                ChatSuggestions(
-                    after_event_id=end.reply_event_id, source=SuggestionSource.GENERATED, suggestions=suggestions
-                )
-                if suggestions
-                else None
+        if self._is_answer_overtaken(chat_id, end.reply_event_id):
+            return
+        suggestions = parse_generated_suggestions(answer)
+        generated = (
+            ChatSuggestions(
+                after_event_id=end.reply_event_id, source=SuggestionSource.GENERATED, suggestions=suggestions
             )
-            self._store(chat_id, generated)
+            if suggestions
+            else None
+        )
+        self._store(chat_id, generated)
 
     def _question_about(self, chat_id: ChatId, end: ConversationEnd) -> Callable[[], str] | None:
         """The call that asks a model for replies to the chat's last reply; None, with the reason logged, when
