@@ -13,8 +13,14 @@ STATE_DIRECTORY: Final[Path] = Path("data/.state/app_install")
 INSTALL_LOCK_PATH: Final[Path] = STATE_DIRECTORY / "lock"
 APP_DATA_DIRECTORY: Final[Path] = Path("data/.apps")
 SECRETS_DIRECTORY: Final[Path] = Path("data/.secrets")
+# Who may visit each app of a shared workspace, in one table per app keyed by the app's name.
+SHARE_GRANTS_PATH: Final[Path] = SECRETS_DIRECTORY / "share_grants.toml"
+# What the routines library keeps about each routine on this machine, in one directory per routine id.
+ROUTINE_STATE_DIRECTORY: Final[Path] = Path("data/.state/routines")
 # The local ref that keeps the commit an installed app was last taken from alive in the workspace repository.
 UPSTREAM_REF_PREFIX: Final[str] = "refs/app-upstream/"
+# The local ref that keeps the commit last published from this workspace alive: the next publish's parent.
+PUBLISHED_REF_PREFIX: Final[str] = "refs/app-published/"
 MANIFEST_FILENAME: Final[str] = "app.toml"
 PYPROJECT_FILENAME: Final[str] = "pyproject.toml"
 APP_SKILLS_DIRNAME: Final[str] = "skills"

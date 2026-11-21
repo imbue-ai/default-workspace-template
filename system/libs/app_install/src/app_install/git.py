@@ -3,6 +3,7 @@
 import os
 import re
 import subprocess
+from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
@@ -23,6 +24,7 @@ COMMITTER_EMAIL: Final[str] = "app-install@workspace.invalid"
 GIT_TIMEOUT_SECONDS: Final[float] = 300.0
 _VERSION_TAG_PATTERN: Final[re.Pattern[str]] = re.compile(r"refs/tags/(v(\d+)\.(\d+)\.(\d+))$")
 DEFAULT_BRANCH: Final[str] = "main"
+_TEMPLATE_VERSION_TAG_GLOB: Final[str] = "minds-v*"
 # What git says when a repository needs a credential the workspace does not hold. GitHub answers a private
 # repository as "not found" to a caller it does not know.
 _ACCESS_FAILURE_MARKERS: Final[tuple[str, ...]] = (
@@ -54,14 +56,19 @@ def _environment(is_global_config_read: bool, is_gateway_used: bool) -> dict[str
 
 
 def run_git(
-    cwd: Path, arguments: Sequence[str], is_global_config_read: bool = True, is_gateway_used: bool = False
+    cwd: Path,
+    arguments: Sequence[str],
+    is_global_config_read: bool = True,
+    is_gateway_used: bool = False,
+    extra_environment: Mapping[str, str] | None = None,
 ) -> str:
     """Run one git command in ``cwd`` with hooks off and the installer's identity; its stdout, stripped.
 
     Hooks are off because GitHub sync's post-commit hook would push the branch of every repository the
     installer commits in, its scratch worktrees included. With ``is_gateway_used`` every github.com URL the
     command names goes through the latchkey gateway, when the workspace has one, and the command then reads the
-    gateway's wiring from here alone, not from the global configuration. Raises GitCommandError when the command
+    gateway's wiring from here alone, not from the global configuration. ``extra_environment`` is added to the
+    command's environment (an index file of the command's own, say). Raises GitCommandError when the command
     fails.
     """
     argv = ["git", "-c", f"core.hooksPath={os.devnull}", *arguments]
@@ -69,7 +76,7 @@ def run_git(
         completed = subprocess.run(
             argv,
             cwd=cwd,
-            env=_environment(is_global_config_read, is_gateway_used),
+            env={**_environment(is_global_config_read, is_gateway_used), **(extra_environment or {})},
             capture_output=True,
             text=True,
             check=False,
@@ -128,6 +135,26 @@ def fetch_commit(cwd: Path, url: str, ref: str) -> str:
     # The URL is a link someone was sent and the ref may come with it: after "--" git reads neither as an option.
     _run_reaching_remote(cwd, ["fetch", "--no-tags", "--", url, ref], url)
     return run_git(cwd, ["rev-parse", "FETCH_HEAD^{commit}"])
+
+
+def is_commit_present(repo_root: Path, commit: str) -> bool:
+    """Whether the repository holds the commit's objects."""
+    try:
+        run_git(repo_root, ["cat-file", "-e", f"{commit}^{{commit}}"])
+    except GitCommandError as e:
+        logger.debug("{} is not in the repository at {}: {}", commit, repo_root, e)
+        return False
+    return True
+
+
+def workspace_template_version(repo_root: Path) -> str:
+    """The template version the workspace is on: the nearest ``minds-v`` release tag its history holds, which is
+    how the update pass names a workspace's version too. Empty when the history holds no such tag."""
+    try:
+        return run_git(repo_root, ["describe", "--tags", "--abbrev=0", "--match", _TEMPLATE_VERSION_TAG_GLOB, "HEAD"])
+    except GitCommandError as e:
+        logger.debug("No template release tag is reachable from the checkout at {}: {}", repo_root, e)
+        return ""
 
 
 def _has_unconcluded_merge(repo_root: Path) -> bool:

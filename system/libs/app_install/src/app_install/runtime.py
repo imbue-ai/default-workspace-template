@@ -13,17 +13,22 @@ from typing import Final
 
 from app_install.derived import is_python_app
 from app_install.errors import DevRepositoryError
+from app_install.errors import PublishedNameTakenError
+from app_install.errors import PublishError
 from app_install.git import COMMITTER_EMAIL
 from app_install.git import COMMITTER_NAME
 from app_install.interfaces import CreatedRepository
+from app_install.interfaces import SecretScan
 from app_install.interfaces import WorkspaceRuntimeInterface
 from app_install.paths import APPS_DIRECTORY
 from app_manifest.manifest import EnvironmentNote
 from app_registration import forward_port
 from github_sync.config import GITHUB_URL_PREFIX
 from github_sync.repositories import GithubRequestError
+from github_sync.repositories import RepositoryNameTakenError
 from github_sync.repositories import create_repository
 from github_sync.repositories import lock_down_repository
+from github_sync.repositories import set_repository_topics
 from host_backup.cli import has_recent_backup
 
 # Long enough for a system package or a tool to download and build.
@@ -35,6 +40,11 @@ _NOTHING_TO_COMMIT_MARKERS: Final[tuple[str, ...]] = ("nothing to commit", "no c
 # The file names pytest collects by default, which every app in the template keeps to.
 _TEST_FILE_PATTERNS: Final[tuple[str, ...]] = ("test_*.py", "*_test.py")
 _NODE_MODULES_DIRNAME: Final[str] = "node_modules"
+# The scan a template publish runs: two scanners, both of which must pass, and neither prints a value.
+SECRET_SCAN_SCRIPT: Final[Path] = Path(".agents/skills/publish-template/scripts/scan_secrets.sh")
+_SECRET_FINDING_MARKER: Final[str] = "SECRET SCAN FINDING "
+# What published apps are found by as a group.
+PUBLISHED_APP_TOPIC: Final[str] = "imbue-studio-app"
 
 
 def has_test_files(directory: Path) -> bool:
@@ -193,3 +203,51 @@ class WorkspaceRuntime(WorkspaceRuntimeInterface):
         return CreatedRepository(
             url=f"{GITHUB_URL_PREFIX}{repository}", lockdown_problem=lock_down_repository(repository) or ""
         )
+
+    def create_published_repository(self, name: str, description: str) -> CreatedRepository:
+        try:
+            repository = create_repository(name, description, is_private=False)
+        except RepositoryNameTakenError as e:
+            raise PublishedNameTakenError(str(e)) from e
+        except GithubRequestError as e:
+            raise PublishError(str(e)) from e
+        topic_problem = ""
+        try:
+            set_repository_topics(repository, [PUBLISHED_APP_TOPIC])
+        except GithubRequestError as e:
+            topic_problem = str(e)
+        return CreatedRepository(
+            url=f"{GITHUB_URL_PREFIX}{repository}",
+            lockdown_problem=lock_down_repository(repository) or "",
+            topic_problem=topic_problem,
+        )
+
+    def scan_secrets(self, directory: Path) -> SecretScan:
+        script = self.repo_root / SECRET_SCAN_SCRIPT
+        try:
+            completed = subprocess.run(
+                ["bash", str(script), str(directory)],
+                cwd=self.repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=_COMMAND_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return SecretScan(failure=f"could not run {SECRET_SCAN_SCRIPT.as_posix()}: {e}")
+        if completed.returncode == 0:
+            return SecretScan()
+        findings = tuple(
+            line.partition(_SECRET_FINDING_MARKER)[2].strip()
+            for line in completed.stderr.splitlines()
+            if _SECRET_FINDING_MARKER in line
+        )
+        if findings:
+            return SecretScan(findings=findings)
+        # A scan that fails with nothing found did not run to the end: a scanner is missing or broke.
+        return SecretScan(
+            failure=completed.stderr.strip() or f"{SECRET_SCAN_SCRIPT.as_posix()} exited {completed.returncode}"
+        )
+
+    def check_lock(self, directory: Path) -> str | None:
+        return self._run_in(directory, ["uv", "lock", "--check"])

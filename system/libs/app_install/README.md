@@ -14,6 +14,13 @@ uv run --no-sync app-install regenerate [<name>]
 uv run --no-sync app-install uninstall <name>
 uv run --no-sync app-install migrate <package> [--dry-run]
 uv run --no-sync app-install link <name> [--refresh] [--create-dev-repo]
+uv run --no-sync app-install reference add <name> <path> [--note <text>]
+uv run --no-sync app-install reference remove <name> <path>
+uv run --no-sync app-install publish compare <name> [--commit <rev>]
+uv run --no-sync app-install publish set-version <name> <version>
+uv run --no-sync app-install publish assemble <name> [--commit <rev>]
+uv run --no-sync app-install publish push <name> [--repo-name <repository>]
+uv run --no-sync app-install publish record <name>
 uv run --no-sync app-install check
 uv run --no-sync app-install list
 ```
@@ -26,6 +33,11 @@ Each of the three checks for it first and is refused with a message naming the m
 Each user app has one tracked file, `system/config/apps/<name>.toml`: the app's name, its directory, the loopback port of its main program, whether this workspace built it (`origin = "local"`) or installed it, and the repositories it is kept in step with.
 It is one file per app so that two branches that each add an app never edit the same file.
 An app under `system/apps/` without a record is a built-in app.
+
+What else in the workspace uses the app is listed in its record too, under `[[references]]`: a skill that calls the app's API, a script that reads its data.
+A change to the app then reaches them, since the footprint of the app includes them.
+`app-install reference add <name> <path> [--note <text>]` lists a path and `app-install reference remove <name> <path>` takes one out; each writes the record and commits that one file under the installer's own author (`reference_added`, `reference_removed`, with the record's `references` as they are now).
+A reference is a literal path that exists, outside every app's directory, reached through no symlink, and not under `system/vendor/` or `data/`; one that breaks a rule, and one the record already lists, is `refused` with the reason in `detail`.
 
 `app-install list` prints every record with two more facts about the app:
 
@@ -60,7 +72,18 @@ The result names every collision.
 ## Removing an app
 
 `app-install uninstall <name>` removes the app's directory, its record, and its derived files, has supervisord drop its programs, removes its registry row, and commits the removal under the installer's own author.
-It keeps the app's stored data (`data/.apps/<name>/`) and its secret files, and names them in its result.
+What the installer and the sync service kept about the app on this machine goes with it (`removed_state_paths`): an update that was waiting for a person, with its worktree, a publish that was waiting between two of its steps, and what was last pushed to the app's dev repository.
+
+Everything else is left, and the result names it, because a later app of the same name takes it over:
+
+| Field | What is left |
+| --- | --- |
+| `kept_paths` | The app's stored data (`data/.apps/<name>/`), the newest copy of it an update made, and its secret files. |
+| `kept_share_grants` | The people the app was shared with: the file, the app's table in it (`services.<name>`), and how many people, addresses and domains it names. `null` when the app was shared with nobody. |
+| `kept_routine_state` | The state directory (`data/.state/routines/<id>`) of each routine the app owned: its on/off choice, the schedule the user gave it, and its runs. |
+| `kept_repositories` | The app's repositories on GitHub, its dev repository and its published one. Nothing on GitHub is deleted or changed. |
+| `dependents` | The apps still in the workspace whose manifests list this one under `[[dependencies]]`. Dependencies are advisory, so the uninstall goes ahead. |
+
 What it could not do outside the tree, such as reaching a supervisord that is not running, is listed under `problems`; the app is removed from the tree all the same.
 
 ## Converting an app built before this layout
@@ -150,3 +173,48 @@ The result is `linked` (the first marker was made), `refreshed` (a new one was m
 | `is_dev_repository_created` | Whether this run created it. |
 | `remaining` | What is left before the app is synced, in sentences: for example "GitHub sync is not enabled, so no dev repository was created; pass --create-dev-repo to make one for this app alone". |
 | `problems` | What this run tried and could not do. |
+
+## Publishing an app
+
+An app's published repository is public, is named after the app, and holds one commit per published version: the app's directory at one workspace commit, less the paths the manifest's `[publish] exclude` names.
+It is what another workspace installs from.
+A publish is driven by the `publish-app` skill, which asks the user twice before anything becomes public; the steps that need no judgement are five subcommands, run in this order.
+
+| Step | What it does | Result |
+| --- | --- | --- |
+| `publish compare <name> [--commit <rev>]` | Says what a publish of that commit would hold (`paths`, `excluded_paths`) and which files differ from the version last published (`changed_paths`, each `added`, `modified` or `deleted`), which the next version's number is chosen from. Writes nothing. | `compared` |
+| `publish set-version <name> <version>` | Writes the version into `app.toml`, with `verified_template` set to the template release the workspace is on, and for a Python app into `pyproject.toml`, whose lock is made again. Commits nothing. | `versioned` |
+| `publish assemble <name> [--commit <rev>]` | Builds the tree in a directory under `/var/tmp`, outside the workspace, and finds it fit to publish. Pushes nothing. | `assembled` |
+| `publish push <name> [--repo-name <repository>]` | Creates the repository on the first publish, then pushes the assembled tree as one commit and tags it. | `pushed` |
+| `publish record <name>` | Writes `published_repo_url`, `published_commit`, `published_version` and `verified_template` to the app's record and commits that one file. | `recorded` |
+
+**The version.**
+A version is three numbers, with an optional pre-release after a hyphen, and each published version is newer than the last.
+The template release the workspace is on is the nearest `minds-v` tag in its history (`git describe --tags --match 'minds-v*'`), which is how the update pass names a workspace's version too; when the history holds none, `verified_template` is left as it was and `problems` says so.
+
+**The assembled tree.**
+`assemble` reads the app's directory at the commit it is given (`HEAD`, or the commit of the branch a publish's worker worked on), in an index of its own, so the checkout and whatever is uncommitted in it are not touched.
+`[publish] exclude` is gitignore syntax, relative to the app's directory.
+The tree is refused, with nothing left waiting, when:
+
+- its manifest fails the authoring check, names no version, or names one that is not newer than the last published (`refused`);
+- the secret scan finds anything in it (`secrets_found`, with each finding under `findings`: the scanner, the rule, and the file, never the value). The scan is the one a template publish runs, `.agents/skills/publish-template/scripts/scan_secrets.sh`, and a scan that could not run to the end stops the publish too;
+- it holds a `pyproject.toml` whose lock is not what the project calls for (`lock_check_failed`). `uv lock --check` runs in the assembled directory, so an app that resolves only inside a workspace does not pass;
+- the app was installed and nobody has changed it, so it is its publisher's to publish (`refused`).
+
+The result names what an adopter will be asked for under `needs` (`permissions`, `secrets`, `llm`, `environment`, `dependencies`, `adaptation`).
+
+**The push.**
+On the first publish the public repository is created under the workspace's GitHub account through `latchkey curl`, closed to outside contributions as a published template's repository is, and given the topic `imbue-studio-app`.
+A name the account already uses stops the publish with `name_taken`: the app's `README.md` names the repository, so the name is settled with the user again before anything else.
+The commit is made with `git commit-tree`: the assembled tree, the commit last published as its parent (none on the first publish), and the message `<name> v<version>`.
+The first publish of an app that was installed and then changed here adds the trailer `Derived-From: <upstream_url>@<upstream_commit>`.
+It is pushed to `main` as a fast-forward and the tag `v<version>` after it, both through the latchkey gateway and neither forced: a repository that holds commits the publish does not continue ends the run with `push_refused`.
+A tag that does not reach the repository is listed under `problems`; the version is published all the same.
+The ref `refs/app-published/<name>` keeps the published commit in the workspace repository for the next publish to follow; a workspace that lost it fetches it from the published repository.
+
+**Between the steps.**
+What `assemble` built waits in `data/.state/app_install/publish/<name>.json`, and `push` adds the repository it created and the commit it pushed.
+So a step that was interrupted is finished by running it again: `push` does not create a repository or push a commit twice, and `record`, run alone, finishes a publish whose record was not written.
+`push` and `record` without a waiting tree are `not_assembled`, and `record` before a push is `not_pushed`.
+`record` lists under `problems` a published version made from a commit that is not in the checkout's history yet, which means the branch that holds it still has to be merged.

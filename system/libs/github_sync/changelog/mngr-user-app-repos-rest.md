@@ -3,3 +3,5 @@ The `github-sync` service now keeps each user app's private dev repository curre
 `github-sync sync-app <name>` runs that for one app on request, whether or not sync is enabled for the workspace.
 
 New for callers: `github_sync.repositories` (create and lock down a GitHub repository through latchkey, which the publish-template script now calls), `github_sync.app_history` (whether an app is linked or modified, and its split), and `git_environment_through_gateway`. The library now depends on `app-manifest`.
+
+`github_sync.repositories` also gains `set_repository_topics` and `hint_for_push_failure` (what a refused push most likely means), which moved here from the publish-template scripts so that the app publish uses the same two.

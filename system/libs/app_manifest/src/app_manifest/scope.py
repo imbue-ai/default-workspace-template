@@ -33,6 +33,7 @@ from app_manifest.primitives import ReferencePath
 from app_manifest.primitives import RepoRelativePath
 from app_manifest.primitives import is_path_covered_by
 from app_manifest.records import AppRecord
+from app_manifest.records import RecordReference
 from app_manifest.records import load_record
 from app_manifest.records import record_path
 from imbue.imbue_common.enums import LowerCaseStrEnum
@@ -375,24 +376,32 @@ def _describe_reference_location_problem(repo_root: Path, own_package: str, path
     return None
 
 
+def describe_record_reference_problem(repo_root: Path, package: str, reference: RecordReference) -> str | None:
+    """Why the record of the app at ``system/apps/<package>`` may not list ``reference``, by the rules a
+    manifest's reference is held to; None when it may: it is a literal path that exists, outside every app's
+    directory, reached through no symlink, and not under ``system/vendor/`` or ``data/``."""
+    try:
+        path = ReferencePath(reference.path)
+        if reference.note.strip():
+            ReferenceNote(reference.note)
+    except InvalidManifestValueError as e:
+        return str(e)
+    problem = _describe_reference_location_problem(repo_root, package, path)
+    return None if problem is None else f"reference {str(path)!r} {problem}"
+
+
 def _read_record_references(repo_root: Path, record: AppRecord) -> tuple[AppReference, ...]:
     """A user app's references, as its record lists them.
 
-    Raises RecordLoadError when one breaks a rule a manifest's reference is held to: it is a
-    literal path that exists, outside every app's directory, reached through no symlink.
+    Raises RecordLoadError when one breaks a rule a manifest's reference is held to.
     """
-    source = record_path(repo_root, record.name)
     references: list[AppReference] = []
     for reference in record.references:
-        try:
-            path = ReferencePath(reference.path)
-            note = ReferenceNote(reference.note) if reference.note.strip() else None
-        except InvalidManifestValueError as e:
-            raise RecordLoadError(f"app record {source} is invalid: {e}") from e
-        problem = _describe_reference_location_problem(repo_root, record.package, path)
+        problem = describe_record_reference_problem(repo_root, record.package, reference)
         if problem is not None:
-            raise RecordLoadError(f"app record {source} is invalid: reference {str(path)!r} {problem}")
-        references.append(AppReference(path=path, note=note))
+            raise RecordLoadError(f"app record {record_path(repo_root, record.name)} is invalid: {problem}")
+        note = ReferenceNote(reference.note) if reference.note.strip() else None
+        references.append(AppReference(path=ReferencePath(reference.path), note=note))
     return tuple(references)
 
 

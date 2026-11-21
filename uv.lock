@@ -266,7 +266,9 @@ dependencies = [
     { name = "host-backup" },
     { name = "imbue-common" },
     { name = "loguru" },
+    { name = "pathspec" },
     { name = "pydantic" },
+    { name = "share-grants" },
     { name = "tomlkit" },
 ]
 
@@ -284,7 +286,9 @@ requires-dist = [
     { name = "host-backup", editable = "system/services/host_backup" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=cdd16e8b40c7f8662cab93395a5fd91712ec2d60" },
     { name = "loguru", specifier = ">=0.7" },
+    { name = "pathspec", specifier = ">=1.1" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "share-grants", editable = "system/libs/share_grants" },
     { name = "tomlkit", specifier = ">=0.12" },
 ]
 

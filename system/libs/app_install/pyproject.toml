@@ -11,13 +11,17 @@ dependencies = [
     "app-registration",
     "click>=8.1",
     # The git configuration that reads a repository through the latchkey gateway, what the workspace history says
-    # of an app's own repository (linked, modified), and the creation of an app's dev repository.
+    # of an app's own repository (linked, modified), and the creation of an app's dev and published repositories.
     "github-sync",
     # Whether the workspace has a recent backup to fall back on, before an update runs over an app's data.
     "host-backup",
     "imbue-common",
     "loguru>=0.7",
+    # The gitignore-style globs of a manifest's [publish] exclude, matched as app-manifest matches [scope] exclude.
+    "pathspec>=1.1",
     "pydantic>=2.0",
+    # Who an app is shared with, which an uninstall names because the grants outlive the app.
+    "share-grants",
     # The conversion of an older app rewrites its manifest with its comments kept.
     "tomlkit>=0.12",
 ]
@@ -49,4 +53,4 @@ select = ["F", "I", "UP006", "UP007"]
 
 [tool.ruff.lint.isort]
 force-single-line = true
-known-first-party = ["app_install", "app_manifest", "app_registration", "github_sync", "host_backup"]
+known-first-party = ["app_install", "app_manifest", "app_registration", "github_sync", "host_backup", "share_grants"]

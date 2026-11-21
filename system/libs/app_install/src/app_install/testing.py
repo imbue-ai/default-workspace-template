@@ -106,3 +106,16 @@ def make_published_app_repository(directory: Path, name: str, extra_manifest: st
     (directory / "README.md").write_text(f"# {name}\n")
     commit_all(directory, f"{name}: first version")
     return directory
+
+
+def make_bare_repository(directory: Path) -> Path:
+    """An empty bare repository, standing in for one on GitHub."""
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    run_git(directory.parent, ["init", "--quiet", "--bare", "--initial-branch=main", str(directory)])
+    return directory
+
+
+def point_url_at(workspace: Path, url: str, repository: Path) -> None:
+    """Have every git command run in ``workspace`` reach ``repository`` when it names ``url``, so no test reaches
+    GitHub for a repository the installer's stand-in runtime says it created there."""
+    run_git(workspace, ["config", f"url.{repository}.insteadOf", url])

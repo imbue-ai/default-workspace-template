@@ -15,6 +15,7 @@ from app_install.installing import install_app
 from app_install.mock_runtime_test import RecordingRuntime
 from app_install.operations import add_app
 from app_install.operations import check
+from app_install.operations import uninstall_app
 from app_install.testing import commit_all
 from app_install.testing import make_published_app_repository
 from app_install.testing import make_workspace_repository
@@ -188,6 +189,30 @@ def test_a_waiting_update_is_given_up_by_removing_its_worktree(tmp_path: Path) -
     assert again.conflicted_paths == ("system/apps/notes/notes.py",)
     assert worktree.is_dir()
     assert run_git(workspace, ["rev-parse", "HEAD"]) == before
+
+
+def test_uninstalling_an_app_removes_the_update_of_it_that_was_waiting(tmp_path: Path) -> None:
+    workspace, published = _installed_notes(tmp_path)
+    _app_file(workspace, "notes.py").write_text(_notes_py("hi there", 10))
+    commit_all(workspace, "a friendlier greeting")
+    _publish(published, "0.2.0", _notes_py("good morning", 10), "lock of 0.1.0\n")
+    runtime = RecordingRuntime(repo_root=workspace, is_committing=True)
+    assert update_app(workspace, "notes", None, False, runtime).result is UpdateResult.CONFLICT
+    worktree = update_worktree_path(workspace, "notes")
+    assert worktree.is_dir()
+
+    outcome = uninstall_app(workspace, "notes", runtime)
+
+    assert sorted(outcome.removed_state_paths) == [
+        "data/.state/app_install/worktrees/notes",
+        "data/.state/app_install/worktrees/notes.json",
+    ]
+    assert not worktree.exists()
+    assert not worktree.with_name("notes.json").exists()
+    # git no longer knows the worktree either, so a later app of the name can be updated.
+    assert str(worktree) not in run_git(workspace, ["worktree", "list", "--porcelain"])
+    assert outcome.problems == ()
+    assert not (workspace / "system" / "apps" / "notes").exists()
 
 
 def test_a_conflict_in_the_lock_alone_takes_the_publishers_and_makes_it_again(tmp_path: Path) -> None:

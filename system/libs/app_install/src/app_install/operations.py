@@ -32,12 +32,22 @@ from app_install.git import is_app_modified
 from app_install.git import run_git
 from app_install.interfaces import WorkspaceRuntimeInterface
 from app_install.paths import APP_DATA_DIRECTORY
+from app_install.paths import APP_ROUTINES_DIRNAME
+from app_install.paths import APPS_DIRECTORY
 from app_install.paths import INSTALL_LOCK_PATH
+from app_install.paths import MANIFEST_FILENAME
+from app_install.paths import PUBLISHED_REF_PREFIX
+from app_install.paths import ROUTINE_STATE_DIRECTORY
+from app_install.paths import SHARE_GRANTS_PATH
 from app_install.paths import UPSTREAM_REF_PREFIX
 from app_install.paths import app_directory
 from app_install.paths import manifest_path
 from app_install.paths import secret_file_path
 from app_install.ports import allocate_port
+from app_install.publishing import pending_publish_path
+from app_install.updating import data_snapshots_path
+from app_install.updating import discard_pending_update
+from app_install.updating import pending_update_paths
 from app_manifest.errors import AppManifestError
 from app_manifest.manifest import AppManifest
 from app_manifest.manifest import ManifestReadMode
@@ -49,6 +59,9 @@ from app_manifest.records import load_all_records
 from app_manifest.records import load_record
 from app_manifest.records import record_path
 from app_manifest.records import write_record
+from github_sync.app_sync import pushed_state_path
+from share_grants.grants import GrantsError
+from share_grants.grants import load_grants
 
 # A record no commit holds yet sorts after every committed one, so it is the one a duplicate port is taken from.
 _UNCOMMITTED_SORT_TIME: Final[int] = 2**62
@@ -70,17 +83,46 @@ class RegenerateOutcome(FrozenModel):
     )
 
 
+class KeptShareGrants(FrozenModel):
+    """The people an app was shared with, who are still granted whatever app next takes its name."""
+
+    path: str = Field(description="The grants file, repo-relative")
+    table: str = Field(description="The table of the file that holds the app's grants")
+    grant_count: int = Field(description="How many people, addresses and domains the table names")
+
+
 class UninstallOutcome(FrozenModel):
     """What removing an app did, and what it left for the user."""
 
     name: str = Field(description="The app that was removed")
     removed_paths: tuple[str, ...] = Field(description="Every path removed from the tree, repo-relative")
+    removed_state_paths: tuple[str, ...] = Field(
+        description="The machine state removed with the app, repo-relative: an update that waited for a person, "
+        "a publish that waited between its steps, and what was last pushed to its dev repository"
+    )
     kept_paths: tuple[str, ...] = Field(
-        description="What was left on purpose: the app's stored data and its secret files, when it has any"
+        description="What was left on purpose: the app's stored data, the newest copy of it an update made, and "
+        "its secret files, when it has any"
+    )
+    kept_share_grants: KeptShareGrants | None = Field(
+        description="The app's share grants, which are keyed by its name and so pass to a later app of that "
+        "name; None when it was shared with nobody"
+    )
+    kept_routine_state: tuple[str, ...] = Field(
+        description="The state directory of each routine the app owned, repo-relative: keyed by the routine's "
+        "id, so a later routine of that id takes over its schedule, its on/off choice and its runs"
+    )
+    kept_repositories: tuple[str, ...] = Field(
+        description="The app's repositories on GitHub, its dev repository and its published one, which are "
+        "left exactly as they are"
+    )
+    dependents: tuple[str, ...] = Field(
+        description="The apps still in the workspace whose manifests list this one under [[dependencies]]"
     )
     problems: tuple[str, ...] = Field(
         description="What could not be done outside the tree (programs not reloaded, registry row not removed, "
-        "upstream ref not deleted, removal not committed); the app is removed from the tree all the same"
+        "a ref not deleted, a waiting update not removed, removal not committed); the app is removed from the "
+        "tree all the same"
     )
 
 
@@ -283,15 +325,82 @@ def check(repo_root: Path) -> tuple[str, ...]:
     return tuple(problems)
 
 
+def _dependents(repo_root: Path, record: AppRecord) -> tuple[str, ...]:
+    """The other apps of the workspace whose manifests list the app under ``[[dependencies]]``."""
+    apps_directory = repo_root / APPS_DIRECTORY
+    if not apps_directory.is_dir():
+        return ()
+    dependents: list[str] = []
+    for directory in sorted(apps_directory.iterdir()):
+        path = directory / MANIFEST_FILENAME
+        if directory.name == record.package or not path.is_file():
+            continue
+        try:
+            manifest = load_manifest(path, repo_root=repo_root, mode=ManifestReadMode.TOLERANT)
+        except AppManifestError as e:
+            logger.debug("Reading no dependencies from {}, which cannot be read: {}", path, e)
+            continue
+        if any(dependency.name == record.name for dependency in manifest.dependencies):
+            dependents.append(str(manifest.name))
+    return tuple(dependents)
+
+
+def _routine_ids(directory: Path) -> tuple[str, ...]:
+    """The id of every routine the app at ``directory`` owns: the stem of each definition file."""
+    routines_directory = directory / APP_ROUTINES_DIRNAME
+    if not routines_directory.is_dir():
+        return ()
+    return tuple(sorted(path.stem for path in routines_directory.glob("*.toml") if path.is_file()))
+
+
+def _kept_share_grants(repo_root: Path, name: str, problems: list[str]) -> KeptShareGrants | None:
+    """The app's table in the workspace's share grants, when it names anyone."""
+    path = repo_root / SHARE_GRANTS_PATH
+    if not path.is_file():
+        return None
+    try:
+        grants = load_grants(path).services.get(name)
+    except GrantsError as e:
+        problems.append(f"whether {name} was shared with anyone could not be read: {e}")
+        return None
+    if grants is None:
+        return None
+    grant_count = len(grants.users) + len(grants.emails) + len(grants.email_domains)
+    if grant_count == 0:
+        return None
+    return KeptShareGrants(path=SHARE_GRANTS_PATH.as_posix(), table=f"services.{name}", grant_count=grant_count)
+
+
+def _remove_machine_state(repo_root: Path, name: str, problems: list[str]) -> tuple[str, ...]:
+    """Remove what the installer and the sync service keep about the app on this machine: an update that waits
+    for a person, a publish that waits between its steps, and what was last pushed to its dev repository."""
+    removed = [path.relative_to(repo_root).as_posix() for path in pending_update_paths(repo_root, name)]
+    if removed:
+        try:
+            discard_pending_update(repo_root, name)
+        except GitCommandError as e:
+            problems.append(f"the update of {name} that was waiting was not removed: {e}")
+    for path in (pending_publish_path(repo_root, name), pushed_state_path(repo_root, name)):
+        if path.is_file():
+            path.unlink()
+            removed.append(path.relative_to(repo_root).as_posix())
+    return tuple(removed)
+
+
 def uninstall_app(repo_root: Path, name: str, runtime: WorkspaceRuntimeInterface) -> UninstallOutcome:
     """Remove the app registered as ``name``: its directory, its record, and its derived files, then have
-    supervisord drop its programs, remove its registry row, and commit the removal.
+    supervisord drop its programs, remove its registry row, and commit the removal. An update or a publish of
+    the app that was waiting, and the sync service's state for it, go with it.
 
     The app's stored data under ``data/.apps/<name>/`` and its secret files are kept, and its repositories are
-    left alone. Raises AppRecordNotFoundError when no app is registered under the name.
+    left alone. Its share grants and its routines' state are kept too: both are keyed by name, so a later app
+    of the same name takes them over, and the outcome names them. Raises AppRecordNotFoundError when no app is
+    registered under the name.
     """
     record = load_record(repo_root, name)
     directory = app_directory(repo_root, record.package)
+    dependents = _dependents(repo_root, record)
+    routine_ids = _routine_ids(directory)
     removed: list[str] = list(existing_derived_paths(repo_root, record.package))
     for relative_path in removed:
         (repo_root / relative_path).unlink()
@@ -312,19 +421,39 @@ def uninstall_app(repo_root: Path, name: str, runtime: WorkspaceRuntimeInterface
     registry_failure = runtime.remove_registry_row(name)
     if registry_failure is not None:
         problems.append(f"the app's registry row was not removed: {registry_failure}")
-    ref_failure = runtime.delete_ref(f"{UPSTREAM_REF_PREFIX}{name}")
-    if ref_failure is not None:
-        problems.append(f"the app's upstream ref was not deleted: {ref_failure}")
+    for label, prefix in (("upstream", UPSTREAM_REF_PREFIX), ("published", PUBLISHED_REF_PREFIX)):
+        ref_failure = runtime.delete_ref(f"{prefix}{name}")
+        if ref_failure is not None:
+            problems.append(f"the app's {label} ref was not deleted: {ref_failure}")
+    removed_state = _remove_machine_state(repo_root, name, problems)
     commit_failure = runtime.commit_paths(removed, f"app-install: uninstall {name}")
     if commit_failure is not None:
         problems.append(f"the removal was not committed: {commit_failure}")
 
     kept = [
         path.relative_to(repo_root).as_posix()
-        for path in (repo_root / APP_DATA_DIRECTORY / name, *(repo_root / file for file in secret_files))
+        for path in (
+            repo_root / APP_DATA_DIRECTORY / name,
+            data_snapshots_path(repo_root, name),
+            *(repo_root / file for file in secret_files),
+        )
         if path.exists()
     ]
-    return UninstallOutcome(name=name, removed_paths=tuple(removed), kept_paths=tuple(kept), problems=tuple(problems))
+    return UninstallOutcome(
+        name=name,
+        removed_paths=tuple(removed),
+        removed_state_paths=removed_state,
+        kept_paths=tuple(kept),
+        kept_share_grants=_kept_share_grants(repo_root, name, problems),
+        kept_routine_state=tuple(
+            (ROUTINE_STATE_DIRECTORY / routine_id).as_posix()
+            for routine_id in routine_ids
+            if (repo_root / ROUTINE_STATE_DIRECTORY / routine_id).is_dir()
+        ),
+        kept_repositories=tuple(url for url in (record.dev_repo_url, record.published_repo_url) if url),
+        dependents=dependents,
+        problems=tuple(problems),
+    )
 
 
 def _declared_secret_files(repo_root: Path, record: AppRecord) -> tuple[Path, ...]:

@@ -10,6 +10,7 @@ from app_manifest.manifest import load_manifest
 from app_manifest.primitives import ReferencePath
 from app_manifest.primitives import RepoRelativePath
 from app_manifest.primitives import is_path_covered_by
+from app_manifest.records import RecordReference
 from app_manifest.scope import BUILT_IN_EXCLUDES
 from app_manifest.scope import CreationScope
 from app_manifest.scope import CreationType
@@ -18,6 +19,7 @@ from app_manifest.scope import compute_app_scope
 from app_manifest.scope import compute_creation_scope
 from app_manifest.scope import compute_pass_scope
 from app_manifest.scope import compute_skill_scope
+from app_manifest.scope import describe_record_reference_problem
 from app_manifest.scope import find_referencing_manifests
 from app_manifest.scope import find_wiring_sections
 from app_manifest.scope import list_user_app_files
@@ -1125,6 +1127,11 @@ def test_a_record_reference_is_held_to_the_rules_of_a_manifest_reference(
 
     with pytest.raises(RecordLoadError, match=f"notes.toml is invalid: .*{problem}"):
         _notes_app_scope(tmp_path)
+    # What adds a reference to a record asks the same question before it writes one.
+    described = describe_record_reference_problem(tmp_path, "notes", RecordReference(path=reference_path))
+    assert described is not None and problem in described
+    allowed = RecordReference(path="system/scripts/run_notes.sh")
+    assert describe_record_reference_problem(tmp_path, "notes", allowed) is None
     # Across every app, a bad record hides only its own app, as a manifest that does not load does.
     with captured_warnings() as warnings:
         matches = find_referencing_manifests(tmp_path, RepoRelativePath("system/scripts/run_notes.sh"))

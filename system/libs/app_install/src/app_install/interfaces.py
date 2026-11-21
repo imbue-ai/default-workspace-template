@@ -17,6 +17,16 @@ class CreatedRepository(FrozenModel):
     lockdown_problem: str = Field(
         default="", description="Why closing the repository to outside contributions did not take, if it did not"
     )
+    topic_problem: str = Field(default="", description="Why the repository's topic was not set, if it was not")
+
+
+class SecretScan(FrozenModel):
+    """What the secret scan made of a directory."""
+
+    findings: tuple[str, ...] = Field(
+        default=(), description="Each finding, with the scanner, the rule, and the file; never the value"
+    )
+    failure: str = Field(default="", description="Why the scan could not be run to the end, if it could not")
 
 
 class WorkspaceRuntimeInterface(MutableModel, ABC):
@@ -80,3 +90,19 @@ class WorkspaceRuntimeInterface(MutableModel, ABC):
         """Create the private repository ``name`` under the workspace's GitHub account and close it to outside
         contributions. Raises DevRepositoryError when it is not created; a name the account already uses is one
         such case, and the message says so."""
+
+    @abstractmethod
+    def create_published_repository(self, name: str, description: str) -> CreatedRepository:
+        """Create the public repository ``name`` under the workspace's GitHub account, close it to outside
+        contributions, and give it the topic published apps are found by. Raises PublishedNameTakenError when
+        the account already has a repository of that name, and PublishError when it is not created for any other
+        reason."""
+
+    @abstractmethod
+    def scan_secrets(self, directory: Path) -> SecretScan:
+        """Run the workspace's secret scan, the one a template publish runs, over ``directory``."""
+
+    @abstractmethod
+    def check_lock(self, directory: Path) -> str | None:
+        """Whether the lock of the Python project at ``directory`` is what its project calls for, checked there
+        and nowhere else; why it is not, None when it is."""

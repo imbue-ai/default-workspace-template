@@ -9,6 +9,13 @@ Usage, from the workspace repo's root::
     uv run --no-sync app-install uninstall <name>
     uv run --no-sync app-install migrate <package> [--dry-run]
     uv run --no-sync app-install link <name> [--refresh] [--create-dev-repo]
+    uv run --no-sync app-install reference add <name> <path> [--note <text>]
+    uv run --no-sync app-install reference remove <name> <path>
+    uv run --no-sync app-install publish compare <name> [--commit <rev>]
+    uv run --no-sync app-install publish set-version <name> <version>
+    uv run --no-sync app-install publish assemble <name> [--commit <rev>]
+    uv run --no-sync app-install publish push <name> [--repo-name <repository>]
+    uv run --no-sync app-install publish record <name>
     uv run --no-sync app-install check
     uv run --no-sync app-install list
 
@@ -25,9 +32,15 @@ import click
 
 from app_install.errors import AppInstallError
 from app_install.errors import CollisionError
+from app_install.errors import LockCheckError
 from app_install.errors import NoSnapshotError
 from app_install.errors import NotAnAppError
+from app_install.errors import NotAssembledError
+from app_install.errors import NotPushedError
+from app_install.errors import PublishedNameTakenError
+from app_install.errors import PushRefusedError
 from app_install.errors import RepositoryUnreachableError
+from app_install.errors import SecretsFoundError
 from app_install.installing import InstallOutcome
 from app_install.installing import install_app
 from app_install.linking import link_app
@@ -41,11 +54,21 @@ from app_install.operations import regenerate
 from app_install.operations import uninstall_app
 from app_install.paths import secret_file_path
 from app_install.ports import is_port_bound
+from app_install.publishing import PublishedTree
+from app_install.publishing import assemble_app
+from app_install.publishing import compare_with_published
+from app_install.publishing import push_app
+from app_install.publishing import record_publish
+from app_install.publishing import set_version
+from app_install.references import ReferenceOutcome
+from app_install.references import add_reference
+from app_install.references import remove_reference
 from app_install.runtime import WorkspaceRuntime
 from app_install.updating import UpdateOutcome
 from app_install.updating import UpdateResult
 from app_install.updating import update_app
 from app_manifest.errors import AppManifestError
+from app_manifest.manifest import AppManifest
 
 _EXIT_REFUSED: Final[int] = 1
 
@@ -97,9 +120,28 @@ def add_command(repo_root: Path, package: str, port: int | None) -> None:
     )
 
 
+def _adopter_needs(manifest: AppManifest) -> dict[str, object]:
+    """What a manifest asks of whoever adopts the app: the same fields, in the same shapes, for an install's
+    result and for a publish's."""
+    return {
+        "permissions": [note.model_dump(mode="json") for note in manifest.permissions],
+        "secrets": [
+            {
+                "file": str(secret.file),
+                "variables": [str(variable) for variable in secret.variables],
+                "note": str(secret.note or ""),
+            }
+            for secret in manifest.secrets
+        ],
+        "llm": manifest.llm.model_dump(mode="json") if manifest.llm is not None else None,
+        "adaptation": [note.model_dump(mode="json") for note in manifest.adaptation],
+    }
+
+
 def _install_fields(outcome: InstallOutcome) -> dict[str, object]:
     manifest = outcome.manifest
     missing_secret_files = set(outcome.missing_secret_files)
+    needs = _adopter_needs(manifest)
     return {
         "name": str(outcome.record.name),
         "package": outcome.record.package,
@@ -111,7 +153,7 @@ def _install_fields(outcome: InstallOutcome) -> dict[str, object]:
         "programs": list(outcome.programs),
         "is_answering": outcome.is_answering,
         "needs": {
-            "permissions": [note.model_dump(mode="json") for note in manifest.permissions],
+            **needs,
             "secrets": [
                 {
                     "file": str(secret.file),
@@ -121,8 +163,6 @@ def _install_fields(outcome: InstallOutcome) -> dict[str, object]:
                 }
                 for secret in manifest.secrets
             ],
-            "llm": manifest.llm.model_dump(mode="json") if manifest.llm is not None else None,
-            "adaptation": [note.model_dump(mode="json") for note in manifest.adaptation],
             "missing_dependencies": list(outcome.missing_dependencies),
             "unresolved_environment": list(outcome.unresolved_environment),
         },
@@ -223,7 +263,14 @@ def uninstall_command(repo_root: Path, name: str) -> None:
         "uninstalled",
         name=outcome.name,
         removed_paths=list(outcome.removed_paths),
+        removed_state_paths=list(outcome.removed_state_paths),
         kept_paths=list(outcome.kept_paths),
+        kept_share_grants=(
+            outcome.kept_share_grants.model_dump(mode="json") if outcome.kept_share_grants is not None else None
+        ),
+        kept_routine_state=list(outcome.kept_routine_state),
+        kept_repositories=list(outcome.kept_repositories),
+        dependents=list(outcome.dependents),
         problems=list(outcome.problems),
     )
 
@@ -293,6 +340,210 @@ def link_command(repo_root: Path, name: str, is_refreshing: bool, is_dev_reposit
         dev_repo_url=outcome.record.dev_repo_url,
         is_dev_repository_created=outcome.is_dev_repository_created,
         remaining=list(outcome.remaining),
+        problems=list(outcome.problems),
+    )
+
+
+@main.group("reference")
+def reference_group() -> None:
+    """Change what an app's record lists as using the app elsewhere in the workspace."""
+
+
+def _reference_fields(outcome: ReferenceOutcome) -> dict[str, object]:
+    return {
+        "name": str(outcome.record.name),
+        "path": outcome.reference.path,
+        "note": outcome.reference.note,
+        "references": [reference.model_dump(mode="json") for reference in outcome.record.references],
+        "problems": list(outcome.problems),
+    }
+
+
+@reference_group.command("add")
+@click.argument("name")
+@click.argument("path")
+@click.option("--note", default="", help="One line saying which of the app's surfaces the path uses")
+@click.pass_obj
+def reference_add_command(repo_root: Path, name: str, path: str, note: str) -> None:
+    """List PATH, a file or directory outside the app NAME's directory, in the app's record as using the app."""
+    with install_lock(repo_root):
+        try:
+            outcome = add_reference(repo_root, name, path, note, WorkspaceRuntime(repo_root=repo_root))
+        except (AppInstallError, AppManifestError) as e:
+            _refuse("refused", name=name, path=path, detail=str(e))
+    _emit("reference_added", **_reference_fields(outcome))
+
+
+@reference_group.command("remove")
+@click.argument("name")
+@click.argument("path")
+@click.pass_obj
+def reference_remove_command(repo_root: Path, name: str, path: str) -> None:
+    """Take PATH out of what the record of the app NAME lists as using the app."""
+    with install_lock(repo_root):
+        try:
+            outcome = remove_reference(repo_root, name, path, WorkspaceRuntime(repo_root=repo_root))
+        except (AppInstallError, AppManifestError) as e:
+            _refuse("refused", name=name, path=path, detail=str(e))
+    _emit("reference_removed", **_reference_fields(outcome))
+
+
+@main.group("publish")
+def publish_group() -> None:
+    """The steps of publishing an app to its public repository, which the publish-app skill runs in order."""
+
+
+def _published_tree_fields(published: PublishedTree) -> dict[str, object]:
+    return {
+        "source_commit": published.source_commit,
+        "tree": published.tree,
+        "paths": list(published.paths),
+        "excluded_paths": list(published.excluded_paths),
+    }
+
+
+@publish_group.command("compare")
+@click.argument("name")
+@click.option("--commit", "revision", default="HEAD", show_default=True, help="The workspace commit to compare")
+@click.pass_obj
+def publish_compare_command(repo_root: Path, name: str, revision: str) -> None:
+    """Say what a publish of the app NAME would push, and how it differs from the version last published."""
+    try:
+        outcome = compare_with_published(repo_root, name, revision)
+    except (AppInstallError, AppManifestError) as e:
+        _refuse("refused", name=name, detail=str(e))
+    record = outcome.record
+    _emit(
+        "compared",
+        name=str(record.name),
+        origin=record.origin.value,
+        is_published=bool(record.published_commit),
+        published_repo_url=record.published_repo_url,
+        published_commit=record.published_commit,
+        published_version=record.published_version,
+        version=outcome.version,
+        changed_paths=[change.model_dump(mode="json") for change in outcome.changed_paths],
+        **_published_tree_fields(outcome.published),
+    )
+
+
+@publish_group.command("set-version")
+@click.argument("name")
+@click.argument("version")
+@click.pass_obj
+def publish_set_version_command(repo_root: Path, name: str, version: str) -> None:
+    """Write VERSION into the app NAME (its manifest and, for a Python app, its project and lock) with the
+    template version this workspace is on. Commits nothing."""
+    with install_lock(repo_root):
+        try:
+            outcome = set_version(repo_root, name, version, WorkspaceRuntime(repo_root=repo_root))
+        except (AppInstallError, AppManifestError) as e:
+            _refuse("refused", name=name, detail=str(e))
+    _emit(
+        "versioned",
+        name=str(outcome.record.name),
+        version=outcome.version,
+        previous_version=outcome.previous_version,
+        verified_template=outcome.verified_template,
+        changed_paths=list(outcome.changed_paths),
+        problems=list(outcome.problems),
+    )
+
+
+@publish_group.command("assemble")
+@click.argument("name")
+@click.option("--commit", "revision", default="HEAD", show_default=True, help="The workspace commit to publish")
+@click.pass_obj
+def publish_assemble_command(repo_root: Path, name: str, revision: str) -> None:
+    """Build the tree a publish of the app NAME would push, outside the workspace, scan it for secrets, and
+    check that a Python app's lock holds there. Pushes nothing."""
+    with install_lock(repo_root):
+        try:
+            outcome = assemble_app(repo_root, name, revision, WorkspaceRuntime(repo_root=repo_root))
+        except SecretsFoundError as e:
+            _refuse("secrets_found", name=name, findings=list(e.findings))
+        except LockCheckError as e:
+            _refuse("lock_check_failed", name=name, detail=str(e))
+        except (AppInstallError, AppManifestError) as e:
+            _refuse("refused", name=name, detail=str(e))
+    manifest = outcome.manifest
+    _emit(
+        "assembled",
+        name=str(outcome.record.name),
+        version=manifest.version,
+        verified_template=manifest.verified_template or "",
+        is_first_publish=not outcome.record.published_commit,
+        published_repo_url=outcome.record.published_repo_url,
+        is_lock_checked=outcome.is_lock_checked,
+        needs={
+            **_adopter_needs(manifest),
+            "environment": manifest.environment.model_dump(mode="json"),
+            "dependencies": [dependency.model_dump(mode="json") for dependency in manifest.dependencies],
+        },
+        **_published_tree_fields(outcome.published),
+    )
+
+
+@publish_group.command("push")
+@click.argument("name")
+@click.option(
+    "--repo-name",
+    "repository_name",
+    default=None,
+    help="The repository a first publish creates; the app's name otherwise",
+)
+@click.pass_obj
+def publish_push_command(repo_root: Path, name: str, repository_name: str | None) -> None:
+    """Push the assembled tree of the app NAME to its public repository as one commit and tag it, creating the
+    repository on the first publish. Never forced."""
+    with install_lock(repo_root):
+        try:
+            outcome = push_app(repo_root, name, repository_name, WorkspaceRuntime(repo_root=repo_root))
+        except PublishedNameTakenError as e:
+            _refuse("name_taken", name=name, repo_name=repository_name or name, detail=str(e))
+        except NotAssembledError as e:
+            _refuse("not_assembled", name=name, detail=str(e))
+        except PushRefusedError as e:
+            _refuse("push_refused", name=name, detail=str(e))
+        except (AppInstallError, AppManifestError) as e:
+            _refuse("refused", name=name, detail=str(e))
+    _emit(
+        "pushed",
+        name=str(outcome.record.name),
+        published_repo_url=outcome.repo_url,
+        published_commit=outcome.commit,
+        parent=outcome.parent,
+        version=outcome.version,
+        tag=outcome.tag,
+        is_repository_created=outcome.is_repository_created,
+        is_tag_pushed=outcome.is_tag_pushed,
+        derived_from=outcome.derived_from,
+        problems=list(outcome.problems),
+    )
+
+
+@publish_group.command("record")
+@click.argument("name")
+@click.pass_obj
+def publish_record_command(repo_root: Path, name: str) -> None:
+    """Write what was pushed for the app NAME into its record and commit that one file."""
+    with install_lock(repo_root):
+        try:
+            outcome = record_publish(repo_root, name, WorkspaceRuntime(repo_root=repo_root))
+        except NotAssembledError as e:
+            _refuse("not_assembled", name=name, detail=str(e))
+        except NotPushedError as e:
+            _refuse("not_pushed", name=name, detail=str(e))
+        except (AppInstallError, AppManifestError) as e:
+            _refuse("refused", name=name, detail=str(e))
+    record = outcome.record
+    _emit(
+        "recorded",
+        name=str(record.name),
+        published_repo_url=record.published_repo_url,
+        published_commit=record.published_commit,
+        published_version=record.published_version,
+        verified_template=record.verified_template,
         problems=list(outcome.problems),
     )
 

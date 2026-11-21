@@ -70,3 +70,40 @@ class UpdateInProgressError(AppInstallError):
 class NoSnapshotError(AppInstallError):
     """The app's stored data could not be kept safe before an update: it does not fit beside itself and the
     workspace has no recent backup, or copying it aside failed."""
+
+
+class RecordReferenceError(AppInstallError, ValueError):
+    """A reference cannot be added to an app's record, or is not there to remove."""
+
+
+class PublishError(AppInstallError):
+    """A step of a publish could not be done; nothing after it ran."""
+
+
+class SecretsFoundError(PublishError):
+    """The secret scan found something in the tree about to be published; ``findings`` names each, with its
+    file and never its value."""
+
+    def __init__(self, findings: tuple[str, ...]) -> None:
+        self.findings = findings
+        super().__init__("; ".join(findings))
+
+
+class LockCheckError(PublishError):
+    """The app's lock does not match its project when the app stands alone, outside any workspace."""
+
+
+class NotAssembledError(PublishError):
+    """No assembled and scanned tree of the app is waiting to be pushed or recorded."""
+
+
+class NotPushedError(PublishError):
+    """The assembled tree has not been pushed, so there is no published commit to record."""
+
+
+class PublishedNameTakenError(PublishError):
+    """The account already has a repository of the name the app was to be published under."""
+
+
+class PushRefusedError(PublishError):
+    """The published repository holds commits this workspace's publish does not continue."""
