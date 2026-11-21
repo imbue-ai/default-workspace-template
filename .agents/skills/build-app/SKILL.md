@@ -682,7 +682,10 @@ belongs to the app inside it:
   skill) and lands in `system/apps/<package>/routines/<id>.toml`.
 - **An environment unit** (a script that installs a system package or a tool
   the app needs) goes at `system/apps/<package>/env.d/<NNNN>-<name>.sh`, with
-  `NNNN` at 2000 or higher.
+  `NNNN` at 2000 or higher. env-converge runs every unit at each boot, not
+  when its file appears, so run a new one by hand once
+  (`bash system/apps/<package>/env.d/<NNNN>-<name>.sh`, from the repo root)
+  for the app to have what it installs now.
 - **Stored data and secret values stay out of it.** What the app stores stays
   under `data/.apps/<name>/` (through `DATA_DIR`) and secret values under
   `data/.secrets/`; never put either in the app directory.

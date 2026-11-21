@@ -105,7 +105,11 @@ app was already installed).
    installed, with the reason. An apt package that does not exist at this
    workspace's pinned snapshot can be reached with
    `uv run --no-sync env-converge upgrade`; offer that. Do not press on into a
-   setup that cannot work.
+   setup that cannot work. The installer does not run the environment units
+   the app carries (`system/apps/<package>/env.d/*.sh`): env-converge runs
+   them at the next boot. When the app needs what one installs before then,
+   run it by hand (`bash system/apps/<package>/env.d/<file>`, from the repo
+   root).
 
 **Done means the user can open the app and see their own data.** A program
 that starts or a route that answers 200 is not done. Open the app yourself
