@@ -310,6 +310,9 @@ def test_a_first_publish_creates_the_repository_and_pushes_one_parentless_commit
     assert pushed.derived_from == ""
     assert pushed.problems == ()
     assert "create_published_repository notes 'Notes'" in runtime.calls
+    # The record names the repository from the moment it exists; the version waits for the record step.
+    assert pushed.record.published_repo_url == _PUBLISHED_URL
+    assert (pushed.record.published_commit, pushed.record.published_version) == ("", "")
     assert sorted(_refs(published)) == ["refs/heads/main", "refs/tags/v0.1.0"]
     assert run_git(published, ["rev-parse", "main"]) == pushed.commit
     assert run_git(published, ["rev-parse", "v0.1.0^{commit}"]) == pushed.commit
@@ -382,6 +385,7 @@ def test_a_name_the_account_already_uses_stops_the_first_publish(tmp_path: Path)
     pushed = push_app(workspace, "notes", "octo-notes", runtime)
     assert pushed.repo_url == "https://github.com/octo/octo-notes"
     assert run_git(renamed, ["rev-parse", "main"]) == pushed.commit
+    assert load_record(workspace, "notes").published_repo_url == "https://github.com/octo/octo-notes"
 
 
 def test_a_repository_that_was_created_is_not_created_again_when_the_push_is_run_again(tmp_path: Path) -> None:
@@ -393,6 +397,14 @@ def test_a_repository_that_was_created_is_not_created_again_when_the_push_is_run
     run_git(workspace, ["config", "--unset", f"url.{published}.insteadOf"])
     with pytest.raises(PublishError, match="the push to https://github.com/octo/notes failed"):
         push_app(workspace, "notes", None, runtime)
+    # The repository exists from then on, so the record names it, committed, before anything is in it.
+    assert load_record(workspace, "notes").published_repo_url == _PUBLISHED_URL
+    assert run_git(workspace, ["log", "-1", "--format=%an|%s"]) == (
+        "app-install|app-install: record the published repository of notes"
+    )
+    assert run_git(workspace, ["status", "--porcelain"]) == ""
+    # Assembling again, after a fix say, does not forget the repository either.
+    assemble_app(workspace, "notes", "HEAD", runtime)
     run_git(workspace, ["config", "--unset", f"url.{tmp_path / 'github' / 'missing.git'}.insteadOf"])
     point_url_at(workspace, _PUBLISHED_URL, published)
 
@@ -486,6 +498,24 @@ def test_the_record_step_alone_finishes_a_publish_whose_record_was_not_written(t
     assert run_git(published, ["rev-list", "--count", "main"]) == "1"
     with pytest.raises(NotAssembledError):
         record_publish(workspace, "notes", runtime)
+
+
+def test_the_next_version_is_not_assembled_while_a_pushed_one_waits_to_be_recorded(tmp_path: Path) -> None:
+    workspace, published, runtime = _publisher(tmp_path, is_python=False)
+    _versioned(workspace, runtime, "0.1.0")
+    assemble_app(workspace, "notes", "HEAD", runtime)
+    pushed = push_app(workspace, "notes", None, runtime)
+    _versioned(workspace, runtime, "0.2.0")
+
+    # Assembling now would forget which commit was pushed, and the next push could not follow it.
+    with pytest.raises(PublishError, match="publish record notes"):
+        assemble_app(workspace, "notes", "HEAD", runtime)
+
+    record_publish(workspace, "notes", runtime)
+    assemble_app(workspace, "notes", "HEAD", runtime)
+    second = push_app(workspace, "notes", None, runtime)
+    assert second.parent == pushed.commit
+    assert run_git(published, ["rev-list", "main"]).splitlines() == [second.commit, pushed.commit]
 
 
 def test_recording_a_version_made_on_a_branch_that_was_not_merged_says_so(tmp_path: Path) -> None:

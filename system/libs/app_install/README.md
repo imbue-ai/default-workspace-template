@@ -185,7 +185,7 @@ A publish is driven by the `publish-app` skill, which asks the user twice before
 | `publish compare <name> [--commit <rev>]` | Says what a publish of that commit would hold (`paths`, `excluded_paths`) and which files differ from the version last published (`changed_paths`, each `added`, `modified` or `deleted`), which the next version's number is chosen from. Writes nothing. | `compared` |
 | `publish set-version <name> <version>` | Writes the version into `app.toml`, with `verified_template` set to the template release the workspace is on, and for a Python app into `pyproject.toml`, whose lock is made again. Commits nothing. | `versioned` |
 | `publish assemble <name> [--commit <rev>]` | Builds the tree in a directory under `/var/tmp`, outside the workspace, and finds it fit to publish. Pushes nothing. | `assembled` |
-| `publish push <name> [--repo-name <repository>]` | Creates the repository on the first publish, then pushes the assembled tree as one commit and tags it. | `pushed` |
+| `publish push <name> [--repo-name <repository>]` | Creates the repository on the first publish and writes its URL to the record, then pushes the assembled tree as one commit and tags it. | `pushed` |
 | `publish record <name>` | Writes `published_repo_url`, `published_commit`, `published_version` and `verified_template` to the app's record and commits that one file. | `recorded` |
 
 **The version.**
@@ -206,6 +206,7 @@ The result names what an adopter will be asked for under `needs` (`permissions`,
 
 **The push.**
 On the first publish the public repository is created under the workspace's GitHub account through `latchkey curl`, closed to outside contributions as a published template's repository is, and given the topic `imbue-studio-app`.
+Its URL is written to the app's record and committed at once, so a push that fails afterwards never creates it a second time.
 A name the account already uses stops the publish with `name_taken`: the app's `README.md` names the repository, so the name is settled with the user again before anything else.
 The commit is made with `git commit-tree`: the assembled tree, the commit last published as its parent (none on the first publish), and the message `<name> v<version>`.
 The first publish of an app that was installed and then changed here adds the trailer `Derived-From: <upstream_url>@<upstream_commit>`.
@@ -214,7 +215,8 @@ A tag that does not reach the repository is listed under `problems`; the version
 The ref `refs/app-published/<name>` keeps the published commit in the workspace repository for the next publish to follow; a workspace that lost it fetches it from the published repository.
 
 **Between the steps.**
-What `assemble` built waits in `data/.state/app_install/publish/<name>.json`, and `push` adds the repository it created and the commit it pushed.
-So a step that was interrupted is finished by running it again: `push` does not create a repository or push a commit twice, and `record`, run alone, finishes a publish whose record was not written.
+What `assemble` built waits in `data/.state/app_install/publish/<name>.json`, and `push` adds the commit it pushed.
+So a step that was interrupted is finished by running it again: `push` does not push a commit twice, and `record`, run alone, finishes a publish whose record was not written.
 `push` and `record` without a waiting tree are `not_assembled`, and `record` before a push is `not_pushed`.
+`assemble` is `refused` while a version that was pushed still waits to be recorded, since assembling the next one would forget which commit that was.
 `record` lists under `problems` a published version made from a commit that is not in the checkout's history yet, which means the branch that holds it still has to be merged.

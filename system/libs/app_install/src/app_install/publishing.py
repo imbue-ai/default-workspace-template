@@ -122,7 +122,6 @@ class PendingPublish(FrozenModel):
     version: str = Field(description="The version the tree's manifest names")
     description: str = Field(default="", description="The app's one-line description, for a new repository")
     verified_template: str = Field(default="", description="The template version the tree's manifest names")
-    repo_url: str = Field(default="", description="The repository a first publish created")
     pushed_commit: str = Field(default="", description="The commit that reached the repository's main branch")
     is_tag_pushed: bool = Field(default=False, description="Whether the version's tag reached the repository")
 
@@ -161,7 +160,9 @@ class AssembleOutcome(FrozenModel):
 class PushOutcome(FrozenModel):
     """What a push did."""
 
-    record: AppRecord = Field(description="The app's record, which the push does not change")
+    record: AppRecord = Field(
+        description="The app's record as it is now: it names the published repository once that exists"
+    )
     repo_url: str = Field(description="The published repository")
     commit: str = Field(description="The commit on the repository's main branch")
     parent: str = Field(description="The published commit it follows, empty for the first")
@@ -439,6 +440,21 @@ def _check_is_this_workspaces_to_publish(repo_root: Path, record: AppRecord, pub
         )
 
 
+def _check_nothing_pushed_is_unrecorded(repo_root: Path, name: str) -> None:
+    """Raise PublishError when a version that was pushed still waits to be recorded: assembling the next one
+    would forget which commit that was, and the next push could not follow it."""
+    try:
+        pending = _load_pending(repo_root, name)
+    except NotAssembledError as e:
+        logger.debug("Nothing of {} is waiting between two steps of a publish: {}", name, e)
+        return
+    if pending.pushed_commit:
+        raise PublishError(
+            f"{name} {_VERSION_TAG_PREFIX}{pending.version} was pushed and is not recorded yet: run "
+            f"`app-install publish record {name}` before assembling the next version"
+        )
+
+
 def assemble_app(repo_root: Path, name: str, revision: str, runtime: WorkspaceRuntimeInterface) -> AssembleOutcome:
     """Build the tree a publish of the app ``name`` at ``revision`` would push, in a directory outside the
     workspace, and find it fit to publish: its manifest passes the authoring check and names a version newer
@@ -446,10 +462,12 @@ def assemble_app(repo_root: Path, name: str, revision: str, runtime: WorkspaceRu
     its project calls for with no workspace around it. The tree then waits for ``push_app``. Nothing is pushed.
 
     Raises AppRecordNotFoundError for an app with no record, NotModifiedAppError for an installed app nobody
-    has changed, SecretsFoundError with each finding, LockCheckError, and PublishError for everything else.
-    Whatever was waiting from an earlier assembly is gone when it raises.
+    has changed, SecretsFoundError with each finding, LockCheckError, and PublishError for everything else,
+    which includes a version that was pushed and still waits to be recorded. A tree that was waiting from an
+    earlier assembly is gone when it raises for any other reason.
     """
     record = load_record(repo_root, name)
+    _check_nothing_pushed_is_unrecorded(repo_root, name)
     pending_publish_path(repo_root, name).unlink(missing_ok=True)
     with _scratch_directory() as scratch:
         index_file = scratch / _INDEX_FILENAME
@@ -529,13 +547,14 @@ def push_app(
     """Push the tree ``assemble_app`` left waiting as the next version of the app ``name``.
 
     On the first publish the public repository ``repository_name`` (the app's name when None) is created and
-    closed to outside contributions. The tree becomes one commit, whose parent is the commit last published and
+    closed to outside contributions, and its URL is written to the app's record and committed, so that it is
+    never created a second time. The tree becomes one commit, whose parent is the commit last published and
     whose message names the version and, for the first publish of an app that was installed and changed here,
     what it was derived from. The commit goes to the repository's ``main`` as a fast-forward and the tag
     ``v<version>`` after it, both through the latchkey gateway and neither forced.
 
-    A run that was interrupted is finished by running it again: a repository that was created is not created
-    twice, and a commit that reached ``main`` is not pushed twice. Raises AppRecordNotFoundError for an app with
+    A run that was interrupted is finished by running it again: a commit that reached ``main`` is not pushed
+    twice. Raises AppRecordNotFoundError for an app with
     no record, NotAssembledError when no tree is waiting, PublishedNameTakenError when the account already has a
     repository of that name, PushRefusedError when the repository holds commits this publish does not continue,
     and PublishError otherwise. A tag that does not reach the repository is a problem in the outcome: the
@@ -545,7 +564,7 @@ def push_app(
     pending = _load_pending(repo_root, name)
     problems: list[str] = []
     is_repository_created = False
-    repo_url = record.published_repo_url or pending.repo_url
+    repo_url = record.published_repo_url
     if not repo_url:
         chosen_name = repository_name or name
         if not _REPOSITORY_NAME_PATTERN.fullmatch(chosen_name):
@@ -555,8 +574,13 @@ def push_app(
         created = runtime.create_published_repository(chosen_name, pending.description)
         is_repository_created = True
         repo_url = created.url
-        pending = pending.model_copy_update(to_update(pending.field_ref().repo_url, repo_url))
-        _write_pending(repo_root, name, pending)
+        record = record.model_copy_update(to_update(record.field_ref().published_repo_url, repo_url))
+        record_file = write_record(repo_root, record)
+        commit_failure = runtime.commit_paths(
+            [record_file.relative_to(repo_root).as_posix()], f"app-install: record the published repository of {name}"
+        )
+        if commit_failure is not None:
+            problems.append(f"the repository's URL is in the app's record but was not committed: {commit_failure}")
         if created.lockdown_problem:
             problems.append(
                 f"closing {repo_url} to outside contributions (issues, wiki, projects, discussions, outside "
@@ -632,7 +656,6 @@ def record_publish(repo_root: Path, name: str, runtime: WorkspaceRuntimeInterfac
             f"`app-install publish push {name}` first"
         )
     updated = record.model_copy_update(
-        to_update(record.field_ref().published_repo_url, record.published_repo_url or pending.repo_url),
         to_update(record.field_ref().published_commit, pending.pushed_commit),
         to_update(record.field_ref().published_version, pending.version),
         to_update(record.field_ref().verified_template, pending.verified_template or record.verified_template),
