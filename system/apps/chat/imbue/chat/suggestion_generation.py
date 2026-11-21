@@ -354,12 +354,19 @@ class SuggestionGenerator(MutableModel):
                 self.consider_turn_end(chat_id)
 
     def _settle_turn_end(self, chat_id: ChatId) -> None:
+        stored = read_chat_suggestions(self.chat_files_root / chat_id)
+        if stored is None:
+            # Reading a chat's transcript starts following it, so a chat with nothing to ask about and no set to
+            # remove is not read: a worker's, a room's, and every chat's while the switch is off.
+            reason = reason_chat_gets_no_suggestions(self.get_chat_snapshot(chat_id), self.read_chat_settings())
+            if reason is not None:
+                logger.debug("Suggested no replies in chat {}: {}", chat_id, reason)
+                return
         events = self.read_tail_events(chat_id, _TAIL_EVENT_COUNT)
         if events is None:
             logger.debug("Left the suggestions of chat {} alone: it has no transcript to read", chat_id)
             return
         end = read_conversation_end(events)
-        stored = read_chat_suggestions(self.chat_files_root / chat_id)
         if end is not None and stored is not None and stored.after_event_id == end.reply_event_id:
             return
         ask = None if end is None else self._question_about(chat_id, end)

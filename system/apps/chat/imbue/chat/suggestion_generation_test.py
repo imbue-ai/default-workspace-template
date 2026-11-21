@@ -371,6 +371,7 @@ class _GenerationHarness:
         )
         self.completion = ScriptedOneShotCompletion(answers)
         self.is_harness_answering_questions = True
+        self.transcript_read_count = 0
         self.pushed_chat_ids: list[ChatId] = []
         # The reply the generator held as pending at each push, which is what a page's read on that push is answered.
         self.pending_reply_event_id_at_each_push: list[str | None] = []
@@ -378,12 +379,16 @@ class _GenerationHarness:
             chat_files_root=self.chat_files_root,
             read_chat_settings=lambda: self.settings,
             get_chat_snapshot=lambda _chat_id: self.snapshot,
-            read_tail_events=lambda _chat_id, _limit: self.events,
+            read_tail_events=self._read_tail_events,
             resolve_chat_account_binding=lambda _chat_id: self.binding,
             build_one_shot_completion=self._build_completion,
             broadcast_suggestions_updated=self._push,
             executor=InlineExecutor(),
         )
+
+    def _read_tail_events(self, _chat_id: ChatId, _limit: int) -> list[dict[str, Any]] | None:
+        self.transcript_read_count += 1
+        return self.events
 
     def _push(self, chat_id: ChatId) -> None:
         self.pushed_chat_ids.append(chat_id)
@@ -507,6 +512,10 @@ def _make_a_room(harness: _GenerationHarness) -> None:
     harness.snapshot = _room()
 
 
+def _have_an_agent_start_it(harness: _GenerationHarness) -> None:
+    harness.snapshot = _started_by_an_agent()
+
+
 def _leave_it_waiting_on_a_background_task(harness: _GenerationHarness) -> None:
     harness.snapshot = _with_status(ChatStatus.BACKGROUND)
 
@@ -562,6 +571,24 @@ def test_a_turn_end_that_asks_no_model_still_removes_the_earlier_replys_set(tmp_
     assert harness.completion.prompts == []
     assert harness.stored() is None
     assert harness.pushed_chat_ids == [_CHAT_ID]
+
+
+@pytest.mark.parametrize(
+    "arrange", [_switch_off, _make_a_room, _have_an_agent_start_it, _leave_it_waiting_on_a_background_task]
+)
+def test_a_chat_that_gets_no_suggestions_and_has_no_set_is_settled_without_reading_its_transcript(
+    tmp_path: Path, arrange: Callable[[_GenerationHarness], None]
+) -> None:
+    """Reading a transcript starts following its chat, which a chat with nothing to settle is spared."""
+    harness = _GenerationHarness(tmp_path, [_TWO_SUGGESTIONS])
+    arrange(harness)
+
+    harness.end_turn()
+
+    assert harness.transcript_read_count == 0
+    assert harness.completion.prompts == []
+    assert harness.stored() is None
+    assert harness.pushed_chat_ids == []
 
 
 def test_a_chat_with_no_transcript_to_read_is_left_as_it_is(tmp_path: Path) -> None:
