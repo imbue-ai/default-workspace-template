@@ -173,6 +173,9 @@ what this workspace records about an app its agent built or installed, which
   pairs a manifest with that record, the references read from it, and the
   links to the skills the app carries, and `list_user_app_files` lists what a
   user app owns beside its directory ("Built-in apps and user apps" below).
+  `describe_record_reference_problem(repo_root, package, reference)` says why
+  a record may not list a reference, by the rules one is read by, which is
+  what `app-install reference add` asks before it writes one.
   `compute_skill_scope` refuses a path that does not exist, because git ignores a
   pathspec that matches nothing and a mistyped path would read as "unchanged",
   and refuses the link to a skill an app carries for the same reason.
