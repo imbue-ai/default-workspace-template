@@ -1302,6 +1302,20 @@ def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, a
     assert "desktops_updated" in types and "active_desktop_changed" in types
 
 
+def test_a_desktop_record_in_a_request_body_still_refuses_a_field_it_does_not_know(client: FlaskClient) -> None:
+    """desktops.json keeps the fields this shell does not know, but a request naming a record is held to the record."""
+    (home,) = client.get("/api/desktops").get_json()["desktops"]
+    target = home["shortcuts"][0]["target"]
+    move = {"app": target["app"], "launch": target["launch"], "cell": {"column": 5, "row": 5}}
+
+    refused = client.post("/api/desktops/home/shortcuts/move", json={**move, "cell": {**move["cell"], "span": 2}})
+    papered = client.post("/api/desktops/home/wallpaper", json={"wallpaper": {"kind": "file", "name": "x", "fit": 1}})
+
+    assert (refused.status_code, papered.status_code) == (400, 400)
+    assert client.get("/api/desktops").get_json()["desktops"] == [home]
+    assert client.post("/api/desktops/home/shortcuts/move", json=move).status_code == 200
+
+
 def test_file_wallpapers_are_served_from_a_relative_configured_directory(
     tmp_path: Path, broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch
 ) -> None:

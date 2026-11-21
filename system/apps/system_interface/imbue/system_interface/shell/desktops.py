@@ -15,6 +15,7 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.registry import RegistryRow
 from loguru import logger
+from pydantic import BaseModel
 from pydantic import Field
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import DesktopId
@@ -43,6 +44,7 @@ from imbue.system_interface.shell.data_types import DesktopDeleteOutcome
 from imbue.system_interface.shell.data_types import DesktopThemesDocument
 from imbue.system_interface.shell.data_types import DesktopsChangeOutcome
 from imbue.system_interface.shell.data_types import DesktopsDocument
+from imbue.system_interface.shell.data_types import StoredDesktops
 from imbue.system_interface.shell.data_types import ThemeChoices
 from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
 from imbue.system_interface.shell.desktop_document import default_shortcut_targets
@@ -66,8 +68,12 @@ from imbue.system_interface.shell.ownership import reordered_desktops
 from imbue.system_interface.shell.ownership import with_visitor_owners
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
+from imbue.system_interface.shell.state_files import UnreadableStateFile
+from imbue.system_interface.shell.state_files import load_json_object
+from imbue.system_interface.shell.state_files import move_unreadable_state_file_aside
 from imbue.system_interface.shell.state_files import parse_versioned_document
 from imbue.system_interface.shell.state_files import read_json_object
+from imbue.system_interface.shell.state_files import validate_versioned_document
 from imbue.system_interface.shell.state_files import write_json_atomic
 
 DESKTOPS_FILENAME: Final[str] = "desktops.json"
@@ -106,8 +112,8 @@ DESKTOP_GLYPH_COLORS: Final[tuple[str, ...]] = (
 FALLBACK_USER_DESKTOP_NAME: Final[str] = "Guest"
 # The key desktops.json carried per desktop before every desktop was shared (the sharing mode); an old file may
 # still hold it.
-# CLEANUP: drop ``_RETIRED_DESKTOP_KEYS`` and the strip in ``_read_unlocked`` around late November 2026, once every
-# workspace has rewritten its desktops.json without the key (the first write after this release does).
+# CLEANUP: drop ``_RETIRED_DESKTOP_KEYS`` and the strip in ``_read_desktops_file`` around late November 2026, once
+# every workspace has rewritten its desktops.json without the key (the first write after this release does).
 _RETIRED_DESKTOP_KEYS: Final[frozenset[str]] = frozenset({"sharing"})
 # CLEANUP: drop ``_RETIRED_WINDOW_KEYS`` and its strip in ``_without_retired_keys`` around late December 2026, once
 # every workspace has rewritten its desktops.json without the key (the first write after this release does).
@@ -245,6 +251,89 @@ def _without_retired_keys(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _read_desktops_file(path: Path) -> StoredDesktops | UnreadableStateFile | None:
+    """``desktops.json`` at ``path``, with the keys this shell no longer stores dropped and the fields it does not
+    know read past; None when the file is absent, and why not when it cannot be read."""
+    loaded = load_json_object(path)
+    if not isinstance(loaded, dict):
+        return loaded
+    raw = _without_retired_keys(loaded)
+    document = validate_versioned_document(raw, DesktopsDocument, DESKTOPS_FILE_VERSION, extra="ignore")
+    if isinstance(document, UnreadableStateFile):
+        return document
+    return StoredDesktops(document=document, raw=raw)
+
+
+@pure
+def _with_unknown_keys_kept(
+    written: dict[str, Any], stored: dict[str, Any], record_type: type[BaseModel]
+) -> dict[str, Any]:
+    """``written``, with the keys of ``stored`` that ``record_type`` has no field for put back."""
+    return {**written, **{key: value for key, value in stored.items() if key not in record_type.model_fields}}
+
+
+@pure
+def _shortcut_with_unknown_fields_kept(written: dict[str, Any], stored: dict[str, Any]) -> dict[str, Any]:
+    kept = _with_unknown_keys_kept(written, stored, DesktopShortcut)
+    kept["target"] = _with_unknown_keys_kept(written["target"], stored["target"], ShortcutTarget)
+    kept["cell"] = _with_unknown_keys_kept(written["cell"], stored["cell"], GridCell)
+    return kept
+
+
+@pure
+def _desktop_with_unknown_fields_kept(
+    desktop: Desktop, stored_desktop: Desktop, stored: dict[str, Any]
+) -> dict[str, Any]:
+    """``desktop`` as JSON, with the fields this shell does not know put back from ``stored``, the JSON
+    ``stored_desktop`` was read from: on the desktop, its wallpaper, each shortcut (by target) with its target and
+    cell, and each window (by id)."""
+    written = desktop.model_dump(mode="json")
+    kept = _with_unknown_keys_kept(written, stored, Desktop)
+    if desktop.wallpaper is not None and stored_desktop.wallpaper is not None:
+        kept["wallpaper"] = _with_unknown_keys_kept(written["wallpaper"], stored["wallpaper"], Wallpaper)
+    # The stored JSON was validated item by item, so its lists line up with the stored desktop's.
+    stored_shortcut_by_target = {
+        shortcut.target: stored_shortcut
+        for shortcut, stored_shortcut in zip(stored_desktop.shortcuts, stored["shortcuts"], strict=True)
+    }
+    kept["shortcuts"] = [
+        _shortcut_with_unknown_fields_kept(written_shortcut, stored_shortcut_by_target[shortcut.target])
+        if shortcut.target in stored_shortcut_by_target
+        else written_shortcut
+        for shortcut, written_shortcut in zip(desktop.shortcuts, written["shortcuts"], strict=True)
+    ]
+    stored_window_by_id = {
+        window.id: stored_window
+        for window, stored_window in zip(stored_desktop.windows, stored["windows"], strict=True)
+    }
+    kept["windows"] = [
+        _with_unknown_keys_kept(written_window, stored_window_by_id[window.id], Window)
+        if window.id in stored_window_by_id
+        else written_window
+        for window, written_window in zip(desktop.windows, written["windows"], strict=True)
+    ]
+    return kept
+
+
+@pure
+def _desktops_json_with_unknown_fields_kept(document: DesktopsDocument, stored: StoredDesktops) -> dict[str, Any]:
+    """``document`` as JSON, with every field the stored file holds that this shell does not know put back where it
+    was: on the document, and on each desktop (by id) and what it holds. A desktop, shortcut, or window that is gone,
+    and a wallpaper that was cleared, takes its fields with it."""
+    stored_desktop_by_id = {
+        desktop.id: (desktop, stored_desktop)
+        for desktop, stored_desktop in zip(stored.document.desktops, stored.raw["desktops"], strict=True)
+    }
+    kept = _with_unknown_keys_kept(document.model_dump(mode="json"), stored.raw, DesktopsDocument)
+    kept["desktops"] = [
+        _desktop_with_unknown_fields_kept(desktop, *stored_desktop_by_id[desktop.id])
+        if desktop.id in stored_desktop_by_id
+        else desktop.model_dump(mode="json")
+        for desktop in document.desktops
+    ]
+    return kept
+
+
 @pure
 def resolve_active_desktop(record: ClientRecord | None, desktops: Sequence[Desktop]) -> DesktopId | None:
     """The desktop a client is on (desktop contracts.md section 4.3): its stored active desktop when a desktop of
@@ -300,16 +389,26 @@ class DesktopStore(MutableModel):
 
     def _read_unlocked(self) -> DesktopsDocument | None:
         """The stored document, or None when the file is absent, unreadable, or of another version (logged)."""
-        raw = read_json_object(self._path())
-        return parse_versioned_document(
-            _without_retired_keys(raw) if raw is not None else None,
-            DesktopsDocument,
-            DESKTOPS_FILE_VERSION,
-            self._path(),
-        )
+        stored = _read_desktops_file(self._path())
+        if isinstance(stored, UnreadableStateFile):
+            logger.warning("Ignored the desktops file at {}: it {}", self._path(), stored.reason)
+            return None
+        return stored.document if stored is not None else None
 
     def _write_unlocked(self, document: DesktopsDocument) -> None:
-        write_json_atomic(self._path(), document.model_dump(mode="json"))
+        """Write ``document`` with the fields the stored file holds that this shell does not know put back. A stored
+        file that cannot be read is moved aside rather than written over; something other than a file in its place
+        is left for the write to fail on."""
+        path = self._path()
+        stored = _read_desktops_file(path)
+        if isinstance(stored, UnreadableStateFile) and path.is_file():
+            move_unreadable_state_file_aside(path, stored.reason)
+        written = (
+            _desktops_json_with_unknown_fields_kept(document, stored)
+            if isinstance(stored, StoredDesktops)
+            else document.model_dump(mode="json")
+        )
+        write_json_atomic(path, written)
 
     def _themes_path(self) -> Path:
         return self.state_directory / DESKTOP_THEMES_FILENAME
