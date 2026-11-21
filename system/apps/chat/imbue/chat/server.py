@@ -21,6 +21,7 @@ from typing import assert_never
 from uuid import uuid4
 
 import httpx
+from app_manifest.built_assets import send_built_asset
 from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
@@ -44,7 +45,6 @@ from flask import Response
 from flask import current_app
 from flask import request
 from flask import send_file
-from flask import send_from_directory
 from flask.ctx import AppContext
 from loguru import logger as _loguru_logger
 from pydantic import Field
@@ -3000,14 +3000,15 @@ def _favicon() -> Response:
 
 
 def _serve_asset(filename: str) -> Response:
-    """The chat page's built bundle (``static/assets/``), by the hashed name the document links."""
+    """The chat page's built bundle (``static/assets/``), by the hashed name the document links; one named from its
+    content is cached for good, so a load (a phone over a slow link above all) does not ask for it again."""
     assets_directory = get_state().static_directory / "assets"
     # A missing asset is a plain 404 rather than the HTML error page ``send_from_directory``
     # would raise. Existence and safety are both left to ``send_from_directory``: ``filename``
     # arrives with any ``..`` segments intact, so joining it onto the directory ourselves would
     # stat paths outside it -- an existence oracle for the whole filesystem.
     try:
-        return send_from_directory(assets_directory, filename)
+        return send_built_asset(assets_directory, filename)
     except NotFound:
         return Response(status=404)
 

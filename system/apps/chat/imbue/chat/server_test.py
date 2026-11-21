@@ -4657,6 +4657,24 @@ def test_serves_the_built_bundle_from_its_static_assets(tmp_path: Path) -> None:
     assert client.get("/assets/../chat.html").status_code == 404
 
 
+def test_caches_an_asset_named_from_its_content_for_good_and_revalidates_the_rest(tmp_path: Path) -> None:
+    static = tmp_path / "static"
+    (static / "assets").mkdir(parents=True)
+    (static / "assets" / "chat-D4x_9-Qa.js").write_text("console.log('chat');")
+    (static / "assets" / "chat.js").write_text("console.log('chat');")
+    state = build_test_state()
+    state.static_directory = static
+    client = create_application(state).test_client()
+
+    hashed = client.get("/assets/chat-D4x_9-Qa.js")
+    unhashed = client.get("/assets/chat.js")
+
+    assert hashed.cache_control.max_age == 365 * 24 * 60 * 60
+    assert hashed.cache_control.immutable
+    assert unhashed.cache_control.no_cache
+    assert not unhashed.cache_control.immutable
+
+
 def test_serves_image_at_its_absolute_path(client: FlaskClient, tmp_path: Path) -> None:
     """A request for an existing image file's absolute path streams its bytes inline."""
     image_path = tmp_path / "chart.png"
