@@ -241,8 +241,10 @@ What gets generated:
   another creation's skill, a script, a doc -- is not registered in this
   file: the app has a record (`system/config/apps/<name>.toml`), which is
   where its references are kept, and the manifest check refuses
-  `[[references]]` beside a record. Do not write the record by hand either;
-  the harden pass names such a file in its report
+  `[[references]]` beside a record. Do not write the record by hand either:
+  `uv run --no-sync app-install reference add <name> <path> --note "<the
+  surface it uses>"` records that a path uses the app, and
+  `app-install reference remove <name> <path>` takes the entry out again
   (`.agents/shared/worker/references/type-app.md`).
 - `system/apps/<package>/pyproject.toml` -- the app is a **standalone uv
   project**, not a root workspace member: it declares
@@ -438,6 +440,29 @@ sets, not a failure. `BACKOFF` or `FATAL` is the failure signal, and a broken
 app reaches it well before the window is up. On either, read its log
 (`/var/log/supervisor/<name>-stderr.log`) or run
 `supervisorctl tail <name> stderr`.
+
+### Commit the new app, and link it when GitHub sync is on
+
+Commit what the scaffold wrote and registered: the app's directory, its
+record, its program file, and any skill link. Then, when the workspace has
+GitHub sync enabled (`test -f data/system/github_sync.toml`, the file the
+`github-sync` skill writes), run once, from the repo root of the live
+workspace:
+
+```bash
+uv run --no-sync app-install link <name>
+```
+
+It gives the app's own history its starting point and creates the app's
+private dev repository, `<name>-dev`, which the sync service then keeps
+current (the `github-sync` skill, "App dev repositories"). It needs the app
+to be committed first, and it is refused in a worker's worktree, since it
+moves the workspace's own branch. Its result is one JSON line: `linked` is
+the expected `result`, and `problems` names anything it could not do (a
+repository of that name already on the account, say), which does not hold
+the build back; mention it to the user at the end rather than stopping. With
+sync off, skip this: an app is then just its directory, and it is linked
+when sync is enabled or at the next workspace update.
 
 ### Put a throwaway mock in front of the user (the confirmation gate; looped)
 
@@ -664,9 +689,9 @@ Two cases, two patterns:
 
 ### Everything the app owns lives in its directory
 
-`system/apps/<package>/` is the whole app: one directory that can be shared,
-installed in another workspace, and removed in one piece. Put everything that
-belongs to the app inside it:
+`system/apps/<package>/` is the whole app: one directory that can be shared
+(the `publish-app` skill), installed in another workspace (`install-app`),
+and removed in one piece. Put everything that belongs to the app inside it:
 
 - **A skill that belongs to the app** (one whose job is to drive this app) goes
   at `system/apps/<package>/skills/<skill-name>/SKILL.md`. Then run
@@ -731,8 +756,11 @@ key), the app brings older data forward itself when it starts: it looks at
 what is on disk and converts anything still in the old shape before it serves
 a request. Do not convert the data by hand and leave the app unable to read
 the old shape. The app may later be installed and updated in another
-workspace, whose data is still in the old shape and where nobody else knows
-what that shape was. Keep the conversion, and a test of it, in the app.
+workspace, where its data outlives its code: an update replaces the app's
+files and leaves `data/.apps/<name>/` as the older version wrote it, and
+nobody there knows what that shape was. Keep the conversion, and a test of
+it, in the app, and keep it for every shape a published version ever wrote,
+since an adopter can skip versions.
 
 ### Renaming an app
 
@@ -940,6 +968,9 @@ supervisorctl reread && supervisorctl update
 `app-install add` allocates the app's port, writes its record
 (`system/config/apps/<name>.toml`), and generates its program file
 (`system/supervisord.conf.d/<name>.conf`); it prints the port in its result.
+Commit the app, and link it when GitHub sync is on, exactly as for a
+scaffolded app ("Commit the new app, and link it when GitHub sync is on",
+above).
 The generated program registers the manifest and the port through
 `forward_port.py` before it starts the tool, and carries the
 `oom_tag_service.py user` prefix, so this user-created app is shed before any

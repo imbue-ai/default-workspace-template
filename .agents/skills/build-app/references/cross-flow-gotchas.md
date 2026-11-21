@@ -67,10 +67,25 @@ new WebSocket(scheme + "//" + location.host + "/socket");
 
 ## Multiple ports per app
 
-If your app listens on more than one port (rare, but happens with
-admin UIs or metrics endpoints), expose each as its own service
-(`<name>-admin`, `<name>-metrics`). `forward_port.py` only registers
-one URL per service name.
+An app has one port, the one the workspace allocates for it (`{port:main}`
+in its `app.toml`), and one registered URL, which is where its window
+opens. Do not register an extra port as a second app named `<name>-admin`
+or `<name>-metrics`: an app's name may not be another app's name followed by
+a hyphen and more, because those names belong to the app's own background
+programs, so the registration is refused.
+
+- **An extra surface** (an admin page, a metrics endpoint) is a path on the
+  app's one port (`/admin`, `/metrics`), served by the same process.
+- **A background program** the app needs beside its main one (a worker, a
+  poller, a queue consumer) is a `[[services]]` entry in its `app.toml`
+  (`role`, `command`, `args`, `env`). It runs as the supervisord program
+  `<name>-<role>`, generated like the app's own, and gets no window and no
+  port of its own; `{port:main}` in its `args` or `env` is the app's port,
+  for a program that calls the app.
+- **A wrapped tool that insists on a second listening port** keeps that port
+  on loopback and unregistered. Nothing allocates it, so give the tool a
+  port well away from the range the workspace hands out (8080 upwards), and
+  reach it only from inside the workspace.
 
 ## Port already in use
 

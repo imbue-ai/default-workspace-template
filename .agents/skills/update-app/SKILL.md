@@ -26,6 +26,10 @@ refreshed. The live change loop below handles both.
 If you're doing something *other* than editing an existing app or service:
 
 - **Creating a new app** -> `build-app`.
+- **Bringing in a newer version of an app that was installed from someone
+  else's repository** -> `update-installed-app`. Changing such an app yourself
+  is this skill, as for any app; the next version is then merged over your
+  change.
 - **Arranging windows** (open/place/focus/minimize/close) -> `manage-desktop`.
 
 ## Match the flow to the scope of the change
@@ -533,8 +537,19 @@ An app the workspace built or installed (one with a record under
 `uv run --no-sync app-install uninstall <name>`: it removes the app's
 directory, its record, its generated program files and skill links, and its
 registry row, has supervisord drop its programs, and commits the removal.
-Do not take such an app apart by hand; `build-app`'s `cleanup.md` reference
-has the full teardown.
+Do not take such an app apart by hand. Its one JSON line says what happened:
+`removed_paths` is what left the tree, `problems` is what it could not do
+outside the tree (supervisord not reached, say), which is yours to finish,
+and the rest is what was left on purpose: `kept_paths` (the app's stored
+data, each secret file it declared, and the copy of its data an update
+made), `kept_share_grants` (who it was shared with, which an app of the same
+name added later inherits), `kept_routine_state` (its routines' switches,
+schedules and run history), `kept_repositories` (its repositories on GitHub,
+left exactly as they are), and `dependents` (the apps still here that expect
+it). Tell the user about each that is not empty. `build-app`'s `cleanup.md`
+reference has the full teardown, including what to check before removing an
+app that other things use. The same command removes an installed app (the
+`install-app` skill) as it does one built here.
 
 Dropping any other service is the definition-level case of step 2: remove its
 `[program:<name>]` block, `supervisorctl reread && supervisorctl update`,
