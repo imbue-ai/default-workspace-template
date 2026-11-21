@@ -21,6 +21,7 @@ from routines.primitives import RunTrigger
 from routines.service import RoutinesService
 from routines.testing import TEST_NOW
 from routines.testing import build_test_service
+from routines.testing import make_user_app
 from routines.testing import wait_for_last_run
 from routines.testing import write_app_definition
 from routines_app.mock_fix_chat_test import RecordingFixChatStarter
@@ -29,6 +30,20 @@ from routines_app.server import create_app
 MANIFEST_PATH = Path(__file__).resolve().parents[2] / "app.toml"
 # A schedule change as the page sends it: every field, the unused ones null.
 DAILY_SCHEDULE_BODY: dict[str, object] = {"every": "1d", "at": "07:30", "days": [], "day_of_month": None, "once": None}
+# A routine as an app ships it in its own directory: hourly, and naming no app.
+SHIPPED_HOURLY_TOML = 'title = "Inbox status"\nwhat = "Checks mail."\nevery = "1h"\ncommand = ["true"]\n'
+INBOX_STATUS = RoutineId("inbox-status")
+# What a row says of a routine under system/routines, which no app owns.
+NO_OWNER: dict[str, object] = {
+    "owning_app": None,
+    "is_schedule_only": False,
+    "has_schedule_override": False,
+    "app_schedule_text": None,
+}
+
+
+def _owner_of(row: dict[str, object]) -> dict[str, object]:
+    return {field: row[field] for field in NO_OWNER}
 
 
 def test_the_api_document_describes_every_route(client: FlaskClient) -> None:
@@ -212,6 +227,90 @@ def test_a_routine_an_app_owns_is_rescheduled_without_its_file_changing_and_cann
     assert path.read_text() == shipped
 
 
+def test_a_row_names_the_app_whose_directory_holds_the_file_and_says_only_its_schedule_can_change(
+    client: FlaskClient, service: RoutinesService, sync_routine: RoutineId
+) -> None:
+    """The owner comes from where the file is, not from the definition: the shipped file names no app, and the
+    workspace's own routine stays the workspace's."""
+    app_package = make_user_app(service.paths, "inbox-status")
+    write_app_definition(service.paths, app_package, INBOX_STATUS, SHIPPED_HOURLY_TOML)
+    owned = {
+        "owning_app": "inbox-status",
+        "is_schedule_only": True,
+        "has_schedule_override": False,
+        "app_schedule_text": None,
+    }
+
+    rows = {row["routine_id"]: row for row in client.get("/api/routines").get_json()["routines"]}
+
+    assert rows["inbox-status"]["app"] is None
+    assert _owner_of(rows["inbox-status"]) == owned
+    assert _owner_of(rows[str(sync_routine)]) == NO_OWNER
+    assert _owner_of(client.get("/api/routines/inbox-status").get_json()["row"]) == owned
+    assert _owner_of(client.get(f"/api/routines/{sync_routine}").get_json()["row"]) == NO_OWNER
+    switched = client.put("/api/routines/inbox-status/enabled", json={"is_enabled": False})
+    assert _owner_of(switched.get_json()) == owned
+
+
+def test_an_owning_app_no_record_names_goes_by_its_directory(client: FlaskClient, service: RoutinesService) -> None:
+    """A directory under system/apps with no record of its own, and every directory while a record is unreadable."""
+    write_app_definition(service.paths, "inbox_status", INBOX_STATUS, SHIPPED_HOURLY_TOML)
+
+    assert client.get("/api/routines/inbox-status").get_json()["row"]["owning_app"] == "inbox_status"
+
+    recorded = make_user_app(service.paths, "mail-digest")
+    write_app_definition(service.paths, recorded, RoutineId("mail-digest"), SHIPPED_HOURLY_TOML)
+    assert client.get("/api/routines/mail-digest").get_json()["row"]["owning_app"] == "mail-digest"
+    (service.paths.repo_root / "system" / "config" / "apps" / "broken.toml").write_text("name = [not toml")
+    assert client.get("/api/routines/mail-digest").get_json()["row"]["owning_app"] == "mail_digest"
+
+
+def test_going_back_to_the_apps_schedule_drops_the_users_and_leaves_the_file_alone(
+    client: FlaskClient, service: RoutinesService, repository: RecordingRepository
+) -> None:
+    path = write_app_definition(service.paths, "inbox_status", INBOX_STATUS, SHIPPED_HOURLY_TOML)
+    rescheduled = client.put("/api/routines/inbox-status/schedule", json=DAILY_SCHEDULE_BODY).get_json()
+    assert (rescheduled["has_schedule_override"], rescheduled["app_schedule_text"]) == (True, "Every hour")
+    assert rescheduled["schedule_text"] == "Every day at 7:30 am"
+    assert service.states.read(INBOX_STATUS).schedule_override is not None
+
+    cleared = client.delete("/api/routines/inbox-status/schedule")
+
+    assert cleared.status_code == 200, cleared.get_json()
+    row = cleared.get_json()
+    assert (row["has_schedule_override"], row["app_schedule_text"]) == (False, None)
+    assert (row["schedule_text"], row["is_schedule_only"]) == ("Every hour", True)
+    assert service.states.read(INBOX_STATUS).schedule_override is None
+    detail = client.get("/api/routines/inbox-status").get_json()
+    assert (detail["definition"]["every"], detail["definition"]["at"]) == ("1h", None)
+    assert path.read_text() == SHIPPED_HOURLY_TOML
+    assert repository.commits == []
+    # With none in place there is nothing to drop, and the answer is the same row.
+    again = client.delete("/api/routines/inbox-status/schedule")
+    assert (again.status_code, again.get_json()) == (200, row)
+
+
+def test_only_a_readable_routine_an_app_owns_has_an_apps_schedule_to_go_back_to(
+    client: FlaskClient, service: RoutinesService, repository: RecordingRepository, sync_routine: RoutineId
+) -> None:
+    own_file = service.paths.workspace_definition_path(sync_routine)
+    as_written = own_file.read_text()
+    commits_before = list(repository.commits)
+
+    not_an_apps = client.delete(f"/api/routines/{sync_routine}/schedule")
+
+    assert not_an_apps.status_code == 409
+    assert "belongs to no app" in not_an_apps.get_json()["detail"]
+    assert own_file.read_text() == as_written
+    assert repository.commits == commits_before
+    assert client.delete("/api/routines/nothing/schedule").status_code == 404
+    assert client.delete("/api/routines/Not An Id/schedule").status_code == 404
+    write_app_definition(service.paths, "inbox_status", INBOX_STATUS, "title = [not toml")
+    broken = client.delete("/api/routines/inbox-status/schedule")
+    assert broken.status_code == 400
+    assert "is broken" in broken.get_json()["detail"]
+
+
 def test_a_removal_that_cannot_delete_the_state_says_so_and_keeps_the_routine(
     git_paths: RoutinesPaths,
     repository: RecordingRepository,
@@ -292,6 +391,7 @@ def test_a_preview_refuses_every_change(
     assert preview_client.put(f"/api/routines/{sync_routine}/schedule", json=DAILY_SCHEDULE_BODY).status_code == 403
     assert preview_client.post(f"/api/routines/{sync_routine}/fix", json={}).status_code == 403
     assert preview_client.delete(f"/api/routines/{sync_routine}").status_code == 403
+    assert preview_client.delete(f"/api/routines/{sync_routine}/schedule").status_code == 403
     assert service.detail(sync_routine).row.is_enabled
     assert service.detail(sync_routine).row.schedule_text == "Every hour"
     assert fix_chat_starter.started == []

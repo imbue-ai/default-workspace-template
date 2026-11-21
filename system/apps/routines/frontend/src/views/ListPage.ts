@@ -8,7 +8,7 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 
-import type { RoutineListing, RoutineRow } from "../models/api";
+import { appOf, type RoutineListing, type RoutineRow } from "../models/api";
 import { routinePathOf } from "../models/routing";
 import { healthPill } from "./healthPill";
 
@@ -26,9 +26,10 @@ export const ADD_PREFIX = "Add a routine: ";
 export function groupRows(rows: readonly RoutineRow[], appNames: Record<string, string>): [string, RoutineRow[]][] {
   const byApp = new Map<string | null, RoutineRow[]>();
   for (const row of rows) {
-    const group = byApp.get(row.app) ?? [];
+    const app = appOf(row);
+    const group = byApp.get(app) ?? [];
     group.push(row);
-    byApp.set(row.app, group);
+    byApp.set(app, group);
   }
   const ordered: [string, RoutineRow[]][] = [];
   for (const [app, members] of byApp) {

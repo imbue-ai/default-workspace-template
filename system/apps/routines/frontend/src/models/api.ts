@@ -50,6 +50,20 @@ export interface RoutineRow {
   skill: string | null;
   command: string[];
   chat_id: string | null;
+  /** The app whose directory holds the definition file, by name; null for a routine the workspace owns. */
+  owning_app: string | null;
+  /** Whether the schedule and the on/off switch are all that can be changed here: the rest is the app's. */
+  is_schedule_only: boolean;
+  /** Whether the routine runs on a schedule the user gave it in place of its app's. */
+  has_schedule_override: boolean;
+  /** The app's own schedule in words while the user's is in its place; null otherwise. */
+  app_schedule_text: string | null;
+}
+
+/** The app a routine is shown under: the one that owns its definition file, else the one its definition
+ * names for grouping. */
+export function appOf(row: RoutineRow): string | null {
+  return row.owning_app ?? row.app;
 }
 
 export interface ListingSummary {
@@ -145,6 +159,11 @@ export function setEnabled(routineId: string, isEnabled: boolean): Promise<Routi
 
 export function setSchedule(routineId: string, change: ScheduleChange): Promise<RoutineRow> {
   return requestJson("PUT", `/api/routines/${encode(routineId)}/schedule`, change);
+}
+
+/** Go back to the schedule the routine's app gives it, dropping the one the user gave it. */
+export function clearScheduleOverride(routineId: string): Promise<RoutineRow> {
+  return requestJson("DELETE", `/api/routines/${encode(routineId)}/schedule`);
 }
 
 export function openFixChat(routineId: string): Promise<FixChatResponse> {

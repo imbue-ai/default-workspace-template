@@ -19,6 +19,7 @@ work unmodified.
 
 import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -32,7 +33,9 @@ from pydantic import ValidationError
 from werkzeug.serving import run_simple
 
 from app_manifest.content_security_policy import attach_document_policy
+from app_manifest.errors import RecordLoadError
 from app_manifest.primitives import AppName
+from app_manifest.records import load_all_records
 from app_manifest.registry import read_origin_label
 from imbue.app_sdk.api_schema import DEFAULT_API_SCHEMA_PATH
 from imbue.app_sdk.api_schema import RouteModels
@@ -45,14 +48,14 @@ from imbue.app_sdk.routes import model_response
 from imbue.app_sdk.routes import parse_request_body
 from imbue.imbue_common.ids import InvalidRandomIdError
 from imbue.imbue_common.logging import setup_logging
-from routines.data_types import RoutineDetail
-from routines.data_types import RoutineListing
+from routines.data_types import LoadedRoutine
 from routines.data_types import RoutineRow
 from routines.data_types import RunDetail
 from routines.data_types import RunStartReceipt
 from routines.data_types import ScheduleChange
 from routines.definitions import describe_validation_error
 from routines.errors import AppOwnedRoutineError
+from routines.errors import BrokenDefinitionError
 from routines.errors import DefinitionCommitError
 from routines.errors import DefinitionValidationError
 from routines.errors import DuplicateRoutineError
@@ -65,14 +68,21 @@ from routines.fix_brief import build_fix_brief
 from routines.fix_brief import fix_chat_name
 from routines.paths import RoutinesPaths
 from routines.paths import paths_from_environment
+from routines.presentation import app_schedule_text
+from routines.presentation import has_schedule_override
+from routines.presentation import is_schedule_only
 from routines.primitives import RoutineId
 from routines.primitives import RunId
 from routines.registry import CHAT_APP_NAME
+from routines.schedule import schedule_of
 from routines.service import RoutinesService
 from routines.service import build_service
 from routines_app.data_types import EnabledRequest
 from routines_app.data_types import FixChatResponse
 from routines_app.data_types import HealthResponse
+from routines_app.data_types import RoutineDetailWithOwner
+from routines_app.data_types import RoutineListingWithOwners
+from routines_app.data_types import RoutineRowWithOwner
 from routines_app.documents import inject_chat_label_meta_tag
 from routines_app.errors import FixChatError
 from routines_app.fix_chat import ChatAppFixChatStarter
@@ -117,17 +127,18 @@ ROUTE_TABLE: RouteTable = {
     ("GET", "/{routine_id}/runs/{run_id}/log"): SchemalessRoute(reason="a run's whole-log page"),
     ("GET", "/assets/{filename}"): SchemalessRoute(reason="one file of the pages' built bundle"),
     ("GET", HEALTH_PATH): RouteModels(response_model=HealthResponse),
-    ("GET", "/api/routines"): RouteModels(response_model=RoutineListing),
-    ("GET", "/api/routines/{routine_id}"): RouteModels(response_model=RoutineDetail),
+    ("GET", "/api/routines"): RouteModels(response_model=RoutineListingWithOwners),
+    ("GET", "/api/routines/{routine_id}"): RouteModels(response_model=RoutineDetailWithOwner),
     ("GET", "/api/routines/{routine_id}/runs/{run_id}"): RouteModels(response_model=RunDetail),
     ("GET", "/api/routines/{routine_id}/runs/{run_id}/log"): SchemalessRoute(reason="the run's log, as text"),
     ("POST", "/api/routines/{routine_id}/run"): RouteModels(response_model=RunStartReceipt),
     ("PUT", "/api/routines/{routine_id}/enabled"): RouteModels(
-        request_model=EnabledRequest, response_model=RoutineRow
+        request_model=EnabledRequest, response_model=RoutineRowWithOwner
     ),
     ("PUT", "/api/routines/{routine_id}/schedule"): RouteModels(
-        request_model=ScheduleChange, response_model=RoutineRow
+        request_model=ScheduleChange, response_model=RoutineRowWithOwner
     ),
+    ("DELETE", "/api/routines/{routine_id}/schedule"): RouteModels(response_model=RoutineRowWithOwner),
     ("POST", "/api/routines/{routine_id}/fix"): RouteModels(response_model=FixChatResponse),
     ("DELETE", "/api/routines/{routine_id}"): RouteModels(response_model=None, success_status=HTTP_NO_CONTENT),
 }
@@ -145,6 +156,50 @@ def _run_id(raw: str) -> RunId | None:
         return RunId(raw)
     except InvalidRandomIdError:
         return None
+
+
+def _app_names_by_package(repo_root: Path) -> dict[str, str]:
+    """The name of each user app by its directory under system/apps, as the workspace's records of the apps have
+    them; empty when a record cannot be read, which names every owning app by its directory."""
+    try:
+        records = load_all_records(repo_root)
+    except RecordLoadError as e:
+        logger.warning("Naming the apps that own routines by their directories alone: {}", e)
+        return {}
+    return {record.package: str(record.name) for record in records}
+
+
+def _row_with_owner(
+    service: RoutinesService,
+    row: RoutineRow,
+    loaded: LoadedRoutine | None,
+    app_names_by_package: Mapping[str, str],
+) -> RoutineRowWithOwner:
+    """The row with the app its definition file belongs to. ``loaded`` is the routine as the store has it; None
+    for one that went between the row being built and this read, which shows as the workspace's own until the
+    next poll drops it."""
+    if loaded is None or loaded.app_package is None:
+        return RoutineRowWithOwner(
+            **dict(row), owning_app=None, is_schedule_only=False, has_schedule_override=False, app_schedule_text=None
+        )
+    state = service.states.read(row.routine_id)
+    return RoutineRowWithOwner(
+        **dict(row),
+        owning_app=app_names_by_package.get(loaded.app_package, loaded.app_package),
+        is_schedule_only=is_schedule_only(loaded),
+        has_schedule_override=has_schedule_override(loaded, state),
+        app_schedule_text=app_schedule_text(loaded, state, service.clock.local_zone()),
+    )
+
+
+def _owned_row(service: RoutinesService, routine_id: RoutineId) -> RoutineRowWithOwner:
+    """One routine's row with its owning app; raises RoutineNotFoundError for a routine there is none of."""
+    return _row_with_owner(
+        service,
+        service.row(routine_id),
+        service.definitions.load(routine_id),
+        _app_names_by_package(service.paths.repo_root),
+    )
 
 
 def create_app(
@@ -210,21 +265,48 @@ def create_app(
 
     @app.get("/api/routines")
     def listing() -> ResponseReturnValue:
-        """Every routine with its health, schedule, next run and last run, problems first."""
-        response = model_response(service.listing())
+        """Every routine with its health, schedule, next run, last run and owning app, problems first."""
+        listed = service.listing()
+        loaded_by_id = {loaded.routine_id: loaded for loaded in service.definitions.list_routines()}
+        app_names_by_package = _app_names_by_package(service.paths.repo_root)
+        response = model_response(
+            RoutineListingWithOwners(
+                routines=tuple(
+                    _row_with_owner(service, row, loaded_by_id.get(row.routine_id), app_names_by_package)
+                    for row in listed.routines
+                ),
+                summary=listed.summary,
+                app_names=listed.app_names,
+                generated_at=listed.generated_at,
+            )
+        )
         response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.get("/api/routines/<routine_id>")
     def detail(routine_id: str) -> ResponseReturnValue:
-        """One routine with its definition and recent runs."""
+        """One routine with its owning app, its definition and recent runs."""
         wanted = _routine_id(routine_id)
         if wanted is None:
             return not_found(routine_id)
         try:
-            response = model_response(service.detail(wanted))
+            routine_detail = service.detail(wanted)
+            row = _row_with_owner(
+                service,
+                routine_detail.row,
+                service.definitions.load(wanted),
+                _app_names_by_package(service.paths.repo_root),
+            )
         except RoutineNotFoundError:
             return not_found(routine_id)
+        response = model_response(
+            RoutineDetailWithOwner(
+                row=row,
+                definition=routine_detail.definition,
+                definition_path=routine_detail.definition_path,
+                runs=routine_detail.runs,
+            )
+        )
         response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -290,7 +372,7 @@ def create_app(
         body = parse_request_body(EnabledRequest)
         try:
             service.set_enabled(wanted, body.is_enabled)
-            return model_response(service.row(wanted))
+            return model_response(_owned_row(service, wanted))
         except RoutineNotFoundError:
             return not_found(routine_id)
 
@@ -306,7 +388,7 @@ def create_app(
         change = parse_request_body(ScheduleChange)
         try:
             service.change_schedule(wanted, change)
-            return model_response(service.row(wanted))
+            return model_response(_owned_row(service, wanted))
         except RoutineNotFoundError:
             return not_found(routine_id)
         except ValidationError as e:
@@ -315,6 +397,32 @@ def create_app(
             return error_response(str(e), HTTP_BAD_REQUEST)
         except DefinitionCommitError as e:
             return error_response(str(e), HTTP_CONFLICT)
+
+    @app.delete("/api/routines/<routine_id>/schedule")
+    def clear_schedule(routine_id: str) -> ResponseReturnValue:
+        """Go back to the schedule the routine's app gives it, dropping the one the user gave it; answers the
+        routine as the list shows it, the same when there was none to drop. 409 for a routine no app owns, whose
+        file's schedule is the only one it has, and 400 for one whose definition does not load."""
+        wanted = _routine_id(routine_id)
+        if wanted is None:
+            return not_found(routine_id)
+        if is_preview:
+            return error_response(PREVIEW_REFUSAL, HTTP_FORBIDDEN)
+        try:
+            loaded = service.definitions.load(wanted)
+            if not is_schedule_only(loaded):
+                return error_response(
+                    f"{wanted} belongs to no app, so the schedule in its file is the only one it has.", HTTP_CONFLICT
+                )
+            if loaded.definition is None:
+                return error_response(str(BrokenDefinitionError(wanted, loaded.error)), HTTP_BAD_REQUEST)
+            # Rescheduling to exactly the file's schedule is how the service drops the user's.
+            service.change_schedule(wanted, schedule_of(loaded.definition))
+            return model_response(_owned_row(service, wanted))
+        except RoutineNotFoundError:
+            return not_found(routine_id)
+        except DefinitionValidationError as e:
+            return error_response(str(e), HTTP_BAD_REQUEST)
 
     @app.post("/api/routines/<routine_id>/fix")
     def fix(routine_id: str) -> ResponseReturnValue:

@@ -9,6 +9,7 @@ import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 
 import {
+  clearScheduleOverride,
   fetchDetail,
   fetchListing,
   fetchLog,
@@ -204,6 +205,15 @@ export class AppModel {
     }, "Couldn't change the schedule");
   }
 
+  /** Drop the user's schedule for a routine an app owns, so it runs on the app's again. */
+  useAppSchedule(): void {
+    if (this.page.kind !== "routine") return;
+    const routineId = this.page.routineId;
+    void this.actAndReload(async () => {
+      await clearScheduleOverride(routineId);
+    }, "Couldn't go back to the app's schedule");
+  }
+
   fix(): void {
     if (this.page.kind !== "routine") return;
     const routineId = this.page.routineId;
@@ -276,6 +286,7 @@ export const App: m.Component<AppAttrs> = {
           onRunNow: () => model.runNow(),
           onToggleEnabled: () => model.toggleEnabled(),
           onChangeSchedule: () => model.openScheduleEditor(),
+          onUseAppSchedule: () => model.useAppSchedule(),
           onFix: () => model.fix(),
           onRemove: () => model.remove(),
         });

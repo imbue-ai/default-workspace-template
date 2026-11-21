@@ -4,7 +4,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { listingOf, rowOf, runOf } from "../testing/records";
+import { appOwnedRowOf, listingOf, rowOf, runOf } from "../testing/records";
 import { ADD_PREFIX, ListPage, groupRows } from "./ListPage";
 
 afterEach(() => unmountViews());
@@ -21,6 +21,20 @@ describe("groupRows", () => {
       ["Daily News", ["b"]],
       ["other", ["c"]],
       ["Workspace", ["a"]],
+    ]);
+  });
+
+  it("puts a routine an app owns under that app, whatever its definition names", () => {
+    const rows = [
+      appOwnedRowOf({ routine_id: "a", app: null }),
+      appOwnedRowOf({ routine_id: "b", app: "mail" }),
+      rowOf({ routine_id: "c", app: "inbox-status" }),
+      rowOf({ routine_id: "d", app: null }),
+    ];
+    const groups = groupRows(rows, { "inbox-status": "Inbox Status" });
+    expect(groups.map(([heading, members]) => [heading, members.map((r) => r.routine_id)])).toEqual([
+      ["Inbox Status", ["a", "b", "c"]],
+      ["Workspace", ["d"]],
     ]);
   });
 
