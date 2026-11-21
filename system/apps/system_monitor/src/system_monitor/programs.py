@@ -44,7 +44,6 @@ PROGRAM_NAMES = {
     "xvfb": "Virtual display",
     "terminal-pty": "Terminal",
     "owner-exec": "Web access",
-    "vm-exec-register": "Web access",
     "env-converge": "Environment setup",
 }
 
