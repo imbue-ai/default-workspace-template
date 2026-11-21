@@ -80,7 +80,11 @@ def sync_app_command(name: str) -> None:
         require_primary_checkout(repo_root)
         record = load_record(repo_root, name)
     except (AppSyncError, AppManifestError) as e:
-        click.echo(json.dumps({"result": "refused", "name": name, "detail": str(e)}))
+        click.echo(
+            json.dumps(
+                {"result": "refused", "name": name, "detail": str(e)}, sort_keys=True
+            )
+        )
         raise SystemExit(1) from e
     report = sync_app(repo_root, record, VisibilityLedger(), check_repo_visibility)
     fields = report.model_dump(mode="json", exclude={"state"})
