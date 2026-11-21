@@ -10,6 +10,7 @@ from app_manifest.selection import ChangedPathClass
 from app_manifest.selection import CreationReach
 from app_manifest.selection import SuiteSelection
 from app_manifest.selection import load_repo_layout
+from app_manifest.selection import read_projectless_user_apps
 from app_manifest.selection import render_command_line
 from app_manifest.selection import render_selection
 from app_manifest.selection import select_tests
@@ -838,3 +839,14 @@ def test_an_app_with_no_record_and_no_python_project_keeps_its_root_collected_te
     selection = _select(workspace, paths)
 
     assert _command_lines(selection) == [_ALWAYS_RUN, "uv run --no-sync pytest system/apps/wrapped", _BAND_CHECK]
+
+
+@pytest.mark.parametrize(("has_record", "expected"), [(True, ("system/apps/wrapped",)), (False, ())])
+def test_the_root_run_leaves_out_only_a_user_app_that_is_no_python_project(
+    workspace: Path, has_record: bool, expected: tuple[str, ...]
+) -> None:
+    # The notes app is a user app with a project of its own, which runs as its own pytest root.
+    _notes_as_a_user_app(workspace)
+    _wrapped_server(workspace, has_record=has_record)
+
+    assert read_projectless_user_apps(workspace) == expected

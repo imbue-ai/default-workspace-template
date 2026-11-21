@@ -430,6 +430,14 @@ def _projectless_user_apps(repo_root: Path, manifests: Sequence[LoadedManifest])
     ]
 
 
+def read_projectless_user_apps(repo_root: Path) -> tuple[str, ...]:
+    """The directories of the user apps that are no Python project, off the tree at ``repo_root``.
+    The root ``conftest.py`` keeps the root run from collecting them, so that the root run and
+    the selection leave the same test files out."""
+    repo_root = repo_root.resolve()
+    return tuple(_projectless_user_apps(repo_root, load_app_manifests(repo_root)))
+
+
 def load_repo_layout(repo_root: Path) -> RepoLayout:
     """Read everything the selection needs off the tree at ``repo_root``."""
     repo_root = repo_root.resolve()

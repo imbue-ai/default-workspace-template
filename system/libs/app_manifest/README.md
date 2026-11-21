@@ -465,7 +465,9 @@ environment units among the rest) is a path in that app's package. A user app
 with no `pyproject.toml` (a wrapped server) is no Python project: it has no
 venv to run a suite in, and no selected command names a test file it happens
 to hold, so a change to it selects the tests of what it references and the
-always-run set, and nothing of its own.
+always-run set, and nothing of its own. The root run leaves those test files
+out as well: the root `conftest.py` ignores the directories
+`read_projectless_user_apps` names.
 
 A path in no package, skill or npm package, that is not npm root
 configuration, a supervisord block, a user app's record or skill link,
