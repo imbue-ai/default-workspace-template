@@ -324,9 +324,16 @@ the topic `imbue-studio-app`. It then pushes the assembled tree as ONE commit
 on top of the last published one, and the tag `v<version>`. It never forces
 anything. Act on `result`:
 
-- `pushed`: the version is public. Keep `published_repo_url`. Each entry of
-  `problems` is a follow-up to mention (a tag that did not go, a setting that
-  did not take), not a failed publish. Go to step 7.
+- `pushed`: the version is public. Keep `published_repo_url`. Check
+  `is_tag_pushed` before going on. When it is false the version has no tag,
+  and whoever installs or updates the app is given the highest tag, so they
+  would keep getting the version before this one: run this step again now (it
+  sends only the tag), because step 7 ends the publish and nothing sends the
+  tag after it. If the tag still does not go, or `problems` says the
+  repository already has that tag (someone made it on GitHub, and it is never
+  moved), stop and tell the user, and run this step and step 7 once it is
+  sorted out. Every other entry of `problems` is a follow-up to mention (a
+  setting that did not take), not a failed publish. Then go to step 7.
 - `name_taken`: the account already has a repository of that name. Nothing
   was published. Go back to the scope gate for the name alone: agree another
   with the user, have the worker point the README's links at it, run step 4
