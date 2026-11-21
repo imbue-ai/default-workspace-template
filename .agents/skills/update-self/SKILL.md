@@ -819,7 +819,8 @@ resumes), and how to honor a rollback request are in
 not reported.** This holds for every update. When something of theirs does not
 work on the landed tree -- a user program not RUNNING after the restart
 (`supervisorctl status`), a user app that fails its health route, a user skill
-that no longer imports, a consumer the report names that the update broke:
+that no longer imports, a consumer the report names that the update broke, an
+app the report's follow-ups name (below):
 
 1. Say what you are fixing in one short chat line ("One of your apps didn't
    come back after the update -- fixing it now."). Nothing else changes in the
@@ -847,6 +848,39 @@ that no longer imports, a consumer the report names that the update broke:
 - **Rebuild-only flags** -- surface each as needing a workspace recreate,
   saying what the running workspace lacks until then; never imply they are
   live.
+- **The apps the workspace built or installed** -- the worker brought each
+  one's generated files up to the new template in its branch (its guide, 4b),
+  and reported, without holding the update for it, any app it could not: one
+  `app-install migrate` left `unconverted`, one `app-install regenerate`
+  refused, one `app-install check` found a problem in. Such an app still runs
+  as it did before the update. Dispatch a repair worker for each, as above,
+  with the JSON line the worker quoted; it brings the app's `app.toml` in
+  line with how the app really runs and converts or regenerates it again.
+
+  Then, **only when GitHub sync is enabled** (`test -f
+  data/system/github_sync.toml`), bring the apps' own repositories along.
+  This is yours and never the worker's: linking moves the workspace's own
+  branch, which a worker's worktree is not on, and it is refused there. From
+  the repo root of the live workspace, after the apply:
+
+  ```bash
+  uv run --no-sync app-install list
+  uv run --no-sync app-install link <name>             # each app with "state": "owned" and "is_linked": false
+  uv run --no-sync app-install link <name> --refresh   # each app with "state": "owned" and "is_linked": true
+  ```
+
+  The first gives an app that was never linked its starting point and its
+  private dev repository (the `github-sync` skill, "App dev repositories");
+  the second moves the starting point up to now, so the sync service's
+  passes stay fast as the workspace's history grows. `linked`, `refreshed`
+  and `already_linked` are all fine, and `is_full_clone_used` only says the
+  slow path was taken. Nothing here undoes or holds the update. A `refused`,
+  or an entry under `problems`, is handled like anything else of the user's
+  that is broken: one chat line and a repair worker with the command's JSON
+  line, unless it is something only the user can settle (a repository named
+  `<name>-dev` already on their account, a GitHub permission that is no
+  longer granted), which goes in the results message instead. With sync off
+  there is nothing to do: an app is then just its directory.
 - **User apps without `stop_when_no_windows`** -- the shell stops an app
   whose manifest declares `stop_when_no_windows = true` a minute after its
   last window closes and starts it again on the next request (the build-app
