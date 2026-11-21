@@ -6,7 +6,8 @@
  * and hidden by calling these. The shell's handshake alone goes down as a message (the root's
  * relay hands it on), since the page's app contract reads it. The page's replies --
  * ``shell:focused``, ``shell:open``, and the ``minds:`` messages -- travel up as messages, which
- * the root's relay forwards to the shell.
+ * the root's relay forwards to the shell. One call goes the other way: a page the root frames asks the root for
+ * the provider chooser its no-provider notice offers (``ChatRootEmbedApi``), since that chooser is the root's.
  */
 
 export interface ChatPageEmbedApi {
@@ -26,8 +27,27 @@ export interface ChatPageEmbedApi {
   focus(): void;
 }
 
+/** What the chat root exposes on its window for the chat pages it frames, which call in the same way. */
+export interface ChatRootEmbedApi {
+  /** Open the root's provider chooser for the chat on screen, which awaits its first send with nothing signed in
+   *  (``models/firstSendChooser.ts``): the chooser the root opens by itself, opened again from the chat's notice. */
+  chooseProviderForFirstSend(): void;
+}
+
 declare global {
   interface Window {
     chatPageEmbed?: ChatPageEmbedApi;
+    chatRootEmbed?: ChatRootEmbedApi;
+  }
+}
+
+/** The chat root framing this page, or null for a page the shell frames itself, or one visited directly. */
+export function framingChatRoot(): ChatRootEmbedApi | null {
+  if (typeof window === "undefined" || window.parent === window) return null;
+  try {
+    return window.parent.chatRootEmbed ?? null;
+  } catch {
+    // A parent of another origin (the shell's frame) cannot be read, and is no chat root.
+    return null;
   }
 }

@@ -1,0 +1,5 @@
+The seed route takes Imbue Studio's first-run body: a first-run seed opens the Main chat on the agent's welcome ("Hi, I'm your Studio agent...", what Studio is for, "How would you like to get started?"), and what the user told the first run about what they want Studio for goes ahead of the chat's first send for the agent, without being shown in the chat.
+
+A first-run workspace now opens on a full-window page, "Your own cloud computer, any AI": a tile per provider, each opening that provider's sign-in, the connected ones listed above "Add another", and Skip / Next. It is shown to the workspace's owner once; while it is owed, the chat's own provider dialog no longer opens by itself.
+
+Once a provider is connected on that page, Skip goes away and Next is the way on. Leaving the page with a provider connected starts the Main chat's agent at once, and it speaks first: about the (up to three) things the user said they want Studio for, or, with nothing said, that it is here and ready to help. The note that starts it is hidden from the chat.
