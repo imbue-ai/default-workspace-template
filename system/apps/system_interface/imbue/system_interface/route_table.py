@@ -1,14 +1,10 @@
 """What every route of the shell exchanges: the table its API document publishes and every parse and answer is
-checked against (``app_schema``)."""
+checked against (``imbue.app_sdk``)."""
 
 from typing import Final
 
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
-from app_schema.api_schema import AlternateResponse
-from app_schema.api_schema import RouteModels
-from app_schema.api_schema import RouteTable
-from app_schema.api_schema import SchemalessRoute
 from pydantic import BaseModel
 from workspace_layout.answers import ClientView
 from workspace_layout.answers import ClientsListing
@@ -40,6 +36,10 @@ from workspace_layout.shell_url import ROSTER_ROUTE
 from workspace_profile.manifest import KeybindingsMeResponse
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 
+from imbue.app_sdk.api_schema import AlternateResponse
+from imbue.app_sdk.api_schema import RouteModels
+from imbue.app_sdk.api_schema import RouteTable
+from imbue.app_sdk.api_schema import SchemalessRoute
 from imbue.system_interface.api_models import HeartbeatRequest
 from imbue.system_interface.api_models import HeartbeatResponse
 from imbue.system_interface.api_models import PresenceListing

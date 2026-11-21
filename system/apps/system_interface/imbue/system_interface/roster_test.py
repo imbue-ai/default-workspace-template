@@ -7,12 +7,12 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import UserId
 from workspace_layout.roster import PARTICIPANT_COLORS
 from workspace_layout.roster import RosterDocument
 
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.avatar.selection import AvatarSelectionStore

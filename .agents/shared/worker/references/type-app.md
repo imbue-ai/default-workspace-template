@@ -10,28 +10,58 @@ run and test a web frontend in isolation, see
 ## Where the source lives
 
 An app's footprint is its own directory, the supervisord program blocks that
-run it (each in its own `system/supervisord.conf.d/` drop-in), and the
-`[[references]]` its `app.toml` declares -- skills, scripts, docs, and other
-apps. It may be the only consumer of its references, or they may be shared.
+run it (each in its own `system/supervisord.conf.d/` drop-in), and its
+references: the skills, scripts, and docs elsewhere in the workspace that use
+it. It may be the only consumer of its references, or they may be shared.
 The scope file (`harden-creation.md`) is that footprint resolved to literal
 paths.
 
+An app the workspace built or installed has a record,
+`system/config/apps/<name>.toml`, which `app-install` keeps. Everything such an
+app owns lives in its own directory, and what the workspace holds for it
+outside that directory is the record and the files `app-install` generates.
+Never edit the record or a generated file by hand. A built-in app has no
+record.
+
 - The scaffolded lib: `system/apps/<package>/src/<package>/runner.py` (the Flask app
   and routes), plus its `pyproject.toml`, `README.md`, and
-  `test_<package>_ratchets.py`. This is the scope file's `primary`.
+  `test_<package>_ratchets.py`. This is the first entry of the scope file's
+  `primary`; an app with a record also lists its record and its skill links
+  there.
+- A skill the app owns lives at `system/apps/<package>/skills/<skill>/` and is
+  part of the app: harden it in the app's pass, never as a creation of its
+  own. `.agents/skills/<skill>` is a link to it that `app-install` generates.
+  Edit the files under the app's directory: git reports a change there, and
+  reports the link as one path, never a change through it. `skill:<skill>`
+  names the app, so a pass names the app once, as `app:<name>`. The app's
+  routines (`routines/`) and environment units (`env.d/`) live in its
+  directory the same way.
 - The app's program entry at `system/supervisord.conf.d/<name>.conf` -- you
-  normally do not touch it; the scaffold created it. The app is a standalone uv
+  do not touch it. For an app with a record it is generated from `app.toml`
+  and the record: change the manifest and run `uv run --no-sync app-install
+  regenerate <name>`. The app is a standalone uv
   project with its own `uv.lock` and `.venv` (`uv add` in its directory changes
   its dependencies), so the root `pyproject.toml` and `uv.lock` need no entry.
-- A background service co-owned by the app (a `<app>-<role>` program) also
+- A background service the app owns (a `<app>-<role>` program) also
   lives in the app's folder; treat it as part of the app, and its
   `[program:<app>-<role>]` block as one more `wiring` section beside the app's
-  own.
-- The manifest's `[[references]]`: the skills, scripts, and docs built for this
+  own. An app with a record declares it as a `[[services]]` entry in its
+  `app.toml`, and its program file is generated like the app's own. A
+  `[wiring]` table is read only in a built-in app's manifest.
+- The references: the skills, scripts, and docs built for this
   app that sit outside its directory, each with a `note` naming the surface it
-  uses. A change that lands outside the footprint -- `diff.outside_footprint` in
-  the scope file names it -- is registered here when the file belongs to the
-  app, rather than left unclaimed.
+  uses. For an app with a record they are the `[[references]]` entries of the
+  record; `[[references]]` in its `app.toml` is not read, so add none there.
+  For a built-in app they are the `[[references]]` entries of its `app.toml`.
+  A change that lands outside the footprint -- `diff.outside_footprint` in
+  the scope file names it -- is registered there when the file belongs to the
+  app, rather than left unclaimed. When the app has a record, do not write the
+  entry into the record yourself: name the file in your report under `Outside
+  footprint:`, saying it belongs to the app.
+- `[scope] exclude` in the `app.toml` of an app with a record is relative to
+  the app's directory (`seed/**`, not `system/apps/<package>/seed/**`), so the
+  manifest means the same in every workspace the app is installed into. A
+  built-in app's globs are relative to the repo root.
 
 ## Running and testing
 
@@ -61,12 +91,16 @@ App specifics:
   uv run --no-sync pytest system/apps/<package>           # a built-in app
   ```
 
-  Its pages import the shell's built modules, which a fresh worktree lacks
-  (the shell's `static/` is gitignored), so build them once before its
-  browser tests: `(cd system && npm ci && npm run build)`.
+  Its pages import the shell's two browser modules. An app built on the app
+  SDK serves them by fetching them from the running shell
+  (`register_shell_module_routes`) and answers 404 for both when no shell
+  runs, so its pages load without the shell's features. An app whose
+  `runner.py` reads them from the shell's `static/` directory instead, which
+  is gitignored and so missing from a fresh worktree, needs them built once
+  before its browser tests: `(cd system && npm ci && npm run build)`.
 
   The gate is `harden-creation.md`'s "The test gate": `select-tests` turns the
-  app's `[[references]]` into the suites that exercise them (a referenced
+  app's references into the suites that exercise them (a referenced
   skill's tests run when the app's surface moves), along with everything else
   the change reaches.
 
@@ -142,15 +176,15 @@ adds `user_id` and `email`; a visiting agent adds `agent_id`, `agent_name` and
 with no header is the owner's, which is safe only from loopback under a
 loopback `Host`. Every built-in app installs a guard for that and the scaffold
 does not, so add `install_request_guard(app, exempt_rules=frozenset())` from
-`app_schema.request_guard` right after the app is created, ahead of every
-other request hook (`system/libs/app_schema/README.md`; `exempt_rules` names a
+`imbue.app_sdk.request_guard` right after the app is created, ahead of every
+other request hook (`exempt_rules` names a
 route meant for pages of other origins). It answers 403 to a page of another
 origin and to a header-less request from anywhere else. A header that does
 not parse is never read as the owner's: `parse_identity_header` raises on it
 and the guard answers that with a 400, so a route that reads the identity
 answers 400, and a route that never reads it does not see the difference.
-Read the identity with `workspace_layout.identity`, as the shell and the chat
-app do; it comes with `app-schema`. Use `parse_identity_header`,
+Read the identity with `imbue.app_sdk.identity`, as the shell and the chat
+app do; it is part of the app SDK the app already depends on. Use `parse_identity_header`,
 `is_owner_participant`, and `participant_key_of`, which names the requester
 `user:<id>`, `agent:<id>`, or `owner`. Locally the header looks the same, so
 the test client exercises all of this without turning sharing on.
@@ -211,7 +245,7 @@ an owner-only route answers both 403 and still works for the owner and for a
 request with no header, a route that reads the identity answers 400 to a
 header that does not parse, saved markup comes back inert, a change records
 the visitor's participant key, and the access log gains its line. Assert the
-guard with `app_schema.testing`'s
+guard with `imbue.app_sdk.app_testing`'s
 `assert_request_guard_refuses_unknown_provenance` on one of the app's reads.
 
 ## Critical apps

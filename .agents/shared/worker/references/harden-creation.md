@@ -95,11 +95,16 @@ edit is invisible to it).
 
 A non-empty `diff.outside_footprint` in that final scope file is a claim to
 settle before you report. For each path, either add a `[[references]]` entry to
-the owning app's `app.toml` -- when the file genuinely belongs to it -- or name
-it in your final report under `Outside footprint:`, one line each on why it
-changed on this branch. A skill run's one sanctioned edit inside an app
-directory, the `[[references]]` entry it adds to that app's manifest, sits
-under the skill's `context` and is counted as inside the footprint.
+the owning app's `app.toml` -- when the file genuinely belongs to it and the
+app is built in -- or name it in your final report under `Outside footprint:`,
+one line each on why it changed on this branch. An app the workspace built or
+installed keeps its references in its record
+(`system/config/apps/<name>.toml`), and its manifest is refused with
+`[[references]]` in it: write neither, and name the file in the report, saying
+which app it belongs to (`type-app.md`). A skill run's one sanctioned edit
+inside a built-in app's directory, the `[[references]]` entry it adds to that
+app's manifest, sits under the skill's `context` and is counted as inside the
+footprint.
 
 ## Carried work from a superseded pass
 
@@ -390,9 +395,10 @@ those shows is invisible to it. When you have a concrete reason to think a
 suite it left out can observe your change (it runs your script as a
 subprocess, calls your service over HTTP, reads a file your change writes),
 run that suite too. When that suite is an app the workspace built and the path
-lies outside the app, declare the coupling as part of your change: add the
-path to the app's `app.toml` as a `[[references]]` entry, so the next change
-to it selects the app without anyone having to notice. When the suite is
+lies outside the app, the coupling belongs in the app's record, which you do
+not write: name the path in your report under `Outside footprint:`, saying
+which app it belongs to (`type-app.md`), so it is registered and the next
+change to it selects the app without anyone having to notice. When the suite is
 built-in, leave its declarations alone: a local edit to a built-in file only
 makes divergence for the next update, and a reference would widen a built-in
 app's footprint into other units' files. Such a coupling is a built-in defect

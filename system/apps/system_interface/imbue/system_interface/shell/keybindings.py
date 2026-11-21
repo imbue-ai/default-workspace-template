@@ -19,7 +19,6 @@ from typing import Final
 from app_manifest.manifest import KeybindingAction
 from loguru import logger
 from pydantic import Field
-from workspace_layout.identity import RequestIdentity
 from workspace_profile.keybindings import keybinding_assignment
 from workspace_profile.keybindings import with_keybinding_assignment
 from workspace_profile.keybindings import without_keybinding_assignment
@@ -32,6 +31,7 @@ from workspace_profile.overrides import write_user_override_values
 from workspace_profile.resolve import resolve_request_user_id
 from workspace_profile.snapshot import WorkspaceProfileSnapshot
 
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 

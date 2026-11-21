@@ -6,8 +6,6 @@ import os
 from enum import auto
 from typing import Final
 
-from app_schema.routes import model_response
-from app_schema.routes import parse_request_body
 from flask import Flask
 from flask.typing import ResponseReturnValue
 from latchkey_access.gateway import GatewayAccess
@@ -20,6 +18,8 @@ from workspace_profile.manifest import resolve_keybindings_me_response
 from workspace_profile.resolve import resolve_request_user_id
 from workspace_profile.snapshot import load_workspace_profile_snapshot
 
+from imbue.app_sdk.routes import model_response
+from imbue.app_sdk.routes import parse_request_body
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.app_context import get_state

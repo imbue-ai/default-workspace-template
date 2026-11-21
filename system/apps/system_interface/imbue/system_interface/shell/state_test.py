@@ -16,8 +16,6 @@ import pytest
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from pydantic import ValidationError
-from workspace_layout.identity import ANONYMOUS_OWNER
-from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import UserId
@@ -32,6 +30,8 @@ from workspace_themes.contract import WORKSPACE_THEMES_DIRECTORY
 from workspace_themes.testing import write_standard_theme
 from workspace_themes.testing import write_test_theme
 
+from imbue.app_sdk.identity import ANONYMOUS_OWNER
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.profiles import ProfileResolver

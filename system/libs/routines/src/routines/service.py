@@ -11,6 +11,7 @@ from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from routines.chat_app import HttpChatApp
 from routines.clock import SystemClock
+from routines.data_types import LoadedRoutine
 from routines.data_types import RoutineDefinition
 from routines.data_types import RoutineDetail
 from routines.data_types import RoutineListing
@@ -21,8 +22,11 @@ from routines.data_types import RunResult
 from routines.data_types import RunStartReceipt
 from routines.data_types import ScheduleChange
 from routines.definitions import FileDefinitionStore
+from routines.errors import AppOwnedRoutineError
+from routines.errors import BrokenDefinitionError
 from routines.errors import ChatAppError
 from routines.errors import DefinitionValidationError
+from routines.errors import DuplicateRoutineError
 from routines.errors import RunInFlightError
 from routines.errors import RunNotFoundError
 from routines.interfaces import ChatAppInterface
@@ -48,6 +52,10 @@ from routines.runner import Runner
 from routines.runner import is_run_process_alive
 from routines.runner import read_result
 from routines.runner import spawn_run_process
+from routines.schedule import apply_schedule
+from routines.schedule import effective_routine
+from routines.schedule import is_same_schedule
+from routines.schedule import schedule_of
 from routines.state import FileStateStore
 from routines.tails import read_tail
 
@@ -88,15 +96,20 @@ class RoutinesService(MutableModel):
             self.clock.local_zone(),
         )
 
+    def effective(self, routine_id: RoutineId) -> LoadedRoutine:
+        """The routine as it runs: its definition, with the schedule the user gave it when an app owns it."""
+        return effective_routine(self.definitions.load(routine_id), self.states.read(routine_id))
+
     def detail(self, routine_id: RoutineId, run_limit: int = DEFAULT_RUN_LIMIT) -> RoutineDetail:
         loaded = self.definitions.load(routine_id)
+        state = self.states.read(routine_id)
         now = self.clock.now()
-        row = build_row(loaded, self.states.read(routine_id), now, self.clock.local_zone())
+        row = build_row(loaded, state, now, self.clock.local_zone())
         runs = fold_run_events(self.ledger.recent_events(routine_id, run_limit), now)
         return RoutineDetail(
             row=row,
-            definition=loaded.definition,
-            definition_path=str(self.paths.definition_path(routine_id)),
+            definition=effective_routine(loaded, state).definition,
+            definition_path=str(loaded.path),
             runs=tuple(runs),
         )
 
@@ -147,29 +160,56 @@ class RoutinesService(MutableModel):
         definition: RoutineDefinition,
         change_description: str,
     ) -> Path:
-        return self.definitions.replace(routine_id, definition, change_description)
+        """Make the routine the definition given; answers the file the change went to. The workspace's own file
+        is rewritten and committed. An app's file is never rewritten: a definition that differs from it in the
+        schedule alone is kept as the user's schedule in the state, any other raises AppOwnedRoutineError, and a
+        file that does not load raises BrokenDefinitionError."""
+        loaded = self.definitions.load(routine_id)
+        if loaded.is_duplicated or loaded.app_package is None:
+            return self.definitions.replace(routine_id, definition, change_description)
+        if loaded.definition is None:
+            raise BrokenDefinitionError(routine_id, loaded.error)
+        if apply_schedule(loaded.definition, schedule_of(definition)) != definition:
+            raise AppOwnedRoutineError(routine_id, loaded.app_package)
+        self._keep_user_schedule(routine_id, loaded.definition, definition)
+        return self.paths.state_path(routine_id)
 
     def change_schedule(self, routine_id: RoutineId, change: ScheduleChange) -> RoutineDefinition:
+        """Reschedule the routine; answers the definition it now runs as. The workspace's own file is rewritten
+        and committed; for a routine an app owns the schedule goes to the state and the file stays as it is."""
         loaded = self.definitions.load(routine_id)
         if loaded.definition is None:
-            raise DefinitionValidationError(f"{routine_id} is broken ({loaded.error}); fix its file first.")
-        updated = loaded.definition.model_copy_update(
-            to_update(loaded.definition.field_ref().every, change.every),
-            to_update(loaded.definition.field_ref().at, change.at),
-            to_update(loaded.definition.field_ref().days, change.days),
-            to_update(loaded.definition.field_ref().day_of_month, change.day_of_month),
-            to_update(loaded.definition.field_ref().once, change.once),
+            raise BrokenDefinitionError(routine_id, loaded.error)
+        rescheduled = apply_schedule(loaded.definition, change)
+        if loaded.app_package is None:
+            self.definitions.replace(routine_id, rescheduled, "change the schedule")
+        else:
+            self._keep_user_schedule(routine_id, loaded.definition, rescheduled)
+        return rescheduled
+
+    def _keep_user_schedule(
+        self, routine_id: RoutineId, definition: RoutineDefinition, rescheduled: RoutineDefinition
+    ) -> None:
+        """Record the schedule of the rescheduled definition as the user's, in the state of a routine an app
+        owns; a schedule that is the file's own again clears the record instead, so the routine follows its app
+        once more."""
+        override = None if is_same_schedule(rescheduled, definition) else schedule_of(rescheduled)
+        self.states.update(
+            routine_id,
+            lambda state: state.model_copy_update(to_update(state.field_ref().schedule_override, override)),
         )
-        validated = RoutineDefinition.model_validate(updated.model_dump())
-        self.definitions.replace(routine_id, validated, "change the schedule")
-        return validated
 
     def remove(self, routine_id: RoutineId) -> None:
         """Delete the definition and the state; raises RunInFlightError while a run is going, since the run writes
         the state it would pull away. The run lock is held for the removal, so no run starts under it. The chat
         and the state go first: a definition removal whose commit is refused still unlinks the file, and a
-        retry would then find no routine to clean up after."""
-        self.definitions.load(routine_id)
+        retry would then find no routine to clean up after. A routine whose file the library may not delete (an
+        app's, or one of several with the id) is refused before anything goes, with the store's own error."""
+        loaded = self.definitions.load(routine_id)
+        if loaded.is_duplicated:
+            raise DuplicateRoutineError(f"{routine_id} is {loaded.error}.")
+        if loaded.app_package is not None:
+            raise AppOwnedRoutineError(routine_id, loaded.app_package)
         with held_lock(self.paths.run_lock_path(routine_id), f"A run of {routine_id}"):
             state = self.states.read(routine_id)
             if state.current_run is not None and is_run_process_alive(state.current_run):

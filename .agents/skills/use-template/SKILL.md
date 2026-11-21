@@ -29,6 +29,14 @@ the original author left stubbed or unwired — together with the user.
 
 All git commands run with cwd = the repo root (`/home/user/workspace`).
 
+## An app is not a template
+
+Most of what people share is a single app, not a whole workspace. A published
+app is a repository with an `app.toml` at its root and no `template.md`. When
+the URL the user gave is one of those, do not adapt it here: follow the
+`install-app` skill with the same URL, which adds that one app and leaves the
+rest of this workspace as it is.
+
 ## Two entry points
 
 There are two ways this skill starts. Figure out which one applies before doing

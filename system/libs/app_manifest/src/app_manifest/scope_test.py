@@ -2,8 +2,8 @@ import json
 from pathlib import Path
 
 import pytest
-from loguru import logger
 
+from app_manifest.errors import RecordLoadError
 from app_manifest.errors import ScopeComputationError
 from app_manifest.manifest import AppManifest
 from app_manifest.manifest import load_manifest
@@ -20,6 +20,8 @@ from app_manifest.scope import compute_pass_scope
 from app_manifest.scope import compute_skill_scope
 from app_manifest.scope import find_referencing_manifests
 from app_manifest.scope import find_wiring_sections
+from app_manifest.scope import list_user_app_files
+from app_manifest.scope import load_app_manifests
 from app_manifest.scope import parse_creation_spec
 from app_manifest.scope import reference_kind_for_path
 from app_manifest.scope import render_scope_file
@@ -27,11 +29,14 @@ from app_manifest.scope import split_against_creations
 from app_manifest.scope import with_diff_against_base
 from app_manifest.testing import NEWS_MANIFEST
 from app_manifest.testing import build_news_workspace
+from app_manifest.testing import captured_warnings
 from app_manifest.testing import commit_changes
 from app_manifest.testing import commit_everything
 from app_manifest.testing import init_git_repository
 from app_manifest.testing import run_git
 from app_manifest.testing import write_app_manifest
+from app_manifest.testing import write_app_record
+from app_manifest.testing import write_app_skill
 from app_manifest.testing import write_repo_file
 from app_manifest.testing import write_supervisord_conf
 from app_manifest.testing import write_supervisord_dropin
@@ -86,7 +91,7 @@ def test_wiring_finds_the_apps_program_and_its_sidecars_but_not_other_apps(
 ) -> None:
     build_news_workspace(tmp_path)
 
-    wiring = find_wiring_sections(tmp_path, _news_manifest(tmp_path))
+    wiring = find_wiring_sections(tmp_path, _news_manifest(tmp_path), is_user_app=False)
 
     assert len(wiring) == 1
     assert wiring[0].path == "system/supervisord.conf"
@@ -103,7 +108,7 @@ def test_wiring_includes_the_programs_the_manifest_declares(tmp_path: Path) -> N
         is_icon_written=True,
     )
 
-    wiring = find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path))
+    wiring = find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path), is_user_app=False)
 
     assert list(wiring[0].sections) == ["program:news", "program:xvfb"]
 
@@ -115,7 +120,7 @@ def test_wiring_finds_blocks_in_the_drop_ins_the_include_glob_names(tmp_path: Pa
     write_supervisord_conf(tmp_path, ())
     write_supervisord_dropin(tmp_path, "news", ("program:news", "program:news-fetcher"))
 
-    wiring = find_wiring_sections(tmp_path, _news_manifest(tmp_path))
+    wiring = find_wiring_sections(tmp_path, _news_manifest(tmp_path), is_user_app=False)
 
     assert len(wiring) == 1
     assert wiring[0].path == "system/supervisord.conf.d/news.conf"
@@ -136,7 +141,7 @@ def test_wiring_attributes_each_block_to_the_file_it_is_written_in(tmp_path: Pat
         is_icon_written=True,
     )
 
-    wiring = find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path))
+    wiring = find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path), is_user_app=False)
 
     assert [(section.path, list(section.sections)) for section in wiring] == [
         ("system/supervisord.conf.d/news.conf", ["program:news"]),
@@ -157,7 +162,7 @@ def test_a_declared_wiring_program_may_be_an_event_listener(tmp_path: Path) -> N
         is_icon_written=True,
     )
 
-    wiring = find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path))
+    wiring = find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path), is_user_app=False)
 
     # Drop-ins are read in name order, as supervisord reads them.
     assert [(section.path, list(section.sections)) for section in wiring] == [
@@ -177,7 +182,7 @@ def test_a_declared_wiring_program_with_no_block_is_an_error(tmp_path: Path) -> 
 
     # The error names both section kinds the block could have taken.
     with pytest.raises(ScopeComputationError, match="program:xvfb or eventlistener:xvfb"):
-        find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path))
+        find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path), is_user_app=False)
 
 
 def test_wiring_is_empty_for_an_app_the_supervisord_conf_does_not_run_yet(
@@ -186,14 +191,14 @@ def test_wiring_is_empty_for_an_app_the_supervisord_conf_does_not_run_yet(
     build_news_workspace(tmp_path)
     write_supervisord_conf(tmp_path, ("program:files", "program:chat"))
 
-    assert find_wiring_sections(tmp_path, _news_manifest(tmp_path)) == ()
+    assert find_wiring_sections(tmp_path, _news_manifest(tmp_path), is_user_app=False) == ()
 
 
 def test_wiring_is_empty_when_there_is_no_supervisord_conf_at_all(tmp_path: Path) -> None:
     build_news_workspace(tmp_path)
     (tmp_path / "system" / "supervisord.conf").unlink()
 
-    assert find_wiring_sections(tmp_path, _news_manifest(tmp_path)) == ()
+    assert find_wiring_sections(tmp_path, _news_manifest(tmp_path), is_user_app=False) == ()
 
 
 def test_an_unparseable_supervisord_conf_raises_rather_than_yielding_no_wiring(
@@ -203,7 +208,7 @@ def test_an_unparseable_supervisord_conf_raises_rather_than_yielding_no_wiring(
     (tmp_path / "system" / "supervisord.conf").write_text("[program:news\ncommand=x\n")
 
     with pytest.raises(ScopeComputationError, match="supervisord.conf"):
-        find_wiring_sections(tmp_path, _news_manifest(tmp_path))
+        find_wiring_sections(tmp_path, _news_manifest(tmp_path), is_user_app=False)
 
 
 def test_an_app_scope_carries_the_apps_own_paths_wiring_references_and_conventions(
@@ -355,18 +360,26 @@ def test_the_reverse_lookup_skips_an_app_directory_with_no_manifest(tmp_path: Pa
 def test_the_reverse_lookup_skips_a_manifest_it_cannot_load_and_warns(tmp_path: Path) -> None:
     build_news_workspace(tmp_path)
     write_app_manifest(tmp_path, "broken", 'name = "broken"\n', is_icon_written=False)
-    captured: list[str] = []
-    sink_id = logger.add(lambda message: captured.append(str(message)), level="WARNING")
-    try:
+    with captured_warnings() as captured:
         matches = find_referencing_manifests(tmp_path, RepoRelativePath(".agents/skills/news-refresh"))
-    finally:
-        logger.remove(sink_id)
 
     # One app's stale manifest must not hide every other app's claim on the skill.
     assert [match.manifest.name for match in matches] == ["news"]
     assert len(captured) == 1
     assert "broken" in captured[0]
     assert "display_name" in captured[0]
+
+
+def test_the_reverse_lookup_reads_a_manifest_that_carries_a_key_it_does_not_know(tmp_path: Path) -> None:
+    build_news_workspace(tmp_path)
+    write_app_manifest(tmp_path, "news", f"future_field = true\n{NEWS_MANIFEST}", is_icon_written=True)
+
+    with captured_warnings() as warnings:
+        matches = find_referencing_manifests(tmp_path, RepoRelativePath(".agents/skills/news-refresh"))
+
+    assert [match.manifest.name for match in matches] == ["news"]
+    assert len(warnings) == 1
+    assert "unknown key 'future_field'" in warnings[0]
 
 
 def test_a_skill_scope_is_its_own_directory_plus_the_owning_apps_as_context(
@@ -887,3 +900,340 @@ def test_a_file_the_hardened_change_committed_outside_every_footprint_is_the_pas
     assert scope.diff is not None
     assert scope.diff.outside_footprint == ("system/scripts/helper.sh",)
     assert scope.diff.others == ("docs/system/unrelated.md", "system/scripts/other.sh")
+
+
+# An app whose manifest still carries the tables a built-in app's footprint is read from: a
+# reference, a wiring program nothing defines, and exclude globs that mean one thing read from
+# the repo root and another read from the app's own directory.
+_NOTES_MANIFEST = """
+name = "notes"
+display_name = "Notes"
+icon = "icon.svg"
+
+[[references]]
+path = "system/scripts/run_notes.sh"
+
+[wiring]
+programs = ["xvfb"]
+
+[[services]]
+role = "indexer"
+command = "notes-indexer"
+
+[scope]
+exclude = ["frontend/build/**", "*.log"]
+"""
+
+_NOTES_RECORD_REFERENCES = {".agents/skills/weekly-review": "Calls GET /api/notes to build the weekly summary"}
+
+
+def _build_notes_workspace(repo_root: Path) -> Path:
+    """The notes app, a skill and a script that use it, and one drop-in per program."""
+    manifest_path = write_app_manifest(repo_root, "notes", _NOTES_MANIFEST, is_icon_written=True)
+    write_repo_file(repo_root, "system/apps/notes/runner.py", "ROUTES = ('/api/notes',)\n")
+    write_repo_file(repo_root, "system/scripts/run_notes.sh", "#!/bin/sh\nexit 0\n")
+    write_repo_file(repo_root, ".agents/skills/weekly-review/SKILL.md", "# weekly review\n")
+    write_supervisord_dropin(repo_root, "notes", ("program:notes",))
+    write_supervisord_dropin(repo_root, "notes-indexer", ("program:notes-indexer",))
+    write_supervisord_dropin(repo_root, "files", ("program:files",))
+    return manifest_path
+
+
+def _notes_app_scope(repo_root: Path) -> CreationScope:
+    manifest_path = repo_root / "system" / "apps" / "notes" / "app.toml"
+    return compute_app_scope(repo_root, manifest_path, load_manifest(manifest_path, repo_root=repo_root))
+
+
+def _wiring_of(scope: CreationScope) -> list[tuple[str, list[str]]]:
+    return [(wiring.path, list(wiring.sections)) for wiring in scope.wiring]
+
+
+def test_an_app_without_a_record_is_read_from_its_manifest(tmp_path: Path) -> None:
+    _build_notes_workspace(tmp_path)
+    write_supervisord_dropin(tmp_path, "xvfb", ("program:xvfb",))
+
+    scope = _notes_app_scope(tmp_path)
+
+    assert list(scope.primary) == ["system/apps/notes/"]
+    assert [reference.path for reference in scope.references] == ["system/scripts/run_notes.sh"]
+    assert _wiring_of(scope) == [
+        ("system/supervisord.conf.d/notes-indexer.conf", ["program:notes-indexer"]),
+        ("system/supervisord.conf.d/notes.conf", ["program:notes"]),
+        ("system/supervisord.conf.d/xvfb.conf", ["program:xvfb"]),
+    ]
+    assert list(scope.exclude) == [*BUILT_IN_EXCLUDES, "frontend/build/**", "*.log"]
+
+
+def test_a_user_app_is_read_from_its_record_and_its_own_directory(tmp_path: Path) -> None:
+    _build_notes_workspace(tmp_path)
+    write_app_record(tmp_path, "notes", "notes", _NOTES_RECORD_REFERENCES)
+
+    scope = _notes_app_scope(tmp_path)
+
+    assert list(scope.primary) == ["system/apps/notes/", "system/config/apps/notes.toml"]
+    # The manifest's own [[references]] is not read.
+    assert [(reference.path, reference.note, reference.kind) for reference in scope.references] == [
+        (".agents/skills/weekly-review", "Calls GET /api/notes to build the weekly summary", ReferenceKind.SKILL)
+    ]
+    # Nor is its [wiring]: no block defines xvfb, which a built-in app's footprint refuses. The
+    # declared service's block is the app's, once.
+    assert _wiring_of(scope) == [
+        ("system/supervisord.conf.d/notes-indexer.conf", ["program:notes-indexer"]),
+        ("system/supervisord.conf.d/notes.conf", ["program:notes"]),
+    ]
+    assert list(scope.exclude) == [
+        *BUILT_IN_EXCLUDES,
+        "system/apps/notes/frontend/build/**",
+        "system/apps/notes/**/*.log",
+    ]
+
+
+def test_a_user_app_is_recorded_and_run_by_its_name_and_kept_in_the_directory_its_record_names(
+    tmp_path: Path,
+) -> None:
+    manifest_path = write_app_manifest(
+        tmp_path,
+        "inbox_status",
+        'name = "inbox-status"\ndisplay_name = "Inbox status"\nicon = "icon.svg"\n\n'
+        '[[services]]\nrole = "indexer"\ncommand = "inbox-status-indexer"\n\n'
+        '[scope]\nexclude = ["seed/**"]\n',
+        is_icon_written=True,
+    )
+    write_app_record(tmp_path, "inbox-status", "inbox_status", {})
+    write_app_skill(tmp_path, "inbox_status", "triage-inbox")
+    write_supervisord_dropin(tmp_path, "inbox-status", ("program:inbox-status",))
+    write_supervisord_dropin(tmp_path, "inbox-status-indexer", ("program:inbox-status-indexer",))
+
+    scope = compute_app_scope(tmp_path, manifest_path, load_manifest(manifest_path, repo_root=tmp_path))
+    (loaded,) = load_app_manifests(tmp_path)
+
+    assert list(scope.primary) == [
+        "system/apps/inbox_status/",
+        "system/config/apps/inbox-status.toml",
+        ".agents/skills/triage-inbox",
+    ]
+    assert _wiring_of(scope) == [
+        ("system/supervisord.conf.d/inbox-status-indexer.conf", ["program:inbox-status-indexer"]),
+        ("system/supervisord.conf.d/inbox-status.conf", ["program:inbox-status"]),
+    ]
+    assert list(scope.exclude) == [*BUILT_IN_EXCLUDES, "system/apps/inbox_status/seed/**"]
+    assert loaded.record is not None
+    assert (loaded.record.name, loaded.record.package) == ("inbox-status", "inbox_status")
+    assert list(list_user_app_files(tmp_path, loaded)) == [
+        "system/config/apps/inbox-status.toml",
+        ".agents/skills/triage-inbox",
+    ]
+
+
+def test_an_app_without_a_record_still_has_an_undefined_wiring_program_refused(tmp_path: Path) -> None:
+    _build_notes_workspace(tmp_path)
+
+    with pytest.raises(ScopeComputationError, match="declares wiring program 'xvfb'"):
+        _notes_app_scope(tmp_path)
+
+
+def test_a_user_apps_service_with_no_program_file_yet_has_no_wiring_for_it(tmp_path: Path) -> None:
+    _build_notes_workspace(tmp_path)
+    write_app_record(tmp_path, "notes", "notes", {})
+    (tmp_path / "system" / "supervisord.conf.d" / "notes-indexer.conf").unlink()
+
+    assert _wiring_of(_notes_app_scope(tmp_path)) == [("system/supervisord.conf.d/notes.conf", ["program:notes"])]
+
+
+def test_a_record_that_names_another_directory_does_not_make_the_app_a_user_app(tmp_path: Path) -> None:
+    _build_notes_workspace(tmp_path)
+    write_supervisord_dropin(tmp_path, "xvfb", ("program:xvfb",))
+    write_app_record(tmp_path, "notes", "notes_elsewhere", {})
+
+    scope = _notes_app_scope(tmp_path)
+
+    assert list(scope.primary) == ["system/apps/notes/"]
+    assert [reference.path for reference in scope.references] == ["system/scripts/run_notes.sh"]
+
+
+def test_a_user_apps_excludes_are_matched_from_its_own_directory(tmp_path: Path) -> None:
+    changed = [
+        RepoRelativePath("system/apps/notes/runner.py"),
+        RepoRelativePath("system/apps/notes/frontend/build/bundle.js"),
+        RepoRelativePath("system/apps/notes/logs/debug.log"),
+        RepoRelativePath("frontend/build/bundle.js"),
+    ]
+    _build_notes_workspace(tmp_path)
+    write_supervisord_dropin(tmp_path, "xvfb", ("program:xvfb",))
+    built_in = split_against_creations(changed, (_notes_app_scope(tmp_path),))
+    write_app_record(tmp_path, "notes", "notes", {})
+    user_app = split_against_creations(changed, (_notes_app_scope(tmp_path),))
+
+    # Read from the repo root, the first glob names a directory outside the app.
+    assert built_in == (("system/apps/notes/runner.py", "system/apps/notes/frontend/build/bundle.js"), ())
+    # Read from the app's directory, it names the app's own build output and nothing outside it.
+    assert user_app == (("system/apps/notes/runner.py",), ("frontend/build/bundle.js",))
+
+
+@pytest.mark.parametrize("exclude_globs", ['"**"', '"*"', '"app.toml", "icon.svg", "*.py"'])
+def test_a_user_apps_excludes_that_leave_nothing_of_the_app_are_refused(tmp_path: Path, exclude_globs: str) -> None:
+    write_app_manifest(
+        tmp_path,
+        "notes",
+        f'name = "notes"\ndisplay_name = "Notes"\nicon = "icon.svg"\n[scope]\nexclude = [{exclude_globs}]\n',
+        is_icon_written=True,
+    )
+    write_repo_file(tmp_path, "system/apps/notes/runner.py", "ROUTES = ()\n")
+    write_app_record(tmp_path, "notes", "notes", {})
+
+    with pytest.raises(ScopeComputationError, match="cover 'system/apps/notes/', which is part of the footprint"):
+        _notes_app_scope(tmp_path)
+
+
+def test_a_user_apps_exclude_cannot_reach_what_its_record_references(tmp_path: Path) -> None:
+    write_app_manifest(
+        tmp_path,
+        "notes",
+        'name = "notes"\ndisplay_name = "Notes"\nicon = "icon.svg"\n'
+        '[scope]\nexclude = [".agents/skills/weekly-review/**"]\n',
+        is_icon_written=True,
+    )
+    write_repo_file(tmp_path, ".agents/skills/weekly-review/SKILL.md", "# weekly review\n")
+    write_app_record(tmp_path, "notes", "notes", _NOTES_RECORD_REFERENCES)
+
+    scope = _notes_app_scope(tmp_path)
+
+    # The same glob in a built-in app's manifest swallows the referenced skill and is refused.
+    assert scope.exclude[-1] == "system/apps/notes/.agents/skills/weekly-review/**"
+
+
+@pytest.mark.parametrize(
+    ("reference_path", "problem"),
+    [
+        (".agents/skills/missing", "does not exist"),
+        ("system/apps/notes/runner.py", "inside the app's own directory"),
+        ("system/apps/files/runner.py", "names another app's directory"),
+        (".claude/skills/weekly-review", "goes through the symlink '.claude/skills'"),
+        (".agents/skills/*", "glob character"),
+        ("data/notes.json", "nothing under 'data/' can be referenced"),
+    ],
+)
+def test_a_record_reference_is_held_to_the_rules_of_a_manifest_reference(
+    tmp_path: Path, reference_path: str, problem: str
+) -> None:
+    _build_notes_workspace(tmp_path)
+    write_repo_file(tmp_path, "system/apps/files/runner.py", "ROUTES = ()\n")
+    write_repo_file(tmp_path, "data/notes.json", "{}\n")
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "skills").symlink_to("../.agents/skills")
+    write_app_record(tmp_path, "notes", "notes", {reference_path: ""})
+
+    with pytest.raises(RecordLoadError, match=f"notes.toml is invalid: .*{problem}"):
+        _notes_app_scope(tmp_path)
+    # Across every app, a bad record hides only its own app, as a manifest that does not load does.
+    with captured_warnings() as warnings:
+        matches = find_referencing_manifests(tmp_path, RepoRelativePath("system/scripts/run_notes.sh"))
+    assert matches == ()
+    assert len(warnings) == 1
+    assert "notes.toml is invalid" in warnings[0]
+
+
+def test_the_reverse_lookup_finds_a_path_a_record_lists_and_not_one_only_the_manifest_lists(tmp_path: Path) -> None:
+    _build_notes_workspace(tmp_path)
+    write_app_record(tmp_path, "notes", "notes", _NOTES_RECORD_REFERENCES)
+
+    from_record = find_referencing_manifests(tmp_path, RepoRelativePath(".agents/skills/weekly-review/SKILL.md"))
+    from_manifest = find_referencing_manifests(tmp_path, RepoRelativePath("system/scripts/run_notes.sh"))
+
+    assert [(match.manifest.name, match.reference.path) for match in from_record] == [
+        ("notes", ".agents/skills/weekly-review")
+    ]
+    assert from_record[0].reference.note == "Calls GET /api/notes to build the weekly summary"
+    assert from_manifest == ()
+
+
+def test_a_skill_a_user_app_carries_is_part_of_the_apps_footprint(tmp_path: Path) -> None:
+    _build_notes_workspace(tmp_path)
+    write_app_record(tmp_path, "notes", "notes", {})
+    init_git_repository(tmp_path)
+    base_sha = commit_everything(tmp_path, "base")
+    write_app_skill(tmp_path, "notes", "notes-digest")
+    write_app_record(tmp_path, "notes", "notes", _NOTES_RECORD_REFERENCES)
+    write_repo_file(tmp_path, ".agents/skills/weekly-review/SKILL.md", "# weekly review, for the digest\n")
+    commit_everything(tmp_path, "the app gains a skill")
+
+    scope = with_diff_against_base(_notes_app_scope(tmp_path), tmp_path, base_sha, "HEAD")
+
+    assert list(scope.primary) == [
+        "system/apps/notes/",
+        "system/config/apps/notes.toml",
+        ".agents/skills/notes-digest",
+    ]
+    assert scope.diff is not None
+    # Git reports the link as one path and the skill's files under the app's directory.
+    assert scope.diff.inside_footprint == (
+        ".agents/skills/notes-digest",
+        ".agents/skills/weekly-review/SKILL.md",
+        "system/apps/notes/skills/notes-digest/SKILL.md",
+        "system/config/apps/notes.toml",
+    )
+    assert scope.diff.outside_footprint == ()
+
+
+@pytest.mark.parametrize(
+    ("target", "expected_entry"),
+    [
+        (".agents/skills/notes-digest", ".agents/skills/notes-digest"),
+        (".agents/skills/notes-digest/SKILL.md", ".agents/skills/notes-digest"),
+        ("system/apps/notes/skills/notes-digest", "system/apps/notes/skills/notes-digest"),
+        ("system/apps/notes/skills/notes-digest/SKILL.md", "system/apps/notes/skills/notes-digest"),
+    ],
+)
+def test_the_reverse_lookup_names_the_app_that_carries_a_skill(
+    tmp_path: Path, target: str, expected_entry: str
+) -> None:
+    _build_notes_workspace(tmp_path)
+    write_app_record(tmp_path, "notes", "notes", {})
+    write_app_skill(tmp_path, "notes", "notes-digest")
+
+    matches = find_referencing_manifests(tmp_path, RepoRelativePath(target))
+
+    assert [(match.manifest.name, match.reference.path) for match in matches] == [("notes", expected_entry)]
+    # The rest of the app's directory is the app's by location, which the lookup does not answer for.
+    assert find_referencing_manifests(tmp_path, RepoRelativePath("system/apps/notes/runner.py")) == ()
+
+
+def test_a_carried_skills_name_resolves_to_the_app_and_any_other_skill_stays_a_skill(tmp_path: Path) -> None:
+    _build_notes_workspace(tmp_path)
+    write_app_record(tmp_path, "notes", "notes", _NOTES_RECORD_REFERENCES)
+    write_app_skill(tmp_path, "notes", "notes-digest")
+
+    carried = compute_creation_scope(tmp_path, parse_creation_spec("skill:notes-digest"))
+    ordinary = compute_creation_scope(tmp_path, parse_creation_spec("skill:weekly-review"))
+
+    assert carried == _notes_app_scope(tmp_path)
+    assert carried.creation.type is CreationType.APP
+    assert ordinary.creation.type is CreationType.SKILL
+    assert list(ordinary.primary) == [".agents/skills/weekly-review/"]
+    # The skill's one edit outside its directory is the reference the app's record gains.
+    assert list(ordinary.context) == ["system/apps/notes/", "system/config/apps/notes.toml"]
+    assert split_against_creations(
+        [RepoRelativePath("system/config/apps/notes.toml"), RepoRelativePath("system/apps/notes/runner.py")],
+        (ordinary,),
+    ) == (("system/config/apps/notes.toml",), ("system/apps/notes/runner.py",))
+
+
+def test_a_pass_that_names_an_app_and_a_skill_it_carries_is_refused(tmp_path: Path) -> None:
+    _build_notes_workspace(tmp_path)
+    write_app_record(tmp_path, "notes", "notes", {})
+    write_app_skill(tmp_path, "notes", "notes-digest")
+    specs = [parse_creation_spec(spec) for spec in ("app:notes", "skill:notes-digest")]
+
+    with pytest.raises(ScopeComputationError, match="names app:notes and skill:notes-digest, which are one creation"):
+        compute_pass_scope(tmp_path, specs, None, "HEAD", None)
+
+
+@pytest.mark.parametrize("target", [".agents/skills/notes-digest", ".agents/skills/notes-digest/SKILL.md"])
+def test_a_skill_scope_over_a_carried_skills_link_is_refused(tmp_path: Path, target: str) -> None:
+    _build_notes_workspace(tmp_path)
+    write_app_record(tmp_path, "notes", "notes", {})
+    write_app_skill(tmp_path, "notes", "notes-digest")
+
+    # Git never reports a change through the link, so a footprint over it would cover nothing.
+    with pytest.raises(ScopeComputationError, match="scope it as app:notes"):
+        compute_skill_scope(tmp_path, RepoRelativePath(target))

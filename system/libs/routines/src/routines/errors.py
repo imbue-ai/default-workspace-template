@@ -18,6 +18,14 @@ class DefinitionValidationError(RoutinesError, ValueError):
     """A definition file that does not say what a routine is."""
 
 
+class BrokenDefinitionError(DefinitionValidationError):
+    """A change to a routine whose definition file does not load, which has to be fixed before anything else."""
+
+    def __init__(self, routine_id: str, reason: str | None) -> None:
+        self.routine_id = routine_id
+        super().__init__(f"{routine_id} is broken ({reason}); fix its file first.")
+
+
 class RoutineNotFoundError(RoutinesError, KeyError):
     """No definition by that id."""
 
@@ -31,6 +39,23 @@ class RoutineNotFoundError(RoutinesError, KeyError):
 
 class RoutineExistsError(RoutinesError, ValueError):
     """A definition by that id already exists."""
+
+
+class AppOwnedRoutineError(RoutinesError, RuntimeError):
+    """A change that would rewrite or delete a definition file inside an app's directory."""
+
+    def __init__(self, routine_id: str, app_package: str) -> None:
+        self.routine_id = routine_id
+        self.app_package = app_package
+        super().__init__(
+            f"{routine_id} belongs to the app in system/apps/{app_package}/, so only its schedule and its on/off "
+            "switch can be changed here. Anything else, removing it included, is a change to that app: edit or "
+            f"delete system/apps/{app_package}/routines/{routine_id}.toml as part of changing the app."
+        )
+
+
+class DuplicateRoutineError(RoutinesError, RuntimeError):
+    """More than one definition file has the routine's id, so no one of them can be changed in its name."""
 
 
 class RunInFlightError(RoutinesError, RuntimeError):

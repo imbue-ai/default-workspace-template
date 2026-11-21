@@ -52,28 +52,56 @@ SKILL.md.
   headings, cross-references, and `## Conventions` / `## Gotchas` -- every place
   that names or summarizes the changed material.
 
+## Skills an app owns
+
+A skill that exists only as part of one app lives in that app's directory, at
+`system/apps/<package>/skills/<name>/`, and `.agents/skills/<name>` is a link
+to it that `app-install` generates. Such a skill is part of the app, not a
+creation of its own:
+
+- `skill:<name>` names the app: the scope file carries the app's footprint,
+  and the pass follows `type-app.md`. A pass that names both the app and the
+  skill is refused, since they are one creation.
+- Edit its files under the app's directory. Git reports a change there, and
+  reports the link as one path, never a change through it.
+- It has no `python/` project of its own. Code it needs lives in the app's
+  package, reached as one of the app's console scripts or over the app's HTTP
+  API.
+
+The reverse lookup below tells the two kinds apart: for a skill an app owns,
+the line's `path` is the link itself (`.agents/skills/<name>`) and its `note`
+says the app carries the skill. The rest of this reference is about a skill
+with a directory of its own under `.agents/skills/`.
+
 ## Skills that drive an app
 
 A skill that calls an app's routes, its CLI, or its store belongs to that app's
-footprint, and the app's manifest is where the link lives: one `[[references]]`
-entry in `system/apps/<package>/app.toml` whose `path` is
-`.agents/skills/<name>` and whose `note` names the surface used ("calls `POST
-/api/ingest`; writes `data/.apps/<name>/`"). The link is one-directional -- the
-skill declares nothing about the app -- so check for the entry by reverse
-lookup and add it to the app's `app.toml` as part of this change when it is
-missing:
+footprint, and the app's references are where the link lives: one
+`[[references]]` entry whose `path` is `.agents/skills/<name>` and whose `note`
+names the surface used ("calls `POST /api/ingest`; writes
+`data/.apps/<name>/`"). A built-in app keeps its references in
+`system/apps/<package>/app.toml`. An app the workspace built or installed
+keeps them in its record, `system/config/apps/<app>.toml`, which `app-install`
+keeps; `[[references]]` in that app's `app.toml` is not read. The link is
+one-directional -- the skill declares nothing about the app -- so check for
+the entry by reverse lookup:
 
 ```bash
 uv run --no-sync app-manifest references --for-path .agents/skills/<name>
 ```
 
-One JSON line per app that claims the skill; no output means none does.
+One JSON line per app that claims the skill; no output means none does. When
+the entry is missing, add it to a built-in app's `app.toml` as part of this
+change. For an app with a record, do not write it into the record or the
+manifest yourself: name the skill in your report under `Outside footprint:`,
+saying which app it drives.
 
 The skill's `context` in the scope file lists the primary directory of every app
-that claims this skill. Read those to verify the invocation contract the skill
+that claims this skill, and the record of each one that has a record. Read
+those to verify the invocation contract the skill
 relies on -- the routes in `src/<package>/runner.py`, the CLI entry points in
-`pyproject.toml`, `app.toml` -- and read them only: the `[[references]]` entry
-above is the sole edit this run makes inside an app's directory, and a fix that
+`pyproject.toml`, `app.toml` -- and read them only: the reference entry
+above is the sole edit this run makes to an app, and a fix that
 belongs to the app itself is that app's own pass.
 
 ## Testing a skill

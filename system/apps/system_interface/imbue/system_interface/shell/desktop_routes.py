@@ -11,8 +11,6 @@ from typing import assert_never
 from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
-from app_schema.routes import model_response
-from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import request
 from flask import send_file
@@ -84,6 +82,8 @@ from workspace_layout.records import Wallpaper
 from workspace_layout.records import Window
 from workspace_layout.shell_url import DESKTOPS_ROUTE
 
+from imbue.app_sdk.routes import model_response
+from imbue.app_sdk.routes import parse_request_body
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure

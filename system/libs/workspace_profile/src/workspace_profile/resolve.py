@@ -13,8 +13,8 @@ owner's overrides. A visitor's user id comes from the header.
 
 from pathlib import Path
 
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.imbue_common.pure import pure
-from workspace_layout.identity import RequestIdentity
 
 from workspace_profile.overrides import (
     load_unsent_change_values,

@@ -9,12 +9,15 @@ metadata:
 
 A **routine** is something that runs on a schedule and then exits: a command
 run from the repo root, or a skill run in a chat of its own (what the
-workspace calls an automation). Each is one TOML file under
-`system/routines/<id>.toml` (the root `routines/` folder points there),
-tracked like an app or a skill. The `routines` command is the only way one is
-created or changed; the Routines app (`http://routines.<workspace-host>/`) is
-where the user sees them. Nothing is registered anywhere else: no cron lines,
-no supervisord programs, no extra template.
+workspace calls an automation). Each is one TOML file, tracked like an app or
+a skill: under `system/routines/<id>.toml` (the root `routines/` folder points
+there), or, for a routine that belongs to an app built or installed in this
+workspace, inside that app at `system/apps/<package>/routines/<id>.toml` (see
+"Routines that belong to an app" below). `routines show <id>` prints where a
+routine's file is. The `routines` command is how one is created or changed;
+the Routines app (`http://routines.<workspace-host>/`) is where the user sees
+them. Nothing is registered anywhere else: no cron lines, no supervisord
+programs, no extra template.
 
 Workspace updates are not routines either: the Imbue Studio app schedules
 them through its own `update-self-dispatch` cron entry, which runs the update
@@ -77,7 +80,17 @@ Other flags: `--app <name>` (the app it belongs to), `--timeout` (how long a
 run may take; `1h`), `--retry-after` (the gap before a failed run is retried;
 `2m`), `--notify-after-failures` (failures in a row before the user is told;
 `3`), `--disabled` (start switched off). The id is the file's name: lowercase
-letters, digits and hyphens.
+letters, digits and hyphens, and no two routines in the workspace share one,
+wherever their files are.
+
+`--app <name>` also decides where the file is written. For an app built or
+installed in this workspace (it has a record
+`system/config/apps/<name>.toml`, and the folder `system/apps/<package>/`
+that record names), the definition goes into the app's own
+folder, `system/apps/<package>/routines/<id>.toml`, so the routine is part of
+the app and goes wherever the app goes. For a built-in app, or a name that is
+no app, the file goes under `system/routines/` and the name only groups the
+routine in the list. The command prints the path it wrote.
 
 The title and the sentence are the user's words for it, not the command's:
 "Morning inbox digest" and "Reads new mail and writes a short summary note.",
@@ -130,6 +143,30 @@ after `retry_after`), Overdue (it should have run and did not, which means the
 tick is not running), Needs you (its agent waits on the user), Broken (its
 file does not validate; `show <id>`, or `list --format json`, says why), Not
 run yet, Done (a one-off that ran), or Off.
+
+## Routines that belong to an app
+
+A routine whose file is inside an app (`system/apps/<package>/routines/`) is
+part of that app. It is listed, run, paused and watched like any other, with
+the same commands. Two things differ, because the file is the app's and the
+`routines` command never rewrites or deletes a file inside an app:
+
+- **Changing its schedule** works as usual
+  (`uv run --no-sync routines edit <id> --every 2h`, or Change schedule in the
+  Routines app), but the new schedule is kept as the user's own choice in the
+  routine's state (`data/.state/routines/<id>/state.json`), not in the file,
+  and nothing is committed. `list` and `show` print the schedule the routine
+  actually runs on, so it can differ from what the file says. To go back to
+  the app's own schedule, edit the routine to exactly the schedule in its file.
+- **Changing anything else, or removing it**, is refused with a message naming
+  the app's folder. Those are changes to the app: edit or delete the routine's
+  file inside the app's folder as part of changing that app (the `update-app`
+  skill), and commit it with the app's other changes. To stop it running
+  without changing the app, use `routines disable <id>`.
+
+If two files give the same id (one under `system/routines/` and one inside an
+app, or in two apps), the routine shows as Broken with both paths and does not
+run; rename or delete one of the files.
 
 ## How it runs
 

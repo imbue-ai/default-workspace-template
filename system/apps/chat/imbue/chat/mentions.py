@@ -26,14 +26,14 @@ from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import ValidationError
-from workspace_layout.identity import RequestIdentity
-from workspace_layout.identity import is_owner_participant
-from workspace_layout.identity import participant_key_of
 from workspace_layout.primitives import OWNER_PARTICIPANT_KEY
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 from workspace_layout.roster import RosterDocument
 
+from imbue.app_sdk.identity import RequestIdentity
+from imbue.app_sdk.identity import is_owner_participant
+from imbue.app_sdk.identity import participant_key_of
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.authors import AuthorStore
 from imbue.chat.authors import author_prefix

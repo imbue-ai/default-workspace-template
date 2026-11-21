@@ -209,7 +209,7 @@ export function syncNoticeOf(connections: Connections | null, folder: string): S
   return null;
 }
 
-/** The server refuses with `{"detail": ...}` (app_schema's ErrorResponse); anything else is read as text. */
+/** The server refuses with `{"detail": ...}` (the app SDK's ErrorResponse); anything else is read as text. */
 async function refusalOf(response: Response): Promise<string> {
   const isJson = (response.headers.get("Content-Type") ?? "").includes("application/json");
   if (!isJson) return response.text().catch(() => "");

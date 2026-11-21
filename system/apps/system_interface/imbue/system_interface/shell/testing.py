@@ -29,8 +29,6 @@ from app_manifest.registry import read_registry
 from flask import Flask
 from flask import request
 from loguru import logger
-from workspace_layout.identity import IDENTITY_HEADER
-from workspace_layout.identity import RequestIdentity
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
@@ -46,6 +44,8 @@ from workspace_layout.records import ShortcutTarget
 from workspace_layout.records import Window
 from workspace_layout.records import WindowPlacement
 
+from imbue.app_sdk.identity import IDENTITY_HEADER
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.data_types import ClientStateReport

@@ -21,6 +21,7 @@ from host_backup.cli import (
     _wait_for_next_completion,
     _wait_for_tick_to_end,
     backup_now_main,
+    has_recent_backup,
 )
 from host_backup.config import BACKUP_TOML_PATH
 from host_backup.events import (
@@ -320,6 +321,33 @@ def test_check_reports_the_newest_outcomes_and_triggers_nothing(
     assert result.exit_code == expected_exit_code
     assert json.loads(result.stdout)["newest_outcome"] == expected_outcome
     assert not (tmp_path / BACKUP_TOML_PATH).exists()
+
+
+@pytest.mark.parametrize(
+    ("ticks", "expected"),
+    [
+        pytest.param(((BackupEventType.RESTIC_BACKUP_SUCCEEDED, timedelta(minutes=50)),), True, id="recent-success"),
+        pytest.param(((BackupEventType.RESTIC_BACKUP_SUCCEEDED, timedelta(hours=3)),), False, id="stale-success"),
+        pytest.param(
+            (
+                (BackupEventType.RESTIC_BACKUP_SUCCEEDED, timedelta(minutes=50)),
+                (BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS, timedelta(minutes=5)),
+            ),
+            False,
+            id="not-configured-since",
+        ),
+        pytest.param((), False, id="never-ran"),
+    ],
+)
+def test_a_caller_in_process_learns_whether_a_recent_backup_succeeded(
+    backup_events_dir: Path,
+    ticks: tuple[tuple[BackupEventType, timedelta], ...],
+    expected: bool,
+) -> None:
+    for index, (event_type, age) in enumerate(ticks):
+        _write_aged_tick(backup_events_dir, event_type, f"tick-{index}", age)
+
+    assert has_recent_backup() is expected
 
 
 def test_check_finds_the_success_the_rotation_moved_aside(

@@ -26,7 +26,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 from app_manifest.registry import SHELL_MODULE_PATHS
-from app_schema.api_schema import (
+from flask import Flask, Response, abort, request, send_file
+from host_backup.config import get_events_dir
+from imbue.app_sdk.api_schema import (
     DEFAULT_API_SCHEMA_PATH,
     AlternateResponse,
     ErrorResponse,
@@ -35,10 +37,8 @@ from app_schema.api_schema import (
     SchemalessRoute,
     register_api_schema_route,
 )
-from app_schema.request_guard import install_request_guard
-from app_schema.routes import model_response, parse_request_body
-from flask import Flask, Response, abort, request, send_file
-from host_backup.config import get_events_dir
+from imbue.app_sdk.request_guard import install_request_guard
+from imbue.app_sdk.routes import model_response, parse_request_body
 from werkzeug.serving import run_simple
 
 from system_monitor import actions, backups, cpu, disk, memory, stats

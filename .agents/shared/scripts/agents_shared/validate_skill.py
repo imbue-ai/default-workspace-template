@@ -99,11 +99,47 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], list[str]]:
 THIRD_PARTY_SKILLS_FILE_NAME = "third-party-skills.toml"
 
 
+# An app installed from someone else's repository carries its own skills, linked into ``skills/``; its record,
+# under the repo root, says where it came from. Read here with the standard library alone, like everything else in
+# this file.
+_APP_RECORDS_DIRECTORY = Path("system/config/apps")
+_APPS_DIRECTORY = Path("system/apps")
+_APP_SKILLS_DIRNAME = "skills"
+_INSTALLED_ORIGIN = "installed"
+
+
+def _installed_app_skills(repo_root: Path) -> dict[str, str]:
+    """The skills carried by the apps this workspace installed from elsewhere, mapped to where each app came from."""
+    skills: dict[str, str] = {}
+    for record_path in sorted((repo_root / _APP_RECORDS_DIRECTORY).glob("*.toml")):
+        record = tomllib.loads(record_path.read_text(encoding="utf-8"))
+        if record.get("origin") != _INSTALLED_ORIGIN:
+            continue
+        source = record.get("upstream_url") or f"the installed app {record.get('name')}"
+        skills_dir = (
+            repo_root
+            / _APPS_DIRECTORY
+            / str(record.get("package"))
+            / _APP_SKILLS_DIRNAME
+        )
+        if skills_dir.is_dir():
+            skills.update(
+                {
+                    path.name: str(source)
+                    for path in sorted(skills_dir.iterdir())
+                    if (path / "SKILL.md").is_file()
+                }
+            )
+    return skills
+
+
 def third_party_skills(agents_dir: Path) -> dict[str, str]:
-    """The skills ``.agents/third-party-skills.toml`` lists, mapped to where each came from."""
+    """The skills the workspace keeps as they came, mapped to where each came from: the ones
+    ``.agents/third-party-skills.toml`` lists, and the ones an installed app carries."""
+    installed = _installed_app_skills(agents_dir.parent)
     listing = agents_dir / THIRD_PARTY_SKILLS_FILE_NAME
     if not listing.is_file():
-        return {}
+        return installed
     skills = tomllib.loads(listing.read_text(encoding="utf-8")).get("skills", {})
     if not isinstance(skills, dict) or not all(
         isinstance(source, str) and source for source in skills.values()
@@ -112,12 +148,25 @@ def third_party_skills(agents_dir: Path) -> dict[str, str]:
             f"{listing}: [skills] must map each skill's name to where it came from, a "
             'non-empty string (pdf = "https://github.com/anthropics/skills")'
         )
-    return skills
+    return {**installed, **skills}
+
+
+def _agents_dir_of(skill_dir: Path) -> Path:
+    """The ``.agents`` directory a skill belongs to, whether it is named by its entry under ``skills/`` or by the
+    directory inside an app that the entry links to."""
+    apps_parts = _APPS_DIRECTORY.parts
+    if (
+        skill_dir.parent.name == _APP_SKILLS_DIRNAME
+        and len(skill_dir.parents) > 2
+        and skill_dir.parents[2].parts[-len(apps_parts) :] == apps_parts
+    ):
+        return skill_dir.parents[4] / ".agents"
+    return skill_dir.parent.parent
 
 
 def is_third_party_skill(skill_dir: Path) -> bool:
-    """Whether ``.agents/third-party-skills.toml`` lists the skill, so the checks leave it out."""
-    return skill_dir.name in third_party_skills(skill_dir.parent.parent)
+    """Whether the workspace keeps the skill as it came, so the checks leave it out."""
+    return skill_dir.name in third_party_skills(_agents_dir_of(skill_dir))
 
 
 def package_name(skill_name: str) -> str:

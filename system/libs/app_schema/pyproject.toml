@@ -1,24 +1,24 @@
 [project]
 name = "app-schema"
 version = "0.1.0"
-description = "An app's self-description: the OpenAPI document for its HTTP API, built from its Flask routes"
+description = "The names of the app SDK (imbue-app-sdk) under their old package, for apps written before it"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    # The test helper reads the app's manifest to learn the schema path, title and description.
+    # Everything this package offers is the SDK's.
+    "imbue-app-sdk",
+    # CLEANUP: drop the three below with this package. An app written before the SDK reaches them through this
+    # package: it imports workspace_layout.identity, and its own imbue-common and app-manifest requirements
+    # resolve to the workspace's pin through this package's sources.
     "app-manifest",
-    "flask>=3.0",
     "imbue-common",
-    "loguru>=0.7",
-    "pydantic>=2.0",
-    # The request guard reads the identity header and the provenance rules every app shares.
     "workspace-layout",
 ]
 
 [project.optional-dependencies]
 # What assert_api_schema_describes_app validates a served document with; an app's test suite
 # depends on app-schema[testing], its runtime on app-schema alone.
-testing = ["openapi-spec-validator>=0.7"]
+testing = ["imbue-app-sdk[testing]"]
 
 [build-system]
 requires = ["hatchling"]

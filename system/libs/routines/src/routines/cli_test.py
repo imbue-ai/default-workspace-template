@@ -35,7 +35,19 @@ from routines.runner import RUN_ID_ENV
 from routines.state import FileStateStore
 from routines.testing import TEST_NOW
 from routines.testing import legacy_runner_line
+from routines.testing import make_user_app
 from routines.testing import wait_for_last_run
+from routines.testing import write_app_definition
+
+_APP_ROUTINE_TOML = 'title = "Inbox status"\nwhat = "Checks mail."\nevery = "1d"\nat = "07:30"\ncommand = ["true"]\n'
+
+
+def _commit_subjects(paths: RoutinesPaths) -> list[str]:
+    """Every commit of the workspace, newest first."""
+    log = subprocess.run(
+        ["git", "log", "--format=%s"], cwd=paths.repo_root, capture_output=True, text=True, check=True
+    )
+    return log.stdout.splitlines()
 
 
 def _invoke(paths: RoutinesPaths, *args: str, environ: dict[str, str] | None = None) -> Result:
@@ -100,6 +112,100 @@ def test_add_list_show_edit_and_remove_round_trip(git_paths: RoutinesPaths) -> N
     assert removed.exit_code == 0
     assert not (git_paths.definitions_dir / "news-sync.toml").exists()
     assert "No routines yet" in _invoke(git_paths, "list").output
+
+
+def test_add_for_a_user_app_writes_the_definition_into_the_apps_directory_and_commits_it(
+    git_paths: RoutinesPaths,
+) -> None:
+    make_user_app(git_paths, "inbox-status")
+
+    added = _add_command_routine(git_paths, "true", app="inbox-status")
+
+    path = git_paths.repo_root / "system/apps/inbox_status/routines/x.toml"
+    assert added.exit_code == 0, added.output
+    assert added.output == f"Added x at {path}\n"
+    assert 'app = "inbox-status"' in path.read_text()
+    assert not (git_paths.definitions_dir / "x.toml").exists()
+    committed = subprocess.run(
+        ["git", "log", "--format=%s", "--name-only", "-1"],
+        cwd=git_paths.repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert committed.stdout.split() == ["routines:", "add", "x", "system/apps/inbox_status/routines/x.toml"]
+    assert f"file:     {path}" in _invoke(git_paths, "show", "x").output
+
+
+def test_add_for_an_app_that_is_no_user_app_writes_the_definition_under_system_routines(
+    git_paths: RoutinesPaths,
+) -> None:
+    """A built-in app has its directory under system/apps and no record of an install."""
+    git_paths.app_dir("chat").mkdir(parents=True)
+
+    added = _add_command_routine(git_paths, "true", app="chat")
+
+    assert added.exit_code == 0, added.output
+    assert (git_paths.definitions_dir / "x.toml").is_file()
+    assert not git_paths.app_definitions_dir("chat").exists()
+
+
+def test_edit_reschedules_a_routine_an_app_owns_without_touching_its_file_or_committing(
+    git_paths: RoutinesPaths,
+) -> None:
+    path = write_app_definition(git_paths, "inbox_status", RoutineId("inbox-status"), _APP_ROUTINE_TOML)
+    commits_before = _commit_subjects(git_paths)
+
+    edited = _invoke(git_paths, "edit", "inbox-status", "--every", "1w", "--days", "mon")
+
+    assert edited.exit_code == 0, edited.output
+    assert edited.output == f"Updated inbox-status at {git_paths.state_path(RoutineId('inbox-status'))}\n"
+    # The flags go over the routine as it runs: the next one keeps the weekly cadence the first one set.
+    assert _invoke(git_paths, "edit", "inbox-status", "--at", "09:00").exit_code == 0
+    assert "Every week on Monday at 9:00 am" in _invoke(git_paths, "show", "inbox-status").output
+    assert path.read_text() == _APP_ROUTINE_TOML
+    assert _commit_subjects(git_paths) == commits_before
+
+
+def test_edit_of_a_routine_with_no_definition_it_may_rewrite_says_why_rather_than_asking_for_every_field(
+    git_paths: RoutinesPaths,
+) -> None:
+    # An id two files share, and an app's file that does not parse: neither has a definition to edit.
+    write_app_definition(git_paths, "inbox_status", RoutineId("inbox-status"), _APP_ROUTINE_TOML)
+    git_paths.workspace_definition_path(RoutineId("inbox-status")).parent.mkdir(parents=True, exist_ok=True)
+    git_paths.workspace_definition_path(RoutineId("inbox-status")).write_text(_APP_ROUTINE_TOML)
+    write_app_definition(git_paths, "inbox_status", RoutineId("mail-check"), "title = [not toml")
+
+    duplicated = _invoke(git_paths, "edit", "inbox-status", "--every", "2h")
+    broken = _invoke(git_paths, "edit", "mail-check", "--every", "2h")
+
+    assert duplicated.exit_code == 1
+    assert "defined in more than one file" in duplicated.output
+    assert broken.exit_code == 1
+    assert broken.output.startswith("error: mail-check is broken (not valid TOML")
+    assert broken.output.rstrip().endswith("fix its file first.")
+    assert "Field required" not in duplicated.output + broken.output
+
+
+def test_edit_of_anything_but_the_schedule_and_remove_are_refused_for_a_routine_an_app_owns(
+    git_paths: RoutinesPaths,
+) -> None:
+    path = write_app_definition(git_paths, "inbox_status", RoutineId("inbox-status"), _APP_ROUTINE_TOML)
+    assert _invoke(git_paths, "disable", "inbox-status").exit_code == 0
+
+    for flags in (["--title", "Mail check"], ["--timeout", "5m"], ["--every", "2d", "--what", "Other."]):
+        refused = _invoke(git_paths, "edit", "inbox-status", *flags)
+        assert refused.exit_code == 1, flags
+        assert "error: inbox-status belongs to the app in system/apps/inbox_status/" in refused.output
+        assert "system/apps/inbox_status/routines/inbox-status.toml" in refused.output
+    removed = _invoke(git_paths, "remove", "inbox-status")
+    assert removed.exit_code == 1
+    assert "error: inbox-status belongs to the app in system/apps/inbox_status/" in removed.output
+
+    assert path.read_text() == _APP_ROUTINE_TOML
+    row = json.loads(_invoke(git_paths, "list", "--format", "json").output)["routines"][0]
+    # Still listed, still off, still on the app's schedule: a refused edit changes nothing.
+    assert (row["routine_id"], row["health"], row["schedule_text"]) == ("inbox-status", "OFF", "Every day at 7:30 am")
 
 
 def test_add_refuses_a_definition_that_does_not_validate_with_the_reason(git_paths: RoutinesPaths) -> None:

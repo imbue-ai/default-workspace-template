@@ -3,16 +3,16 @@ identity, and how an op settles on the one client it targets (desktop contracts.
 
 from typing import Final
 
-from app_schema.routes import error_response
 from flask import request
 from flask.typing import ResponseReturnValue
-from workspace_layout.identity import IDENTITY_HEADER
-from workspace_layout.identity import RequestIdentity
-from workspace_layout.identity import is_loopback_address
-from workspace_layout.identity import parse_identity_header
 from workspace_layout.ops import OpRequester
 from workspace_layout.primitives import ClientId
 
+from imbue.app_sdk.identity import IDENTITY_HEADER
+from imbue.app_sdk.identity import RequestIdentity
+from imbue.app_sdk.identity import is_loopback_address
+from imbue.app_sdk.identity import parse_identity_header
+from imbue.app_sdk.routes import error_response
 from imbue.system_interface.shell.client_activity import find_client_id_for_page
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import NoTargetClientError

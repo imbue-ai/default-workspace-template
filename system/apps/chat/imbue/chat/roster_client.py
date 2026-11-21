@@ -14,13 +14,13 @@ from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 from workspace_layout.errors import ShellOpError
-from workspace_layout.identity import RequestIdentity
 from workspace_layout.interfaces import ShellLayoutInterface
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.roster import RosterDocument
 from workspace_layout.roster import RosterParticipant
 from workspace_layout.roster import UNNAMED_PERSON_DISPLAY_NAME
 
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 

@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from github_sync.wiring import HOOKS_PATH, apply_git_wiring, remove_git_wiring
+from github_sync.wiring import (
+    HOOKS_PATH,
+    apply_git_wiring,
+    gateway_git_config,
+    remove_git_wiring,
+)
 
 
 def _get_all_global(key: str) -> list[str]:
@@ -54,6 +59,32 @@ def test_apply_git_wiring_adds_permissions_override_header_when_set(
     assert headers == [
         "X-Latchkey-Gateway-Password: pw-abc",
         "X-Latchkey-Gateway-Permissions-Override: jwt-xyz",
+    ]
+
+
+def test_gateway_git_config_names_the_rewrite_and_both_headers_in_order(
+    isolated_git_and_gateway_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A caller that wires one command, not the container, reads the same
+    entries apply_git_wiring writes."""
+    assert gateway_git_config() is None
+
+    _set_gateway_env(monkeypatch, "http://127.0.0.1:41234")
+    monkeypatch.setenv("LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE", "jwt-xyz")
+
+    assert gateway_git_config() == [
+        (
+            "url.http://127.0.0.1:41234/gateway/https://github.com/.insteadOf",
+            "https://github.com/",
+        ),
+        (
+            "http.http://127.0.0.1:41234/.extraHeader",
+            "X-Latchkey-Gateway-Password: pw-abc",
+        ),
+        (
+            "http.http://127.0.0.1:41234/.extraHeader",
+            "X-Latchkey-Gateway-Permissions-Override: jwt-xyz",
+        ),
     ]
 
 

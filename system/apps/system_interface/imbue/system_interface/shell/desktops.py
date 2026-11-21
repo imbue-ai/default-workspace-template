@@ -16,7 +16,6 @@ from app_manifest.primitives import LaunchPathId
 from app_manifest.registry import RegistryRow
 from loguru import logger
 from pydantic import Field
-from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import UserId
@@ -32,6 +31,7 @@ from workspace_layout.records import Wallpaper
 from workspace_layout.records import Window
 from workspace_themes.primitives import ThemeId
 
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure

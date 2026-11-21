@@ -6,13 +6,13 @@ import pytest
 from flask.testing import FlaskClient
 
 from app_manifest.testing import assert_document_policy_admits_page
-from app_schema.testing import assert_api_schema_describes_app
-from app_schema.testing import assert_request_guard_refuses_unknown_provenance
 from getting_started.pages import build_pages_app
 from getting_started.template_catalog import TemplateCatalogStore
 from getting_started.testing import FakeTemplateCatalogFetcher
 from getting_started.testing import catalog_document
 from getting_started.testing import catalog_template_document
+from imbue.app_sdk.app_testing import assert_api_schema_describes_app
+from imbue.app_sdk.app_testing import assert_request_guard_refuses_unknown_provenance
 
 _CATALOG_URL = "https://example.test/catalog/new-tab-templates.json"
 _MANIFEST_PATH = Path(__file__).resolve().parents[2] / "app.toml"
@@ -119,5 +119,5 @@ def test_the_app_describes_its_api_the_way_its_manifest_says(tmp_path: Path) -> 
 def test_a_page_of_another_origin_and_a_header_less_request_off_loopback_are_refused(tmp_path: Path) -> None:
     """The workspace's own browser is on loopback too, so the app reads a header-less request as the owner's only
     from loopback under a loopback Host, and never one its browser marks as another origin's (the request guard,
-    app_schema.request_guard)."""
+    imbue.app_sdk.request_guard)."""
     assert_request_guard_refuses_unknown_provenance(_client(tmp_path), "GET", "/api/health")

@@ -49,7 +49,7 @@ DISABLED_COMPONENTS: Final[tuple[str, ...]] = (
 
 # Chromium features that must stay on, kept as data so the reason is greppable: a page of another origin reaching
 # a loopback service (the Screen's own, the chat's) is gated by the browser's Local Network Access checks, the first
-# layer in front of the services' own provenance check (workspace_layout.identity).
+# layer in front of the services' own provenance check (imbue.app_sdk.identity).
 NEVER_DISABLED_FEATURES: Final[tuple[str, ...]] = ("LocalNetworkAccessChecks",)
 
 # Playwright default switches that must never be emitted, kept as data so the reason is greppable.

@@ -15,6 +15,23 @@ foreground; supervisord starts and supervises every program. supervisord
 does **not** watch the config file -- you apply changes with
 `supervisorctl`.
 
+The program files of an app the workspace built or installed (one with a
+record under `system/config/apps/`) are generated from its `app.toml` and its
+record by `app-install`, and each begins with a comment saying so. The
+sections below on adding, removing and modifying a program are for every
+other program; for such an app:
+
+- **Add it** with the `build-app` scaffold, or `uv run --no-sync app-install
+  add <package>` for an app directory that already exists.
+- **Change how it runs** in its `app.toml` (`[run]`, `[[services]]`,
+  `[[secrets]]`; a `command` there is one of the app's console scripts when
+  the app has a `pyproject.toml`, and is run as given otherwise), then
+  `uv run --no-sync app-install regenerate <name>` and
+  `supervisorctl reread && supervisorctl update`. Never edit the generated
+  file: `uv run --no-sync app-install check` reports it, and the next
+  regenerate overwrites it.
+- **Remove it** with `uv run --no-sync app-install uninstall <name>`.
+
 ## Program format
 
 ```ini
@@ -157,9 +174,10 @@ than ~1s later, and it keeps the command self-documenting.
 2. `supervisorctl reread && supervisorctl update` -- supervisord stops and
    forgets the removed program.
 
-For an app, also drop its `data/.state/apps.toml` entry with
-`python3 system/scripts/forward_port.py --name <name> --remove`; for a scaffolded web lib,
-`build-app`'s `cleanup.md` reference covers the full teardown.
+For an app without a record, also drop its `data/.state/apps.toml` entry with
+`python3 system/scripts/forward_port.py --name <name> --remove`. An app with a
+record is removed with `uv run --no-sync app-install uninstall <name>`
+instead; `build-app`'s `cleanup.md` reference covers the full teardown.
 
 ## Modifying a service
 

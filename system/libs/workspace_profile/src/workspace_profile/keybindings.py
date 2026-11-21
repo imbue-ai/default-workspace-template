@@ -24,8 +24,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
+from imbue.app_sdk.identity import RequestIdentity
 from imbue.imbue_common.pure import pure
-from workspace_layout.identity import RequestIdentity
 
 from workspace_profile.errors import InvalidChordError
 from workspace_profile.overrides import (

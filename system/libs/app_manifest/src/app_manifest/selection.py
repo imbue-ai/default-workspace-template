@@ -2,16 +2,19 @@
 
 Selection reads only what the workspace declares: a changed path inside a package or skill
 runs that unit's suite, plus the suites of the packages (workspace members and user packages) that depend on it
-(``pyproject.toml``), the npm packages that depend on it (``package.json``), and the apps whose
-manifests reference it (``[[references]]``); a package the root project depends on also runs
-the full root suite, the root project's own tests. A supervisord block runs the app whose
-program it holds and the check that every block names its OOM band. ``uv.lock`` selects the
+(``pyproject.toml``), the npm packages that depend on it (``package.json``), and the apps that
+reference it (``[[references]]``, in a built-in app's manifest or a user app's record); a package
+the root project depends on also runs the full root suite, the root project's own tests. A
+supervisord block runs the app whose program it holds and the check that every block names its
+OOM band. A user app's record, and the link to a skill it carries, run that app. A user app
+that is no Python project (a wrapped server with no ``pyproject.toml``) has no suite: a change
+to it runs the tests of what it references and the always-run set. ``uv.lock`` selects the
 members that depend on what it upgraded. A change inside the frontend of an app with its own
 pytest root runs only the app's tests marked ``browser`` or ``frontend``; any other app runs
 whole. A small always-run set guards the repo-wide
 invariants any edit can break; agent prose outside every skill, and the other markdown the
-always-run prose checks read, selects only that set and the apps whose manifests reference
-it. Any other path belongs to no declared unit, so it runs the full root suite.
+always-run prose checks read, selects only that set and the apps that reference it. Any other
+path belongs to no declared unit, so it runs the full root suite.
 """
 
 import json
@@ -43,6 +46,7 @@ from app_manifest.scope import find_wiring_sections
 from app_manifest.scope import list_changed_files
 from app_manifest.scope import list_tracked_files
 from app_manifest.scope import list_uncommitted_paths
+from app_manifest.scope import list_user_app_files
 from app_manifest.scope import load_app_manifests
 from app_manifest.scope import match_referencing_manifests
 from app_manifest.scope import read_file_at_revision
@@ -77,6 +81,7 @@ _PACKAGE_PARENT_DIRECTORIES: Final[tuple[str, ...]] = (
     _APPS_DIRECTORY,
 )
 _SKILLS_DIRECTORY: Final[str] = ".agents/skills"
+_PYTHON_PROJECT_FILE: Final[str] = "pyproject.toml"
 # Agent prose, which only the always-run prose checks and the apps referencing it read.
 _AGENT_PROSE_DIRECTORY: Final[str] = ".agents"
 
@@ -165,6 +170,7 @@ class ChangedPathClass(LowerCaseStrEnum):
     FRONTEND_PACKAGE = auto()
     MANIFEST_REFERENCE = auto()
     WIRING = auto()
+    USER_APP_FILE = auto()
     ROOT_CONFIG = auto()
     DOCS = auto()
     UNOWNED = auto()
@@ -262,6 +268,9 @@ class RepoLayout(FrozenModel):
     manifests: tuple[LoadedManifest, ...] = Field(description="The app manifests that load")
     wiring_owners: Mapping[str, tuple[str, ...]] = Field(
         description="Each supervisord config file and the app directories with blocks in it"
+    )
+    user_app_files: Mapping[str, str] = Field(
+        description="Each user app's record and each link to a skill one carries, with that app's directory"
     )
     has_shell_modules: bool = Field(
         description="Whether the tree holds the shell's built modules that every app's pages import"
@@ -386,13 +395,47 @@ def _wiring_owners(repo_root: Path, manifests: Sequence[LoadedManifest]) -> dict
         if package_directory is None:
             continue
         try:
-            sections = find_wiring_sections(repo_root, loaded.manifest)
+            sections = find_wiring_sections(repo_root, loaded.manifest, is_user_app=loaded.record is not None)
         except ScopeComputationError as e:
             logger.warning("Skipping the wiring of {}: {}", loaded.manifest_path, e)
             continue
         for section in sections:
             owners[section.path].add(package_directory.rstrip("/"))
     return {path: tuple(sorted(directories)) for path, directories in owners.items()}
+
+
+def _user_app_files(repo_root: Path, manifests: Sequence[LoadedManifest]) -> dict[str, str]:
+    owners: dict[str, str] = {}
+    for loaded in manifests:
+        package_directory = app_package_directory(repo_root, loaded.manifest_path)
+        if package_directory is None:
+            continue
+        for path in list_user_app_files(repo_root, loaded):
+            owners[path] = package_directory.rstrip("/")
+    return owners
+
+
+def _projectless_user_apps(repo_root: Path, manifests: Sequence[LoadedManifest]) -> list[str]:
+    """The directories of the user apps that are no Python project (a wrapped server with no
+    ``pyproject.toml``). One has no venv of its own to run a suite in, and a test file it happens
+    to hold is its upstream's, written for an environment the root venv is not, so no selected
+    command names it."""
+    directories = (
+        app_package_directory(repo_root, loaded.manifest_path) for loaded in manifests if loaded.record is not None
+    )
+    return [
+        directory.rstrip("/")
+        for directory in directories
+        if directory is not None and not (repo_root / directory / _PYTHON_PROJECT_FILE).is_file()
+    ]
+
+
+def read_projectless_user_apps(repo_root: Path) -> tuple[str, ...]:
+    """The directories of the user apps that are no Python project, off the tree at ``repo_root``.
+    The root ``conftest.py`` keeps the root run from collecting them, so that the root run and
+    the selection leave the same test files out."""
+    repo_root = repo_root.resolve()
+    return tuple(_projectless_user_apps(repo_root, load_app_manifests(repo_root)))
 
 
 def load_repo_layout(repo_root: Path) -> RepoLayout:
@@ -402,10 +445,12 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
     python_members = read_python_members(repo_root)
     user_packages = read_user_packages(repo_root, python_members)
     own_root_units = tuple(sorted({*read_own_root_units(repo_root, python_members), *user_packages}))
+    manifests = load_app_manifests(repo_root)
     # No suite collects the tests of a directory the root run ignores and that is not an own
     # root, and naming one to the root run would override its --ignore.
     uncollected_directories = [
-        directory for directory in read_root_ignored_directories(repo_root) if directory not in own_root_units
+        *(directory for directory in read_root_ignored_directories(repo_root) if directory not in own_root_units),
+        *_projectless_user_apps(repo_root, manifests),
     ]
     test_files = tuple(
         sorted(
@@ -415,7 +460,6 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
             and not any(is_path_covered_by(directory, path) for directory in uncollected_directories)
         )
     )
-    manifests = load_app_manifests(repo_root)
     root_dependencies = read_root_dependencies(repo_root)
     return RepoLayout(
         repo_root=repo_root,
@@ -431,6 +475,7 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
         npm_packages=read_npm_packages(repo_root),
         manifests=manifests,
         wiring_owners=_wiring_owners(repo_root, manifests),
+        user_app_files=_user_app_files(repo_root, manifests),
         has_shell_modules=all((repo_root / path).is_file() for path in SHELL_MODULE_PATHS),
     )
 
@@ -504,13 +549,13 @@ def _owning_npm_package(layout: RepoLayout, path: str) -> NpmPackage | None:
 
 
 def _referenced_directory_requests(layout: RepoLayout, path: str, app_directory: str) -> list[_PytestRequest]:
-    """The tests beneath each directory the app's manifest references."""
+    """The tests beneath each directory the app references."""
     requests: list[_PytestRequest] = []
     for loaded in layout.manifests:
         owner = app_package_directory(layout.repo_root, loaded.manifest_path)
         if owner is None or owner.rstrip("/") != app_directory:
             continue
-        for reference in loaded.manifest.references:
+        for reference in loaded.references:
             directory = reference.path.rstrip("/")
             reason = _reason(path, ChangedPathClass.PACKAGE, f"{app_directory} references {directory}")
             requests.extend(
@@ -522,7 +567,7 @@ def _referenced_directory_requests(layout: RepoLayout, path: str, app_directory:
 def _select_for_unit(context: _SelectionContext, path: str, unit: str) -> _PathOutcome:
     """A package's or skill's own suite, or only the changed test file in an app with its own
     pytest root; for a package's non-test file, also the suites of the packages that depend on it
-    and of the directories an app's manifest references, and whether the root project depends on
+    and of the directories an app references, and whether the root project depends on
     the package or on one of those members. A non-test file in an app's frontend selects nothing
     here."""
     layout = context.layout
@@ -685,6 +730,15 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
         )
         is_owned = True
 
+    user_app = layout.user_app_files.get(path)
+    if user_app is not None:
+        classes.append(ChangedPathClass.USER_APP_FILE)
+        reason = _reason(path, ChangedPathClass.USER_APP_FILE, f"kept for {user_app}")
+        pytest_requests.extend(
+            _present([_whole_request(layout, user_app, marker_scope=MarkerScope.DEFAULT, reason=reason)])
+        )
+        is_owned = True
+
     npm_package = _owning_npm_package(layout, path)
     if path in _NPM_ROOT_CONFIG_FILES or npm_package is not None:
         directories = (
@@ -736,7 +790,7 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
 
 
 def _select_for_manifest_references(layout: RepoLayout, path: str) -> _PathOutcome:
-    """The apps whose manifests reference the path."""
+    """The apps that reference the path."""
     classes: list[ChangedPathClass] = []
     requests: list[_PytestRequest] = []
     for match in match_referencing_manifests(layout.manifests, RepoRelativePath(path)):

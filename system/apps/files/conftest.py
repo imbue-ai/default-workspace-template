@@ -18,10 +18,10 @@ from playwright.sync_api import Browser
 from playwright.sync_api import BrowserContext
 from playwright.sync_api import Page
 
-from app_schema.routes import model_response
 from files_app.connections import Connections as ConnectionsListing
 from files_app.server import create_app
 from files_app.serving import serve_in_background
+from imbue.app_sdk.routes import model_response
 
 STATIC_DIRECTORY = Path(__file__).parent / "static"
 

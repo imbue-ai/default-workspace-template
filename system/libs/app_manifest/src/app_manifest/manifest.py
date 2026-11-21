@@ -1,11 +1,13 @@
 import re
 import tomllib
+from collections.abc import Sequence
 from enum import auto
 from pathlib import Path
 from typing import Any
 from typing import Final
 from typing import Self
 
+from loguru import logger
 from pydantic import Field
 from pydantic import ValidationError
 from pydantic import field_validator
@@ -34,6 +36,7 @@ from app_manifest.primitives import ReferenceNote
 from app_manifest.primitives import ReferencePath
 from app_manifest.primitives import SecretFileName
 from app_manifest.primitives import is_path_covered_by
+from app_manifest.records import record_path
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -70,6 +73,40 @@ MAIN_PORT_NAME: Final[PreviewName] = PreviewName("main")
 PREVIEW_DATA_COPY_KEY: Final[PreviewName] = PreviewName("data")
 DEFAULT_PREVIEW_HEALTH_PATH: Final[str] = "/health"
 DEFAULT_PREVIEW_OPEN_PATH: Final[str] = "/"
+
+# What a ``[run]`` or ``[[services]]`` command, argument, or environment value may carry: the app's own port and
+# the loopback host. A program has no scratch space and no copies, so the preview table's other placeholders have
+# no meaning there.
+RUN_PORT_PLACEHOLDER: Final[str] = "{port:main}"
+RUN_HOST_PLACEHOLDER: Final[str] = "{host}"
+_RUN_PLACEHOLDERS: Final[frozenset[str]] = frozenset({RUN_PORT_PLACEHOLDER, RUN_HOST_PLACEHOLDER})
+# A program's command, its arguments, and its environment are written onto one line of a supervisord file.
+_LINE_BREAKS: Final[tuple[str, ...]] = ("\n", "\r")
+# supervisord's config parser cuts a line at a ";" or "#" that follows whitespace, inside quotes too.
+_INLINE_COMMENT_START_PATTERN: Final[re.Pattern[str]] = re.compile(r"\s[;#]")
+# A service's role names the program ``<app>-<role>``.
+SERVICE_ROLE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+# An app's version: three dot-separated numbers, with an optional pre-release after a hyphen.
+APP_VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
+# A template version: a release tag of the default workspace template.
+TEMPLATE_VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^minds-v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
+
+# The key a manifest declares its shortcuts under: one table, or an array of them.
+_DEFAULT_SHORTCUT_KEY: Final[str] = "default_shortcut"
+
+# The error type pydantic gives a key that a model forbidding extra keys does not declare.
+_UNKNOWN_KEY_ERROR_TYPE: Final[str] = "extra_forbidden"
+
+
+class ManifestReadMode(LowerCaseStrEnum):
+    """What ``load_manifest`` does with a key the manifest models do not declare, and with a ``[[references]]``
+    or ``[wiring]`` table in the manifest of an app that has a record."""
+
+    # Warns about the key and ignores it: for a reader, which has to read a manifest written
+    # for a newer template than this workspace's (an app installed from someone else's repository).
+    TOLERANT = auto()
+    # Refuses the manifest: for a check of a manifest this workspace is authoring.
+    STRICT = auto()
 
 
 class ShortcutMode(LowerCaseStrEnum):
@@ -302,7 +339,8 @@ class ScopeRules(FrozenModel):
 
     exclude: tuple[ExcludeGlob, ...] = Field(
         default=(),
-        description="Repo-root-relative gitignore-style globs no pass ever considers",
+        description="gitignore-style globs no pass ever considers: relative to the repo root, or to the app's "
+        "own directory for an app with a record",
     )
 
 
@@ -493,6 +531,166 @@ def scaffold_preview_spec(name: AppName) -> PreviewSpec:
     )
 
 
+def _check_program_text(table: str, field_name: str, text: str) -> None:
+    """Raises InvalidManifestValueError for a placeholder a program has no value for, or a line break."""
+    if any(line_break in text for line_break in _LINE_BREAKS):
+        raise InvalidManifestValueError(f"{table}.{field_name} must be a single line, got {text!r}")
+    for match in PREVIEW_PLACEHOLDER_PATTERN.finditer(text):
+        if match.group(0) not in _RUN_PLACEHOLDERS:
+            raise InvalidManifestValueError(
+                f"{table}.{field_name} carries {match.group(0)}; a program takes only "
+                f"{RUN_PORT_PLACEHOLDER} and {RUN_HOST_PLACEHOLDER}"
+            )
+
+
+def _check_program_command(table: str, command: str) -> None:
+    """Raises InvalidManifestValueError for a command that is not one word: it is run as the program itself, never
+    split, so one that carries its arguments names a program that does not exist."""
+    _check_program_text(table, "command", command)
+    if any(character.isspace() for character in command):
+        raise InvalidManifestValueError(
+            f"{table}.command must be one word, the program to run, got {command!r}; its arguments go in {table}.args"
+        )
+
+
+def _check_program_environment_value(table: str, name: str, value: str) -> None:
+    """Raises InvalidManifestValueError for a value supervisord's environment line cannot carry: it wraps a value
+    in one kind of quote, has no escape for the other, strips every quote from both ends of what it reads, and
+    reads a ``;`` or ``#`` that follows whitespace as the start of a comment."""
+    _check_program_text(table, "env", value)
+    has_both_quotes = '"' in value and "'" in value
+    if has_both_quotes or value.startswith(("'", '"')) or value.endswith(("'", '"')):
+        raise InvalidManifestValueError(
+            f"{table}.env.{name} cannot be carried in a program's environment: a value may hold one kind of "
+            "quote, and not at either end"
+        )
+    if _INLINE_COMMENT_START_PATTERN.search(value):
+        raise InvalidManifestValueError(
+            f"{table}.env.{name} cannot be carried in a program's environment: supervisord reads a ';' or '#' "
+            "that follows a space as the start of a comment"
+        )
+
+
+class RunSpec(FrozenModel):
+    """How the app's main program starts: the manifest's ``[run]`` table.
+
+    Absent, the app starts the scaffold's way: the console script named after the app, with
+    ``<PACKAGE_UPPER>_PORT`` set to the app's port.
+    """
+
+    command: NonEmptyStr | None = Field(
+        default=None,
+        description="What runs: a script of a Python app's own project, or a command as given for an app with "
+        "no project; absent, the app's name",
+    )
+    args: tuple[str, ...] = Field(default=(), description="Arguments appended to the command; may carry placeholders")
+    env: dict[EnvVarName, str] = Field(
+        default_factory=dict, description="Environment for the program; values may carry placeholders"
+    )
+
+    @model_validator(mode="after")
+    def _check_texts(self) -> Self:
+        if self.command is not None:
+            _check_program_command("run", self.command)
+        for argument in self.args:
+            _check_program_text("run", "args", argument)
+        for name, value in self.env.items():
+            _check_program_environment_value("run", name, value)
+        return self
+
+
+class ServiceSpec(FrozenModel):
+    """A background program the app owns: one entry of the manifest's ``[[services]]``, run as ``<app>-<role>``."""
+
+    role: str = Field(description="What the service is for, in one lowercase word or a few joined by hyphens")
+    command: NonEmptyStr = Field(
+        description="What runs: a script of a Python app's own project, or a command as given"
+    )
+    args: tuple[str, ...] = Field(default=(), description="Arguments appended to the command; may carry placeholders")
+    env: dict[EnvVarName, str] = Field(
+        default_factory=dict, description="Environment for the program; values may carry placeholders"
+    )
+
+    @model_validator(mode="after")
+    def _check_role_and_texts(self) -> Self:
+        if not SERVICE_ROLE_PATTERN.fullmatch(self.role):
+            raise InvalidManifestValueError(
+                f"invalid service role {self.role!r}: lowercase letters and digits, joined by single hyphens"
+            )
+        _check_program_command("services", self.command)
+        for argument in self.args:
+            _check_program_text("services", "args", argument)
+        for name, value in self.env.items():
+            _check_program_environment_value("services", name, value)
+        return self
+
+
+class PermissionNote(FrozenModel):
+    """A latchkey permission an adopter will probably need to grant: guidance written when the app is published."""
+
+    scope: NonEmptyStr = Field(description="The latchkey scope, such as slack-api")
+    permission: NonEmptyStr = Field(description="The permission within the scope, such as slack-read-all")
+    note: str = Field(default="", description="One line saying what the app uses it for")
+
+
+class LlmNote(FrozenModel):
+    """That the app calls a model, and how: guidance written when the app is published."""
+
+    method: NonEmptyStr = Field(
+        description="'keyed' for an API key through the workspace's proxy, 'keyless' for a subscription-backed CLI"
+    )
+    note: str = Field(default="", description="One line saying what the app uses the model for")
+
+
+class EnvironmentNote(FrozenModel):
+    """The system packages and global tools the app needs beyond its own project: written when the app is
+    published. Environment units are not listed: the files under the app's ``env.d/`` are the list."""
+
+    apt: tuple[NonEmptyStr, ...] = Field(default=(), description="apt packages, by name")
+    npm_global: dict[str, str] = Field(default_factory=dict, description="Global npm packages, name to version")
+    uv_tools: dict[str, str] = Field(default_factory=dict, description="uv tools, name to version")
+    cargo_crates: dict[str, str] = Field(default_factory=dict, description="cargo crates, name to version")
+    cargo_default_toolchain: NonEmptyStr | None = Field(
+        default=None, description="The rustup default toolchain the crates need"
+    )
+
+
+class AppDependency(FrozenModel):
+    """Another app this app expects to find in the workspace. Advisory: nothing installs it."""
+
+    name: AppName = Field(description="The other app's name")
+    repo_url: NonEmptyStr | None = Field(
+        default=None, description="The other app's published repository, when it has one"
+    )
+
+
+class AdaptationNote(FrozenModel):
+    """Something an adopter must decide or rewire before the app fits their workspace."""
+
+    summary: NonEmptyStr = Field(description="What does not carry over as it is")
+    resolution: str = Field(default="", description="What to ask or change")
+
+
+class PublishRules(FrozenModel):
+    """What the app leaves out of the snapshot it publishes."""
+
+    exclude: tuple[NonEmptyStr, ...] = Field(
+        default=(),
+        description="gitignore-style globs, relative to the app's directory, left out of the published snapshot",
+    )
+
+    @field_validator("exclude")
+    @classmethod
+    def _check_exclude(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for glob in value:
+            if glob.startswith(("/", "!")) or "\\" in glob or ".." in glob.split("/"):
+                raise InvalidManifestValueError(
+                    f"invalid publish exclude {glob!r}: a glob relative to the app's directory, with no leading "
+                    "'/' or '!', no backslash, and no '..' segment"
+                )
+        return value
+
+
 class AppManifest(FrozenModel):
     """An app's static declarations, read from its app.toml (desktop-interface contracts.md section 2)."""
 
@@ -535,7 +733,7 @@ class AppManifest(FrozenModel):
     )
     default_shortcuts: tuple[DefaultShortcut, ...] = Field(
         default=(),
-        validation_alias="default_shortcut",
+        validation_alias=_DEFAULT_SHORTCUT_KEY,
         description="The shortcuts a new desktop is seeded with, in order: the ``default_shortcut`` table, or an "
         "array of them; none declared leaves the choice to the shell",
     )
@@ -580,8 +778,33 @@ class AppManifest(FrozenModel):
         default_factory=AppTheming,
         description="How far the app takes part in workspace themes",
     )
-    preview: PreviewSpec = Field(
-        description="How a throwaway instance boots for a preview (the scaffold convention by default)"
+    version: str | None = Field(
+        default=None, description="The app's semantic version; absent until the app is first published"
+    )
+    verified_template: str | None = Field(
+        default=None,
+        description="The template version the publisher's workspace ran when this version was published: guidance "
+        "for an adopter, never a requirement",
+    )
+    run: RunSpec | None = Field(
+        default=None, description="How the app's main program starts (the scaffold convention when absent)"
+    )
+    services: tuple[ServiceSpec, ...] = Field(
+        default=(), description="The background programs the app owns, each run as <name>-<role>"
+    )
+    permissions: tuple[PermissionNote, ...] = Field(
+        default=(), description="The latchkey permissions an adopter will probably need to grant"
+    )
+    llm: LlmNote | None = Field(default=None, description="Present when the app calls a model, and how")
+    environment: EnvironmentNote = Field(
+        default_factory=EnvironmentNote, description="The system packages and global tools the app needs"
+    )
+    dependencies: tuple[AppDependency, ...] = Field(
+        default=(), description="The other apps this app expects to find in the workspace"
+    )
+    adaptation: tuple[AdaptationNote, ...] = Field(default=(), description="What an adopter must decide or rewire")
+    publish: PublishRules = Field(
+        default_factory=PublishRules, description="What the app leaves out of the snapshot it publishes"
     )
 
     @model_validator(mode="before")
@@ -630,6 +853,18 @@ class AppManifest(FrozenModel):
             raise InvalidManifestValueError(
                 f"wiring programs must not repeat the app's own program {str(self.program)!r}"
             )
+        service_roles = [service.role for service in self.services]
+        if len(set(service_roles)) != len(service_roles):
+            raise InvalidManifestValueError(f"service roles must be unique, got {service_roles}")
+        if self.version is not None and not APP_VERSION_PATTERN.fullmatch(self.version):
+            raise InvalidManifestValueError(f"invalid version {self.version!r}: expected a semantic version, 1.2.3")
+        if self.verified_template is not None and not TEMPLATE_VERSION_PATTERN.fullmatch(self.verified_template):
+            raise InvalidManifestValueError(
+                f"invalid verified_template {self.verified_template!r}: expected a template release, minds-v1.2.3"
+            )
+        dependency_names = [dependency.name for dependency in self.dependencies]
+        if len(set(dependency_names)) != len(dependency_names):
+            raise InvalidManifestValueError(f"dependency names must be unique, got {dependency_names}")
         message_types = [handler.type for handler in self.message_handlers]
         if len(set(message_types)) != len(message_types):
             raise InvalidManifestValueError(f"message handler types must be unique, got {message_types}")
@@ -658,10 +893,14 @@ class AppManifest(FrozenModel):
         return self
 
 
+def _dotted_location(location: Sequence[int | str]) -> str:
+    return ".".join(str(part) for part in location)
+
+
 def describe_validation_error(error: ValidationError) -> str:
     """One line naming the first failing field and why, for logs and CLI output."""
     first = error.errors()[0]
-    location = ".".join(str(part) for part in first["loc"]) or "<root>"
+    location = _dotted_location(first["loc"]) or "<root>"
     return f"field {location!r}: {first['msg']}"
 
 
@@ -686,7 +925,7 @@ def app_package_directory(repo_root: Path, manifest_path: Path) -> str | None:
     return f"{app_directory.relative_to(repo_root).as_posix()}/"
 
 
-def _is_inside_another_apps_directory(repo_root: Path, reference_path: ReferencePath) -> bool:
+def is_inside_an_app_directory(repo_root: Path, reference_path: ReferencePath) -> bool:
     """Whether a reference reaches into some app package under system/apps/."""
     parts = reference_path.split("/")
     # A file that sits directly in system/apps/ (its README) is not an app; only a
@@ -698,7 +937,7 @@ def _is_inside_another_apps_directory(repo_root: Path, reference_path: Reference
     )
 
 
-def _find_symlinked_component(repo_root: Path, reference_path: ReferencePath) -> str | None:
+def find_symlinked_component(repo_root: Path, reference_path: ReferencePath) -> str | None:
     """The first component of a reference that is itself a symlink, or None when none is.
 
     Git reports a changed file under the real directory and never under a symlink to it
@@ -722,7 +961,7 @@ def _check_references_against_repo_root(path: Path, manifest: AppManifest, repo_
                 f"manifest {path} is invalid: reference {str(reference.path)!r} is inside the app's "
                 f"own directory {own_app_directory!r}, which is already implicit"
             )
-        if _is_inside_another_apps_directory(repo_root, reference.path):
+        if is_inside_an_app_directory(repo_root, reference.path):
             raise ManifestLoadError(
                 f"manifest {path} is invalid: reference {str(reference.path)!r} names another app's "
                 "directory; an app-to-app dependency belongs in pyproject.toml, where it is already "
@@ -732,7 +971,7 @@ def _check_references_against_repo_root(path: Path, manifest: AppManifest, repo_
             raise ManifestLoadError(
                 f"manifest {path} references {str(reference.path)!r}, which does not exist under {repo_root}"
             )
-        symlinked_component = _find_symlinked_component(repo_root, reference.path)
+        symlinked_component = find_symlinked_component(repo_root, reference.path)
         if symlinked_component is not None:
             raise ManifestLoadError(
                 f"manifest {path} references {str(reference.path)!r}, which goes through the symlink "
@@ -741,14 +980,72 @@ def _check_references_against_repo_root(path: Path, manifest: AppManifest, repo_
             )
 
 
-def load_manifest(path: Path, *, repo_root: Path | None = None) -> AppManifest:
+def _without_key(node: Any, location: Sequence[int | str]) -> Any:
+    """``node`` without the key ``location`` leads to, through table keys and array indices."""
+    head, *rest = location
+    if not rest:
+        return {key: value for key, value in node.items() if key != head}
+    if isinstance(node, list):
+        return [_without_key(item, rest) if index == head else item for index, item in enumerate(node)]
+    return {**node, head: _without_key(node[head], rest)}
+
+
+def _without_unknown_keys(data: dict[str, Any], locations: Sequence[Sequence[int | str]]) -> dict[str, Any]:
+    stripped = dict(data)
+    # A location follows the shape the models validate, in which one shortcut table is already a list of one.
+    if _DEFAULT_SHORTCUT_KEY in stripped:
+        stripped[_DEFAULT_SHORTCUT_KEY] = as_default_shortcut_list(stripped[_DEFAULT_SHORTCUT_KEY])
+    for location in locations:
+        stripped = _without_key(stripped, location)
+    return stripped
+
+
+def _validate_manifest_data(path: Path, data: dict[str, Any], mode: ManifestReadMode) -> AppManifest:
+    try:
+        return AppManifest.model_validate(data)
+    except ValidationError as e:
+        unknown_key_locations = (
+            [details["loc"] for details in e.errors() if details["type"] == _UNKNOWN_KEY_ERROR_TYPE]
+            if mode == ManifestReadMode.TOLERANT
+            else []
+        )
+        if not unknown_key_locations:
+            raise ManifestLoadError(f"manifest {path} is invalid: {describe_validation_error(e)}") from e
+    for location in unknown_key_locations:
+        logger.warning("Ignoring the unknown key {!r} in manifest {}", _dotted_location(location), path)
+    # The models still forbid unknown keys here, so the only keys ignored are the ones just warned about.
+    return _validate_manifest_data(path, _without_unknown_keys(data, unknown_key_locations), ManifestReadMode.STRICT)
+
+
+def check_declares_no_record_tables(path: Path, manifest: AppManifest) -> None:
+    """Raises ManifestLoadError for a manifest that carries ``[[references]]`` or ``[wiring]``, which an app
+    with a record does not declare: what else uses the app is listed in its record, and its background
+    programs are ``[[services]]``."""
+    if manifest.references or manifest.wiring.programs:
+        raise ManifestLoadError(
+            f"manifest {path} is invalid: an app with a record declares no [[references]] and no [wiring]; "
+            "what else uses the app is listed in its record, and its background programs are [[services]]"
+        )
+
+
+def load_manifest(
+    path: Path, *, repo_root: Path | None = None, mode: ManifestReadMode = ManifestReadMode.TOLERANT
+) -> AppManifest:
     """Read and validate an app.toml, also checking that the icon it names exists beside it.
+
+    A key the models do not declare, at any depth, is logged as a warning and ignored in the
+    tolerant mode, and fails the load in the strict one.
 
     The reference rules that need the manifest's place in the tree (every reference exists, and
     none names this app's own directory or another app's) are checked against ``repo_root`` when
     it is given, and otherwise against the root derived from a manifest that sits at
     ``system/apps/<package>/app.toml``. A manifest anywhere else (a temp directory in a test)
     with no explicit root skips those checks; the value rules still apply.
+
+    An app with a record under that root keeps what uses it in the record, so its manifest's
+    ``[[references]]`` and ``[wiring]`` are not read: the tolerant mode loads them without those
+    checks, and the strict mode refuses a manifest that still carries either. Every other rule
+    holds in both modes.
     """
     try:
         raw_text = path.read_text(encoding="utf-8")
@@ -758,15 +1055,20 @@ def load_manifest(path: Path, *, repo_root: Path | None = None) -> AppManifest:
         data = tomllib.loads(raw_text)
     except tomllib.TOMLDecodeError as e:
         raise ManifestLoadError(f"manifest {path} is not valid TOML: {e}") from e
-    try:
-        manifest = AppManifest.model_validate(data)
-    except ValidationError as e:
-        raise ManifestLoadError(f"manifest {path} is invalid: {describe_validation_error(e)}") from e
+    manifest = _validate_manifest_data(path, data, mode)
     if manifest.icon is not None and not (path.parent / manifest.icon).is_file():
         raise ManifestLoadError(f"manifest {path} names icon {str(manifest.icon)!r}, which does not exist beside it")
     resolved_repo_root = repo_root.resolve() if repo_root is not None else repo_root_for_manifest(path)
-    if resolved_repo_root is not None:
+    if resolved_repo_root is None:
+        return manifest
+    if not record_path(resolved_repo_root, manifest.name).is_file():
         _check_references_against_repo_root(path, manifest, resolved_repo_root)
+        return manifest
+    # An app with a record lists what else uses it in the record, and names its programs as services. Tables
+    # its manifest still carries are not read, so an installed app's is not held to this workspace's tree; the
+    # authoring check refuses them, since a workspace that still writes them means something else by them.
+    if mode is ManifestReadMode.STRICT:
+        check_declares_no_record_tables(path, manifest)
     return manifest
 
 

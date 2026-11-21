@@ -3,11 +3,11 @@ and the notice each verdict puts into the chat -- over a recording bridge in pla
 
 from pathlib import Path
 
-from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
-from app_schema.api_schema import register_api_schema_route
 from flask import Flask
 from flask.testing import FlaskClient
 
+from imbue.app_sdk.api_schema import DEFAULT_API_SCHEMA_PATH
+from imbue.app_sdk.api_schema import register_api_schema_route
 from imbue.chat import secret_requests_endpoints
 from imbue.chat.mock_secret_request_bridge_test import RecordingSecretRequestBridge
 from imbue.chat.secret_requests import SecretRequestStore

@@ -1,0 +1,52 @@
+[project]
+name = "app-install"
+version = "0.1.0"
+description = "The app-install command: registers, generates the derived files of, and checks the apps a workspace's agent builds or installs"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # The manifest every derived file is generated from.
+    "app-manifest",
+    # The registry an uninstalled app's row is removed from.
+    "app-registration",
+    "click>=8.1",
+    # The git configuration that reads a repository through the latchkey gateway, for one the anonymous read is
+    # refused.
+    "github-sync",
+    # Whether the workspace has a recent backup to fall back on, before an update runs over an app's data.
+    "host-backup",
+    "imbue-common",
+    "loguru>=0.7",
+    "pydantic>=2.0",
+    # The conversion of an older app rewrites its manifest with its comments kept.
+    "tomlkit>=0.12",
+]
+
+[project.scripts]
+app-install = "app_install.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app_install"]
+
+[dependency-groups]
+dev = [
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.87",
+]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]
+
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint]
+select = ["F", "I", "UP006", "UP007"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+known-first-party = ["app_install", "app_manifest", "app_registration", "github_sync", "host_backup"]

@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 from app_manifest.testing import assert_document_policy_admits_page
-from app_schema.testing import (
+from flask.testing import FlaskClient
+from imbue.app_sdk.app_testing import (
     CROSS_SITE_FETCH_HEADERS,
     assert_api_schema_describes_app,
     assert_request_guard_refuses_unknown_provenance,
 )
-from flask.testing import FlaskClient
 from workspace_themes.contract import STANDARD_THEME_ID, TERMINAL_TOKENS
 
 from terminal_app.pages import (
@@ -429,7 +429,7 @@ def test_a_page_of_another_origin_and_a_header_less_request_off_loopback_are_ref
 ) -> None:
     """The workspace's own browser is on loopback too, so the pages read a header-less request as the owner's only
     from loopback under a loopback Host, and never one its browser marks as another origin's (the request guard,
-    app_schema.request_guard): such a page cannot open a terminal."""
+    imbue.app_sdk.request_guard): such a page cannot open a terminal."""
     assert_request_guard_refuses_unknown_provenance(pages_client, "GET", "/")
     cross_site = pages_client.post(NEW_PATH, json={}, headers=CROSS_SITE_FETCH_HEADERS)
     assert cross_site.status_code == 403

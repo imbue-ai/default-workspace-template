@@ -37,6 +37,8 @@ from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
 from agents_shared.validate_skill import is_entry_module, third_party_skills
+from app_manifest.primitives import AppName
+from app_manifest.records import AppOrigin, AppRecord, load_all_records, write_record
 from entry_points_testing import (
     BARE_SEARCH_PATHS,
     REPO_ROOT,
@@ -315,14 +317,21 @@ def _is_scanned(relative: str, suffixes: tuple[str, ...]) -> bool:
     return relative.endswith(suffixes)
 
 
-def _is_in_third_party_skill(relative: str, repo_root: Path) -> bool:
-    """Whether a file belongs to a skill listed as a third party's, kept as it came: not ours to police."""
+def _is_kept_as_it_came(relative: str, repo_root: Path) -> bool:
+    """Whether a file belongs to a skill listed as a third party's, or to an app installed from
+    someone else's repository, each kept as it came: not ours to police."""
     parts = PurePosixPath(relative).parts
-    return (
+    if (
         parts[:2] == (".agents", "skills")
         and len(parts) > 3
         and parts[2] in third_party_skills(repo_root / ".agents")
-    )
+    ):
+        return True
+    return parts[:3] in {
+        ("system", "apps", record.package)
+        for record in load_all_records(repo_root)
+        if record.origin is AppOrigin.INSTALLED
+    }
 
 
 def _scanned_files(
@@ -346,7 +355,7 @@ def _scanned_files(
         for relative in tracked
         if relative
         and _is_scanned(relative, suffixes)
-        and not _is_in_third_party_skill(relative, repo_root)
+        and not _is_kept_as_it_came(relative, repo_root)
         and (repo_root / relative).is_file()
         and not resolves_into_vendor(repo_root / relative, repo_root)
     ]
@@ -938,7 +947,7 @@ def _tracked_paths(repo_root: Path, pattern: str) -> list[str]:
         for relative in tracked
         if relative
         and "vendor" not in PurePosixPath(relative).parts
-        and not _is_in_third_party_skill(relative, repo_root)
+        and not _is_kept_as_it_came(relative, repo_root)
         and (repo_root / relative).is_file()
     ]
 
@@ -946,7 +955,7 @@ def _tracked_paths(repo_root: Path, pattern: str) -> list[str]:
 def _tracked_python_files(repo_root: Path) -> list[str]:
     """The template's own tracked ``.py`` files, tests included.
 
-    Vendored code and third-party skills are left out, and so is this file,
+    Vendored code, third-party skills and installed apps are left out, and so is this file,
     whose planted cases would count.
     """
     return sorted(
@@ -1093,6 +1102,31 @@ def test_a_listed_third_party_skill_is_not_counted_whatever_its_layout(
         ".agents/skills/ours/scripts/run.py",
         "system/tool.py",
     ]
+
+
+def test_an_installed_app_is_not_counted_whatever_it_holds(tmp_path: Path) -> None:
+    edit = "import sys\nsys.path.insert(0, 'x')\n"
+    for package, origin in (("ours", AppOrigin.LOCAL), ("theirs", AppOrigin.INSTALLED)):
+        skill = tmp_path / "system" / "apps" / package / "skills" / f"{package}-digest"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("uv run python digest.py\n")
+        (tmp_path / "system" / "apps" / package / "tool.py").write_text(edit)
+        write_record(
+            tmp_path,
+            AppRecord(
+                name=AppName(package), package=package, port=8080, origin=origin
+            ),
+        )
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+
+    scanned = {
+        str(path.relative_to(tmp_path)) for path in _scanned_files(repo_root=tmp_path)
+    }
+
+    assert _sys_path_editors(_import_path_sites(tmp_path)) == ["system/apps/ours/tool.py"]
+    assert "system/apps/ours/skills/ours-digest/SKILL.md" in scanned
+    assert not any(path.startswith("system/apps/theirs/") for path in scanned)
 
 
 def test_the_sys_path_scan_sees_each_form_of_edit() -> None:

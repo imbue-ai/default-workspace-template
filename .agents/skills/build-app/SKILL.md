@@ -109,8 +109,15 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   GitHub sync adds), which would claim that service as a sidecar. Short and
   descriptive (`news`, `docs-viewer`) beats clever. Avoid names
   already used by an existing program (`system_interface`, `browser`, etc.
-  are reserved by the scaffolder, which also refuses a name any
-  `system/supervisord.conf.d/*.conf` already declares).
+  are reserved by the scaffolder, and registering the app refuses a name
+  that another app, a program in `system/supervisord.conf` or any
+  `system/supervisord.conf.d/*.conf`, or a console script already holds).
+  The name also must not be another app's name with a hyphen and more after
+  it, and no other app's name may be this one extended that way: beside the
+  built-in `chat`, `chat-export` is refused, and so is `notes` beside an
+  existing `notes-sync`. An app's background programs are named
+  `<name>-<role>`, so one of the two apps would be taken for a program of the
+  other.
 - **Draw the app's icon** -- a 216 by 216 two-layer tile specific to what
   *this* app does, built to the rules in `docs/system/app-icons.md` (a
   flat background under one fill-only glyph inside a centred 144 box, in
@@ -118,17 +125,16 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   `forward_port.py` refuses a brand-new registration without one. The
   scaffold copies it beside the app's manifest (`app.toml`), which names
   it.
-- **Pick a free port.** The scaffolder (canonical path) auto-picks the lowest free
-  port at or above 8080 by parsing `system/supervisord.conf`, every
-  `system/supervisord.conf.d/*.conf`, and `data/.state/apps.toml`, so running
-  manual port checks (`ss -tln`) is unnecessary. If you are picking a port
-  manually for the wrap-existing escape hatch, check `ss -tln` and avoid `8000`
-  (system_interface), `8010` (the chat app), `8030` (the Getting Started app),
-  `8040` (the System Monitor app), `8083` (the Screen's CDP proxy) and `8090` (the
-  Screen service).
-  Two things do not show up there: the `agent-observer` program binds no port at
-  all, and a preview of any app (`update-app`'s `preview_app.py`) takes free
-  ports at boot, so nothing to avoid is written down for it.
+- **Do not pick a port: the workspace allocates one.** Both paths register the
+  app through `app-install` (the scaffolder calls it for you; the wrap-existing
+  escape hatch runs `uv run --no-sync app-install add <package>`). It gives the
+  app the lowest port at or above 8080 that no supervisord program, no row of
+  `data/.state/apps.toml` and no other app's record holds, that is not one of
+  the Screen's ports, and that nothing is listening on, so manual port checks
+  (`ss -tln`) are unnecessary. The port is written to the app's record
+  (`system/config/apps/<name>.toml`) and reaches the app through its program's
+  environment; no file in the app's directory holds it. Pass `--port` only
+  when the user needs a particular port; a taken one is refused.
 - **Bind to `127.0.0.1`** (not `0.0.0.0`). The forwarder reaches your
   app from inside the same container; binding to all interfaces is
   noise. The scaffolder does this. For the wrap-existing path, many
@@ -147,8 +153,13 @@ uv run --no-sync .agents/skills/build-app/python/build_app_skill/scaffold_flask_
     --start \
     [--display-name "<what users see>"] \
     [--port <int>] \
-    [--extra-dep <pkg>] [--extra-dep <pkg>] ...
+    [--extra-dep <pkg>] [--extra-dep <pkg>] ... \
+    [--secrets-file <name> --secrets-variable <NAME> [--secrets-variable <NAME>] ...]
 ```
+
+The scaffolder writes the app's directory and then registers it through
+`app-install`, which allocates the app's port, writes its record, and
+generates its supervisord program file.
 
 Required:
 - `--name`: kebab-case (lowercase letters/digits with single hyphens;
@@ -165,22 +176,39 @@ Required:
   registered on every start.
 
 Optional:
-- `--start`: registers the app with supervisord (`reread` + `update`) and
-  waits for the service to answer healthy on `http://127.0.0.1:<port>/health`.
+- `--start`: has supervisord pick up the app's generated program (`reread` +
+  `update`) and waits for the service to answer healthy on
+  `http://127.0.0.1:<port>/health`.
   Recommended to eliminate separate manual supervisor commands.
 - `--display-name`: what users see for the app (the manifest's
   `display_name`, at most 64 characters). Defaults to the description,
   so pass it when the description is long.
-- `--port`: explicit port; auto-picked if omitted.
+- `--port`: the port to register the app on; the lowest free one if omitted.
 - `--extra-dep`: repeatable. Add libraries beyond `flask`/`flask-sock`
   (e.g. `--extra-dep "jinja2>=3.1" --extra-dep "anthropic>=0.40"`).
-- `--skip-uv-sync`: skip the final manifest check and the app's own lock and
-  venv (for fast iteration / dry runs).
+- `--secrets-file` and `--secrets-variable`: the `<name>` of a
+  `data/.secrets/<name>.env` the app needs and each variable that file sets
+  (repeat `--secrets-variable`; the file needs at least one). They become the
+  manifest's `[[secrets]]` block, which the generated program runs under (see
+  below).
+- `--skip-uv-sync`: skip the app's own lock and venv (for fast iteration /
+  dry runs). The app is still registered.
 
 The scaffolder fails non-zero with a clear stderr message if the lib
 already exists, the name is reserved or invalid, the description is
-empty, spans lines or is over 200 characters, the requested port
-is taken, or the manifest check, the app's `uv lock` or its `uv sync` fails.
+empty, spans lines or is over 200 characters, a secrets file is named
+without a variable, the workspace refuses to register the app, or the
+app's `uv lock` or its `uv sync` fails. A registration is refused when the
+app's manifest is not valid, when the app would take a name, a program, a
+console script or a port something in the workspace already holds, or when
+its name and another app's differ only by a hyphenated suffix (pre-flight
+above); the message names every problem, and the app's directory is removed again, so
+fix what it names and run the scaffolder again. A failure after the
+registration (the lock, the sync) leaves the app registered, with its
+directory, its record and its generated program in place, and a second run is refused
+because the directory exists: remove the app with
+`uv run --no-sync app-install uninstall <name>`, fix what the message names,
+and run the scaffolder again.
 
 What gets generated:
 
@@ -207,20 +235,27 @@ What gets generated:
   flight. `forward_port.py --manifest`
   reads it on every start; the scaffold checks it with `uv run --no-sync app-manifest
   validate-manifest system/apps/<package>/app.toml` (run that yourself after
-  editing it). Anything you build for this app outside `system/apps/<package>/`
-  -- a skill that drives it, a script, a doc -- is registered in the same file
-  under `[[references]]` with a `note` naming the surface it uses.
+  editing it). What belongs to the app goes inside `system/apps/<package>/`
+  (see "Everything the app owns lives in its directory" below). Anything
+  elsewhere in the workspace that uses the app without belonging to it --
+  another creation's skill, a script, a doc -- is not registered in this
+  file: the app has a record (`system/config/apps/<name>.toml`), which is
+  where its references are kept, and the manifest check refuses
+  `[[references]]` beside a record. Do not write the record by hand either;
+  the harden pass names such a file in its report
+  (`.agents/shared/worker/references/type-app.md`).
 - `system/apps/<package>/pyproject.toml` -- the app is a **standalone uv
   project**, not a root workspace member: it declares
   `[project.scripts] <name> = "<package>.runner:main"`, the entry point its own
-  sync installs into its own `.venv`; depends on the workspace's shared code
-  (`app-schema`) through an editable path source, so that code is shared live
-  and `imbue-common` comes from the root's mngr pin; makes the directory its
+  sync installs into its own `.venv`; depends on `app-schema` through an
+  editable path source, which is how the app SDK (`imbue.app_sdk`, what
+  `runner.py` imports) and `imbue-common` reach the app's venv at the commit
+  the workspace pins mngr to; makes the directory its
   own `ty` project (an empty `[tool.ty]` table and a pinned `ty` dev dependency)
   for the ratchets' type check; and carries the root's two-week supply-chain
   cooldown (`[tool.uv] exclude-newer = "14 days"`), which a standalone project
-  does not inherit. Never add an `imbue-common` source of your own:
-  a second source for the same package fails to lock.
+  does not inherit. Never add an `imbue-app-sdk` or `imbue-common` source of
+  your own: a second source for the same package fails to lock.
 - `system/apps/<package>/uv.lock` -- the app's own lock, seeded from the root
   `uv.lock` so the app starts on the built-ins' versions and resolves from the
   warm cache.
@@ -237,10 +272,14 @@ What gets generated:
   `root_path`/`ROOT_PATH` is needed. It also defines a `DATA_DIR`
   constant (defaults to `data/.apps/<name>/`, overridable via the
   `<PACKAGE_UPPER>_DATA_DIR` env var) -- route all persistent state
-  through it (see File-path conventions below) -- and a `PORT` constant
-  (defaults to this service's assigned port, overridable via the
-  `<PACKAGE_UPPER>_PORT` env var) bound in `run_simple`. Both overrides
-  are what let a future edit boot a throwaway instance on a spare port
+  through it (see File-path conventions below) -- and `HOST` and `PORT`
+  constants bound in `run_simple`, read from the `<PACKAGE_UPPER>_HOST`
+  env var (loopback when unset) and the `<PACKAGE_UPPER>_PORT` env var.
+  The app's program sets `<PACKAGE_UPPER>_PORT` to the port the workspace
+  allocated, so the runner holds no port of its own; with the variable
+  unset (the app run on its own, outside a workspace) the operating system
+  picks a free one. Never write a port into the app's code. These env vars
+  are also what let a future edit boot a throwaway instance on a spare port
   against a data copy (see `update-app`). The scaffolded index page also
   carries the **shell page script** (`SHELL_PAGE_SCRIPT` in the runner) -- a
   module script that connects the page to the workspace shell framing it,
@@ -259,7 +298,10 @@ What gets generated:
   navigate its own window. The runner serves the two modules
   the script imports from its own origin at `/_static/app_contract.js` and
   `/_static/context_menu.js` (a module import is a fetch without cookies,
-  which the forwarder refuses across origins); keep that route too.
+  which the forwarder refuses across origins) through the SDK's
+  `register_shell_module_routes(app)`, which fetches each from the running
+  shell; keep that call, and its `SHELL_MODULE_ROUTE_KEY` entry in
+  `ROUTE_TABLE`, too.
   A reference names an element by what its markup carries -- its `id`, its
   `data-*` attributes, its classes, a selector -- so give a list
   row the `id` or a `data-*` attribute of the record it shows, and an
@@ -269,17 +311,25 @@ What gets generated:
   zero, plus `test_no_type_errors`, which fails on any `ty` error in the app.
 - `system/apps/<package>/README.md` -- one-line description.
 
-What gets updated and installed -- no shared file is written, which is what
+What gets registered and installed -- no shared file is written, which is what
 lets two agents scaffold two apps at once:
 
 - Root `pyproject.toml` and `uv.lock` -- untouched. The root `members` names
   only the built-in packages; an app it does not name is a standalone project,
   so its dependencies never move the chat's or another app's.
-- `system/supervisord.conf.d/<name>.conf` -- writes the app's own program block:
+- `system/config/apps/<name>.toml` -- the app's record, which `app-install`
+  writes when the scaffolder registers the app: its name, its directory, the
+  port it was allocated, and that this workspace built it. `app-install` keeps
+  it; do not edit it by hand.
+- `system/supervisord.conf.d/<name>.conf` -- the app's program file, which
+  `app-install` generates from `app.toml` and the record:
 
   ```ini
+  # Generated by app-install from system/apps/<package>/app.toml and the app's record.
+  # Do not edit this file: change the manifest and run `uv run --no-sync app-install regenerate`.
   [program:<name>]
   command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/apps/<package> && uv sync --locked --project system/apps/<package> && python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec system/apps/<package>/.venv/bin/<name>"
+  environment=<PACKAGE_UPPER>_PORT="<port>"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -287,6 +337,33 @@ lets two agents scaffold two apps at once:
   startretries=5
   # plus rotated stdout/stderr logfiles under /var/log/supervisor/<name>-*.log
   ```
+
+  **The program file, and any `.agents/skills/` link for the app, are
+  generated: never edit one by hand.** To change how the app runs, change
+  `app.toml` -- `[run]` (the command that starts the app, its `args` and its
+  `env`), `[[services]]` (a background program the app owns, run as
+  `<name>-<role>`), `[[secrets]]` (below) -- then regenerate and have
+  supervisord pick the change up:
+
+  ```bash
+  uv run --no-sync app-install regenerate <name>
+  supervisorctl reread && supervisorctl update
+  ```
+
+  A `command` in `[run]` or `[[services]]` names one of the app's console
+  scripts (`[project.scripts]` in its `pyproject.toml`): the program runs it
+  from the app's own `.venv/bin`. Only an app with no `pyproject.toml` (a
+  wrapped server, below) has its command run as given. Either way a `command`
+  is one word, the program itself: its arguments go in `args`.
+
+  A scaffolded app has no `[run]` table: without one, the program runs the
+  console script named after the app with `<PACKAGE_UPPER>_PORT` set to its
+  port. A `[run]` table replaces all of that, so one you add to a scaffolded
+  app must pass the port on itself:
+  `env = { <PACKAGE_UPPER>_PORT = "{port:main}" }`.
+
+  `uv run --no-sync app-install check` fails when a generated file differs
+  from what its manifest generates, which is how a hand edit is caught.
 
   `startsecs`/`startretries` bound a crash loop: an app that dies before it has
   stayed up 30s counts as a failed start, so supervisord backs off and ends in
@@ -304,14 +381,16 @@ lets two agents scaffold two apps at once:
   and restart.
 
   An app that needs a credential (an API key the user supplied through the
-  `connect-external-service` skill's secret card) declares it in `app.toml` and
-  runs under the wrapper. `--secrets-file <name>` makes the scaffold write the
-  wrapped program command; the `[[secrets]]` block you add to the manifest by
-  hand either way, since only you know the variables. The block names the file,
+  `connect-external-service` skill's secret card) declares it in `app.toml`,
+  and its generated program runs under the wrapper. `--secrets-file <name>`
+  with a `--secrets-variable <NAME>` for each variable the file sets makes the
+  scaffold write the `[[secrets]]` block; add its `note` by hand. For an app
+  that already exists, add the whole block and run
+  `uv run --no-sync app-install regenerate <name>`. The block names the file,
   its variables, and a one-line note (`publish-template` reads it, and refuses
   to assemble a program that runs under a file no block declares), and the
-  program command wraps the entry point so the file's variables reach the
-  process and nothing else does:
+  generated command wraps the entry point once per block, so the file's
+  variables reach the process and nothing else does:
 
   ```toml
   [[secrets]]
@@ -331,8 +410,8 @@ lets two agents scaffold two apps at once:
   owns its origin, so root-absolute URLs (`href="/api"`), WebSockets
   (`new WebSocket("/ws")`), cookies (`Set-Cookie: Path=/`), and
   service workers all work exactly as written -- nothing rewrites
-  anything. The
-  `bash -c "..."` wrapper is required because supervisord runs commands
+  anything. The generated command sits in a
+  `bash -c "..."` wrapper because supervisord runs commands
   directly (no shell) and this one chains `forward_port.py` with `&&`. The
   `oom_tag_service.py user` prefix tags this user-created app so it is
   shed before any built-in service under memory pressure (see
@@ -434,7 +513,7 @@ investing in configuration or integration around it.
 
 Every app with an HTTP API serves an OpenAPI document of its routes at
 `/api/schema` (the manifest's `api_schema_path`), built by
-`app_schema.api_schema.register_api_schema_route(app, DEFAULT_API_SCHEMA_PATH, title=..., description=..., route_table=ROUTE_TABLE)`,
+`imbue.app_sdk.api_schema.register_api_schema_route(app, DEFAULT_API_SCHEMA_PATH, title=..., description=..., route_table=ROUTE_TABLE)`,
 which the scaffold already calls in `runner.py` with the manifest's
 `display_name` and `description` and a starting table. The document is built
 from the live url map on each request, so every route you add is listed
@@ -449,9 +528,9 @@ automatically; what each route owes it is:
   (plus `alternate_responses` for a second success under another status, or a
   failure whose answer is a model richer than the error shape),
   and the view reads its body only through
-  `app_schema.routes.parse_request_body(Model)` and answers only through
-  `app_schema.routes.model_response(model, status)`; a refusal or a failure is
-  `app_schema.routes.error_response(detail, status)`. A page, a file, a
+  `imbue.app_sdk.routes.parse_request_body(Model)` and answers only through
+  `imbue.app_sdk.routes.model_response(model, status)`; a refusal or a failure is
+  `imbue.app_sdk.routes.error_response(detail, status)`. A page, a file, a
   stream, a socket or a redirect gets `SchemalessRoute(reason=...)`. Define the
   models as `FrozenModel`s with a `Field(description=...)` per attribute; the
   descriptions are what the document shows.
@@ -582,6 +661,78 @@ Two cases, two patterns:
 - **Static assets shipped alongside the .py file** (templates,
   default configs, bundled JSON): `Path(__file__).parent / "assets/..."`
   is the right pattern.
+
+### Everything the app owns lives in its directory
+
+`system/apps/<package>/` is the whole app: one directory that can be shared,
+installed in another workspace, and removed in one piece. Put everything that
+belongs to the app inside it:
+
+- **A skill that belongs to the app** (one whose job is to drive this app) goes
+  at `system/apps/<package>/skills/<skill-name>/SKILL.md`. Then run
+  `uv run --no-sync app-install regenerate <name>`, which links it into
+  `.agents/skills/<skill-name>` so it is discovered like any other skill; the
+  link is generated, so never create or edit it by hand. Such a skill carries
+  no `python/` project of its own. Code it needs lives in the app's package
+  and is reached as one of the app's console scripts (`[project.scripts]` in
+  the app's `pyproject.toml`, run with
+  `uv run --no-sync --project system/apps/<package> <command>`) or over the
+  app's HTTP API.
+- **A routine that belongs to the app** is added with
+  `uv run --no-sync routines add <id> --app <name> ...` (the `manage-routines`
+  skill) and lands in `system/apps/<package>/routines/<id>.toml`.
+- **An environment unit** (a script that installs a system package or a tool
+  the app needs) goes at `system/apps/<package>/env.d/<NNNN>-<name>.sh`, with
+  `NNNN` at 2000 or higher. env-converge runs every unit at each boot, not
+  when its file appears, so run a new one by hand once
+  (`bash system/apps/<package>/env.d/<NNNN>-<name>.sh`, from the repo root)
+  for the app to have what it installs now.
+- **Stored data and secret values stay out of it.** What the app stores stays
+  under `data/.apps/<name>/` (through `DATA_DIR`) and secret values under
+  `data/.secrets/`; never put either in the app directory.
+
+A skill name, a routine id and an environment unit's file name are each unique
+across the workspace. `uv run --no-sync app-install check` reports a clash.
+
+### Find another app by name
+
+Nothing outside an app may hold that app's port. The workspace allocates the
+port, so it differs from one workspace to the next and can change in this one.
+Never write another app's `http://localhost:<port>` into code, a script, a
+skill or a doc. Find the app by its name:
+
+- **Python code** uses the SDK:
+
+  ```python
+  from imbue.app_sdk.apps import resolve_app_url
+
+  url = resolve_app_url("<name>")
+  ```
+
+  It returns the app's URL inside the workspace, read from the shell at the
+  time of the call. It raises `AppNotRegisteredError` when the workspace has no
+  such app and `ShellUnreachableError` when the shell does not answer (both in
+  `imbue.app_sdk.errors`).
+- **A script or a skill** calls the same function, from the repo root:
+
+  ```bash
+  uv run --no-sync python -c 'from imbue.app_sdk.apps import resolve_app_url; print(resolve_app_url("<name>"))'
+  ```
+
+  The `link` that `uv run --no-sync workspace-layout list` prints for an app
+  is the address to write for a person (a chat reply, a doc). It opens the
+  app's window; a program cannot request it.
+
+### The app carries its own data migrations
+
+When a change to the app changes the shape of what it stores under
+`data/.apps/<name>/` (a renamed field, a file split in two, a new required
+key), the app brings older data forward itself when it starts: it looks at
+what is on disk and converts anything still in the old shape before it serves
+a request. Do not convert the data by hand and leave the app unable to read
+the old shape. The app may later be installed and updated in another
+workspace, whose data is still in the old shape and where nobody else knows
+what that shape was. Keep the conversion, and a test of it, in the app.
 
 ### Renaming an app
 
@@ -733,9 +884,11 @@ calling the work done.
 
 ## Escape hatch: wrap an existing server
 
-For pre-existing third-party tools, do not scaffold a lib. Save your
-icon as `system/apps/<name>/icon.svg` and write the app's manifest beside
-it as `system/apps/<name>/app.toml` (like the `files` app):
+For pre-existing third-party tools, do not scaffold a lib. The app is still
+a directory, `system/apps/<package>/` (`<package>` is the app's name with each
+hyphen replaced by an underscore), holding your icon as `icon.svg` and the
+app's manifest as `app.toml`. The manifest's `[run]` table gives the tool's
+existing start command:
 
 ```toml
 name = "<name>"
@@ -743,70 +896,72 @@ display_name = "<What users see>"
 icon = "icon.svg"
 priority = "user"
 program = "<name>"
+
+[run]
+command = "<the program the existing start command runs>"
+args = ["<each argument>", "--port", "{port:main}"]
 ```
 
-Then add a `[program:<name>]` block as its own
-`system/supervisord.conf.d/<name>.conf` that runs `forward_port.py --manifest`
-and then your existing start command. supervisord runs commands directly (no
-shell), so wrap any command that chains with `&&` in `bash -c "..."`, and
-prefix the whole thing with
-`python3 system/services/oom_priority/bin/oom_tag_service.py user` so this user-created app is
-shed before any built-in service under memory pressure (see
-`system/services/oom_priority/README.md`):
+- `command` is the program alone, run as given (on `PATH`, or a path relative
+  to the repo root, where the program runs). Each argument is its own entry
+  in `args`.
+- Put `{port:main}` wherever the server takes its port: the workspace
+  allocates the port and fills it in. `{host}` is the loopback address
+  (`127.0.0.1`), for a server that takes its bind host as an argument.
+- A server that takes its port or host from the environment gets an `env`
+  table instead: `env = { PORT = "{port:main}", HOST = "{host}" }`.
 
-```ini
-[program:<name>]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml --url http://localhost:<port> && exec <existing_start_command>"
-directory=/home/user/workspace
-autostart=true
-autorestart=true
-startsecs=30
-startretries=5
+For example, a Jupyter server:
+
+```toml
+name = "docs-viewer"
+display_name = "Docs viewer"
+icon = "icon.svg"
+priority = "user"
+program = "docs-viewer"
+
+[run]
+command = "jupyter"
+args = ["notebook", "--port", "{port:main}", "--ip", "{host}", "--no-browser"]
 ```
 
-Two valid shapes:
+A start that takes several steps (exports, a bootstrap) goes in a script
+inside the app's directory, which `[run]` then runs:
+`command = "bash"`, `args = ["system/apps/<package>/run.sh", "{port:main}"]`,
+with the script ending in `exec <existing_start_command>`.
 
-- **Inline** (preferred when one line fits):
+Register the app and start it:
 
-  ```ini
-  [program:docs-viewer]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/docs-viewer/app.toml --url http://localhost:8090 && exec jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
-  directory=/home/user/workspace
-  autostart=true
-  autorestart=true
-  startsecs=30
-  startretries=5
-  ```
+```bash
+uv run --no-sync app-install add <package>
+supervisorctl reread && supervisorctl update
+```
 
-- **Wrapper script** (preferred for multi-step bootstrap or env exports):
+`app-install add` allocates the app's port, writes its record
+(`system/config/apps/<name>.toml`), and generates its program file
+(`system/supervisord.conf.d/<name>.conf`); it prints the port in its result.
+The generated program registers the manifest and the port through
+`forward_port.py` before it starts the tool, and carries the
+`oom_tag_service.py user` prefix, so this user-created app is shed before any
+built-in service under memory pressure (see
+`system/services/oom_priority/README.md`). Do not write a program block by
+hand, and never edit the generated file: to change the command, change `[run]`
+and run `uv run --no-sync app-install regenerate <name>`, then
+`supervisorctl reread && supervisorctl update`.
 
-  ```bash
-  # system/scripts/run_<name>.sh
-  #!/usr/bin/env bash
-  set -euo pipefail
-  python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml --url http://localhost:<port>
-  exec <existing_start_command>
-  ```
-
-  ```ini
-  [program:<name>]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash system/scripts/run_<name>.sh
-  directory=/home/user/workspace
-  autostart=true
-  autorestart=true
-  startsecs=30
-  startretries=5
-  ```
-
-After writing `system/supervisord.conf.d/<name>.conf`, run `supervisorctl
-reread && supervisorctl update` to start the new program.
-
-The `forward_port.py` call MUST come first in the command -- the port
-must be registered before the app starts listening, otherwise the
-shell's announcement of the registration races with the backend coming up.
-
-For the full program schema and logging knobs, see the shared
-[`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).
+**A wrapped server has no request guard.** Nothing checks who is calling it,
+so it trusts anything that can reach its port. That includes a page of another
+site open in the workspace's own browser, which can send it requests, and,
+once the workspace is shared, anyone the app is shared with. A scaffolded app
+can install the SDK's request guard
+(`imbue.app_sdk.request_guard.install_request_guard`), which refuses such
+callers ahead of every route; a wrapped tool cannot. So before you wrap a
+tool, look at what it exposes. When it exposes anything sensitive or
+destructive (the user's files, credentials, a shell or code execution, an
+admin action, anything that deletes), tell the user so in plain terms before
+you stand it up, and prefer a scaffolded app, whose routes can sit behind the
+guard, over wrapping the tool as it is. If the tool has authentication of its
+own (a token, a password), leave it on.
 
 Verification and gotchas references apply identically to this path.
 
@@ -825,8 +980,8 @@ app's. If it can do neither, leave it as it is.
 
 ## `forward_port.py` CLI reference
 
-Used by both paths (the scaffolder generates the call; the escape
-hatch has you write it directly).
+Used by both paths: the program `app-install` generates for an app calls
+it, so you do not write the call yourself.
 
 ```
 python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url URL
@@ -927,6 +1082,5 @@ domain (`https://<label>.<share-domain>/`) -- and
 
 ## Cleanup
 
-To remove an app (drop the `apps.toml` entry, stop and unregister
-the supervisord program, and revert the scaffolded lib), see
+To remove an app, run `uv run --no-sync app-install uninstall <name>`; see
 [references/cleanup.md](references/cleanup.md).

@@ -152,10 +152,15 @@ Make the change interactive and keep the user's view in sync as you go.
 Edit the service's code under `system/apps/<package>/` (or wherever the program's
 command points). If the change calls Claude,
 follow `use-ai-integration` -- the same rules as when the service was
-built. Anything the change creates for the app outside its own directory --
-a skill that drives it, a script, a doc -- is registered in the app's `app.toml`
-under `[[references]]` with a `note` naming the surface it uses, so it travels
-with the app through hardening, testing, and publishing.
+built. Anything the change creates for a built-in app outside its own
+directory -- a skill that drives it, a script, a doc -- is registered in the
+app's `app.toml` under `[[references]]` with a `note` naming the surface it
+uses, so it travels with the app through hardening and testing. An app the
+workspace built or installed (one with a record under `system/config/apps/`)
+takes no `[[references]]` in its `app.toml`: put what belongs to it inside its
+own directory (a skill under `skills/`, a routine under `routines/`), and leave
+anything else for the harden pass to name in its report
+(`.agents/shared/worker/references/type-app.md`).
 
 Check the app's `stop_when_no_windows` against what the change makes it do.
 The scaffold writes `true`: the shell stops the program a minute after the
@@ -254,6 +259,16 @@ process restarts:
   `supervisorctl reread && supervisorctl update`. The full program schema,
   the add/remove/inspect mechanics, and the `forward_port.py` wiring live
   in [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).
+  An app the workspace built or installed (one with a record under
+  `system/config/apps/`) is the exception: its program files are generated
+  from its `app.toml`, and each begins with a comment saying so. Never edit
+  one. Say how the app runs in its `app.toml` (`[run]` for its main program,
+  `[[services]]` for a background program, `[[secrets]]` for a secret file it
+  runs under), run `uv run --no-sync app-install regenerate <name>`, then
+  `supervisorctl reread && supervisorctl update`. Its port is kept in its
+  record and passed to it in its program's environment, so no file is edited
+  to change one. `uv run --no-sync app-install check` says whether the
+  generated files match.
   This surgical reload is for iterating on a single service. It is *not* the
   path for landing an `update-self` merge -- that restarts the whole services
   agent (`mngr start --restart system-services`) so `bootstrap` re-runs too,
@@ -494,13 +509,17 @@ where the data dies. Encode these, cheapest first:
 
 - **Retrofit older services when you touch them.** A service that predates
   this convention hardcodes `data/.apps/<name>/` and its listen port at its call
-  sites. Add both overrides the scaffold now emits, as part of your change, so
-  the throwaway instance above works: the data-dir override
+  sites. Add both overrides, as part of your change, so the throwaway instance
+  above works: the data-dir override
   `DATA_DIR = Path(os.environ.get("<PACKAGE_UPPER>_DATA_DIR", "data/.apps/<name>"))`
   (route reads/writes through it), and the port override
   `PORT = int(os.environ.get("<PACKAGE_UPPER>_PORT", "<assigned-port>"))`
-  (bind `PORT` in `run_simple`, never a hardcoded literal). If you genuinely
-  can't, fall back to read-only verification plus the snapshot net.
+  (bind `PORT` in `run_simple`, never a hardcoded literal). The assigned port
+  stays the default only for a service whose hand-written program file passes
+  no port. An app with a record gets its port from its generated program's
+  environment, so the scaffold writes `"0"` as the default and no port sits
+  in the app's code. If you genuinely can't, fall back to read-only
+  verification plus the snapshot net.
 
 - **The copy isolates local state, not external effects.** Pointing at a
   data copy does not stop a test run from really posting to Slack, calling a
@@ -509,13 +528,19 @@ where the data dies. Encode these, cheapest first:
 
 ## Removing a service
 
-Dropping a service is the definition-level case of step 2: remove its
+An app the workspace built or installed (one with a record under
+`system/config/apps/`) is removed with one command,
+`uv run --no-sync app-install uninstall <name>`: it removes the app's
+directory, its record, its generated program files and skill links, and its
+registry row, has supervisord drop its programs, and commits the removal.
+Do not take such an app apart by hand; `build-app`'s `cleanup.md` reference
+has the full teardown.
+
+Dropping any other service is the definition-level case of step 2: remove its
 `[program:<name>]` block, `supervisorctl reread && supervisorctl update`,
-and (for an app) `python3 system/scripts/forward_port.py --name <name>
---remove` plus reverting the scaffolded lib. The mechanics are in
-[`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md); for a
-scaffolded web lib, `build-app`'s `cleanup.md` reference has the
-full teardown.
+and (for an app without a record) `python3 system/scripts/forward_port.py
+--name <name> --remove`. The mechanics are in
+[`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).
 
 Teardown stops at the code and the process. **Leave the service's data
 (`data/.apps/<name>/`) in place** -- removing a service is not license to

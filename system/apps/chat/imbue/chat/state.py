@@ -9,12 +9,12 @@ from flask import current_app
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
-from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.interfaces import ShellLayoutInterface
 from workspace_layout.primitives import BubbleKind
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 
+from imbue.app_sdk.errors import InvalidIdentityValueError
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import agent_tmux_session_name
@@ -327,7 +327,7 @@ class ChatAppState(MutableModel):
                 continue
             try:
                 key = ParticipantKey(author)
-            except InvalidLayoutValueError as e:
+            except InvalidIdentityValueError as e:
                 logger.warning("A transcript names an author that is not a participant key; kept as written: {}", e)
                 event[AUTHOR_NAME_FIELD] = author
                 continue

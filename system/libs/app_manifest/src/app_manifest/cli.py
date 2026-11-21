@@ -5,6 +5,7 @@ import click
 from pydantic import Field
 
 from app_manifest.errors import AppManifestError
+from app_manifest.manifest import ManifestReadMode
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import ReferenceNote
 from app_manifest.primitives import ReferencePath
@@ -30,12 +31,15 @@ from imbue.imbue_common.primitives import NonEmptyStr
 
 
 class ReferenceLookupRow(FrozenModel):
-    """One line of ``app-manifest references --for-path``: an app that declares it owns the target."""
+    """One line of ``app-manifest references --for-path``: an app that claims the target."""
 
-    app: NonEmptyStr = Field(description="The referencing app's registered name")
+    app: NonEmptyStr = Field(description="The claiming app's registered name")
     manifest: RepoRelativePath = Field(description="That app's manifest")
-    path: ReferencePath = Field(description="The reference entry that covers the target")
-    note: ReferenceNote | None = Field(description="The note the manifest wrote on that entry")
+    path: ReferencePath = Field(
+        description="The entry that covers the target: a reference of the app's, the link to a skill it "
+        "carries, or that skill's directory inside the app"
+    )
+    note: ReferenceNote | None = Field(description="The note written on that entry")
 
 
 # Every command reads the same tree, so they share one option. The footprint commands
@@ -68,9 +72,10 @@ def validate_manifest(manifest_path: Path, repo_root: Path | None) -> None:
 
     Without --repo-root the reference location checks run against the root a manifest at
     ``system/apps/<package>/app.toml`` implies, and are skipped for a manifest anywhere else.
+    A key the manifest schema does not declare fails the check.
     """
     try:
-        manifest = load_manifest(manifest_path, repo_root=repo_root)
+        manifest = load_manifest(manifest_path, repo_root=repo_root, mode=ManifestReadMode.STRICT)
     except AppManifestError as e:
         raise click.ClickException(str(e)) from e
     click.echo(f"ok: {manifest.name} ({manifest.display_name})")
@@ -82,7 +87,8 @@ def validate_manifest(manifest_path: Path, repo_root: Path | None) -> None:
     "--for-path",
     "for_path",
     default=None,
-    help="Compute a skill footprint for this repo-root-relative path instead of an app's manifest.",
+    help="Compute a skill footprint for this repo-root-relative path instead of an app's manifest. "
+    "A skill an app carries is part of that app, so the link to it in the skills directory is refused.",
 )
 @_repo_root_option
 @click.option(
@@ -113,7 +119,12 @@ def footprint(
     diff_ref: str | None,
     out_path: Path | None,
 ) -> None:
-    """Write the scope file for one creation: its own paths, its wiring, and what it references."""
+    """Write the scope file for one creation: its own paths, its wiring, and what it references.
+
+    An app with a record under system/config/apps is read from that record: its references are the
+    record's, its manifest's [[references]] and [wiring] are not read, and its [scope] exclude
+    globs are relative to the app's own directory.
+    """
     if manifest_path is not None and for_path is not None:
         raise click.UsageError("pass either a manifest path or --for-path, not both")
     if diff_ref is not None and diff_base is None:
@@ -148,7 +159,8 @@ def _app_scope(repo_root: Path, manifest_path: Path) -> CreationScope:
     multiple=True,
     required=True,
     help="A creation the pass covers, as <type>:<name> (repeatable): app:<registered name or package>, "
-    "skill:<directory>, service:<package>, or shared:<path under .agents/shared>.",
+    "skill:<directory>, service:<package>, or shared:<path under .agents/shared>. A skill an app "
+    "carries in its own directory names that app.",
 )
 @_repo_root_option
 @click.option(
@@ -229,7 +241,12 @@ def _emit_rendered(rendered: str, out_path: Path | None) -> None:
 )
 @_repo_root_option
 def references(for_path: str, repo_root: Path | None) -> None:
-    """Print every app whose manifest declares that it owns this path; nothing at all when none does."""
+    """Print every app that claims this path; nothing at all when none does.
+
+    An app claims a path its references list (a built-in app's manifest, a user app's record), and
+    a user app claims each skill it carries, by its link under .agents/skills or by its real
+    directory inside the app.
+    """
     resolved_repo_root = _resolved_repo_root(repo_root)
     try:
         matches = find_referencing_manifests(resolved_repo_root, RepoRelativePath(for_path))

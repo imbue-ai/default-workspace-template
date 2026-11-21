@@ -4,18 +4,29 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from inline_snapshot import snapshot
+from pydantic import ValidationError
 
 from routines.data_types import RoutineDefinition
 from routines.data_types import RoutineState
+from routines.data_types import ScheduleChange
+from routines.data_types import ScheduleOverride
+from routines.primitives import Duration
+from routines.primitives import TimeOfDay
+from routines.schedule import apply_schedule
 from routines.schedule import describe_age
 from routines.schedule import describe_duration
 from routines.schedule import describe_moment
 from routines.schedule import describe_schedule
+from routines.schedule import effective_routine
 from routines.schedule import is_overdue
+from routines.schedule import is_same_schedule
 from routines.schedule import next_due
 from routines.schedule import overdue_margin_seconds
+from routines.schedule import schedule_of
 from routines.testing import TEST_NOW
+from routines.testing import TEST_ROUTINE_ID
 from routines.testing import TEST_ZONE
+from routines.testing import loaded_routine
 
 
 def _definition(**fields: object) -> RoutineDefinition:
@@ -205,3 +216,67 @@ def test_moments_ages_and_durations_read_relative_to_now() -> None:
             "1h 02m",
         ]
     )
+
+
+def test_a_routine_an_app_owns_runs_on_the_schedule_its_state_keeps_for_the_user() -> None:
+    definition = _definition(every="1d", at="07:30")
+    loaded = loaded_routine(TEST_ROUTINE_ID, definition, app_package="inbox_status")
+    state = RoutineState(
+        schedule_override=ScheduleOverride(every=Duration("2h")),
+        last_succeeded_at=TEST_NOW - timedelta(minutes=30),
+    )
+
+    effective = effective_routine(loaded, state).definition
+
+    assert effective is not None
+    assert (effective.every, effective.at) == (Duration("2h"), None)
+    assert effective == apply_schedule(definition, ScheduleChange(every=Duration("2h")))
+    assert next_due(effective, state, TEST_NOW, TEST_ZONE) == TEST_NOW + timedelta(minutes=90)
+    assert next_due(definition, state, TEST_NOW, TEST_ZONE) == _local(2026, 10, 21, 7, 30)
+    assert describe_schedule(effective, TEST_ZONE) == "Every 2 hours"
+
+
+def test_a_routine_runs_on_its_definitions_schedule_without_a_schedule_of_the_users() -> None:
+    loaded = loaded_routine(TEST_ROUTINE_ID, _definition(every="1d", at="07:30"), app_package="inbox_status")
+    assert effective_routine(loaded, RoutineState()) == loaded
+
+
+def test_a_routine_the_workspace_owns_runs_on_its_file_whatever_schedule_its_state_carries() -> None:
+    """Its reschedule rewrites the file, so a schedule left in the state (by an app that had the id before) is
+    not its user's."""
+    loaded = loaded_routine(TEST_ROUTINE_ID, _definition(every="1d", at="07:30"))
+    state = RoutineState(schedule_override=ScheduleOverride(every=Duration("2h")))
+    assert effective_routine(loaded, state) == loaded
+
+
+def test_a_broken_routine_has_no_schedule_to_replace() -> None:
+    loaded = loaded_routine(TEST_ROUTINE_ID, None, error="what: Field required", app_package="inbox_status")
+    state = RoutineState(schedule_override=ScheduleOverride(every=Duration("2h")))
+    assert effective_routine(loaded, state) == loaded
+
+
+def test_the_schedule_of_a_definition_put_back_on_it_changes_nothing() -> None:
+    definition = _definition(every="1mo", at="09:00", day_of_month=3)
+    assert schedule_of(definition) == ScheduleOverride(every=Duration("1mo"), at=TimeOfDay("09:00"), day_of_month=3)
+    assert apply_schedule(definition, schedule_of(definition)) == definition
+
+
+def test_two_schedules_are_one_whatever_order_their_weekdays_are_written_in() -> None:
+    written = _definition(every="1d", at="07:30", days=["mon", "wed", "fri"])
+
+    assert is_same_schedule(written, _definition(every="1d", at="07:30", days=["fri", "mon", "wed"]))
+    assert not is_same_schedule(written, _definition(every="1d", at="07:30", days=["mon", "fri"]))
+    assert not is_same_schedule(written, _definition(every="1d", at="08:00", days=["mon", "wed", "fri"]))
+
+
+@pytest.mark.parametrize(
+    ("fields", "problem"),
+    [
+        ({}, "exactly one of 'every' and 'once'"),
+        ({"every": "15m", "at": "07:00"}, "a day or longer"),
+        ({"once": "2026-11-03T15:00", "days": ["mon"]}, "go with 'every'"),
+    ],
+)
+def test_a_kept_schedule_that_is_not_one_schedule_is_refused(fields: dict[str, object], problem: str) -> None:
+    with pytest.raises(ValidationError, match=problem):
+        ScheduleOverride.model_validate(fields)

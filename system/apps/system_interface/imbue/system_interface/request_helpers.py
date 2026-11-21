@@ -2,11 +2,12 @@
 
 import traceback
 
-from app_schema.routes import error_response
 from flask import Response
 from flask import request
 from loguru import logger
 from werkzeug.exceptions import HTTPException
+
+from imbue.app_sdk.routes import error_response
 
 
 def handle_unhandled_exception(exc: Exception) -> Response | HTTPException:

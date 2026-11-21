@@ -84,6 +84,32 @@ def _remove_gateway_entries(kept_gateway_url: str | None) -> None:
             _git_config("--unset-all", key)
 
 
+def gateway_git_config() -> list[tuple[str, str]] | None:
+    """The git configuration that sends every https://github.com/ URL through the
+    latchkey gateway with the gateway's headers, as (key, value) pairs in the
+    order git must read them, or None when the gateway env vars are not all
+    present.
+
+    A key that appears twice carries two values (both headers are sent).
+    """
+    gateway_url = get_gateway_url()
+    password = get_gateway_password()
+    if not gateway_url or not password:
+        return None
+    header_key = f"http.{gateway_url}/.extraHeader"
+    entries = [
+        (f"url.{proxied_url(gateway_url, GITHUB_URL_PREFIX)}.insteadOf", GITHUB_URL_PREFIX),
+        (header_key, f"{PASSWORD_HEADER}: {password}"),
+    ]
+    # Desktop-hosted gateways authorize via this per-agent JWT and deny
+    # everything without it; VPS gateways omit the env var and need only the
+    # password header. Git sends every extraHeader entry, so both apply.
+    permissions_override = get_gateway_permissions_override()
+    if permissions_override:
+        entries.append((header_key, f"{PERMISSIONS_OVERRIDE_HEADER}: {permissions_override}"))
+    return entries
+
+
 def apply_git_wiring() -> bool:
     """Install the gateway rewrite, auth headers, and hooks path in global git config.
 
@@ -91,8 +117,8 @@ def apply_git_wiring() -> bool:
     a logged warning) when the latchkey gateway env vars are not all present.
     """
     gateway_url = get_gateway_url()
-    password = get_gateway_password()
-    if not gateway_url or not password:
+    entries = gateway_git_config()
+    if entries is None:
         logger.warning(
             "Latchkey gateway env is incomplete (need LATCHKEY_GATEWAY, "
             "LATCHKEY_GATEWAY_PASSWORD); cannot wire git for GitHub sync"
@@ -101,23 +127,11 @@ def apply_git_wiring() -> bool:
 
     _remove_gateway_entries(gateway_url)
 
-    header_key = f"http.{gateway_url}/.extraHeader"
-    config_steps: list[tuple[str, ...]] = [
-        (
-            "--replace-all",
-            f"url.{proxied_url(gateway_url, GITHUB_URL_PREFIX)}.insteadOf",
-            GITHUB_URL_PREFIX,
-        ),
-        ("--replace-all", header_key, f"{PASSWORD_HEADER}: {password}"),
-    ]
-    # Desktop-hosted gateways authorize via this per-agent JWT and deny
-    # everything without it; VPS gateways omit the env var and need only the
-    # password header. Git sends every extraHeader entry, so both apply.
-    permissions_override = get_gateway_permissions_override()
-    if permissions_override:
-        config_steps.append(
-            ("--add", header_key, f"{PERMISSIONS_OVERRIDE_HEADER}: {permissions_override}")
-        )
+    written_keys: set[str] = set()
+    config_steps: list[tuple[str, ...]] = []
+    for key, value in entries:
+        config_steps.append(("--add" if key in written_keys else "--replace-all", key, value))
+        written_keys.add(key)
     config_steps.append(("--replace-all", "core.hooksPath", HOOKS_PATH))
     for argv in config_steps:
         result = _git_config(*argv)

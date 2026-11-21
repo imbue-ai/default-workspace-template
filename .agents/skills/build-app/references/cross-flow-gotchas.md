@@ -74,24 +74,25 @@ one URL per service name.
 
 ## Port already in use
 
-If the port you chose is bound by something else, the start command
+If the app's port is bound by something else, the start command
 will fail loudly (the framework will print an error and exit).
 Supervisord retries it a few times and then leaves the program in
-FATAL (`startsecs`/`startretries` in the program block bound the loop),
+FATAL (`startsecs`/`startretries` in the program file bound the loop),
 so the failure shows up via `supervisorctl status <name>` and
-`/var/log/supervisor/<name>-stderr.log`. Pick a different port.
+`/var/log/supervisor/<name>-stderr.log`.
 
-The scaffolder's port-picking pre-flight (which parses `system/supervisord.conf`,
-every `system/supervisord.conf.d/*.conf`,
-and `data/.state/apps.toml`) catches this before you write the
-program entry. For the wrap-existing escape hatch, run `ss -tln`
-manually before choosing a port.
+`app-install` allocates the port on both paths and skips one that a
+program, a registry row or another app's record holds, or that something
+is listening on, so this happens only when something took the port
+afterwards. Find what holds it (`ss -tlnp`) and stop that; do not edit
+the port into the program file, which is generated.
 
 ## Bind host (wrap-existing path mostly)
 
 The scaffolder generates
-`run_simple("127.0.0.1", port, app, threaded=True, ...)` (werkzeug)
-which is correct. For the wrap-existing escape hatch, many Node
+`run_simple(HOST, PORT, app, threaded=True, ...)` (werkzeug), where
+`HOST` is `127.0.0.1` unless the app's `<PACKAGE_UPPER>_HOST` env var
+says otherwise, which is correct. For the wrap-existing escape hatch, many Node
 frameworks default to `0.0.0.0` (Node's
 `http.createServer().listen(port)` binds to `::`/`0.0.0.0` when no
 host is passed). Pass an explicit loopback host

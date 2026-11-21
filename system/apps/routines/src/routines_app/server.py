@@ -34,15 +34,15 @@ from werkzeug.serving import run_simple
 from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_origin_label
-from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
-from app_schema.api_schema import RouteModels
-from app_schema.api_schema import RouteTable
-from app_schema.api_schema import SchemalessRoute
-from app_schema.api_schema import register_api_schema_route
-from app_schema.request_guard import install_request_guard
-from app_schema.routes import error_response
-from app_schema.routes import model_response
-from app_schema.routes import parse_request_body
+from imbue.app_sdk.api_schema import DEFAULT_API_SCHEMA_PATH
+from imbue.app_sdk.api_schema import RouteModels
+from imbue.app_sdk.api_schema import RouteTable
+from imbue.app_sdk.api_schema import SchemalessRoute
+from imbue.app_sdk.api_schema import register_api_schema_route
+from imbue.app_sdk.request_guard import install_request_guard
+from imbue.app_sdk.routes import error_response
+from imbue.app_sdk.routes import model_response
+from imbue.app_sdk.routes import parse_request_body
 from imbue.imbue_common.ids import InvalidRandomIdError
 from imbue.imbue_common.logging import setup_logging
 from routines.data_types import RoutineDetail
@@ -52,8 +52,10 @@ from routines.data_types import RunDetail
 from routines.data_types import RunStartReceipt
 from routines.data_types import ScheduleChange
 from routines.definitions import describe_validation_error
+from routines.errors import AppOwnedRoutineError
 from routines.errors import DefinitionCommitError
 from routines.errors import DefinitionValidationError
+from routines.errors import DuplicateRoutineError
 from routines.errors import InvalidRoutineIdError
 from routines.errors import RoutineNotFoundError
 from routines.errors import RunInFlightError
@@ -294,7 +296,8 @@ def create_app(
 
     @app.put("/api/routines/<routine_id>/schedule")
     def set_schedule(routine_id: str) -> ResponseReturnValue:
-        """Change when the routine runs; 400 with the reason when the schedule does not validate."""
+        """Change when the routine runs; 400 with the reason when the schedule does not validate. A routine an
+        app owns keeps the new schedule in its state, and its definition file stays as the app has it."""
         wanted = _routine_id(routine_id)
         if wanted is None:
             return not_found(routine_id)
@@ -336,7 +339,8 @@ def create_app(
 
     @app.delete("/api/routines/<routine_id>")
     def remove(routine_id: str) -> ResponseReturnValue:
-        """Remove the routine: its definition and state go, its runs stay in the ledger; 409 while one is going."""
+        """Remove the routine: its definition and state go, its runs stay in the ledger; 409 while one is going,
+        and for a routine whose file is not the workspace's to delete (an app's, or one of several with the id)."""
         wanted = _routine_id(routine_id)
         if wanted is None:
             return not_found(routine_id)
@@ -346,7 +350,7 @@ def create_app(
             service.remove(wanted)
         except RoutineNotFoundError:
             return not_found(routine_id)
-        except RunInFlightError as e:
+        except (RunInFlightError, AppOwnedRoutineError, DuplicateRoutineError) as e:
             return error_response(str(e), HTTP_CONFLICT)
         except StateRemovalError as e:
             return error_response(str(e), HTTP_INTERNAL_SERVER_ERROR)

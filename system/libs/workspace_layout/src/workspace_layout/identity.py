@@ -1,168 +1,24 @@
-"""The request identity every request into the workspace carries: the ``X-Imbue-Identity`` header a proxy stamps
-(the share identity spec, section 4.2; the share gateway README, "Request identity"), parsed once, and the
-participant key it names (the multiplayer spec, section 4.1), read the same way by the shell and the apps; and the
-provenance check that decides whether a request is read at all (below), installed ahead of every app's routes by
-``app_schema.request_guard``."""
+"""The request identity and the provenance check, which live in the app SDK (``imbue.app_sdk.identity``).
 
-import urllib.parse
-from typing import Final
+# CLEANUP: delete this module once every supported workspace has run the update that converts its apps to the SDK
+# (``app-install migrate``); nothing built in imports it, and it is kept only for user apps written before the SDK.
+"""
 
-from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.imbue_common.model_update import to_update
-from imbue.imbue_common.pure import pure
-from pydantic import ConfigDict
-from pydantic import Field
-
-from workspace_layout.errors import InvalidIdentityHeaderError
-from workspace_layout.primitives import OWNER_PARTICIPANT_KEY
-from workspace_layout.primitives import ParticipantKey
-from workspace_layout.primitives import UserId
-
-IDENTITY_HEADER: Final[str] = "X-Imbue-Identity"
-
-
-class RequestIdentity(FrozenModel):
-    """The requester a proxy vouched for: the owner flag always; the account (its id and email) when the workspace is
-    shared; the grant (its agent id, name, and granter) for a visiting agent. What to call an account and what it
-    looks like is its profile, not the header's."""
-
-    # The header is cross-version wire data from the proxies; a field this build does not
-    # know -- or no longer reads, like the display name older proxies stamp -- must never make it unreadable.
-    model_config = ConfigDict(extra="ignore")
-
-    # Strict: a proxy stamps a real boolean, and a header that spells one as text is not a proxy's.
-    owner: bool = Field(strict=True, description="Whether the requester is the workspace's owner")
-    user_id: str | None = Field(default=None, description="The account's user id (absent for an unshared workspace)")
-    email: str | None = Field(
-        default=None, description="The account's verified email, present exactly when user_id is"
-    )
-    agent_id: str | None = Field(default=None, description="A visiting agent's grant id; absent for a person")
-    agent_name: str | None = Field(default=None, description="The name the visiting agent joined under")
-    granter: str | None = Field(default=None, description="Who invited the visiting agent, as the grant records it")
-    is_header_present: bool = Field(
-        default=False,
-        description="Whether a proxy actually stamped the request: set by the parse, never read from the wire. "
-        "False tells an in-container caller (a script, the terminal) from a page's request, which both read as "
-        "the owner otherwise",
-    )
-
-
-ANONYMOUS_OWNER: Final[RequestIdentity] = RequestIdentity(owner=True)
-
-
-@pure
-def parse_identity_header(header_value: str | None) -> RequestIdentity:
-    """The identity a request carries; a missing or blank header reads as the anonymous owner.
-
-    A missing header means the request came through no current proxy (an older
-    forward, an in-container caller): it is treated as the owner with no account,
-    never as a visitor, so ``is_header_present`` is set only for a header a proxy
-    stamped. A present header that does not parse is nobody's proxy's: it raises
-    ``InvalidIdentityHeaderError`` for the route to refuse (the multiplayer spec,
-    D10), since reading it as the owner's would make a visitor behind a buggy proxy
-    the owner for attribution and desktop ownership.
-    """
-    if header_value is None or not header_value.strip():
-        return ANONYMOUS_OWNER
-    try:
-        parsed = RequestIdentity.model_validate_json(header_value)
-    except ValueError as e:
-        raise InvalidIdentityHeaderError(f"the {IDENTITY_HEADER} header does not parse: {e}") from e
-    return parsed.model_copy_update(to_update(parsed.field_ref().is_header_present, True))
-
-
-@pure
-def participant_key_of(identity: RequestIdentity) -> ParticipantKey:
-    """The participant the request comes from: the account when the header names one, the visiting agent when it
-    names a grant, and otherwise the owner of a workspace that has not shared (the multiplayer spec, S12)."""
-    if identity.user_id is not None:
-        return ParticipantKey(f"user:{UserId(identity.user_id)}")
-    if identity.agent_id is not None:
-        return ParticipantKey(f"agent:{identity.agent_id}")
-    return OWNER_PARTICIPANT_KEY
-
-
-@pure
-def is_owner_participant(identity: RequestIdentity) -> bool:
-    """Whether the requester is the owner, under either of the owner's keys (S12): the header says so, or it names
-    no account and no grant, which ``participant_key_of`` keys ``owner`` whatever the flag says."""
-    return identity.agent_id is None and (identity.owner or identity.user_id is None)
-
-
-@pure
-def visiting_user_id(identity: RequestIdentity) -> UserId | None:
-    """The user id of a signed-in requester other than the owner, the one kind of requester who gets a desktop of
-    their own on arrival (desktop plan section 3.10); None for the owner and for a requester with no account."""
-    if identity.owner or identity.user_id is None:
-        return None
-    return UserId(identity.user_id)
-
-
-# Where a request with no proxy header may come from. The services bind loopback and read a header-less request as
-# the owner's, since only an in-container caller (an agent's command, the shell, a script) reaches them without a
-# proxy in front. But the workspace's own browser (the Screen's Chromium) is on loopback too, and a page it shows
-# would be read the same way, so a header-less request is the owner's only under a loopback ``Host``: a page that
-# reaches loopback through a name of its own (a rebound or wildcard DNS name) names that host instead. And a browser
-# marks a request made by a page of another origin with fetch metadata, which no in-container client sends, so such a
-# request is refused whatever it carries, other than a GET or HEAD navigation (the shell framing an app's page).
-LOOPBACK_ADDRESSES: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1"})
-LOOPBACK_HOSTNAMES: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "localhost"})
-FETCH_SITE_HEADER: Final[str] = "Sec-Fetch-Site"
-FETCH_MODE_HEADER: Final[str] = "Sec-Fetch-Mode"
-_OWN_ORIGIN_FETCH_SITES: Final[frozenset[str]] = frozenset({"same-origin", "none"})
-_NAVIGATE_FETCH_MODE: Final[str] = "navigate"
-_NAVIGATION_METHODS: Final[frozenset[str]] = frozenset({"GET", "HEAD"})
-
-OTHER_ORIGIN_REFUSAL: Final[str] = "only a page of this origin may call it"
-UNTRUSTED_LOOPBACK_REFUSAL: Final[str] = (
-    f"a request with no {IDENTITY_HEADER} header is admitted from loopback alone, under a loopback Host"
-)
-
-
-class RequestProvenance(FrozenModel):
-    """What a request says about where it came from: the facts the provenance check reads, as the server saw them."""
-
-    method: str = Field(description="The HTTP method")
-    identity_header: str | None = Field(description="The X-Imbue-Identity header as sent, or None")
-    fetch_site: str | None = Field(description="The Sec-Fetch-Site header a browser sends, or None")
-    fetch_mode: str | None = Field(description="The Sec-Fetch-Mode header a browser sends, or None")
-    host: str = Field(description="The Host header, with or without its port")
-    remote_address: str | None = Field(description="The peer address the connection came from")
-
-
-@pure
-def is_loopback_address(remote_address: str | None) -> bool:
-    return remote_address in LOOPBACK_ADDRESSES
-
-
-@pure
-def is_loopback_host(host: str) -> bool:
-    """Whether a ``Host`` (with or without its port) names loopback by address or as ``localhost``."""
-    try:
-        hostname = urllib.parse.urlsplit(f"//{host}").hostname
-    except ValueError:
-        return False
-    return hostname in LOOPBACK_HOSTNAMES
-
-
-@pure
-def is_from_another_origin(method: str, fetch_site: str | None, fetch_mode: str | None) -> bool:
-    """Whether the browser marks the request as made by a page of another origin, other than a GET or HEAD
-    navigation. A request without fetch metadata (a client that is not a browser) is not judged here."""
-    if fetch_site is None or fetch_site in _OWN_ORIGIN_FETCH_SITES:
-        return False
-    return not (fetch_mode == _NAVIGATE_FETCH_MODE and method in _NAVIGATION_METHODS)
-
-
-@pure
-def describe_provenance_refusal(provenance: RequestProvenance) -> str | None:
-    """Why the request may not be read at all, or None when it may: a page of another origin is refused whatever it
-    carries; a request a proxy stamped is then read by its header; one with no header is admitted from loopback
-    alone, under a loopback ``Host``."""
-    if is_from_another_origin(provenance.method, provenance.fetch_site, provenance.fetch_mode):
-        return OTHER_ORIGIN_REFUSAL
-    if provenance.identity_header is not None and provenance.identity_header.strip():
-        return None
-    if is_loopback_address(provenance.remote_address) and is_loopback_host(provenance.host):
-        return None
-    return UNTRUSTED_LOOPBACK_REFUSAL
+from imbue.app_sdk.identity import ANONYMOUS_OWNER as ANONYMOUS_OWNER
+from imbue.app_sdk.identity import FETCH_MODE_HEADER as FETCH_MODE_HEADER
+from imbue.app_sdk.identity import FETCH_SITE_HEADER as FETCH_SITE_HEADER
+from imbue.app_sdk.identity import IDENTITY_HEADER as IDENTITY_HEADER
+from imbue.app_sdk.identity import LOOPBACK_ADDRESSES as LOOPBACK_ADDRESSES
+from imbue.app_sdk.identity import LOOPBACK_HOSTNAMES as LOOPBACK_HOSTNAMES
+from imbue.app_sdk.identity import OTHER_ORIGIN_REFUSAL as OTHER_ORIGIN_REFUSAL
+from imbue.app_sdk.identity import UNTRUSTED_LOOPBACK_REFUSAL as UNTRUSTED_LOOPBACK_REFUSAL
+from imbue.app_sdk.identity import RequestIdentity as RequestIdentity
+from imbue.app_sdk.identity import RequestProvenance as RequestProvenance
+from imbue.app_sdk.identity import describe_provenance_refusal as describe_provenance_refusal
+from imbue.app_sdk.identity import is_from_another_origin as is_from_another_origin
+from imbue.app_sdk.identity import is_loopback_address as is_loopback_address
+from imbue.app_sdk.identity import is_loopback_host as is_loopback_host
+from imbue.app_sdk.identity import is_owner_participant as is_owner_participant
+from imbue.app_sdk.identity import parse_identity_header as parse_identity_header
+from imbue.app_sdk.identity import participant_key_of as participant_key_of
+from imbue.app_sdk.identity import visiting_user_id as visiting_user_id

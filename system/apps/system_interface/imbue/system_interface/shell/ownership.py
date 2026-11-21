@@ -7,15 +7,15 @@ stays a function of the records alone.
 from collections.abc import Mapping
 from collections.abc import Sequence
 
-from workspace_layout.identity import RequestIdentity
-from workspace_layout.identity import is_owner_participant
-from workspace_layout.identity import participant_key_of
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import OWNER_PARTICIPANT_KEY
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.records import ClientRecord
 from workspace_layout.records import Desktop
 
+from imbue.app_sdk.identity import RequestIdentity
+from imbue.app_sdk.identity import is_owner_participant
+from imbue.app_sdk.identity import participant_key_of
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import UserRecord

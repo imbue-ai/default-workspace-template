@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
-from workspace_layout.identity import ANONYMOUS_OWNER, RequestIdentity
+from imbue.app_sdk.identity import ANONYMOUS_OWNER, RequestIdentity
 
 from workspace_profile.errors import InvalidChordError, ProfileWriteError
 from workspace_profile.keybindings import (

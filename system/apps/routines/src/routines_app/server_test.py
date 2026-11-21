@@ -4,9 +4,9 @@ from pathlib import Path
 import pytest
 from flask.testing import FlaskClient
 
-from app_schema.testing import CROSS_SITE_FETCH_HEADERS
-from app_schema.testing import assert_api_schema_describes_app
-from app_schema.testing import assert_request_guard_refuses_unknown_provenance
+from imbue.app_sdk.app_testing import CROSS_SITE_FETCH_HEADERS
+from imbue.app_sdk.app_testing import assert_api_schema_describes_app
+from imbue.app_sdk.app_testing import assert_request_guard_refuses_unknown_provenance
 from imbue.imbue_common.model_update import to_update
 from routines.data_types import CurrentRun
 from routines.mock_chat_app_test import ScriptedChatApp
@@ -22,6 +22,7 @@ from routines.service import RoutinesService
 from routines.testing import TEST_NOW
 from routines.testing import build_test_service
 from routines.testing import wait_for_last_run
+from routines.testing import write_app_definition
 from routines_app.mock_fix_chat_test import RecordingFixChatStarter
 from routines_app.server import create_app
 
@@ -187,6 +188,30 @@ def test_removing_a_routine_deletes_it_once_no_run_is_going(
     assert client.delete(f"/api/routines/{sync_routine}").status_code == 404
 
 
+def test_a_routine_an_app_owns_is_rescheduled_without_its_file_changing_and_cannot_be_removed(
+    client: FlaskClient, service: RoutinesService, repository: RecordingRepository
+) -> None:
+    shipped = 'title = "Inbox status"\nwhat = "Checks mail."\nevery = "1h"\ncommand = ["true"]\n'
+    path = write_app_definition(service.paths, "inbox_status", RoutineId("inbox-status"), shipped)
+
+    changed = client.put("/api/routines/inbox-status/schedule", json=DAILY_SCHEDULE_BODY)
+
+    assert changed.status_code == 200, changed.get_json()
+    assert changed.get_json()["schedule_text"] == "Every day at 7:30 am"
+    detail = client.get("/api/routines/inbox-status").get_json()
+    # The schedule editor opens on the detail's definition, so it carries the schedule the routine runs on.
+    assert (detail["definition"]["every"], detail["definition"]["at"]) == ("1d", "07:30")
+    assert detail["definition_path"] == str(path)
+    assert path.read_text() == shipped
+    assert repository.commits == []
+
+    refused = client.delete("/api/routines/inbox-status")
+    assert refused.status_code == 409
+    assert "belongs to the app in system/apps/inbox_status/" in refused.get_json()["detail"]
+    assert client.get("/api/routines/inbox-status").status_code == 200
+    assert path.read_text() == shipped
+
+
 def test_a_removal_that_cannot_delete_the_state_says_so_and_keeps_the_routine(
     git_paths: RoutinesPaths,
     repository: RecordingRepository,
@@ -302,7 +327,7 @@ def test_a_page_of_another_origin_and_a_header_less_request_off_loopback_are_ref
 ) -> None:
     """The workspace's own browser is on loopback too, so the app reads a header-less request as the owner's only
     from loopback under a loopback Host, and never one its browser marks as another origin's (the request guard,
-    app_schema.request_guard)."""
+    imbue.app_sdk.request_guard)."""
     assert_request_guard_refuses_unknown_provenance(client, "GET", "/api/routines")
     cross_site = client.post(f"/api/routines/{sync_routine}/run", headers=CROSS_SITE_FETCH_HEADERS)
     assert cross_site.status_code == 403
