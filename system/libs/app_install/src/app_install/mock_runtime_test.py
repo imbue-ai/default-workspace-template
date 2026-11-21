@@ -23,6 +23,7 @@ class RecordingRuntime(WorkspaceRuntimeInterface):
     is_committing: bool = Field(default=False, description="Whether a commit is really made in the repository")
     is_port_answering: bool = Field(default=True, description="Whether a started app answers on its port")
     relocked_lock_text: str = Field(default="relocked\n", description="What a relock writes as the app's lock")
+    relock_failure: str | None = Field(default=None, description="Why a relock fails, if it does")
     verify_failure: str | None = Field(default=None, description="Why the app's checks fail, if they do")
     is_backup_recent: bool = Field(default=False, description="Whether the workspace has a recent backup")
     free_bytes: int = Field(default=10**12, description="How much room the disk has")
@@ -57,6 +58,8 @@ class RecordingRuntime(WorkspaceRuntimeInterface):
 
     def relock_app(self, worktree: Path, package: str) -> str | None:
         self.calls.append(f"relock_app {package}")
+        if self.relock_failure is not None:
+            return self.relock_failure
         (worktree / "system" / "apps" / package / "uv.lock").write_text(self.relocked_lock_text)
         return None
 

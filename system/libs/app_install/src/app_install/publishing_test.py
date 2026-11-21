@@ -129,6 +129,36 @@ def test_a_version_that_is_malformed_or_not_newer_than_the_published_one_is_refu
     assert set_version(workspace, "notes", "2.0.0-rc1", runtime).version == "2.0.0-rc1"
 
 
+def test_a_version_that_cannot_be_written_everywhere_is_written_nowhere(tmp_path: Path) -> None:
+    workspace, _published, runtime = _publisher(tmp_path)
+    manifest_file = workspace / "system" / "apps" / "notes" / "app.toml"
+    project_file = workspace / "system" / "apps" / "notes" / "pyproject.toml"
+    # A project file with no table to carry the version: the manifest is written before that is found out.
+    project_file.write_text('[tool.notes]\nkind = "demo"\n')
+    manifest_before = manifest_file.read_text()
+
+    with pytest.raises(PublishError, match=r"has no \[project\] table"):
+        set_version(workspace, "notes", "0.1.0", runtime)
+
+    assert manifest_file.read_text() == manifest_before
+    assert project_file.read_text() == '[tool.notes]\nkind = "demo"\n'
+    assert "relock_app notes" not in runtime.calls
+
+
+def test_a_lock_that_is_not_made_again_is_a_problem_of_a_version_that_was_written(tmp_path: Path) -> None:
+    workspace, _published, runtime = _publisher(tmp_path)
+    runtime.relock_failure = "uv lock exited 2"
+
+    outcome = set_version(workspace, "notes", "0.1.0", runtime)
+
+    assert outcome.version == "0.1.0"
+    assert outcome.changed_paths == ("system/apps/notes/app.toml", "system/apps/notes/pyproject.toml")
+    assert outcome.problems == (
+        "the app's lock was not made again, and it names the app's own version: uv lock exited 2",
+    )
+    assert 'version = "0.1.0"' in (workspace / "system" / "apps" / "notes" / "app.toml").read_text()
+
+
 def test_a_workspace_with_no_template_release_in_its_history_says_so(tmp_path: Path) -> None:
     workspace, _published, runtime = _publisher(tmp_path, is_python=False)
     run_git(workspace, ["tag", "-d", _TEMPLATE_VERSION])
@@ -439,6 +469,75 @@ def test_a_push_that_reached_the_repository_before_that_was_noted_is_finished_by
     assert again.problems == ()
     assert run_git(published, ["rev-list", "main"]) == pushed.commit
     assert record_publish(workspace, "notes", runtime).record.published_commit == pushed.commit
+
+
+def _refuse_tags(published: Path) -> Path:
+    """Have the repository refuse every tag pushed to it, and return the hook that does."""
+    hook = published / "hooks" / "update"
+    hook.parent.mkdir(exist_ok=True)
+    hook.write_text('#!/bin/sh\ncase "$1" in refs/tags/*) echo "no tags for now" >&2; exit 1 ;; esac\n')
+    hook.chmod(hook.stat().st_mode | stat.S_IXUSR)
+    return hook
+
+
+def test_a_tag_that_did_not_reach_the_repository_is_sent_alone_by_pushing_again(tmp_path: Path) -> None:
+    workspace, published, runtime = _publisher(tmp_path, is_python=False)
+    _versioned(workspace, runtime, "0.1.0")
+    assemble_app(workspace, "notes", "HEAD", runtime)
+    hook = _refuse_tags(published)
+
+    untagged = push_app(workspace, "notes", None, runtime)
+
+    # The version is published all the same, and the outcome says its tag is still owed.
+    assert untagged.is_tag_pushed is False
+    (problem,) = untagged.problems
+    assert problem.startswith(f"{untagged.commit} is published, but its tag v0.1.0 was not pushed")
+    assert _refs(published) == ["refs/heads/main"]
+    assert run_git(published, ["rev-parse", "main"]) == untagged.commit
+
+    hook.unlink()
+    tagged = push_app(workspace, "notes", None, runtime)
+
+    assert (tagged.is_tag_pushed, tagged.commit, tagged.problems) == (True, untagged.commit, ())
+    assert run_git(published, ["rev-list", "--count", "main"]) == "1"
+    assert run_git(published, ["rev-parse", "v0.1.0^{commit}"]) == untagged.commit
+    assert runtime.calls.count("create_published_repository notes 'Notes'") == 1
+
+
+def test_a_tag_the_repository_already_has_is_reported_and_never_moved(tmp_path: Path) -> None:
+    workspace, published, runtime = _publisher(tmp_path, is_python=False)
+    first = _publish(workspace, runtime, "0.1.0")
+    # Someone tagged the first version as the next one on GitHub.
+    run_git(published, ["tag", "v0.2.0", first.commit])
+    write_app_file(workspace, "notes", "src/notes/runner.py", "GREETING = 'good morning'\n")
+    _versioned(workspace, runtime, "0.2.0")
+    assemble_app(workspace, "notes", "HEAD", runtime)
+
+    second = push_app(workspace, "notes", None, runtime)
+
+    assert second.is_tag_pushed is False
+    (problem,) = second.problems
+    assert problem.startswith(f"{_PUBLISHED_URL} already has a tag v0.2.0, which is never moved")
+    assert run_git(published, ["rev-parse", "main"]) == second.commit
+    assert run_git(published, ["rev-parse", "v0.2.0^{commit}"]) == first.commit
+
+
+def test_a_repository_that_was_not_closed_to_outside_contributions_is_a_problem_of_the_first_publish(
+    tmp_path: Path,
+) -> None:
+    workspace, published, runtime = _publisher(tmp_path, is_python=False)
+    runtime.lockdown_problem = "PATCH answered 403"
+    _versioned(workspace, runtime, "0.1.0")
+    assemble_app(workspace, "notes", "HEAD", runtime)
+
+    pushed = push_app(workspace, "notes", None, runtime)
+
+    assert pushed.is_repository_created and pushed.is_tag_pushed
+    assert pushed.problems == (
+        f"closing {_PUBLISHED_URL} to outside contributions (issues, wiki, projects, discussions, outside "
+        "pull requests) did not take: PATCH answered 403",
+    )
+    assert run_git(published, ["rev-parse", "main"]) == pushed.commit
 
 
 def test_only_the_first_publish_of_an_app_installed_and_changed_here_says_what_it_was_derived_from(
