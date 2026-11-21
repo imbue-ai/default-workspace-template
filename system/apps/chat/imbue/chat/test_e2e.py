@@ -465,7 +465,7 @@ def test_suggestions_worked_out_after_a_reply_rise_above_the_composer_with_the_r
     expect(pills.first).to_have_class(re.compile(r"suggestion-pill--recommended"))
     strip = _chat(page).locator(".suggestion-strip--open")
     composer = _chat(page).locator(".message-input-textbox")
-    assert _box(strip)["y"] + _box(strip)["height"] <= _box(composer)["y"]
+    assert _box(strip)["bottom"] <= _box(composer)["top"]
     page.screenshot(path=str(tmp_path / "generated-suggestions.png"))
 
     _chat(page).locator(".suggestion-strip-more").click()
