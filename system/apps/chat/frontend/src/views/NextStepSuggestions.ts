@@ -27,6 +27,8 @@ import { SuggestionStrip, suggestionsOffNotice } from "./SuggestionStrip";
 import { isChatTurnOver } from "./TurnDoneMark";
 
 const NEXT_STEP_SWITCH = SUGGESTION_SWITCHES.next_step;
+// How many of a generated set's suggestions are drawn before "Show more". A fixed set is drawn whole.
+const GENERATED_SET_FOLD = 3;
 // The group of the chrome's workspace settings that holds the suggestion switches.
 const SUGGESTIONS_SETTINGS_GROUP = "suggestions";
 export const SUGGESTIONS_OFF_NOTICE_MS = 8_000;
@@ -131,6 +133,7 @@ export function NextStepSuggestions(): m.Component<{ chatId: string }> {
           key: adopted.set.after_event_id,
           placement: "next_step",
           suggestions: adopted.set.suggestions,
+          foldAfter: adopted.set.source === "fixed" ? null : GENERATED_SET_FOLD,
           isOpen: adopted.isOpen,
           onPick: (suggestion) => submitSuggestion(chatId, suggestion.label),
           onToggle: () => toggleNextStepSuggestions(chatId),

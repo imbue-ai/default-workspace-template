@@ -1,8 +1,8 @@
 /**
  * A strip: the suggestions of one placement, above the composer and at its width. Open, it is its suggestions as
  * pills in a wrapping row (the recommended one in green) over a quiet link that switches the placement off;
- * collapsed, it is a small labelled toggle that opens it again. The pills' look is ``style.css``'s
- * (``suggestion-pill``).
+ * collapsed, it is a small labelled toggle that opens it again. A set that may run long shows its first few with
+ * a "Show more" that reveals the rest. The pills' look is ``style.css``'s (``suggestion-pill``).
  */
 
 import m from "mithril";
@@ -38,6 +38,8 @@ export const SUGGESTION_PLACEMENT_WORDS: Record<SuggestionPlacement, PlacementWo
 export interface SuggestionStripAttrs {
   placement: SuggestionPlacement;
   suggestions: readonly Suggestion[];
+  /** How many suggestions are drawn before "Show more" is clicked; null draws every one. */
+  foldAfter: number | null;
   isOpen: boolean;
   onPick: (suggestion: Suggestion) => void;
   onToggle: () => void;
@@ -49,10 +51,19 @@ export interface SuggestionStripAttrs {
 const COLUMN_CLASS = "mx-auto mb-2 w-full max-w-(--width-message-column)";
 const STRIP_CLASS = `suggestion-strip ${COLUMN_CLASS}`;
 
+// A key no suggestion's own id takes, for the control drawn among the keyed pills.
+const SHOW_MORE_KEY = "suggestion-strip-show-more";
+
 export function SuggestionStrip(): m.Component<SuggestionStripAttrs> {
+  // Kept through a collapse to the toggle and back, so the rest stay revealed once asked for.
+  let isUnfolded = false;
+
   return {
     view({ attrs }) {
       const words = SUGGESTION_PLACEMENT_WORDS[attrs.placement];
+      const shown =
+        attrs.foldAfter === null || isUnfolded ? attrs.suggestions : attrs.suggestions.slice(0, attrs.foldAfter);
+      const isMoreToShow = shown.length < attrs.suggestions.length;
       if (!attrs.isOpen) {
         return m(
           "div",
@@ -82,21 +93,39 @@ export function SuggestionStrip(): m.Component<SuggestionStripAttrs> {
         [
           m(
             "div",
-            { class: "suggestion-strip-pills flex flex-wrap gap-1.5" },
-            attrs.suggestions.map((suggestion) =>
-              m(
-                "button",
-                {
-                  key: suggestion.suggestion_id,
-                  type: "button",
-                  class: suggestion.is_recommended
-                    ? "suggestion-pill suggestion-pill--recommended"
-                    : "suggestion-pill",
-                  onclick: () => attrs.onPick(suggestion),
-                },
-                suggestion.label,
+            { class: "suggestion-strip-pills flex flex-wrap items-center gap-1.5" },
+            [
+              ...shown.map((suggestion) =>
+                m(
+                  "button",
+                  {
+                    key: suggestion.suggestion_id,
+                    type: "button",
+                    class: suggestion.is_recommended
+                      ? "suggestion-pill suggestion-pill--recommended"
+                      : "suggestion-pill",
+                    onclick: () => attrs.onPick(suggestion),
+                  },
+                  suggestion.label,
+                ),
               ),
-            ),
+              isMoreToShow
+                ? m(
+                    Button,
+                    {
+                      key: SHOW_MORE_KEY,
+                      variant: "ghost",
+                      sm: true,
+                      quiet: true,
+                      extra: "suggestion-strip-more",
+                      onclick: () => {
+                        isUnfolded = true;
+                      },
+                    },
+                    "Show more",
+                  )
+                : null,
+            ].filter((child) => child !== null),
           ),
           attrs.onDisable === null
             ? null

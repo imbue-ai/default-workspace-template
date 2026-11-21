@@ -17,6 +17,7 @@ function renderStrip(overrides: Partial<SuggestionStripAttrs> = {}): {
   const attrs: SuggestionStripAttrs = {
     placement: "next_step",
     suggestions: START,
+    foldAfter: null,
     isOpen: true,
     onPick: vi.fn(),
     onToggle: vi.fn(),
@@ -72,6 +73,61 @@ describe("an open strip", () => {
 
     expect(root.querySelector(".suggestion-strip-disable")).toBeNull();
     expect(pills(root)).toHaveLength(START.length);
+  });
+});
+
+describe("a strip that folds a long set", () => {
+  const LONG: Suggestion[] = ["One", "Two", "Three", "Four", "Five"].map((label) => ({
+    suggestion_id: label.toLowerCase(),
+    label,
+    is_recommended: false,
+  }));
+
+  function showMore(root: HTMLElement): HTMLButtonElement | null {
+    return root.querySelector<HTMLButtonElement>(".suggestion-strip-more");
+  }
+
+  /** Draw the strip again in place, as the page does after a click or a change of what it was handed. */
+  function redraw(
+    root: HTMLElement,
+    attrs: SuggestionStripAttrs,
+    overrides: Partial<SuggestionStripAttrs> = {},
+  ): void {
+    m.render(root, m(SuggestionStrip, { ...attrs, ...overrides }));
+  }
+
+  it("draws the first few and a Show more that reveals the rest and then goes", () => {
+    const { root, attrs } = renderStrip({ suggestions: LONG, foldAfter: 3 });
+
+    expect(pills(root).map((pill) => pill.textContent)).toEqual(["One", "Two", "Three"]);
+    expect(showMore(root)?.textContent).toBe("Show more");
+
+    showMore(root)!.click();
+    redraw(root, attrs);
+
+    expect(pills(root).map((pill) => pill.textContent)).toEqual(["One", "Two", "Three", "Four", "Five"]);
+    expect(showMore(root)).toBeNull();
+    pills(root)[4].click();
+    expect(attrs.onPick).toHaveBeenCalledExactlyOnceWith(LONG[4]);
+  });
+
+  it("keeps the rest revealed through a collapse to its toggle and back", () => {
+    const { root, attrs } = renderStrip({ suggestions: LONG, foldAfter: 3 });
+    showMore(root)!.click();
+
+    redraw(root, attrs, { isOpen: false });
+    redraw(root, attrs, { isOpen: true });
+
+    expect(pills(root)).toHaveLength(5);
+    expect(showMore(root)).toBeNull();
+  });
+
+  it("offers no Show more for a set that fits, or for one that is never folded", () => {
+    expect(showMore(renderStrip({ suggestions: LONG.slice(0, 3), foldAfter: 3 }).root)).toBeNull();
+
+    const whole = renderStrip({ suggestions: LONG, foldAfter: null });
+    expect(pills(whole.root)).toHaveLength(5);
+    expect(showMore(whole.root)).toBeNull();
   });
 });
 

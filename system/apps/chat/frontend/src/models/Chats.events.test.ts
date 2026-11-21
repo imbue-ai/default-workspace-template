@@ -7,10 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providers = vi.hoisted(() => ({ loadAccounts: vi.fn(async () => undefined) }));
 const chatSettings = vi.hoisted(() => ({ rereadChatSettings: vi.fn() }));
+const suggestions = vi.hoisted(() => ({ rereadNextStepSuggestions: vi.fn() }));
 
 vi.mock("mithril", () => ({ default: { redraw: vi.fn(), request: vi.fn() } }));
 vi.mock("./Providers", () => ({ loadAccounts: providers.loadAccounts }));
 vi.mock("./ChatSettings", () => ({ rereadChatSettings: chatSettings.rereadChatSettings }));
+vi.mock("./Suggestions", () => ({ rereadNextStepSuggestions: suggestions.rereadNextStepSuggestions }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({
   apiUrl: (path: string) => path,
   wsUrl: (path: string) => `ws://test${path}`,
@@ -336,6 +338,15 @@ describe("the settings over the socket", () => {
     push({ type: "settings_updated" });
 
     expect(chatSettings.rereadChatSettings).toHaveBeenCalledOnce();
+  });
+
+  it("reads a chat's suggestions again when the app says its stored set changed", () => {
+    open();
+    expect(suggestions.rereadNextStepSuggestions).not.toHaveBeenCalled();
+
+    push({ type: "suggestions_updated", chat_id: "agent-suggested" });
+
+    expect(suggestions.rereadNextStepSuggestions).toHaveBeenCalledExactlyOnceWith("agent-suggested");
   });
 
   it("reads the settings again on a reconnect, since a change while it was down reached no one", () => {

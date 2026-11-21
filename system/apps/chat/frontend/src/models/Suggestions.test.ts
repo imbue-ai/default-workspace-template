@@ -26,6 +26,11 @@ import {
 const CHAT = "agent-1";
 const NONE: SuggestionsAnswer = { status: "none", after_event_id: null, source: null, suggestions: [] };
 
+/** What the route answers while a set for ``afterEventId`` is being worked out. */
+function pending(afterEventId: string): SuggestionsAnswer {
+  return { status: "pending", after_event_id: afterEventId, source: null, suggestions: [] };
+}
+
 function ready(afterEventId: string, labels: string[] = ["Yes", "No"]): SuggestionsAnswer {
   return {
     status: "ready",
@@ -82,6 +87,10 @@ describe("suggestionSetOf", () => {
 
   it.each(["none", "pending", "a-status-from-the-future"])("reads the status %s as no set", (status) => {
     expect(suggestionSetOf({ ...ready("reply-1"), status })).toBeNull();
+  });
+
+  it("reads a pending answer as no set yet", () => {
+    expect(suggestionSetOf(pending("reply-1"))).toBeNull();
   });
 
   it("reads a ready answer with nothing to draw as no set", () => {
@@ -274,6 +283,63 @@ describe("the set a chat's page draws", () => {
 
     expect(shownLabels()).toEqual(["Show me some ideas"]);
     expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(true);
+  });
+});
+
+describe("a set worked out after the turn ended", () => {
+  it("is drawn, open, when the push that says it is stored brings it, with no wait in between", async () => {
+    vi.useFakeTimers();
+    mockRequest.mockResolvedValue(ready("reply-1"));
+    await look();
+    await look({ isTurnDone: false, lastReplyEventId: "reply-2" });
+
+    // The turn ends: the read it asks for finds the new reply's set still being worked out.
+    mockRequest.mockResolvedValue(pending("reply-2"));
+    await look({ lastReplyEventId: "reply-2" });
+    expect(getNextStepSuggestions(CHAT)).toBeNull();
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+
+    // Looking again asks nothing: the push is what says there is something to read.
+    await look({ lastReplyEventId: "reply-2" });
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+
+    mockRequest.mockResolvedValue(ready("reply-2", ["Yes, add reminders", "Show me the app"]));
+    rereadNextStepSuggestions(CHAT);
+    await look({ lastReplyEventId: "reply-2" });
+
+    expect(shownLabels()).toEqual(["Yes, add reminders", "Show me the app"]);
+    expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(true);
+    expect(mockRequest).toHaveBeenCalledTimes(3);
+  });
+
+  it("is drawn when its push arrives before the page has seen the turn end", async () => {
+    mockRequest.mockResolvedValue(ready("reply-1"));
+    await look();
+    await look({ isTurnDone: false, lastReplyEventId: "reply-2" });
+
+    mockRequest.mockResolvedValue(ready("reply-2", ["Thanks, that is all"]));
+    rereadNextStepSuggestions(CHAT);
+    await look({ isTurnDone: false, lastReplyEventId: "reply-2" });
+    expect(shownLabels()).toEqual(["Yes", "No"]);
+    expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(false);
+
+    await look({ lastReplyEventId: "reply-2" });
+
+    expect(shownLabels()).toEqual(["Thanks, that is all"]);
+    expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(true);
+  });
+
+  it("leaves nothing drawn when the push says the stored set was removed", async () => {
+    mockRequest.mockResolvedValue(ready("reply-1"));
+    await look();
+    expect(shownLabels()).toEqual(["Yes", "No"]);
+
+    mockRequest.mockResolvedValue(NONE);
+    rereadNextStepSuggestions(CHAT);
+    await look({ isTurnDone: false });
+    await look({ lastReplyEventId: "reply-2" });
+
+    expect(getNextStepSuggestions(CHAT)).toBeNull();
   });
 });
 

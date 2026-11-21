@@ -43,8 +43,9 @@ export interface SuggestionSet {
   suggestions: readonly Suggestion[];
 }
 
-/** What ``GET /api/chats/<chat-id>/suggestions`` answers. An ``action`` marks a suggestion whose click does something
- *  other than send its label. */
+/** What ``GET /api/chats/<chat-id>/suggestions`` answers: ``ready`` with the stored set, ``pending`` while one is being
+ *  worked out (a ``suggestions_updated`` push follows), or ``none``. An ``action`` marks a suggestion whose click does
+ *  something other than send its label. */
 export interface SuggestionsAnswer {
   status: string;
   after_event_id: string | null;
@@ -154,7 +155,8 @@ export async function readNextStepSuggestions(chatId: string): Promise<void> {
   m.redraw();
 }
 
-/** Read the set again for a chat this page draws suggestions for: the page is shown again, or the settings changed. */
+/** Read the set again for a chat this page draws suggestions for: the chat app said its stored set changed (a set
+ *  worked out since the turn ended arrives this way, seconds after the read the turn's end asked for). */
 export function rereadNextStepSuggestions(chatId: string): void {
   if (stateByChat.has(chatId)) void readNextStepSuggestions(chatId);
 }

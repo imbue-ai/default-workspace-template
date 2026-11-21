@@ -15,6 +15,7 @@ import type { CompactionCause, UserMessageEvent } from "./Response";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
 import { loadAccounts } from "./Providers";
 import { rereadChatSettings } from "./ChatSettings";
+import { rereadNextStepSuggestions } from "./Suggestions";
 
 /** The agent-level facts about a chat's active agent that the pages render (the backend's
  *  ``ActiveAgentSnapshot``). */
@@ -237,6 +238,7 @@ type WsEvent =
   | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null }
   | { type: "accounts_updated" }
   | { type: "settings_updated" }
+  | { type: "suggestions_updated"; chat_id: string }
   | { type: "held_send_failed"; chat_id: string; message_id: string; detail: string; kind: string };
 
 /** Notified when a message the chat app held while its agent came up never reached the agent: the chat, the message's
@@ -370,6 +372,9 @@ function handleEvent(event: WsEvent): void {
       break;
     case "settings_updated":
       rereadChatSettings();
+      break;
+    case "suggestions_updated":
+      rereadNextStepSuggestions(event.chat_id);
       break;
     case "mentions_updated":
       notifyMentionsUpdated();

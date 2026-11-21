@@ -252,6 +252,28 @@ describe("the next-step strip", () => {
     expect(root.querySelector(".suggestion-strip")?.getAttribute("data-placement")).toBe("next_step");
   });
 
+  it("draws a generated set's first three with Show more for the rest, and a fixed set whole", async () => {
+    const five = ["One", "Two", "Three", "Four", "Five"].map((label) => ({
+      suggestion_id: label.toLowerCase(),
+      label,
+      is_recommended: false,
+    }));
+    stored.suggestions = { ...START_SET, source: "generated", suggestions: five };
+    await load();
+
+    expect(pillLabels()).toEqual(["One", "Two", "Three"]);
+    click(".suggestion-strip-more");
+    expect(pillLabels()).toEqual(["One", "Two", "Three", "Four", "Five"]);
+
+    resetSuggestionsForTests();
+    m.render(root, null);
+    stored.suggestions = { ...START_SET, source: "fixed", suggestions: five };
+    await load();
+
+    expect(pillLabels()).toEqual(["One", "Two", "Three", "Four", "Five"]);
+    expect(root.querySelector(".suggestion-strip-more")).toBeNull();
+  });
+
   it("sends a clicked suggestion's label through the composer", async () => {
     await load();
 

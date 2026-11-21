@@ -124,8 +124,10 @@ observe`, its own supervised service) writes, and serves:
   its last message as `last_messaged_at`, which the chat root's list orders on)
   the provisional-chat events (`provisional_chat_created`,
   `provisional_chat_completed`), `accounts_updated` whenever the account
-  index changes, whichever process wrote it, and `settings_updated` whenever a
-  settings route writes the workspace's chat settings.
+  index changes, whichever process wrote it, `settings_updated` whenever a
+  settings route writes the workspace's chat settings, and `suggestions_updated`
+  (`{"chat_id"}`) whenever a chat's stored next-step suggestions are replaced or
+  removed.
 - `POST /api/focus-chat`: what the shell posts for the Imbue Studio app's `minds:focus-chat` (the user opened a
   chat's notification), since the manifest registers the type under `[[message_handlers]]`. It takes the
   message's `chatId` and the `client_id` the shell adds, and asks the shell's `show` op
@@ -659,19 +661,55 @@ chat's folder, `data/.apps/chat/chats/<chat-id>/suggestions.json`:
 }
 ```
 
-`source` is `fixed` for a set the chat app wrote word for word and `generated` for one a model
-worked out; the first-run seed's start suggestions are the only set written today. `GET
-/api/chats/<chat-id>/suggestions` answers `{"status", "after_event_id", "source",
-"suggestions"}`: `ready` with the stored set, or `none` with nulls and an empty list. It answers
-for a seeded chat still awaiting its first agent as for any listed chat, and 404 for a chat the
-app does not know.
+`source` is `fixed` for a set the chat app wrote word for word (the first-run seed's start
+suggestions) and `generated` for one a model worked out. `GET /api/chats/<chat-id>/suggestions`
+answers `{"status", "after_event_id", "source", "suggestions"}`: `ready` with the stored set,
+`pending` while a set is being worked out (naming the reply it is for, with an empty list), or
+`none` with nulls and an empty list. It answers for a seeded chat still awaiting its first agent
+as for any listed chat, and 404 for a chat the app does not know.
+
+When a turn ends, the chat app works out replies to suggest under the agent's last message
+(`suggestion_generation.py`). The agent manager reports the end once the harness has closed the
+turn (for Claude, after its Stop hooks have run), and the generator settles the stored set off
+that thread, one chat at a time. It asks a model only when all of these hold: next-step
+suggestions are switched on; the chat is an agent chat a person talks to (not a room, and not
+one an agent started); the chat is idle, with no permission request, background task, or switch
+pending and nothing queued; the transcript ends on an assistant message that has text and is not
+a provider failure; the stored set is not already for that message; and the chat's harness has a
+`OneShotCompletion`. Whether a page is showing the chat plays no part, so a chat's suggestions
+are there when its user comes back to it.
+
+The question goes to the account the chat runs on, as chat naming's does, and never enters the
+chat's transcript. It runs on a mid-sized model (the one-shot call's `medium` tier: the `sonnet`
+alias for Claude, the newest "terra" model of the account's list for Codex, each falling back to
+the account's default model) with an allowance for thinking (for Codex, a `medium` reasoning
+effort where the model offers one). The system prompt asks for a draft,
+a critique, and a shorter second list, usually two or three suggestions, each as a
+`<suggestion>` element with `recommended="true"` on a clear best one. The prompt is the end of
+the conversation as tagged turns: the reply, always whole, under up to five turns before it,
+cut from the oldest end to 12,000 characters. A turn is what one side said in a row, as the page
+shows it: a person's own words without the context sent along with them, and the agent's text
+without its tool calls or thinking.
+
+Only the `<suggestion>` elements of the answer are read. A label is kept when it is one line of
+1 to 80 characters that no earlier one repeats, up to ten, and only the first kept one may be
+recommended. Before storing, the chat is read again: an answer is dropped when the reply is no
+longer the chat's last word, a turn is in flight, or the switch went off meanwhile. A set that
+is kept replaces the stored file; an answer with no suggestions, a failed or timed-out call, and
+a turn's end at which nothing is asked all remove it, so a set never outlives the reply it was
+made for. A failed call is logged and not tried again for the same message. Each change to the
+file is pushed as `suggestions_updated`, and a page showing the chat reads the route again. A
+chat on a harness with no one-shot call (Pi, Antigravity, OpenCode) gets no generated sets.
 
 The page draws the set as the next-step strip, directly above the composer and at its width:
 pills in a wrapping row with a dashed outline, the recommended one (at most one, and the first)
 in green. It takes a set up only when the answer's `after_event_id` is the id of the last
 assistant message the page holds, no user message follows that message, the page holds the
 transcript's end, and the chat's turn is done, a seeded chat awaiting its first agent counting
-as done; so a set left from an earlier turn never shows. Clicking a suggestion sends its label
+as done; so a set left from an earlier turn never shows. A generated set arrives a few seconds
+after its reply, with the push; nothing is drawn in its place meanwhile. A generated set longer
+than three draws its first three and a "Show more" that reveals the rest; a fixed set is drawn
+whole. Clicking a suggestion sends its label
 through the composer, so the transcript shows exactly what the pill said: the label alone with
 an empty draft, else the draft's text, a newline, and the label, with the draft's attachments;
 it queues behind a running turn, launches a chat awaiting its first message, and carries out an
