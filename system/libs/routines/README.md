@@ -38,8 +38,9 @@ skill = "inbox-digest"
 
 ## How it runs
 
-One cron line, written by the bootstrap at every boot, runs `routines tick`
-every minute through `with_agent_env.sh`. The tick closes off runs whose
+One cron entry, written by the bootstrap at every boot, runs `routines tick`
+every minute through `with_agent_env.sh`; it states the boot's `MNGR_HOST_DIR`,
+where the wrapper finds the agent environment. The tick closes off runs whose
 process is gone, spawns `routines run <id> --trigger scheduled` for every
 routine that is due, and once a day archives the ledger past 16 MB and prunes
 run directories older than 90 days.
