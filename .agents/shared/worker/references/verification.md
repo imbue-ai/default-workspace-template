@@ -87,6 +87,12 @@ scope file's `diff.base`.
     `SKILL.md` and its `scripts/`, so you see how it invokes the app; every
     `context` path, read-only; the `conventions` list.
 
+    An app's `primary` can list `.agents/skills/<skill>` entries beside its
+    directory. Each is a link to a skill the app carries inside its own
+    directory (`system/apps/<package>/skills/<skill>/`), which is part of the
+    app: read it there, once, and expect its changes in the diff under the
+    app's directory, never under the link.
+
     Never read a path matching a creation's `exclude`, unless another
     creation's footprint holds it and does not exclude it; the scope file
     itself is the one exception.
@@ -102,6 +108,10 @@ scope file's `diff.base`.
     routes, CLI, or stored data shape has to be reflected in every `references`
     entry that uses that surface, and a change inside a referenced skill,
     script, or doc has to match the app's current surface. Flag any drift.
+    Flag also a file in the diff, outside the app's directory, that newly
+    uses the app and is not among its `references`: an app with a record
+    (`system/config/apps/<name>.toml`) gains the entry through
+    `app-install reference add`, never through an edit to the record.
 
 ### Verify Architecture
 

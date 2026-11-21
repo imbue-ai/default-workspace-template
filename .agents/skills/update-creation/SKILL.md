@@ -80,7 +80,20 @@ space-separated: `app:<registered name>`, `skill:<directory>`,
 script or reference (e.g. `skill:migrate-config`, or `app:roadmap
 skill:sync-roadmap` for an app and the skill that drives it). Use `$SLUG` for
 the pass: the creation's own name when there is one, otherwise a short
-kebab-case name for the change (`roadmap-sync`). Then:
+kebab-case name for the change (`roadmap-sync`).
+
+A skill an app carries is part of that app, not a creation of its own: its
+`.agents/skills/<name>` entry is a link into the app's own directory
+(`system/apps/<package>/skills/<name>/`). Name the app, `app:<registered
+name>`. `skill:<name>` for such a skill resolves through the link to the app,
+and a pass that names both is refused as one creation named twice.
+
+When the change made something outside an app start using that app (a
+standalone skill that now calls its routes, a script that reads its store),
+say so in the task body: the worker records it in the app's record with
+`app-install reference add`, so a later change to the app reaches it.
+
+Then:
 
 - Worker agent name and branch: `update-$SLUG` / `mngr/update-$SLUG`
 - Runtime dir / task file: `data/.tasks/harden/update-$SLUG/` /
