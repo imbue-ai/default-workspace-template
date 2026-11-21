@@ -10,11 +10,15 @@ from imbue.chat.chat_seed import SEED_FILENAME
 from imbue.chat.chat_seed import SEED_SOURCE
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_seed import first_run_kickoff_message
+from imbue.chat.chat_seed import is_first_run_seed
+from imbue.chat.chat_seed import read_first_run_context
 from imbue.chat.chat_seed import read_seed_events
 from imbue.chat.chat_seed import seed_agent_info
 from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_seed import seed_event_id
 from imbue.chat.chat_seed import seed_events
+from imbue.chat.chat_seed import write_first_run_context
 from imbue.chat.chat_seed import write_seed_file
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.harness_type import HarnessType
@@ -168,3 +172,51 @@ def test_the_seed_pseudo_agent_is_the_chat_itself_on_the_seed_harness(tmp_path: 
     assert info.harness is HarnessType.SEED
     assert info.agent_state_dir == tmp_path and info.claude_config_dir == tmp_path
     assert info.state == "STOPPED"
+
+
+def test_the_first_runs_words_ride_the_launch_message_and_nothing_else(tmp_path: Path) -> None:
+    chat_dir = _seeded_chat_dir(tmp_path, _turns())
+    write_first_run_context(chat_dir, "  I want to use Studio for: Music.  ")
+
+    launch = seed_context_message(chat_dir, "hello")
+
+    assert read_first_run_context(chat_dir) == "I want to use Studio for: Music."
+    assert "<about-user>\nI want to use Studio for: Music.\n</about-user>" in launch
+    assert launch.endswith("\nhello")
+
+
+def test_a_first_run_chat_with_nothing_said_is_still_marked_and_carries_no_about_user_block(tmp_path: Path) -> None:
+    chat_dir = _seeded_chat_dir(tmp_path, _turns())
+    assert is_first_run_seed(chat_dir) is False
+    write_first_run_context(chat_dir, "   ")
+
+    assert is_first_run_seed(chat_dir) is True
+    assert "<about-user>" not in seed_context_message(chat_dir, "hello")
+
+
+def test_the_kickoff_note_carries_the_welcome_and_the_picks_and_is_hidden_whole(tmp_path: Path) -> None:
+    chat_dir = _seeded_chat_dir(tmp_path, _turns())
+    write_first_run_context(chat_dir, "I want to use Studio for: Music, Film, art.")
+
+    note = first_run_kickoff_message(chat_dir)
+
+    for turn in _turns():
+        assert turn.text in note
+    assert "<about-user>\nI want to use Studio for: Music, Film, art.\n</about-user>" in note
+    assert "exactly three" in note and "numbered list" in note and "drawn from what they picked" in note
+    assert "reply with a number" in note
+    decision = classify_user_message(note)
+    assert decision is not None and decision.display is DisplayKind.HIDDEN
+
+
+def test_the_kickoff_note_with_no_picks_asks_for_a_plain_ready_to_help(tmp_path: Path) -> None:
+    chat_dir = _seeded_chat_dir(tmp_path, _turns())
+    write_first_run_context(chat_dir, "")
+
+    note = first_run_kickoff_message(chat_dir)
+
+    assert "<about-user>" not in note
+    assert "here and ready to help" in note
+    assert "exactly three" in note and "numbered list" in note and "reply with a number" in note
+    decision = classify_user_message(note)
+    assert decision is not None and decision.display is DisplayKind.HIDDEN

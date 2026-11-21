@@ -110,6 +110,7 @@ from imbue.chat.chat_intakes import app_chat_title
 from imbue.chat.chat_intakes import chat_id_selected_by_window_path
 from imbue.chat.chat_intakes import intake_path
 from imbue.chat.chat_intakes import most_recently_messaged_chat_id
+from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
@@ -2298,8 +2299,21 @@ def _seed_chat() -> Response:
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
     seed_request = parse_request_body(SeedChatRequest)
+    if seed_request.is_first_run:
+        # Handed over again as the user enters the workspace: the chat is there already, and only what they
+        # said about themselves may have changed.
+        updated = agent_manager.update_first_run_context(seed_request.context)
+        if updated is not None:
+            return model_response(
+                CreateChatResponse(chat_id=updated.chat_id, name=updated.name, display_name=updated.display_name), 201
+            )
     try:
-        created = agent_manager.seed_chat(MAIN_CHAT_NAME, seed_request.turns)
+        if seed_request.is_first_run:
+            created = agent_manager.seed_chat(
+                MAIN_CHAT_NAME, FIRST_RUN_WELCOME, first_run_context=seed_request.context, is_first_run=True
+            )
+        else:
+            created = agent_manager.seed_chat(MAIN_CHAT_NAME, seed_request.turns)
     except AgentNameConflictError as e:
         return error_response(str(e), 409)
     except AgentCreationError as e:

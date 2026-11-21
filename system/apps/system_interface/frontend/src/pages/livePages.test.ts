@@ -744,6 +744,15 @@ describe("the contract", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it("tells the pages no theme once the layer is stopped", () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    spy.mockClear();
+    layer.stop();
+    void wearTheme({ id: "mac-classic", revision: "r1" });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it("tells the pages a previewed theme is a preview, on a change and in the greeting, and when it is saved", () => {
     const spy = spyOnFrame("win-1");
     load("win-1");
@@ -1815,6 +1824,27 @@ describe("raising the window the document's focus lands in", () => {
     frameOf("win-1").focus();
     tick();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+  });
+
+  it("stops its watcher when the layer is stopped, and raises for no landing after", () => {
+    vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
+    const timers = vi.getTimerCount();
+    layer.stop();
+    expect(vi.getTimerCount()).toBe(timers - 1);
+    blurIntoFrameOf("win-1");
+    tick();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+  });
+
+  it("leaves the watcher of the layer that replaced it running when a replaced layer is stopped", () => {
+    vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
+    const timers = vi.getTimerCount();
+    const newer = new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" });
+    newer.start();
+    layer.stop();
+    expect(vi.getTimerCount()).toBe(timers);
+    newer.stop();
+    expect(vi.getTimerCount()).toBe(timers - 1);
   });
 });
 
