@@ -14,7 +14,11 @@ function recordingChrome(): { chrome: FirstRunChrome; reports: boolean[]; schedu
   const reports: boolean[] = [];
   const scheduled: [() => void, number][] = [];
   return {
-    chrome: { report: (isPending) => reports.push(isPending), coverMs: 560, schedule: (run, ms) => scheduled.push([run, ms]) },
+    chrome: {
+      report: (isPending) => reports.push(isPending),
+      coverMs: 560,
+      schedule: (run, ms) => scheduled.push([run, ms]),
+    },
     reports,
     scheduled,
   };
