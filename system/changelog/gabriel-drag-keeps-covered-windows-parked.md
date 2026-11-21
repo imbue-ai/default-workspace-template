@@ -1,0 +1,1 @@
+The desktop plan now says that a window being moved or resized neither covers nor is covered for the length of the gesture, so the pages behind the windows that stay put stay parked, and that the moved window gets a compositor layer of its own until the move ends.

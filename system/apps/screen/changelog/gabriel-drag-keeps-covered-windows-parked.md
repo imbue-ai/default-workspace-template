@@ -1,0 +1,1 @@
+The browser launch-path integration test no longer fails when the browser-command test runs before it in the same process. The module shares one browser, so the earlier test's tab was restored into this one's launch and broke its exact tab-list check; it now checks that its own tab was checkpointed once.

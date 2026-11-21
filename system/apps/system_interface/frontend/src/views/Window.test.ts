@@ -19,6 +19,7 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     state: "NORMAL",
     stackIndex: 1,
     isFocused: true,
+    isMoving: false,
     isTouch: false,
     isMenuOpen: false,
     hasAppChat: true,
