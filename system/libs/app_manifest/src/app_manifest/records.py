@@ -8,6 +8,7 @@ under ``system/apps/`` without a record is a built-in app.
 
 import json
 import tomllib
+from collections.abc import Iterable
 from enum import auto
 from pathlib import Path
 from typing import Final
@@ -22,6 +23,10 @@ from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 
 RECORDS_DIRECTORY: Final[Path] = Path("system/config/apps")
+_APPS_DIRECTORY: Final[str] = "system/apps"
+# The files in an app's directory that are a function of other files there: on a conflict the upstream side is
+# taken and the file is made again, and a difference in one alone does not make an installed app modified.
+REGENERABLE_FILENAMES: Final[frozenset[str]] = frozenset({"uv.lock"})
 LOWEST_PORT: Final[int] = 1
 HIGHEST_PORT: Final[int] = 65535
 _RECORD_HEADER: Final[str] = (
@@ -67,6 +72,27 @@ class AppRecord(FrozenModel):
     references: tuple[RecordReference, ...] = Field(
         default=(), description="Paths elsewhere in this workspace that use the app"
     )
+
+
+def app_directory_prefix(record: AppRecord) -> str:
+    """The app's directory relative to the workspace repo's root, which is the prefix ``git subtree`` knows it by."""
+    return f"{_APPS_DIRECTORY}/{record.package}"
+
+
+def join_marker_pattern(record: AppRecord) -> str:
+    """The ``git log --grep`` pattern of the commits that join the app's directory to a history of its own.
+
+    ``git subtree`` leaves such a commit when an app is installed or updated (a squash) and when its first split
+    is made with ``--rejoin``, and starts every later split from the newest one. An app whose workspace history
+    holds one is linked; the pattern is the one ``git subtree`` itself searches with.
+    """
+    return f"^git-subtree-dir: {app_directory_prefix(record)}/*$"
+
+
+def modifying_paths(differing_paths: Iterable[str]) -> tuple[str, ...]:
+    """Of the paths in which an installed app's directory differs from what was installed, the ones that make
+    the app modified: every one that is not a regenerable file."""
+    return tuple(path for path in differing_paths if Path(path).name not in REGENERABLE_FILENAMES)
 
 
 def record_path(repo_root: Path, name: str) -> Path:

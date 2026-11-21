@@ -42,14 +42,12 @@ from app_install.paths import manifest_path
 from app_manifest.manifest import AppManifest
 from app_manifest.manifest import ManifestReadMode
 from app_manifest.manifest import load_manifest
+from app_manifest.records import REGENERABLE_FILENAMES
 from app_manifest.records import AppOrigin
 from app_manifest.records import AppRecord
 from app_manifest.records import load_record
 from app_manifest.records import write_record
 
-# The files in an app's directory that are a function of other files there: on a conflict the upstream side is
-# taken and the file is made again, and a difference in one alone does not make an installed app modified.
-REGENERABLE_FILENAMES: Final[frozenset[str]] = frozenset({"uv.lock"})
 _WORKTREES_DIRNAME: Final[str] = "worktrees"
 _SNAPSHOTS_DIRNAME: Final[str] = "snapshots"
 _NOBACKUP_MARKER: Final[str] = ".nobackup"

@@ -113,7 +113,16 @@ what this workspace records about an app its agent built or installed, which
   `AppRecordNotFoundError` for an app with none), `load_all_records`,
   `parse_record` (a record that does not parse, or whose file is not named
   after its app, raises `RecordLoadError`), `render_record` (the file's
-  text, the same text for the same record), and `write_record`.
+  text, the same text for the same record), and `write_record`. Three rules
+  about an app's own repository that the installer and GitHub sync both
+  read are here too, as plain functions that run no command:
+  `REGENERABLE_FILENAMES` (the files in an app's directory that are made
+  from other files there, today `uv.lock`) and `modifying_paths(paths)`,
+  which keeps the paths that make an installed app modified;
+  `app_directory_prefix(record)`, the directory `git subtree` knows the
+  app by; and `join_marker_pattern(record)`, the `git log --grep` pattern
+  of the commits that join that directory to a history of its own, which
+  is how a linked app is told.
 - `app_manifest.registry`: `RegistryRow` (absent keys read as the contract's
   defaults; unknown keys are ignored so a newer registration script never hides
   an app from an older reader), `read_registry(path)` (a row that fails
