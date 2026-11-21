@@ -10,8 +10,8 @@ dependencies = [
     # The registry an uninstalled app's row is removed from.
     "app-registration",
     "click>=8.1",
-    # The git configuration that reads a repository through the latchkey gateway, for one the anonymous read is
-    # refused.
+    # The git configuration that reads a repository through the latchkey gateway, what the workspace history says
+    # of an app's own repository (linked, modified), and the creation of an app's dev repository.
     "github-sync",
     # Whether the workspace has a recent backup to fall back on, before an update runs over an app's data.
     "host-backup",
