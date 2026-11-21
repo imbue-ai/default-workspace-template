@@ -572,7 +572,9 @@ off the record, which leaves the message for the page's "Try again" or for the
 launch after a restart. It reaches the agent as the user's
 first words would, the seeded conversation ahead of it, except that a slash
 command goes as it is and leaves the conversation pending for the first send
-after it. A chat launched as a room is not sent it: a room has no agent to act
+after it: the words the launch itself brought, when it brought any, and
+otherwise the next message, one that waited while the agent was being created
+included. A chat launched as a room is not sent it: a room has no agent to act
 on one. A blank or absent `first_message` is a seed as it always was, and
 launches nothing.
 

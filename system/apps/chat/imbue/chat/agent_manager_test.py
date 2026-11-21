@@ -1447,12 +1447,13 @@ def test_the_users_own_first_words_follow_a_seeds_first_message(
     """A user who signed in somewhere other than the chat's own chooser can type before anything has launched
     the chat. Their send is the launch, and the seed's message still goes first: it rides the create, and the
     user's words, which the chat keeps as the launch's own, are delivered through the send path once the agent
-    is up."""
+    is up. They are the first send after the seed's command, so they carry the seeded conversation it left
+    pending."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
     _sign_out_of_every_account()
     mngr_binary, go_path, argv_log = _write_gated_mngr_binary(tmp_path)
-    manager, _store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
     delivered: list[tuple[str, str]] = []
 
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
@@ -1482,7 +1483,13 @@ def test_the_users_own_first_words_follow_a_seeds_first_message(
 
         (create_line,) = _create_lines(argv_log)
         assert create_line.endswith(f"--message {_SEED_FIRST_MESSAGE}")
-        assert delivered == [("m-1", "1")]
+        ((message_id, carried),) = delivered
+        assert message_id == "m-1"
+        assert carried.startswith(f"<{SEED_CONTEXT_TAG}>") and carried.endswith(f"</{SEED_CONTEXT_TAG}>\n1")
+        assert "Wait.. what is honest software?" in carried
+        wait_until_true(
+            lambda: _is_seed_pending(store, ChatId(seeded.chat_id)) is False, 10, "the seed marked as delivered"
+        )
     finally:
         go_path.touch()
         manager.stop()

@@ -3685,6 +3685,24 @@ class AgentManager:
             report_undelivered=self._report_undelivered_held_send,
         )
 
+    def _new_chat_send_delivery(self, capabilities: HandoffCapabilities, chat_id: ChatId) -> HeldSendDelivery:
+        """How a send that waited for a chat's agent to be created reaches it: as any held send does, and with the
+        seeded conversation ahead of it when the launch left that pending (``carry_pending_seed``), as a send
+        through the message route carries it. A room's send carries none, there as here."""
+        delivery = self._held_send_delivery(capabilities)
+        return HeldSendDelivery(
+            deliver=lambda agent_info, text, message_id: (
+                capabilities.deliver(agent_info, text, message_id)
+                if agent_info.harness is HarnessType.ROOM
+                else self.carry_pending_seed(
+                    chat_id, text, lambda carried: capabilities.deliver(agent_info, carried, message_id)
+                )
+            ),
+            sleep=delivery.sleep,
+            is_stopping=delivery.is_stopping,
+            report_undelivered=delivery.report_undelivered,
+        )
+
     def _report_undelivered_held_send(self, chat_id: ChatId, message_id: str, detail: str, kind: str) -> None:
         """Tell the pages a held send never reached its agent, so the one that sent it hands it back."""
         self._broadcaster.broadcast_held_send_failed(chat_id, message_id, detail, kind)
@@ -5009,8 +5027,8 @@ class AgentManager:
         agent back off the record) leaves it for the retry, and nothing after a landed create reads it again. The
         words the launch itself brought follow it through the send path once the agent is up. That message is
         delivered like the user's first words, the seeded conversation ahead of it, except that a slash command
-        goes as it is and leaves the conversation for the first send after it. A room takes no such message: it
-        has no agent to act on one.
+        goes as it is and leaves the conversation for the first send after it, which the launch's own words are
+        when it brought any (``_settle_new_chat``). A room takes no such message: it has no agent to act on one.
 
         ``labels`` ride the create as extra ``--label``s, for a caller outside the workspace
         that wants the chat's window surfaced (``auto_open``); one that restates a label the app
@@ -5637,7 +5655,9 @@ class AgentManager:
         what the user chose the switch by. With no pick, or a refused one, a chat that launches
         fast on a harness switched fast once it is up gets that switch here. The messages go
         through the send path a held send takes; a refusal is logged the same way, and only a
-        first message that landed is told of.
+        first message that landed is told of. The first message goes as the launch made it; a
+        held send carries the seeded conversation when the launch left it pending
+        (``_new_chat_send_delivery``).
         """
         agent_info = self.get_agent_info_by_id(agent_id)
         capabilities = self._handoff_capabilities
@@ -5671,7 +5691,7 @@ class AgentManager:
             if is_delivered and first_message.on_delivered is not None:
                 first_message.on_delivered(chat_id, first_message.message_id)
         for held in held_sends:
-            deliver_held_send(self._held_send_delivery(capabilities), agent_info, held, chat_id)
+            deliver_held_send(self._new_chat_send_delivery(capabilities, chat_id), agent_info, held, chat_id)
 
     def _mark_creation_failed_locked(self, chat_id: ChatId, error: str) -> None:
         """Keep the provisional chat, in the failed phase: its page shows the reason and can
