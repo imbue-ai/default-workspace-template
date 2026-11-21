@@ -270,8 +270,10 @@ with no workspace around it. Nothing is pushed. Act on `result`:
 - `lock_check_failed`: the app's dependencies do not resolve on their own.
   Have the worker make the lock again in the app's directory (`uv lock`) and
   commit it. If it still fails, the app depends on something that exists only
-  inside a workspace: stop, and tell the user the app cannot be published
-  until that is changed.
+  inside a workspace (the usual case is a `path = "../../libs/..."` entry
+  under `[tool.uv.sources]` in its `pyproject.toml`, which resolves nowhere
+  else): stop, and tell the user the app cannot be published until that is
+  changed. Nothing was published.
 - `refused`: `detail` says why (no version in the manifest, a version not
   newer than the last published, a manifest that fails its check). Have the
   worker fix it.
