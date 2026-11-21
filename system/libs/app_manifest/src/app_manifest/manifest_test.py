@@ -1744,6 +1744,12 @@ def test_a_manifest_that_declares_none_of_them_runs_the_scaffolds_way(tmp_path: 
         pytest.param('[run]\nargs = ["{copy:data}"]\n', "takes only", id="run-arg-with-a-copy-placeholder"),
         pytest.param('[run]\nenv = { NOTES_STATE = "{scratch}" }\n', "takes only", id="run-env-with-scratch"),
         pytest.param('[run]\ncommand = "notes\\n--evil"\n', "single line", id="run-command-with-a-line-break"),
+        pytest.param('[run]\ncommand = "npm start"\n', "run.args", id="run-command-carrying-its-arguments"),
+        pytest.param(
+            '[[services]]\nrole = "indexer"\ncommand = "node indexer.js"\n',
+            "services.args",
+            id="service-command-carrying-its-arguments",
+        ),
         pytest.param('[run]\nenv = { "NOT A NAME" = "1" }\n', "env", id="run-env-name-that-is-no-variable"),
         pytest.param(
             '[run]\nenv = { NOTES_TITLE = "It\'s \\"notes\\"" }\n',

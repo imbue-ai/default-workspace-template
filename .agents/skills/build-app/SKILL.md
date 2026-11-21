@@ -353,7 +353,8 @@ lets two agents scaffold two apps at once:
   A `command` in `[run]` or `[[services]]` names one of the app's console
   scripts (`[project.scripts]` in its `pyproject.toml`): the program runs it
   from the app's own `.venv/bin`. Only an app with no `pyproject.toml` (a
-  wrapped server, below) has its command run as given.
+  wrapped server, below) has its command run as given. Either way a `command`
+  is one word, the program itself: its arguments go in `args`.
 
   A scaffolded app has no `[run]` table: without one, the program runs the
   console script named after the app with `<PACKAGE_UPPER>_PORT` set to its

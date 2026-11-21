@@ -543,6 +543,16 @@ def _check_program_text(table: str, field_name: str, text: str) -> None:
             )
 
 
+def _check_program_command(table: str, command: str) -> None:
+    """Raises InvalidManifestValueError for a command that is not one word: it is run as the program itself, never
+    split, so one that carries its arguments names a program that does not exist."""
+    _check_program_text(table, "command", command)
+    if any(character.isspace() for character in command):
+        raise InvalidManifestValueError(
+            f"{table}.command must be one word, the program to run, got {command!r}; its arguments go in {table}.args"
+        )
+
+
 def _check_program_environment_value(table: str, name: str, value: str) -> None:
     """Raises InvalidManifestValueError for a value supervisord's environment line cannot carry: it wraps a value
     in one kind of quote, has no escape for the other, strips every quote from both ends of what it reads, and
@@ -581,7 +591,7 @@ class RunSpec(FrozenModel):
     @model_validator(mode="after")
     def _check_texts(self) -> Self:
         if self.command is not None:
-            _check_program_text("run", "command", self.command)
+            _check_program_command("run", self.command)
         for argument in self.args:
             _check_program_text("run", "args", argument)
         for name, value in self.env.items():
@@ -607,7 +617,7 @@ class ServiceSpec(FrozenModel):
             raise InvalidManifestValueError(
                 f"invalid service role {self.role!r}: lowercase letters and digits, joined by single hyphens"
             )
-        _check_program_text("services", "command", self.command)
+        _check_program_command("services", self.command)
         for argument in self.args:
             _check_program_text("services", "args", argument)
         for name, value in self.env.items():

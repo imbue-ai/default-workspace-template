@@ -72,7 +72,8 @@ what this workspace records about an app its agent built or installed, which
   the app's main program, its `args` and its `env`; `ServiceSpec`, one
   `[[services]]` entry: a background program run as `<name>-<role>`, whose
   `role` is lowercase words joined by hyphens and unique within the app; in
-  both, a text may carry only the `{port:main}` and `{host}` placeholders,
+  both, a `command` is one word (its arguments go in `args`), a text may
+  carry only the `{port:main}` and `{host}` placeholders,
   and an `env` value may hold one kind of quote, and not at either end,
   and no `;` or `#` after a space, which supervisord reads as the start of
   a comment: that is all its environment line can carry; and the guidance
