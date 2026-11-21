@@ -112,6 +112,7 @@ from imbue.chat.harnesses.room.transcript import transcript_path
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
+from imbue.chat.main import install_suggestion_generator
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import CreateChatRequest
@@ -4299,6 +4300,66 @@ def test_a_listed_chat_answers_the_suggestions_stored_in_its_folder(app: Flask, 
             {"suggestion_id": "s2", "label": "Show me the plan first", "is_recommended": False},
         ],
     }
+
+
+def test_a_turns_end_works_out_suggestions_the_route_reads_pending_and_then_ready(
+    app: Flask, client: FlaskClient, tmp_path: Path
+) -> None:
+    """The page reads ``pending`` while the model answers, hears one push when the set is stored, and then reads the
+    set under the reply its own transcript ends on."""
+    claude_config_dir = tmp_path / "claude_config"
+    agent_state_dir = _track_claude_agent(app, "agent-123", "Chat-1", claude_config_dir)
+    projects_dir = claude_config_dir / "projects" / "hash123"
+    projects_dir.mkdir(parents=True)
+    records = [
+        {
+            "type": "user",
+            "uuid": "uuid-asked",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": "Build me a plant tracker"},
+        },
+        {
+            "type": "assistant",
+            "uuid": "uuid-replied",
+            "timestamp": "2026-01-01T00:00:01Z",
+            "message": {
+                "role": "assistant",
+                "model": "claude-opus-4-6",
+                "content": [{"type": "text", "text": "Built. Want reminders?"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        },
+    ]
+    (projects_dir / "suggested-session.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
+    (agent_state_dir / "claude_session_id_history").write_text("suggested-session\n")
+    state = state_of(app)
+    completion = ScriptedOneShotCompletion(['<suggestion recommended="true">Yes, add reminders</suggestion>'])
+    answers_while_asked: list[dict[str, Any]] = []
+    completion.on_call = lambda: answers_while_asked.append(client.get("/api/chats/agent-123/suggestions").get_json())
+    install_suggestion_generator(
+        state, state.agent_manager.chat_files_root, lambda _harness: completion, InlineExecutor()
+    )
+    reply_event_id = client.get("/api/chats/agent-123/events").get_json()["events"][-1]["event_id"]
+    pushes = state.broadcaster.register()
+    assert state.suggestion_generator is not None
+
+    state.suggestion_generator.consider_turn_end(ChatId("agent-123"))
+
+    assert answers_while_asked == [
+        {"status": "pending", "after_event_id": reply_event_id, "source": None, "suggestions": []}
+    ]
+    assert drain_pushes(pushes) == [{"type": "suggestions_updated", "chat_id": "agent-123"}]
+    assert client.get("/api/chats/agent-123/suggestions").get_json() == {
+        "status": "ready",
+        "after_event_id": reply_event_id,
+        "source": "generated",
+        "suggestions": [{"suggestion_id": "generated-1", "label": "Yes, add reminders", "is_recommended": True}],
+    }
+    assert completion.prompts == [
+        '<turn speaker="user">\nBuild me a plant tracker\n</turn>\n'
+        '<turn speaker="assistant">\nBuilt. Want reminders?\n</turn>'
+    ]
 
 
 def test_the_suggestions_of_a_chat_the_app_does_not_know_are_not_found(app: Flask, client: FlaskClient) -> None:

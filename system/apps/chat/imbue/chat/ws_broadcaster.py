@@ -156,6 +156,11 @@ class WebSocketBroadcaster(MutableModel):
         """Broadcast a settings_updated event: the chat settings changed, so every page reads them again."""
         self.broadcast({"type": "settings_updated"})
 
+    def broadcast_suggestions_updated(self, chat_id: ChatId) -> None:
+        """Broadcast a suggestions_updated event: the chat's stored next-step suggestions were replaced or removed,
+        so a page showing the chat reads them again."""
+        self.broadcast({"type": "suggestions_updated", "chat_id": chat_id})
+
     def broadcast_provisional_chat_completed(self, chat_id: ChatId, success: bool, error: str | None) -> None:
         """Broadcast a provisional_chat_completed event: the chat is an agent, failed, or was discarded."""
         self.broadcast(

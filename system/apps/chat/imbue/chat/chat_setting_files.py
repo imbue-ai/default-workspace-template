@@ -43,3 +43,13 @@ def write_chat_setting_file(chat_dir: Path, filename: str, state: FrozenModel) -
     temp_path = path.with_suffix(".json.tmp")
     temp_path.write_text(json.dumps(state.model_dump(mode="json"), indent=2, sort_keys=True) + "\n", encoding="utf-8")
     temp_path.replace(path)
+
+
+def remove_chat_setting_file(chat_dir: Path, filename: str) -> bool:
+    """Remove the chat's setting, so it reads as one the chat never had; False when it had none."""
+    path = chat_dir / filename
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True

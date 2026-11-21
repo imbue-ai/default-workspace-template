@@ -119,6 +119,15 @@ def test_broadcast_provisional_chat_completed() -> None:
     assert msg["error"] is None
 
 
+def test_broadcast_suggestions_updated_names_the_chat_whose_set_changed() -> None:
+    broadcaster = WebSocketBroadcaster()
+    client_queue = broadcaster.register()
+
+    broadcaster.broadcast_suggestions_updated(ChatId("agent-suggested"))
+
+    assert json.loads(client_queue.get_nowait() or "") == {"type": "suggestions_updated", "chat_id": "agent-suggested"}
+
+
 def test_shutdown_sends_none_sentinel() -> None:
     broadcaster = WebSocketBroadcaster()
     q = broadcaster.register()

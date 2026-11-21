@@ -9,6 +9,7 @@ from imbue.chat.suggestions import SUGGESTIONS_FILENAME
 from imbue.chat.suggestions import Suggestion
 from imbue.chat.suggestions import SuggestionSource
 from imbue.chat.suggestions import read_chat_suggestions
+from imbue.chat.suggestions import remove_chat_suggestions
 from imbue.chat.suggestions import write_chat_suggestions
 
 
@@ -82,6 +83,16 @@ def test_a_file_written_without_the_optional_fields_reads_with_their_defaults(tm
         source=SuggestionSource.GENERATED,
         suggestions=(Suggestion(suggestion_id="s1", label="Yes", is_recommended=False),),
     )
+
+
+def test_a_removed_set_reads_as_none_and_removing_none_says_so(tmp_path: Path) -> None:
+    chat_dir = tmp_path / "agent-suggested"
+    write_chat_suggestions(chat_dir, _fixed_set())
+
+    assert remove_chat_suggestions(chat_dir) is True
+    assert read_chat_suggestions(chat_dir) is None
+    assert remove_chat_suggestions(chat_dir) is False
+    assert remove_chat_suggestions(tmp_path / "agent-never") is False
 
 
 def test_a_chat_with_no_suggestions_file_reads_as_none(tmp_path: Path) -> None:

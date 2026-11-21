@@ -5448,6 +5448,42 @@ def test_a_turn_the_transcript_ends_before_its_hooks_do_reads_working_until_they
         manager.stop()
 
 
+def test_a_turns_end_is_reported_once_and_only_after_its_harness_has_closed_the_turn(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Claude's transcript ends a turn before its Stop hooks have run. The listener that works out the chat's
+    suggestions hears the end only once the ``active`` marker is gone, so it never reads a chat still closing."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    manager, _reader = _manager_reading_tasks(broadcaster, tmp_path)
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    ended_chat_ids: list[ChatId] = []
+    manager.set_turn_end_listener(ended_chat_ids.append)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING")
+        manager._ensure_activity_tracking("agent-1")
+        manager.update_session_events(
+            "agent-1", [{"type": "user_message", "timestamp": "2026-07-28T00:00:00Z", "content": "go"}]
+        )
+        (state_dir / "active").touch()
+        manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+        manager.update_session_events(
+            "agent-1", [{"type": "assistant_message", "timestamp": "2026-07-28T00:00:05Z", "content": "done"}]
+        )
+        manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.WORKING]
+        assert ended_chat_ids == []
+
+        (state_dir / "active").unlink()
+        manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+        manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.IDLE]
+        assert ended_chat_ids == [ChatId("agent-1")]
+    finally:
+        manager.stop()
+
+
 def test_an_observe_event_during_a_closing_turn_keeps_it_closing(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

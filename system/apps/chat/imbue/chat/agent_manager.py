@@ -1651,6 +1651,8 @@ class AgentManager:
     # Hears every chat-list push beside the pages: the tray's feed to the shell. Set once at composition
     # (``set_chats_updated_listener``); ``None`` (tests, a secondary) = nobody beside the pages.
     _chats_updated_listener: Callable[[list[ChatSnapshot]], object] | None
+    # What hears that a turn ended in a chat (``set_turn_end_listener``); ``None`` (tests, a secondary) = nobody.
+    _turn_end_listener: Callable[[ChatId], object] | None
     # A chat's author annotations, which live on the app state the manager must not import: they say who has written
     # in the chat (the multiplayer spec, section 5.4) and who sent each message not on its transcript yet. Set once
     # at composition (``set_author_annotations_reader``); ``None`` (tests) = no chat has any.
@@ -1802,6 +1804,7 @@ class AgentManager:
         manager._main_chat_wake_started_at = {}
         manager._transcript_broadcaster = None
         manager._chats_updated_listener = None
+        manager._turn_end_listener = None
         manager._author_annotations_reader = None
         manager._watcher_eviction_callback = None
         manager._unviewed_transcript_release = None
@@ -2002,6 +2005,12 @@ class AgentManager:
         """Install what hears every chat-list push beside the pages: the tray's feed to the shell (the multiplayer
         spec, section 6.4). The composition root calls this once."""
         self._chats_updated_listener = listener
+
+    def set_turn_end_listener(self, listener: Callable[[ChatId], object]) -> None:
+        """Install what hears that a turn ended in a chat, once its harness has closed the turn: what works out the
+        chat's next-step suggestions (``suggestion_generation.py``). It is called on the thread that saw the turn
+        end, so it must hand its work off. The composition root calls this once."""
+        self._turn_end_listener = listener
 
     def set_author_annotations_reader(self, reader: Callable[[ChatId], tuple[AuthorAnnotation, ...]]) -> None:
         """Install what reads a chat's author annotations, for its snapshot: who has written in it (the multiplayer
@@ -7057,6 +7066,7 @@ class AgentManager:
         # after the sibling hooks that write them). Reading them now, not on the poller's next
         # pass, publishes the end with its wait, so the chat never reads idle (done) in between.
         was_turn_open = is_turn_in_flight(old_state) or was_turn_closing
+        ended_chat_id: ChatId | None = None
         if was_turn_open and not (is_turn_in_flight(new_state) or is_turn_closing):
             with self._lock:
                 ended_chat_id = self._chat_id_of_agent_if_active_locked(agent_id)
@@ -7081,6 +7091,8 @@ class AgentManager:
 
         if broadcast_on_change:
             self._broadcast_chats_updated()
+        if ended_chat_id is not None and self._turn_end_listener is not None:
+            self._turn_end_listener(ended_chat_id)
 
     def update_session_events(self, agent_id: str, events: list[dict[str, Any]]) -> None:
         """Fold a batch of transcript events into the agent's activity signals.

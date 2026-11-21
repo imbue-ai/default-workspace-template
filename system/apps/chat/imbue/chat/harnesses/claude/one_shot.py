@@ -1,4 +1,5 @@
-"""Claude's one-shot completion: ``claude -p`` on the cheapest model the account answers on, under its config dir."""
+"""Claude's one-shot completion: ``claude -p`` on the model of the asked size the account answers on, under its
+config dir."""
 
 import json
 import os
@@ -18,6 +19,7 @@ from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
 from imbue.chat.harnesses.one_shot import OneShotCompletionTimeoutError
+from imbue.chat.harnesses.one_shot import OneShotModelTier
 from imbue.chat.harnesses.one_shot import answer_on_first_model
 from imbue.chat.harnesses.one_shot import describe_model_name
 from imbue.concurrency_group.errors import ProcessError
@@ -26,9 +28,12 @@ from imbue.imbue_common.pure import pure
 
 logger = _loguru_logger
 
-# The haiku alias the pinned Claude Code resolves rather than a dated id, so it follows the CLI's own
-# idea of the current Haiku; then None, the account's default model, for an account that refuses it.
-ONE_SHOT_MODEL_PREFERENCE: Final[tuple[str | None, ...]] = ("haiku", None)
+# For each tier, the alias the pinned Claude Code resolves rather than a dated id, so it follows the CLI's own
+# idea of the current model of that size; then None, the account's default model, for an account that refuses it.
+ONE_SHOT_MODEL_PREFERENCE_BY_TIER: Final[Mapping[OneShotModelTier, tuple[str | None, ...]]] = {
+    OneShotModelTier.SMALL: ("haiku", None),
+    OneShotModelTier.MEDIUM: ("sonnet", None),
+}
 _TIMEOUT_SECONDS: Final = 60.0
 _SLOW_WARNING_SECONDS: Final = 15.0
 
@@ -71,8 +76,10 @@ def claude_one_shot_argv(system_prompt: str, model: str | None) -> list[str]:
 
 
 @pure
-def claude_one_shot_env(ambient_env: Mapping[str, str], config_dir: Path) -> dict[str, str]:
-    """The server's environment scoped to one account's config dir.
+def claude_one_shot_env(
+    ambient_env: Mapping[str, str], config_dir: Path, thinking_token_allowance: int | None
+) -> dict[str, str]:
+    """The server's environment scoped to one account's config dir, with thinking capped at the allowance.
 
     The server's own auth keys are dropped: the call must be paid by the chat's account, not by a
     key left in the service's environment.
@@ -84,8 +91,10 @@ def claude_one_shot_env(ambient_env: Mapping[str, str], config_dir: Path) -> dic
     }
     env.update(ClaudeAccountBinding().account_env(config_dir))
     # An account that thinks by default spends most of a short answer's time thinking: measured
-    # on Haiku, about 3s with thinking against under 1s without, for the same name.
-    env["MAX_THINKING_TOKENS"] = "0"
+    # on Haiku, about 3s with thinking against under 1s without, for the same name. So thinking is
+    # off unless the caller allows some. A model that decides for itself how much to think (Sonnet,
+    # on the pinned Claude Code) is asked the same way whatever this says.
+    env["MAX_THINKING_TOKENS"] = str(0 if thinking_token_allowance is None else thinking_token_allowance)
     return env
 
 
@@ -104,16 +113,24 @@ def parse_claude_print_result(stdout: str) -> str:
 class ClaudeOneShotCompletion(OneShotCompletion):
     """Runs ``claude -p`` from an empty directory, so no project instructions or hooks reach the answer."""
 
-    def complete(self, account_dir: Path, system_prompt: str, prompt: str) -> str:
-        """The answer on the first model in ``ONE_SHOT_MODEL_PREFERENCE`` that gives one."""
+    def complete(
+        self,
+        account_dir: Path,
+        system_prompt: str,
+        prompt: str,
+        *,
+        model_tier: OneShotModelTier,
+        thinking_token_allowance: int | None,
+    ) -> str:
+        """The answer on the first model of the tier's preference list that gives one."""
+        env = claude_one_shot_env(os.environ, account_dir, thinking_token_allowance)
         return answer_on_first_model(
-            ONE_SHOT_MODEL_PREFERENCE,
-            lambda model: self._complete_on(model, account_dir, system_prompt, prompt),
+            ONE_SHOT_MODEL_PREFERENCE_BY_TIER[model_tier],
+            lambda model: self._complete_on(model, env, system_prompt, prompt),
             describe_model_name,
         )
 
-    def _complete_on(self, model: str | None, account_dir: Path, system_prompt: str, prompt: str) -> str:
-        env = claude_one_shot_env(os.environ, account_dir)
+    def _complete_on(self, model: str | None, env: Mapping[str, str], system_prompt: str, prompt: str) -> str:
         started_at = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="chat_one_shot_") as isolated_dir:
             try:

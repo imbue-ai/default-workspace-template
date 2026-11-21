@@ -255,9 +255,12 @@ class ChatSettingsResponse(FrozenModel):
 class ChatSuggestionsResponse(FrozenModel):
     """Response from GET /api/chats/<chat_id>/suggestions: the next-step suggestions stored for the chat."""
 
-    status: SuggestionsStatus = Field(description="ready when the chat has a stored set, else none")
+    status: SuggestionsStatus = Field(
+        description="ready when the chat has a stored set, pending while one is being worked out, else none"
+    )
     after_event_id: str | None = Field(
-        description="The event id of the assistant message the set follows; None when there is no set"
+        description="The event id of the assistant message the set follows, or the one a pending set is being "
+        "worked out for; None when there is no set"
     )
     source: SuggestionSource | None = Field(description="Where the set came from; None when there is no set")
     suggestions: tuple[Suggestion, ...] = Field(description="The suggestions in order; empty when there is no set")
@@ -273,6 +276,11 @@ class ChatSuggestionsResponse(FrozenModel):
             source=stored.source,
             suggestions=stored.suggestions,
         )
+
+    @classmethod
+    def pending(cls, after_event_id: str) -> "ChatSuggestionsResponse":
+        """The answer while a set for the reply ``after_event_id`` is being worked out."""
+        return cls(status=SuggestionsStatus.PENDING, after_event_id=after_event_id, source=None, suggestions=())
 
 
 class FastModeStateResponse(FrozenModel):

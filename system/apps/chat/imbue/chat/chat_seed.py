@@ -15,6 +15,7 @@ record as its second member when the user's first message launches it.
 """
 
 import json
+from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 from enum import auto
@@ -220,6 +221,12 @@ def read_seed_events(chat_dir: Path) -> list[dict[str, Any]]:
 
 
 @pure
+def tagged_turns(turns: Sequence[SeedTurn]) -> str:
+    """Turns of a conversation as a model is handed them: one tagged block per turn, in order."""
+    return "\n".join(f'<turn speaker="{turn.role}">\n{turn.text.strip()}\n</turn>' for turn in turns)
+
+
+@pure
 def seed_transcript(events: list[dict[str, Any]]) -> str:
     """The seed segment's turns as the conversation they were: one tagged block per turn, in order.
 
@@ -227,14 +234,14 @@ def seed_transcript(events: list[dict[str, Any]]) -> str:
     A closing context tag inside a turn is broken up, so the block the page strips always ends
     where this builder put its end.
     """
-    blocks: list[str] = []
+    turns: list[SeedTurn] = []
     for event in events:
-        role = "user" if event.get("type") == "user_message" else "assistant"
-        text = event.get("content") if role == "user" else event.get("text")
+        role = SeedRole.USER if event.get("type") == "user_message" else SeedRole.ASSISTANT
+        text = event.get("content") if role is SeedRole.USER else event.get("text")
         if not isinstance(text, str) or not text.strip():
             continue
-        blocks.append(f'<turn speaker="{role}">\n{text.strip()}\n</turn>')
-    return "\n".join(blocks).replace(f"</{SEED_CONTEXT_TAG}>", f"</ {SEED_CONTEXT_TAG}>")
+        turns.append(SeedTurn(role=role, text=text))
+    return tagged_turns(turns).replace(f"</{SEED_CONTEXT_TAG}>", f"</ {SEED_CONTEXT_TAG}>")
 
 
 def is_slash_command(message: str) -> bool:

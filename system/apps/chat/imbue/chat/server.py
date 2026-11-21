@@ -361,17 +361,19 @@ def _segment_reader(state: ChatAppState, segment: ChatSegmentInfo) -> Transcript
 
 
 def _chat_transcript(chat_id: str) -> ChatTranscript | None:
+    """The transcript of the chat a request names (``chat_transcript_of``), or None for one the app does not list."""
+    parsed = parse_chat_ref(chat_id)
+    return None if parsed is None else chat_transcript_of(get_state(), parsed)
+
+
+def chat_transcript_of(state: ChatAppState, chat_id: ChatId) -> ChatTranscript | None:
     """The chat's transcript over every segment the record names, or None for a chat the app does not list.
 
     The live segment reads through its watcher (built here if need be, so a chat's first
     read starts tailing it); an archived segment reads through the loader the state already
     holds, or loads on the first read that reaches into it.
     """
-    parsed = parse_chat_ref(chat_id)
-    if parsed is None:
-        return None
-    state = get_state()
-    segments = state.agent_manager.get_chat_segments(parsed)
+    segments = state.agent_manager.get_chat_segments(chat_id)
     if segments is None:
         return None
     info_by_agent_id = {segment.agent.id: segment for segment in segments}
@@ -385,7 +387,7 @@ def _chat_transcript(chat_id: str) -> ChatTranscript | None:
         if resident is not None:
             reader_by_agent_id[segment.agent.id] = resident
     return ChatTranscript.build(
-        parsed,
+        chat_id,
         tuple(
             TranscriptSegment(
                 agent_id=segment.agent.id,
@@ -402,6 +404,13 @@ def _chat_transcript(chat_id: str) -> ChatTranscript | None:
         reader_by_agent_id,
         lambda transcript_segment: _segment_reader(state, info_by_agent_id[transcript_segment.agent_id]),
     )
+
+
+def read_chat_tail_events(state: ChatAppState, chat_id: ChatId, limit: int) -> list[dict[str, Any]] | None:
+    """The newest ``limit`` events of the chat's transcript, as its pages read them; None for a chat the app does
+    not list."""
+    transcript = chat_transcript_of(state, chat_id)
+    return None if transcript is None else transcript.get_tail_events(limit)
 
 
 def _get_events(chat_id: str) -> Response:
@@ -1474,12 +1483,18 @@ def _known_chat_or_not_found(chat_id: str) -> ChatId | Response:
 
 def _get_suggestions_endpoint(chat_id: str) -> Response:
     """``GET /api/chats/<chat_id>/suggestions``: the next-step suggestions stored for the chat, with the message
-    they follow, or ``none``. A page shows them only while that message is still the chat's last assistant
-    message, so the route answers a set left from an earlier turn as it stands."""
+    they follow; ``pending`` while a set for the chat's last reply is being worked out; else ``none``. A page shows
+    a set only while that message is still the chat's last assistant message, so the route answers a set left from
+    an earlier turn as it stands."""
     parsed = _known_chat_or_not_found(chat_id)
     if isinstance(parsed, Response):
         return parsed
-    return model_response(ChatSuggestionsResponse.of(get_state().agent_manager.get_chat_suggestions(parsed)))
+    state = get_state()
+    generator = state.suggestion_generator
+    pending_reply_event_id = None if generator is None else generator.get_pending_reply_event_id(parsed)
+    if pending_reply_event_id is not None:
+        return model_response(ChatSuggestionsResponse.pending(pending_reply_event_id))
+    return model_response(ChatSuggestionsResponse.of(state.agent_manager.get_chat_suggestions(parsed)))
 
 
 def _get_fast_mode_endpoint(chat_id: str) -> Response:

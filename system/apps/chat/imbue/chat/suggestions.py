@@ -14,6 +14,7 @@ from typing import Final
 from pydantic import Field
 
 from imbue.chat.chat_setting_files import read_chat_setting_file
+from imbue.chat.chat_setting_files import remove_chat_setting_file
 from imbue.chat.chat_setting_files import write_chat_setting_file
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -35,6 +36,8 @@ class SuggestionsStatus(LowerCaseStrEnum):
     """Where a chat's next-step suggestions stand, as the read route reports it (a wire value)."""
 
     READY = auto()
+    # A set for the chat's last reply is being worked out; a ``suggestions_updated`` push follows it.
+    PENDING = auto()
     NONE = auto()
 
 
@@ -69,3 +72,8 @@ def read_chat_suggestions(chat_dir: Path) -> ChatSuggestions | None:
 def write_chat_suggestions(chat_dir: Path, suggestions: ChatSuggestions) -> None:
     """Replace the chat's stored set whole (a temp file renamed into place)."""
     write_chat_setting_file(chat_dir, SUGGESTIONS_FILENAME, suggestions)
+
+
+def remove_chat_suggestions(chat_dir: Path) -> bool:
+    """Remove the chat's stored set; False when it had none."""
+    return remove_chat_setting_file(chat_dir, SUGGESTIONS_FILENAME)
