@@ -118,19 +118,20 @@ def _account_offering(tmp_path: Path, *models: CodexModel) -> Path:
     return account_dir
 
 
+def _name_a_chat(account_dir: Path) -> str:
+    """The call chat naming makes: the small tier, with no thinking."""
+    return CodexOneShotCompletion().complete(
+        account_dir, "Name this chat.", "Plan Rome", model_tier=OneShotModelTier.SMALL, thinking_token_allowance=None
+    )
+
+
 def test_complete_answers_on_the_luna_model_the_account_offers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     account_dir = _account_offering(tmp_path, _model("gpt-6-sol", is_default=True), _model("gpt-6-luna"))
     log_path = put_stand_in_cli_on_path(tmp_path, "codex", _ANSWERING_BODY, monkeypatch)
 
-    answer = CodexOneShotCompletion().complete(
-        account_dir,
-        "Name this chat.",
-        "Plan Rome",
-        model_tier=OneShotModelTier.SMALL,
-        thinking_token_allowance=None,
-    )
+    answer = _name_a_chat(account_dir)
 
     assert answer == "Rome trip: plan five days"
     assert '--model gpt-6-luna -c model_reasoning_effort="low"' in log_path.read_text()
@@ -143,13 +144,7 @@ def test_complete_falls_back_to_the_default_model_when_the_chosen_one_is_refused
     body = 'case " $* " in *" --model "*) echo "model is not supported" >&2; exit 1;; esac\n' + _ANSWERING_BODY
     log_path = put_stand_in_cli_on_path(tmp_path, "codex", body, monkeypatch)
 
-    answer = CodexOneShotCompletion().complete(
-        account_dir,
-        "Name this chat.",
-        "Plan Rome",
-        model_tier=OneShotModelTier.SMALL,
-        thinking_token_allowance=None,
-    )
+    answer = _name_a_chat(account_dir)
 
     assert answer == "Rome trip: plan five days"
     calls = log_path.read_text().splitlines()
@@ -163,13 +158,7 @@ def test_complete_raises_when_codex_writes_no_answer(tmp_path: Path, monkeypatch
     put_stand_in_cli_on_path(tmp_path, "codex", "cat > /dev/null", monkeypatch)
 
     with pytest.raises(OneShotCompletionError, match="no answer"):
-        CodexOneShotCompletion().complete(
-            account_dir,
-            "Name this chat.",
-            "Plan Rome",
-            model_tier=OneShotModelTier.SMALL,
-            thinking_token_allowance=None,
-        )
+        _name_a_chat(account_dir)
 
 
 def test_complete_raises_with_both_models_failures_when_neither_answers(
@@ -179,10 +168,4 @@ def test_complete_raises_with_both_models_failures_when_neither_answers(
     put_stand_in_cli_on_path(tmp_path, "codex", 'cat > /dev/null; echo "401 Unauthorized" >&2; exit 1', monkeypatch)
 
     with pytest.raises(OneShotCompletionError, match="gpt-6-luna: .*401.*default model: .*401"):
-        CodexOneShotCompletion().complete(
-            account_dir,
-            "Name this chat.",
-            "Plan Rome",
-            model_tier=OneShotModelTier.SMALL,
-            thinking_token_allowance=None,
-        )
+        _name_a_chat(account_dir)
