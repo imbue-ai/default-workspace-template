@@ -30,6 +30,7 @@ from typing import Final
 
 import click
 
+from app_install.errors import AppChecksFailedError
 from app_install.errors import AppInstallError
 from app_install.errors import CollisionError
 from app_install.errors import LockCheckError
@@ -67,6 +68,7 @@ from app_install.runtime import WorkspaceRuntime
 from app_install.updating import UpdateOutcome
 from app_install.updating import UpdateResult
 from app_install.updating import update_app
+from app_install.verifying import verify_app
 from app_manifest.errors import AppManifestError
 from app_manifest.manifest import AppManifest
 
@@ -342,6 +344,27 @@ def link_command(repo_root: Path, name: str, is_refreshing: bool, is_dev_reposit
         remaining=list(outcome.remaining),
         problems=list(outcome.problems),
     )
+
+
+@main.command("verify")
+@click.argument("name")
+@click.option(
+    "--template",
+    "template_version",
+    default=None,
+    help="The template version to record (minds-v<major>.<minor>.<patch>); by default the one the checkout is on",
+)
+@click.pass_obj
+def verify_command(repo_root: Path, name: str, template_version: str | None) -> None:
+    """Run the checks of the app NAME and, when they pass, record the template version they passed on."""
+    with install_lock(repo_root):
+        try:
+            outcome = verify_app(repo_root, name, template_version, WorkspaceRuntime(repo_root=repo_root))
+        except AppChecksFailedError as e:
+            _refuse("tests_failed", name=name, detail=str(e))
+        except (AppInstallError, AppManifestError) as e:
+            _refuse("refused", name=name, detail=str(e))
+    _emit("verified", name=name, verified_template=outcome.verified_template, problems=list(outcome.problems))
 
 
 @main.group("reference")

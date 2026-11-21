@@ -9,3 +9,5 @@
 `app-install reference add <name> <path> [--note <text>]` and `app-install reference remove <name> <path>` change what an app's record lists as using the app, holding a reference to the rules the footprint code reads it by, and commit that one file.
 
 `app-install uninstall` now also removes an update or a publish of the app that was waiting and the sync service's state for it, and its result names what a later app of the same name takes over (`kept_share_grants`, `kept_routine_state`), the repositories on GitHub it leaves alone (`kept_repositories`), and the apps that list the uninstalled one under `[[dependencies]]` (`dependents`).
+
+`app-install verify <name> [--template <version>]` runs an app's own checks and, when they pass, records the template version they passed on as the record's `verified_template`; the update pass runs it for each app it converted or regenerated.

@@ -72,6 +72,14 @@ class NoSnapshotError(AppInstallError):
     workspace has no recent backup, or copying it aside failed."""
 
 
+class AppChecksFailedError(AppInstallError):
+    """An app's own checks do not pass: its environment does not sync from its lock, or its tests fail."""
+
+
+class InvalidTemplateVersionError(AppInstallError, ValueError):
+    """A value given as a template version is not written as one."""
+
+
 class RecordReferenceError(AppInstallError, ValueError):
     """A reference cannot be added to an app's record, or is not there to remove."""
 

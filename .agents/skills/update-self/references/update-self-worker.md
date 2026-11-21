@@ -383,6 +383,13 @@ in your report.
   - Then `uv run --no-sync app-install check`. `inconsistent` names each
     problem; one in an app's own files is that app's follow-up, reported the
     same way.
+  - Then, for each app `migrate` converted or `regenerate` listed a file of
+    (and for no other), `uv run --no-sync app-install verify <name> --template <target>`,
+    with the version this update brings in (`minds-v<major>.<minor>.<patch>`).
+    It runs the app's own checks and, on `verified`, writes that version to
+    the app's record and commits it (part of this gate, like the commits
+    above). `tests_failed` wrote nothing: the app's follow-up, reported the
+    same way.
   These commits are part of the environment gate, like a relock: they are
   mechanical, they are not edits of your own for the review gates of 4c, and
   an app they changed gets this step's suites and its isolated boot as any

@@ -21,6 +21,7 @@ uv run --no-sync app-install publish set-version <name> <version>
 uv run --no-sync app-install publish assemble <name> [--commit <rev>]
 uv run --no-sync app-install publish push <name> [--repo-name <repository>]
 uv run --no-sync app-install publish record <name>
+uv run --no-sync app-install verify <name> [--template <version>]
 uv run --no-sync app-install check
 uv run --no-sync app-install list
 ```
@@ -129,6 +130,13 @@ That is also the way out when the merge was taken back in the worktree (`git mer
 
 `up_to_date` means the app is already at the version asked for.
 An app this workspace built has nothing to update from.
+
+## Recording that an app's checks pass
+
+`app-install verify <name>` runs the app's own checks (its environment syncs from its lock and its tests pass) and, when they pass, writes the template version they passed on to the record's `verified_template` and commits that one file (`verified`).
+The version is the nearest `minds-v` release tag in the checkout's history, or the one `--template` gives: the update pass names the version it is bringing in, which its worktree's history holds no tag for yet.
+Checks that fail write nothing (`tests_failed`).
+An adopter's agent compares an app's `verified_template` with its own workspace's version when the app misbehaves there.
 
 ## Linking an app
 
