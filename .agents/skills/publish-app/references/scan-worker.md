@@ -24,7 +24,7 @@ time these fields are written, so read the app properly.
 From your worktree root:
 
 ```bash
-eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py data/.tasks/launch-task/publish-<name>/task.md)"
+eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py data/.tasks/launch-task/<slug>/task.md)"
 START=$(git rev-parse HEAD)
 echo "TASK_FILE=$TASK_FILE START=$START"
 ```
@@ -177,7 +177,7 @@ uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py report \
 Valid `name:` values: `question` (a gate, at any point), `done`, `stuck`. A
 `done` body gives:
 
-- the branch (`mngr/publish-<name>`) and its commit (`git rev-parse HEAD`);
+- the branch (`mngr/<slug>`) and its commit (`git rev-parse HEAD`);
 - the version you wrote, and why if it is not the one in your task;
 - what whoever installs the app will be asked for, in one plain line per
   table you wrote;

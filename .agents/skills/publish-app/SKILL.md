@@ -47,7 +47,8 @@ line whose `result` says what happened (`system/libs/app_install/README.md`,
   in the record's `published_repo_url`, and is not asked again.
 - `owner`: the GitHub account the repository is under (step 3).
 - `version`: the version being published (step 2 proposes it).
-- `WORKER=publish-<name>`, whose branch is `mngr/publish-<name>`.
+- `slug`: `publish-` followed by the app's name (`publish-notes`). It names the
+  worker, and the worker's branch is `mngr/<slug>`.
 - `PTM=/home/user/workspace/.agents/skills/publish-template/python/publish_template_skill`:
   the GitHub access check this flow shares with `publish-template`.
 
@@ -195,16 +196,16 @@ path parts of the record's `published_repo_url`.
 
 Dispatch the worker. Per `launch-task`, the delegation is one step in your
 timeline ("Get the app ready (in the background)"). If an earlier attempt left
-a worker or branch named `publish-<name>`, remove it first
-(`create_worker.py destroy --name publish-<name>`, then
-`git branch -D mngr/publish-<name>`). The task file holds parameters only; the
+a worker or branch named `<slug>`, remove it first
+(`create_worker.py destroy --name <slug>`, then
+`git branch -D mngr/<slug>`). The task file holds parameters only; the
 instructions are in `references/scan-worker.md`:
 
 ````bash
-mkdir -p data/.tasks/launch-task/publish-<name>
-cat > data/.tasks/launch-task/publish-<name>/task.md << 'TASK_EOF'
+mkdir -p data/.tasks/launch-task/<slug>
+cat > data/.tasks/launch-task/<slug>/task.md << 'TASK_EOF'
 ---
-finish_report_path: data/.tasks/launch-task/publish-<name>/reports/report.md
+finish_report_path: data/.tasks/launch-task/<slug>/reports/report.md
 ---
 
 # Task: Get the "<name>" app ready to publish
@@ -227,15 +228,15 @@ TASK_EOF
 
 ```bash
 uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
-    --name publish-<name> --template worker \
-    --runtime-dir data/.tasks/launch-task/publish-<name>/ \
-    --task-file data/.tasks/launch-task/publish-<name>/task.md
+    --name <slug> --template worker \
+    --runtime-dir data/.tasks/launch-task/<slug>/ \
+    --task-file data/.tasks/launch-task/<slug>/task.md
 ```
 
 ```bash
 python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" --waiter -- \
     uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
-    --name publish-<name> --task-file data/.tasks/launch-task/publish-<name>/task.md
+    --name <slug> --task-file data/.tasks/launch-task/<slug>/task.md
 ```
 
 Handle `question` gates and timeouts per
@@ -249,7 +250,7 @@ and anything it could not determine.
 ## 4. Assemble and scan what will be published
 
 ```bash
-uv run --no-sync app-install publish assemble <name> --commit mngr/publish-<name>
+uv run --no-sync app-install publish assemble <name> --commit mngr/<slug>
 ```
 
 It builds what would be published (the app's directory at the worker's commit,
@@ -297,7 +298,7 @@ Present the publish ONCE, in plain language:
   right and complete?" A gap here silently breaks the app for whoever
   installs it;
 - the **README**, pasted as your message so it renders as a page
-  (`git show mngr/publish-<name>:system/apps/<package>/README.md`), asking
+  (`git show mngr/<slug>:system/apps/<package>/README.md`), asking
   whether it reads like a good description of what they built. Say up front
   that the button at its top shows as a plain link in chat;
 - the **address** it will have, `https://github.com/<owner>/<repo_name>`, and
@@ -344,7 +345,7 @@ anything. Act on `result`:
 ## 7. Record it, and close out
 
 Merge the worker's branch as `lead-proxy.md` describes for a `done` report
-(`git merge --no-ff mngr/publish-<name>`), then:
+(`git merge --no-ff mngr/<slug>`), then:
 
 ```bash
 uv run --no-sync app-install publish record <name>
@@ -360,9 +361,9 @@ answered `recorded` means there is nothing left to record
 Then destroy the worker and its branch:
 
 ```bash
-uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name publish-<name>
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name <slug>
 git worktree prune
-git branch -d "mngr/publish-<name>"
+git branch -d "mngr/<slug>"
 ```
 
 If you are stopping after a failure instead, leave the worker and its branch
