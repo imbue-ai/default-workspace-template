@@ -1,17 +1,19 @@
 /**
- * The "Start from a template" cards and rails of the page: a card is a template's drawing
- * in a 3:2 frame with its title and byline under it; a shelf is a heading over a sideways rail of
- * cards that shows three and a half at a time, pages one visible width with an arrow in the gutter
- * at each end, and scrolls freely with the trackpad. The arrows sit outside the scrolling area, so
- * the cards run to the rail's edge with nothing over them. Picking a card is the page's
- * business (it shows the detail page), so both components only report the pick.
+ * The "Start from a template" cards and rails of the page: a card is a template's drawing (or a
+ * published app's icon) in a 3:2 frame with its title and byline under it; a shelf is a heading
+ * over a sideways rail of cards that shows three and a half at a time, pages one visible width
+ * with an arrow in the gutter at each end, and scrolls freely with the trackpad. The arrows sit
+ * outside the scrolling area, so the cards run to the rail's edge with nothing over them. Picking
+ * a card is the page's business (it shows the detail page), so both components only report the
+ * pick.
  *
  * The rail arithmetic (which arrows to show, where a page lands) is exported as pure functions so
  * it can be tested without a DOM.
  */
 
 import m from "mithril";
-import type { CatalogTemplate, ResolvedShelf } from "../models/TemplateCatalog";
+import type { CatalogListing, ResolvedShelf } from "../models/TemplateCatalog";
+import { listingKey } from "../models/TemplateCatalog";
 import { TemplateArt } from "./TemplateArt";
 import { HOVER_LIFT_GROUP } from "./hoverLift";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
@@ -67,39 +69,52 @@ export function railArrowTop(artCentre: number): string {
 }
 
 export interface TemplateCardAttrs {
-  template: CatalogTemplate;
+  listing: CatalogListing;
   // Whether the card fills its grid cell (a search result) rather than taking a rail's card width.
   isFill: boolean;
-  onPick: (template: CatalogTemplate) => void;
+  onPick: (listing: CatalogListing) => void;
 }
 
-/** One template as a card: its drawing (or a glyph when there is none or it failed to load), its title, its byline. */
+/** What a card says under its picture: the listing's title and who published it. */
+export function listingCaption(listing: CatalogListing): { title: string; author: string } {
+  const { title, author } = listing.kind === "template" ? listing.template : listing.app;
+  return { title, author };
+}
+
+/** The attribute a card and the detail page mark themselves with: ``data-template`` with the slug, or
+ *  ``data-app`` with the app's name. */
+export function listingMarker(listing: CatalogListing): Record<string, string> {
+  return listing.kind === "template" ? { "data-template": listing.template.slug } : { "data-app": listing.app.name };
+}
+
+/** One template or app as a card: its picture (or a glyph when there is none or it failed to load), its title, its byline. */
 export function TemplateCard(): m.Component<TemplateCardAttrs> {
   return {
     view(vnode) {
-      const { template, isFill, onPick } = vnode.attrs;
+      const { listing, isFill, onPick } = vnode.attrs;
+      const caption = listingCaption(listing);
       return m(
         "button",
         {
           type: "button",
-          "data-template": template.slug,
+          ...listingMarker(listing),
           class:
             "new-tab-template-card group shrink-0 snap-start cursor-pointer text-left " +
             (isFill ? "w-full" : CARD_WIDTH_CLASS),
-          onclick: () => onPick(template),
+          onclick: () => onPick(listing),
         },
         [
           m(TemplateArt, {
-            template,
+            listing,
             // The whole card is the target, so the title and byline lift the drawing too; the
             // "Start something" tiles wear the same lift.
             frameClass: `${HOVER_LIFT_GROUP} rounded-lg`,
             glyphSize: CARD_FALLBACK_GLYPH_SIZE,
           }),
-          m("span", { class: "mt-2 block truncate text-(length:--font-size-body) text-primary" }, template.title),
-          template.author === ""
+          m("span", { class: "mt-2 block truncate text-(length:--font-size-body) text-primary" }, caption.title),
+          caption.author === ""
             ? null
-            : m("span", { class: "type-helper block truncate text-faint" }, `by ${template.author}`),
+            : m("span", { class: "type-helper block truncate text-faint" }, `by ${caption.author}`),
         ],
       );
     },
@@ -108,7 +123,7 @@ export function TemplateCard(): m.Component<TemplateCardAttrs> {
 
 export interface TemplateShelvesAttrs {
   shelves: readonly ResolvedShelf[];
-  onPick: (template: CatalogTemplate) => void;
+  onPick: (listing: CatalogListing) => void;
 }
 
 /** The catalog's rows as rails of cards, each with the paging arrows its scroll position calls for. */
@@ -250,7 +265,7 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
     });
   }
 
-  function shelfView(shelf: ResolvedShelf, onPick: (template: CatalogTemplate) => void): m.Vnode {
+  function shelfView(shelf: ResolvedShelf, onPick: (listing: CatalogListing) => void): m.Vnode {
     const paging = railPaging(railExtentByShelf.get(shelf.key) ?? { scrollLeft: 0, clientWidth: 0, scrollWidth: 0 });
     return m("section", { key: shelf.key, class: "new-tab-template-shelf mt-4 first:mt-0", "data-shelf": shelf.key }, [
       m("h3", { class: "type-label px-2 text-primary" }, shelf.title),
@@ -280,7 +295,9 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
             onupdate: (vnode: m.VnodeDOM) => measureRail(shelf.key, vnode.dom as HTMLElement),
             onscroll: (event: Event) => measureRail(shelf.key, event.currentTarget as HTMLElement),
           },
-          shelf.templates.map((template) => m(TemplateCard, { key: template.slug, template, isFill: false, onPick })),
+          shelf.listings.map((listing) =>
+            m(TemplateCard, { key: listingKey(listing), listing, isFill: false, onPick }),
+          ),
         ),
         railGutter(shelf, 1, paging.canPageRight),
       ]),

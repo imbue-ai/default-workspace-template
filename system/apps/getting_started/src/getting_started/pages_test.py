@@ -9,6 +9,7 @@ from app_manifest.testing import assert_document_policy_admits_page
 from getting_started.pages import build_pages_app
 from getting_started.template_catalog import TemplateCatalogStore
 from getting_started.testing import FakeTemplateCatalogFetcher
+from getting_started.testing import catalog_app_document
 from getting_started.testing import catalog_document
 from getting_started.testing import catalog_template_document
 from imbue.app_sdk.app_testing import assert_api_schema_describes_app
@@ -84,6 +85,47 @@ def test_the_catalog_route_answers_the_catalog_with_resolved_thumbnails(tmp_path
     (template,) = body["catalog"]["templates"]
     assert template["thumbnail_url"] == "https://example.test/catalog/thumbnails/someone--inbox.svg"
     assert "thumbnail" not in template
+    # A catalog that lists no apps answers an empty list, so the page reads one shape.
+    assert body["catalog"]["apps"] == []
+
+
+def test_the_catalog_route_answers_the_apps_with_resolved_icons_and_the_shelf_entries_naming_them(
+    tmp_path: Path,
+) -> None:
+    fetcher = FakeTemplateCatalogFetcher(
+        body_by_url={
+            _CATALOG_URL: catalog_document(
+                catalog_template_document("inbox"),
+                apps=[
+                    catalog_app_document(
+                        "weather-desk",
+                        description="Forecasts.",
+                        version="1.2.0",
+                        required_accounts=[{"scope": "slack-api", "permission": "slack-read-all"}],
+                        required_secrets=["OPENWEATHER_API_KEY"],
+                        needs_ai=True,
+                        apt_packages=["ffmpeg"],
+                    )
+                ],
+                shelves=[{"key": "popular", "title": "Most popular", "slugs": ["app:weather-desk", "inbox"]}],
+            )
+        }
+    )
+    response = _client(tmp_path, fetcher=fetcher).get("/api/templates-catalog")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["catalog"]["shelves"][0]["slugs"] == ["app:weather-desk", "inbox"]
+    (app,) = body["catalog"]["apps"]
+    assert app["name"] == "weather-desk"
+    assert app["repository_url"] == "https://github.com/someone/weather-desk"
+    assert app["icon_url"] == "https://example.test/catalog/app-icons/someone--weather-desk.svg"
+    assert "icon" not in app
+    assert app["version"] == "1.2.0"
+    assert app["required_accounts"] == [{"scope": "slack-api", "permission": "slack-read-all"}]
+    assert app["required_secrets"] == ["OPENWEATHER_API_KEY"]
+    assert app["needs_ai"] is True
+    assert app["apt_packages"] == ["ffmpeg"]
 
 
 def test_the_catalog_route_says_when_nothing_could_be_loaded_and_answers_null_when_disabled(tmp_path: Path) -> None:

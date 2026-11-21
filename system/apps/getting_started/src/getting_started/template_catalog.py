@@ -7,6 +7,10 @@ reach the URL keeps showing what it last saw; with no copy at all the page says 
 templates failed to load. The document is cross-version data -- an older workspace reads a
 newer catalog -- so every model ignores unknown fields, and only the format number and the
 four fields a card cannot do without are required.
+
+Beside its templates a catalog may list published apps (``apps``), and a shelf names one as
+``app:<name>`` among its template slugs. Both are additions an older reader passes over: it
+never reads ``apps``, and its page drops a shelf entry that is no template's slug.
 """
 
 import json
@@ -95,14 +99,36 @@ class CatalogTemplate(FrozenModel):
     choices: tuple[TemplateChoice, ...] = Field(default=(), description="Decisions left to the adopter")
 
 
+class CatalogApp(FrozenModel):
+    """One published app as the catalog lists it, read from the app's ``app.toml``."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = Field(min_length=1, description="The app's name, unique among the catalog's apps")
+    title: str = Field(min_length=1, description="The name a card shows")
+    repository_url: str = Field(min_length=1, description="The published repository an agent installs it from")
+    description: str = Field(default="", description="One or two sentences")
+    author: str = Field(default="", description="Who published it; empty when unknown")
+    icon: str = Field(
+        default="", description="The app's icon, relative to the catalog file or absolute; empty for none"
+    )
+    version: str = Field(default="", description="The published semantic version; empty when never published")
+    required_accounts: tuple[RequiredAccount, ...] = Field(default=(), description="Permissions it asks for")
+    required_secrets: tuple[str, ...] = Field(default=(), description="Keys the adopter supplies")
+    needs_ai: bool = Field(default=False, description="Whether its code calls a model")
+    apt_packages: tuple[str, ...] = Field(default=(), description="System packages it installs")
+
+
 class CatalogShelf(FrozenModel):
-    """A browsing row: a title and the slugs it holds, in display order."""
+    """A browsing row: a title and the entries it holds, in display order."""
 
     model_config = ConfigDict(extra="ignore")
 
     key: str = Field(min_length=1, description="Stable identifier of the row")
     title: str = Field(min_length=1, description="The row's heading")
-    slugs: tuple[str, ...] = Field(description="The templates in the row, in order")
+    slugs: tuple[str, ...] = Field(
+        description="The row's entries, in order: a template's slug, or an app's name behind 'app:'"
+    )
 
 
 class TemplateCatalog(FrozenModel):
@@ -113,6 +139,7 @@ class TemplateCatalog(FrozenModel):
     format: int = Field(description="The document format; only format 1 is read")
     generated_at: str = Field(default="", description="When the catalog was produced, ISO 8601")
     templates: tuple[CatalogTemplate, ...] = Field(description="Every template, in catalog order")
+    apps: tuple[CatalogApp, ...] = Field(default=(), description="Every published app, in catalog order")
     shelves: tuple[CatalogShelf, ...] = Field(default=(), description="The browsing rows, in order")
 
 
@@ -137,7 +164,7 @@ class TemplateCatalogReading(FrozenModel):
 
 
 def parse_template_catalog(body: bytes, source: str) -> TemplateCatalog:
-    """The catalog in ``body``. A template or shelf that does not validate is skipped with a warning;
+    """The catalog in ``body``. A template, app, or shelf that does not validate is skipped with a warning;
     a body that is not a format-1 document raises ``TemplateCatalogFormatError``."""
     try:
         parsed = json.loads(body)
@@ -148,7 +175,8 @@ def parse_template_catalog(body: bytes, source: str) -> TemplateCatalog:
 
 def template_catalog_from_document(parsed: Any, source: str) -> TemplateCatalog:
     """The catalog in an already-parsed JSON value (a fetched body, or the copy on disk); refuses
-    anything but a format-1 object, and skips a template or shelf that does not validate."""
+    anything but a format-1 object, and skips a template, app, or shelf that does not validate. A document
+    with no ``apps`` list (every catalog before apps could be published) lists none."""
     if not isinstance(parsed, dict):
         raise TemplateCatalogFormatError(f"the catalog at {source} is not a JSON object")
     if parsed.get("format") != _CATALOG_FORMAT:
@@ -156,11 +184,13 @@ def template_catalog_from_document(parsed: Any, source: str) -> TemplateCatalog:
             f"the catalog at {source} has format {parsed.get('format')!r}; this workspace reads format {_CATALOG_FORMAT}"
         )
     templates = _validated_entries(parsed.get("templates"), CatalogTemplate, "template", source)
+    apps = _validated_entries(parsed.get("apps", []), CatalogApp, "app", source)
     shelves = _validated_entries(parsed.get("shelves", []), CatalogShelf, "shelf", source)
     return TemplateCatalog(
         format=_CATALOG_FORMAT,
         generated_at=str(parsed.get("generated_at", "")),
         templates=tuple(templates),
+        apps=tuple(apps),
         shelves=tuple(shelves),
     )
 
@@ -179,8 +209,8 @@ def _validated_entries(raw_entries: Any, model: type[_EntryT], noun: str, source
 
 @pure
 def resolve_thumbnail_url(catalog_url: str, thumbnail: str) -> str:
-    """Where a template's drawing is: its ``thumbnail`` resolved against the catalog's own URL (an
-    absolute URL stays as it is; an empty one stays empty)."""
+    """Where a template's drawing or an app's icon is: the catalog's path for it resolved against the
+    catalog's own URL (an absolute URL stays as it is; an empty one stays empty)."""
     if thumbnail == "":
         return ""
     return urljoin(catalog_url, thumbnail)
@@ -205,11 +235,29 @@ class TemplateEntry(FrozenModel):
     choices: tuple[TemplateChoice, ...] = Field(description="Decisions left to the adopter")
 
 
+class AppEntry(FrozenModel):
+    """One published app as the catalog route answers it: the catalog's listing, its icon resolved to a URL."""
+
+    name: str = Field(description="The app's name, unique among the catalog's apps; a shelf names it as app:<name>")
+    title: str = Field(description="The name a card shows")
+    description: str = Field(description="One or two sentences")
+    repository_url: str = Field(description="The published repository an agent installs it from")
+    author: str = Field(description="Who published it; empty when unknown")
+    icon_url: str = Field(description="The absolute URL of the app's icon; empty for none")
+    version: str = Field(description="The published semantic version; empty when never published")
+    required_accounts: tuple[RequiredAccount, ...] = Field(description="Permissions it asks for")
+    required_secrets: tuple[str, ...] = Field(description="Keys the adopter supplies")
+    needs_ai: bool = Field(description="Whether its code calls a model")
+    apt_packages: tuple[str, ...] = Field(description="System packages it installs")
+
+
 class CatalogDocument(FrozenModel):
-    """The ``catalog`` object the page reads: the templates with their drawings resolved to URLs, and the shelves."""
+    """The ``catalog`` object the page reads: the templates and apps with their images resolved to URLs, and the
+    shelves."""
 
     generated_at: str = Field(description="When the catalog was produced, ISO 8601; empty when unknown")
     templates: tuple[TemplateEntry, ...] = Field(description="Every template, in catalog order")
+    apps: tuple[AppEntry, ...] = Field(description="Every published app, in catalog order")
     shelves: tuple[CatalogShelf, ...] = Field(description="The browsing rows, in order")
 
 
@@ -224,11 +272,22 @@ def template_wire(template: CatalogTemplate, catalog_url: str) -> TemplateEntry:
 
 
 @pure
+def app_wire(app: CatalogApp, catalog_url: str) -> AppEntry:
+    return AppEntry.model_validate(
+        {
+            **app.model_dump(exclude={"icon"}),
+            "icon_url": resolve_thumbnail_url(catalog_url, app.icon),
+        }
+    )
+
+
+@pure
 def catalog_wire(catalog: TemplateCatalog, catalog_url: str) -> CatalogDocument:
     """The catalog as the route answers it."""
     return CatalogDocument(
         generated_at=catalog.generated_at,
         templates=tuple(template_wire(template, catalog_url) for template in catalog.templates),
+        apps=tuple(app_wire(app, catalog_url) for app in catalog.apps),
         shelves=catalog.shelves,
     )
 

@@ -14,6 +14,7 @@ from getting_started.template_catalog import catalog_wire
 from getting_started.template_catalog import parse_template_catalog
 from getting_started.template_catalog import resolve_thumbnail_url
 from getting_started.testing import FakeTemplateCatalogFetcher
+from getting_started.testing import catalog_app_document
 from getting_started.testing import catalog_document
 from getting_started.testing import catalog_template_document
 
@@ -57,6 +58,71 @@ def test_parse_skips_a_template_that_does_not_validate_and_keeps_the_rest() -> N
     assert [template.slug for template in catalog.templates] == ["good"]
 
 
+def test_parse_reads_the_apps_a_catalog_lists_and_fills_their_optional_fields() -> None:
+    catalog = parse_template_catalog(
+        catalog_document(
+            catalog_template_document("inbox"),
+            apps=[
+                catalog_app_document(
+                    "weather-desk",
+                    title="Weather Desk",
+                    description="Forecasts for the places you care about.",
+                    author="someone",
+                    version="1.2.0",
+                    required_accounts=[{"scope": "slack-api", "permission": "slack-read-all", "note": "Posts it"}],
+                    required_secrets=["OPENWEATHER_API_KEY"],
+                    needs_ai=True,
+                    apt_packages=["ffmpeg"],
+                    unknown_field="ignored",
+                ),
+                catalog_app_document("plain"),
+            ],
+            shelves=[{"key": "popular", "title": "Most popular", "slugs": ["app:weather-desk", "inbox"]}],
+        ),
+        _CATALOG_URL,
+    )
+    weather, plain = catalog.apps
+    assert weather.name == "weather-desk"
+    assert weather.title == "Weather Desk"
+    assert weather.repository_url == "https://github.com/someone/weather-desk"
+    assert weather.version == "1.2.0"
+    assert [(account.scope, account.permission) for account in weather.required_accounts] == [
+        ("slack-api", "slack-read-all")
+    ]
+    assert weather.required_secrets == ("OPENWEATHER_API_KEY",)
+    assert weather.needs_ai is True
+    assert weather.apt_packages == ("ffmpeg",)
+    assert (plain.description, plain.author, plain.version, plain.needs_ai) == ("", "", "", False)
+    assert plain.required_accounts == () and plain.required_secrets == () and plain.apt_packages == ()
+    # A shelf's entries are kept as written: the page resolves them, and drops the ones it cannot.
+    assert catalog.shelves[0].slugs == ("app:weather-desk", "inbox")
+
+
+def test_parse_lists_no_apps_for_a_catalog_written_before_apps_could_be_published() -> None:
+    body = catalog_document(catalog_template_document("inbox"))
+    assert "apps" not in json.loads(body)
+    catalog = parse_template_catalog(body, _CATALOG_URL)
+    assert catalog.apps == ()
+    assert [template.slug for template in catalog.templates] == ["inbox"]
+
+
+def test_parse_skips_an_app_that_does_not_validate_and_keeps_the_rest() -> None:
+    catalog = parse_template_catalog(
+        catalog_document(
+            catalog_template_document("inbox"),
+            apps=[
+                catalog_app_document("good"),
+                {"name": "", "title": "No name", "repository_url": "https://github.com/someone/unnamed"},
+                {"name": "no-repository", "title": "No repository url"},
+                "not an object",
+            ],
+        ),
+        _CATALOG_URL,
+    )
+    assert [app.name for app in catalog.apps] == ["good"]
+    assert [template.slug for template in catalog.templates] == ["inbox"]
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -65,6 +131,7 @@ def test_parse_skips_a_template_that_does_not_validate_and_keeps_the_rest() -> N
         json.dumps({"format": 2, "templates": []}).encode(),
         json.dumps({"format": 1}).encode(),
         json.dumps({"format": 1, "templates": "nope"}).encode(),
+        json.dumps({"format": 1, "templates": [], "apps": "nope"}).encode(),
     ],
 )
 def test_parse_refuses_a_document_that_is_not_a_format_1_catalog(body: bytes) -> None:
@@ -93,6 +160,39 @@ def test_the_catalog_wire_carries_resolved_thumbnail_urls_and_the_shelves() -> N
     assert wire["templates"][0]["thumbnail_url"] == "https://example.test/catalog/thumbnails/someone--inbox.svg"
     assert "thumbnail" not in wire["templates"][0]
     assert wire["shelves"] == [{"key": "popular", "title": "Most popular", "slugs": ["inbox"]}]
+
+
+def test_the_catalog_wire_carries_the_apps_with_resolved_icon_urls_and_their_shelf_entries() -> None:
+    catalog = parse_template_catalog(
+        catalog_document(
+            catalog_template_document("inbox"),
+            apps=[catalog_app_document("weather-desk"), catalog_app_document("bare", icon="")],
+            shelves=[{"key": "popular", "title": "Most popular", "slugs": ["inbox", "app:weather-desk"]}],
+        ),
+        _CATALOG_URL,
+    )
+    wire = catalog_wire(catalog, _CATALOG_URL).model_dump(mode="json")
+    weather, bare = wire["apps"]
+    assert weather == {
+        "name": "weather-desk",
+        "title": "Weather-Desk",
+        "description": "",
+        "repository_url": "https://github.com/someone/weather-desk",
+        "author": "",
+        "icon_url": "https://example.test/catalog/app-icons/someone--weather-desk.svg",
+        "version": "",
+        "required_accounts": [],
+        "required_secrets": [],
+        "needs_ai": False,
+        "apt_packages": [],
+    }
+    assert bare["icon_url"] == ""
+    assert wire["shelves"] == [{"key": "popular", "title": "Most popular", "slugs": ["inbox", "app:weather-desk"]}]
+
+
+def test_the_catalog_wire_of_a_catalog_with_no_apps_carries_an_empty_list() -> None:
+    catalog = parse_template_catalog(catalog_document(catalog_template_document("inbox")), _CATALOG_URL)
+    assert catalog_wire(catalog, _CATALOG_URL).model_dump(mode="json")["apps"] == []
 
 
 # the store
@@ -134,6 +234,31 @@ def test_store_answers_the_disk_copy_as_stale_when_the_fetch_fails(tmp_path: Pat
 
     assert reading.availability is TemplateCatalogAvailability.STALE
     assert reading.catalog is not None and [template.slug for template in reading.catalog.templates] == ["inbox"]
+
+
+def test_store_keeps_the_apps_in_its_disk_copy_and_reads_a_copy_written_before_apps(tmp_path: Path) -> None:
+    seeding_fetcher = FakeTemplateCatalogFetcher(
+        body_by_url={
+            _CATALOG_URL: catalog_document(
+                catalog_template_document("inbox"), apps=[catalog_app_document("weather-desk")]
+            )
+        }
+    )
+    assert _store(tmp_path, seeding_fetcher).read().availability is TemplateCatalogAvailability.FRESH
+
+    # A new process with the URL unreachable answers the apps from the disk copy.
+    reading = _store(tmp_path, FakeTemplateCatalogFetcher()).read()
+    assert reading.availability is TemplateCatalogAvailability.STALE
+    assert reading.catalog is not None and [app.name for app in reading.catalog.apps] == ["weather-desk"]
+
+    # A copy an older version of the app wrote has no apps key; it still reads, with no apps.
+    cache_path = tmp_path / CATALOG_CACHE_FILENAME
+    older_copy = json.loads(cache_path.read_text())
+    del older_copy["apps"]
+    cache_path.write_text(json.dumps(older_copy))
+    older_reading = _store(tmp_path, FakeTemplateCatalogFetcher()).read()
+    assert older_reading.catalog is not None and older_reading.catalog.apps == ()
+    assert [template.slug for template in older_reading.catalog.templates] == ["inbox"]
 
 
 def test_store_is_unavailable_with_no_fetch_and_no_disk_copy(tmp_path: Path) -> None:
