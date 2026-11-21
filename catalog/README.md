@@ -130,8 +130,10 @@ python3 catalog/build_catalog_from_export.py \
 ```
 
 `--app` is repeatable; it adds the app, or replaces the entry of the same name,
-and copies the icon to `app-icons/<owner>--<name>.svg`. The apps already listed
-are kept. `--drop-app <name>` removes one, with its icon and every shelf entry
+and copies the icon to `app-icons/<owner>--<name>.svg`. The icon has to be an
+`.svg` file of the checkout itself: one that is a link or a path leading out of
+the checkout is refused, since the checkout is someone else's repository. The
+apps already listed are kept. `--drop-app <name>` removes one, with its icon and every shelf entry
 naming it. `--popular` rewrites the leading shelf and takes `app:<name>` beside
 template slugs; leave it out to keep the shelves as they are. Any other shelf
 takes an app by adding `app:<name>` to its `slugs` by hand, which a later run

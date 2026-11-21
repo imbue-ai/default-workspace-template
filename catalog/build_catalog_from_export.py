@@ -58,6 +58,7 @@ _APP_SHELF_ENTRY_PREFIX = "app:"
 _APP_MANIFEST_FILENAME = "app.toml"
 # The icon of an app whose manifest names none.
 _DEFAULT_APP_ICON = "icon.svg"
+_APP_ICON_SUFFIX = ".svg"
 
 # Templates left out of the shipped catalog whatever the export says: a title that does not
 # belong on a first-run surface.
@@ -128,6 +129,33 @@ def app_shelf_entry(app_name: str) -> str:
     return f"{_APP_SHELF_ENTRY_PREFIX}{app_name}"
 
 
+def _app_icon_source(
+    app_directory: Path, manifest_path: Path, icon: object
+) -> Path | None:
+    """The file the manifest's ``icon`` names, or None when the checkout holds none.
+
+    The checkout is someone else's repository and the file is copied into the catalog, so
+    the icon is held to the manifest's own rule (a relative ``.svg`` path) and has to be a
+    file of the checkout itself: a path or a link that leads out of it is refused.
+    """
+    if not isinstance(icon, str) or not icon:
+        raise CatalogBuildError(
+            f"{manifest_path} names an icon that is no path: {icon!r}"
+        )
+    if Path(icon).is_absolute() or Path(icon).suffix.lower() != _APP_ICON_SUFFIX:
+        raise CatalogBuildError(
+            f"{manifest_path} names the icon {icon!r}, which is not a relative {_APP_ICON_SUFFIX} path"
+        )
+    icon_source = app_directory / icon
+    if not icon_source.is_file():
+        return None
+    if not icon_source.resolve().is_relative_to(app_directory.resolve()):
+        raise CatalogBuildError(
+            f"the icon {icon!r} that {manifest_path} names leads outside the app's checkout"
+        )
+    return icon_source
+
+
 def read_catalog_app(
     repository_url: str, app_directory: Path
 ) -> tuple[dict[str, Any], Path | None]:
@@ -150,8 +178,9 @@ def read_catalog_app(
         raise CatalogBuildError(
             f"{manifest_path} names the app {name!r}, which is not an app name"
         )
-    icon_source = app_directory / manifest.get("icon", _DEFAULT_APP_ICON)
-    has_icon = icon_source.is_file()
+    icon_source = _app_icon_source(
+        app_directory, manifest_path, manifest.get("icon", _DEFAULT_APP_ICON)
+    )
     try:
         entry = {
             "name": name,
@@ -160,7 +189,7 @@ def read_catalog_app(
             "author": owner,
             "repository_url": repository_url,
             "icon": f"{_APP_ICONS_DIRECTORY_NAME}/{owner}--{name}{icon_source.suffix}"
-            if has_icon
+            if icon_source is not None
             else "",
             "version": manifest.get("version", ""),
             "required_accounts": [
@@ -179,7 +208,7 @@ def read_catalog_app(
         raise CatalogBuildError(
             f"{manifest_path} declares what the app needs in a shape this builder cannot read: {e!r}"
         ) from e
-    return entry, icon_source if has_icon else None
+    return entry, icon_source
 
 
 def _merged_apps(

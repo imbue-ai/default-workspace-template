@@ -222,6 +222,21 @@ def test_an_apps_icon_is_the_file_its_manifest_names(tmp_path: Path) -> None:
         (_WEATHER_URL, "name = ", "cannot read"),
         (
             _WEATHER_URL,
+            'name = "odd"\ndisplay_name = "Odd"\nicon = "/etc/hostname"\n',
+            "not a relative .svg path",
+        ),
+        (
+            _WEATHER_URL,
+            'name = "odd"\ndisplay_name = "Odd"\nicon = "notes.txt"\n',
+            "not a relative .svg path",
+        ),
+        (
+            _WEATHER_URL,
+            'name = "odd"\ndisplay_name = "Odd"\nicon = 5\n',
+            "an icon that is no path",
+        ),
+        (
+            _WEATHER_URL,
             'name = "odd"\ndisplay_name = "Odd"\n[[permissions]]\nscope = "slack-api"\n',
             "cannot read",
         ),
@@ -233,6 +248,29 @@ def test_an_app_the_builder_cannot_list_is_refused_with_the_reason(
     checkout = _write_app_checkout(tmp_path / "app", manifest=manifest)
     with pytest.raises(builder.CatalogBuildError, match=message):
         builder.read_catalog_app(repository_url, checkout)
+
+
+def test_an_icon_that_leads_out_of_the_checkout_is_refused(tmp_path: Path) -> None:
+    # A file of whoever runs the builder, which a checkout of someone else's app must not reach.
+    (tmp_path / "private.svg").write_text("not the app's to publish\n")
+    linked = _write_app_checkout(
+        tmp_path / "linked",
+        manifest='name = "linked"\ndisplay_name = "Linked"\n',
+        icon=None,
+    )
+    (linked / "icon.svg").symlink_to(tmp_path / "private.svg")
+    climbing = _write_app_checkout(
+        tmp_path / "climbing",
+        manifest='name = "climbing"\ndisplay_name = "Climbing"\nicon = "../private.svg"\n',
+        icon=None,
+    )
+    for checkout in (linked, climbing):
+        with pytest.raises(
+            builder.CatalogBuildError, match="leads outside the app's checkout"
+        ):
+            builder.read_catalog_app(
+                f"https://github.com/someone/{checkout.name}", checkout
+            )
 
 
 def test_a_checkout_with_no_manifest_is_refused(tmp_path: Path) -> None:
