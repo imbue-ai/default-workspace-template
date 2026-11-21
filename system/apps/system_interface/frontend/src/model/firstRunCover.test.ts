@@ -81,4 +81,14 @@ describe("the first run's cover", () => {
     noteChromeWashesExit(true, chrome);
     expect(reports).toEqual([true]);
   });
+
+  it("does not tell the chrome the page is up again while it is coming down under the color", () => {
+    const { chrome, reports, scheduled } = recordingChrome();
+    noteChromeWashesExit(true, chrome);
+    applyFirstRunProviderStep(true, "https://chat.example", chrome, () => undefined);
+    applyFirstRunProviderStep(false, "https://chat.example", chrome, () => undefined);
+    noteChromeWashesExit(true, chrome);
+    expect(reports).toEqual([true, false]);
+    scheduled[0][0]();
+  });
 });

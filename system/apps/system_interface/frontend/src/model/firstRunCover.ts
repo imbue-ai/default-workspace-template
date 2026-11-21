@@ -40,10 +40,11 @@ let isExitWashed = false;
 // Whether the page is waiting out the chrome's color to come down, so a repeated end is not reported twice.
 let isTakingDown = false;
 
-/** The chrome said what it does with the step's end; one listening only now hears of a page already up. */
+/** The chrome said what it does with the step's end; one listening only now hears of a page already up, unless it
+ * is already coming down. */
 export function noteChromeWashesExit(isWashed: boolean, chrome: FirstRunChrome): void {
   isExitWashed = isWashed;
-  if (pendingOrigin !== null) chrome.report(true);
+  if (pendingOrigin !== null && !isTakingDown) chrome.report(true);
 }
 
 /** Take the chat app's word for the step (`origin` is that app's own), tell the chrome, and redraw on a change. */
