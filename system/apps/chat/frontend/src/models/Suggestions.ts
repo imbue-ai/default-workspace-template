@@ -155,8 +155,9 @@ export async function readNextStepSuggestions(chatId: string): Promise<void> {
   m.redraw();
 }
 
-/** Read the set again for a chat this page draws suggestions for: the chat app said its stored set changed (a set
- *  worked out since the turn ended arrives this way, seconds after the read the turn's end asked for). */
+/** Read the set again for a chat this page draws suggestions for: the page is shown again, or the chat app said its
+ *  stored set changed (a set worked out since the turn ended arrives this way, seconds after the read the turn's end
+ *  asked for). */
 export function rereadNextStepSuggestions(chatId: string): void {
   if (stateByChat.has(chatId)) void readNextStepSuggestions(chatId);
 }
