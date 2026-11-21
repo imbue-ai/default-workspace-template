@@ -29,6 +29,10 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.primitives import SUBAGENT_KEY_SEPARATOR
+from imbue.chat.suggestions import ChatSuggestions
+from imbue.chat.suggestions import Suggestion
+from imbue.chat.suggestions import SuggestionSource
+from imbue.chat.suggestions import SuggestionsStatus
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
@@ -242,9 +246,33 @@ class PoweredByResponse(FrozenModel):
 
 
 class ChatSettingsResponse(FrozenModel):
-    """Response from GET and PUT /api/settings: the workspace-wide chat settings as they stand."""
+    """Response from GET and PUT /api/settings and PUT /api/settings/suggestions: the workspace-wide chat settings
+    as they stand."""
 
     settings: ChatSettings = Field(description="The settings")
+
+
+class ChatSuggestionsResponse(FrozenModel):
+    """Response from GET /api/chats/<chat_id>/suggestions: the next-step suggestions stored for the chat."""
+
+    status: SuggestionsStatus = Field(description="ready when the chat has a stored set, else none")
+    after_event_id: str | None = Field(
+        description="The event id of the assistant message the set follows; None when there is no set"
+    )
+    source: SuggestionSource | None = Field(description="Where the set came from; None when there is no set")
+    suggestions: tuple[Suggestion, ...] = Field(description="The suggestions in order; empty when there is no set")
+
+    @classmethod
+    def of(cls, stored: ChatSuggestions | None) -> "ChatSuggestionsResponse":
+        """The answer for a chat's stored set, or for a chat that has none."""
+        if stored is None:
+            return cls(status=SuggestionsStatus.NONE, after_event_id=None, source=None, suggestions=())
+        return cls(
+            status=SuggestionsStatus.READY,
+            after_event_id=stored.after_event_id,
+            source=stored.source,
+            suggestions=stored.suggestions,
+        )
 
 
 class FastModeStateResponse(FrozenModel):
@@ -962,6 +990,8 @@ class SeedChatRequest(FrozenModel):
     is_first_run: bool = Field(
         default=False, description="A first-run arrival: the chat opens on ``FIRST_RUN_WELCOME`` instead of turns"
     )
+    # CLEANUP: drop ``context`` once no supported Imbue Studio app sends it (the ones that ask what type of
+    # studio the user wants to make); the app then sends ``{"turns": [], "is_first_run": true}`` alone.
     context: str = Field(default="", description="What the user told the first run, for the agent; never shown")
 
     @model_validator(mode="after")

@@ -1,4 +1,5 @@
-"""The chat app's workspace-wide settings: the fast mode and idle compaction a new chat starts with, and the notices shown.
+"""The chat app's workspace-wide settings: the fast mode and idle compaction a new chat starts with, the notices
+shown, and which suggestions are offered.
 
 One small JSON file beside the chat app's other state (``data/.apps/chat/settings.json``),
 read on every use so an edit from another process lands without a restart, and written whole.
@@ -8,6 +9,7 @@ read on every use so an edit from another process lands without a restart, and w
 import json
 import os
 import threading
+from collections.abc import Callable
 from enum import auto
 from pathlib import Path
 from typing import Final
@@ -19,6 +21,7 @@ from pydantic import ValidationError
 
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 
 logger = _loguru_logger
@@ -64,6 +67,54 @@ class ChatSettings(FrozenModel):
         default=False,
         description="Whether the one-time notice explaining idle compaction has been shown",
     )
+    is_next_step_suggestions_enabled: bool = Field(
+        default=True,
+        description="Whether suggested replies are offered under an agent's reply",
+    )
+    is_activity_suggestions_enabled: bool = Field(
+        default=True,
+        description="Whether things to try in Studio are offered while an agent works on a reply",
+    )
+    is_new_chat_suggestions_enabled: bool = Field(
+        default=True,
+        description="Whether things to try in Studio are offered on a chat with no message yet",
+    )
+
+
+class SuggestionSettingsUpdate(FrozenModel):
+    """A change to the suggestion switches alone: a switch left out, or null, stays as it is.
+
+    Replacing the settings whole would let a writer that knows fewer fields reset the rest, so the
+    writers of these switches (a strip's disable link, the Imbue Studio app's workspace settings) send
+    only the switches they mean to change.
+    """
+
+    is_next_step_suggestions_enabled: bool | None = Field(
+        default=None, description="The new value of the next-step switch; None leaves it"
+    )
+    is_activity_suggestions_enabled: bool | None = Field(
+        default=None, description="The new value of the activity switch; None leaves it"
+    )
+    is_new_chat_suggestions_enabled: bool | None = Field(
+        default=None, description="The new value of the new-chat switch; None leaves it"
+    )
+
+    def apply_to(self, settings: ChatSettings) -> ChatSettings:
+        """``settings`` with the switches this update names set, and everything else as it was."""
+        updated = settings
+        if self.is_next_step_suggestions_enabled is not None:
+            updated = updated.model_copy_update(
+                to_update(updated.field_ref().is_next_step_suggestions_enabled, self.is_next_step_suggestions_enabled)
+            )
+        if self.is_activity_suggestions_enabled is not None:
+            updated = updated.model_copy_update(
+                to_update(updated.field_ref().is_activity_suggestions_enabled, self.is_activity_suggestions_enabled)
+            )
+        if self.is_new_chat_suggestions_enabled is not None:
+            updated = updated.model_copy_update(
+                to_update(updated.field_ref().is_new_chat_suggestions_enabled, self.is_new_chat_suggestions_enabled)
+            )
+        return updated
 
 
 class ChatSettingsStore(MutableModel):
@@ -92,10 +143,21 @@ class ChatSettingsStore(MutableModel):
 
     def write(self, settings: ChatSettings) -> None:
         with self._lock:
-            if self.path is None:
-                self._in_memory = settings
-                return
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            temp_path = self.path.with_suffix(".json.tmp")
-            temp_path.write_text(json.dumps(settings.model_dump(mode="json"), indent=2, sort_keys=True) + "\n")
-            os.replace(temp_path, self.path)
+            self._write_locked(settings)
+
+    def update(self, change: Callable[[ChatSettings], ChatSettings]) -> ChatSettings:
+        """Write ``change`` of the settings as they stand, and answer what was written. The read and the write
+        are one step under the store's lock, so two changes to different fields both land."""
+        with self._lock:
+            settings = change(self.read())
+            self._write_locked(settings)
+        return settings
+
+    def _write_locked(self, settings: ChatSettings) -> None:
+        if self.path is None:
+            self._in_memory = settings
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = self.path.with_suffix(".json.tmp")
+        temp_path.write_text(json.dumps(settings.model_dump(mode="json"), indent=2, sort_keys=True) + "\n")
+        os.replace(temp_path, self.path)

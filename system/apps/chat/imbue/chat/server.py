@@ -112,6 +112,7 @@ from imbue.chat.chat_intakes import intake_path
 from imbue.chat.chat_intakes import most_recently_messaged_chat_id
 from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_settings import ChatSettings
+from imbue.chat.chat_settings import SuggestionSettingsUpdate
 from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
 from imbue.chat.client_activity import is_client_activity_reportable
@@ -177,6 +178,7 @@ from imbue.chat.models import ChatNotificationRequest
 from imbue.chat.models import ChatSegmentInfo
 from imbue.chat.models import ChatSettingsResponse
 from imbue.chat.models import ChatSnapshot
+from imbue.chat.models import ChatSuggestionsResponse
 from imbue.chat.models import ChatWatchersResponse
 from imbue.chat.models import ConvergingResponse
 from imbue.chat.models import CreateChatRequest
@@ -1470,6 +1472,16 @@ def _known_chat_or_not_found(chat_id: str) -> ChatId | Response:
     return parsed
 
 
+def _get_suggestions_endpoint(chat_id: str) -> Response:
+    """``GET /api/chats/<chat_id>/suggestions``: the next-step suggestions stored for the chat, with the message
+    they follow, or ``none``. A page shows them only while that message is still the chat's last assistant
+    message, so the route answers a set left from an earlier turn as it stands."""
+    parsed = _known_chat_or_not_found(chat_id)
+    if isinstance(parsed, Response):
+        return parsed
+    return model_response(ChatSuggestionsResponse.of(get_state().agent_manager.get_chat_suggestions(parsed)))
+
+
 def _get_fast_mode_endpoint(chat_id: str) -> Response:
     """``GET /api/chats/<chat_id>/fast-mode``: the chat's fast mode (off, auto or on, and whether auto has switched)."""
     parsed = _known_chat_or_not_found(chat_id)
@@ -1515,7 +1527,19 @@ def _put_settings_endpoint() -> Response:
     value answers 400.
     """
     settings = parse_request_body(ChatSettings)
-    get_state().chat_settings.write(settings)
+    state = get_state()
+    state.chat_settings.write(settings)
+    state.broadcaster.broadcast_settings_updated()
+    return model_response(ChatSettingsResponse(settings=settings))
+
+
+def _put_suggestion_settings_endpoint() -> Response:
+    """``PUT /api/settings/suggestions``: change the suggestion switches the body names and leave every other
+    setting as it is; answers the settings as they then stand."""
+    update = parse_request_body(SuggestionSettingsUpdate)
+    state = get_state()
+    settings = state.chat_settings.update(update.apply_to)
+    state.broadcaster.broadcast_settings_updated()
     return model_response(ChatSettingsResponse(settings=settings))
 
 
@@ -3113,6 +3137,7 @@ _PER_CHAT_ROUTES: Final[tuple[tuple[str, Callable[..., Response], tuple[str, ...
     ("model", _set_model_choice_endpoint, ("POST",)),
     ("model-options", _get_model_options_endpoint, ("GET",)),
     ("powered-by", _get_powered_by_endpoint, ("GET",)),
+    ("suggestions", _get_suggestions_endpoint, ("GET",)),
     ("interrupt", _interrupt_agent_endpoint, ("POST",)),
     ("flush-queue", _flush_queue_endpoint, ("POST",)),
     ("shoulder-tap-atomic", _shoulder_tap_atomic_endpoint, ("POST",)),
@@ -3192,6 +3217,9 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("DELETE", "/api/chats/{chat_id}/uploads/{relative_path}"): RouteModels(response_model=OkResponse),
     ("GET", "/api/settings"): RouteModels(response_model=ChatSettingsResponse),
     ("PUT", "/api/settings"): RouteModels(request_model=ChatSettings, response_model=ChatSettingsResponse),
+    ("PUT", "/api/settings/suggestions"): RouteModels(
+        request_model=SuggestionSettingsUpdate, response_model=ChatSettingsResponse
+    ),
     ("POST", "/api/chats/{chat_id}/destroy"): RouteModels(response_model=DestroyAgentResponse),
     ("POST", "/api/chats/{chat_id}/rename"): RouteModels(
         request_model=RenameChatRequest, response_model=RenameChatResponse
@@ -3226,6 +3254,7 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ),
     ("GET", "/api/chats/{chat_id}/model-options"): RouteModels(response_model=ModelOptionsResponse),
     ("GET", "/api/chats/{chat_id}/powered-by"): RouteModels(response_model=PoweredByResponse),
+    ("GET", "/api/chats/{chat_id}/suggestions"): RouteModels(response_model=ChatSuggestionsResponse),
     # The view reads the body itself: the stop button posts none.
     ("POST", "/api/chats/{chat_id}/interrupt"): RouteModels(
         request_model=InterruptAgentRequest,
@@ -3384,6 +3413,7 @@ def create_application(state: ChatAppState) -> Flask:
     application.add_url_rule(
         "/api/settings", view_func=_put_settings_endpoint, methods=["PUT"], endpoint="_put_settings_endpoint"
     )
+    application.add_url_rule("/api/settings/suggestions", view_func=_put_suggestion_settings_endpoint, methods=["PUT"])
     application.add_url_rule("/api/harnesses", view_func=_get_harnesses_endpoint, methods=["GET"])
     application.add_url_rule("/api/uploads", view_func=_upload_attachment, methods=["POST"])
     application.add_url_rule("/api/uploads/<path:relative_path>", view_func=_serve_attachment, methods=["GET"])

@@ -107,8 +107,8 @@ observe`, its own supervised service) writes, and serves:
   no pty is registered) in meta tags. Every chat page reports its path and the
   chat's title to the shell.
 - Every `/api/chats/<chat-id>/...` route (events, streams, sends, model choice,
-  the queue actions, presence and watchers, a notification's desktop bubble, destroy, rename, make-main, start,
-  stop; the subagent reads under
+  the queue actions, presence and watchers, a notification's desktop bubble, the next-step suggestions,
+  destroy, rename, make-main, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats/awaiting` (the chat an empty chat list opens on), `/api/chats`,
   `/api/harnesses`, `/api/uploads` (and a chat's own uploads under
@@ -123,8 +123,9 @@ observe`, its own supervised service) writes, and serves:
   per chat, the agent-level facts under `active_agent` and the epoch seconds of
   its last message as `last_messaged_at`, which the chat root's list orders on)
   the provisional-chat events (`provisional_chat_created`,
-  `provisional_chat_completed`), and `accounts_updated` whenever the account
-  index changes, whichever process wrote it.
+  `provisional_chat_completed`), `accounts_updated` whenever the account
+  index changes, whichever process wrote it, and `settings_updated` whenever a
+  settings route writes the workspace's chat settings.
 - `POST /api/focus-chat`: what the shell posts for the Imbue Studio app's `minds:focus-chat` (the user opened a
   chat's notification), since the manifest registers the type under `[[message_handlers]]`. It takes the
   message's `chatId` and the `client_id` the shell adds, and asks the shell's `show` op
@@ -572,6 +573,24 @@ out as typed, since a harness runs a command only when the slash leads the
 message, and leaves a pending seed for the next message. The seed survives a restart of this app because
 the record does; discarding the chat before its first send drops both.
 
+A new workspace's first chat is seeded by the chat app's own words rather than the Imbue Studio
+app's: a seed request with `is_first_run` and no turns opens the chat on `FIRST_RUN_WELCOME`
+(the agent introducing itself, what Studio is for, and "**How do you want to start?**"), owes the
+workspace's owner the provider page (`first_run.py`), and writes the chat's start suggestions
+(below), "Describe what you want to make" and "See what Studio can do", under the welcome's last
+turn. Leaving the provider page with a provider connected starts the chat's agent at once, with no
+message, as any sign-in's launch does: the agent says nothing until the user picks a suggestion or
+types, and that first send carries the welcome. For this chat the context block also says that
+this is the user's first conversation in a new workspace and that the agent reads
+`.agents/skills/first-run-onboarding/SKILL.md` before replying; the skill holds the reply to each
+start suggestion word for word, and has the agent treat anything else as an ordinary request. An
+Imbue Studio app that still asks what type of studio the user wants sends the answer as `context`:
+it is kept beside the seed in `first_run_context.txt` (the file that marks the chat as the first
+run's, empty when nothing was said), rides the same block without being shown, and is taken again
+from a first-run seed posted before the chat's first agent is launched, which answers the same
+chat rather than opening a second. Earlier versions started this chat's agent with a note of the
+chat app's own (`<first-run-kickoff>`); the page still hides it in the transcripts that hold one.
+
 The workspace has one **main chat**, where a text with no chat of its own goes
 (`main_chat.py`). It is a pointer, like a star on one chat, kept in
 `data/.apps/chat/main_chat.json`; no chat is special in itself, so a handoff, a
@@ -621,6 +640,61 @@ fast row states the chat's mode and opens a submenu where the mode, auto's turn
 limit and the default for new chats are set; `/fast on` and `/fast off` typed
 in the composer choose the mode too. The first time auto switches a chat in a
 workspace, a one-time notice over the model bar explains it.
+
+## Suggestions
+
+Suggestions are short entries above the composer that the user can click instead of typing
+(`suggestions.py`; `specs/chat-suggestions` in the mngr repository). A chat's next-step
+suggestions are the replies offered under one assistant message, kept whole as one file in the
+chat's folder, `data/.apps/chat/chats/<chat-id>/suggestions.json`:
+
+```json
+{
+  "version": 1,
+  "after_event_id": "<the event id of the assistant message these follow>",
+  "source": "fixed",
+  "suggestions": [
+    {"suggestion_id": "start-describe", "label": "Describe what you want to make", "is_recommended": false}
+  ]
+}
+```
+
+`source` is `fixed` for a set the chat app wrote word for word and `generated` for one a model
+worked out; the first-run seed's start suggestions are the only set written today. `GET
+/api/chats/<chat-id>/suggestions` answers `{"status", "after_event_id", "source",
+"suggestions"}`: `ready` with the stored set, or `none` with nulls and an empty list. It answers
+for a seeded chat still awaiting its first agent as for any listed chat, and 404 for a chat the
+app does not know.
+
+The page draws the set as the next-step strip, directly above the composer and at its width:
+pills in a wrapping row with a dashed outline, the recommended one (at most one, and the first)
+in green. It takes a set up only when the answer's `after_event_id` is the id of the last
+assistant message the page holds, no user message follows that message, the page holds the
+transcript's end, and the chat's turn is done, a seeded chat awaiting its first agent counting
+as done; so a set left from an earlier turn never shows. Clicking a suggestion sends its label
+through the composer, so the transcript shows exactly what the pill said: the label alone with
+an empty draft, else the draft's text, a newline, and the label, with the draft's attachments;
+it queues behind a running turn, launches a chat awaiting its first message, and carries out an
+armed switch, as a typed message does. With no provider signed in, or the chat's account signed
+out, the click opens the provider chooser and sends nothing, and the strip stays for a second
+click; while a switch is being prepared or dictation owns the box it does nothing. When a
+message is sent, by a suggestion or by typing, or a turn starts from anywhere else, the strip
+collapses to a "Next steps" toggle above the composer that opens it again, and the toggle goes
+when that turn ends. A room shows no strip.
+
+Three workspace-wide switches say which suggestions are offered, each on unless changed:
+`is_next_step_suggestions_enabled`, `is_activity_suggestions_enabled`, and
+`is_new_chat_suggestions_enabled` in the chat settings (`chat_settings.py`, `GET /api/settings`).
+Only the next-step switch has a strip to govern today. `PUT /api/settings` replaces the settings
+whole, so a writer that knows fewer fields would reset the rest; `PUT /api/settings/suggestions`
+takes any of the three switches, changes only those (one left out or null stays as it is), and
+answers the settings as `GET /api/settings` does. Under the pills the workspace's owner is shown
+a "disable next step suggestions" link, which switches the placement off through that route: the
+strip goes, a notice with "Undo" takes its place for a few seconds, and where the Imbue Studio
+app says it opens workspace settings the link opens them on their Suggestions group, whose
+switches write through the same route. Every write through either settings route is pushed to
+every page as `settings_updated` on `/api/ws`, and each page reads the settings again, so a
+strip switched off on one page goes at once on all of them.
 
 ## Chat names
 

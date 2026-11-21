@@ -1007,6 +1007,7 @@ export class LivePagesLayer implements PageDriver {
       app: page.app,
       path,
       opensLocalFiles: this.store.getOpensLocalFiles(),
+      opensWorkspaceSettings: this.store.getOpensWorkspaceSettings(),
       isViewing,
     });
     page.greetedDesktopId = desktopId;

@@ -6,9 +6,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providers = vi.hoisted(() => ({ loadAccounts: vi.fn(async () => undefined) }));
+const chatSettings = vi.hoisted(() => ({ rereadChatSettings: vi.fn() }));
 
 vi.mock("mithril", () => ({ default: { redraw: vi.fn(), request: vi.fn() } }));
 vi.mock("./Providers", () => ({ loadAccounts: providers.loadAccounts }));
+vi.mock("./ChatSettings", () => ({ rereadChatSettings: chatSettings.rereadChatSettings }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({
   apiUrl: (path: string) => path,
   wsUrl: (path: string) => `ws://test${path}`,
@@ -308,5 +310,38 @@ describe("the account list over the socket", () => {
     open();
 
     expect(listener).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("the settings over the socket", () => {
+  let manager: ChatsModule;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.stubGlobal("WebSocket", FakeSocket);
+    chatSettings.rereadChatSettings.mockClear();
+    manager = await import("./Chats");
+    manager.initChats();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    FakeSocket.latest = null;
+  });
+
+  it("reads the settings again when the app says they changed", () => {
+    open();
+    expect(chatSettings.rereadChatSettings).not.toHaveBeenCalled();
+
+    push({ type: "settings_updated" });
+
+    expect(chatSettings.rereadChatSettings).toHaveBeenCalledOnce();
+  });
+
+  it("reads the settings again on a reconnect, since a change while it was down reached no one", () => {
+    open();
+    open();
+
+    expect(chatSettings.rereadChatSettings).toHaveBeenCalledOnce();
   });
 });

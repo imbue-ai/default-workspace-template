@@ -66,9 +66,8 @@ WORKSPACE_UPDATE_OUTCOME_NOT_LANDED = "not-landed"
 # shows only the words, so the block is stripped here and the rest travels as ``display_body``.
 SEED_CONTEXT_TAG = "chat-seed-context"
 
-# Cross-layer contract: the tag the chat app wraps the note in that starts a first-run workspace's first agent
-# (``chat_seed.first_run_kickoff_message``): the conversation the chat opened on and what to open with. Nobody
-# typed it, so the whole message is hidden and the agent's reply is the first thing the user reads from it.
+# The tag around the note the chat app used to start a first-run workspace's first agent with, still in older
+# chats' transcripts: nobody typed it, so the whole message stays hidden.
 FIRST_RUN_KICKOFF_TAG = "first-run-kickoff"
 
 _SKILL_EXPANSION_PREFIX = "Base directory for this skill:"
@@ -278,7 +277,7 @@ def _match_seed_context(content: str) -> MessageDisplay | None:
 
 
 def _match_first_run_kickoff(content: str) -> MessageDisplay | None:
-    """The note that starts a first-run workspace's first agent: written by the chat app, read only by the agent."""
+    """The note first-run chats' first agents used to be started with, still in older chats' transcripts."""
     if _FIRST_RUN_KICKOFF_RE.match(content) is None:
         return None
     return MessageDisplay(display=DisplayKind.HIDDEN)

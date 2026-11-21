@@ -17,6 +17,7 @@ const HANDSHAKE: ShellHandshake = {
   app: "chat",
   path: "/",
   opensLocalFiles: false,
+  opensWorkspaceSettings: false,
   isViewing: false,
 };
 
@@ -173,6 +174,23 @@ describe("InnerFramePool", () => {
     pool.setRootShown(true);
     expect(pageB.shown).toHaveBeenCalledTimes(2);
     expect(pageA.shown).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands every page a handshake that changed, as when the chrome says later that it opens workspace settings", () => {
+    pool.setHandshake(HANDSHAKE);
+    pool.show("agent-a");
+    const pageA = loadPage("agent-a");
+    const changed = { ...HANDSHAKE, opensWorkspaceSettings: true };
+
+    pool.setHandshake(changed);
+
+    expect(pageA.posted.mock.calls).toEqual([
+      [HANDSHAKE_MESSAGE, "*"],
+      [{ type: SHELL_HANDSHAKE, ...changed }, "*"],
+    ]);
+    // A page that loads after the change is greeted with it.
+    pool.show("agent-b");
+    expect(loadPage("agent-b").posted.mock.calls).toEqual([[{ type: SHELL_HANDSHAKE, ...changed }, "*"]]);
   });
 
   it("tells a page that loads while the root is hidden that it is hidden", () => {

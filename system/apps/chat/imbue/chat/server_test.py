@@ -84,7 +84,6 @@ from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
-from imbue.chat.chat_seed import first_run_kickoff_message
 from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.chat_transcript import agent_switch_event_id
@@ -142,6 +141,10 @@ from imbue.chat.server import _stream_filtered_events
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
+from imbue.chat.suggestions import ChatSuggestions
+from imbue.chat.suggestions import Suggestion
+from imbue.chat.suggestions import SuggestionSource
+from imbue.chat.suggestions import write_chat_suggestions
 from imbue.chat.testing import InlineExecutor
 from imbue.chat.testing import RecordingGateway
 from imbue.chat.testing import RecordingMngrMessenger
@@ -4080,7 +4083,7 @@ def test_a_first_run_seed_handed_over_again_updates_what_the_user_said_on_the_sa
     assert first.status_code == 201 and again.status_code == 201
     chat_id = first.get_json()["chat_id"]
     assert again.get_json()["chat_id"] == chat_id
-    assert "I want to use Studio for: Film." in first_run_kickoff_message(tmp_path / chat_id)
+    assert "I want to use Studio for: Film." in seed_context_message(tmp_path / chat_id, "hello")
     assert len(agent_manager.get_provisional_chats()) == 1
 
 
@@ -4135,6 +4138,9 @@ def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: F
             "is_fast_mode_notice_shown": False,
             "autocompact_default": True,
             "is_autocompact_notice_shown": False,
+            "is_next_step_suggestions_enabled": True,
+            "is_activity_suggestions_enabled": True,
+            "is_new_chat_suggestions_enabled": True,
         }
     }
 
@@ -4144,6 +4150,9 @@ def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: F
         "is_fast_mode_notice_shown": True,
         "autocompact_default": False,
         "is_autocompact_notice_shown": True,
+        "is_next_step_suggestions_enabled": False,
+        "is_activity_suggestions_enabled": True,
+        "is_new_chat_suggestions_enabled": False,
     }
     response = client.put("/api/settings", json=replacement)
 
@@ -4155,6 +4164,152 @@ def test_the_chat_settings_refuse_a_turn_limit_below_one_and_an_unknown_mode(cli
     assert client.put("/api/settings", json={"fast_mode_turn_limit": 0}).status_code == 400
     assert client.put("/api/settings", json={"fast_mode_default": "sometimes"}).status_code == 400
     assert client.get("/api/settings").get_json()["settings"]["fast_mode_turn_limit"] == 2
+
+
+def test_the_suggestion_switches_are_changed_one_at_a_time_and_every_other_setting_is_left(
+    client: FlaskClient,
+) -> None:
+    """A strip's disable link and the Imbue Studio app name only the switch they mean to change, so neither
+    resets a setting the other wrote, nor one a writer of the whole settings wrote."""
+    client.put("/api/settings", json={"fast_mode_default": "auto", "fast_mode_turn_limit": 5})
+
+    response = client.put("/api/settings/suggestions", json={"is_activity_suggestions_enabled": False})
+
+    expected = {
+        "fast_mode_default": "auto",
+        "fast_mode_turn_limit": 5,
+        "is_fast_mode_notice_shown": False,
+        "autocompact_default": True,
+        "is_autocompact_notice_shown": False,
+        "is_next_step_suggestions_enabled": True,
+        "is_activity_suggestions_enabled": False,
+        "is_new_chat_suggestions_enabled": True,
+    }
+    assert response.status_code == 200
+    assert response.get_json() == {"settings": expected}
+    assert client.get("/api/settings").get_json() == {"settings": expected}
+
+    # A second writer changes another switch; a null and an absent switch both stay as they are.
+    second = client.put(
+        "/api/settings/suggestions",
+        json={"is_next_step_suggestions_enabled": False, "is_activity_suggestions_enabled": None},
+    )
+
+    expected = {**expected, "is_next_step_suggestions_enabled": False}
+    assert second.get_json() == {"settings": expected}
+    assert client.put("/api/settings/suggestions", json={}).get_json() == {"settings": expected}
+    back_on = client.put("/api/settings/suggestions", json={"is_activity_suggestions_enabled": True})
+    assert back_on.get_json() == {"settings": {**expected, "is_activity_suggestions_enabled": True}}
+
+
+def test_the_suggestion_switches_refuse_a_value_that_is_no_switch_and_a_setting_that_is_not_theirs(
+    client: FlaskClient,
+) -> None:
+    before = client.get("/api/settings").get_json()
+
+    assert (
+        client.put("/api/settings/suggestions", json={"is_new_chat_suggestions_enabled": "sometimes"}).status_code
+        == 400
+    )
+    assert client.put("/api/settings/suggestions", json={"fast_mode_turn_limit": 9}).status_code == 400
+    assert client.put("/api/settings/suggestions", json=[True]).status_code == 400
+    assert client.get("/api/settings").get_json() == before
+
+
+def test_a_settings_change_through_either_route_is_pushed_to_every_page(app: Flask, client: FlaskClient) -> None:
+    """A strip switched off on one page goes at once on every other: each page reads the settings again."""
+    pushes = state_of(app).broadcaster.register()
+
+    client.put("/api/settings/suggestions", json={"is_next_step_suggestions_enabled": False})
+    assert drain_pushes(pushes) == [{"type": "settings_updated"}]
+
+    client.put("/api/settings", json={"fast_mode_turn_limit": 3})
+    assert drain_pushes(pushes) == [{"type": "settings_updated"}]
+
+    # A refused change and a read change nothing, so nothing is pushed.
+    client.put("/api/settings/suggestions", json={"is_next_step_suggestions_enabled": "sometimes"})
+    client.put("/api/settings", json={"fast_mode_turn_limit": 0})
+    client.get("/api/settings")
+    assert drain_pushes(pushes) == []
+
+
+def test_a_first_run_chat_awaiting_its_first_agent_answers_its_start_suggestions(tmp_path: Path) -> None:
+    """The first-run chat offers its replies before any agent exists: the route answers for a seeded chat that
+    is still provisional, naming the welcome's last turn as the message the set follows."""
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+    chat_id = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"]
+    provisional = agent_manager.get_provisional_chat(chat_id)
+    assert provisional is not None and provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+
+    response = client.get(f"/api/chats/{chat_id}/suggestions")
+
+    last_event = client.get(f"/api/chats/{chat_id}/events").get_json()["events"][-1]
+    assert last_event["text"] == "**How do you want to start?**"
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "status": "ready",
+        "after_event_id": last_event["event_id"],
+        "source": "fixed",
+        "suggestions": [
+            {"suggestion_id": "start-describe", "label": "Describe what you want to make", "is_recommended": False},
+            {"suggestion_id": "start-tour", "label": "See what Studio can do", "is_recommended": False},
+        ],
+    }
+
+
+def test_a_chat_with_no_stored_suggestions_answers_none(tmp_path: Path) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+    chat_id = client.post("/api/chats/seed", json=_seed_body()).get_json()["chat_id"]
+
+    response = client.get(f"/api/chats/{chat_id}/suggestions")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"status": "none", "after_event_id": None, "source": None, "suggestions": []}
+
+
+def test_a_listed_chat_answers_the_suggestions_stored_in_its_folder(app: Flask, client: FlaskClient) -> None:
+    _register_agent(app, "agent-suggested", "Chat-1", "RUNNING")
+    none_yet = client.get("/api/chats/agent-suggested/suggestions")
+    write_chat_suggestions(
+        state_of(app).agent_manager.chat_files_root / "agent-suggested",
+        ChatSuggestions(
+            after_event_id="evt-reply-7",
+            source=SuggestionSource.GENERATED,
+            suggestions=(
+                Suggestion(suggestion_id="s1", label="Yes, go ahead", is_recommended=True),
+                Suggestion(suggestion_id="s2", label="Show me the plan first"),
+            ),
+        ),
+    )
+
+    response = client.get("/api/chats/agent-suggested/suggestions")
+
+    assert none_yet.get_json() == {"status": "none", "after_event_id": None, "source": None, "suggestions": []}
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "status": "ready",
+        "after_event_id": "evt-reply-7",
+        "source": "generated",
+        "suggestions": [
+            {"suggestion_id": "s1", "label": "Yes, go ahead", "is_recommended": True},
+            {"suggestion_id": "s2", "label": "Show me the plan first", "is_recommended": False},
+        ],
+    }
+
+
+def test_the_suggestions_of_a_chat_the_app_does_not_know_are_not_found(app: Flask, client: FlaskClient) -> None:
+    """A folder alone is not a chat: a set left under an id the app neither lists nor holds is never answered."""
+    write_chat_suggestions(
+        state_of(app).agent_manager.chat_files_root / "agent-gone",
+        ChatSuggestions(after_event_id="evt-1", source=SuggestionSource.FIXED, suggestions=()),
+    )
+
+    assert client.get("/api/chats/agent-gone/suggestions").status_code == 404
+    assert client.get("/api/chats/agent-never/suggestions").status_code == 404
 
 
 def test_a_chats_idle_compaction_defaults_to_the_workspaces_and_is_replaced_whole(

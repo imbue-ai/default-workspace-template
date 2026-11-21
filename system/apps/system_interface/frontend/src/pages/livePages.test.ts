@@ -818,6 +818,7 @@ describe("the contract", () => {
         app: "docs",
         path: "/?doc=1",
         opensLocalFiles: false,
+        opensWorkspaceSettings: false,
         isViewing: false,
       },
       // The theme the page wears follows every handshake (workspace-themes plan section 5.3).
@@ -838,6 +839,7 @@ describe("the contract", () => {
         app: "docs",
         path: "/?doc=1",
         opensLocalFiles: false,
+        opensWorkspaceSettings: false,
         isViewing: false,
       },
       { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
@@ -879,6 +881,13 @@ describe("the contract", () => {
     const spy = spyOnFrame("win-1");
     load("win-1");
     expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, opensLocalFiles: true });
+  });
+
+  it("tells a page in its handshake whether the embedder opens its workspace settings", () => {
+    store.setOpensWorkspaceSettings(true);
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, opensWorkspaceSettings: true });
   });
 
   it("greets a page reloaded while hidden with its own desktop, not the active one", async () => {

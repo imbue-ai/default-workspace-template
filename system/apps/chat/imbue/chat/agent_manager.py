@@ -107,7 +107,7 @@ from imbue.chat.chat_records import DEFAULT_CHAT_RECORDS_ROOT
 from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_records import is_seed_entry
 from imbue.chat.chat_seed import SeedTurn
-from imbue.chat.chat_seed import first_run_kickoff_message
+from imbue.chat.chat_seed import first_run_start_suggestions
 from imbue.chat.chat_seed import is_first_run_seed
 from imbue.chat.chat_seed import is_slash_command
 from imbue.chat.chat_seed import seed_agent_info
@@ -225,6 +225,9 @@ from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_MESSAGE
 from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_TITLE
 from imbue.chat.sign_in_notices import SignInFailureNotices
+from imbue.chat.suggestions import ChatSuggestions
+from imbue.chat.suggestions import read_chat_suggestions
+from imbue.chat.suggestions import write_chat_suggestions
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ConcurrencyGroupError
@@ -4683,9 +4686,9 @@ class AgentManager:
 
     def _start_first_run_main_chat(self) -> None:
         """Start the main chat's first agent as the owner leaves the provider page with an account connected, so
-        the agent is up and has spoken by the time they read the chat. Nothing to start (they skipped, or the chat
-        is already running or gone) is not an error, and a launch that is refused leaves the chat awaiting its
-        first send as before."""
+        their first pick or message goes to an agent that is already up. The agent is sent nothing and says
+        nothing until then. Nothing to start (they skipped, or the chat is already running or gone) is not an
+        error, and a launch that is refused leaves the chat awaiting its first send as before."""
         main_chat_id = self._main_chat.read()
         if main_chat_id is None:
             return
@@ -4702,11 +4705,13 @@ class AgentManager:
         except (AgentCreationError, AccountError, OSError, ValueError) as e:
             _loguru_logger.warning("Did not start the first-run main chat {}: {}", main_chat_id, e)
 
+    # CLEANUP: drop this method and its call in the seed route once no supported Imbue Studio app sends
+    # ``context`` with its first-run seed (the ones that ask what type of studio the user wants to make).
     def update_first_run_context(self, first_run_context: str) -> CreatedChat | None:
         """Take what the user told Imbue Studio's first run again, for a first-run main chat nobody has sent to
         yet: the app seeds the chat as the workspace finishes building and hands the answer over once more as the
         user enters, since they may have answered in between. Answers the chat, or None when there is no such
-        chat to update (no first-run seed, or its first agent already has the note)."""
+        chat to update (no first-run seed, or its first agent has been launched)."""
         main_chat_id = self._main_chat.read()
         if main_chat_id is None:
             return None
@@ -4746,7 +4751,8 @@ class AgentManager:
 
         ``first_run_context`` is what the user told Imbue Studio's first run; it rides the first send with the
         seed and is never shown. ``is_first_run`` owes the owner the first run's provider page, marked before the
-        chat is published so the first page to load already knows.
+        chat is published so the first page to load already knows, and offers the start suggestions under the
+        seeded turns (``chat_seed.first_run_start_suggestions``).
         """
         explicit_title = explicit_chat_name(title)
         if is_first_run:
@@ -4756,7 +4762,9 @@ class AgentManager:
                 explicit_title, turns, is_recorded_as_main_first=self._main_chat.read() is None
             )
             if is_first_run:
-                write_first_run_context(self._chat_files_root / provisional.chat_id, first_run_context)
+                chat_dir = self._chat_files_root / provisional.chat_id
+                write_first_run_context(chat_dir, first_run_context)
+                write_chat_suggestions(chat_dir, first_run_start_suggestions(provisional.chat_id, turns))
         self._publish_seeded_chat(provisional)
         if is_first_run:
             # A page that read the accounts before this seed does not know the provider page is owed.
@@ -4887,6 +4895,10 @@ class AgentManager:
         )
         self._provisional_chats[chat_id] = provisional
         return provisional
+
+    def get_chat_suggestions(self, chat_id: ChatId) -> ChatSuggestions | None:
+        """The next-step suggestions stored for the chat (``suggestions.py``), or None when it has none."""
+        return read_chat_suggestions(self._chat_files_root / chat_id)
 
     def get_fast_mode_state(self, chat_id: ChatId) -> ChatFastModeState:
         """The chat's fast mode (``chat_fast_mode.py``): what it chose, else the workspace's default for a new chat."""
@@ -5125,14 +5137,6 @@ class AgentManager:
                 launched_chat_id = ChatId(str(AgentId()))
                 display_name = self._mint_display_name_locked(explicit_name)
 
-            # A first-run chat launched with no words (its owner connected a provider and has typed nothing
-            # yet) is started with a note of its own, so its agent speaks first; the note carries the seed.
-            is_first_run_kickoff = (
-                seed_record is not None
-                and not message
-                and harness is not HarnessType.ROOM
-                and is_first_run_seed(self._chat_files_root / launched_chat_id)
-            )
             # A seeded chat's id is its seed's; its first agent is a member of its own, like a
             # handoff's successor, with a fresh id and the membership labels. It goes on the
             # record before the provisional record changes phase, so a record that cannot be
@@ -5144,7 +5148,7 @@ class AgentManager:
                     seed_record,
                     account,
                     harness,
-                    is_seed_carried_by_first_send=not message and not is_first_run_kickoff,
+                    is_seed_carried_by_first_send=not message,
                 )
             )
             provisional = ProvisionalChat(
@@ -5192,9 +5196,7 @@ class AgentManager:
         # sign-in's) leaves the conversation for the first send to carry. A room's words ride bare:
         # a room has no agent to need the context, and its page shows the seeded conversation as the
         # chat's earlier segment already (the multiplayer spec, section 7.3).
-        if is_first_run_kickoff:
-            launch_message = first_run_kickoff_message(self._chat_files_root / launched_chat_id)
-        elif seed_record is None or not message or harness is HarnessType.ROOM:
+        if seed_record is None or not message or harness is HarnessType.ROOM:
             launch_message = message
         else:
             launch_message = seed_context_message(self._chat_files_root / launched_chat_id, message)

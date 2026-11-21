@@ -5,12 +5,15 @@ from pathlib import Path
 
 from loguru import logger
 
+from imbue.chat.chat_seed import FIRST_RUN_SKILL_PATH
+from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import INLINE_SEED_MAX_BYTES
 from imbue.chat.chat_seed import SEED_FILENAME
 from imbue.chat.chat_seed import SEED_SOURCE
+from imbue.chat.chat_seed import START_TOUR_LABEL
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
-from imbue.chat.chat_seed import first_run_kickoff_message
+from imbue.chat.chat_seed import first_run_start_suggestions
 from imbue.chat.chat_seed import is_first_run_seed
 from imbue.chat.chat_seed import read_first_run_context
 from imbue.chat.chat_seed import read_seed_events
@@ -25,7 +28,9 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.primitives import ChatId
+from imbue.chat.suggestions import SuggestionSource
 
+_REPO_ROOT = Path(__file__).parents[5]
 _CHAT_ID = ChatId("agent-seeded")
 _CREATED_AT = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
 # The last seeded turn a bare-number reply picks from.
@@ -194,29 +199,61 @@ def test_a_first_run_chat_with_nothing_said_is_still_marked_and_carries_no_about
     assert "<about-user>" not in seed_context_message(chat_dir, "hello")
 
 
-def test_the_kickoff_note_carries_the_welcome_and_the_picks_and_is_hidden_whole(tmp_path: Path) -> None:
-    chat_dir = _seeded_chat_dir(tmp_path, _turns())
-    write_first_run_context(chat_dir, "I want to use Studio for: Music, Film, art.")
-
-    note = first_run_kickoff_message(chat_dir)
-
-    for turn in _turns():
-        assert turn.text in note
-    assert "<about-user>\nI want to use Studio for: Music, Film, art.\n</about-user>" in note
-    assert "exactly three" in note and "numbered list" in note and "drawn from what they picked" in note
-    assert "reply with a number" in note
-    decision = classify_user_message(note)
-    assert decision is not None and decision.display is DisplayKind.HIDDEN
+def test_the_first_run_welcome_is_the_agents_introduction_ending_on_how_to_start() -> None:
+    assert [turn.role for turn in FIRST_RUN_WELCOME] == [SeedRole.ASSISTANT] * 4
+    assert [turn.text for turn in FIRST_RUN_WELCOME] == [
+        "Hi, I'm your Studio agent. I'll be with you from here on.",
+        "You can chat with me any time by clicking my avatar on the desktop.",
+        "With Studio you can:\n\n- Build apps\n- Run agents\n- Automate workflows\n- Consolidate your data",
+        "**How do you want to start?**",
+    ]
 
 
-def test_the_kickoff_note_with_no_picks_asks_for_a_plain_ready_to_help(tmp_path: Path) -> None:
-    chat_dir = _seeded_chat_dir(tmp_path, _turns())
+def test_the_start_suggestions_follow_the_welcomes_last_turn_and_recommend_neither() -> None:
+    """The page shows a set only under the message it names, so the set names the seed's last event."""
+    suggestions = first_run_start_suggestions(_CHAT_ID, FIRST_RUN_WELCOME)
+
+    assert suggestions.source is SuggestionSource.FIXED
+    assert suggestions.after_event_id == seed_event_id(_CHAT_ID, 3)
+    assert suggestions.after_event_id == seed_events(_CHAT_ID, FIRST_RUN_WELCOME, _CREATED_AT)[-1]["event_id"]
+    assert [(each.suggestion_id, each.label, each.is_recommended) for each in suggestions.suggestions] == [
+        ("start-describe", "Describe what you want to make", False),
+        ("start-tour", "See what Studio can do", False),
+    ]
+
+
+def test_a_first_run_chats_first_send_tells_the_agent_to_follow_the_onboarding_skill(tmp_path: Path) -> None:
+    """The reply to each start suggestion is in the skill, so the agent is sent there before it answers; the
+    paragraph rides inside the block the page strips, so the user still sees only what they sent."""
+    chat_dir = _seeded_chat_dir(tmp_path, FIRST_RUN_WELCOME)
     write_first_run_context(chat_dir, "")
 
-    note = first_run_kickoff_message(chat_dir)
+    launch = seed_context_message(chat_dir, START_TOUR_LABEL)
 
-    assert "<about-user>" not in note
-    assert "here and ready to help" in note
-    assert "exactly three" in note and "numbered list" in note and "reply with a number" in note
-    decision = classify_user_message(note)
-    assert decision is not None and decision.display is DisplayKind.HIDDEN
+    paragraph = (
+        "This is the user's first conversation in a new workspace. Before replying, read "
+        ".agents/skills/first-run-onboarding/SKILL.md and follow it."
+    )
+    assert paragraph in launch
+    assert launch.index(paragraph) < launch.index(f"</{SEED_CONTEXT_TAG}>")
+    decision = classify_user_message(launch)
+    assert decision is not None
+    assert decision.display is DisplayKind.PROMPT_WITH_CONTEXT
+    assert decision.display_body == "See what Studio can do"
+
+
+def test_a_seeded_chat_that_is_not_a_first_runs_is_not_sent_to_the_onboarding_skill(tmp_path: Path) -> None:
+    launch = seed_context_message(_seeded_chat_dir(tmp_path, _turns()), "hello")
+
+    assert "first-run-onboarding" not in launch
+    assert "first conversation in a new workspace" not in launch
+
+
+def test_the_onboarding_skill_answers_every_start_suggestion_by_its_exact_words() -> None:
+    """A click sends the suggestion's label and the skill matches the message against it, so the two are one
+    contract kept in two files."""
+    skill = (_REPO_ROOT / FIRST_RUN_SKILL_PATH).read_text()
+
+    for suggestion in first_run_start_suggestions(_CHAT_ID, FIRST_RUN_WELCOME).suggestions:
+        assert f"| `{suggestion.label}` |" in skill
+    assert FIRST_RUN_WELCOME[-1].text in skill

@@ -92,7 +92,10 @@ from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_records import InMemoryChatRecordStore
+from imbue.chat.chat_seed import FIRST_RUN_SKILL_PATH
 from imbue.chat.chat_seed import FIRST_RUN_WELCOME
+from imbue.chat.chat_seed import START_DESCRIBE_LABEL
+from imbue.chat.chat_seed import START_TOUR_LABEL
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import read_seed_events
@@ -159,6 +162,9 @@ from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_MESSAGE
 from imbue.chat.state import ChatAppState
+from imbue.chat.suggestions import ChatSuggestions
+from imbue.chat.suggestions import Suggestion
+from imbue.chat.suggestions import SuggestionSource
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingGateway
 from imbue.chat.testing import RecordingMngrMessenger
@@ -960,12 +966,12 @@ def test_a_send_to_an_unseeded_or_unknown_chat_is_delivered_as_given(
         manager.stop()
 
 
-def test_a_first_run_chat_launched_with_no_words_is_started_with_the_kickoff_note_and_owes_no_seed(
+def test_a_first_run_chat_started_as_its_owner_leaves_the_provider_page_is_sent_nothing_until_they_pick(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A first-run workspace's owner connects a provider and has typed nothing: the agent is started with a note
-    of the chat app's own (the welcome, what they picked, what to open with), so it speaks first, and since the
-    note carries the seed no later send owes it."""
+    """A first-run workspace's owner connects a provider and has typed nothing: the agent is started with no
+    message, as any seeded chat's is, so it says nothing until the user picks or types. The first send then
+    carries the welcome, what the user told the first run, and where the reply to a start suggestion is written."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
@@ -974,19 +980,60 @@ def test_a_first_run_chat_launched_with_no_words_is_started_with_the_kickoff_not
         seeded = manager.seed_chat(
             "Main", FIRST_RUN_WELCOME, first_run_context="I want to use Studio for: Music.", is_first_run=True
         )
-        manager.create_chat("", chat_id=seeded.chat_id)
+        chat_id = ChatId(seeded.chat_id)
+        manager.finish_first_run_provider_step()
         wait_until_true(
             lambda: manager.get_provisional_chat(seeded.chat_id) is None, 10, "the provisional chat's completion"
         )
-        record = store.read(ChatId(seeded.chat_id))
+
+        record = store.read(chat_id)
+        assert record is not None
+        assert len(record.agents) == 2 and record.is_seed_pending is True
+        (create_line,) = [line for line in argv_log.read_text().splitlines() if line.startswith("create ")]
+        assert "--message" not in create_line.split()
+        assert FIRST_RUN_KICKOFF_TAG not in create_line and FIRST_RUN_WELCOME[0].text not in create_line
+
+        delivered: list[str] = []
+        assert (
+            manager.carry_pending_seed(chat_id, START_TOUR_LABEL, _delivering(delivered, SendOutcome.OK))
+            is SendOutcome.OK
+        )
+        (carried,) = delivered
+        assert carried.startswith(f"<{SEED_CONTEXT_TAG}>")
+        assert carried.endswith(f"</{SEED_CONTEXT_TAG}>\n{START_TOUR_LABEL}")
+        for turn in FIRST_RUN_WELCOME:
+            assert turn.text in carried
+        assert "I want to use Studio for: Music." in carried
+        assert FIRST_RUN_SKILL_PATH in carried
+        assert _is_seed_pending(store, chat_id) is False
     finally:
         manager.stop()
 
-    (recorded,) = argv_log.read_text().splitlines()
-    assert f"<{FIRST_RUN_KICKOFF_TAG}>" in recorded and recorded.rstrip().endswith(f"</{FIRST_RUN_KICKOFF_TAG}>")
-    assert "I want to use Studio for: Music." in recorded
-    assert FIRST_RUN_WELCOME[0].text in recorded
-    assert record is not None and record.is_seed_pending is False
+
+def test_a_first_run_seed_offers_the_start_suggestions_under_the_welcomes_last_turn(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The first-run chat opens with replies to click, stored before any agent exists; a chat seeded on
+    another conversation gets none."""
+    manager, _store = _seed_manager(broadcaster, tmp_path)
+    try:
+        first_run = manager.seed_chat("Main", FIRST_RUN_WELCOME, is_first_run=True)
+        ordinary = manager.seed_chat("Getting started", _seed_turns())
+
+        chat_id = ChatId(first_run.chat_id)
+        last_event = read_seed_events(_seed_files_root(tmp_path) / chat_id)[-1]
+        assert last_event["text"] == "**How do you want to start?**"
+        assert manager.get_chat_suggestions(chat_id) == ChatSuggestions(
+            after_event_id=last_event["event_id"],
+            source=SuggestionSource.FIXED,
+            suggestions=(
+                Suggestion(suggestion_id="start-describe", label=START_DESCRIBE_LABEL, is_recommended=False),
+                Suggestion(suggestion_id="start-tour", label=START_TOUR_LABEL, is_recommended=False),
+            ),
+        )
+        assert manager.get_chat_suggestions(ChatId(ordinary.chat_id)) is None
+    finally:
+        manager.stop()
 
 
 def test_a_waited_launch_of_a_seeded_chat_reports_the_member_agent_it_created(

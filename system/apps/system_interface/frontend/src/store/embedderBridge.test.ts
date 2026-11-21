@@ -59,6 +59,14 @@ describe("connectEmbedderToStore", () => {
     expect(store.getIsEmbedderPresent()).toBe(true);
   });
 
+  it("keeps whether the chrome opens its workspace settings, off until it says so", () => {
+    expect(store.getOpensWorkspaceSettings()).toBe(false);
+    embedderSays({ type: "minds:embedder-capabilities", canPopOut: false, opensWorkspaceSettings: true });
+    expect(store.getOpensWorkspaceSettings()).toBe(true);
+    embedderSays({ type: "minds:embedder-capabilities", canPopOut: false });
+    expect(store.getOpensWorkspaceSettings()).toBe(false);
+  });
+
   it("lands the chrome's immersive changes in the store, an error as a notice, and drops a malformed one", () => {
     embedderSays({ type: "minds:immersive-changed", on: true, keyboardLocked: true });
     expect(store.getImmersive()).toEqual({ windowId: null, isKeyboardLocked: true });

@@ -14,7 +14,15 @@ import { refreshKeybindings } from "./models/keybindings";
 import type { CreatedChat } from "./models/Chats";
 import type { ModelIdentity } from "./models/ModelSettings";
 import { ensureParticipants } from "./models/Participants";
-import { reportChatOnScreen, reportProviderChooserOnScreen } from "@imbue/workspace-ui/src/embed";
+import { rereadNextStepSuggestions } from "./models/Suggestions";
+import {
+  EMBEDDER_CAPABILITIES,
+  OPEN_WORKSPACE_SETTINGS,
+  reportChatOnScreen,
+  reportProviderChooserOnScreen,
+  sendToEmbedder,
+  setEmbedderMessageHandler,
+} from "@imbue/workspace-ui/src/embed";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { currentPresenceState, reportFocusChange, reportPresence, startPresenceReporting } from "./presence";
@@ -36,6 +44,22 @@ let lastHandshake: ShellHandshake | null = null;
 export function getShellHandshake(): ShellHandshake | null {
   return lastHandshake;
 }
+
+// Whether the Imbue Studio chrome said it opens its workspace settings when a page asks: read off the handshake by
+// a page greeted after the chrome spoke, and off the chrome's own word, which the shell passes on, by one already
+// open. A page the chat root frames hears only the handshake, which the root keeps up to date.
+let isWorkspaceSettingsOpenedByChrome = false;
+
+/** Whether a chrome stands above this page that opens its workspace settings when asked. */
+export function opensWorkspaceSettings(): boolean {
+  return isWorkspaceSettingsOpenedByChrome;
+}
+
+/** Ask the Imbue Studio chrome to open its workspace settings at ``group``. */
+export function openWorkspaceSettings(group: string): void {
+  sendToEmbedder(OPEN_WORKSPACE_SETTINGS, { group });
+}
+
 // Whether the shell says this page is on screen: true until told otherwise on a top-level
 // visit, and false from the moment a framed page connects, until the shell says shown.
 let isShown = true;
@@ -102,6 +126,7 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   const { isPresenceReported } = options;
   const onHandshake = (received: ShellHandshake): void => {
     lastHandshake = received;
+    isWorkspaceSettingsOpenedByChrome = received.opensWorkspaceSettings;
     adoptClientIdentity({ clientId: received.clientId, desktopId: received.desktopId });
     // Hidden until the shell says shown: a page can load into a background tab, and open
     // (any page's unexpired visible or hidden report) is what a hidden report keeps.
@@ -111,8 +136,10 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   const onShown = (): void => {
     isShown = true;
     if (isPresenceReported) reportPresence("visible");
-    // Whoever joined while the page was out of view is drawn right once it is back.
+    // Whoever joined while the page was out of view is drawn right once it is back, and so is a reply that ended
+    // meanwhile, with its suggestions.
     void ensureParticipants();
+    rereadNextStepSuggestions(chatId);
     m.redraw();
   };
   const onHidden = (): void => {
@@ -133,6 +160,10 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   });
   void refreshKeybindings();
   mirrorParentTheme();
+  setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
+    isWorkspaceSettingsOpenedByChrome = message.opensWorkspaceSettings === true;
+    m.redraw();
+  });
   if (connection.isFramed) {
     // The chat root frames chat pages from this same origin and drives them by calling in
     // rather than by messaging (of the shell's messages, only the handshake comes down as one);
@@ -158,7 +189,9 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     if (isPresenceReported) {
       startPresenceReporting(chatId, "direct-visit", document.visibilityState === "visible" ? "visible" : "hidden");
       document.addEventListener("visibilitychange", () => {
-        reportPresence(document.visibilityState === "visible" ? "visible" : "hidden");
+        const isVisible = document.visibilityState === "visible";
+        reportPresence(isVisible ? "visible" : "hidden");
+        if (isVisible) rereadNextStepSuggestions(chatId);
       });
     }
   } else {

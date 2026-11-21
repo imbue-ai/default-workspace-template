@@ -80,8 +80,8 @@ export const WINDOW_DRAG_ENDED: "minds:window-drag-ended" =
 export const DETACHED_WINDOWS: "minds:detached-windows" =
   "DETACHED_WINDOWS" in embedContract ? embedContract.DETACHED_WINDOWS : "minds:detached-windows";
 // Embedder -> workspace: what the chrome can do, right after WORKSPACE_READY. Payload: { canPopOut,
-// opensExternalLinks?, opensCustomSchemeLinks?, opensLocalFiles?, immersive? }: whether it takes
-// OPEN_EXTERNAL, custom-scheme links there, OPEN_LOCAL_FILES, and IMMERSIVE_REQUEST.
+// opensExternalLinks?, opensCustomSchemeLinks?, opensLocalFiles?, immersive?, opensWorkspaceSettings? }: whether
+// it takes OPEN_EXTERNAL, custom-scheme links there, OPEN_LOCAL_FILES, IMMERSIVE_REQUEST, and OPEN_WORKSPACE_SETTINGS.
 export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities" =
   "EMBEDDER_CAPABILITIES" in embedContract ? embedContract.EMBEDDER_CAPABILITIES : "minds:embedder-capabilities";
 // Embedder -> workspace: return a pulled-out window to the desktop. Payload: { windowId, frame? }.
@@ -125,6 +125,11 @@ export const HIGHLIGHT_CHROME: "minds:highlight-chrome" =
 // EMBEDDER_CAPABILITIES.
 export const OPEN_LOCAL_FILES: "minds:open-local-files" =
   "OPEN_LOCAL_FILES" in embedContract ? embedContract.OPEN_LOCAL_FILES : "minds:open-local-files";
+// Workspace -> embedder (contract v17): open the chrome's workspace settings at one of their groups. Payload:
+// { group? }, a group's name ("suggestions"); absent, or one the chrome does not know, opens General. Sent only to
+// an embedder that said ``opensWorkspaceSettings`` with EMBEDDER_CAPABILITIES.
+export const OPEN_WORKSPACE_SETTINGS: "minds:open-workspace-settings" =
+  "OPEN_WORKSPACE_SETTINGS" in embedContract ? embedContract.OPEN_WORKSPACE_SETTINGS : "minds:open-workspace-settings";
 
 // The immersive-mode pair (contract v12, the Screen integration spec section 5), probed the same way.
 // Workspace -> embedder: take the app window Fullscreen-API fullscreen with the keyboard locked for this window

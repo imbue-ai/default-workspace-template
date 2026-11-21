@@ -28,6 +28,8 @@ vi.mock("./presence", () => ({
 }));
 const ensureParticipants = vi.fn(() => Promise.resolve());
 vi.mock("./models/Participants", () => ({ ensureParticipants }));
+const rereadNextStepSuggestions = vi.fn();
+vi.mock("./models/Suggestions", () => ({ rereadNextStepSuggestions }));
 
 import { CHAT_ON_SCREEN, PROVIDER_CHOOSER_ON_SCREEN } from "@imbue/workspace-ui/src/embed";
 import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_LOCATION, SHELL_SHOWN } from "@imbue/workspace-ui/src/app_contract";
@@ -289,6 +291,86 @@ describe("reportProviderChooserOnScreenOnce", () => {
     reportProviderChooserOnScreenOnce(true);
     reportProviderChooserOnScreenOnce(true);
     expect(chooserReports(parent)).toEqual([{ type: PROVIDER_CHOOSER_ON_SCREEN }]);
+  });
+});
+
+describe("whether the chrome opens its workspace settings", () => {
+  const CAPABILITIES = { type: "minds:embedder-capabilities", canPopOut: false };
+
+  async function loadConnectedShell(): Promise<typeof import("./shell")> {
+    vi.resetModules();
+    const shell = await import("./shell");
+    connection = shell.connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    return shell;
+  }
+
+  it("is no until a handshake says so, for a page greeted after the chrome spoke or framed by the chat root", async () => {
+    const parent = framed();
+    const shell = await loadConnectedShell();
+    expect(shell.opensWorkspaceSettings()).toBe(false);
+
+    deliver(HANDSHAKE, parent);
+    expect(shell.opensWorkspaceSettings()).toBe(false);
+
+    // The root hands its pages the shell's handshake again when the chrome speaks after it.
+    deliver({ ...HANDSHAKE, opensWorkspaceSettings: true }, parent);
+    expect(shell.opensWorkspaceSettings()).toBe(true);
+  });
+
+  it("follows the chrome's own word, which the shell passes on to a page it already greeted", async () => {
+    const parent = framed();
+    const shell = await loadConnectedShell();
+    deliver(HANDSHAKE, parent);
+
+    deliver({ ...CAPABILITIES, opensWorkspaceSettings: true }, parent);
+    expect(shell.opensWorkspaceSettings()).toBe(true);
+
+    deliver(CAPABILITIES, parent);
+    expect(shell.opensWorkspaceSettings()).toBe(false);
+  });
+
+  it("asks the chrome for its workspace settings at a group with the contract's message", async () => {
+    const parent = framed();
+    const shell = await loadConnectedShell();
+
+    shell.openWorkspaceSettings("suggestions");
+
+    expect(parent.postMessage.mock.calls.map(([data]) => data)).toContainEqual({
+      type: "minds:open-workspace-settings",
+      group: "suggestions",
+    });
+  });
+});
+
+describe("the chat's suggestions when its page is shown again", () => {
+  it("are read again when the shell shows the page", async () => {
+    const parent = framed();
+    const { connectChatToShell } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    deliver(HANDSHAKE, parent);
+    expect(rereadNextStepSuggestions).not.toHaveBeenCalled();
+
+    deliver({ type: SHELL_SHOWN }, parent);
+
+    expect(rereadNextStepSuggestions.mock.calls).toEqual([["agent-1"]]);
+  });
+
+  it("are read again when a page visited directly becomes visible", async () => {
+    const { connectChatToShell } = await loadShell();
+    const addSpy = vi.spyOn(document, "addEventListener");
+    connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    const onVisibilityChange = addSpy.mock.calls.find(([type]) => type === "visibilitychange")?.[1] as () => void;
+    addSpy.mockRestore();
+    const visibility = vi.spyOn(document, "visibilityState", "get");
+
+    visibility.mockReturnValue("hidden");
+    onVisibilityChange();
+    expect(rereadNextStepSuggestions).not.toHaveBeenCalled();
+
+    visibility.mockReturnValue("visible");
+    onVisibilityChange();
+    expect(rereadNextStepSuggestions.mock.calls).toEqual([["agent-1"]]);
+    visibility.mockRestore();
   });
 });
 

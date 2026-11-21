@@ -65,6 +65,7 @@ import {
 } from "../models/Providers";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { reportProviderChooserOnScreenOnce } from "../shell";
+import { EMBEDDER_CAPABILITIES, setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
 import { ProviderChooserModal } from "../views/ProviderChooserModal";
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { COMPACT_MEDIA_QUERY } from "../compactLayout";
@@ -622,6 +623,13 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
     },
   });
   connection = shell;
+  // The chrome can say what it does after the shell greeted the root. The pages the root frames hear the chrome
+  // only through the handshake the root hands them, so the root keeps that up to date.
+  setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
+    if (handshake === null) return;
+    handshake = { ...handshake, opensWorkspaceSettings: message.opensWorkspaceSettings === true };
+    pool?.setHandshake(handshake);
+  });
   // Hidden until the shell says shown: the root can load into a background tab.
   if (shell.isFramed) isRootShown = false;
   window.addEventListener("focus", () => shell.focused());

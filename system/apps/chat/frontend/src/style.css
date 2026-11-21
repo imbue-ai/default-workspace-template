@@ -824,6 +824,60 @@
   }
 }
 
+/* A strip of suggestions above the composer (views/SuggestionStrip.ts) rises into place as it appears. Its pills
+   are dashed, to read as offers rather than as controls of the page; the recommended one is the success green.
+   Reduced motion shows the strip in place. */
+@keyframes suggestion-strip-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.suggestion-strip--open {
+  animation: suggestion-strip-rise 150ms ease-out;
+}
+
+.suggestion-pill {
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px dashed var(--c-border-strong);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--c-text-primary);
+  font-size: var(--font-size-body);
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-base) ease,
+    border-color var(--dur-base) ease;
+}
+
+.suggestion-pill:hover {
+  background: var(--c-fill-hover);
+}
+
+.suggestion-pill:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
+
+.suggestion-pill--recommended {
+  border-color: var(--c-success);
+  color: var(--c-success);
+}
+
+.suggestion-pill--recommended:hover {
+  background: var(--c-success-bg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .suggestion-strip--open {
+    animation: none;
+  }
+}
+
 /*
  * The first run's provider page (views/FirstRunProvidersPage.ts): the warm cream ground and brown ink of
  * Imbue Studio's first-run pages, whatever theme the workspace wears, since it continues them.

@@ -14,6 +14,7 @@ import type { ModelChoice, ModelIdentity } from "./ModelSettings";
 import type { CompactionCause, UserMessageEvent } from "./Response";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
 import { loadAccounts } from "./Providers";
+import { rereadChatSettings } from "./ChatSettings";
 
 /** The agent-level facts about a chat's active agent that the pages render (the backend's
  *  ``ActiveAgentSnapshot``). */
@@ -235,6 +236,7 @@ type WsEvent =
   | ({ type: "provisional_chat_created" } & ProvisionalChat)
   | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null }
   | { type: "accounts_updated" }
+  | { type: "settings_updated" }
   | { type: "held_send_failed"; chat_id: string; message_id: string; detail: string; kind: string };
 
 /** Notified when a message the chat app held while its agent came up never reached the agent: the chat, the message's
@@ -297,9 +299,11 @@ function connect(): void {
     connected = true;
     console.info("[chat-ws] connected");
     reconnectBackoff.reset();
-    // A change to the account list, or to someone's pending mentions, while the socket was down was pushed to no one.
+    // A change to the account list, to the settings, or to someone's pending mentions, while the socket was down
+    // was pushed to no one.
     if (hasConnectedBefore) {
       rereadAccounts();
+      rereadChatSettings();
       notifyMentionsUpdated();
     }
     hasConnectedBefore = true;
@@ -363,6 +367,9 @@ function handleEvent(event: WsEvent): void {
   switch (event.type) {
     case "accounts_updated":
       rereadAccounts();
+      break;
+    case "settings_updated":
+      rereadChatSettings();
       break;
     case "mentions_updated":
       notifyMentionsUpdated();
