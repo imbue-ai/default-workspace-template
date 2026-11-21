@@ -6,7 +6,10 @@ Usage, from the repo root (the cwd ``mngr exec`` gives every command there)::
     python3 system/scripts/seed_welcome_chat.py --transcript-file path/to/body.json
 
 The body is what the chat app's ``POST /api/chats/seed`` takes: ``{"title": "...", "turns":
-[{"role": "user" | "assistant", "text": "..."}, ...]}``. The Imbue Studio app runs this through ``mngr
+[{"role": "user" | "assistant", "text": "..."}, ...]}``, and optionally ``"first_message": "..."``, a
+message the chat sends as the user's own when its first agent launches (``/install-app <url>`` for a
+workspace created from an app). The body is passed on as given, so a chat app from before
+``first_message`` refuses a body that carries it, with a 400 naming the field. The Imbue Studio app runs this through ``mngr
 exec`` the moment a workspace is ready, so the onboarding conversation continues inside the
 workspace as its first chat; the transcript rides the command line (base64, since it holds
 newlines and quotes) because ``mngr exec`` carries no stdin.
