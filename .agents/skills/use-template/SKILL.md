@@ -1,6 +1,6 @@
 ---
 name: use-template
-description: Adapt an existing template (a published snapshot of apps/features from another agent) into this agent, resolving its requirements interactively. Use when the user gives a template's git URL, or asks to adopt/adapt/reuse a published template.
+description: Adapt an existing template (a published snapshot of a whole workspace from another agent -- its apps, skills, services and config together) into this agent, resolving its requirements interactively. Use when the user gives a template's git URL, or asks to adopt/adapt/reuse a published template. For one app someone published (a repository with an app.toml at its root), use install-app instead.
 metadata:
   author: imbue
 ---
@@ -19,8 +19,8 @@ manifest format. This skill reads BOTH:
   `template.toml` is what identifies it. Still adopted exactly as before;
   nothing writes this format any more.
 
-A template is a publishable, reusable snapshot of the apps and features an agent
-has built. It lives in its own GitHub repo as a real default-workspace-template tree
+A template is a publishable, reusable snapshot of a whole workspace: the apps and
+features an agent has built, together. It lives in its own GitHub repo as a real default-workspace-template tree
 plus its manifest at the repo root -- `template.md` with a
 `template.svg` thumbnail (v2 adds `template.toml`; a v1 repo instead has
 slug-named `inspiration-<slug>.md`, possibly several). Adapting a template means bringing
@@ -35,7 +35,10 @@ Most of what people share is a single app, not a whole workspace. A published
 app is a repository with an `app.toml` at its root and no `template.md`. When
 the URL the user gave is one of those, do not adapt it here: follow the
 `install-app` skill with the same URL, which adds that one app and leaves the
-rest of this workspace as it is.
+rest of this workspace as it is. When you cannot tell which the URL is from
+the link or the user's words, start with `install-app`: its installer
+refuses a repository with no app at its root (`not_an_app`), changing
+nothing, and that skill then sends a template back here.
 
 ## Two entry points
 
@@ -136,6 +139,29 @@ git worktree add -q "$WT" HEAD
   lib"); until then it fails to start. When resolving a conflict in the root
   `pyproject.toml`, keep this workspace's explicit `members` list, never the template's
   globs.
+- **Apps the template carries with a record.** A template holds each app its
+  publisher's workspace built as ordinary files: the app's directory, its
+  record (`system/config/apps/<name>.toml`), its generated program files and
+  the links to its skills. They arrive as apps this workspace owns. Check
+  them against what is already here, in the worktree:
+
+  ```bash
+  ( cd "$WT" && uv run --no-sync app-install check )
+  ```
+
+  `inconsistent` names each problem. Two apps on one port (the template's
+  app was given a port this workspace already uses) is settled by
+  `( cd "$WT" && uv run --no-sync app-install regenerate )`, which moves the
+  app whose record is newer and rewrites its program file; commit what it
+  lists under `changed_paths` in the worktree. A name the template's app
+  shares with something here (an app, a skill, a routine) is a requirement
+  to settle with the user (step 4), not something to resolve mechanically.
+  An app whose record says it was installed (`origin = "installed"`) cannot
+  be updated here from its publisher, because the history that connects it
+  to its publisher's repository did not come with the template: when the
+  user wants to follow that app's new versions, remove it
+  (`app-install uninstall <name>`, which keeps its data) and add it again
+  with the `install-app` skill and the record's `upstream_url`.
 - **Boot smoke-check** the merged worktree -- validate `system/supervisord.conf` WITHOUT
   launching the daemon (never `supervisord -t`, which launches it):
 

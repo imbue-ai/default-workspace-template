@@ -1,13 +1,21 @@
 ---
 name: update-published-template
-description: Create a NEW version of a template you already published (v2, v3, ...) -- re-cut the changes made since the last version on top of the published snapshot and advance the published repo by exactly one clean commit, preserving all of the hand-crafted content in the published repo. Use when the user asks to update, re-publish, revise, or ship a new version of a template they previously published.
+description: Create a NEW version of a template (a published snapshot of a whole workspace) you already published (v2, v3, ...) -- re-cut the changes made since the last version on top of the published snapshot and advance the published repo by exactly one clean commit, preserving all of the hand-crafted content in the published repo. Use when the user asks to update, re-publish, revise, or ship a new version of a template they previously published. For a new version of one app that was published on its own, use publish-app, which handles every version of an app.
 metadata:
   author: imbue
 ---
 
 # Update a published template
 
-Version: v2 (templates flow). This is the PUBLISHER's re-publish path -- the
+Version: v2 (templates flow). A template shares a whole workspace. One app
+that was published on its own (a repository with `app.toml` at its root) is
+not a template: its next version is the `publish-app` skill's, which handles
+an app's first publish and every later one. Check which the user means
+before going on: the ledger in `docs/VERSION_HISTORY.md` lists the templates
+this workspace published, and `uv run --no-sync app-install list` shows an
+app's `published_repo_url` when it was published on its own.
+
+This is the PUBLISHER's re-publish path -- the
 companion to `publish-template` (a template's first publish),
 `use-template` (adopt someone else's), and `update-installed-template`
 (pull a newer version of one you adopted). It produces the NEXT version of a
