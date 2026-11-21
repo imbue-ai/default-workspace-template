@@ -11,6 +11,7 @@ from github_sync.wiring import (
     HOOKS_PATH,
     apply_git_wiring,
     gateway_git_config,
+    git_environment_through_gateway,
     remove_git_wiring,
 )
 
@@ -143,3 +144,40 @@ def test_remove_git_wiring_clears_everything_but_keeps_ssh_rewrites(
     assert _get_all_global("http.http://127.0.0.1:41234/.extraHeader") == []
     assert _get_all_global("core.hooksPath") == []
     assert _get_all_global("url.https://github.com/.insteadOf") == ["git@github.com:"]
+
+
+def test_one_command_is_wired_through_the_gateway_by_its_environment_alone(
+    isolated_git_and_gateway_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert git_environment_through_gateway({"PATH": "/usr/bin"}) is None
+
+    _set_gateway_env(monkeypatch, "http://127.0.0.1:41234")
+    environment = git_environment_through_gateway(
+        {
+            "PATH": "/usr/bin",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "user.name",
+            "GIT_CONFIG_VALUE_0": "someone",
+        }
+    )
+
+    assert environment is not None
+    # The global configuration, which carries the same headers once sync is
+    # enabled, is left out, and what the caller configured is kept.
+    assert environment["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert environment["GIT_CONFIG_COUNT"] == "3"
+    assert (environment["GIT_CONFIG_KEY_0"], environment["GIT_CONFIG_VALUE_0"]) == (
+        "user.name",
+        "someone",
+    )
+    resolved = subprocess.run(
+        ["git", "ls-remote", "--get-url", "https://github.com/some-user/notes-dev"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert resolved.stdout.strip() == (
+        "http://127.0.0.1:41234/gateway/https://github.com/some-user/notes-dev"
+    )
+    assert environment["GIT_CONFIG_VALUE_2"] == "X-Latchkey-Gateway-Password: pw-abc"

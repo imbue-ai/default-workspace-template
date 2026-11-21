@@ -1,12 +1,16 @@
 [project]
 name = "github-sync"
 version = "0.1.0"
-description = "Opt-in service that syncs runtime/ (and, via a post-commit hook, every branch) to a private GitHub repo through the latchkey gateway"
+description = "Opt-in service that syncs every branch (via a post-commit hook) and each user app's own history to private GitHub repos through the latchkey gateway"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    # The app records: which user apps the workspace has, and the dev repository of each.
+    "app-manifest",
     "click>=8.0",
+    "imbue-common",
     "loguru>=0.7.0",
+    "pydantic>=2.0",
 ]
 
 [project.scripts]

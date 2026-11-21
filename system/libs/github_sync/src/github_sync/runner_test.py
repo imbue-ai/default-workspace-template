@@ -18,14 +18,24 @@ from pathlib import Path
 import pytest
 
 from github_sync.runner import (
-    VISIBILITY_CHECK_INTERVAL_SECONDS,
     _do_tick,
     _refresh_visibility,
     _SyncState,
     status_file_path,
 )
-from github_sync.testing import install_fake_latchkey
-from github_sync.visibility import VISIBILITY_PRIVATE, VISIBILITY_PUBLIC
+from github_sync.testing import (
+    add_owned_app,
+    git_output,
+    init_bare_repo,
+    init_workspace,
+    install_fake_latchkey,
+    link_app,
+)
+from github_sync.visibility import (
+    VISIBILITY_CHECK_INTERVAL_SECONDS,
+    VISIBILITY_PRIVATE,
+    VISIBILITY_PUBLIC,
+)
 
 _REPO_URL = "https://github.com/some-user/my-workspace"
 
@@ -275,3 +285,82 @@ def test_do_tick_reports_malformed_config(
 
     assert state.last_error is not None
     assert "github_sync.toml" in state.last_error
+
+
+def test_do_tick_runs_the_app_pass_and_an_app_that_fails_stops_nothing_else(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_git_and_gateway_env: Path,
+    fake_latchkey_bin: Path,
+) -> None:
+    """Each tick pushes every linked app to its dev repository and names each
+    app in the status mirror; an app whose push fails leaves the workspace's
+    own sync, and the other apps, as they were."""
+    workspace = init_workspace(tmp_path / "workspace")
+    dev_repository = init_bare_repo(tmp_path / "notes-dev.git")
+    notes_url = "https://github.com/some-user/notes-dev"
+    link_app(workspace, add_owned_app(workspace, "notes", dev_repo_url=notes_url))
+    # No gateway listens for this one, so its push fails.
+    link_app(
+        workspace,
+        add_owned_app(
+            workspace, "shelf", dev_repo_url="https://github.com/some-user/shelf-dev"
+        ),
+    )
+    add_owned_app(workspace, "drafts")
+    monkeypatch.chdir(workspace)
+    _write_sync_config(workspace)
+    _set_gateway_env(monkeypatch)
+    # No test reaches a gateway: the one dev repository resolves to a local one.
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", f"url.{dev_repository}.insteadOf")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", notes_url)
+    install_fake_latchkey(fake_latchkey_bin, "echo '{\"private\": true}'")
+    state = _SyncState()
+
+    _do_tick(state)
+
+    status = json.loads(status_file_path().read_text())
+    assert status["is_push_allowed"] is True
+    assert status["app_pass_error"] is None
+    apps = {app["name"]: app for app in status["apps"]}
+    assert {name: app["state"] for name, app in apps.items()} == {
+        "drafts": "no_dev_repository",
+        "notes": "pushed",
+        "shelf": "failed",
+    }
+    assert apps["notes"]["pushed_commit"] == git_output(
+        dev_repository, "rev-parse", "refs/heads/main"
+    )
+    assert apps["notes"]["visibility"] == "private"
+    assert "shelf-dev" in apps["shelf"]["detail"]
+
+    _do_tick(state)
+
+    status = json.loads(status_file_path().read_text())
+    assert {app["name"]: app["state"] for app in status["apps"]} == {
+        "drafts": "no_dev_repository",
+        "notes": "up_to_date",
+        "shelf": "failed",
+    }
+
+
+def test_do_tick_says_why_the_app_pass_did_not_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_git_and_gateway_env: Path,
+    fake_latchkey_bin: Path,
+) -> None:
+    """A service started somewhere that is not the workspace's checkout still
+    watches the sync repo; the status says the apps were not looked at."""
+    monkeypatch.chdir(tmp_path)
+    _write_sync_config(tmp_path)
+    _set_gateway_env(monkeypatch)
+    install_fake_latchkey(fake_latchkey_bin, "echo '{\"private\": true}'")
+
+    _do_tick(_SyncState())
+
+    status = json.loads(status_file_path().read_text())
+    assert status["is_push_allowed"] is True
+    assert status["apps"] == []
+    assert "not a git checkout" in status["app_pass_error"]

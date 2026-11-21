@@ -27,107 +27,30 @@ cannot break the call.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+
+from github_sync.repositories import (
+    GITHUB_API_URL,
+    GithubRequestError,
+    create_repository,
+    explain_refusal,
+    lock_down_repository,
+    request_github,
+)
 
 from publish_template_skill.validate_template import REPO_URL_PLACEHOLDER
 
-_API = "https://api.github.com"
 _FLOW_VERSION_SUFFIX = " (minds template v2)"
 _TEMPLATE_TOPIC = "minds-template"
 _REPO_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._-]*$")
-_LOCKDOWN_SETTINGS = {
-    "pull_request_creation_policy": "collaborators_only",
-    "has_issues": False,
-    "has_wiki": False,
-    "has_projects": False,
-    "has_discussions": False,
-}
-
-
-class GitHubRepoError(Exception):
-    """Raised when GitHub, or latchkey in front of it, refuses a request."""
-
-
-def _request(method: str, url: str, body: dict[str, object]) -> dict[str, Any]:
-    try:
-        completed = subprocess.run(
-            [
-                "latchkey",
-                "curl",
-                "-s",
-                "-X",
-                method,
-                url,
-                "-H",
-                "Content-Type: application/json",
-                "-d",
-                json.dumps(body),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError as e:
-        raise GitHubRepoError(f"cannot run latchkey: {e}") from e
-    if completed.returncode != 0:
-        raise GitHubRepoError(
-            f"{method} {url} failed (curl exit {completed.returncode}): {completed.stderr.strip()}"
-        )
-    try:
-        response = json.loads(completed.stdout)
-    except json.JSONDecodeError as e:
-        raise GitHubRepoError(
-            f"{method} {url} answered: {completed.stdout[:500]}"
-        ) from e
-    if not isinstance(response, dict):
-        raise GitHubRepoError(f"{method} {url} answered: {completed.stdout[:500]}")
-    return response
-
-
-def _explain(response: dict[str, Any]) -> str:
-    text = json.dumps(response)
-    if "not permitted" in text:
-        return (
-            f"{text} -- the github-rest-api grant (github-read-user + github-write-all) "
-            "is missing or too narrow; request it again"
-        )
-    if "already exists" in text:
-        return f"{text} -- the name is taken on this account; ask the user for another"
-    return text
 
 
 def create_repo(name: str, description: str, is_private: bool) -> str:
     """Create the repo and return its `<owner>/<repo>`."""
-    response = _request(
-        "POST",
-        f"{_API}/user/repos",
-        {
-            "name": name,
-            "description": description + _FLOW_VERSION_SUFFIX,
-            "private": is_private,
-        },
-    )
-    owner = response.get("owner")
-    login = owner.get("login") if isinstance(owner, dict) else None
-    if not isinstance(login, str) or response.get("name") != name:
-        raise GitHubRepoError(f"the repo was not created: {_explain(response)}")
-    return f"{login}/{name}"
-
-
-def lock_down(repo: str) -> str | None:
-    """Close the collaboration surface; the problem if it did not take, else None."""
-    try:
-        response = _request("PATCH", f"{_API}/repos/{repo}", dict(_LOCKDOWN_SETTINGS))
-    except GitHubRepoError as e:
-        return str(e)
-    if "name" not in response:
-        return _explain(response)
-    return None
+    return create_repository(name, description + _FLOW_VERSION_SUFFIX, is_private)
 
 
 def point_readme_at(worktree: Path, repo: str) -> bool:
@@ -156,12 +79,12 @@ def point_readme_at(worktree: Path, repo: str) -> bool:
 
 
 def set_template_topic(repo: str) -> None:
-    response = _request(
-        "PUT", f"{_API}/repos/{repo}/topics", {"names": [_TEMPLATE_TOPIC]}
+    response = request_github(
+        "PUT", f"{GITHUB_API_URL}/repos/{repo}/topics", {"names": [_TEMPLATE_TOPIC]}
     )
     names = response.get("names")
     if not isinstance(names, list) or _TEMPLATE_TOPIC not in names:
-        raise GitHubRepoError(f"the topic was not set: {_explain(response)}")
+        raise GithubRequestError(f"the topic was not set: {explain_refusal(response)}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -191,11 +114,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
         repo = create_repo(args.name, args.description, args.visibility == "private")
-    except GitHubRepoError as e:
+    except GithubRequestError as e:
         print(f"github_repo: {e}", file=sys.stderr)
         return 1
 
-    lockdown_problem = lock_down(repo)
+    lockdown_problem = lock_down_repository(repo)
     if lockdown_problem is not None:
         print(
             f"github_repo: follow-up: {repo} was created, but closing its issues, wiki, "

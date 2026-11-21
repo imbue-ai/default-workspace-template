@@ -10,6 +10,7 @@ last confirmed answer (see runner._refresh_visibility for that policy).
 
 import json
 import subprocess
+from datetime import datetime
 
 from loguru import logger
 
@@ -19,7 +20,21 @@ VISIBILITY_PRIVATE = "private"
 VISIBILITY_PUBLIC = "public"
 VISIBILITY_UNKNOWN = "unknown"
 
+# How long a confirmed visibility answer stays fresh before it is re-checked.
+# Failed checks are retried every tick instead.
+VISIBILITY_CHECK_INTERVAL_SECONDS = 900
+
 _LATCHKEY_CURL_TIMEOUT_SECONDS = 60
+
+
+def is_visibility_check_due(
+    visibility: str, checked_at: datetime | None, now: datetime
+) -> bool:
+    """Whether a repository's visibility must be asked again: it was never
+    confirmed, or its confirmed answer has gone stale."""
+    if checked_at is None or visibility == VISIBILITY_UNKNOWN:
+        return True
+    return (now - checked_at).total_seconds() >= VISIBILITY_CHECK_INTERVAL_SECONDS
 
 
 def parse_visibility_response(body: str) -> str:

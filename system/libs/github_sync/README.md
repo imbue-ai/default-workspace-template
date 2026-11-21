@@ -12,7 +12,8 @@ Once enabled, three pieces work together:
    it re-applies the git wiring (self-healing a gateway URL whose
    reverse-tunneled port changed across restarts) and periodically re-verifies
    the sync repo is still **private**, mirroring the answer to a status file
-   the post-commit hook consults.
+   the post-commit hook consults. The same tick keeps each user app's own
+   private repository current (see "App dev repositories" below).
 2. **The git wiring** (`uv run --no-sync github-sync wire-git`): global git config that
    rewrites `https://github.com/...` remotes to the latchkey gateway's git
    proxy and attaches the gateway auth headers, so a plain `git push` works
@@ -47,6 +48,98 @@ tree to encrypted object storage.
   offline -- in which case pushes would fail too) keeps the last confirmed
   answer and is retried every tick.
 
+## App dev repositories
+
+A user app (one with a record under `system/config/apps/`) lives in the
+workspace repository at `system/apps/<package>` and can have a private
+repository of its own, `<name>-dev`, that holds the app's directory at its
+root with the app's own commit history. `app-install link <name>` creates it
+and writes its URL to the record's `dev_repo_url`; this service fills it and
+keeps it current. It never creates a repository and never commits to the
+workspace repository.
+
+On every tick, once the wiring is applied, the service runs the **app pass**
+against the workspace's primary checkout. For each app whose record names a
+dev repository:
+
+1. It compares the tree of `HEAD:system/apps/<package>` with the tree it last
+   pushed. Equal means there is nothing to do.
+2. Otherwise it runs `git subtree split --prefix=system/apps/<package>`, which
+   turns the workspace commits that touched the app into commits of the app's
+   own history, and pushes the result to the dev repository's `main` through
+   the gateway. The push is a fast-forward or it is refused; it is never
+   forced.
+3. It records what it pushed in `data/.state/app_sync/<name>.json`.
+
+The split writes loose objects only: no ref of the workspace repository
+moves, so the pass cannot disturb an update that is being applied.
+
+Which apps the pass pushes:
+
+- **An app this workspace built** is pushed once it is **linked**: the
+  history of the checked-out commit holds a join marker for the app's
+  directory, a commit whose message carries the trailer
+  `git-subtree-dir: system/apps/<package>`. `app-install link` leaves one
+  (`git subtree split --rejoin`), and a split then starts from the marker
+  instead of walking the whole workspace history, which takes minutes.
+  `git rev-list --max-count=1 --grep='^git-subtree-dir: system/apps/<package>/*$' HEAD`
+  is the test, the same search `git subtree` makes, and `app-install link`
+  and the pass both ask it through `github_sync.app_history.is_app_linked`.
+- **An installed app** is pushed once it has a dev repository, which
+  `app-install link` gives it only when it is **modified**: its committed
+  directory differs from the tree it was installed from in a path outside
+  the regenerable set (`uv.lock`). The squash commits an install and an
+  update leave are join markers already, and the split builds the adopter's
+  history on top of the publisher's commits.
+
+Everything else is skipped and named in the status with a reason:
+`no_dev_repository` (the record has no `dev_repo_url`; an app this workspace
+built, or a modified installed one), `not_linked` (a dev repository but no
+join marker), and `unmodified` (an installed app nobody changed, which has no
+dev repository by design).
+
+**Private-only enforcement** covers every dev repository, each on its own:
+its visibility is checked through latchkey on the same 15-minute schedule as
+the sync repo's, its pushes are held until it is first confirmed private
+(`visibility_unknown`) and halted while it is public (`not_private`), and
+neither state touches the workspace's own sync or any other app. A push the
+dev repository refuses because it holds history this workspace does not
+continue (two workspaces that own the same app) is reported as
+`push_refused` and retried, never forced. Any other failure (`failed`) is
+reported for that app alone.
+
+The state file only saves work:
+
+```json
+{
+  "dev_repo_url": "https://github.com/alice/notes-dev",
+  "pushed_commit": "<the commit of the app's own history that was pushed>",
+  "pushed_tree": "<that commit's tree, the app's directory>"
+}
+```
+
+When it is missing or unreadable (a restored workspace), the pass splits and
+pushes again; a split reproduces the same commits, so the push changes nothing
+the dev repository already has.
+
+`uv run --no-sync github-sync status` shows the pass under `service`:
+`apps` is one object per user app (`name`, `state`, `dev_repo_url`,
+`visibility`, `pushed_commit`, `detail`), and `app_pass_error` says why the
+pass did not run at all (the service was not started in the primary
+checkout), else `null`.
+
+### One app without workspace sync
+
+A single app can have a dev repository in a workspace where GitHub sync is not
+enabled. `uv run --no-sync app-install link <name> --create-dev-repo` creates
+the repository, and `uv run --no-sync github-sync sync-app <name>`, run from
+the workspace root, does for that one app what the service does each tick:
+checks the repository is private, splits, and pushes through the gateway. It
+prints one JSON line whose `result` is the app's state, with the same fields
+as an entry of `apps`, and exits nonzero unless the result is `pushed` or
+`up_to_date`. Nothing keeps that repository current afterwards: run it again
+after later changes, or enable sync.
+
 ## Restoring on a fresh container
 
 If a workspace is recreated from a previously-synced repo, the synced-in
@@ -65,4 +158,30 @@ uv run --no-sync github-sync wire-git          # install the gateway git wiring
 uv run --no-sync github-sync unwire-git        # remove the wiring (disable path)
 uv run --no-sync github-sync check-visibility  # print visibility; nonzero unless private
 uv run --no-sync github-sync status            # config + latest service status as JSON
+uv run --no-sync github-sync sync-app <name>   # split and push one app to its dev repository, once
 ```
+
+## Library
+
+`app-install` and the publish flows import a few things from here rather
+than keep copies:
+
+- `github_sync.repositories`: `create_repository(name, description,
+  is_private)` returns `<owner>/<repo>` (`RepositoryNameTakenError` when the
+  account has one of that name, `GithubRequestError` for any other refusal),
+  and `lock_down_repository(repository)` closes issues, wiki, projects,
+  discussions and outside pull requests, returning the problem when that did
+  not take.
+- `github_sync.app_history`: `is_app_linked`, `is_app_modified`, `app_tree`,
+  `split_app`, `is_primary_checkout`, and `require_git_subtree`, which raises
+  `GitSubtreeMissingError` naming the command when this git has no
+  `git subtree`.
+- `github_sync.wiring`: `gateway_git_config()` and
+  `git_environment_through_gateway(environment)`, for one git command that
+  goes through the gateway without the container being wired.
+- `github_sync.config.is_sync_configured(repo_root)`.
+
+The record-level rules both sides read (the regenerable set, the join-marker
+pattern, an app's directory) are in `app_manifest.records`, which this
+library depends on; `app-install` depends on this library, never the other
+way round.

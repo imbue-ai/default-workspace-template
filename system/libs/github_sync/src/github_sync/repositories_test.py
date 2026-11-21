@@ -1,0 +1,107 @@
+"""Creating and closing a repository, against a stand-in `latchkey`."""
+
+import json
+from pathlib import Path
+
+import pytest
+
+from github_sync.repositories import (
+    GithubRequestError,
+    RepositoryNameTakenError,
+    create_repository,
+    lock_down_repository,
+)
+from github_sync.testing import install_fake_latchkey
+
+
+def _answer(bin_dir: Path, body: dict[str, object], log: Path) -> None:
+    """Have `latchkey` answer every request with `body`, logging its arguments."""
+    answer = bin_dir / "answer.json"
+    answer.write_text(json.dumps(body))
+    install_fake_latchkey(bin_dir, f'printf "%s\\n" "$@" >> "{log}"\ncat "{answer}"')
+
+
+def test_a_repository_is_created_private_under_the_authenticated_account(
+    fake_latchkey_bin: Path, tmp_path: Path
+) -> None:
+    log = tmp_path / "latchkey-arguments"
+    _answer(
+        fake_latchkey_bin,
+        {"name": "notes-dev", "owner": {"login": "octo"}, "private": True},
+        log,
+    )
+
+    repository = create_repository("notes-dev", 'The "notes" app', is_private=True)
+
+    assert repository == "octo/notes-dev"
+    arguments = log.read_text().splitlines()
+    assert arguments[:5] == [
+        "curl",
+        "-s",
+        "-X",
+        "POST",
+        "https://api.github.com/user/repos",
+    ]
+    assert json.loads(arguments[-1]) == {
+        "name": "notes-dev",
+        "description": 'The "notes" app',
+        "private": True,
+    }
+
+
+def test_a_taken_name_is_told_apart_from_every_other_refusal(
+    fake_latchkey_bin: Path, tmp_path: Path
+) -> None:
+    _answer(
+        fake_latchkey_bin,
+        {
+            "message": "Repository creation failed.",
+            "errors": [{"message": "name already exists on this account"}],
+        },
+        tmp_path / "log",
+    )
+    with pytest.raises(RepositoryNameTakenError, match="name already exists"):
+        create_repository("notes-dev", "notes", is_private=True)
+
+    _answer(
+        fake_latchkey_bin,
+        {"error": "request not permitted by the user"},
+        tmp_path / "log",
+    )
+    with pytest.raises(GithubRequestError, match="github-rest-api") as refused:
+        create_repository("notes-dev", "notes", is_private=True)
+    assert not isinstance(refused.value, RepositoryNameTakenError)
+
+
+def test_a_latchkey_that_fails_or_answers_no_json_is_a_refused_request(
+    fake_latchkey_bin: Path,
+) -> None:
+    install_fake_latchkey(fake_latchkey_bin, "echo 'gateway offline' >&2; exit 7")
+    with pytest.raises(GithubRequestError, match="gateway offline"):
+        create_repository("notes-dev", "notes", is_private=True)
+
+    install_fake_latchkey(fake_latchkey_bin, "echo 'not json'")
+    with pytest.raises(GithubRequestError, match="not json"):
+        create_repository("notes-dev", "notes", is_private=True)
+
+
+def test_locking_down_closes_every_surface_and_reports_what_did_not_take(
+    fake_latchkey_bin: Path, tmp_path: Path
+) -> None:
+    log = tmp_path / "latchkey-arguments"
+    _answer(fake_latchkey_bin, {"name": "notes-dev"}, log)
+
+    assert lock_down_repository("octo/notes-dev") is None
+
+    arguments = log.read_text().splitlines()
+    assert arguments[3:5] == ["PATCH", "https://api.github.com/repos/octo/notes-dev"]
+    assert json.loads(arguments[-1]) == {
+        "pull_request_creation_policy": "collaborators_only",
+        "has_issues": False,
+        "has_wiki": False,
+        "has_projects": False,
+        "has_discussions": False,
+    }
+
+    _answer(fake_latchkey_bin, {"message": "Server Error"}, log)
+    assert lock_down_repository("octo/notes-dev") == '{"message": "Server Error"}'

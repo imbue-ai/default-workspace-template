@@ -12,7 +12,9 @@ The wiring also points core.hooksPath at the repo's git_hooks so the
 post-commit auto-push hook applies everywhere.
 """
 
+import os
 import subprocess
+from collections.abc import Mapping
 
 from loguru import logger
 
@@ -108,6 +110,31 @@ def gateway_git_config() -> list[tuple[str, str]] | None:
     if permissions_override:
         entries.append((header_key, f"{PERMISSIONS_OVERRIDE_HEADER}: {permissions_override}"))
     return entries
+
+
+def git_environment_through_gateway(environment: Mapping[str, str]) -> dict[str, str] | None:
+    """`environment` changed so that one git command run under it sends every
+    https://github.com/ URL through the latchkey gateway, or None when the
+    gateway env vars are not all present.
+
+    The command then reads the gateway's wiring from here alone, with the
+    global configuration left out: once GitHub sync is enabled that
+    configuration carries the same headers, git sends every extraHeader it
+    reads, and the gateway refuses a password it is sent twice. The entries
+    go in the environment rather than the arguments so the gateway's password
+    is in no process listing.
+    """
+    entries = gateway_git_config()
+    if entries is None:
+        return None
+    wired = dict(environment)
+    wired["GIT_CONFIG_GLOBAL"] = os.devnull
+    first_index = int(wired.get("GIT_CONFIG_COUNT", "0"))
+    for index, (key, value) in enumerate(entries, start=first_index):
+        wired[f"GIT_CONFIG_KEY_{index}"] = key
+        wired[f"GIT_CONFIG_VALUE_{index}"] = value
+    wired["GIT_CONFIG_COUNT"] = str(first_index + len(entries))
+    return wired
 
 
 def apply_git_wiring() -> bool:

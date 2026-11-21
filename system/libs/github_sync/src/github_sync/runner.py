@@ -1,13 +1,20 @@
 """GitHub sync service loop.
 
 The service is a wiring and visibility watchdog for the opt-in GitHub sync;
-the actual pushing happens in the post-commit hook that the wiring activates.
+the pushing of the workspace's own branches happens in the post-commit hook
+that the wiring activates.
 Each tick re-applies the latchkey git wiring (self-healing a gateway URL whose
 reverse-tunneled port changed across restarts) and periodically re-verifies
 that the sync repo is still private: the post-commit hook holds its pushes
 until visibility is first confirmed private and whenever the repo is confirmed
 public. A re-check that fails outright keeps the last confirmed answer and is
 retried every tick (see _refresh_visibility).
+
+Each tick then runs the app pass (see app_sync): every user app that has a
+private dev repository has its own history split out of the workspace history
+and pushed there. The pass is the one place this service runs git on the
+repository, it never commits, and a failure in it is reported in the status
+file without touching the workspace's own sync.
 
 Workspace data under data/ is NOT synced to GitHub: it is gitignored and
 covered by the restic host-backup service instead. Only git commits (the main
@@ -25,6 +32,14 @@ from pathlib import Path
 
 from loguru import logger
 
+from github_sync.app_sync import (
+    SYNCED_STATES,
+    AppSyncError,
+    AppSyncReport,
+    AppSyncState,
+    VisibilityLedger,
+    run_app_pass,
+)
 from github_sync.config import (
     GithubSyncConfigError,
     load_repo_url,
@@ -34,13 +49,11 @@ from github_sync.visibility import (
     VISIBILITY_PUBLIC,
     VISIBILITY_UNKNOWN,
     check_repo_visibility,
+    is_visibility_check_due,
 )
 from github_sync.wiring import apply_git_wiring
 
 TICK_INTERVAL_SECONDS = 60
-# How long a confirmed visibility answer stays fresh before it is re-checked.
-# Failed checks are retried every tick instead.
-VISIBILITY_CHECK_INTERVAL_SECONDS = 900
 LOG_FILE = Path("/tmp/github-sync.log")
 # Machine-readable status mirror, read by the post-commit hook (to respect a
 # visibility halt) and by the github-sync skill's status report. Lives in /tmp
@@ -57,6 +70,11 @@ class _SyncState:
         self.visibility: str = VISIBILITY_UNKNOWN
         self.visibility_checked_at: datetime | None = None
         self.last_error: str | None = None
+        # The app pass: each dev repository's confirmed visibility, what the
+        # last pass found for each app, and why it could not run at all.
+        self.app_visibility = VisibilityLedger()
+        self.app_reports: tuple[AppSyncReport, ...] = ()
+        self.app_pass_error: str | None = None
 
     @property
     def is_push_allowed(self) -> bool:
@@ -87,13 +105,10 @@ def _refresh_visibility(state: _SyncState, repo_url: str) -> None:
     leaves the previous answer in place and is retried next tick. Transitions
     are logged loudly since a repo flipping public is a security condition.
     """
-    if (
-        state.visibility_checked_at is not None
-        and state.visibility != VISIBILITY_UNKNOWN
+    if not is_visibility_check_due(
+        state.visibility, state.visibility_checked_at, _now_utc()
     ):
-        age_seconds = (_now_utc() - state.visibility_checked_at).total_seconds()
-        if age_seconds < VISIBILITY_CHECK_INTERVAL_SECONDS:
-            return
+        return
     visibility = check_repo_visibility(repo_url)
     if visibility == VISIBILITY_UNKNOWN:
         logger.debug("Could not check visibility of {}; will retry", repo_url)
@@ -127,6 +142,8 @@ def _write_status(state: _SyncState) -> None:
         "visibility_checked_at": _iso_or_none(state.visibility_checked_at),
         "is_push_allowed": state.is_push_allowed,
         "last_error": state.last_error,
+        "apps": [report.model_dump(mode="json") for report in state.app_reports],
+        "app_pass_error": state.app_pass_error,
     }
     status_path = status_file_path()
     tmp_path = status_path.with_name(status_path.name + ".tmp")
@@ -137,8 +154,53 @@ def _write_status(state: _SyncState) -> None:
         logger.warning("Failed to write status file {}: {}", status_path, e)
 
 
+def _log_app_reports(
+    previous: tuple[AppSyncReport, ...], current: tuple[AppSyncReport, ...]
+) -> None:
+    """Log each app whose report changed since the last pass, so a skipped or
+    held app is named once rather than every tick."""
+    previous_by_name = {report.name: report for report in previous}
+    for report in current:
+        if report == previous_by_name.get(report.name):
+            continue
+        if report.state == AppSyncState.PUSHED:
+            logger.info(
+                "Pushed {} to its dev repository {} at {}",
+                report.name,
+                report.dev_repo_url,
+                report.pushed_commit,
+            )
+        elif report.state in SYNCED_STATES or report.state == AppSyncState.UNMODIFIED:
+            logger.debug("App {}: {}", report.name, report.state)
+        elif report.state == AppSyncState.NOT_PRIVATE:
+            logger.error(
+                "Dev repository {} of {} is PUBLIC; its pushes are halted until "
+                "it is made private again",
+                report.dev_repo_url,
+                report.name,
+            )
+        else:
+            logger.warning("App {} not synced ({}): {}", report.name, report.state, report.detail)
+
+
+def _run_app_pass(state: _SyncState) -> None:
+    """Split and push every app that has a dev repository; never raises."""
+    try:
+        reports = run_app_pass(Path.cwd(), state.app_visibility, check_repo_visibility)
+    except AppSyncError as e:
+        if str(e) != state.app_pass_error:
+            logger.warning("The app pass did not run: {}", e)
+        state.app_reports = ()
+        state.app_pass_error = str(e)
+        return
+    _log_app_reports(state.app_reports, reports)
+    state.app_reports = reports
+    state.app_pass_error = None
+
+
 def _do_tick(state: _SyncState) -> None:
-    """Run one watchdog tick: re-apply wiring, verify visibility, mirror status."""
+    """Run one watchdog tick: re-apply wiring, verify visibility, mirror status,
+    then run the app pass and mirror what it found."""
     try:
         repo_url = load_repo_url()
     except GithubSyncConfigError as e:
@@ -173,6 +235,7 @@ def _do_tick(state: _SyncState) -> None:
     # post-commit hook (the only pusher) has no self-heal of its own.
     if not apply_git_wiring():
         state.last_error = "latchkey gateway env incomplete; wiring not applied"
+        state.app_reports = ()
         _write_status(state)
         return
     state.last_error = None
@@ -190,6 +253,11 @@ def _do_tick(state: _SyncState) -> None:
         )
     else:
         pass
+    # Mirrored before the app pass, so the hook never waits on a split to learn
+    # of a visibility halt.
+    _write_status(state)
+
+    _run_app_pass(state)
     _write_status(state)
 
 

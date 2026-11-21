@@ -6,10 +6,20 @@ github-sync skill during enable / disable / status.
 """
 
 import json
+from pathlib import Path
 
 import click
+from app_manifest.errors import AppManifestError
+from app_manifest.records import load_record
 
 from github_sync import runner
+from github_sync.app_sync import (
+    SYNCED_STATES,
+    AppSyncError,
+    VisibilityLedger,
+    require_primary_checkout,
+    sync_app,
+)
 from github_sync.config import GithubSyncConfigError, load_repo_url
 from github_sync.visibility import VISIBILITY_PRIVATE, check_repo_visibility
 from github_sync.wiring import apply_git_wiring, remove_git_wiring
@@ -53,6 +63,29 @@ def check_visibility() -> None:
     visibility = check_repo_visibility(repo_url)
     click.echo(visibility)
     if visibility != VISIBILITY_PRIVATE:
+        raise SystemExit(1)
+
+
+@main.command("sync-app")
+@click.argument("name")
+def sync_app_command(name: str) -> None:
+    """Bring the dev repository of the app NAME in step with its directory, once.
+
+    What the service does for every app each tick, for one app on request, and
+    whether or not GitHub sync is enabled for the workspace. Prints one JSON
+    line; exits nonzero unless the dev repository now holds the app.
+    """
+    repo_root = Path.cwd()
+    try:
+        require_primary_checkout(repo_root)
+        record = load_record(repo_root, name)
+    except (AppSyncError, AppManifestError) as e:
+        click.echo(json.dumps({"result": "refused", "name": name, "detail": str(e)}))
+        raise SystemExit(1) from e
+    report = sync_app(repo_root, record, VisibilityLedger(), check_repo_visibility)
+    fields = report.model_dump(mode="json", exclude={"state"})
+    click.echo(json.dumps({"result": report.state.value, **fields}, sort_keys=True))
+    if report.state not in SYNCED_STATES:
         raise SystemExit(1)
 
 

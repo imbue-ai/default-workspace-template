@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Builds and validates a publishable template"
 requires-python = ">=3.12"
 dependencies = [
+    # github_repo.py creates and closes the repo through the library GitHub sync and app-install use.
+    "github-sync",
     # validate_template.py checks a template.toml against env_converge's pydantic schema.
     "pydantic>=2",
     # record_publish.py writes the version history in update-self's ledger format.

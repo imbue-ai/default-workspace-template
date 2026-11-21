@@ -37,6 +37,11 @@ class GithubSyncConfigError(GithubSyncError, ValueError):
     """Raised when github_sync.toml exists but is not a valid sync config."""
 
 
+def is_sync_configured(repo_root: Path) -> bool:
+    """Whether GitHub sync is enabled for the workspace whose repo root is `repo_root`."""
+    return (repo_root / CONFIG_PATH).exists()
+
+
 def load_repo_url() -> str | None:
     """Return the sync repo URL from github_sync.toml, or None when sync is not configured.
 
