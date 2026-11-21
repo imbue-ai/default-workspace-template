@@ -62,11 +62,18 @@ would leave an installed app modified against where it came from:
   `AppOwnedRoutineError`, which names the app's directory and the file to
   change there, as part of a change to the app.
 - The on/off switch is state for every routine, an app's included.
-- `is_schedule_only`, `has_schedule_override` and `app_schedule_text` in
-  `presentation.py` say of a loaded routine and its state whether an app owns
-  it, whether the user's schedule is in place of the app's, and how the app's
-  own schedule reads meanwhile. The Routines app adds them to each row it
-  answers, with the owning app's name.
+- A row (`RoutineRow`, what `routines list --format json` lists, what
+  `routines show --format json` answers as `row`, and what the Routines app's
+  API answers) says whose the routine is in four fields. `owning_app` is the
+  app whose directory holds the definition file, under the name the
+  workspace's record of the app gives that directory, else the directory's own
+  name, and null for a routine under `system/routines`; it is read from where
+  the file is, not from the definition's `app` field, which stays what the
+  definition says. `is_schedule_only` is true for a routine an app owns: its
+  schedule and its switch are all that can be changed. `has_schedule_override`
+  is true while the user's schedule is in place of the app's, and
+  `app_schedule_text` is the app's own schedule in words meanwhile, null
+  otherwise.
 - `routines add --app <name>` writes the definition into
   `system/apps/<package>/routines/` and commits it there when `<name>` is a
   user app: it has a record, `system/config/apps/<name>.toml`, and the

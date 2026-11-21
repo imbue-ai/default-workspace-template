@@ -32,8 +32,7 @@ One document serves every page; the page reads its path, reports it to the
 shell with `shell:location`, and polls the API every 30 seconds (every 5 while
 a run is going). The API is typed through the app SDK (`imbue.app_sdk`) and published at
 `/api/schema`; every model is the library's, so the `routines` command's JSON
-and the API's are the same shapes, except that the app's row (alone, in the
-listing and in the detail) carries four more fields, which say whose the
+and the API's are the same shapes. Four fields of a row say whose the
 routine's definition file is:
 
 | Row field | Meaning |

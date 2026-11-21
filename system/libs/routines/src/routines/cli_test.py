@@ -208,6 +208,30 @@ def test_edit_of_anything_but_the_schedule_and_remove_are_refused_for_a_routine_
     assert (row["routine_id"], row["health"], row["schedule_text"]) == ("inbox-status", "OFF", "Every day at 7:30 am")
 
 
+def test_list_and_show_say_in_json_which_app_owns_a_routine_and_what_its_own_schedule_is(
+    git_paths: RoutinesPaths,
+) -> None:
+    """The command's JSON is the app's: a row names the app whose directory holds the file, by the name the
+    workspace's record gives it, and while the user's schedule is in place says what the app's own is."""
+    app_package = make_user_app(git_paths, "inbox-status")
+    write_app_definition(git_paths, app_package, RoutineId("inbox-status"), _APP_ROUTINE_TOML)
+    assert _add_command_routine(git_paths, "true").exit_code == 0
+    owner_fields = ("owning_app", "is_schedule_only", "has_schedule_override", "app_schedule_text")
+
+    rows = {
+        row["routine_id"]: row for row in json.loads(_invoke(git_paths, "list", "--format", "json").output)["routines"]
+    }
+
+    assert [rows["inbox-status"][field] for field in owner_fields] == ["inbox-status", True, False, None]
+    assert [rows["x"][field] for field in owner_fields] == [None, False, False, None]
+
+    assert _invoke(git_paths, "edit", "inbox-status", "--every", "1w", "--days", "mon").exit_code == 0
+    shown = json.loads(_invoke(git_paths, "show", "inbox-status", "--format", "json").output)["row"]
+
+    assert [shown[field] for field in owner_fields] == ["inbox-status", True, True, "Every day at 7:30 am"]
+    assert shown["schedule_text"] == "Every week on Monday at 7:30 am"
+
+
 def test_add_refuses_a_definition_that_does_not_validate_with_the_reason(git_paths: RoutinesPaths) -> None:
     result = _add_command_routine(git_paths, "true", every="15m", at="07:00")
     assert result.exit_code == 1
