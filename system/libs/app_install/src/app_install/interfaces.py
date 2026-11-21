@@ -3,15 +3,25 @@ from abc import abstractmethod
 from collections.abc import Sequence
 from pathlib import Path
 
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from pydantic import Field
 
 from app_manifest.manifest import EnvironmentNote
 
 
+class CreatedRepository(FrozenModel):
+    """A GitHub repository the runtime created."""
+
+    url: str = Field(description="The repository's https://github.com/<owner>/<repo> URL")
+    lockdown_problem: str = Field(
+        default="", description="Why closing the repository to outside contributions did not take, if it did not"
+    )
+
+
 class WorkspaceRuntimeInterface(MutableModel, ABC):
     """The running workspace around the repository, as far as the installer touches it: supervisord, the app
-    registry, and the repository's history."""
+    registry, the repository's history, and the workspace's GitHub account."""
 
     repo_root: Path = Field(frozen=True, description="The workspace repo's root")
 
@@ -64,3 +74,9 @@ class WorkspaceRuntimeInterface(MutableModel, ABC):
     def delete_ref(self, ref: str) -> str | None:
         """Delete a local ref of the repository if it exists; the reason when it could not, None when the ref is
         gone."""
+
+    @abstractmethod
+    def create_private_repository(self, name: str, description: str) -> CreatedRepository:
+        """Create the private repository ``name`` under the workspace's GitHub account and close it to outside
+        contributions. Raises DevRepositoryError when it is not created; a name the account already uses is one
+        such case, and the message says so."""

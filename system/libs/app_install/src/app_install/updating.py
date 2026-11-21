@@ -31,6 +31,7 @@ from app_install.errors import NotInstalledAppError
 from app_install.errors import UpdateInProgressError
 from app_install.git import fetch_commit
 from app_install.git import land_commit
+from app_install.git import require_git_subtree
 from app_install.git import resolve_ref
 from app_install.git import run_git
 from app_install.interfaces import WorkspaceRuntimeInterface
@@ -321,12 +322,14 @@ def update_app(
     """Bring the installed app ``name`` to ``requested_ref`` of the repository it came from, or to its latest
     version; with ``is_continuing``, finish an update that stopped for a person.
 
-    Raises AppRecordNotFoundError for an app with no record, NotInstalledAppError for an app this workspace
+    Raises MissingCommandError when git has no ``git subtree``, AppRecordNotFoundError for an app with no
+    record, NotInstalledAppError for an app this workspace
     built, UpdateInProgressError when an update of the app is already waiting (or, when continuing, none is),
     where a waiting update whose worktree has been removed was given up and no longer waits,
     NoSnapshotError when the app's data cannot be kept safe, and CollisionError when the new version would take a
     name something in the workspace holds. The primary checkout is unchanged unless the result is UPDATED.
     """
+    require_git_subtree(repo_root)
     record = load_record(repo_root, name)
     if record.origin is not AppOrigin.INSTALLED or not record.upstream_url:
         raise NotInstalledAppError(f"{name} was built in this workspace, so there is nothing to update it from")

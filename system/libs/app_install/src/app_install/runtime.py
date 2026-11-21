@@ -1,4 +1,4 @@
-"""The installer's hands on the running workspace: supervisorctl, the registration script, and git."""
+"""The installer's hands on the running workspace: supervisorctl, the registration script, git, and latchkey."""
 
 import fnmatch
 import os
@@ -12,12 +12,18 @@ from pathlib import Path
 from typing import Final
 
 from app_install.derived import is_python_app
+from app_install.errors import DevRepositoryError
 from app_install.git import COMMITTER_EMAIL
 from app_install.git import COMMITTER_NAME
+from app_install.interfaces import CreatedRepository
 from app_install.interfaces import WorkspaceRuntimeInterface
 from app_install.paths import APPS_DIRECTORY
 from app_manifest.manifest import EnvironmentNote
 from app_registration import forward_port
+from github_sync.config import GITHUB_URL_PREFIX
+from github_sync.repositories import GithubRequestError
+from github_sync.repositories import create_repository
+from github_sync.repositories import lock_down_repository
 from host_backup.cli import has_recent_backup
 
 # Long enough for a system package or a tool to download and build.
@@ -178,3 +184,12 @@ class WorkspaceRuntime(WorkspaceRuntimeInterface):
 
     def delete_ref(self, ref: str) -> str | None:
         return self._run(["git", "update-ref", "-d", ref])
+
+    def create_private_repository(self, name: str, description: str) -> CreatedRepository:
+        try:
+            repository = create_repository(name, description, is_private=True)
+        except GithubRequestError as e:
+            raise DevRepositoryError(str(e)) from e
+        return CreatedRepository(
+            url=f"{GITHUB_URL_PREFIX}{repository}", lockdown_problem=lock_down_repository(repository) or ""
+        )

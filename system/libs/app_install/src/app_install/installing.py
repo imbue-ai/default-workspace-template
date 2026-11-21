@@ -31,6 +31,7 @@ from app_install.errors import GitCommandError
 from app_install.errors import NotAnAppError
 from app_install.git import fetch_commit
 from app_install.git import land_commit
+from app_install.git import require_git_subtree
 from app_install.git import resolve_ref
 from app_install.git import run_git
 from app_install.interfaces import WorkspaceRuntimeInterface
@@ -126,10 +127,12 @@ def install_app(
 ) -> InstallOutcome:
     """Install the app published at ``url`` into the workspace, at ``requested_ref`` or its latest version.
 
-    Raises RepositoryUnreachableError when the repository cannot be read, NotAnAppError when it holds no app,
+    Raises MissingCommandError when git has no ``git subtree``, RepositoryUnreachableError when the repository
+    cannot be read, NotAnAppError when it holds no app,
     CollisionError when the app would take a name something in the workspace holds, and GitCommandError when the
     app cannot be added or landed. The primary checkout is unchanged when it raises.
     """
+    require_git_subtree(repo_root)
     ref = resolve_ref(repo_root, url, requested_ref)
     commit = fetch_commit(repo_root, url, ref)
     name = _read_published_name(repo_root, commit, url)

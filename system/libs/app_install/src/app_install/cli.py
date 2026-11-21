@@ -8,6 +8,7 @@ Usage, from the workspace repo's root::
     uv run --no-sync app-install regenerate [<name>]
     uv run --no-sync app-install uninstall <name>
     uv run --no-sync app-install migrate <package> [--dry-run]
+    uv run --no-sync app-install link <name> [--refresh] [--create-dev-repo]
     uv run --no-sync app-install check
     uv run --no-sync app-install list
 
@@ -29,6 +30,7 @@ from app_install.errors import NotAnAppError
 from app_install.errors import RepositoryUnreachableError
 from app_install.installing import InstallOutcome
 from app_install.installing import install_app
+from app_install.linking import link_app
 from app_install.migration import MigrateOutcome
 from app_install.migration import migrate_app
 from app_install.operations import add_app
@@ -256,6 +258,45 @@ def migrate_command(repo_root: Path, package: str, dry_run: bool) -> None:
     _emit("would_migrate" if dry_run else "migrated", **_migration_fields(outcome))
 
 
+@main.command("link")
+@click.argument("name")
+@click.option(
+    "--refresh",
+    "is_refreshing",
+    is_flag=True,
+    help="Make a new join marker at the current commit, so later splits stay fast",
+)
+@click.option(
+    "--create-dev-repo",
+    "is_dev_repository_wanted",
+    is_flag=True,
+    help="Create the app's dev repository even though GitHub sync is not enabled for the workspace",
+)
+@click.pass_obj
+def link_command(repo_root: Path, name: str, is_refreshing: bool, is_dev_repository_wanted: bool) -> None:
+    """Make the first split of the app NAME's own history and, when GitHub sync is enabled, its private dev
+    repository, which the sync service then keeps current. Run from the workspace's primary checkout."""
+    with install_lock(repo_root):
+        try:
+            outcome = link_app(
+                repo_root, name, is_refreshing, is_dev_repository_wanted, WorkspaceRuntime(repo_root=repo_root)
+            )
+        except (AppInstallError, AppManifestError) as e:
+            _refuse("refused", name=name, detail=str(e))
+    _emit(
+        outcome.result.value,
+        name=str(outcome.record.name),
+        package=outcome.record.package,
+        marker_commit=outcome.marker_commit,
+        split_commit=outcome.split_commit,
+        is_full_clone_used=outcome.is_full_clone_used,
+        dev_repo_url=outcome.record.dev_repo_url,
+        is_dev_repository_created=outcome.is_dev_repository_created,
+        remaining=list(outcome.remaining),
+        problems=list(outcome.problems),
+    )
+
+
 @main.command("check")
 @click.pass_obj
 def check_command(repo_root: Path) -> None:
@@ -272,9 +313,15 @@ def check_command(repo_root: Path) -> None:
 @main.command("list")
 @click.pass_obj
 def list_command(repo_root: Path) -> None:
-    """Print every user app's record and whether it was built here or installed."""
+    """Print every user app's record with its state (owned, installed, or modified) and whether it is linked."""
     try:
         apps = list_apps(repo_root)
     except (AppInstallError, AppManifestError) as e:
         _refuse("refused", detail=str(e))
-    _emit("listed", apps=[{**app.record.model_dump(mode="json"), "state": app.state} for app in apps])
+    _emit(
+        "listed",
+        apps=[
+            {**app.record.model_dump(mode="json"), "state": app.state.value, "is_linked": app.is_linked}
+            for app in apps
+        ],
+    )

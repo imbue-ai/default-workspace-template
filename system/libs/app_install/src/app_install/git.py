@@ -10,8 +10,11 @@ from typing import Final
 from loguru import logger
 
 from app_install.errors import GitCommandError
+from app_install.errors import MissingCommandError
 from app_install.errors import RepositoryUnreachableError
-from github_sync.wiring import gateway_git_config
+from app_manifest.records import AppRecord
+from github_sync import app_history
+from github_sync.wiring import git_environment_through_gateway
 
 # The installer's own committer: its commits come from a command, not from any one chat's agent, and the
 # analytics feed tells them from the user's own work by this name.
@@ -40,20 +43,13 @@ def _environment(is_global_config_read: bool, is_gateway_used: bool) -> dict[str
     environment["GIT_AUTHOR_EMAIL"] = COMMITTER_EMAIL
     environment["GIT_COMMITTER_NAME"] = COMMITTER_NAME
     environment["GIT_COMMITTER_EMAIL"] = COMMITTER_EMAIL
-    gateway_entries = (gateway_git_config() or []) if is_gateway_used else []
-    if not is_global_config_read or gateway_entries:
+    if is_gateway_used:
+        # A workspace with no gateway has only its global configuration to read the repository with.
+        environment = git_environment_through_gateway(environment) or environment
+    if not is_global_config_read:
         # With GitHub sync enabled the container's global configuration routes every github.com URL through the
-        # latchkey gateway; leaving it out is what makes a fetch anonymous. It is left out of a read through the
-        # gateway too: git sends every extraHeader it reads, so the gateway's headers would go out twice, once
-        # from each place, and the gateway refuses a password it is sent twice.
+        # latchkey gateway; leaving it out is what makes a fetch anonymous.
         environment["GIT_CONFIG_GLOBAL"] = os.devnull
-    if gateway_entries:
-        # In the environment and not in the arguments, so the gateway's password is in no process listing.
-        first_index = int(environment.get("GIT_CONFIG_COUNT", "0"))
-        for index, (key, value) in enumerate(gateway_entries, start=first_index):
-            environment[f"GIT_CONFIG_KEY_{index}"] = key
-            environment[f"GIT_CONFIG_VALUE_{index}"] = value
-        environment["GIT_CONFIG_COUNT"] = str(first_index + len(gateway_entries))
     return environment
 
 
@@ -171,3 +167,40 @@ def land_commit(repo_root: Path, commit: str) -> None:
         raise GitCommandError(
             f"{commit} does not merge into the primary checkout, which is left as it was: {merge_failure}"
         ) from merge_failure
+
+
+def require_git_subtree(cwd: Path) -> None:
+    """Raise MissingCommandError, naming the command, when this git has no ``git subtree``: installing, updating,
+    and linking an app all go through it, and without it git answers with its own usage text."""
+    try:
+        app_history.require_git_subtree(cwd)
+    except app_history.GitSubtreeMissingError as e:
+        raise MissingCommandError(str(e)) from e
+    except app_history.AppHistoryError as e:
+        raise GitCommandError(str(e)) from e
+
+
+def is_primary_checkout(repo_root: Path) -> bool:
+    """Whether ``repo_root`` is the root of the repository's primary checkout, not a linked worktree."""
+    try:
+        return app_history.is_primary_checkout(repo_root)
+    except app_history.AppHistoryError as e:
+        raise GitCommandError(str(e)) from e
+
+
+def is_app_linked(repo_root: Path, record: AppRecord) -> bool:
+    """Whether the checked-out history holds a join marker for the app's directory, the answer the sync pass
+    reads too."""
+    try:
+        return app_history.is_app_linked(repo_root, record)
+    except app_history.AppHistoryError as e:
+        raise GitCommandError(str(e)) from e
+
+
+def is_app_modified(repo_root: Path, record: AppRecord) -> bool:
+    """Whether an installed app's committed directory differs from what was installed in a path outside the
+    regenerable set, the answer the sync pass reads too."""
+    try:
+        return app_history.is_app_modified(repo_root, record)
+    except app_history.AppHistoryError as e:
+        raise GitCommandError(str(e)) from e

@@ -13,15 +13,26 @@ uv run --no-sync app-install update <name> [--branch <ref>] [--continue]
 uv run --no-sync app-install regenerate [<name>]
 uv run --no-sync app-install uninstall <name>
 uv run --no-sync app-install migrate <package> [--dry-run]
+uv run --no-sync app-install link <name> [--refresh] [--create-dev-repo]
 uv run --no-sync app-install check
 uv run --no-sync app-install list
 ```
+
+Installing, updating, and linking an app go through `git subtree`, which some distributions package apart from git.
+Each of the three checks for it first and is refused with a message naming the missing command (`refused`, with `git-subtree` in `detail`) rather than with git's usage text.
 
 ## The app record
 
 Each user app has one tracked file, `system/config/apps/<name>.toml`: the app's name, its directory, the loopback port of its main program, whether this workspace built it (`origin = "local"`) or installed it, and the repositories it is kept in step with.
 It is one file per app so that two branches that each add an app never edit the same file.
 An app under `system/apps/` without a record is a built-in app.
+
+`app-install list` prints every record with two more facts about the app:
+
+- `state`: `owned` for an app this workspace built, `installed` for one added from someone else's repository, and `modified` for an installed app whose committed directory differs from the tree it was installed from (the record's `upstream_tree`) in any path outside the regenerable set.
+  The regenerable set is the files in an app's directory that are made from other files there, which today is `uv.lock`: an app whose lock was only made again here is still `installed`.
+  An edit that is not committed yet changes nothing.
+- `is_linked`: whether the workspace history holds a join marker for the app's directory (see "Linking an app" below).
 
 ## Derived files
 
@@ -95,3 +106,47 @@ That is also the way out when the merge was taken back in the worktree (`git mer
 
 `up_to_date` means the app is already at the version asked for.
 An app this workspace built has nothing to update from.
+
+## Linking an app
+
+An app can have a private repository of its own on GitHub, `<name>-dev`: the app's directory at its root, with the app's own commit history.
+The `github-sync` service fills it and keeps it current with `git subtree split`, which turns the workspace commits that touched the app into commits of the app's own history (`system/libs/github_sync/README.md`, "App dev repositories").
+`app-install link <name>` does the two things the service never does: it commits to the workspace repository, and it creates a repository.
+Run it from the workspace root on the primary checkout; in a linked worktree it is refused, since it moves the primary branch.
+
+**The join marker.**
+Without one, a split walks the whole workspace history, which takes minutes.
+For an app this workspace built, `link` makes the app's first split with `git subtree split --rejoin`, which leaves a marker: a merge commit whose message carries `git-subtree-dir: system/apps/<package>`, whose first parent is the commit it was made on and whose second is the split.
+A later split starts from the newest marker.
+
+- The marker is made in a clone under `/var/tmp`, never in the checkout, with hooks off, and the primary branch is then moved to it.
+  Its tree is its first parent's tree, so no file changes and uncommitted work is left exactly as it is.
+  The branch is moved only if it is still where the marker was made; when something else committed meanwhile, the marker is made again.
+- The clone is shallow, cut one second before the oldest commit that touches the app (`git clone --shallow-since`), so the first split walks the app's lifetime rather than the workspace's.
+  That is used only when the app's history reads the same in the clone as in the workspace: the same commits touching the app's directory, each following the same ones (`git rev-list --parents <commit> -- system/apps/<package>`).
+  It does not when a commit is dated earlier than one of its ancestors, and when a merge made after the app's first commit brings in a commit dated before it: git cuts every parent of such a merge, so the merge reads as the commit that added the app.
+  The marker is then made in a clone of the whole history, which is correct and slow, and the result says so (`is_full_clone_used`).
+- **An app is linked** when the history of the checked-out commit holds such a marker: `git rev-list --max-count=1 --grep='^git-subtree-dir: system/apps/<package>/*$' HEAD` names a commit.
+  This is the search `git subtree` itself makes, and `link`, `list`, and the sync service all ask it through one function, `github_sync.app_history.is_app_linked`.
+  Linking an app that is linked makes nothing.
+- `--refresh` makes a new marker at the current commit when a commit has touched the app since its newest marker, which keeps later splits fast as workspace commits accumulate.
+  When the app has not changed since, there is no newer split to join and none is made: `git subtree` cannot read a history that holds two markers for one split.
+- An installed app needs no marker.
+  The commits `install` and `update` leave are join markers already, so `link` only creates its dev repository, and only once the app is `modified`; an unchanged installed app is refused.
+
+**The dev repository.**
+When GitHub sync is enabled for the workspace (`data/system/github_sync.toml` exists) and the app's record has no `dev_repo_url`, `link` creates the private repository `<name>-dev` under the workspace's GitHub account through `latchkey curl`, closes it to outside contributions as a published template's repository is closed, writes its URL to the record, and commits that one file under the installer's own author.
+`--create-dev-repo` does the same in a workspace where sync is not enabled, for one app on request; `uv run --no-sync github-sync sync-app <name>` then pushes the app once, and again whenever it is run.
+A repository that cannot be created (the name is taken on the account, or the GitHub permission is missing) does not undo the marker: it is listed under `problems`, and the next `link` tries again.
+
+The result is `linked` (the first marker was made), `refreshed` (a new one was made), or `already_linked` (none was made), with:
+
+| Field | Meaning |
+| --- | --- |
+| `marker_commit` | The marker that was made, else empty. |
+| `split_commit` | The commit of the app's own history the marker joins, else empty. |
+| `is_full_clone_used` | Whether the marker was made in a clone of the whole workspace history. |
+| `dev_repo_url` | The record's dev repository, empty when the app has none. |
+| `is_dev_repository_created` | Whether this run created it. |
+| `remaining` | What is left before the app is synced, in sentences: for example "GitHub sync is not enabled, so no dev repository was created; pass --create-dev-repo to make one for this app alone". |
+| `problems` | What this run tried and could not do. |

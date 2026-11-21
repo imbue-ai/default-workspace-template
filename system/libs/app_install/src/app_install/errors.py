@@ -31,6 +31,22 @@ class GitCommandError(AppInstallError):
     """A git command the installer ran failed."""
 
 
+class MissingCommandError(GitCommandError):
+    """A command the installer needs is not installed; the message names it."""
+
+
+class NotPrimaryCheckoutError(AppInstallError):
+    """The command was run in a linked worktree, and it moves the workspace's primary branch."""
+
+
+class NotModifiedAppError(AppInstallError, ValueError):
+    """The app was installed and nobody has changed it, so it has no repository of this workspace's own."""
+
+
+class DevRepositoryError(AppInstallError):
+    """An app's dev repository could not be created."""
+
+
 class RepositoryUnreachableError(AppInstallError):
     """An app's repository could not be read, anonymously or with the workspace's GitHub access."""
 

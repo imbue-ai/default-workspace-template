@@ -3,7 +3,10 @@ from pathlib import Path
 
 from pydantic import Field
 
+from app_install.errors import DevRepositoryError
+from app_install.interfaces import CreatedRepository
 from app_install.interfaces import WorkspaceRuntimeInterface
+from app_install.runtime import WorkspaceRuntime
 from app_manifest.manifest import EnvironmentNote
 
 
@@ -15,12 +18,16 @@ class RecordingRuntime(WorkspaceRuntimeInterface):
     registry_failure: str | None = Field(default=None, description="What removing a row fails with, if it does")
     ref_failure: str | None = Field(default=None, description="What deleting a ref fails with, if it does")
     commit_failure: str | None = Field(default=None, description="What a commit fails with, if it does")
+    is_committing: bool = Field(default=False, description="Whether a commit is really made in the repository")
     is_port_answering: bool = Field(default=True, description="Whether a started app answers on its port")
     relocked_lock_text: str = Field(default="relocked\n", description="What a relock writes as the app's lock")
     verify_failure: str | None = Field(default=None, description="Why the app's checks fail, if they do")
     is_backup_recent: bool = Field(default=False, description="Whether the workspace has a recent backup")
     free_bytes: int = Field(default=10**12, description="How much room the disk has")
     unresolved_environment: tuple[str, ...] = Field(default=(), description="What the environment install fails on")
+    github_account: str = Field(default="octo", description="The account a created repository lands under")
+    repository_failure: str | None = Field(default=None, description="What creating a repository fails with")
+    lockdown_problem: str = Field(default="", description="Why closing a created repository did not take")
 
     def reload_programs(self) -> str | None:
         self.calls.append("reload_programs")
@@ -60,8 +67,18 @@ class RecordingRuntime(WorkspaceRuntimeInterface):
 
     def commit_paths(self, relative_paths: Sequence[str], message: str) -> str | None:
         self.calls.append(f"commit_paths {sorted(relative_paths)} {message!r}")
+        if self.is_committing:
+            return WorkspaceRuntime(repo_root=self.repo_root).commit_paths(relative_paths, message)
         return self.commit_failure
 
     def delete_ref(self, ref: str) -> str | None:
         self.calls.append(f"delete_ref {ref}")
         return self.ref_failure
+
+    def create_private_repository(self, name: str, description: str) -> CreatedRepository:
+        self.calls.append(f"create_private_repository {name} {description!r}")
+        if self.repository_failure is not None:
+            raise DevRepositoryError(self.repository_failure)
+        return CreatedRepository(
+            url=f"https://github.com/{self.github_account}/{name}", lockdown_problem=self.lockdown_problem
+        )

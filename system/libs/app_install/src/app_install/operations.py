@@ -6,9 +6,11 @@ from collections.abc import Callable
 from collections.abc import Generator
 from collections.abc import Sequence
 from contextlib import contextmanager
+from enum import auto
 from pathlib import Path
 from typing import Final
 
+from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from loguru import logger
@@ -25,6 +27,8 @@ from app_install.errors import AppAlreadyRegisteredError
 from app_install.errors import AppNotFoundError
 from app_install.errors import CollisionError
 from app_install.errors import GitCommandError
+from app_install.git import is_app_linked
+from app_install.git import is_app_modified
 from app_install.git import run_git
 from app_install.interfaces import WorkspaceRuntimeInterface
 from app_install.paths import APP_DATA_DIRECTORY
@@ -80,11 +84,26 @@ class UninstallOutcome(FrozenModel):
     )
 
 
+class AppState(LowerCaseStrEnum):
+    """What a user app is to this workspace."""
+
+    # Built in this workspace.
+    OWNED = auto()
+    # Added from someone else's repository and left as it came, apart from files made from other files.
+    INSTALLED = auto()
+    # Added from someone else's repository and changed here.
+    MODIFIED = auto()
+
+
 class ListedApp(FrozenModel):
     """One user app as ``app-install list`` reports it."""
 
     record: AppRecord = Field(description="The app's record")
-    state: str = Field(description="owned for an app built here, installed for one added from elsewhere")
+    state: AppState = Field(description="Whether the app was built here, installed, or installed and changed here")
+    is_linked: bool = Field(
+        description="Whether the workspace history holds a join marker for the app, so its own history splits "
+        "out quickly"
+    )
 
 
 @contextmanager
@@ -319,9 +338,24 @@ def _declared_secret_files(repo_root: Path, record: AppRecord) -> tuple[Path, ..
     return tuple(secret_file_path(str(secret.file)) for secret in manifest.secrets)
 
 
+def _app_state(repo_root: Path, record: AppRecord) -> AppState:
+    if record.origin is AppOrigin.LOCAL:
+        return AppState.OWNED
+    return AppState.MODIFIED if is_app_modified(repo_root, record) else AppState.INSTALLED
+
+
+def _is_linked(repo_root: Path, record: AppRecord) -> bool:
+    try:
+        return is_app_linked(repo_root, record)
+    except GitCommandError as e:
+        logger.warning("Could not read the history of {}, so it is listed as not linked: {}", record.name, e)
+        return False
+
+
 def list_apps(repo_root: Path) -> tuple[ListedApp, ...]:
-    """Every user app of the workspace with whether it was built here or installed."""
+    """Every user app of the workspace with its state (built here, installed, or installed and changed in a
+    committed path outside the regenerable set) and whether its history is linked."""
     return tuple(
-        ListedApp(record=record, state="owned" if record.origin is AppOrigin.LOCAL else "installed")
+        ListedApp(record=record, state=_app_state(repo_root, record), is_linked=_is_linked(repo_root, record))
         for record in load_all_records(repo_root)
     )
