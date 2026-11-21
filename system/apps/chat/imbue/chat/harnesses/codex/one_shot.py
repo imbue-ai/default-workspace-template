@@ -36,8 +36,8 @@ from imbue.mngr_codex.app_server_client import CodexModel
 
 logger = _loguru_logger
 
-# The family of OpenAI's model of each size across versions: the small, cheap one (gpt-5.6-luna, gpt-6-luna)
-# and the efficient one a step above it (gpt-5.6-terra, gpt-6.1-terra).
+# The family of OpenAI's model of each size across versions: the small, cheap one ("gpt-6-luna") and the
+# efficient one a step above it ("gpt-6.1-terra").
 _MODEL_FAMILY_BY_TIER: Final[Mapping[OneShotModelTier, str]] = {
     OneShotModelTier.SMALL: "luna",
     OneShotModelTier.MEDIUM: "terra",

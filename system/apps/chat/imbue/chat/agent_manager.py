@@ -2009,7 +2009,7 @@ class AgentManager:
     def set_turn_end_listener(self, listener: Callable[[ChatId], object]) -> None:
         """Install what hears that a turn ended in a chat, once its harness has closed the turn: what works out the
         chat's next-step suggestions (``suggestion_generation.py``). It is called on the thread that saw the turn
-        end, so it must hand its work off. The composition root calls this once."""
+        end, so it must hand its work off."""
         self._turn_end_listener = listener
 
     def set_author_annotations_reader(self, reader: Callable[[ChatId], tuple[AuthorAnnotation, ...]]) -> None:

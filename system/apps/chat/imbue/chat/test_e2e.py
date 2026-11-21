@@ -50,13 +50,16 @@ from imbue.chat.auto_open import chat_root_path
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.registry import get_model_state_path
+from imbue.chat.main import install_suggestion_generator
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import FIXTURE_SESSION_ID
 from imbue.chat.testing import HookedSendMngrMessenger
+from imbue.chat.testing import InlineExecutor
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import SummaryWritingMngrMessenger
@@ -423,6 +426,52 @@ def test_conversation_and_composer_render(e2e_server: RunningWorkspace, page: Pa
     expect(send_button).to_be_disabled()
     textarea.fill("test message")
     expect(send_button).to_be_enabled()
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_suggestions_worked_out_after_a_reply_rise_above_the_composer_with_the_rest_behind_show_more(
+    e2e_server: RunningWorkspace, page: Page, tmp_path: Path
+) -> None:
+    """The page is already showing the reply when its suggestions are stored: the push brings the strip in with no
+    reload, a set longer than three keeps the rest behind Show more, and the first pill wears the recommended look."""
+    state = e2e_server.chat_state
+    manager = state.agent_manager
+    agent = manager.get_agent_by_id(FIXTURE_AGENT_ID)
+    assert agent is not None
+    seed_agent_state(
+        manager,
+        FIXTURE_AGENT_ID,
+        name=agent.name,
+        state="WAITING",
+        labels=agent.labels,
+        activity_state=ActivityState.IDLE,
+    )
+    labels = ["Show me what you can do", "Help me plan my week", "Build me an app", "Connect my email", "Not now"]
+    answer = "\n".join(
+        f'<suggestion recommended="true">{label}</suggestion>' if index == 0 else f"<suggestion>{label}</suggestion>"
+        for index, label in enumerate(labels)
+    )
+    completion = ScriptedOneShotCompletion([answer])
+    install_suggestion_generator(state, manager.chat_files_root, lambda _harness: completion, InlineExecutor())
+    assert state.suggestion_generator is not None
+    _open_fixture_chat(page, e2e_server)
+    expect(_chat(page).locator(".message-assistant").first).to_contain_text("Hello! How can I help you?")
+    pills = _chat(page).locator(".suggestion-pill")
+    expect(pills).to_have_count(0)
+
+    state.suggestion_generator.consider_turn_end(ChatId(FIXTURE_AGENT_ID))
+
+    expect(pills).to_have_text(labels[:3], timeout=15000)
+    expect(pills.first).to_have_class(re.compile(r"suggestion-pill--recommended"))
+    strip = _chat(page).locator(".suggestion-strip--open")
+    composer = _chat(page).locator(".message-input-textbox")
+    assert _box(strip)["y"] + _box(strip)["height"] <= _box(composer)["y"]
+    page.screenshot(path=str(tmp_path / "generated-suggestions.png"))
+
+    _chat(page).locator(".suggestion-strip-more").click()
+
+    expect(pills).to_have_text(labels)
+    expect(_chat(page).locator(".suggestion-strip-more")).to_have_count(0)
 
 
 @pytest.mark.timeout(60, func_only=False)

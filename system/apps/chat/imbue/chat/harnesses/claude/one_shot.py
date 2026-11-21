@@ -92,8 +92,8 @@ def claude_one_shot_env(
     env.update(ClaudeAccountBinding().account_env(config_dir))
     # An account that thinks by default spends most of a short answer's time thinking: measured
     # on Haiku, about 3s with thinking against under 1s without, for the same name. So thinking is
-    # off unless the caller allows some. A model that decides for itself how much to think (Sonnet,
-    # on the pinned Claude Code) is asked the same way whatever this says.
+    # off unless the caller allows some. A model that decides for itself how much to think is asked
+    # the same way whatever this says.
     env["MAX_THINKING_TOKENS"] = str(0 if thinking_token_allowance is None else thinking_token_allowance)
     return env
 
