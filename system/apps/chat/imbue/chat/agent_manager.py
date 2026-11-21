@@ -4758,6 +4758,9 @@ class AgentManager:
             if is_first_run:
                 write_first_run_context(self._chat_files_root / provisional.chat_id, first_run_context)
         self._publish_seeded_chat(provisional)
+        if is_first_run:
+            # A page that read the accounts before this seed does not know the provider page is owed.
+            self._broadcaster.broadcast_accounts_updated()
         return CreatedChat(
             chat_id=provisional.chat_id, name=canonical_agent_name(provisional.name), display_name=provisional.name
         )

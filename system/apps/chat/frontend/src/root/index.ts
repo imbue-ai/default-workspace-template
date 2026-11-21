@@ -56,6 +56,7 @@ import {
   areAccountsLoaded,
   areLanesLoaded,
   closeProviderChooser,
+  getFlow,
   isFirstRunProviderStepPending,
   isProviderChooserOpen,
   loadAccountsWithRetry,
@@ -397,6 +398,9 @@ const firstSendChooser = makeRootFirstSendChooser({
 /** After every draw of the root: the chooser it owes, and the chrome's report once one of its choosers is drawn with
  *  its providers listed in a shown window. */
 function afterRootDraw(): void {
+  // A first-run seed that landed after this root opened its chooser: the shell's cover asks now, so the root's
+  // own chooser stands down unless a sign-in is already under way in it.
+  if (isFirstRunProviderStepPending() && isProviderChooserOpen() && getFlow() === null) closeProviderChooser();
   if (isProviderChooserOpen() && areLanesLoaded()) reportProviderChooserOnScreenOnce(isRootShown);
   firstSendChooser.afterDraw();
 }
