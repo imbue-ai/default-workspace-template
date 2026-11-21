@@ -308,8 +308,9 @@ Then end your turn and wait for their explicit go-ahead to THIS message.
 
 Changes they ask for go to the worker, followed by step 4 again, and the
 changed part shown again. If they call it off, stop here: destroy the worker
-and its branch (step 7's commands, without the merge), and say nothing was
-published.
+and its branch (step 7's commands without the merge, and with
+`git branch -D`, since git refuses `-d` for a branch that was never merged),
+and say nothing was published.
 
 ## 6. Push
 
