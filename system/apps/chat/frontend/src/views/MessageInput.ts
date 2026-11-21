@@ -53,9 +53,11 @@ import {
   dropOutgoingNoTurnWillRetire,
   getOutgoingMessages,
 } from "../models/OutgoingMessages";
+import { failureSentence } from "@imbue/workspace-ui/src/models/failure";
 import {
   describeRequestError,
   describeRequestErrorKind,
+  describeRequestFailure,
   isUnansweredRequest,
   sendFailureKindOf,
 } from "@imbue/workspace-ui/src/models/request-error";
@@ -184,14 +186,11 @@ function withoutNulCharacters(draft: string): string {
   return draft.split("\0").join("");
 }
 
-function sendFailureKind(sendError: unknown): unknown {
-  return (sendError as { response?: { kind?: unknown } | null } | null)?.response?.kind;
-}
-
 /** The kind the notice handles a failed send as. A send that got no answer may have been delivered
  *  before its answer was lost, so it is handled as one mngr could not confirm. */
 function noticeKindOf(sendError: unknown): SendFailureKind {
-  return isUnansweredRequest(sendError) ? "submission_unconfirmed" : describeRequestErrorKind(sendError);
+  const isUnanswered = isUnansweredRequest(sendError) || describeRequestFailure(sendError).cause === "not_answered";
+  return isUnanswered ? "submission_unconfirmed" : describeRequestErrorKind(sendError);
 }
 
 function messageTextKey(chatId: string): string {
@@ -211,7 +210,7 @@ function composerHintKey(chatId: string): string {
 const pendingComposerPrepends = new Map<string, string>();
 
 // What the failure notice says about a send, in place of mngr's reason, which is written for its own
-// command line. "unknown" keeps that reason: it is the only account of what went wrong.
+// command line. "unknown" is worded by failureSentence instead; the reason stays behind See details either way.
 const SEND_FAILURE_SENTENCES: Partial<Record<SendFailureKind, string>> = {
   input_blocked: "The agent is waiting on something in its terminal. Answer it there and try again.",
   agent_unreachable: "The agent isn't running and didn't start.",
@@ -239,6 +238,8 @@ const pendingComposerFocuses = new Set<string>();
 interface PendingFailureNotice {
   title: string;
   detail: string;
+  /** What goes behind the notice's "See details". */
+  details?: string | null;
   /** mngr's classification, so a sibling's failure earns the same buttons the composer's would. */
   kind?: SendFailureKind;
   /** Repeated by Retry. Omitted when the operation cannot be repeated. */
@@ -338,7 +339,13 @@ addHeldSendFailedListener((chatId, messageId, detail, kind) => {
   heldSendDrafts.delete(messageId);
   dropOutgoingByMessageId(chatId, [messageId]);
   restoreComposerDraft(chatId, held.draft);
-  raiseFailureNotice(chatId, { title: "Couldn't send your message", detail, kind: sendFailureKindOf(kind) });
+  const told = failureSentence(describeRequestFailure(detail), "Your message wasn't delivered");
+  raiseFailureNotice(chatId, {
+    title: "Couldn't send your message",
+    detail: told.message,
+    details: told.details,
+    kind: sendFailureKindOf(kind),
+  });
 });
 
 /**
@@ -581,7 +588,7 @@ function composeRow(leading: m.Children | undefined, boxChildren: m.Children[]):
  * actions refresh: a removal made in another window leaves it listing the account until then.
  */
 function catchUpOnSignedOutAccount(sendError: unknown): void {
-  if (sendFailureKind(sendError) !== ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND) {
+  if (describeRequestFailure(sendError).kind !== ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND) {
     return;
   }
   loadAccounts().then(
@@ -647,6 +654,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     messageId: string;
   };
   let actionFailureDetail: string | null = null;
+  // What goes behind the notice's "See details": the status and the chat app's own words for a failed send.
+  let actionFailureDetails: string | null = null;
   // A failed Stop shares this notice, and telling the user their message could not be sent when
   // they clicked Stop is simply wrong copy.
   let actionFailureTitle = "Couldn't send your message";
@@ -1304,6 +1313,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // Safe to drop: the failed message was put back in that agent's composer when the send
         // failed, so nothing is lost by closing its notice unanswered.
         actionFailureDetail = null;
+        actionFailureDetails = null;
         actionFailureRecovery = null;
         actionFailureInFlight = null;
         actionFailureKind = "unknown";
@@ -1319,6 +1329,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         clearActionFailureNotice();
         actionFailureTitle = pendingNotice.title;
         actionFailureDetail = pendingNotice.detail;
+        actionFailureDetails = pendingNotice.details ?? null;
         actionFailureKind = pendingNotice.kind ?? "unknown";
         externalRetry = pendingNotice.retry ?? null;
       }
@@ -1560,13 +1571,15 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).
           dropOutgoingNoTurnWillRetire(chatId, outgoingId, status);
         } catch (err) {
-          // The backend confirms delivery before resolving, so a rejection means the message was
-          // NOT accepted. A /compact the server declined to run gets the declined-command notice
-          // rather than the failure notice, since retrying at once cannot change it.
-          const detail = describeRequestError(err);
-          const isDeclined = DECLINED_COMPACT_SEND_FAILURE_KINDS.has(sendFailureKind(err));
+          // A refusal means the message was NOT accepted; one nothing answered, or mngr could not
+          // confirm, may have reached the agent anyway (noticeKindOf). A /compact the server declined
+          // to run gets the declined-command notice rather than the failure notice, since retrying
+          // at once cannot change it.
+          const failure = describeRequestFailure(err);
+          const told = failureSentence(failure, "Your message wasn't delivered");
+          const isDeclined = DECLINED_COMPACT_SEND_FAILURE_KINDS.has(failure.kind);
           if (!isDeclined) {
-            console.error(`Failed to send message to chat ${chatId}: ${detail}`);
+            console.error(`Failed to send message to chat ${chatId}: ${told.message}`, failure.details);
           }
           dropOutgoing(chatId, outgoingId);
           // Back in the composer immediately: the recovery record is closure state, so a reload
@@ -1580,12 +1593,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // await, so they may have switched and the switch-clear has already gone by.
           if (currentChatId === chatId) {
             if (isDeclined) {
-              declinedSend = { title: "/compact wasn't sent", body: detail };
+              declinedSend = { title: "/compact wasn't sent", body: told.message };
             } else {
               actionFailureTitle = "Couldn't send your message";
-              actionFailureDetail = detail;
+              actionFailureDetail = told.message;
+              actionFailureDetails = told.details;
               actionFailureKind = noticeKindOf(err);
-              isActionFailureOnSignedOutAccount = sendFailureKind(err) === ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND;
+              isActionFailureOnSignedOutAccount = failure.kind === ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND;
               actionFailureRecovery = recovery;
             }
           }
@@ -1959,6 +1973,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
 
       function clearActionFailureNotice(): void {
         actionFailureDetail = null;
+        actionFailureDetails = null;
         actionFailureRecovery = null;
         actionFailureInFlight = null;
         externalRetry = null;
@@ -2042,11 +2057,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // it would surface this agent's error over a different chat, with no way to act on it.
           // The message is already back in that agent's composer either way.
           if (currentChatId === recovery.chatId) {
-            actionFailureDetail = describeRequestError(err);
+            const failure = describeRequestFailure(err);
+            const told = failureSentence(failure, "Your message wasn't delivered");
+            actionFailureDetail = told.message;
+            actionFailureDetails = told.details;
             // The reason can change between attempts -- a blocked input can become an agent that
             // is gone -- and the buttons follow the kind, so it has to be re-read with the text.
             actionFailureKind = noticeKindOf(err);
-            isActionFailureOnSignedOutAccount = sendFailureKind(err) === ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND;
+            isActionFailureOnSignedOutAccount = failure.kind === ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND;
             actionFailureInFlight = null;
           } else {
             clearActionFailureNotice();
@@ -2085,6 +2103,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           await interruptAgent(recovery.chatId);
         } catch (err) {
           actionFailureDetail = describeRequestError(err);
+          actionFailureDetails = null;
           actionFailureKind = describeRequestErrorKind(err);
           actionFailureInFlight = null;
           m.redraw();
@@ -2101,6 +2120,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           return m(actionFailureNotice, {
             title: actionFailureTitle,
             body: [detail],
+            details: actionFailureDetails,
             dismissLabel: "Cancel",
             onDismiss: dismissActionFailureNotice,
             actions: [
@@ -2139,6 +2159,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   recovery === null ? null : (SEND_FAILURE_RESTART_SENTENCES[actionFailureKind] ?? null),
                 ]
               : [detail, isRepeatable ? "You can open the agent's terminal, fix it there, then Retry." : null],
+          details: actionFailureDetails,
           dismissLabel: isRepeatable || recovery !== null ? "Cancel" : "OK",
           isDismissable: actionFailureInFlight === null,
           onDismiss: dismissActionFailureNotice,

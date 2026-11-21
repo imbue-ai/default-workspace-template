@@ -305,6 +305,7 @@ export const App: m.Component<AppAttrs> = {
         toasts: model.toasts.current(),
         placementClass: "fixed bottom-4",
         onDismiss: (id) => model.toasts.dismiss(id),
+        closesPlainToasts: true,
       }),
     ];
   },

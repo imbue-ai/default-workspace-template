@@ -1,16 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFailure } from "@imbue/workspace-ui/src/models/failure";
+import { HttpError } from "@imbue/workspace-ui/src/models/http";
 
 const mocks = vi.hoisted(() => {
-  class CreateChatRefusedError extends Error {
-    readonly kind: string | null;
-
-    constructor(detail: string, kind: string | null) {
-      super(detail);
-      this.kind = kind;
-    }
-  }
   return {
-    CreateChatRefusedError,
     // What the fresh read of the account list leaves selected; null when nothing is signed in.
     selectedAccount: null as { id: string } | null,
     createChat: vi.fn(async (_projectId: string, _accountId?: string) => ({
@@ -24,7 +17,6 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("../models/Chats", () => ({
-  CreateChatRefusedError: mocks.CreateChatRefusedError,
   createChat: mocks.createChat,
   awaitingChatForEmptyList: mocks.awaitingChatForEmptyList,
 }));
@@ -34,6 +26,11 @@ vi.mock("../models/Providers", () => ({
 }));
 
 import { startNewChat } from "./newChat";
+
+/** The chat app's refusal of a create, as ``postJson`` throws it. */
+function createRefusal(detail: string, kind: string | null): HttpError {
+  return new HttpError(readFailure({ status: 400, body: { detail, kind }, rawText: null, requestKind: "change" }));
+}
 
 describe("startNewChat", () => {
   beforeEach(() => {
@@ -61,7 +58,7 @@ describe("startNewChat", () => {
 
   it("opens the chat awaiting a provider when the chat app finds nothing signed in after all", async () => {
     mocks.createChat.mockRejectedValueOnce(
-      new mocks.CreateChatRefusedError("Connect an AI provider to start chatting.", "no_provider_account"),
+      createRefusal("Connect an AI provider to start chatting.", "no_provider_account"),
     );
 
     expect(await startNewChat()).toEqual({ kind: "awaiting_provider", chatId: "chat-awaiting" });
@@ -69,7 +66,7 @@ describe("startNewChat", () => {
 
   it("gives the chat app's reason for any other refusal instead of opening a chat", async () => {
     mocks.createChat.mockRejectedValueOnce(
-      new mocks.CreateChatRefusedError("Cannot determine work directory for primary agent agent-1", null),
+      createRefusal("Cannot determine work directory for primary agent agent-1", null),
     );
 
     expect(await startNewChat()).toEqual({

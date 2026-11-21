@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { ToastQueue } from "./toasts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TOAST_DURATION_MS, ToastQueue } from "./toasts";
 
 describe("ToastQueue", () => {
   afterEach(() => {
@@ -31,5 +31,72 @@ describe("ToastQueue", () => {
     expect(queue.current()).toEqual([]);
     vi.advanceTimersByTime(1000);
     expect(onChange).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("ToastQueue's plain notes with details", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps a plain note's details, and holds the note up once its reader opens them", () => {
+    vi.useFakeTimers();
+    const queue = new ToastQueue(() => undefined, 1000);
+    queue.show("Could not close the window.", { isLasting: false, details: "HTTP 409\nWindow win-1 is pinned" });
+    queue.show("Could not move the shortcut.", { isLasting: false, details: "HTTP 400" });
+    const [held] = queue.current();
+    expect(held.details).toBe("HTTP 409\nWindow win-1 is pinned");
+    queue.hold(held.id);
+    vi.advanceTimersByTime(1000);
+    expect(queue.current().map((toast) => toast.message)).toEqual(["Could not close the window."]);
+    queue.dismiss(held.id);
+    expect(queue.current()).toEqual([]);
+  });
+});
+
+describe("ToastQueue's lasting notes", () => {
+  let queue: ToastQueue;
+
+  function messages(): string[] {
+    return queue.current().map((toast) => toast.message);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    queue = new ToastQueue(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("lets a plain note go on its own and keeps a lasting one until it is dismissed, whatever each carries", () => {
+    queue.show("Could not move the shortcut.");
+    queue.show("Could not read the desktops and apps.", { isLasting: true });
+    vi.advanceTimersByTime(TOAST_DURATION_MS);
+    expect(messages()).toEqual(["Could not read the desktops and apps."]);
+    queue.dismiss(queue.current()[0].id);
+    expect(messages()).toEqual([]);
+  });
+
+  it("replaces a note that says the same rather than stacking it, and keeps one whose details differ", () => {
+    queue.show("Docs couldn't open that.", { isLasting: true, details: "HTTP 400\nno account" });
+    queue.show("Could not close the window.");
+    queue.show("Docs couldn't open that.", { isLasting: true, details: "HTTP 400\nno account" });
+    queue.show("Docs couldn't open that.", { isLasting: true, details: "HTTP 400\nchat is gone" });
+
+    expect(queue.current().map((toast) => [toast.message, toast.details])).toEqual([
+      ["Could not close the window.", null],
+      ["Docs couldn't open that.", "HTTP 400\nno account"],
+      ["Docs couldn't open that.", "HTTP 400\nchat is gone"],
+    ]);
+  });
+
+  it("holds at most three lasting notes, dropping the oldest, and never drops a plain one for them", () => {
+    queue.show("A plain note.");
+    for (let index = 1; index <= 4; index += 1) {
+      queue.show(`Lasting ${index}.`, { isLasting: true });
+    }
+    expect(messages()).toEqual(["A plain note.", "Lasting 2.", "Lasting 3.", "Lasting 4."]);
   });
 });

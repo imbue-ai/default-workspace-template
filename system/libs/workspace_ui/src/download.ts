@@ -19,7 +19,8 @@ export function startDownload(document: Document, url: string, name: string, onF
     }
     const words = answer?.contentType === "text/plain" ? (answer.body?.textContent ?? "").trim() : "";
     frame.remove();
-    onFailure(words === "" ? `Couldn't download ${name}.` : `Couldn't download ${name}: ${words}`);
+    const stem = `Couldn't download "${name}".`;
+    onFailure(words === "" ? stem : `${stem} ${words}`);
   });
   frame.src = url;
   // Left in place on success: the page cannot tell when the response arrives, and removing the frame before then

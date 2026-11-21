@@ -850,7 +850,7 @@ def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page)
 
         error = _chat(page).locator(".message-list-error")
         expect(error).to_be_visible(timeout=15000)
-        expect(error.locator("p")).to_have_text("Error: request failed (HTTP 503)")
+        expect(error.locator("p")).to_have_text("The workspace didn't answer. Try again in a moment.")
 
         page.unroute(events_url)
         error.locator(".message-list-reload").click()
@@ -1787,8 +1787,8 @@ def test_a_send_still_unconfirmed_when_sent_again_asks_the_user_to_check_before_
     tmp_path: Path, page: Page
 ) -> None:
     """The chat app's own second send could not be confirmed either, so it sends nothing more itself: the notice says
-    so in its own words rather than mngr's diagnostics, offers neither Retry nor Restart, and the message stays in the
-    composer and is sent again only when Send again is pressed."""
+    so in its own words, with mngr's diagnostics behind See details, offers neither Retry nor Restart, and the message
+    stays in the composer and is sent again only when Send again is pressed."""
     text = "did you get this?"
     sent: list[str] = []
     messenger = scripted_send_mngr_messenger(
@@ -1811,7 +1811,9 @@ def test_a_send_still_unconfirmed_when_sent_again_asks_the_user_to_check_before_
         expect(notice).to_contain_text(
             "The agent may already have it, so check its terminal before you send it again."
         )
-        expect(notice).not_to_contain_text("Timeout waiting")
+        # A closed <details> is not rendered, so the notice's inner text is what the user sees before opening it.
+        expect(notice).not_to_contain_text("Timeout waiting", use_inner_text=True)
+        expect(notice.locator(".see-details-text")).to_contain_text("Timeout waiting")
         expect(notice.get_by_role("button", name="Retry")).to_have_count(0)
         expect(notice.get_by_role("button", name="Restart")).to_have_count(0)
         expect(chat.locator(".message-input-textbox")).to_have_value(text)

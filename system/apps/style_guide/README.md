@@ -13,7 +13,8 @@ contents list beside the catalog, in three groups.
   fields, the Dropdown and the SegmentedControl, the Menu (with a submenu,
   check rows, a disabled and a danger row), hover tooltips, badges, banners,
   activity dots and spinners, the Modal, the notice and delete-confirmation
-  dialogs, toasts, and the surfaces stacked as the apps stack them.
+  dialogs (a notice with its details), toasts (plain, and lasting with their
+  details and buttons), and the surfaces stacked as the apps stack them.
 - **Theming**: the theme the page wears, and every part of the theme contract
   (`docs/system/blueprint/workspace-themes/`, section 4.2) with the section
   that shows it, or what draws it when the catalog does not; and a framed
