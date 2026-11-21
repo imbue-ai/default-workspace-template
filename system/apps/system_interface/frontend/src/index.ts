@@ -26,9 +26,9 @@ import { permissionResolutionEntries } from "./model/permissionResolutions";
 import * as api from "./model/api";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/deepLinks";
 import type { DeepLink } from "./model/deepLinks";
-import { connectEmbedderToStore, immersiveBridge } from "./store/embedderBridge";
+import { connectEmbedderToStore, firstRunChrome, immersiveBridge } from "./store/embedderBridge";
 import { parseSoloMode } from "./model/soloMode";
-import { isFirstRunProviderStepPending, setFirstRunProviderStep } from "./model/firstRunCover";
+import { applyFirstRunProviderStep, isFirstRunProviderStepPending } from "./model/firstRunCover";
 import { isPreviewShell } from "./model/PreviewShell";
 import type { Frame } from "./model/records";
 import { frameFromViewportFractions } from "./geometry/frames";
@@ -229,7 +229,7 @@ function bootstrap(): void {
   setChildFrameMessageHandler(SHELL_FIRST_RUN_PROVIDER_STEP, (frame, payload) => {
     if (typeof payload.isPending !== "boolean") return;
     const origin = new URL(frame.src, window.location.href).origin;
-    if (setFirstRunProviderStep(payload.isPending, origin)) m.redraw();
+    applyFirstRunProviderStep(payload.isPending, origin, firstRunChrome, () => m.redraw());
   });
   const rootElement = document.getElementById("app");
   if (rootElement) {
