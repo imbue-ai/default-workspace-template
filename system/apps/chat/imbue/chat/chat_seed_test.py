@@ -203,6 +203,8 @@ def test_the_kickoff_note_carries_the_welcome_and_the_picks_and_is_hidden_whole(
     for turn in _turns():
         assert turn.text in note
     assert "<about-user>\nI want to use Studio for: Music, Film, art.\n</about-user>" in note
+    assert "exactly three" in note and "numbered list" in note and "drawn from what they picked" in note
+    assert "reply with a number" in note
     decision = classify_user_message(note)
     assert decision is not None and decision.display is DisplayKind.HIDDEN
 
@@ -215,5 +217,6 @@ def test_the_kickoff_note_with_no_picks_asks_for_a_plain_ready_to_help(tmp_path:
 
     assert "<about-user>" not in note
     assert "here and ready to help" in note
+    assert "exactly three" in note and "numbered list" in note and "reply with a number" in note
     decision = classify_user_message(note)
     assert decision is not None and decision.display is DisplayKind.HIDDEN

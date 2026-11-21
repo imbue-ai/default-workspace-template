@@ -105,14 +105,22 @@ def first_run_kickoff_message(chat_dir: Path) -> str:
     about_user = (
         "While the workspace was being set up, the user was asked what type of studio they want to make and "
         f"answered:\n<about-user>\n{context}\n</about-user>\n"
-        "Open with one short, warm message (two to four sentences) that speaks to what they picked: for each "
-        "thing they named, up to three, one concrete thing you could build or do for it here, then ask which "
-        "they would like to start with."
+        "Open with one short, warm sentence that speaks to what they picked."
         if context != ""
         else (
-            "The user was not asked, or did not say, what they want Studio for. Open with one short, warm message "
-            "(one or two sentences) saying you are here and ready to help, and ask what they would like to do first."
+            "The user was not asked, or did not say, what they want Studio for. Open with one short, warm sentence "
+            "saying you are here and ready to help."
         )
+    )
+    offer = (
+        "Then offer exactly three things you could build or do for them here, as a numbered list (1., 2., 3.), one "
+        "short line each, each a concrete thing rather than a category"
+        + (
+            ", drawn from what they picked (still three when they named fewer)"
+            if context != ""
+            else ", spread across what Studio is good for"
+        )
+        + ". End with one line saying they can reply with a number, or tell you something else. Nothing after that."
     )
     return (
         f"<{FIRST_RUN_KICKOFF_TAG}>\n"
@@ -120,7 +128,7 @@ def first_run_kickoff_message(chat_dir: Path) -> str:
         "first time, and the chat already shows them the welcome this note carries, written before any agent "
         "joined; you are the first agent to join it, and they have not typed anything yet.\n\n"
         f"<conversation>\n{transcript}\n</conversation>\n\n"
-        f"{about_user}\n"
+        f"{about_user}\n{offer}\n"
         "Do not repeat the welcome above, do not use any tools, and do not mention this note or that you were "
         "told anything: just write the message.\n"
         f"</{FIRST_RUN_KICKOFF_TAG}>"
