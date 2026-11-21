@@ -240,6 +240,8 @@ export class LivePagesLayer implements PageDriver {
   private lastFocusedWindowId: string | null = null;
   /** Drops the ``ttyd-focus`` posts still pending for the window last focused. */
   private cancelFrameFocus: () => void = () => undefined;
+  /** Lets go of what ``start`` took hold of. */
+  private stopStarted: () => void = () => undefined;
   /** The ticks the watcher has run. */
   private watchedTicks = 0;
   /** The tick the watcher last raised a window in; null before any. */
@@ -277,7 +279,8 @@ export class LivePagesLayer implements PageDriver {
     this.host.tabIndex = -1;
     this.store.setPageDriver(this);
     stopFollowingTheme?.();
-    stopFollowingTheme = onThemeChanged((theme, isRemembered) => this.sendTheme(theme, isRemembered));
+    const stopFollowing = onThemeChanged((theme, isRemembered) => this.sendTheme(theme, isRemembered));
+    stopFollowingTheme = stopFollowing;
     // The window loses focus when it lands in a frame: for a page that binds no contract, the one sign a person
     // reached its window (the app-usage-signals spec, section 6.4).
     stopWatchingFrameFocus?.();
@@ -292,11 +295,22 @@ export class LivePagesLayer implements PageDriver {
       this.raiseWindowOfActiveFrame(true);
       this.pageToHandBack = null;
     }, FOCUS_WATCH_INTERVAL_MS);
-    stopWatchingFrameFocus = () => {
+    const stopWatching = (): void => {
       window.removeEventListener("blur", onWindowBlur);
       clearInterval(watchTimer);
       this.cancelFrameFocus();
     };
+    stopWatchingFrameFocus = stopWatching;
+    this.stopStarted = () => {
+      stopFollowing();
+      stopWatching();
+    };
+  }
+
+  /** Stop hearing theme changes and watching focus land in a frame, once the layer's view is gone: the watcher is
+   *  a timer, and would go on reading a document that is no longer there. */
+  stop(): void {
+    this.stopStarted();
   }
 
   /** Set which pages live; applied by the next reconcile. */

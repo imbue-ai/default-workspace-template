@@ -9,6 +9,7 @@ import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import type { Desktop, DesktopShortcut } from "../model/records";
+import { FOCUS_WATCH_INTERVAL_MS } from "../pages/livePages";
 import { DesktopStore } from "../store/DesktopStore";
 import { TourController } from "../model/tour";
 import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
@@ -1304,5 +1305,26 @@ describe("a fullscreen window", () => {
     m.redraw.sync();
     expect(document.querySelector("[data-fullscreen-window]")).toBeNull();
     expect(document.querySelector('[data-window-id="win-1"]')?.getAttribute("data-window-state")).toBe("NORMAL");
+  });
+});
+
+describe("the view's removal", () => {
+  it("stops the pages layer's focus watcher, so no tick of it outlives the document", async () => {
+    unmountViews();
+    const started = vi.spyOn(globalThis, "setInterval");
+    const cleared = vi.spyOn(globalThis, "clearInterval");
+    try {
+      await mountApp();
+      const watchers = started.mock.calls.flatMap(([, delay], idx) =>
+        delay === FOCUS_WATCH_INTERVAL_MS ? [started.mock.results[idx].value] : [],
+      );
+      expect(watchers).toHaveLength(1);
+      expect(cleared).not.toHaveBeenCalledWith(watchers[0]);
+      unmountViews();
+      expect(cleared).toHaveBeenCalledWith(watchers[0]);
+    } finally {
+      started.mockRestore();
+      cleared.mockRestore();
+    }
   });
 });

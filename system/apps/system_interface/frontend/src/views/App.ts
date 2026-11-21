@@ -1401,6 +1401,7 @@ export function App(): m.Component<AppAttrs> {
       uninstallContextMenu?.();
       detachGestures?.();
       resizeObserver?.disconnect();
+      pages?.stop();
       if (travelFrame !== null) cancelAnimationFrame(travelFrame);
       trayCard.dispose();
       stopCardRefresh();
