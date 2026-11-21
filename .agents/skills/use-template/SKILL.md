@@ -143,15 +143,17 @@ git worktree add -q "$WT" HEAD
   publisher's workspace built as ordinary files: the app's directory, its
   record (`system/config/apps/<name>.toml`), its generated program files and
   the links to its skills. They arrive as apps this workspace owns. Check
-  them against what is already here, in the worktree:
+  them against what is already here, in the worktree. Run the installer from
+  the repo root and point it at the worktree, which has no environment of its
+  own to run it from:
 
   ```bash
-  ( cd "$WT" && uv run --no-sync app-install check )
+  uv run --no-sync app-install --repo-root "$WT" check
   ```
 
   `inconsistent` names each problem. Two apps on one port (the template's
   app was given a port this workspace already uses) is settled by
-  `( cd "$WT" && uv run --no-sync app-install regenerate )`, which moves the
+  `uv run --no-sync app-install --repo-root "$WT" regenerate`, which moves the
   app whose record is newer and rewrites its program file; commit what it
   lists under `changed_paths` in the worktree. A name the template's app
   shares with something here (an app, a skill, a routine) is a requirement
