@@ -1,0 +1,9 @@
+A workspace boot now starts the shell and the chat app first, and everything else behind them. supervisord used to start all of its programs in the same second, so on a small machine the desktop and the AI-provider chooser waited while about twenty other programs started up and competed for the CPU.
+
+- The first wave is the shell, the chat app, what those two need to serve (agent-observer, owner-exec, vm-exec-register), share-gateway and the memory guard (earlyoom, oom-tag-backstop, publish_cgroup_meminfo). It starts at once.
+
+- Every other built-in program runs through the new `system/scripts/workspace_bare_scripts/start_after_first_wave.py`. At boot this waits until the shell and the chat answer `/api/health`, then waits that program's own `--delay`, so env-converge and host-backup (each with a `uv sync`) start a few seconds apart. share-gateway is in the first wave because relay visitors and the owner's web access reach the shell through it. Waiting for the two apps never runs past 30 seconds after supervisord started, so a broken chat holds nothing back for longer than that. A program started later than that (a restart, a wake, a `supervisorctl update`) is not held at all.
+
+- Every program keeps `autostart=true`. `system/test_supervisord_layout.py` checks that every built-in program is in exactly one of the two waves, and that the gate runs inside the memory band wrapper.
+
+- The shell's and the chat app's program lines now bind each app's port before the app imports anything, through the new `system/scripts/workspace_bare_scripts/listen_then_exec.py`. They then register the app with `forward_port.py --announce`, so both apps are on the services stream within a fraction of a second of supervisord starting. Before, the shell announced itself only after its own start-up and the chat only after it had imported mngr. A request that reaches either app in the meantime waits for it rather than being refused.

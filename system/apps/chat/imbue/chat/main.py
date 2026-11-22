@@ -19,6 +19,7 @@ from workspace_layout.client import DisconnectedShell
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import reconcile
 from imbue.chat.accounts import regenerate_create_defaults
+from imbue.chat.agent_discovery import load_mngr_plugins
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.authors import AuthorStore
 from imbue.chat.auto_open import AutoOpenLedger
@@ -297,6 +298,7 @@ def main() -> None:
     """
     args = _parse_args(None)
     config = load_config()
+    load_mngr_plugins()
     if args.preflight:
         logger.info("Booting in pre-flight mode: no account reconciliation, no agent manager, no registration")
     elif args.secondary:
@@ -330,7 +332,9 @@ def main() -> None:
     serving.start()
 
     # Registered once the server answers, so a window the shell opens on the chat right after the
-    # registration finds the app answering.
+    # registration finds the app answering. Under supervisord the program line has already bound the
+    # port and registered the same row before this process imported anything (chat.conf), which
+    # leaves this registration a no-op there; it is what registers a run started any other way.
     if not (args.no_register or args.preflight or args.secondary):
         register_app(args.manifest, AppUrl(f"http://localhost:{config.chat_port}"))
 

@@ -2,6 +2,7 @@
 
 import gzip
 import json
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,8 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
 from app_manifest.registry import RegistryRow
 from app_manifest.registry import read_registry
+from app_registration import announcement
+from app_registration import forward_port
 from event_streams.archive import compress_staged_streams
 
 from imbue.imbue_common.logging import ROTATED_JSONL_PATTERN
@@ -292,3 +295,37 @@ def test_an_interrupted_archive_is_finished_and_only_the_newest_archives_are_kep
         "events.jsonl.20260501000000000000.gz",
     ]
     assert gzip.decompress((tmp_path / "events.jsonl.20260501000000000000.gz").read_bytes()) == b"staged\n"
+
+
+_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 2h12v12H2z"/></svg>'
+
+
+@pytest.mark.parametrize("is_internal", [False, True])
+def test_a_program_lines_early_announcement_says_what_the_shell_would(tmp_path: Path, is_internal: bool) -> None:
+    """``forward_port.py --announce`` writes the row's registration before the shell runs; a consumer must read the
+    same thing from it as from the shell's own line for that row, field for field and in the same order."""
+    registry = tmp_path / "apps.toml"
+    icon_file = tmp_path / "icon.svg"
+    icon_file.write_text(_ICON)
+    forward_port.register(
+        registry,
+        "chat",
+        "http://localhost:8010",
+        icon_path=icon_file,
+        internal=is_internal,
+        display_name="Chat",
+    )
+    (raw_row,) = tomllib.loads(registry.read_text())["apps"]
+    early_path = tmp_path / "early" / ANNOUNCEMENTS_REL
+    shell_path = tmp_path / "shell" / ANNOUNCEMENTS_REL
+    announcement.announce_row(raw_row, early_path)
+    AppAnnouncementWriter(events_path=shell_path).announce(read_registry(registry))
+
+    (early,) = _events(early_path)
+    (shell,) = _events(shell_path)
+    envelope_only = {"timestamp", "event_id"}
+    assert list(early) == list(shell)
+    assert {k: v for k, v in early.items() if k not in envelope_only} == {
+        k: v for k, v in shell.items() if k not in envelope_only
+    }
+    assert len(early["timestamp"]) == len(shell["timestamp"])

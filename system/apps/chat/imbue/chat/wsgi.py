@@ -1,3 +1,4 @@
+import os
 from typing import Final
 
 from flask import Flask
@@ -6,10 +7,21 @@ from werkzeug.serving import BaseWSGIServer
 from werkzeug.serving import WSGIRequestHandler
 from werkzeug.serving import make_server
 
+from imbue.chat.errors import ChatAppError
+
 # How often flask-sock sends a keepalive ping on each WebSocket connection.
 # Pings detect (and tear down) half-dead peers without any asyncio machinery --
 # each connection owns its own thread, so a wedged send only stalls that thread.
 WS_PING_INTERVAL_SECONDS: Final[int] = 25
+
+# The descriptor of a listening socket the program line bound before this process imported
+# (system/scripts/workspace_bare_scripts/listen_then_exec.py), under werkzeug's own name for one
+# handed down across an exec.
+INHERITED_SOCKET_ENV: Final[str] = "WERKZEUG_SERVER_FD"
+
+
+class InheritedSocketMismatchError(ChatAppError, ValueError):
+    """The socket the program line bound is not on the address this server was configured for."""
 
 
 class Http11RequestHandler(WSGIRequestHandler):
@@ -68,5 +80,27 @@ def make_threaded_server(host: str, port: int, app: Flask) -> BaseWSGIServer:
     connections each own a thread) plus HTTP/1.1 keepalive and chunked
     streaming. The caller owns the returned server's ``serve_forever`` /
     ``shutdown`` lifecycle.
+
+    When the program line bound the port already (``INHERITED_SOCKET_ENV`` names the socket),
+    the server serves on that socket, so the connections that arrived while this process
+    imported are answered rather than refused; it must be on ``host``:``port``.
     """
-    return make_server(host, port, app, threaded=True, request_handler=Http11RequestHandler)
+    inherited_fd = os.environ.pop(INHERITED_SOCKET_ENV, None)
+    server = make_server(
+        host,
+        port,
+        app,
+        threaded=True,
+        request_handler=Http11RequestHandler,
+        fd=int(inherited_fd) if inherited_fd is not None else None,
+    )
+    if inherited_fd is not None:
+        # werkzeug serves on a duplicate of the descriptor, so the inherited one is closed here.
+        os.close(int(inherited_fd))
+        bound_host, bound_port = server.socket.getsockname()[:2]
+        if (bound_host, bound_port) != (host, port):
+            server.server_close()
+            raise InheritedSocketMismatchError(
+                f"the inherited socket listens on {bound_host}:{bound_port}, not {host}:{port}"
+            )
+    return server

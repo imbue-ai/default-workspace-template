@@ -2,6 +2,7 @@ import argparse
 import atexit
 import os
 import signal
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from types import FrameType
@@ -161,13 +162,11 @@ def main() -> None:
     with application.app_context():
         state = get_state()
 
-    # Start the shell now that the app is assembled: the stale-client prune, the registry
-    # watch, the liveness and lifecycle sweeps, and the presence sweep. This is the one place
-    # they are started; ``build_application`` only constructs, so tests that build an app never
-    # start them.
-    state.shell.start()
-    state.presence_sweep.start()
-    state.roster_watch.start()
+    # Start what the first request needs now that the app is assembled: the stale-client prune,
+    # the registry read and watch, and the liveness and lifecycle sweeps. This and the start after
+    # serving below are the one place they are started; ``build_application`` only constructs, so
+    # tests that build an app never start them.
+    state.shell.start_before_serving()
 
     # Tear down the broadcaster, the inventory, and the lifecycle manager (which lets go of
     # every parked port) on exit. ``atexit`` covers a normal return; the signal handlers cover
@@ -185,7 +184,20 @@ def main() -> None:
         config.system_interface_port,
         application,
     )
-    server.serve_forever()
+    serving = threading.Thread(target=server.serve_forever, name="shell-server", daemon=True)
+    serving.start()
+
+    # Then what only reports later changes to open windows (the theme and profile snapshot
+    # watches, the presence sweep, the roster watch), so loading the theme catalog for its watch
+    # does not hold up the first page.
+    state.shell.start_after_serving()
+    state.presence_sweep.start()
+    state.roster_watch.start()
+
+    # Nothing shuts the server down, so serving ends only if the server itself failed.
+    serving.join()
+    logger.error("The shell server stopped serving")
+    raise SystemExit(1)
 
 
 if __name__ == "__main__":
