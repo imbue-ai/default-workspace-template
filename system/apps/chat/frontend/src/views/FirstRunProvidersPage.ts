@@ -4,8 +4,10 @@
  * Imbue Studio's first run ends here, inside the new workspace: the shell covers the desktop with this
  * page until its owner connects an AI provider or skips. The tiles are the lanes; a tile opens that
  * lane's sign-in in the provider chooser, which does the signing in. Once an account is connected it is
- * listed, more can be added, Skip goes away and Next leaves. Skip and Next both finish the step for good
- * (`finishFirstRunProviderStep`), after which the shell takes its cover down.
+ * listed, more can be added, Skip goes away and Next leaves. With two or more connected the list marks the
+ * default, the account the first conversation and every new chat run on, and a click on another row makes that
+ * one the default. Skip and Next both finish the step for good (`finishFirstRunProviderStep`), after which the
+ * shell takes its cover down.
  */
 
 import m from "mithril";
@@ -18,21 +20,26 @@ import {
   finishFirstRunProviderStep,
   getAccounts,
   getLanes,
+  getSelectedAccount,
   isFirstRunProviderStepPending,
   isProviderChooserOpen,
+  loadAccounts,
   loadLanesAndAccountsWithRetry,
   openProviderChooser,
+  setDefaultAccount,
 } from "../models/Providers";
 import { reportProviderChooserOnScreenOnce } from "../shell";
 import { ProviderChooserModal } from "./ProviderChooserModal";
 import { providerMark } from "./providerMarks";
 
 export const FIRST_RUN_PROVIDERS_TITLE = "Your own cloud computer, any AI";
-export const FIRST_RUN_PROVIDERS_LINE = "Studio runs your agents 24/7. Connect your provider to start.";
+export const FIRST_RUN_PROVIDERS_LINE = "Studio runs your agents and apps 24/7. Connect your provider to start.";
 export const FIRST_RUN_CONNECTED_HEADING = "Connected";
-export const FIRST_RUN_ADD_ANOTHER_HEADING = "Add another";
+export const FIRST_RUN_DEFAULT_TAG = "Default";
+export const FIRST_RUN_MAKE_DEFAULT_HINT = "Make default";
+export const FIRST_RUN_ADD_ANOTHER_HEADING = "Add another (optional)";
 export const FIRST_RUN_ADD_ANOTHER_LINE =
-  "Add more providers, or several plans from the same one. Studio lets you switch between them mid-conversation.";
+  "Studio can use multiple subscriptions and switch between providers mid-conversation.";
 export const FIRST_RUN_SKIP_LABEL = "Skip";
 export const FIRST_RUN_NEXT_LABEL = "Next";
 
@@ -47,6 +54,22 @@ const TILE_LINE_BY_LANE: Readonly<Record<string, string>> = {
 };
 
 const MARK_SIZE = 26;
+
+const ACCOUNT_ROW_CLASS = "flex items-center gap-3 px-4 py-2";
+const ACCOUNT_TAG_CLASS = "first-run-muted ml-auto shrink-0 pl-3 text-[13px] leading-snug";
+
+/** Pin ``accountId`` as the default. A failure is reloaded over, so the tag never sits on an account the chat app
+ *  does not hold as the default. */
+function makeDefault(accountId: string): void {
+  void setDefaultAccount(accountId, true)
+    .catch((error: unknown) => {
+      console.warn(`Could not make account ${accountId} the default`, error);
+      void loadAccounts();
+    })
+    .finally(() => {
+      m.redraw();
+    });
+}
 
 export interface FirstRunProvidersPageAttrs {
   shell: ShellConnection;
@@ -102,21 +125,39 @@ export function FirstRunProvidersPage(): m.Component<FirstRunProvidersPageAttrs>
     );
   }
 
-  function accountRow(account: ProviderAccount): m.Children {
+  /** One connected account. ``defaultAccountId`` is null while there is one account, which has no default to tell
+   *  apart and none to choose: the row is then the account alone. */
+  function accountRow(account: ProviderAccount, defaultAccountId: string | null): m.Children {
+    const identity = [
+      m(
+        "span",
+        { class: "first-run-tile-mark", "aria-hidden": "true" },
+        m.trust(providerMark(account.lane, MARK_SIZE)),
+      ),
+      m("span", { class: "flex min-w-0 flex-col" }, [
+        m("span", { class: "text-[16px] font-semibold leading-tight" }, account.provider),
+        m("span", { class: "first-run-muted text-[13px] leading-snug" }, account.harness_label),
+      ]),
+    ];
+    if (defaultAccountId === null) {
+      return m("div", { key: account.id, "data-first-run-account": account.id, class: ACCOUNT_ROW_CLASS }, identity);
+    }
+    if (account.id === defaultAccountId) {
+      return m("div", { key: account.id, "data-first-run-account": account.id, class: ACCOUNT_ROW_CLASS }, [
+        ...identity,
+        m("span", { "data-first-run-default": "", class: ACCOUNT_TAG_CLASS }, FIRST_RUN_DEFAULT_TAG),
+      ]);
+    }
     return m(
-      "div",
-      { key: account.id, "data-first-run-account": account.id, class: "flex items-center gap-3 px-4 py-2" },
-      [
-        m(
-          "span",
-          { class: "first-run-tile-mark", "aria-hidden": "true" },
-          m.trust(providerMark(account.lane, MARK_SIZE)),
-        ),
-        m("span", { class: "flex min-w-0 flex-col" }, [
-          m("span", { class: "text-[16px] font-semibold leading-tight" }, account.provider),
-          m("span", { class: "first-run-muted text-[13px] leading-snug" }, account.harness_label),
-        ]),
-      ],
+      "button",
+      {
+        key: account.id,
+        type: "button",
+        "data-first-run-account": account.id,
+        class: `first-run-account-choice w-full text-left ${ACCOUNT_ROW_CLASS}`,
+        onclick: () => makeDefault(account.id),
+      },
+      [...identity, m("span", { class: `first-run-account-hint ${ACCOUNT_TAG_CLASS}` }, FIRST_RUN_MAKE_DEFAULT_HINT)],
     );
   }
 
@@ -133,6 +174,7 @@ export function FirstRunProvidersPage(): m.Component<FirstRunProvidersPageAttrs>
       if (!isFirstRunProviderStepPending() && isLeaving) return m("div", { class: "first-run-page" });
       const accounts = getAccounts();
       const hasAccount = accounts.length > 0;
+      const defaultAccountId = accounts.length > 1 ? (getSelectedAccount()?.id ?? null) : null;
       return m("div", { id: "first-run-providers", class: "first-run-page" }, [
         m("div", { class: "flex w-full max-w-[660px] flex-col" }, [
           m("h1", { class: "first-run-headline text-center" }, FIRST_RUN_PROVIDERS_TITLE),
@@ -140,7 +182,11 @@ export function FirstRunProvidersPage(): m.Component<FirstRunProvidersPageAttrs>
           hasAccount
             ? m("div", { class: "mt-10 flex flex-col" }, [
                 m("h2", { class: "px-4 text-[15px] font-semibold" }, FIRST_RUN_CONNECTED_HEADING),
-                m("div", { class: "mt-2 flex flex-col" }, accounts.map(accountRow)),
+                m(
+                  "div",
+                  { class: "mt-2 flex flex-col" },
+                  accounts.map((account) => accountRow(account, defaultAccountId)),
+                ),
                 m("h2", { class: "mt-6 px-4 text-[15px] font-semibold" }, FIRST_RUN_ADD_ANOTHER_HEADING),
                 m("p", { class: "first-run-muted mt-1 px-4 text-[15px] leading-relaxed" }, FIRST_RUN_ADD_ANOTHER_LINE),
               ])

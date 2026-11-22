@@ -1021,6 +1021,24 @@
   align-items: center;
   justify-content: center;
 }
+/* A connected account that is not the default: the whole row is the button that makes it one, and says so at its
+ * right edge only under the pointer or the keyboard's focus. */
+.first-run-account-choice {
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background-color 120ms ease-out;
+}
+.first-run-account-choice:hover {
+  background: color-mix(in srgb, var(--first-run-ink) 6%, var(--first-run-ground));
+}
+.first-run-account-hint {
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+.first-run-account-choice:hover .first-run-account-hint,
+.first-run-account-choice:focus-visible .first-run-account-hint {
+  opacity: 1;
+}
 .first-run-skip {
   color: var(--first-run-ink-muted);
   font-size: 14px;
@@ -1049,6 +1067,7 @@
   cursor: default;
 }
 .first-run-tile:focus-visible,
+.first-run-account-choice:focus-visible,
 .first-run-skip:focus-visible,
 .first-run-next:focus-visible {
   outline: 2px solid var(--first-run-ink);
