@@ -120,9 +120,10 @@ Now do the merge in a throwaway worktree branched off `HEAD`, and check it there
 before it can touch the live tree:
 
 ```bash
+FETCHED="$(git rev-parse FETCH_HEAD)"
 WT="$(mktemp -d)"
 git worktree add -q "$WT" HEAD
-( cd "$WT" && git merge --allow-unrelated-histories --no-edit FETCH_HEAD )
+( cd "$WT" && git merge --allow-unrelated-histories --no-edit "$FETCHED" )
 ```
 
 **Check the merge went well, in the worktree:**

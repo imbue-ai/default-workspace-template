@@ -109,9 +109,10 @@ or slug is probably wrong, and forcing the merge would splice in a whole foreign
 tree.
 
 ```bash
+FETCHED="$(git rev-parse FETCH_HEAD)"
 WT="$(mktemp -d)"
 git worktree add -q "$WT" HEAD
-( cd "$WT" && git merge --no-edit FETCH_HEAD )
+( cd "$WT" && git merge --no-edit "$FETCHED" )
 ```
 
 **Check the merge went well, in the worktree:**
