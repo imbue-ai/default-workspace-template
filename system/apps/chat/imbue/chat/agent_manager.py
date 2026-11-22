@@ -20,6 +20,7 @@ from uuid import uuid4
 from chat_background_tasks.markers import TaskSource
 from latchkey_access.gateway import GatewayAccess
 from loguru import logger as _loguru_logger
+from onboarding_activity.markers import Marker
 from oom_priority.bands import set_oom_score_adj
 from oom_priority.registry import live_pids_by_agent_id
 from pydantic import Field
@@ -219,6 +220,7 @@ from imbue.chat.naming import canonical_agent_name
 from imbue.chat.naming import first_free_numbered_name
 from imbue.chat.naming import is_minted_chat_name
 from imbue.chat.naming import is_name_conflict
+from imbue.chat.onboarding_markers import set_onboarding_marker
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceTracker
@@ -945,6 +947,17 @@ def _has_new_user_turn_saying(events: list[dict[str, Any]], text: str, seen_ids:
 
 
 @pure
+def _filed_permission_request_id(event: Mapping[str, Any]) -> str | None:
+    """The id of the permission request an event files: a tool result carrying the gateway's echoed
+    ``permission_request`` object, the field the request's card is drawn from. None for any other event."""
+    filed = event.get("permission_request")
+    if not isinstance(filed, dict):
+        return None
+    request_id = filed.get("request_id")
+    return request_id if isinstance(request_id, str) else None
+
+
+@pure
 def _has_user_turn_since(events: list[dict[str, Any]], since: float) -> bool:
     """Whether one of the events is a user turn timestamped at or after ``since`` (epoch seconds).
 
@@ -1619,6 +1632,9 @@ class AgentManager:
     # from the transcript events the watcher parses. A non-empty set is the chat's
     # ``attention`` status.
     _pending_permission_ids_by_agent: dict[str, set[str]]
+    # Whether this process has set the ``permission_request_filed`` onboarding marker, so a transcript read
+    # again (a watcher's backlog) does not write it again.
+    _is_permission_request_marker_set: bool
     # Per agent, the send-time ids of its in-flight sends that are waiting for it to come up. A
     # non-empty set, less the withdrawn ones, is the snapshot's ``is_connecting``; the whole set
     # keeps the chat reading as revived while a send's start is still running.
@@ -1825,6 +1841,7 @@ class AgentManager:
             manager._auto_open.request_open(restored_chat_id)
         manager._is_agent_list_known = False
         manager._pending_permission_ids_by_agent = {}
+        manager._is_permission_request_marker_set = False
         manager._connecting_message_ids_by_agent = {}
         manager._withdrawable_sends_by_agent = {}
         manager._abandoned_creates = set()
@@ -2120,6 +2137,21 @@ class AgentManager:
             self._main_chat.write(chat_id)
         self._broadcast_chats_updated()
         return True
+
+    def has_person_chat_other_than(self, chat_id: ChatId) -> bool:
+        """Whether a chat a person talks to exists besides ``chat_id``: a listed agent chat that no agent started,
+        or an agent chat that is not on an agent yet (awaiting its first send, being created, or failed)."""
+        with self._lock:
+            if any(
+                chat.chat_id != chat_id
+                for agent, chat in self._listed_chats_locked()
+                if agent.labels.get("agent_created") != "true" and agent.harness is not HarnessType.ROOM
+            ):
+                return True
+            return any(
+                provisional.chat_id != chat_id and provisional.kind is not ChatKind.ROOM
+                for provisional in self._provisional_chats.values()
+            )
 
     def _main_chat_candidates_locked(self) -> list[MainChatCandidate]:
         """The chats that can be the main chat: every listed chat a user started that is not a room (make-main
@@ -7141,6 +7173,7 @@ class AgentManager:
         No-op for agents not being tracked for activity (e.g. remote agents, or
         stale callbacks for an agent that was just destroyed).
         """
+        self._note_filed_permission_requests(events)
         is_pending_compaction_ended = self._end_pending_compaction_by_a_later_turn(agent_id, events)
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
@@ -7185,6 +7218,15 @@ class AgentManager:
         _loguru_logger.info("autocompact: compaction pending ended by a turn agent={} cause={}", agent_id, cause.value)
         return True
 
+    def _note_filed_permission_requests(self, events: list[dict[str, Any]]) -> None:
+        """Set the ``permission_request_filed`` onboarding marker when one of ``events`` files a permission
+        request, in whichever chat, settled since or not. Once the marker is written this process leaves it be."""
+        if self._is_permission_request_marker_set:
+            return
+        if not any(_filed_permission_request_id(event) is not None for event in events):
+            return
+        self._is_permission_request_marker_set = set_onboarding_marker(Marker.PERMISSION_REQUEST_FILED)
+
     def _fold_pending_permissions_locked(self, agent_id: str, events: list[dict[str, Any]]) -> bool:
         """Fold a batch of events into the agent's pending permission requests; True when the set changed.
 
@@ -7196,9 +7238,9 @@ class AgentManager:
         pending = self._pending_permission_ids_by_agent.setdefault(agent_id, set())
         before = set(pending)
         for event in events:
-            filed = event.get("permission_request")
-            if isinstance(filed, dict) and isinstance(filed.get("request_id"), str):
-                pending.add(filed["request_id"])
+            filed_request_id = _filed_permission_request_id(event)
+            if filed_request_id is not None:
+                pending.add(filed_request_id)
             if event.get("display") == DisplayKind.PERMISSION_RESOLUTION.value:
                 resolved_id = event.get("request_id")
                 if isinstance(resolved_id, str):

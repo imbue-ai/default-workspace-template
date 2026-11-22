@@ -648,7 +648,13 @@ workspace, a one-time notice over the model bar explains it.
 ## Suggestions
 
 Suggestions are short entries above the composer that the user can click instead of typing
-(`suggestions.py`; `specs/chat-suggestions` in the mngr repository). A chat's next-step
+(`suggestions.py`; `specs/chat-suggestions` in the mngr repository). They are offered at three
+placements: under an agent's reply (`next_step`), while an agent works on a reply (`activity`),
+and on a chat with no message yet (`new_chat`). A reply suggestion sends its label when clicked.
+An action suggestion carries an `action` and sends nothing: its click does what the action
+names. Only the activity and new-chat placements offer those, and a next-step set never does.
+
+A chat's next-step
 suggestions are the replies offered under one assistant message, kept whole as one file in the
 chat's folder, `data/.apps/chat/chats/<chat-id>/suggestions.json`:
 
@@ -658,13 +664,14 @@ chat's folder, `data/.apps/chat/chats/<chat-id>/suggestions.json`:
   "after_event_id": "<the event id of the assistant message these follow>",
   "source": "fixed",
   "suggestions": [
-    {"suggestion_id": "start-describe", "label": "Describe what you want to make", "is_recommended": false}
+    {"suggestion_id": "start-describe", "label": "Describe what you want to make", "action": null, "is_recommended": false}
   ]
 }
 ```
 
 `source` is `fixed` for a set the chat app wrote itself (the first-run seed's start suggestions,
-and the tree's below) and `generated` for one a model worked out. `GET /api/chats/<chat-id>/suggestions`
+and the tree's below) and `generated` for one a model worked out. `action` is null in every
+stored suggestion, and a file written without the field reads the same. `GET /api/chats/<chat-id>/suggestions`
 answers `{"status", "after_event_id", "source", "suggestions"}`: `ready` with the stored set,
 `pending` while a set is being worked out (naming the reply it is for, with an empty list), or
 `none` with nulls and an empty list. It answers for a seeded chat still awaiting its first agent
@@ -770,10 +777,68 @@ button to send your message", recorded as `is_picker_send_hint_shown` in the cha
 shows once; it goes on "Got it", on a click of the button, and when a message is sent any other
 way.
 
+Activity suggestions are things worth trying in Studio that this workspace's owner has not done
+yet (`activity_suggestions.py`). The activity and new-chat placements offer the same ones, each
+an action suggestion with a condition that holds until the owner has done the thing:
+
+| Id | Label | Action | Offered while |
+|---|---|---|---|
+| `new_chat` | Work in parallel by starting a new chat | `new_chat_coach` | `second_chat_started` is not set |
+| `phone_access` | Access Studio from your phone | `phone_access` | `phone_layout_used` is not set |
+| `build_app` | Build an app | `build_app_coach` | the registry holds no app the user built, and `app_build_started` is not set or was last set more than an hour ago |
+| `connect_data` | Connect some data | `connect_data_coach` | neither `permission_request_filed` nor `connect_data_coach_shown` is set |
+
+The names in the last column are onboarding markers (`system/libs/onboarding_activity`): empty
+files under `data/.state/onboarding_activity/` that are only ever set, so a fact stays true
+after what proved it is gone (a deleted chat, a phone put away). The chat app sets three of them
+(`onboarding_markers.py`):
+
+- `second_chat_started`, when `POST /api/chats/create` creates an agent chat a person asked for
+  while another chat a person talks to exists. A create a person asked for names the client it
+  came from in `client_id`, as the page's own create does and a script's
+  (`message_chat.py --create`) does not. A chat a person talks to is a listed agent chat that no
+  agent started, or one not on an agent yet, a seeded chat awaiting its first message included.
+  The chat being launched never counts as the other one, so the first message that launches the
+  chat a workspace opened on starts no second chat.
+- `permission_request_filed`, when the agent manager reads a tool result that files a permission
+  request, in any chat it follows, whether or not the request has been settled since. It is
+  written once per run of the app, so a transcript read again does not write it again. A request
+  filed in a chat the app follows no transcript of is not seen.
+- `connect_data_coach_shown`, when the owner clicks the `connect_data` suggestion.
+
+The shell sets `tour_finished` and `phone_layout_used`, and the build-app skill's scaffolder sets
+`app_build_started` on every run. An app the user built is what `app_manifest.has_user_built_app`
+says it is: a registry row that is neither `system` nor `internal`, registered by a package the
+root `pyproject.toml` does not list as its own, which leaves out the template's apps, a new
+app's mock frame, and a preview.
+
+`GET /api/suggestions/activity?placement=activity|new_chat&chat_id=<chat-id>` answers
+`{"suggestions": [...]}`: every suggestion whose condition holds, in the table's order, each as
+`{"suggestion_id", "label", "action", "is_recommended": false}`. The list is empty when none is
+offered here at all, which is when any of these holds: the requester is not the workspace's
+owner (`X-Imbue-Identity`; a request with no header is the owner's); the placement's switch is
+off; `tour_finished` is not set; or `chat_id` names
+the first-run chat while its tree's step is not `done`. `chat_id` may be left out or name a chat
+the app does not know yet, and then no tree holds anything back. A `placement` that is missing
+or anything else answers 400. The route answers every suggestion that holds and leaves it to the
+page to drop the ones it cannot carry out and to decide how many to draw.
+
+`POST /api/suggestions/activity/clicked` takes `{"suggestion_id": "<id>"}` and answers `{}`. The
+owner's click on `connect_data` sets `connect_data_coach_shown`, which retires that suggestion;
+a click on any of the other three records nothing, since doing the thing is what retires them,
+and so does a visitor's click. An id that is no activity suggestion's answers 400.
+
+A marker or a registry that cannot be read counts against the suggestions that read it, so
+nothing is offered rather than everything: an unreadable `tour_finished` closes the whole gate.
+A marker that cannot be written is logged, and the request or the transcript read that noticed
+the fact goes on as it would have; the suggestion it would have retired may then be offered
+again.
+
 Three workspace-wide switches say which suggestions are offered, each on unless changed:
 `is_next_step_suggestions_enabled`, `is_activity_suggestions_enabled`, and
 `is_new_chat_suggestions_enabled` in the chat settings (`chat_settings.py`, `GET /api/settings`).
-Only the next-step switch has a strip to govern today. `PUT /api/settings` replaces the settings
+The next-step switch governs the strip under a reply, and the other two govern what
+`GET /api/suggestions/activity` answers at their placement. `PUT /api/settings` replaces the settings
 whole, so a writer that knows fewer fields would reset the rest; `PUT /api/settings/suggestions`
 takes any of the three switches, changes only those (one left out or null stays as it is), and
 answers the settings as `GET /api/settings` does. Under the pills the workspace's owner is shown

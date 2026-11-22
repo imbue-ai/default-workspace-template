@@ -7,6 +7,8 @@ from pydantic import ValidationError
 from imbue.chat.suggestions import ChatSuggestions
 from imbue.chat.suggestions import SUGGESTIONS_FILENAME
 from imbue.chat.suggestions import Suggestion
+from imbue.chat.suggestions import SuggestionAction
+from imbue.chat.suggestions import SuggestionPlacement
 from imbue.chat.suggestions import SuggestionSource
 from imbue.chat.suggestions import read_chat_suggestions
 from imbue.chat.suggestions import remove_chat_suggestions
@@ -28,6 +30,32 @@ def test_a_suggestion_is_not_recommended_unless_it_says_so() -> None:
     assert Suggestion(suggestion_id="a", label="Yes").is_recommended is False
 
 
+def test_a_suggestion_is_a_reply_unless_it_names_an_action_and_only_a_known_action_is_one() -> None:
+    assert Suggestion(suggestion_id="a", label="Yes").action is None
+    coach = Suggestion.model_validate(
+        {"suggestion_id": "build_app", "label": "Build an app", "action": "build_app_coach"}
+    )
+    assert coach.action is SuggestionAction.BUILD_APP_COACH
+    assert coach.model_dump(mode="json") == {
+        "suggestion_id": "build_app",
+        "label": "Build an app",
+        "action": "build_app_coach",
+        "is_recommended": False,
+    }
+    with pytest.raises(ValidationError):
+        Suggestion.model_validate({"suggestion_id": "a", "label": "Yes", "action": "open_the_pod_bay_doors"})
+
+
+def test_the_placements_and_the_actions_are_the_wire_values_the_pages_read() -> None:
+    assert [placement.value for placement in SuggestionPlacement] == ["next_step", "activity", "new_chat"]
+    assert [action.value for action in SuggestionAction] == [
+        "new_chat_coach",
+        "phone_access",
+        "build_app_coach",
+        "connect_data_coach",
+    ]
+
+
 def test_a_suggestion_needs_an_id_and_a_label() -> None:
     with pytest.raises(ValidationError):
         Suggestion(suggestion_id="", label="Yes")
@@ -43,8 +71,18 @@ def test_the_suggestions_file_holds_the_set_in_the_shape_the_pages_read(tmp_path
         "after_event_id": "agent-1:seed:3",
         "source": "fixed",
         "suggestions": [
-            {"suggestion_id": "start-describe", "label": "Describe what you want to make", "is_recommended": False},
-            {"suggestion_id": "start-features", "label": "See what Studio can do", "is_recommended": True},
+            {
+                "suggestion_id": "start-describe",
+                "label": "Describe what you want to make",
+                "action": None,
+                "is_recommended": False,
+            },
+            {
+                "suggestion_id": "start-features",
+                "label": "See what Studio can do",
+                "action": None,
+                "is_recommended": True,
+            },
         ],
     }
 
@@ -81,7 +119,7 @@ def test_a_file_written_without_the_optional_fields_reads_with_their_defaults(tm
     assert stored == ChatSuggestions(
         after_event_id="evt-1",
         source=SuggestionSource.GENERATED,
-        suggestions=(Suggestion(suggestion_id="s1", label="Yes", is_recommended=False),),
+        suggestions=(Suggestion(suggestion_id="s1", label="Yes", action=None, is_recommended=False),),
     )
 
 

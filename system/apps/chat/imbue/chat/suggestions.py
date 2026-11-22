@@ -1,5 +1,10 @@
 """Suggestions: short entries above the composer that the user can click instead of typing.
 
+A suggestion is offered in one of three places: under an agent's reply (next-step), while an agent
+works on a reply (activity), and on a chat with no message yet (new-chat). Clicking a reply
+suggestion sends its label; clicking an action suggestion does what its action names instead, and
+only the activity and new-chat placements offer those (``activity_suggestions.py``).
+
 A chat's next-step suggestions are the replies offered under one assistant message, kept as one
 file in the chat's own folder so every page of the chat reads the same set and it travels with
 the chat. The file names the message it follows (``after_event_id``): a page shows the set only
@@ -27,6 +32,31 @@ MAX_SUGGESTION_LABEL_LENGTH: Final[int] = 80
 MAX_SUGGESTION_COUNT: Final[int] = 10
 
 
+class SuggestionPlacement(LowerCaseStrEnum):
+    """Where a strip of suggestions is offered (a wire value)."""
+
+    # Under an agent's reply: replies to it.
+    NEXT_STEP = auto()
+    # While an agent works on a reply: things to try in Studio meanwhile.
+    ACTIVITY = auto()
+    # On a chat with no message yet: the same things to try.
+    NEW_CHAT = auto()
+
+
+class SuggestionAction(LowerCaseStrEnum):
+    """What clicking an action suggestion does in place of sending its label (a wire value). The page that draws
+    the suggestion carries each one out, and drops a suggestion whose action it does not know."""
+
+    # Point at the chat list's New chat button.
+    NEW_CHAT_COACH = auto()
+    # Open the Imbue Studio chrome's share panel at its phone-access control.
+    PHONE_ACCESS = auto()
+    # Point at the composer.
+    BUILD_APP_COACH = auto()
+    # Point at the Imbue Studio chrome's permissions control.
+    CONNECT_DATA_COACH = auto()
+
+
 class SuggestionSource(LowerCaseStrEnum):
     """Where a set of suggestions came from (a wire value)."""
 
@@ -46,11 +76,18 @@ class SuggestionsStatus(LowerCaseStrEnum):
 
 
 class Suggestion(FrozenModel):
-    """One clickable entry. Clicking it sends its label as the user's message, so what the pill says and what
-    the transcript shows never differ."""
+    """One clickable entry. Clicking a reply suggestion sends its label as the user's message, so what the pill
+    says and what the transcript shows never differ; clicking an action suggestion sends nothing."""
 
     suggestion_id: str = Field(min_length=1, description="The suggestion's id, unique within its set")
-    label: str = Field(min_length=1, description="What the pill says, and the message a click sends")
+    label: str = Field(
+        min_length=1, description="What the pill says, and the message a click on a reply suggestion sends"
+    )
+    action: SuggestionAction | None = Field(
+        default=None,
+        description="What a click does in place of sending the label; None for a reply suggestion, which every "
+        "suggestion of a next-step set is",
+    )
     is_recommended: bool = Field(default=False, description="Whether the pill is drawn as the recommended one")
 
 

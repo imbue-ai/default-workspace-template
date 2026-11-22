@@ -19,6 +19,9 @@ from uuid import uuid4
 import pytest
 from latchkey_access.gateway import GatewayAccess
 from mngr_cli_contract.contract import assert_mngr_argv_valid
+from onboarding_activity.markers import MARKER_DIR_ENV
+from onboarding_activity.markers import Marker
+from onboarding_activity.markers import is_marked
 from oom_priority import bands
 from pydantic import SecretStr
 from workspace_layout.primitives import ParticipantKey
@@ -6062,6 +6065,63 @@ def test_a_filed_permission_request_is_pending_until_its_verdict_lands(
         settled = _last_chats_updated(_drain(listener))
         assert settled is not None
         assert [chat["status"] for chat in settled["chats"]] == ["working"]
+    finally:
+        agent_manager.stop()
+
+
+def test_a_filed_permission_request_sets_its_onboarding_marker_once_whichever_chat_filed_it(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """The marker records that a request was ever filed, settled since or not, and by any agent the app reads,
+    tracked for activity or not. Once written it is left alone, so a transcript read again does not refresh it."""
+    marker_path = Path(os.environ[MARKER_DIR_ENV]) / Marker.PERMISSION_REQUEST_FILED.value
+    filed_and_settled = [
+        {"type": "tool_result", "tool_call_id": "x", "permission_request": {"request_id": "evt-1"}},
+        {"type": "user_message", "content": "ok", "display": "permission_resolution", "request_id": "evt-1"},
+    ]
+    try:
+        agent_manager.update_session_events("agent-1", [{"type": "tool_result", "tool_call_id": "x"}])
+        agent_manager.update_session_events(
+            "agent-1", [{"type": "tool_result", "permission_request": "not a request"}]
+        )
+        assert not is_marked(Marker.PERMISSION_REQUEST_FILED)
+
+        agent_manager.update_session_events("agent-untracked", filed_and_settled)
+
+        assert is_marked(Marker.PERMISSION_REQUEST_FILED)
+        long_ago = time.time() - 3600
+        os.utime(marker_path, (long_ago, long_ago))
+
+        agent_manager.update_session_events("agent-1", filed_and_settled)
+
+        assert marker_path.stat().st_mtime == pytest.approx(long_ago)
+    finally:
+        agent_manager.stop()
+
+
+def test_a_permission_marker_that_cannot_be_written_is_tried_again_at_the_next_filed_request(
+    agent_manager: AgentManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    filed = [{"type": "tool_result", "tool_call_id": "x", "permission_request": {"request_id": "evt-1"}}]
+    marker_directory = os.environ[MARKER_DIR_ENV]
+    # A file where the marker directory should be: nothing can be made under it.
+    blocked = tmp_path / "blocked"
+    blocked.write_text("")
+    monkeypatch.setenv(MARKER_DIR_ENV, str(blocked))
+    (tmp_path / "agents" / "agent-1").mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+    try:
+        agent_manager.update_session_events("agent-1", filed)
+
+        # The read goes on as it would have: the request is pending all the same.
+        assert agent_manager.has_pending_permission(ChatId("agent-1"))
+
+        monkeypatch.setenv(MARKER_DIR_ENV, marker_directory)
+        assert not is_marked(Marker.PERMISSION_REQUEST_FILED)
+        agent_manager.update_session_events("agent-1", filed)
+
+        assert is_marked(Marker.PERMISSION_REQUEST_FILED)
     finally:
         agent_manager.stop()
 

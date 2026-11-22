@@ -24,12 +24,17 @@ from uuid import uuid4
 import httpx
 import pytest
 from app_manifest.testing import assert_document_policy_admits_page
+from app_manifest.testing import write_app_manifest
 from app_schema.testing import assert_api_schema_describes_app
 from chat_background_tasks.listing import chats_from_agents_payload
 from flask import Flask
 from flask.testing import FlaskClient
 from latchkey_access.gateway import GatewayAccess
 from mngr_cli_contract.contract import assert_mngr_argv_valid
+from onboarding_activity.markers import MARKER_DIR_ENV
+from onboarding_activity.markers import Marker
+from onboarding_activity.markers import is_marked
+from onboarding_activity.markers import mark
 from oom_priority import bands
 from pydantic import Field
 from pydantic import SecretStr
@@ -4240,6 +4245,327 @@ def test_a_settings_change_through_either_route_is_pushed_to_every_page(app: Fla
     assert drain_pushes(pushes) == []
 
 
+_ALL_ACTIVITY_SUGGESTIONS = [
+    {
+        "suggestion_id": "new_chat",
+        "label": "Work in parallel by starting a new chat",
+        "action": "new_chat_coach",
+        "is_recommended": False,
+    },
+    {
+        "suggestion_id": "phone_access",
+        "label": "Access Studio from your phone",
+        "action": "phone_access",
+        "is_recommended": False,
+    },
+    {"suggestion_id": "build_app", "label": "Build an app", "action": "build_app_coach", "is_recommended": False},
+    {
+        "suggestion_id": "connect_data",
+        "label": "Connect some data",
+        "action": "connect_data_coach",
+        "is_recommended": False,
+    },
+]
+
+
+def _get_activity_suggestions(
+    client: FlaskClient, placement: str = "activity", chat_id: str | None = None, headers: dict[str, str] | None = None
+) -> Any:
+    query = {"placement": placement} if chat_id is None else {"placement": placement, "chat_id": chat_id}
+    return client.get("/api/suggestions/activity", query_string=query, headers=headers)
+
+
+def _offered_activity_ids(client: FlaskClient, placement: str = "activity", chat_id: str | None = None) -> list[str]:
+    response = _get_activity_suggestions(client, placement, chat_id)
+    assert response.status_code == 200
+    return [suggestion["suggestion_id"] for suggestion in response.get_json()["suggestions"]]
+
+
+def test_the_activity_route_offers_nothing_until_the_tour_has_finished_and_then_everything_not_yet_done(
+    client: FlaskClient,
+) -> None:
+    """A workspace whose owner has done none of it is offered all four, in their fixed order, at both
+    placements, once the tour is out of the way."""
+    before_the_tour = _get_activity_suggestions(client)
+
+    mark(Marker.TOUR_FINISHED)
+    while_waiting = _get_activity_suggestions(client, "activity")
+    on_a_new_chat = _get_activity_suggestions(client, "new_chat")
+
+    assert before_the_tour.status_code == 200
+    assert before_the_tour.get_json() == {"suggestions": []}
+    assert while_waiting.status_code == 200
+    assert while_waiting.get_json() == {"suggestions": _ALL_ACTIVITY_SUGGESTIONS}
+    assert on_a_new_chat.get_json() == {"suggestions": _ALL_ACTIVITY_SUGGESTIONS}
+
+
+def test_the_activity_route_refuses_a_placement_that_offers_no_activity_suggestions(client: FlaskClient) -> None:
+    mark(Marker.TOUR_FINISHED)
+
+    assert client.get("/api/suggestions/activity").status_code == 400
+    for placement in ("", "next_step", "ACTIVITY", "everywhere"):
+        refused = _get_activity_suggestions(client, placement)
+        assert refused.status_code == 400
+        assert refused.get_json() == {"detail": "placement must be 'activity' or 'new_chat'"}
+
+
+def test_the_activity_route_drops_each_suggestion_as_its_marker_is_set(client: FlaskClient) -> None:
+    mark(Marker.TOUR_FINISHED)
+
+    mark(Marker.PHONE_LAYOUT_USED)
+    assert _offered_activity_ids(client) == ["new_chat", "build_app", "connect_data"]
+    mark(Marker.SECOND_CHAT_STARTED)
+    assert _offered_activity_ids(client) == ["build_app", "connect_data"]
+    mark(Marker.PERMISSION_REQUEST_FILED)
+    assert _offered_activity_ids(client) == ["build_app"]
+    # A build started just now holds the last one back, at either placement.
+    mark(Marker.APP_BUILD_STARTED)
+    assert _offered_activity_ids(client, "activity") == []
+    assert _offered_activity_ids(client, "new_chat") == []
+
+
+def test_the_activity_route_stops_suggesting_an_app_once_the_user_has_built_one(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The registry is read against the workspace the app runs in: a registered package the root project does not
+    list as its own is the user's app, and the template's own apps are not."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "pyproject.toml").write_text(
+        '[project]\nname = "workspace"\nversion = "0.1.0"\n\n[tool.uv.workspace]\nmembers = ["system/apps/chat"]\n'
+    )
+    for package, name in (("chat", "chat"), ("todo_list", "todo-list")):
+        manifest = f'name = "{name}"\ndisplay_name = "{name.title()}"\nicon = "icon.svg"\n'
+        app_directory = write_app_manifest(workspace, package, manifest, True).parent
+        (app_directory / "pyproject.toml").write_text(f'[project]\nname = "{name}"\nversion = "0.1.0"\n')
+    monkeypatch.chdir(workspace)
+    registry = Path(os.environ["MINDS_APPS_FILE"])
+    mark(Marker.TOUR_FINISHED)
+
+    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://localhost:5000"\n')
+    with_the_templates_apps = _offered_activity_ids(client)
+    registry.write_text(
+        '[[apps]]\nname = "chat"\nurl = "http://localhost:5000"\n'
+        '[[apps]]\nname = "todo-list"\nurl = "http://localhost:5001"\n'
+    )
+    with_a_built_app = _offered_activity_ids(client)
+
+    assert with_the_templates_apps == ["new_chat", "phone_access", "build_app", "connect_data"]
+    assert with_a_built_app == ["new_chat", "phone_access", "connect_data"]
+
+
+def test_the_activity_route_offers_a_visitor_nothing(client: FlaskClient) -> None:
+    mark(Marker.TOUR_FINISHED)
+
+    visitors = _get_activity_suggestions(client, headers=_identity_header(_VISITOR))
+    owners = _get_activity_suggestions(client, headers=_identity_header(RequestIdentity(owner=True)))
+
+    assert visitors.status_code == 200
+    assert visitors.get_json() == {"suggestions": []}
+    assert owners.get_json() == {"suggestions": _ALL_ACTIVITY_SUGGESTIONS}
+
+
+def test_each_activity_placement_is_switched_off_by_its_own_switch(client: FlaskClient) -> None:
+    mark(Marker.TOUR_FINISHED)
+
+    client.put("/api/settings/suggestions", json={"is_activity_suggestions_enabled": False})
+    assert _offered_activity_ids(client, "activity") == []
+    assert len(_offered_activity_ids(client, "new_chat")) == 4
+
+    client.put(
+        "/api/settings/suggestions",
+        json={"is_activity_suggestions_enabled": True, "is_new_chat_suggestions_enabled": False},
+    )
+    assert len(_offered_activity_ids(client, "activity")) == 4
+    assert _offered_activity_ids(client, "new_chat") == []
+
+    # The next-step switch is another strip's.
+    client.put(
+        "/api/settings/suggestions",
+        json={"is_new_chat_suggestions_enabled": True, "is_next_step_suggestions_enabled": False},
+    )
+    assert len(_offered_activity_ids(client, "new_chat")) == 4
+
+
+def test_the_activity_route_offers_nothing_in_the_first_run_chat_while_its_tree_is_in_progress(
+    app: Flask, client: FlaskClient
+) -> None:
+    """The first conversation's own suggestions are the tree's; every other chat, and a chat the app does not
+    know yet, is offered the activity suggestions meanwhile."""
+    manager = state_of(app).agent_manager
+    mark(Marker.TOUR_FINISHED)
+    first_run_chat_id = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"]
+    assert manager.get_first_run_tree_step(ChatId(first_run_chat_id)) is FirstRunTreeStep.START
+
+    assert _offered_activity_ids(client, "activity", first_run_chat_id) == []
+    assert _offered_activity_ids(client, "new_chat", first_run_chat_id) == []
+    assert len(_offered_activity_ids(client, "activity", f"agent-{uuid4().hex}")) == 4
+    assert len(_offered_activity_ids(client, "activity", "")) == 4
+    assert len(_offered_activity_ids(client, "activity")) == 4
+    # An id that is no chat's shape names no chat, so no tree holds anything back.
+    assert len(_offered_activity_ids(client, "activity", "../../etc")) == 4
+
+    write_first_run_tree_step(manager._chat_files_root / first_run_chat_id, FirstRunTreeStep.IDEAS)
+    assert _offered_activity_ids(client, "activity", first_run_chat_id) == []
+
+    write_first_run_tree_step(manager._chat_files_root / first_run_chat_id, FirstRunTreeStep.DONE)
+    assert len(_offered_activity_ids(client, "activity", first_run_chat_id)) == 4
+
+
+def test_a_click_on_the_connect_data_suggestion_retires_it_and_a_click_on_any_other_records_nothing(
+    client: FlaskClient,
+) -> None:
+    mark(Marker.TOUR_FINISHED)
+
+    for suggestion_id in ("new_chat", "phone_access", "build_app"):
+        clicked = client.post("/api/suggestions/activity/clicked", json={"suggestion_id": suggestion_id})
+        assert clicked.status_code == 200
+        assert clicked.get_json() == {}
+    assert _offered_activity_ids(client) == ["new_chat", "phone_access", "build_app", "connect_data"]
+    assert not is_marked(Marker.CONNECT_DATA_COACH_SHOWN)
+
+    clicked = client.post("/api/suggestions/activity/clicked", json={"suggestion_id": "connect_data"})
+
+    assert clicked.status_code == 200
+    assert clicked.get_json() == {}
+    assert is_marked(Marker.CONNECT_DATA_COACH_SHOWN)
+    assert _offered_activity_ids(client) == ["new_chat", "phone_access", "build_app"]
+    assert [marker for marker in Marker if is_marked(marker)] == [
+        Marker.TOUR_FINISHED,
+        Marker.CONNECT_DATA_COACH_SHOWN,
+    ]
+
+
+def test_a_click_that_names_no_activity_suggestion_is_refused_and_a_visitors_click_records_nothing(
+    client: FlaskClient,
+) -> None:
+    for body in ({"suggestion_id": "start-describe"}, {"suggestion_id": ""}, {}, ["connect_data"]):
+        assert client.post("/api/suggestions/activity/clicked", json=body).status_code == 400
+
+    visitors = client.post(
+        "/api/suggestions/activity/clicked", json={"suggestion_id": "connect_data"}, headers=_identity_header(_VISITOR)
+    )
+
+    assert visitors.status_code == 200
+    assert visitors.get_json() == {}
+    assert not is_marked(Marker.CONNECT_DATA_COACH_SHOWN)
+
+
+def test_a_click_is_answered_even_when_its_marker_cannot_be_written(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A file where the marker directory should be: nothing can be made under it.
+    blocked = tmp_path / "blocked"
+    blocked.write_text("")
+    monkeypatch.setenv(MARKER_DIR_ENV, str(blocked))
+
+    clicked = client.post("/api/suggestions/activity/clicked", json={"suggestion_id": "connect_data"})
+    offered = _get_activity_suggestions(client)
+
+    assert clicked.status_code == 200
+    assert clicked.get_json() == {}
+    # With the markers unreadable nothing is offered, rather than everything.
+    assert offered.status_code == 200
+    assert offered.get_json() == {"suggestions": []}
+
+
+def _wait_for_creates_to_finish(manager: AgentManager) -> None:
+    wait_until_true(
+        lambda: all(
+            provisional.phase is not ProvisionalChatPhase.CREATING for provisional in manager.get_provisional_chats()
+        ),
+        10,
+        "the creates to finish",
+    )
+
+
+def test_a_second_chat_a_person_starts_is_recorded_and_the_first_is_not(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """The create names the client it came from, as the New chat button's does. One chat is no second chat."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+
+    first = client.post("/api/chats/create", json={"client_id": "client-1"})
+    is_marked_after_the_first = is_marked(Marker.SECOND_CHAT_STARTED)
+    second = client.post("/api/chats/create", json={"client_id": "client-1"})
+    _wait_for_creates_to_finish(state_of(app).agent_manager)
+
+    assert (first.status_code, second.status_code) == (201, 201)
+    assert not is_marked_after_the_first
+    assert is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_a_create_no_person_asked_for_is_never_a_second_chat(tmp_path: Path, signed_in_account: str) -> None:
+    """A script's create names no client, and a room is no chat with an agent: neither is a person starting a
+    second chat, whatever exists already. A refused create is none either."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    _register_agent(app, f"agent-{uuid4().hex}", "Chat-1", "RUNNING")
+
+    scripted = client.post("/api/chats/create", json={"name": "assist-1a2b3c", "message": "/assist it broke"})
+    room = client.post("/api/chats/create", json={"kind": "room", "client_id": "client-1"})
+    refused = client.post("/api/chats/create", json={"chat_id": "never-minted", "client_id": "client-1"})
+    _wait_for_creates_to_finish(state_of(app).agent_manager)
+
+    assert (scripted.status_code, room.status_code, refused.status_code) == (201, 201, 400)
+    assert not is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_only_another_chat_a_person_talks_to_makes_a_create_the_second(tmp_path: Path, signed_in_account: str) -> None:
+    """A helper another agent started and a room are not chats a person talks to an agent in, so a first chat
+    started beside them is still the first."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    manager = state_of(app).agent_manager
+    with manager._lock:
+        manager._agents["agent-helper"] = AgentStateItem(
+            id="agent-helper", name="helper", state="RUNNING", labels={"agent_created": "true"}, work_dir="/code"
+        )
+        manager._agents["agent-room"] = AgentStateItem(
+            id="agent-room", name="Lounge", state="RUNNING", labels={}, work_dir="/code", harness=HarnessType.ROOM
+        )
+
+    first = client.post("/api/chats/create", json={"client_id": "client-1"})
+    _wait_for_creates_to_finish(manager)
+
+    assert first.status_code == 201
+    assert not manager.has_person_chat_other_than(ChatId(first.get_json()["chat_id"]))
+    assert not is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_launching_the_first_run_chat_by_its_first_message_is_no_second_chat(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """The chat a workspace opens on exists before its agent does, and its own launch starts no second chat."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    seeded = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"]
+
+    launched = client.post(
+        "/api/chats/create", json={"chat_id": seeded, "message": "See what Studio can do", "client_id": "client-1"}
+    )
+    _wait_for_creates_to_finish(state_of(app).agent_manager)
+
+    assert launched.status_code == 201
+    assert not is_marked(Marker.SECOND_CHAT_STARTED)
+
+
+def test_a_chat_started_while_the_seeded_chat_awaits_its_first_message_is_a_second_chat(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """A seeded chat with no agent yet is already a chat a person talks to."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    client.post("/api/chats/seed", json={"turns": [], "is_first_run": True})
+
+    started = client.post("/api/chats/create", json={"client_id": "client-1"})
+    _wait_for_creates_to_finish(state_of(app).agent_manager)
+
+    assert started.status_code == 201
+    assert is_marked(Marker.SECOND_CHAT_STARTED)
+
+
 def test_a_first_run_chat_awaiting_its_first_agent_answers_its_start_suggestions(tmp_path: Path) -> None:
     """The first-run chat offers its replies before any agent exists: the route answers for a seeded chat that
     is still provisional, naming the welcome's last turn as the message the set follows."""
@@ -4260,9 +4586,24 @@ def test_a_first_run_chat_awaiting_its_first_agent_answers_its_start_suggestions
         "after_event_id": last_event["event_id"],
         "source": "fixed",
         "suggestions": [
-            {"suggestion_id": "start-describe", "label": "Describe what you want to make", "is_recommended": False},
-            {"suggestion_id": "start-ideas", "label": "Get ideas for what to make", "is_recommended": False},
-            {"suggestion_id": "start-features", "label": "See what Studio can do", "is_recommended": False},
+            {
+                "suggestion_id": "start-describe",
+                "label": "Describe what you want to make",
+                "action": None,
+                "is_recommended": False,
+            },
+            {
+                "suggestion_id": "start-ideas",
+                "label": "Get ideas for what to make",
+                "action": None,
+                "is_recommended": False,
+            },
+            {
+                "suggestion_id": "start-features",
+                "label": "See what Studio can do",
+                "action": None,
+                "is_recommended": False,
+            },
         ],
     }
 
@@ -4372,8 +4713,8 @@ def test_a_listed_chat_answers_the_suggestions_stored_in_its_folder(app: Flask, 
         "after_event_id": "evt-reply-7",
         "source": "generated",
         "suggestions": [
-            {"suggestion_id": "s1", "label": "Yes, go ahead", "is_recommended": True},
-            {"suggestion_id": "s2", "label": "Show me the plan first", "is_recommended": False},
+            {"suggestion_id": "s1", "label": "Yes, go ahead", "action": None, "is_recommended": True},
+            {"suggestion_id": "s2", "label": "Show me the plan first", "action": None, "is_recommended": False},
         ],
     }
 
@@ -4430,7 +4771,9 @@ def test_a_turns_end_works_out_suggestions_the_route_reads_pending_and_then_read
         "status": "ready",
         "after_event_id": reply_event_id,
         "source": "generated",
-        "suggestions": [{"suggestion_id": "generated-1", "label": "Yes, add reminders", "is_recommended": True}],
+        "suggestions": [
+            {"suggestion_id": "generated-1", "label": "Yes, add reminders", "action": None, "is_recommended": True}
+        ],
     }
     assert completion.prompts == [
         '<turn speaker="user">\nBuild me a plant tracker\n</turn>\n'

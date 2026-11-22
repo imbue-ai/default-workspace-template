@@ -13,6 +13,8 @@ import time
 from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Sequence
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -47,6 +49,7 @@ from flask import request
 from flask import send_file
 from flask.ctx import AppContext
 from loguru import logger as _loguru_logger
+from onboarding_activity.markers import Marker
 from pydantic import Field
 from pydantic import ValidationError
 from simple_websocket import ConnectionClosed
@@ -74,6 +77,13 @@ from imbue.chat.accounts import account_exists
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.activity_state import is_lifecycle_dead
+from imbue.chat.activity_suggestions import activity_placement_named
+from imbue.chat.activity_suggestions import is_placement_enabled
+from imbue.chat.activity_suggestions import marker_set_by_click
+from imbue.chat.activity_suggestions import offered_activity_suggestions
+from imbue.chat.activity_suggestions import read_activity_facts
+from imbue.chat.activity_suggestions import read_marker
+from imbue.chat.activity_suggestions import reason_no_activity_suggestions
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import COMPACT_UNAVAILABLE_SEND_FAILURE_KIND
 from imbue.chat.agent_discovery import COMPACT_WHILE_BUSY_DETAIL
@@ -161,6 +171,9 @@ from imbue.chat.mention_parser import mentioned_people
 from imbue.chat.mentions import BackgroundMentionDeliverer
 from imbue.chat.mentions import MentionHandler
 from imbue.chat.mentions_endpoints import requester_mention_keys
+from imbue.chat.models import ActivitySuggestionClickRequest
+from imbue.chat.models import ActivitySuggestionClickResponse
+from imbue.chat.models import ActivitySuggestionsResponse
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentListItem
@@ -231,6 +244,7 @@ from imbue.chat.models import SwitchChatResponse
 from imbue.chat.models import parse_subagent_key
 from imbue.chat.naming import canonical_agent_name
 from imbue.chat.naming import is_name_conflict
+from imbue.chat.onboarding_markers import set_onboarding_marker
 from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import AGENT_ID_PATTERN
@@ -1507,6 +1521,47 @@ def _get_suggestions_endpoint(chat_id: str) -> Response:
     return model_response(ChatSuggestionsResponse.of(state.agent_manager.get_chat_suggestions(parsed)))
 
 
+def _get_activity_suggestions_endpoint() -> Response:
+    """``GET /api/suggestions/activity?placement=activity|new_chat&chat_id=<chat-id>``: the things to try in
+    Studio offered to the requester at that placement, every one whose condition holds, in their fixed order.
+
+    The list is empty when none is offered here at all: the requester is not the workspace's owner, the
+    placement is switched off, the tour has not finished, or ``chat_id`` names the first-run chat while its first
+    conversation still follows its tree. ``chat_id`` may be left out, or name a chat this app does not know (one
+    its page has not created yet), which no tree holds back. 400 for a ``placement`` that is neither."""
+    placement = activity_placement_named(request.args.get("placement"))
+    if placement is None:
+        return error_response("placement must be 'activity' or 'new_chat'", 400)
+    state = get_state()
+    chat_ref = request.args.get("chat_id", "")
+    # Only an id of a chat's shape can name a folder of this app's, which is where a tree's step is kept.
+    chat_id = ChatId(chat_ref) if AGENT_ID_PATTERN.fullmatch(chat_ref) else None
+    withheld_reason = reason_no_activity_suggestions(
+        is_owner=is_owner_participant(request_identity()),
+        tour_finished=read_marker(Marker.TOUR_FINISHED),
+        tree_step=None if chat_id is None else state.agent_manager.get_first_run_tree_step(chat_id),
+        is_placement_switched_on=is_placement_enabled(placement, state.chat_settings.read()),
+    )
+    if withheld_reason is not None:
+        logger.debug("Offering no {} suggestions: {}", placement.value, withheld_reason)
+        return model_response(ActivitySuggestionsResponse(suggestions=()))
+    facts = read_activity_facts(Path.cwd(), registry_path())
+    offered = offered_activity_suggestions(facts, datetime.now(timezone.utc))
+    return model_response(ActivitySuggestionsResponse(suggestions=offered))
+
+
+def _post_activity_suggestion_clicked_endpoint() -> Response:
+    """``POST /api/suggestions/activity/clicked``: record that the activity suggestion the body names was
+    clicked. A click on the one that only has to be seen once retires it; a click on any other records nothing,
+    since doing the thing it points at is what retires it. Only the owner's click counts. 400 for an id that is
+    no activity suggestion's."""
+    click = parse_request_body(ActivitySuggestionClickRequest)
+    marker = marker_set_by_click(click.suggestion_id)
+    if marker is not None and is_owner_participant(request_identity()):
+        set_onboarding_marker(marker)
+    return model_response(ActivitySuggestionClickResponse())
+
+
 def _get_fast_mode_endpoint(chat_id: str) -> Response:
     """``GET /api/chats/<chat_id>/fast-mode``: the chat's fast mode (off, auto or on, and whether auto has switched)."""
     parsed = _known_chat_or_not_found(chat_id)
@@ -2248,6 +2303,7 @@ def _run_create_chat() -> CreatedChat | Response:
     if attributed is not None and attributed.annotation is not None:
         state.authors.record(created.chat_id, attributed.annotation)
     if create_request.kind is not ChatKind.ROOM:
+        _note_chat_started_by_a_person(state, created.chat_id, create_request.client_id)
         _consider_naming_chat(state, created.chat_id, create_request.message)
         if create_request.message:
             _advance_first_run_tree(state, created.chat_id, create_request.message)
@@ -2262,6 +2318,17 @@ def _run_create_chat() -> CreatedChat | Response:
         detail = outcome.error or f"Creating chat {created.display_name!r} failed"
         return error_response(detail, 500)
     return created
+
+
+def _note_chat_started_by_a_person(state: ChatAppState, chat_id: ChatId, client_id: str) -> None:
+    """Set the ``second_chat_started`` onboarding marker when the agent chat just created was asked for by a person
+    (its create names the client it came from; a script's names none) while another chat a person talks to exists.
+    Launching the one chat a workspace opened on, seeded and awaiting its first send, is no second chat: the
+    chat launched is never counted as the other one."""
+    if not client_id:
+        return
+    if state.agent_manager.has_person_chat_other_than(chat_id):
+        set_onboarding_marker(Marker.SECOND_CHAT_STARTED)
 
 
 def _bubble_new_chats_first_message(
@@ -3249,6 +3316,10 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("PUT", "/api/settings/suggestions"): RouteModels(
         request_model=SuggestionSettingsUpdate, response_model=ChatSettingsResponse
     ),
+    ("GET", "/api/suggestions/activity"): RouteModels(response_model=ActivitySuggestionsResponse),
+    ("POST", "/api/suggestions/activity/clicked"): RouteModels(
+        request_model=ActivitySuggestionClickRequest, response_model=ActivitySuggestionClickResponse
+    ),
     ("POST", "/api/chats/{chat_id}/destroy"): RouteModels(response_model=DestroyAgentResponse),
     ("POST", "/api/chats/{chat_id}/rename"): RouteModels(
         request_model=RenameChatRequest, response_model=RenameChatResponse
@@ -3443,6 +3514,12 @@ def create_application(state: ChatAppState) -> Flask:
         "/api/settings", view_func=_put_settings_endpoint, methods=["PUT"], endpoint="_put_settings_endpoint"
     )
     application.add_url_rule("/api/settings/suggestions", view_func=_put_suggestion_settings_endpoint, methods=["PUT"])
+    application.add_url_rule(
+        "/api/suggestions/activity", view_func=_get_activity_suggestions_endpoint, methods=["GET"]
+    )
+    application.add_url_rule(
+        "/api/suggestions/activity/clicked", view_func=_post_activity_suggestion_clicked_endpoint, methods=["POST"]
+    )
     application.add_url_rule("/api/harnesses", view_func=_get_harnesses_endpoint, methods=["GET"])
     application.add_url_rule("/api/uploads", view_func=_upload_attachment, methods=["POST"])
     application.add_url_rule("/api/uploads/<path:relative_path>", view_func=_serve_attachment, methods=["GET"])

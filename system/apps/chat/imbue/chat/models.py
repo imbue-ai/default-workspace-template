@@ -12,6 +12,7 @@ from workspace_layout.roster import RosterParticipant
 
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
+from imbue.chat.activity_suggestions import ActivitySuggestionId
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.background_tasks import BackgroundTask
 from imbue.chat.chat_autocompact import ChatAutocompactState
@@ -281,6 +282,25 @@ class ChatSuggestionsResponse(FrozenModel):
     def pending(cls, after_event_id: str) -> "ChatSuggestionsResponse":
         """The answer while a set for the reply ``after_event_id`` is being worked out."""
         return cls(status=SuggestionsStatus.PENDING, after_event_id=after_event_id, source=None, suggestions=())
+
+
+class ActivitySuggestionsResponse(FrozenModel):
+    """Response from GET /api/suggestions/activity: the things to try that are offered to the requester."""
+
+    suggestions: tuple[Suggestion, ...] = Field(
+        description="Every activity suggestion whose condition holds, in the order they are offered; empty when "
+        "none holds, and when none is offered to this requester, in this chat, at this placement"
+    )
+
+
+class ActivitySuggestionClickRequest(FrozenModel):
+    """Request body for POST /api/suggestions/activity/clicked: the activity suggestion that was clicked."""
+
+    suggestion_id: ActivitySuggestionId = Field(description="The id of the suggestion clicked")
+
+
+class ActivitySuggestionClickResponse(FrozenModel):
+    """Response from POST /api/suggestions/activity/clicked: an empty object."""
 
 
 class FastModeStateResponse(FrozenModel):
@@ -906,6 +926,11 @@ class CreateChatRequest(FrozenModel):
         default=ChatKind.AGENT,
         description="What to create: an agent chat on the account, or a room (the multiplayer spec, section 7.3), "
         "which runs on no account and takes no model",
+    )
+    client_id: str = Field(
+        default="",
+        description="Per-browser client id of the page a person asked for the chat from; empty for a create no "
+        "person asked for (a script's), which is never counted as a person starting a chat",
     )
 
 
