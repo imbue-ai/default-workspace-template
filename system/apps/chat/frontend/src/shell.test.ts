@@ -6,7 +6,7 @@
  * the shell to open beside it are named by path: the chat root's path for a sibling chat, and the
  * three-part subagent key's path for a sub-agent view.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockInstance } from "vitest";
 
 vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
@@ -97,6 +97,12 @@ function windowListenersAddedBy(connect: () => void): (type: string) => Array<(e
 function deliver(data: unknown, source: unknown): void {
   window.dispatchEvent(new MessageEvent("message", { data, source: source as Window }));
 }
+
+// Transform the module graph once, under the hook's longer timeout: the first test's cold import could otherwise run
+// past the 5 s test timeout when the whole suite loads the machine, and leave its connection to fail the next test.
+beforeAll(async () => {
+  await import("./shell");
+}, 60_000);
 
 beforeEach(() => {
   vi.clearAllMocks();
