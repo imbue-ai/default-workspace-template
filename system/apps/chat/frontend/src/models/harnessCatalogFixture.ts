@@ -20,7 +20,7 @@ export function harnessCatalogFixture(harness: string | undefined): HarnessCatal
   return {
     label,
     options: [],
-    switch_mode: harness === "antigravity" ? "read_only" : "eager_then_reconcile",
+    switch_mode: "eager_then_reconcile",
     picker_mode: "list",
     native_atomic_shoulder_tap_possible: false,
     supports_compaction: COMPACTABLE_HARNESSES.has(harness ?? ""),

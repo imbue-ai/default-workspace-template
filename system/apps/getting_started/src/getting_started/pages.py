@@ -11,6 +11,7 @@ from typing import Final
 from typing import assert_never
 
 from flask import Blueprint
+from flask import Flask
 from flask import Response
 from flask import send_file
 from flask import send_from_directory
@@ -28,6 +29,7 @@ from app_schema.api_schema import RouteModels
 from app_schema.api_schema import RouteTable
 from app_schema.api_schema import SchemalessRoute
 from app_schema.api_schema import register_api_schema_route
+from app_schema.request_guard import install_request_guard
 from app_schema.routes import error_response
 from app_schema.routes import model_response
 from getting_started.template_catalog import CatalogDocument
@@ -81,10 +83,23 @@ ROUTE_TABLE: RouteTable = {
 }
 
 
+def build_pages_app(static_directory: Path, catalog: TemplateCatalogStore, contract_path: Path) -> Flask:
+    """The pages as the one Flask app the app serves: the request guard every app installs ahead of its routes
+    (``app_schema.request_guard``), then the blueprint ``build_pages_blueprint`` builds from the same arguments."""
+    app = Flask(__name__, static_folder=None)
+    install_request_guard(app, exempt_rules=frozenset())
+    app.register_blueprint(build_pages_blueprint(static_directory, catalog, contract_path))
+    return app
+
+
 def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore, contract_path: Path) -> Blueprint:
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
     register_api_schema_route(
-        blueprint, DEFAULT_API_SCHEMA_PATH, title=APP_DISPLAY_NAME, description=APP_DESCRIPTION, route_table=ROUTE_TABLE
+        blueprint,
+        DEFAULT_API_SCHEMA_PATH,
+        title=APP_DISPLAY_NAME,
+        description=APP_DESCRIPTION,
+        route_table=ROUTE_TABLE,
     )
     register_workspace_theme_route(blueprint)
     # The template drawings live beside the catalog (catalog/README.md), so the page admits images from the
@@ -144,7 +159,9 @@ def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore,
     def app_contract() -> ResponseReturnValue:
         """The app contract module: how the page talks to the shell framing it."""
         if not contract_path.is_file():
-            return error_response(f"the workspace shell's frontend is not built: {contract_path} is missing", HTTP_NOT_FOUND)
+            return error_response(
+                f"the workspace shell's frontend is not built: {contract_path} is missing", HTTP_NOT_FOUND
+            )
         # Flask resolves a relative path against the app's own directory, not the cwd the path names.
         return send_file(contract_path.absolute(), mimetype="text/javascript")
 

@@ -17,6 +17,7 @@ from pydantic import Field
 
 from imbue.chat.harnesses.claude.error_notice import ErrorNotice
 from imbue.chat.harnesses.claude.error_notice import classify_error_notice
+from imbue.chat.harnesses.claude.progress_updates import progress_update_text
 from imbue.chat.harnesses.claude.tool_labels import action_note
 from imbue.chat.harnesses.claude.tool_labels import action_parts
 from imbue.chat.harnesses.claude.tool_labels import shell_command
@@ -323,6 +324,13 @@ def _parse_assistant_message(
             text = block.get("text", "")
             if text:
                 text_parts.append(text)
+        elif block_type == "thinking":
+            # A progress update is prose for the user that the API carries in a thinking block;
+            # it reads as the assistant's own words at this point of the turn, like a text block.
+            # Reasoning blocks stay hidden.
+            update = progress_update_text(block)
+            if update:
+                text_parts.append(update)
         elif block_type == "tool_use":
             call_id: str = block.get("id", "")
             tool_name: str = block.get("name", "")
@@ -625,6 +633,9 @@ def _parse_queued_command_attachment(
         "role": "user",
         "content": prompt,
         "message_uuid": uuid,
+        # Claude writes this attachment only for a message it took into the turn it was
+        # running; one flushed at a turn's end or after an interrupt is a plain ``user`` line.
+        "delivered_mid_turn": True,
     }
     # The queued path emits user messages too, so it stamps the same render decision as
     # the normal path -- a /model parked mid-turn must stay hidden (and non-turn), a fleet
@@ -644,9 +655,11 @@ def parse_line_detail(raw_line: str) -> dict[str, dict[str, Any]]:
 
     The read half of the payload-free wire contract: the resident events carry no tool
     inputs or outputs, so an expand re-reads the source line and reconstructs them here,
-    whole and untruncated. Claude's thinking blocks are deliberately NOT surfaced: they are
-    encrypted and useless to the user, so no claude event ever stamps ``has_thinking`` and
-    nothing loads them. Returns {} for a line that yields no payload-bearing events.
+    whole and untruncated. Claude's reasoning is deliberately NOT surfaced: its blocks are
+    encrypted or hold only a summary, so no claude event ever stamps ``has_thinking`` and nothing
+    loads them (a progress update, the one kind of thinking block meant for the user, is resident
+    event text, see ``progress_updates``). Returns {} for a line that yields no payload-bearing
+    events.
     """
     try:
         raw = json.loads(raw_line.strip())
@@ -717,10 +730,12 @@ def parse_line_detail(raw_line: str) -> dict[str, dict[str, Any]]:
 # so are dropped by ``parse_lines`` at the DAG guard. They obey a conservation
 # law: ``enqueue = dequeue + remove + popAll`` -- every parked message leaves the
 # queue through exactly one dequeue/remove/popAll record. In the real Imbue Studio flow
-# EVERY message is delivered via mngr (typed into the TUI), so a mid-turn message
+# EVERY message is delivered via mngr (typed into the TUI), so a parked message
 # commits as a ``dequeue`` whose ``promptSource`` is "typed" (NOT "queued"), and
 # slash commands / task-notifications also leave via dequeue/remove -- none of
-# which the user record or the ``queued_command`` attachment reliably marks. So
+# which the user record or the ``queued_command`` attachment reliably marks. (A
+# message Claude folds into the running turn at a tool result leaves as a
+# ``remove`` beside a ``queued_command`` attachment instead.) So
 # resolution keys off the ledger's LEAVE ops ONLY (one record = one leave), never
 # ``promptSource`` or the attachment. ``parse_queue_signals`` therefore recognizes
 # ONLY the four ``queue-operation`` ops. The ``queued_command`` attachment and the

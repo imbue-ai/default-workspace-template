@@ -60,14 +60,15 @@ Every desktop is shared: a window holds a resource (a terminal, a browser) for e
 A fresh workspace, and a workspace whose state directory holds no `desktops.json`, gets one desktop named `Home` with the theme's default wallpaper and the seeded shortcuts of 3.6.
 It is created on the first read of the desktops after the inventory has read the registry once, so its shortcuts are seeded from the apps that are actually registered rather than from an empty registry at boot.
 Apps register one at a time as their programs finish starting, so an app may register after `Home` was seeded; its default shortcut is added then rather than waited for.
-The shell records every app whose default shortcut it has offered in `default_shortcuts_offered.json`: the apps each new desktop was seeded with, and every app added as follows.
-On every read of the desktops and after every change of the registry's rows, each app with a default shortcut (3.6) that is not recorded has it added to every desktop, and is then recorded.
+The shell records the `(app, launch)` target of every default shortcut it has offered in `default_shortcuts_offered.json`: those each new desktop was seeded with, and every one added as follows.
+On every read of the desktops and after every change of the registry's rows, each default shortcut (3.6) whose target is not recorded is added to every desktop, and is then recorded.
 A desktop that already holds a shortcut of that `(app, launch)` gets nothing.
-A desktop whose shortcuts are exactly the seed of the recorded apps that are registered is seeded again from every registered app, so it reads in launcher order however late each app registered.
+A desktop whose shortcuts are exactly the seed of the recorded targets is seeded again from every registered app, so it reads in launcher order however late each app registered.
 Any other desktop gets the shortcut at the first free cell in reading order, and nothing on it moves.
-A recorded app is never added again: a shortcut the user removed stays removed when its app registers again, on every boot and across restarts, and an app that deregisters changes nothing.
-A state directory holding `desktops.json` but no record counts every app with a shortcut on any desktop as recorded.
-A desktop created when no other desktop stands, such as `Home` seeded over a missing or unusable `desktops.json`, starts the record over from the apps it is seeded with.
+A recorded target is never added again: a shortcut the user removed stays removed when its app registers again, on every boot and across restarts. An app that declares a further default shortcut is offered only that one.
+The same pass drops every shortcut of an app no registry row names, since nothing would run it: the update that retires an app removes its row, and a preview's teardown removes its own. The dropped shortcuts' targets leave the record, so an app that registers again is offered them again; a default shortcut the user had already taken off every desktop has nothing dropped and stays recorded. A registry with no rows drops nothing.
+A state directory holding `desktops.json` but no record counts the first default shortcut of every app with a shortcut on any desktop as recorded, which is also how a record written while an app had at most one default shortcut (a list of apps) is read.
+A desktop created when no other desktop stands, such as `Home` seeded over a missing or unusable `desktops.json`, starts the record over from the shortcuts it is seeded with.
 Deleting the last desktop is refused with `409`.
 Deleting a desktop closes its windows (their pages are destroyed in every client) and removes every client's layout of it; clients on it switch to the first remaining desktop.
 
@@ -109,12 +110,12 @@ A client whose active desktop no longer exists is moved to the first desktop on 
 ### 3.6 Shortcuts and the grid
 
 A shortcut is `{target, mode, cell}` where `target` is `{kind: "launch", app, launch}` (the only V1 kind), `mode` is `focus` or `new`, and `cell` is `{column, row}` with both at least zero.
-`focus` raises the most recently focused window of that app in this client's layout of this desktop (restoring it when minimized) and runs the launch path only when there is none; `new` always runs it.
+`focus` raises the most recently focused window of that app in this client's layout of this desktop (restoring it when minimized) and runs the launch path only when there is none. A POST launch path of a one-window app (an unpinned app whose first default shortcut focuses, such as the Screen) does something the window alone does not (the Screen's Browser opens the browser), so `focus` always runs it into that app's window, as its launcher row does. `new` always runs it.
 A desktop holds at most one shortcut per `(app, launch)`.
 
-Every registered, non-internal app has at most one default shortcut: its manifest's `default_shortcut` when it declares one, whether or not that launch path takes typed or drafted text (none when it names a launch path the app does not offer); otherwise, when its row names a `program`, its first launch path that takes no text (one declaring neither a `text_param` nor a `draft_param`), or its first launch path when every one takes text, in `focus` mode. A shortcut of a launch path that takes text runs it with no text.
+Every registered, non-internal app has its manifest's default shortcuts when it declares any (one `default_shortcut` table, or several as `[[default_shortcut]]`, in order), each whether or not its launch path takes typed or drafted text (none for one naming a launch path the app does not offer); otherwise, when its row names a `program`, its first launch path that takes no text and no mention (one declaring none of `text_param`, `draft_param`, and `mention_param`), or its first launch path when every one takes one, in `focus` mode. A shortcut of a launch path that takes text runs it with no text.
 A row naming no program and declaring no `default_shortcut` has none: such a row is a preview frame, an isolated test server, or an app registered before manifests without `forward_port.py --program`, while an app built from a manifest names one, and so does an app registered before manifests with `--program`.
-A new desktop is seeded from every app's default shortcut, in launcher order (by `launcher_rank`, lowest first, then the apps that declare none; registry order breaks every tie), laid out in reading order from the grid origin.
+A new desktop is seeded from every app's default shortcuts, in launcher order and each app's own order (by `launcher_rank`, lowest first, then the apps that declare none; registry order breaks every tie), laid out in reading order from the grid origin.
 An app that registers after a desktop was made is added to it as 3.2 says.
 The grid is `columns = max(1, floor((width - inset) / cell_width))` by `rows = max(1, floor((height - inset) / cell_height))` over the backdrop, with the cell size and inset from the theme (contracts.md section 10).
 Rendering places every shortcut that has a free cell inside the grid at its cell, then every other shortcut at the nearest free cell to its clamped cell (Euclidean distance in cell units, ties by column then row); no two shortcuts ever draw in one cell, and nothing is written.
@@ -136,7 +137,7 @@ The backdrop draws the wallpaper with `cover` fit, centred, over the theme's bac
 | What is inside an app, and its own verbs on those things | The app, in its pages |
 | Desktops: name, colour, glyph, wallpaper, shortcuts and cells | Shell, shared |
 | Which desktop was made for which user | Shell, in `users.json` |
-| Which apps' default shortcuts have been offered | Shell, in `default_shortcuts_offered.json` |
+| Which default shortcuts have been offered | Shell, in `default_shortcuts_offered.json` |
 | Which windows a desktop holds; each window's path and title | Shell, shared; the page reports path and title |
 | Each client's placements and stacking order; the active desktop | Shell, per client |
 | Taskbar entries, tray widgets, the launcher's contents | Derived in the browser |
@@ -168,7 +169,7 @@ Visitors granted a single app never load the shell and are not concerned.
 
 Every open goes through one route, `POST /api/desktops/<id>/windows` with `{app, path, client_id, if_present, launch?}`, whatever asked for it: a shortcut, a launcher tile, a page's `shell:open`, an agent's `layout.py open`, a deep link, or the chat app's auto-open of a chat started outside the workspace.
 `if_present` is `focus` (the default) or `new`: with `focus`, a window of that app at that exact path already on the desktop is answered instead of opened, and the shell restores and raises it in the requesting client's layout, so the rule holds for an agent op with no browser connected just as it does for a click.
-A shortcut in `focus` mode asks the client's own layout first (any window of the app, most recently focused) and opens only when there is none.
+A shortcut in `focus` mode asks the client's own layout first (any window of the app, most recently focused) and opens only when there is none, except one of a one-window app's POST launch path, which always runs (3.6).
 
 The shell mints the id, appends the window to the desktop, writes the **requesting client's** placement at once (state `NORMAL`, not minimized, frame from the cascade rule, on top of that client's stack), and broadcasts `desktops_updated` and `placements_updated` for that client.
 Every other client has no placement and shows the window minimized in its taskbar.
@@ -185,9 +186,13 @@ Other clients create the page when the window is first restored there, and keep 
 The top non-minimized window is focused.
 Raising moves a placement to the end of the list and saves.
 A click on a window's chrome raises it.
-A click into a page cannot reach the shell across origins, so the pages of every window but the focused one are inert (`pointer-events: none` on their iframes), the press lands on a transparent shield over the window, and the shell raises it and makes its page interactive; the first press is consumed.
-While a menu or the launcher is open the shield covers the focused window too, so the click that dismisses them reaches the shell.
+A click into a page cannot reach the shell across origins, so the shell raises a window when the document's focus lands in its page's frame.
+On a non-touch client every page takes the pointer, the pages of unfocused windows included: a wheel or trackpad scroll over a background window scrolls its page, and a press there is delivered to the page and raises the window; the first press is not consumed.
 A page that receives keyboard focus by other means reports `shell:focused`, and the shell raises its window.
+On a non-touch client the shell also raises the window of a page that sends no report when the page focuses itself while its window is unfocused, except for a focus the page takes in answer to a message the shell has just sent it (section 6.4); a page's own `shell:focused` is not subject to that exception.
+A press into a page that does not move the focus into its frame (a page that cancels the press, such as the chat page while its own popover is open) is not seen by the shell, so that window raises on a later press.
+A touch client keeps the pages of every window but the focused one inert (`pointer-events: none` on their iframes) under a transparent shield: the press lands on the shield, and the shell raises the window and makes its page interactive; the first press is consumed.
+While a menu or the launcher is open the shield covers every window, the focused one too, so the click that dismisses them reaches the shell.
 
 ### 4.3 Moving, resizing, snapping, maximizing, minimizing
 
@@ -216,7 +221,7 @@ Close removes the window from the desktop for every client: the shell drops it f
 The close button, the window menu, a taskbar entry's context menu, an agent's `close`, and the minds chrome's close chord (`minds:close-active-tab`, which closes the focused window after sending it `shell:close-request`) all do this.
 The shell itself has no notion of stopping or deleting what the window showed; what the window showed is the app's to keep or collect, and the terminal and the browser collect it once no window shows it, told of the close through the manifest's `window_closed_path` and sweeping the shell's windows regardless (`docs/system/specs/window-bound-resources.md`).
 The app's *process* is another matter: an app whose manifest declares `stop_when_no_windows` is stopped by the shell a minute after its last window closes, and comes back on the next request for it, the shell holding its port meanwhile (`docs/system/specs/stop-when-no-windows.md`).
-A pinned window is never closed: the route answers `409`, the op is refused with "minimize it instead", and its close control, its menus' Close, and the close chord all minimize it instead (pinned-taskbar-entries plan section 3.2).
+A pinned window is never closed for everyone: the route answers `409`, the op is refused with "minimize it instead", and its close control, its menus' Close, and the close chord close it for this client alone -- minimized, and its entry out of this client's bar until something shows the window again (pinned-taskbar-entries plan section 3.2).
 
 ### 4.6 Following the URL
 
@@ -244,14 +249,14 @@ Creating switches the creating client to the new desktop.
 ### 4.9 Shortcut gestures
 
 Single click selects; double click, Enter, or Space runs; on touch a tap runs, since a finger has no double tap worth asking for and nothing to select for; a drag beyond the threshold lifts the icon, shows the target cell, and drops it there; right-click or long-press opens the shortcut menu (Open, the complementary mode, Remove from desktop).
-Adding a shortcut: the right-click menu of the launcher row of an app's default shortcut (3.6), and of a taskbar entry of the app, offers "Add to desktop", placed at the first free cell in reading order in the shortcut's mode, or "Remove from desktop" when the active desktop holds it (launcher plan section 4.2); no other launch path is offered.
+Adding a shortcut: the right-click menu of the launcher row of each of an app's default shortcuts (3.6), and of a taskbar entry of the app (for its first), offers "Add to desktop", placed at the first free cell in reading order in the shortcut's mode, or "Remove from desktop" when the active desktop holds it (launcher plan section 4.2); no other launch path is offered.
 
 ### 4.10 The taskbar
 
 Left to right: the launcher field; one entry per window of the active desktop in opening order (icon and title, minimized entries dimmed, the focused entry marked); the system tray.
 Entry click: restore and raise when minimized, minimize when focused, raise otherwise.
 Entry context menu: Restore or Minimize, Maximize or Restore, Close.
-A pinned window's entry is always present and may be drawn in the bar in a style or floating above the windows, as the client chooses; its menu's Close minimizes it rather than closing it, and it adds the presentation verbs (pinned-taskbar-entries plan sections 4.2 and 4.4).
+A pinned window's entry is a plain bar entry (gone from this client's bar after its Close, until something shows the window), and the client may float the app's creature above the windows beside it; its menu's Close closes the window for this client alone rather than for everyone, and it adds the presentation verbs (pinned-taskbar-entries plan sections 4.2 and 4.4).
 The tray's widgets are Presence (one profile picture per connected user, the viewer's own last and ringed, drawn only while two or more are connected; the share identity spec) and Desktops (concepts.md 2.8); each is one component with one popover, and adding another is adding a component to a list.
 The taskbar is always visible on the desktop layout; auto-hide is deferred. A phone draws its own bar instead (`plan-phone-interface.md`).
 
@@ -271,7 +276,7 @@ A phone-sized viewport gets the phone layout instead of the desktop, as `plan-ph
 Touch mode is on while the primary pointer is coarse.
 Both are `matchMedia` subscriptions that set `data-phone` and `data-touch` on the root element; every style keys off those attributes, and every behaviour reads the same two flags, so there is one source for each.
 
-Touch: hit targets are at least the theme's touch target size; long-press replaces right-click on windows, entries, and shortcuts; hover-revealed controls are always shown; resize handles are hidden; the inert-page rule and the shield work unchanged, since touch fires pointer events.
+Touch: hit targets are at least the theme's touch target size; long-press replaces right-click on windows, entries, and shortcuts; hover-revealed controls are always shown; resize handles are hidden; the inert pages and the shield of section 4.2 cover every window but the focused one, since touch fires pointer events; a non-touch client has them only for the cases of section 4.2 (an open menu or the launcher, a press on a handle).
 A phone is both; a desktop browser window as small as a phone is phone only; a touch laptop or a tablet is touch only.
 
 ### 4.13 Keyboard
@@ -285,7 +290,7 @@ Window cycling and keyboard move and resize are deferred.
 
 ### 5.1 State files
 
-Under `data/.state/system_interface/`: `desktops.json`, `default_shortcuts_offered.json` (the apps whose default shortcut the shell has offered, 3.2), `placements/<desktop_id>/<client_id>.json`, `clients.json`, `users.json` (the desktop made for each visiting user, 3.10), and the client-activity event log as today.
+Under `data/.state/system_interface/`: `desktops.json`, `default_shortcuts_offered.json` (the default shortcuts the shell has offered, 3.2), `placements/<desktop_id>/<client_id>.json`, `clients.json`, `users.json` (the desktop made for each visiting user, 3.10), and the client-activity event log as today.
 Under `data/.apps/system_interface/`: `wallpapers/`.
 The old `projects.json`, `layouts/`, and `migrated.json` are ignored and left in place; a `CLEANUP:` note names them for deletion once migration lands.
 The boot-time `migrate_workspace_layouts.py` is removed from bootstrap and the apply, and deleted.
@@ -325,9 +330,9 @@ The update apply's post-restart probes change from "every critical app's instanc
 - `geometry/`: pure functions with no DOM: `frames.ts` (fractions to pixels, fit, nudge, min size, snap zones, cascade), `grid.ts` (cells, nearest free cell, reading order), `stack.ts` (raise, focus, the missing-placement default).
 - `reducers/`: pure state transitions over one `DesktopState` record: every verb of section 4 as `(state, event) -> state`, plus the URL-following decision.
 - `store/`: the one implementation class, `DesktopStore`, holding the client's state (desktops, apps, the active desktop's layout, live pages, the gesture in progress, the open overlay), applying reducers, saving with debounce and conflict handling, and subscribing to the socket. Nothing else holds mutable state.
-- `pages/`: the live-page layer (`livePages.ts`), keyed by window id: create once, position, show and hide, make inert, navigate, destroy.
+- `pages/`: the live-page layer (`livePages.ts`), keyed by window id: create once, position, show and hide, make inert, raise the window a page's focus lands in, navigate, destroy.
 - `gestures/`: `pointerGestures.ts`, the one module that listens to pointer events for window drag, resize, and shortcut drag, behind a `GestureSource` interface that yields `{begin, move, end}` with deltas, so it can be swapped for interact.js without touching a reducer.
-- `views/`: Mithril components, each a pure function of records and callbacks: `Backdrop`, `ShortcutIcon`, `Window`, `TitleBar`, `WindowMenu`, `Taskbar`, `TaskbarEntry`, `LauncherField`, `LauncherOverlay` (hosting today's New Tab sections), `SystemTray`, `DesktopsWidget`, `DesktopSettingsDialog`, `SnapPreview`, and the shared `Popover` and `Menu` (today's `placeMenu` rule, moved).
+- `views/`: Mithril components, each a pure function of records and callbacks: `Backdrop`, `ShortcutIcon`, `Window`, `TitleBar`, `WindowMenu`, `Taskbar`, `TaskbarEntry`, `LauncherField`, `LauncherOverlay` (hosting today's New Tab sections), `SystemTray`, `OverviewButton`, `Overview`, `WallpaperChooserDialog`, `SnapPreview`, and the shared `Popover` and `Menu` (today's `placeMenu` rule, moved).
 - `relay.ts`, `embed.ts`: unchanged.
 - `App.ts`, `index.ts`: wiring.
 
@@ -351,20 +356,36 @@ So a theme is a token file, a look is a component, and a behaviour is a reducer 
 
 One iframe per window per client, keyed by window id, created when the window is first shown in this client and destroyed only when the window closes or its desktop is deleted.
 The layer sits above the backdrop and below the window chrome in z-order per window, so the chrome's resize edges and shield stay clickable over a cross-origin page; the reconcile step positions each page over its window's content box.
-Hidden pages (minimized, on another desktop) are `display: none`, which is what a hidden dockview tab did.
+The shield is the chrome's transparent cover over a window's content: it lies over every window while a menu or the launcher is open, and on a touch client over every window but the focused one.
+Every page takes the pointer except on a touch client, where only the focused window's page does, and except for the length of a press on a handle, when every page is inert.
+The layer raises the window whose page frame holds the document's focus while that window is unfocused, through the store's `raiseWindow`, so a viewed desktop and a window being moved or resized refuse the raise.
+It reads the document's active element when the window loses focus to a frame and on a timer every 100 ms (a tick), because a move of the focus from one frame to another fires no event on the shell's document; it does nothing while a gesture is in progress, in the overview, on a viewed desktop, or on a touch client.
+Both waits below are counted in ticks, not in milliseconds, so a thread too busy to run the timer ages neither.
+In this reading, a focus read within two ticks of the layer's own `shell:shown` or `ttyd-focus` to that page is the page's answer to it, not a press (a terminal's wrapper focuses its pty on both): it raises nothing, and the next tick hands the document's focus back to the layer's host element, so a later press into the page still lands as a change of the active element.
+The page takes the focus a few milliseconds after the post, and the timer reads it at its next tick, or at the one after when the post came just before a tick.
+A real press into an unfocused window's page that the layer reads within those two ticks of showing or reloading that page is taken for the page's answer too: the page receives the press, but the window is not raised by it and the focus goes back to the host element; the next press raises the window.
+A landing already waiting in the page when the layer posts it `shell:shown` is judged without that message, so a press that loads another page in the frame (a link, a form) raises the window however soon that page loads; `ttyd-focus` goes only to the focused window's page, where no landing waits.
+After a raise of the layer's takes effect (the store may refuse one, as it does while another window is gestured) it raises no other window for three ticks, so pages that take the focus back whenever they lose it do not turn every press into a fight over the stack; a landing that comes meanwhile stays in the document's focus and is raised by the first tick after the hold.
+The layer posts the focused window's page no `ttyd-focus` while a landing it takes for a press waits in another window's page, not yet read by the timer or held, so no grant takes the focus from it.
+The page-reported `shell:focused` of section 4.2 raises the same window and is subject to neither that exception nor the hold: a page that reports its own focus has its window raised whatever the layer had just sent it.
+Hidden pages (minimized, on another desktop) are parked: moved out of the viewport and made invisible, which stops every engine rendering them while the page keeps its size, layout, and scroll (`display: none` would collapse its viewport and lose its document scroll, and Safari keeps rendering it).
+A shown page that the windows in front of it wholly cover within the backdrop, and the taskbar's band too while a fullscreen window paints over it (so one dragged wholly below that counts), is parked the same way but stays shown to the contract (it gets no `shell:hidden`); the focused window's page never is, so the keyboard stays in the window the user is in.
+A page is covered only where the windows are both drawn now and going, so a window travelling over it covers it once it lands and one moving away uncovers it at once.
+A window being moved or resized moves with no reconcile, so for the length of the gesture it neither is covered nor covers: the pages it was covering show, and the pages behind the windows that stay put stay parked.
+The window being moved has a compositor layer of its own (`will-change: transform` on its chrome and its page) until the move ends, so each pointer move slides the layer instead of repainting it.
 Sandbox and permission attributes are today's.
 The handshake, shown, hidden, close-request, and navigate messages go through `relay.ts` as today.
 
 ### 6.5 Gestures
 
 `pointerGestures.ts` uses pointer capture, a start threshold, and the `GestureSource` interface.
-It makes every iframe inert for the gesture's duration and restores the focused page's interactivity after.
+It makes every iframe inert for the gesture's duration and restores the pages' interactivity after: every page's on a non-touch client, the focused page's on a touch client.
 Touch needs nothing extra beyond `touch-action: none` on handles.
 
 ### 6.6 Theme and metrics
 
 `theme/default.css` extends `base.css` with the desktop tokens of contracts.md section 11.
-`metrics.ts` reads the ones behaviour needs (title bar height, taskbar heights, cell sizes, inset, minimum window size, minimum visible title width, snap threshold, drag threshold, touch target size) from `getComputedStyle(document.documentElement)` once at boot and again on `data-phone` or `data-touch` change, and hands the store a frozen `ThemeMetrics`.
+`metrics.ts` reads the ones behaviour needs (title bar height, window radius, taskbar heights, cell sizes, inset, minimum window size, minimum visible title width, snap threshold, drag threshold, touch target size) from `getComputedStyle(document.documentElement)` once at boot and again on `data-phone` or `data-touch` change, and hands the store a frozen `ThemeMetrics`.
 No metric is a literal in TypeScript, and the phone breakpoint is the one exception in the other direction: it is a TypeScript constant applied as a `matchMedia` query on the viewport's size that sets `data-phone`, and CSS keys off the attribute, so it too lives once.
 
 ## 7. The app contract (v2)
@@ -432,11 +453,12 @@ The files app is dufs plus its location beacon; the sidecar goes.
 Its one launch path is `new` at `/[?path=]`, which dufs already serves, and the beacon reports the folder path and the folder's name as the title.
 There is nothing to navigate in-app, so it declares no navigation capability and is reloaded when it must follow.
 
-### 9.4 Browser
+### 9.4 Browser, now the Screen
 
-The browser daemon keeps its pages at `/?session=<name>` and gains `POST /new` (the `new` launch path, `url` optional), which answers the fleet's one browser (created once, started again when it was stopped, `url` opened as a tab) as `{"path": "/?session=<name>"}`; the browser is stopped, its profile kept, once a window has shown it and none does any more.
-Its page reports its path and the page title, and handles `shell:navigate` by switching session.
-The fleet CLI and the daemon's own routes are untouched.
+The browser is a launch path of the Screen (`docs/system/specs/screen/spec.md`), the workspace's one streamed Linux desktop shown as one window: its `browser` launch path (`POST /launch/browser`, `url` optional) starts the Screen's stack when it is not running and brings Chromium to the front on it, and answers the Screen's one page, `/`.
+The stack never stops for emptiness: it starts on first demand and ends only under memory pressure or by Quit, so closing the last Screen window stops nothing (D3 of that spec, superseding decision 17 of concepts.md).
+The Screen's page reports `/` with the frontmost X window's title.
+Beside the four placement states it takes the fifth, `FULLSCREEN`, which fills the viewport over the taskbar with no title bar, and asks the Imbue Studio chrome for immersive mode through the embed contract where the chrome can (the Screen spec, section 12).
 
 ## 10. Sharing, memory, and updates
 
@@ -446,7 +468,7 @@ The update apply refreshes tool environments as today and probes every critical 
 
 ## 11. What is deleted
 
-`dockview-core`; `DockviewWorkspace.ts`, `Sidebar.ts`, `NewTabLauncher.ts` as a panel (its sections move into `LauncherOverlay`), `IframePanel.ts`, `liveSurfaces.ts` (replaced by `livePages.ts`), `tabMenu.ts`, `tab-rename.ts`, `AllAppsPicker.ts`, `ProjectMembershipDialog.ts`, `ProjectSettingsModal.ts` (replaced by `DesktopSettingsDialog`); the shell's `dockview_document.py`, `layouts.py`, `projects.py`, `instance_relay.py`, the instance fetching in `inventory.py`, and the instance vocabulary in `data_types.py` and `primitives.py`; `migrate_workspace_layouts.py`; the `manage-projects` skill (folded into `manage-layout`, renamed `manage-desktop`); the `app_instances` library and every `/_instances` blueprint in the built-ins; the prototypes' wallpaper binaries are not imported.
+`dockview-core`; `DockviewWorkspace.ts`, `Sidebar.ts`, `NewTabLauncher.ts` as a panel (its sections move into `LauncherOverlay`), `IframePanel.ts`, `liveSurfaces.ts` (replaced by `livePages.ts`), `tabMenu.ts`, `tab-rename.ts`, `AllAppsPicker.ts`, `ProjectMembershipDialog.ts`, `ProjectSettingsModal.ts` (replaced by `WallpaperChooserDialog`); the shell's `dockview_document.py`, `layouts.py`, `projects.py`, `instance_relay.py`, the instance fetching in `inventory.py`, and the instance vocabulary in `data_types.py` and `primitives.py`; `migrate_workspace_layouts.py`; the `manage-projects` skill (folded into `manage-layout`, renamed `manage-desktop`); the `app_instances` library and every `/_instances` blueprint in the built-ins; the prototypes' wallpaper binaries are not imported.
 The word "dock" leaves every file the change touches.
 
 ## 12. mngr-side changes

@@ -1,15 +1,15 @@
-# Latchkey: the user's connected accounts (rows 1, 2 and 4)
+# Latchkey: the user's connected accounts (rows 1 to 4)
 
 Latchkey is a CLI tool that automatically injects credentials into curl commands.
 Credentials are managed on the outside by the Imbue Studio app: sending a permission
 request also triggers a login flow if necessary. No credential ever enters this
 workspace; the gateway attaches it to the request.
 
-## Builtin services (row 1)
+## Services latchkey already knows (row 1)
 
 - **Use `latchkey curl`** instead of regular `curl` for supported services. Pass
   through all regular curl arguments; latchkey is a transparent wrapper.
-- **`latchkey services list`** names the builtin services.
+- **`latchkey services list`** names the services latchkey already knows.
 - **`latchkey services info <service_name>`** gives a service's auth options,
   credential status, API docs links and special requirements.
 - **Submit a permission request** (below) when `latchkey curl` fails with a
@@ -46,7 +46,7 @@ request to send.
 
 | Error latchkey returned | What it means | What to send |
 | --- | --- | --- |
-| `No service matches URL: <url>` | Latchkey has no service for this domain at all | `type: "custom-service"` (row 2 or 4), if the service is workable there; else the other rows |
+| `No service matches URL: <url>` | Latchkey has no service for this domain at all | `type: "custom-service"` (rows 2 to 4), if the service is workable there; else the other rows |
 | `No credentials found for <service>.` | The service exists; it is not connected yet | `type: "predefined"` |
 | `Request not permitted by the user.` | The service exists and is connected; you lack the permission | `type: "predefined"` |
 
@@ -65,8 +65,8 @@ latchkey curl http://latchkey-self.invalid/permissions/self | jq .rules
 
 # 3. Ask for the missing permissions.
 # This one must go in a tool call of its own, with nothing else in it and its output untouched.
-latchkey curl -XPOST -H "X-Latchkey-Device: *" http://latchkey-self.invalid/permission-requests \
-  -H 'Content-Type: application/json' \
+latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
+  -H 'Content-Type: application/json' -H 'X-Latchkey-Device: *' \
   -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "predefined", "payload": {"scope": "discord-api", "permissions": ["discord-read-all"]}, "rationale": "I'"'"'d like to access your Discord account to read server and channel information so I can help you summarize conversations."}'
 ```
 
@@ -90,7 +90,7 @@ first call after an approval message, sleep for a few seconds and retry; the
 change can take a moment to propagate. Do not ask the user to tell you when they
 respond; mention that you will continue once they do if you need to wait.
 
-Do not forget to use the `-H "X-Latchkey-Device: *"` option to send the request
+Do not forget to use the `-H 'X-Latchkey-Device: *'` option to send the request
 to all of the user’s available devices. If none are available (usually
 indicated by an HTTP 503 error) or there are connection failures, the request
 will be stored on the outer host and delivered when the user starts Imbue Studio again.
@@ -147,22 +147,23 @@ single account for the service), or have the user reconnect the account from the
 Permissions tab ("Add connection", then "Add another account" for that service;
 tell them to do that when more than one account is configured).
 
-## Custom services (rows 2 and 4)
+## Custom services (rows 2 to 4)
 
-A **custom service** is a connection to one domain latchkey has no builtin for.
-The user approves it in the Imbue Studio app, pastes the credential into the approval
-window (or signs in through a browser latchkey drives), and the gateway injects
-it into every `latchkey curl` to that domain. The value never enters this
-workspace.
+A **custom service** is a connection to one domain latchkey does not support
+out of the box. The user approves it in the Imbue Studio app, pastes the
+credential into the approval window (or signs in through a browser latchkey
+drives), and the gateway injects it into every `latchkey curl` to that domain.
+The value never enters this workspace.
 
 Before you decide to go down this route: you do not need a connection to make
 requests to URLs that require no credentials; latchkey is not necessary at all.
 And a custom service covers only what the gateway can inject: a request header,
-or a cookie or token captured from a browser sign-in. A key that goes in the
-query string or a signature scheme is not one of them (row 5). A documented API
-that needs a registered OAuth app is not one either, but that does not rule the
-service out: its website's own sign-in may be (row 4, "Signing in instead of a
-key" below).
+a cookie or token captured from a browser sign-in, or the OAuth token of a
+remote MCP server. A key that goes in the query string or a signature scheme is
+not one of them (row 5). A documented API that needs a registered OAuth app is
+not one either, but that does not rule the service out: its website's own
+sign-in may be (row 4, "Signing in instead of a key" below), and so may its own
+MCP server (row 2, `references/mcp.md`).
 
 This asks the user to create a connection to one domain and let this workspace
 use it:
@@ -170,7 +171,7 @@ use it:
 ```bash
 # This one must go in a tool call of its own, with nothing else in it and its output untouched.
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
-  -H 'Content-Type: application/json' \
+  -H 'Content-Type: application/json' -H 'X-Latchkey-Device: *' \
   -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "custom-service", "payload": {"domain": "api.example.com", "scheme": "https"}, "rationale": "I'"'"'d like to reach the Example widget API to look up the part numbers you asked about."}'
 ```
 
@@ -213,9 +214,9 @@ sends it with every `latchkey curl` to the domain:
   -d '{... "payload": {"domain": "www.example.com", "scheme": "https", "login": {"url": "https://www.example.com/login", "flow": "cookie-capture", "flow_params": {"cookieKeys": ["session"]}}}}'
 ```
 
-The sign-in window is latchkey's own browser, on the user's computer, not a
-browser in this workspace. It keeps its own saved state, so the first sign-in
-to a site there is a fresh one.
+The sign-in window is a browser on the user's computer, not a browser in this
+workspace. It may not share the saved sign-ins of the browser the user usually
+works in, so be ready for the user to have to sign in from scratch.
 
 Pick the flow from how the site authenticates its own requests. Find the
 endpoints from public write-ups of the site's API, or by loading its pages in a
@@ -230,8 +231,17 @@ performance.getEntriesByType('resource').map(e => e.name)"`).
   fetches from an endpoint of its own (`tokenUrl`, with the token at
   `tokenField`). The token expires and cannot be refreshed, so the user signs
   in again now and then; say so.
+- **`mcp`** when the service's own hosted MCP server is the thing to
+  connect (row 2, not this row): latchkey registers an OAuth client with the
+  server, sends the user through its consent page, and refreshes the token
+  itself. `references/mcp.md` has the request and how to call the server.
 - **Neither** when every request also needs a value the page computes, such as
   a CSRF header that must echo a cookie: row 4 is out, go on to row 5.
+
+Only use the `cookie-capture` and `token-capture` flows when you are fairly sure
+they will work for the site. When the cookie or token does not actually appear
+during sign-in, the user may be left with an open browser window, not knowing
+what to do next.
 
 `latchkey curl` requests are sent by the gateway, which runs on the user's
 computer for a workspace there and on the workspace's server for a cloud one.
@@ -244,20 +254,19 @@ the next one when `latchkey curl` actually comes back refused.
 `--login-url`, `--login-flow` and `--login-flow-params` flags documented in
 `latchkey services register --help` (run it to see each flow's parameters), but
 use this API rather than the `latchkey services register` CLI directly. All three
-are required inside `login`: a flow needs a login URL and its parameters. The
-parameters are checked against the flow's schema, so an unknown key is refused,
-and every URL in them (`url`, `cookieUrl`, `tokenUrl`) must be on `domain` or a
-subdomain of it.
+are required inside `login`: a flow needs a login URL and its parameters (for
+`mcp`, the login URL is the OAuth authorization endpoint). The parameters are
+checked against the flow's schema, so an unknown key is refused. For
+`cookie-capture` and `token-capture`, every URL (`url`, `cookieUrl`,
+`tokenUrl`) must be on `domain`, a subdomain of it, or a parent domain of it. A
+sibling (`accounts.example.com` for `api.example.com`) is refused. The `mcp`
+flow has its own rules; see `references/mcp.md`, "The `mcp` login flow".
 
 ## When the gateway is unreachable
 
 Every command above is routed through the latchkey gateway at
 `$LATCHKEY_GATEWAY`. If it cannot be reached, treat it as a transient outage; it
-usually helps if the user restarts the Imbue Studio app. Requests to `/permissions` and
-`/permission-requests` are routed to the user's computer, so they fail while it
-is offline. If the user appears to be actively using the app or chatting with
-you, but the latchkey gateway is unreachable, ask them to try restarting the
-Imbue Studio app.
+usually helps if the user restarts the Imbue Studio app.
 
 ## Proxying requests through the user's desktop
 
@@ -277,9 +286,10 @@ desktop whenever possible.
 
 - All curl arguments are passed through unchanged; return code, stdout and
   stderr come back from curl.
-- Unless the user explicitly asks, do not discuss latchkey or the technical
-  details; it is easy for the user to get confused. Do not ask the user to run
-  latchkey commands.
+- Unless the user explicitly asks about latchkey, do not mention latchkey or
+  any of the underlying technical details: latchkey is an implementation
+  detail. Unless they show otherwise, assume the user is non-technical. Do not
+  ask the user to run latchkey commands.
 - Do not call `latchkey auth` commands yourself. The Imbue Studio app runs them on the
   user's computer as part of approving a permission request; for services with no
   browser auth, it provides the form the user pastes a credential into.

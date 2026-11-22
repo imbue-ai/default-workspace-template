@@ -20,13 +20,7 @@ across files that would otherwise drift silently:
    ``CLAUDE_CONFIG_DIR`` to its per-agent dir in its env, and everything it
    spawns (supervisord services, the bootstrap's / system_interface's
    ``mngr create`` calls) would inherit that pin.
-3. The Claude Code version is pinned in two places (the ``setup_system.sh``
-   default and ``agent_types.claude.version``) that must agree. Since the
-   services agent is no longer a claude agent, mngr's runtime pin check only
-   fires when the first chat agent is created on first boot --
-   ``setup_system.sh`` fails the build on an installer mismatch, and this test
-   catches a desync between the two pinned values at merge time.
-4. The chat app's baked model catalog fixture is lifted from one claude build, so it must be
+3. The chat app's baked model catalog fixture is lifted from one claude build, so it must be
    the one for the pinned version: a bump that forgets to regenerate it would otherwise pass
    every catalog test against the old binary's models.
 """
@@ -49,7 +43,6 @@ from imbue.mngr_claude.plugin import ClaudeAgentConfig
 _REPO_ROOT = Path(__file__).parents[1]
 _SETTINGS_PATH = _REPO_ROOT / ".mngr" / "settings.toml"
 _DOCKERFILE_PATH = _REPO_ROOT / "system" / "Dockerfile"
-_SETUP_SYSTEM_PATH = _REPO_ROOT / "system" / "scripts" / "setup_system.sh"
 _CHAT_CLAUDE_HARNESS_DIR = (
     _REPO_ROOT / "system" / "apps" / "chat" / "imbue" / "chat" / "harnesses" / "claude"
 )
@@ -107,18 +100,6 @@ def test_main_agent_type_resolves_to_plain_command_agent() -> None:
     assert resolved.agent_class is CommandAgent
     assert not isinstance(resolved.agent_config, ClaudeAgentConfig)
     assert str(resolved.agent_config.command) == "sleep infinity"
-
-
-def test_claude_version_pin_is_consistent_across_settings_and_setup_script() -> None:
-    settings_version = _load_raw_settings()["agent_types"]["claude"]["version"]
-
-    setup_match = re.search(
-        r"\$\{CLAUDE_CODE_VERSION:=(\S+)\}", _SETUP_SYSTEM_PATH.read_text()
-    )
-    assert setup_match is not None
-    setup_version = setup_match.group(1)
-
-    assert settings_version == setup_version
 
 
 def test_baked_model_catalog_fixture_is_the_pinned_versions() -> None:

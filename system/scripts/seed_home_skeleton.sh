@@ -20,17 +20,15 @@ if [ ! -e /home/user/.cache ] && [ ! -L /home/user/.cache ]; then
     ln -s /var/cache/user /home/user/.cache
 fi
 
-# Link ~/.mcpc (mcpc's state) into data/.secrets before the first agent starts;
-# env-converge runs the same unit on every boot and update.
-bash /home/user/workspace/system/scripts/env.d/1300-mcpc-home-link.sh
-
 # Root's interactive shells read $HOME/.bashrc, which lives on the volume now;
-# seed the PATH + mngr-env lines the image used to keep in /root/.bashrc.
+# seed the PATH + mngr-env lines the image used to keep in /root/.bashrc. The
+# host dir is not the same path on every host: a provisioning command has it in
+# MNGR_HOST_DIR, and the docker first-boot seed (which runs before any agent
+# env exists) gets the container's.
 if [ ! -e /home/user/.bashrc ]; then
-    printf '%s\n' \
-        'PATH="/root/.local/bin:$PATH"' \
-        'if [ -f /home/user/.mngr/env ]; then set -a; . /home/user/.mngr/env; set +a; fi' \
-        > /home/user/.bashrc
+    mngr_host_env="${MNGR_HOST_DIR:-/home/user/.mngr}/env"
+    printf '%s\n' 'PATH="/root/.local/bin:$PATH"' > /home/user/.bashrc
+    printf 'if [ -f %s ]; then set -a; . %s; set +a; fi\n' "$mngr_host_env" "$mngr_host_env" >> /home/user/.bashrc
 fi
 
 # Outgoing ssh reads $HOME/.ssh/known_hosts, which lives on the volume now;

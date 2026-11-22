@@ -31,7 +31,7 @@ Facts this design builds on, as of `main` at `2cf9763de` (2026-10-20).
 - A chat agent notifies the user through `POST /api/v1/agents/<agent-id>/notifications` on the Imbue Studio app, via the latchkey gateway, with `message`, an optional `title`, and `watched_by` (`.agents/skills/notify-user/scripts/notify_user.py`).
   The feed resolves the entry's destination from the agent's chat: a click lands in that chat.
   There is no way to send the user to an app page.
-- A built-in app is a Flask program with an `app.toml` manifest, installed as its own uv tool, registered through `forward_port.py`, serving an OpenAPI document through `system/libs/app_schema`; the ones with a real interface (the shell, the chat, Getting Started, Files) are Mithril and Tailwind builds in the npm workspace at `system/package.json` over `system/libs/workspace_ui`.
+- A built-in app is a Flask program with an `app.toml` manifest, run from the workspace venv, registered through `forward_port.py`, serving an OpenAPI document through `system/libs/app_schema`; the ones with a real interface (the shell, the chat, Getting Started, Files) are Mithril and Tailwind builds in the npm workspace at `system/package.json` over `system/libs/workspace_ui`.
   System Monitor (`system/apps/system_monitor`) is the reference for an app that reads machine state and stores nothing.
 - A published template that users adopted, `nicholasgjokaj-star/routines`, showed the value of one window over everything scheduled, with plain-language rows, automatic-versus-manual runs, next-run times, problems sorted first, a run-in-flight indicator, and a Fix button that hands an agent the evidence.
   It recovered all of it by parsing cron command lines, kept history only for jobs an agent remembered to wrap, modelled only cron commands, could not notify, and matched none of the workspace's conventions.
@@ -156,8 +156,11 @@ The library is `system/libs/routines`, a uv workspace member in the root venv, w
 The bootstrap writes one code-owned entry into `/etc/cron.d/routines` at every boot, beside the recovery guard (the `data/.state/cron.d` install keeps running for whatever the migration of section 12 leaves there):
 
 ```
+MNGR_HOST_DIR=/home/user/.mngr
 * * * * *   root   /home/user/workspace/system/libs/routines/with_agent_env.sh uv run --no-sync routines tick >> /var/log/supervisor/routines-tick.log 2>&1
 ```
+
+The first line is the boot's own `MNGR_HOST_DIR`, which cron would otherwise scrub: the wrapper reads the agent environment from files inside that directory, and a host need not keep it at the container's `/home/user/.mngr`.
 
 `routines tick`:
 
@@ -185,7 +188,7 @@ The tick's own output is a line per spawned run and a line per reaped run, nothi
 5. Writes `run_finished` with the outcome, updates the state, and applies the notification rules (section 8).
 6. Exits with 0 for a success and 1 otherwise, so a caller with `--wait` can read it.
 
-The run directory is passed to the routine as `ROUTINES_RUN_DIR`, with `ROUTINES_ROUTINE_ID` and `ROUTINES_RUN_ID` beside it.
+The run directory is passed to the routine as `ROUTINES_RUN_DIR`, with `ROUTINES_ROUTINE_ID`, `ROUTINES_RUN_ID` and `ROUTINES_TRIGGER` (`scheduled` or `manual`) beside it.
 
 ### 6.3 A command run
 
@@ -197,6 +200,7 @@ Exit 0 is `succeeded`; anything else is `failed`.
 
 `skill = "<name>"` runs the wake below in the runner's own process; `routines wake <name>` is the same wake as a command, which is what the Caretaker's check calls.
 Inside a run (`ROUTINES_RUN_ID` set) the wake attaches the chat to that run and records an agent that waits on the user on it exactly as a skill run does (`run_blocked`, the state, the notification); outside one it is a plain wake that only keeps the chat, with its own exit code.
+The agent in the chat is handed none of the run's environment, so a skill that behaves differently for a run started by hand reads the trigger from the ledger: the newest record of `routines runs <id> --limit 1 --format json` is the run in flight (`outcome` null, `trigger` `SCHEDULED` or `MANUAL`).
 
 1. **Find the chat.** The routine's chat id is in its state.
    With none, or one the chat app no longer knows, take up an agent that still carries the routine (`mngr list --include 'labels.routine == "<id>" || labels.automation == "<id>"'`, the second being the retired runner's label) when the chat app lists it: a migrated automation's agent, or the chat of a routine removed and added again, is named after the routine, and `mngr create` refuses a name an agent already has.
@@ -329,7 +333,7 @@ The Caretaker's check (section 11) is the other layer: it reads the listing for 
 
 ### 10.1 Manifest and program
 
-`system/apps/routines`, name `routines`, display name "Routines", `priority = "routines"` (a new band in `oom_priority`'s table between `files` at 75 and `getting-started` at 80: it stores nothing of its own, and a shed costs a reload), `critical = false`, `stop_when_no_windows = true`, `launcher_rank = 45`, `system = false`, `api_schema_path = "/api/schema"`, a default shortcut on `open` in `focus` mode, and a `[preview]` table over the live state, read-only (the library's state is nothing of the app's to copy).
+`system/apps/routines`, name `routines`, display name "Routines", `priority = "routines"` (a new band in `oom_priority`'s table between `files` at 75 and `getting-started` at 80: it stores nothing of its own, and a shed costs a reload), `critical = false`, `stop_when_no_windows = true`, `launcher_rank = 45`, `system = true` (part of every workspace rather than an app built on it, so the share panel lists it under System and the desktop app's home screen does not count it among the workspace's own apps), `api_schema_path = "/api/schema"`, a default shortcut on `open` in `focus` mode, and a `[preview]` table over the live state, read-only (the library's state is nothing of the app's to copy).
 The program registers on port 8050 (no built-in uses it) and runs the `routines-app` entry point, like System Monitor.
 The app depends on the library and imports nothing from mngr.
 
@@ -348,7 +352,7 @@ One document serves every page; the page routes on its path and reports it throu
 - **`/<id>/runs/<run_id>/log`, the whole log.** The run's entire log under the same navigation header, where the run page shows only the end of a long one.
 - The phone layout stacks the row's cells; the controls wrap into as many rows as the width takes.
 
-Fix it builds a brief from the routine, its last runs, and the last finished run's log, and opens a chat on it through `message_chat.py --create` with `auto_open=true`, as the reference template did; the brief links the routine's page.
+Fix it builds a brief from the routine, its last runs, and the last finished run's log, and opens a chat on it through the chat app's create route (`message_chat.create_through_chat_app`, the call behind `message_chat.py --create`) with `auto_open=true`, as the reference template did; the brief links the routine's page.
 
 ### 10.3 API
 
@@ -398,9 +402,11 @@ The daily routines-only check is a second definition later, `caretaker-routines.
 `routines migrate-cron` converts what a workspace has:
 
 - Every `data/.state/cron.d` entry whose line runs `run_job.sh` becomes a definition: the job id, `--every`, `--at`, and `--retry-after` map to the fields; a command that is `run_automation.sh <skill>` becomes `skill`; a `caretaker` entry becomes the switch on the shipped definition.
-  `data/.state/jobs/<id>/` becomes the state's `last_succeeded_at` and `consecutive_failures`.
+  `data/.state/jobs/<id>/` becomes the state's `last_succeeded_at` and `consecutive_failures`; a job that never ran on minds-v0.8.7 still keeps it under `system/data/.state/jobs/<id>/`, and when both hold one, the later success wins.
   The title is the id with the hyphens read as spaces, and `what` is the command, until an agent describes it.
 - A plain cron line whose five fields are one of the shapes section 5 expresses becomes a definition the same way; one that is not is left in place with a warning in the boot log, since the daemon still runs it.
+- A command is its words when the shell would only split it; one with quoting, operators or expansions runs through the entry's `SHELL` (else `/bin/sh`) as the text cron ran.
+  `\%` is a literal `%`; a line whose bare `%` feeds the command input is left in place.
 - Both copies of every converted entry are removed.
 - The Imbue Studio app's `update-self-dispatch` entry stays with cron, untouched: the app rewrites it whenever it arms an update, so a routine of it would run beside the cron line rather than replace it.
 

@@ -18,10 +18,12 @@ import { isLiveShared } from "../models/connections";
 import * as server from "../models/server";
 import { isTextLike, previewKindOf } from "../models/fileKinds";
 import { formatSize } from "../models/format";
+import { matchesKeybinding } from "../models/keybindings";
 import { childPath, nameOf, parentOf } from "../models/paths";
 import { Dialogs } from "./dialogs";
 import { FileIcon } from "./FileIcon";
 import { iconButton } from "./iconButton";
+import { ZoomableImage } from "./ZoomableImage";
 
 export interface FilePageOptions {
   path: string;
@@ -142,15 +144,7 @@ function body(page: FilePageModel): m.Children {
   }
   switch (preview) {
     case "image":
-      return m(
-        "div",
-        { class: centred },
-        m("img.files-file-image", {
-          src: url,
-          alt: name,
-          class: "max-h-full max-w-full object-contain",
-        }),
-      );
+      return m(ZoomableImage, { src: url, alt: name, frameClass: "h-full bg-page" });
     case "video":
       return m("div", { class: centred }, m("video", { src: url, controls: true, class: "max-h-full max-w-full" }));
     case "audio":
@@ -198,7 +192,7 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
     oninit({ attrs: { page } }) {
       menu = createMenu({ placement: "below", align: "end", minWidth: 200, extraClass: "files-file-menu" });
       onKeydown = (event) => {
-        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        if (matchesKeybinding(event, "save-file")) {
           event.preventDefault();
           void page.save();
         }

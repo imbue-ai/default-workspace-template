@@ -7,20 +7,29 @@
  * three-part subagent key's path for a sub-agent view.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 
 vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
 const createChat = vi.fn();
 const getChatById = vi.fn();
 const addChatsUpdatedListener = vi.fn();
-vi.mock("./models/Chats", () => ({ createChat, getChatById, addChatsUpdatedListener }));
+vi.mock("./models/Chats", () => ({
+  createChat,
+  getChatById,
+  addChatsUpdatedListener,
+  addHeldSendFailedListener: () => undefined,
+}));
 vi.mock("./presence", () => ({
   startPresenceReporting: vi.fn(),
   reportPresence: vi.fn(),
   reportFocusChange: vi.fn(),
   currentPresenceState: vi.fn(() => "hidden"),
 }));
+const ensureParticipants = vi.fn(() => Promise.resolve());
+vi.mock("./models/Participants", () => ({ ensureParticipants }));
 
+import { CHAT_ON_SCREEN, PROVIDER_CHOOSER_ON_SCREEN } from "@imbue/workspace-ui/src/embed";
 import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_LOCATION, SHELL_SHOWN } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 import { chatSnapshotFixture } from "./models/chatSnapshotFixture";
@@ -40,6 +49,8 @@ let connection: ShellConnection | null = null;
  *  The presence mock is one object across those copies, so its calls are cleared per test. */
 async function loadShell(): Promise<{
   connectChatToShell: typeof import("./shell").connectChatToShell;
+  reportChatOnScreenOnce: typeof import("./shell").reportChatOnScreenOnce;
+  reportProviderChooserOnScreenOnce: typeof import("./shell").reportProviderChooserOnScreenOnce;
   startChatOnAccount: typeof import("./shell").startChatOnAccount;
   openSubagentView: typeof import("./shell").openSubagentView;
   presence: {
@@ -57,6 +68,8 @@ async function loadShell(): Promise<{
   const shell = await import("./shell");
   return {
     connectChatToShell: shell.connectChatToShell,
+    reportChatOnScreenOnce: shell.reportChatOnScreenOnce,
+    reportProviderChooserOnScreenOnce: shell.reportProviderChooserOnScreenOnce,
     startChatOnAccount: shell.startChatOnAccount,
     openSubagentView: shell.openSubagentView,
     presence,
@@ -197,6 +210,88 @@ describe("the chat page's location report", () => {
   });
 });
 
+describe("reportChatOnScreenOnce", () => {
+  function chatOnScreenReports(parent: { postMessage: ReturnType<typeof vi.fn> }): unknown[] {
+    return parent.postMessage.mock.calls.map(([data]) => data).filter((data) => data.type === CHAT_ON_SCREEN);
+  }
+
+  let layoutSpy: MockInstance | null = null;
+
+  /** Give the document a height (jsdom lays nothing out). */
+  function layOutDocument(height: number): void {
+    layoutSpy = vi.spyOn(document.documentElement, "getBoundingClientRect").mockReturnValue({ height } as DOMRect);
+  }
+
+  afterEach(() => {
+    layoutSpy?.mockRestore();
+    layoutSpy = null;
+  });
+
+  it("reports a framed chat once it is both shown and loaded, and only once", async () => {
+    const parent = framed();
+    layOutDocument(900);
+    const { connectChatToShell, reportChatOnScreenOnce } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+
+    reportChatOnScreenOnce("agent-1", true);
+    expect(chatOnScreenReports(parent)).toEqual([]);
+
+    deliver(HANDSHAKE, parent);
+    deliver({ type: SHELL_SHOWN }, parent);
+    reportChatOnScreenOnce("agent-1", false);
+    expect(chatOnScreenReports(parent)).toEqual([]);
+
+    reportChatOnScreenOnce("agent-1", true);
+    reportChatOnScreenOnce("agent-1", true);
+    expect(chatOnScreenReports(parent)).toEqual([{ type: CHAT_ON_SCREEN, chatId: "agent-1" }]);
+  });
+
+  it("does not count a page whose frame is not laid out", async () => {
+    const parent = framed();
+    layOutDocument(0);
+    const { connectChatToShell, reportChatOnScreenOnce } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    deliver(HANDSHAKE, parent);
+    deliver({ type: SHELL_SHOWN }, parent);
+
+    reportChatOnScreenOnce("agent-1", true);
+    expect(chatOnScreenReports(parent)).toEqual([]);
+  });
+});
+
+describe("reportProviderChooserOnScreenOnce", () => {
+  function chooserReports(parent: { postMessage: ReturnType<typeof vi.fn> }): unknown[] {
+    return parent.postMessage.mock.calls
+      .map(([data]) => data)
+      .filter((data) => data.type === PROVIDER_CHOOSER_ON_SCREEN);
+  }
+
+  let layoutSpy: MockInstance | null = null;
+
+  afterEach(() => {
+    layoutSpy?.mockRestore();
+    layoutSpy = null;
+  });
+
+  it("reports once the root is shown and laid out, with no chat named, and only once", async () => {
+    const parent = framed();
+    layoutSpy = vi.spyOn(document.documentElement, "getBoundingClientRect").mockReturnValue({ height: 0 } as DOMRect);
+    const { reportProviderChooserOnScreenOnce } = await loadShell();
+
+    reportProviderChooserOnScreenOnce(false);
+    reportProviderChooserOnScreenOnce(true);
+    expect(chooserReports(parent)).toEqual([]);
+
+    layoutSpy.mockReturnValue({ height: 900 } as DOMRect);
+    reportProviderChooserOnScreenOnce(false);
+    expect(chooserReports(parent)).toEqual([]);
+
+    reportProviderChooserOnScreenOnce(true);
+    reportProviderChooserOnScreenOnce(true);
+    expect(chooserReports(parent)).toEqual([{ type: PROVIDER_CHOOSER_ON_SCREEN }]);
+  });
+});
+
 describe("the embed API", () => {
   it("drives a framed page's presence the way the shell's messages do", async () => {
     const parent = framed();
@@ -207,11 +302,18 @@ describe("the embed API", () => {
     if (embed === undefined) throw new Error("no embed API on a framed page");
 
     deliver({ type: SHELL_HANDSHAKE, clientId: "client-2" }, parent);
+    ensureParticipants.mockClear();
     embed.shown();
     embed.hidden();
 
     expect(presence.startPresenceReporting.mock.calls).toEqual([["agent-1", "client-2", "hidden"]]);
     expect(presence.reportPresence.mock.calls).toEqual([["visible"], ["hidden"]]);
+    // Coming back into view reads the roster again, so whoever joined meanwhile is drawn right; so does coming
+    // into focus (the window keeps every earlier test's focus listener too, so only the growth is counted).
+    expect(ensureParticipants).toHaveBeenCalledTimes(1);
+    const readsBeforeFocus = ensureParticipants.mock.calls.length;
+    window.dispatchEvent(new Event("focus"));
+    expect(ensureParticipants.mock.calls.length).toBeGreaterThan(readsBeforeFocus);
   });
 
   it("is absent on a top-level visit, which no root drives", async () => {

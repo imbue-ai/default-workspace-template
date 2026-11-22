@@ -66,7 +66,7 @@ def add_cadence(moment: datetime, cadence: Duration, day_of_month: int | None, z
     if not cadence.is_calendar_months:
         return moment + cadence.timedelta
     local = moment.astimezone(zone)
-    month_index = local.month - 1 + cadence.count
+    month_index = local.month - 1 + cadence.amount
     year = local.year + month_index // 12
     month = month_index % 12 + 1
     wanted_day = day_of_month if day_of_month is not None else local.day
@@ -151,17 +151,17 @@ def _plural(count: int, singular: str, plural: str) -> str:
 def describe_cadence(cadence: Duration) -> str:
     match cadence.unit:
         case DurationUnit.SECONDS:
-            return f"Every {cadence.count} seconds"
+            return f"Every {cadence.amount} seconds"
         case DurationUnit.MINUTES:
-            return "Every minute" if cadence.count == 1 else f"Every {cadence.count} minutes"
+            return "Every minute" if cadence.amount == 1 else f"Every {cadence.amount} minutes"
         case DurationUnit.HOURS:
-            return "Every hour" if cadence.count == 1 else f"Every {cadence.count} hours"
+            return "Every hour" if cadence.amount == 1 else f"Every {cadence.amount} hours"
         case DurationUnit.DAYS:
-            return "Every day" if cadence.count == 1 else f"Every {cadence.count} days"
+            return "Every day" if cadence.amount == 1 else f"Every {cadence.amount} days"
         case DurationUnit.WEEKS:
-            return "Every week" if cadence.count == 1 else f"Every {cadence.count} weeks"
+            return "Every week" if cadence.amount == 1 else f"Every {cadence.amount} weeks"
         case DurationUnit.MONTHS:
-            return "Every month" if cadence.count == 1 else f"Every {cadence.count} months"
+            return "Every month" if cadence.amount == 1 else f"Every {cadence.amount} months"
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -212,10 +212,10 @@ def describe_schedule(definition: RoutineDefinition, zone: tzinfo) -> str:
     if definition.every.is_calendar_months and definition.day_of_month is not None:
         head = (
             f"Monthly on the {_ordinal(definition.day_of_month)}"
-            if definition.every.count == 1
+            if definition.every.amount == 1
             else f"{describe_cadence(definition.every)} on the {_ordinal(definition.day_of_month)}"
         )
-    elif definition.days and definition.every.unit is DurationUnit.DAYS and definition.every.count == 1:
+    elif definition.days and definition.every.unit is DurationUnit.DAYS and definition.every.amount == 1:
         head = (
             "Every weekday"
             if frozenset(definition.days) == _WORKING_WEEK

@@ -55,6 +55,7 @@ function proto(chatId: string, phase: ProvisionalChat["phase"], error: string | 
     chat_id: chatId,
     name: "Chat 1",
     account_id: "acct-1",
+    kind: "agent",
     phase,
     error,
     is_seeded: false,
@@ -108,6 +109,21 @@ describe("the provisional chats over the socket", () => {
     await expect(registered).resolves.toBeUndefined();
     expect(manager.getProvisionalChat("agent-1")).toBeUndefined();
     expect(manager.getChatById("agent-1")?.chat_id).toBe("agent-1");
+  });
+
+  it("tells the held-send listeners which message never reached its agent, and why", () => {
+    const failures: [string, string, string, string][] = [];
+    manager.addHeldSendFailedListener((chatId, messageId, detail, kind) =>
+      failures.push([chatId, messageId, detail, kind]),
+    );
+    push({
+      type: "held_send_failed",
+      chat_id: "agent-1",
+      message_id: "m-1",
+      detail: "Claude is waiting on something in its terminal",
+      kind: "input_blocked",
+    });
+    expect(failures).toEqual([["agent-1", "m-1", "Claude is waiting on something in its terminal", "input_blocked"]]);
   });
 
   it("tells the active-agent listeners when a chat runs on a different agent than before", () => {
@@ -280,5 +296,17 @@ describe("the account list over the socket", () => {
     open();
 
     expect(providers.loadAccounts).toHaveBeenCalledOnce();
+  });
+
+  it("tells the mentions listeners of a reconnect as of a push, since a push while it was down reached no one", () => {
+    const listener = vi.fn();
+    manager.addMentionsUpdatedListener(listener);
+    open();
+    expect(listener).not.toHaveBeenCalled();
+
+    push({ type: "mentions_updated" });
+    open();
+
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 });

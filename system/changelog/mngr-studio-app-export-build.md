@@ -4,4 +4,4 @@ Apps can leave the workspace as Mac apps of their own (Imbue Studio's app export
 
 - The shortcut's and the launcher's menus offer "Add to Applications" and "Show in Finder" for those apps.
 
-- The shell announces each app's `start_path` (the page its desktop shortcut opens by GET), which an exported app opens on, and takes the embed contract's app-export messages (version 12). A Studio without app export sends none of them and the desktop behaves as before.
+- The shell announces each app's `start_path` (the page its first desktop shortcut opens by GET), which an exported app opens on, and takes the embed contract's app-export messages (version 18). A Studio without app export sends none of them and the desktop behaves as before.

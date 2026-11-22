@@ -10,6 +10,7 @@ import m from "mithril";
 import { Modal } from "@imbue/workspace-ui/src/components/Modal";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { menuRowClass } from "@imbue/workspace-ui/src/components/menu";
+import { isHandledByInputMethod } from "@imbue/workspace-ui/src/keybindings";
 import { matchesQuery } from "@imbue/workspace-ui/src/search";
 import type { ChatRow } from "./rows";
 import { FIELD_PART, MENU_ITEM_PART } from "@imbue/workspace-ui/src/themes/parts";
@@ -30,9 +31,10 @@ export interface SendPickerAttrs {
   onDismiss: () => void;
 }
 
-/** The rows a query keeps: the chats that are agents, whose title the query matches. */
+/** The rows a query keeps: the chats that can take a message (agent chats and rooms), whose title the query
+ *  matches. A chat that is not an agent yet cannot take one, so it is not offered. */
 export function pickableRows(rows: readonly ChatRow[], query: string): ChatRow[] {
-  return rows.filter((row) => !row.isProvisional && matchesQuery(query, row.title));
+  return rows.filter((row) => row.kind !== "provisional" && matchesQuery(query, row.title));
 }
 
 export function SendPicker(): m.Component<SendPickerAttrs> {
@@ -74,6 +76,7 @@ export function SendPicker(): m.Component<SendPickerAttrs> {
               highlightIndex = 0;
             },
             onkeydown: (event: KeyboardEvent) => {
+              if (isHandledByInputMethod(event)) return;
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                 event.preventDefault();
                 if (shown.length === 0) return;

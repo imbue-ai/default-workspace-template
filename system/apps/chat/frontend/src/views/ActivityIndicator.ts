@@ -1,15 +1,18 @@
 /**
  * The status row at the live end of the transcript -- the harness-common shell. It sits where
  * the reply will appear, so it is where the user is already looking once they send: just under
- * their own message while that waits on the agent, and under the latest reply while the agent
- * works (``turnStatusPlacement`` says which).
+ * their own message while it waits on the agent or opens the agent's turn, and as the last piece of the agent's
+ * latest stretch, on its line, while the agent works on a turn already in the transcript (``turnStatusPlacement``
+ * says which).
  *
  * The backend (the chat app) is the source of truth for *which* state the agent
  * is in -- IDLE / THINKING / TOOL_RUNNING / COMPACTING -- delivered on ``activity_state`` via
  * the ``chats_updated`` WS payload. This component's job is to render a label:
  *   - IDLE / null      -> hidden
  *   - THINKING         -> "Thinking…"
- *   - TOOL_RUNNING     -> the in-flight tool call, captioned by the agent's harness
+ *   - TOOL_RUNNING     -> the in-flight tool call, captioned by the agent's harness; nothing while that call's
+ *                         chip in the same stretch shows it running (``isRunningCallInline``), though the row
+ *                         still ticks the chip's clock
  *   - COMPACTING       -> "Compacting…", named for who started it ("Compacting while idle…"),
  *                         and "…, then replying…" once a message is queued behind it
  * and, once a turn has run for `ELAPSED_SHOWN_AFTER_MS`, how long it has run so far: from the
@@ -48,13 +51,16 @@
 import m from "mithril";
 import { activityDotClass, type ActivityDotTone } from "@imbue/workspace-ui/src/components/activityDot";
 import type { CompactionCause, ToolCall, TranscriptEvent } from "../models/Response";
-import { COMPACTING_STATE } from "../models/activityState";
+import { COMPACTING_STATE, isWorkingActivityState } from "../models/activityState";
 import { getChatById, getQueuedMessagesForChat } from "../models/Chats";
-import { getOutgoingMessages, sentAtOfArrival } from "../models/OutgoingMessages";
+import { getEventsForChat, hasMoreAfter } from "../models/Response";
+import { getOutgoingMessages, opensTurnWithHeldSends, sentAtOfArrival } from "../models/OutgoingMessages";
 import { BackgroundTasksLine } from "./BackgroundTasksLine";
 import { connectingLabel, isChatConnecting } from "./ConnectingIndicator";
-import { handoffPhaseText } from "./handoff-phase";
 import { harnessLabel } from "./harness-labels";
+import { heldSendsShownElsewhere } from "./HeldSendView";
+import { railNodeAttrs } from "./agent-rail";
+import { AGENT_TEXT_EDGE_CLASS, STRETCH_TEXT_EDGE_CLASS } from "./machine-bubbles";
 import { resolutionRequestIdOf } from "./message-classification";
 import { hasShellResolutionSince, shellResolutionArrivalFor } from "./permission-card";
 import { formatElapsed, latestTurnSpan, type TurnSpan } from "./turnTiming";
@@ -85,8 +91,23 @@ function pendingToolCall(events: TranscriptEvent[]): ToolCall | null {
 }
 
 /** The in-flight tool caption, as labelled by the harness that produced the call. */
-function labelForToolCall(tc: ToolCall): string {
+export function labelForToolCall(tc: ToolCall): string {
   return tc.caption_label || "Running tool…";
+}
+
+/** The call the agent is running right now: the latest call with no result, while the backend reports a tool
+ *  running and the held window reaches the live end (short of it, the running call lies past the held events, whose
+ *  last unanswered call only waits on a result the window stops before). Its chip on a stretch's line shows it
+ *  running in place of the status row (see `isRunningCallInline`); a chip in a step's opened work leaves it to the
+ *  status row. */
+export function runningToolCall(chatId: string): ToolCall | null {
+  if (getChatById(chatId)?.active_agent.activity_state !== "TOOL_RUNNING" || hasMoreAfter(chatId)) return null;
+  return pendingToolCall(getEventsForChat(chatId));
+}
+
+/** How long the turn running a tool has run, as the status row would say it, or null before that is worth saying. */
+export function runningCallElapsed(chatId: string): string | null {
+  return elapsedSince(runningTurnStartedAt(chatId, "TOOL_RUNNING", true, getEventsForChat(chatId)), Date.now());
 }
 
 function compactingLead(cause: CompactionCause | null): string {
@@ -142,9 +163,12 @@ const WAKE_LABEL = "Confirming permission changes…";
 // server's activity states -- the server has no signal for this beat.
 const WAKE_STATE = "WAKING";
 
-// The row's place in the message column it sits in, spaced like a message so the reply that
-// replaces it does not move what is above it.
-const STRIP_COLUMN_CLASS = "mb-5 w-full";
+// The row's place in the message column when it stands on its own, spaced like a message so the reply that
+// replaces it does not move what is above it, and on the bubbles' text edge.
+const STRIP_COLUMN_CLASS = `mb-5 ${AGENT_TEXT_EDGE_CLASS}`;
+
+// The row as the last piece of a stretch of the agent's output, which spaces it.
+const STRIP_STRETCH_CLASS = STRETCH_TEXT_EDGE_CLASS;
 
 // How long a turn (or a send waiting on the agent) runs before the row says how long it has run:
 // a quick answer needs no clock, a long one should show that it is still moving.
@@ -174,16 +198,19 @@ function renderStrip(
     "div",
     {
       class:
-        `agent-activity-indicator ${columnClass} flex min-h-5 items-center gap-2 px-1 ` +
+        `agent-activity-indicator ${columnClass} flex min-h-5 items-center gap-1.5 pr-1 ` +
         "text-(length:--font-size-helper) text-secondary",
       "data-state": state,
       role: "status",
       "aria-live": "polite",
     },
     [
-      m("span", {
-        class: `agent-activity-indicator__dot ${activityDotClass("h-1.5 w-1.5", dotTone)}`,
-      }),
+      // The dot in an icon's box, so it sits on the stretch's line where a chip's icon does.
+      m(
+        "span",
+        { class: "flex size-[13px] shrink-0 items-center justify-center", ...railNodeAttrs("point") },
+        m("span", { class: `agent-activity-indicator__dot ${activityDotClass("h-1.5 w-1.5", dotTone)}` }),
+      ),
       label === null ? null : m("span", { class: "agent-activity-indicator__label truncate" }, label),
       elapsed === null
         ? null
@@ -238,16 +265,23 @@ function oldestSendingAt(chatId: string): number | null {
 }
 
 /** Where the status row goes at the live end of the transcript: under the user's own sends while it
- *  stands for one (a send on its way, or waiting on the agent to come up), else under the latest
- *  turn, ahead of anything queued behind it. */
+ *  stands for one (a send on its way, or waiting on the agent to come up) or reports the turn one of
+ *  them opens, until that send reaches the transcript; else under the latest turn, ahead of anything
+ *  queued behind it. */
 export function turnStatusPlacement(chatId: string): "after-sends" | "after-turn" {
   const chat = getChatById(chatId);
-  const isWorking =
-    chat !== undefined &&
-    (chat.handoff !== null ||
-      (chat.active_agent.activity_state !== null && chat.active_agent.activity_state !== "IDLE"));
-  if (isWorking) return "after-turn";
-  return isChatConnecting(chatId) || getOutgoingMessages(chatId).length > 0 ? "after-sends" : "after-turn";
+  const outgoing = getOutgoingMessages(chatId);
+  if (chat !== undefined && chat.handoff !== null) {
+    // A switch that hands its held sends over as the agent's next turn reports that turn's start until the
+    // first of them lands; the rest wait behind that turn.
+    const isSendWaiting = chat.handoff.held_sends.length > 0 || outgoing.length > 0;
+    const isTurnOpening = opensTurnWithHeldSends(chat.handoff) && heldSendsShownElsewhere(chatId) === 0;
+    return isTurnOpening && isSendWaiting ? "after-sends" : "after-turn";
+  }
+  if (chat !== undefined && isWorkingActivityState(chat.active_agent.activity_state)) {
+    return outgoing.some((message) => message.opensTurn) ? "after-sends" : "after-turn";
+  }
+  return isChatConnecting(chatId) || outgoing.length > 0 ? "after-sends" : "after-turn";
 }
 
 // How long the wake-up strip may stand in for the agent after a verdict. Long
@@ -317,6 +351,10 @@ const TOOL_CAPTION_MIN_MS = 700;
 interface ActivityIndicatorAttrs {
   chatId: string;
   events: TranscriptEvent[];
+  /** The row is the last piece of a stretch of the agent's output, on its line. */
+  isInStretch?: boolean;
+  /** The call the agent is running shows as a running chip in the stretch, so the row says nothing of it. */
+  isRunningCallInline?: boolean;
 }
 
 export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
@@ -406,24 +444,21 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
     return renderStrip(null, STARTING_STATE, columnClass, elapsedSince(startedAt, now));
   };
 
-  /** The activity line: the switch's phase, the turn's caption, the wake-up caption, the row of a send
+  /** The activity line: the turn's caption, the wake-up caption, the row of a send
    *  not yet in a turn, or the row of a turn not yet started; null when there is none. */
   const activityStrip = (attrs: ActivityIndicatorAttrs, columnClass: string): m.Vnode | null => {
     cancelTick();
     const { chatId, events } = attrs;
     const chat = getChatById(chatId);
-    // A chat switching harness reports the switch, not the retiring agent's turn: that
-    // agent is busy with the summary it was asked for, which is the switch's own business.
-    // The failed phase has its own notice over the composer and shows nothing here.
-    if (chat !== undefined && chat.handoff !== null && chat.handoff.phase !== "failed") {
+    // A chat switching agent or account says so in one place, the switch's own node in the conversation, so the
+    // status row shows nothing until the switch lands: the agent's turn meanwhile is the switch's own business (the
+    // summary it was asked for). A failed switch has its notice over the composer, and once a handoff has landed
+    // the successor is the chat's agent: both go back to the agent's own activity.
+    if (chat !== undefined && chat.handoff !== null && chat.handoff.phase !== "failed" && !chat.handoff.has_landed) {
       cancelRelease();
       cancelWake();
       heldToolCaption = null;
-      return renderStrip(
-        handoffPhaseText(chat.handoff, chat.active_agent.harness),
-        `HANDOFF_${chat.handoff.phase}`,
-        columnClass,
-      );
+      return null;
     }
     const state = chat?.active_agent.activity_state ?? null;
     const label = labelForActivityState(
@@ -439,6 +474,14 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
     const turnStartedAt = runningTurnStartedAt(chatId, state, label !== null, events);
     const turnElapsed = elapsedSince(turnStartedAt, now);
     if (turnStartedAt !== null) scheduleTick(turnStartedAt, now);
+    if (state === "TOOL_RUNNING" && attrs.isRunningCallInline === true) {
+      // The chip says it, and keeps the clock this row schedules; nothing is held, so the row does not flash the
+      // caption back up once the call ends.
+      cancelRelease();
+      cancelWake();
+      heldToolCaption = null;
+      return null;
+    }
     if (state === "TOOL_RUNNING" && label !== null) {
       // Active tool -> (re)start the hold window; cancel any pending release.
       cancelRelease();
@@ -489,9 +532,10 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
       cancelTick();
     },
     view(vnode) {
+      const columnClass = vnode.attrs.isInStretch === true ? STRIP_STRETCH_CLASS : STRIP_COLUMN_CLASS;
       const tasks = getChatById(vnode.attrs.chatId)?.active_agent.background_tasks ?? [];
-      if (tasks.length === 0) return activityStrip(vnode.attrs, STRIP_COLUMN_CLASS);
-      return m("div", { class: `agent-activity-stack ${STRIP_COLUMN_CLASS} flex flex-col gap-1` }, [
+      if (tasks.length === 0) return activityStrip(vnode.attrs, columnClass);
+      return m("div", { class: `agent-activity-stack ${columnClass} flex flex-col gap-1` }, [
         m(BackgroundTasksLine, { tasks }),
         activityStrip(vnode.attrs, ""),
       ]);

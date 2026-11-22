@@ -35,6 +35,16 @@ export function kebabGlyph(size = 16): m.Vnode {
   );
 }
 
+/** Two people, for a room: a chat among the workspace's people rather than with an agent. */
+export function peopleGlyph(size = 14): m.Vnode {
+  return strokeGlyph(size, [
+    m("path", { d: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" }),
+    m("circle", { cx: 9, cy: 7, r: 4 }),
+    m("path", { d: "M22 21v-2a4 4 0 0 0-3-3.87" }),
+    m("path", { d: "M16 3.13a4 4 0 0 1 0 7.75" }),
+  ]);
+}
+
 export function listGlyph(size = 22): m.Vnode {
   return strokeGlyph(size, [m("path", { d: "M4 6h16" }), m("path", { d: "M4 12h16" }), m("path", { d: "M4 18h10" })]);
 }

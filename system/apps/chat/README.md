@@ -10,9 +10,9 @@ contract; everything about chats lives in this app's own pages and routes.
 ## What it serves
 
 The `chat` program (declared in `system/supervisord.conf.d/chat.conf`) runs
-`chat-app`, the console script of this package, from its own uv tool environment
-(installed by `system/scripts/build_workspace.sh` with the mngr plugins
-`system/config/mngr_plugins.toml` assigns to `chat`). At startup it registers
+`chat-app`, the console script of this package, from the workspace venv
+(`.venv/bin/chat-app`; the mngr harness plugins are dependencies of this package,
+so the venv carries them). At startup it registers
 its manifest and port 8010 through `system/scripts/forward_port.py`, follows
 the agent lifecycle event file the workspace's `agent-observer` program (`mngr
 observe`, its own supervised service) writes, and serves:
@@ -24,16 +24,37 @@ observe`, its own supervised service) writes, and serves:
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
   chat's title. Loading the page sends and writes nothing. With nothing selected
   (opened bare, or after the chat on screen is deleted) it shows the main chat
-  (below), else the most recent chat, and with no chats one awaiting its first send
-  (`POST /api/chats/awaiting`, held in memory until that send launches it).
+  (below), else the most recent chat, and with no chats and an account signed in
+  one awaiting its first send (`POST /api/chats/awaiting`, held in memory until
+  that send launches it). With nothing signed in it starts no chat for an empty
+  list: the empty list says "Connect an AI provider to start chatting." with a
+  "Choose a provider" button, so a new workspace's welcome chat lands alone.
+  A chat leaves the list the moment its delete is confirmed and comes back if
+  the delete is refused, and with no chats left the one awaiting its first send
+  is only asked for once no delete is on its way.
   With nothing signed in, a chat awaiting its first send shows "Connect an AI
   provider to start chatting." and a "Choose a provider" button above its
-  composer, which stays in view (holding any draft) but disabled, and opens the
-  provider chooser as that notice appears; this is the one place the chooser
-  opens for a missing provider (the New chat button opens the awaiting chat, and
-  an intake's first message goes into its composer, with no dialog). The sign-in
-  that chooser produces launches the awaiting chat at once, with no message, so
-  its agent is up before the user has typed. Whether
+  composer, which stays in view (holding any draft) but disabled. The root opens
+  the provider chooser over everything it frames as soon as the chat it shows is
+  in that state, once per chat, and also once with no chat to show while nothing
+  is signed in (a new workspace before its welcome chat is seeded or its agents
+  are first listed); the first chat it shows after that counts as opened for, so
+  a chooser the user closed stays closed when the welcome chat arrives. The
+  notice's button, and the empty list's, open the root's chooser again
+  (`frontend/src/models/firstSendChooser.ts`; a chat page no root frames
+  opens its own as the notice appears). This is the one place the chooser opens
+  for a missing provider (the New chat button opens the awaiting chat, and an
+  intake's first message goes into its composer, with no dialog). Being the
+  root's, the chooser stays up, with any sign-in under way, when the selection
+  moves (the seeded welcome chat arriving). The sign-in it produces launches the
+  chat awaiting its first send on screen when it finishes, with no message, so
+  its agent is up before the user has typed; one that finishes with no such chat
+  on screen launches the first the root shows after it, and the root starts no
+  chat for an empty list meanwhile. Once per page load, when a chooser of the
+  root's is drawn with its providers listed while the shell shows the root and
+  its frame is laid out, the root posts `minds:provider-chooser-on-screen {}` to
+  the Imbue Studio chrome (forwarded up by the shell), which lifts its cover over
+  a new workspace on it. Whether
   anything is signed in is decided from a fresh read of the account list; the
   New chat button then names no account, so the chat app picks it as the create
   runs and an account signed out since the page read the list is never the one
@@ -42,7 +63,17 @@ observe`, its own supervised service) writes, and serves:
   account list changes (`accounts_updated` on `/api/ws`, from a poll of the
   account index) and reads it again, so a chat whose account was removed
   elsewhere shows the signed-out notice at once; a send refused for it anyway
-  offers "Choose a provider" in place of Retry.
+  offers "Choose a provider" in place of Retry. Each account carries when it
+  last finished a sign-in (`signed_in_at`, kept in its own folder), so a turn
+  that failed on the chat's sign-in before then reads "Signed in again." in
+  every open chat (a turn of the chat's current agent only: an earlier agent's
+  failure was on that agent's account). While the chat app is sending the refused message again
+  itself (its agent's snapshot reports `is_resending_after_sign_in`), the turn
+  says so; otherwise it offers to send the message again while it is still the
+  chat's newest turn, and after a resend that stopped partway, the messages it
+  did not get to. Once a refused message is sent again right after its
+  sign-in error, before the user writes anything else, the original and the
+  error are hidden, so the message shows once.
   The list's right edge drags to resize it (100px to 480px, 180px by default,
   kept per browser). On a phone-sized touchscreen (the shell's rule: a short side at
   most 500px and a long side at most 1000px, either way round), or a window at
@@ -76,10 +107,12 @@ observe`, its own supervised service) writes, and serves:
   no pty is registered) in meta tags. Every chat page reports its path and the
   chat's title to the shell.
 - Every `/api/chats/<chat-id>/...` route (events, streams, sends, model choice,
-  the queue actions, presence and watchers, destroy, rename, make-main, start, stop; the subagent reads under
+  the queue actions, presence and watchers, a notification's desktop bubble, destroy, rename, make-main, start,
+  stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats/awaiting` (the chat an empty chat list opens on), `/api/chats`,
-  `/api/harnesses`, `/api/uploads`,
+  `/api/harnesses`, `/api/uploads` (and a chat's own uploads under
+  `/api/chats/<chat-id>/uploads`),
   `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/latchkey`, and
   `/api/secret-requests` (an agent's `request_secret.py` files a secret request;
   the transcript's secret card submits, declines, and re-reads it).
@@ -97,7 +130,10 @@ observe`, its own supervised service) writes, and serves:
   message's `chatId` and the `client_id` the shell adds, and asks the shell's `show` op
   (`focus_chat.py`) to put the chat root with the chat selected (`/?chat=<chat-id>`) on that client's
   screen, the chat's own page (`/<chat-id>`) counting as already showing it and a subagent view not,
-  and a chat root window (`/`) on screen allowed to be moved to it. The shell picks the window. It
+  and a chat root window (`/`) on screen allowed to be moved to it. With no `chatId` (the Imbue Studio app
+  entering a new workspace) it shows the chat root as it stands: a chat root window at `/` or on any chat
+  the app lists or holds provisionally counts as already showing it, no window is moved, and with none the
+  pinned window comes up at `/`. The shell picks the window. It
   answers the shell's `shown` and window id; `400` for a chat or client id of the wrong shape, `403` in a
   secondary chat, and `502` when the shell cannot be reached, refuses, or answers something else.
 - `/api/health`: `{"status", "is_frontend_built", "agent_events"}`, the probe
@@ -162,7 +198,7 @@ switching agents is working, or error once the switch failed.
 A chat is busy when its agent will resume on its own: a turn is in flight, or a
 background task is pending whose completion starts one. The pending tasks are
 one marker file each under `data/.apps/chat/background_tasks/<chat-id>/`,
-written by `system/scripts/run_in_background.py` and by Claude's Stop hook, and
+written by `system/scripts/workspace_bare_scripts/run_in_background.py` and by Claude's Stop hook, and
 read through the `system/libs/chat_background_tasks` library (`background_tasks.py`
 here wraps it, and creates the directory's root at startup so the shell's avatar
 can watch it). A poller of its own reads each chat's directory, keyed by the
@@ -240,11 +276,24 @@ reads the reply being written off the agent's terminal pane three times a
 second, through mngr's `stream_snapshot` converter
 (`harnesses/claude/reply_draft.py`), and sends what changed:
 `{"type": "assistant_draft", "agent_id", "after_event_id", "text"}`. The page
-shows the draft after the transcript while `after_event_id` is still the last
-event it holds, so the reply landing replaces it at once; an empty `text`
-clears it. A draft that matches a reply the transcript already holds is never
-sent. The terminal's rendering loses heading levels and code-fence languages,
-which the landed reply restores. A chat in the background (no page, a hidden
+shows the draft while `after_event_id` is still the last event it holds, so the
+reply landing replaces it at once; an empty `text` clears it. It shows where the
+reply will land: while a step is open, as that step's caption (or at the end of
+its work, when the step is expanded), and otherwise as a bubble at the end of
+the agent's output (see the stretch layout below). A step left open from an
+earlier turn takes it only once the agent works in it again in the new turn. A
+draft that matches a reply the transcript already holds is never sent. The
+terminal's rendering loses heading levels and code-fence languages, which the
+landed reply restores. Codex also writes an agent message
+to its rollout only once it is finished; its draft comes from the
+`item/agentMessage/delta` notifications the agent's live app-server connection
+already receives (`harnesses/codex/reply_stream.py`), and is dropped once the
+rollout holds the message's id. Pi records an assistant message only on
+`message_end`; mngr's pi lifecycle extension writes the text pi has streamed
+so far to `pi_reply_draft` in the agent's state dir, which the watcher reads.
+Antigravity writes a planner step's text into its row while the step is still
+generating; the watcher takes the newest such row as the draft and drops it
+in the scan that sees the row settle. A chat in the background (no page, a hidden
 or unfocused window, or a frame the chat root keeps loaded out of sight) is
 never read.
 
@@ -252,11 +301,11 @@ A handoff (`chat_handoffs.py`) is how a chat moves to another harness:
 `POST /api/chats/<chat-id>/handoff` with an `account_id` and the message typed
 for the new agent. The chat app stops the current agent's turn and hands its
 queue back (draining), asks the agent for a summary through the
-`handoff-summary` skill unless a fresh one exists (summarizing), then stops and
-archives it under `archived-<seq>-<name>-<id>` with one `mngr rename`, records
-its segment's length, and creates the successor under a pre-minted id with the
-chat's name, the account's binding and `chat_id`/`chat_seq` labels, carrying no
-message of its own (switching); the prompt filled in from
+`handoff-summary` skill unless a fresh one exists (summarizing), then archives
+it under `archived-<seq>-<name>-<id>` with one `mngr rename`, stops it while it
+creates the successor under a pre-minted id with the chat's name, the account's
+binding and `chat_id`/`chat_seq` labels, carrying no message of its own, and
+records the retiring segment's length once the stop is done (switching); the prompt filled in from
 `.agents/shared/references/continue-chat.md` follows through the send path. The
 prompt carries the summary in full when it is 64 KB or under
 (`INLINE_SUMMARY_MAX_BYTES`) and otherwise only its path, which the successor is
@@ -266,7 +315,12 @@ handoff where it stopped. While a chat converges it stays listed as
 `working` from the retiring agent; stop, start, rename, interrupt, the queue
 actions, and the model change answer 409; a send is held (202, `{"status":
 "held"}`) and delivered to the successor in order once it runs; destroy
-proceeds. `POST .../handoff/cancel` calls it off before switching begins and
+proceeds. Once a handoff has landed (the successor is the chat's last member and
+only the prompt and the held sends are left to deliver), the snapshot's `handoff`
+says so (`has_landed`), the chat is listed with the successor's own status, the
+page shows that agent's activity and its Stop, and an interrupt waits (up to
+`LANDED_SWITCH_WAIT_TIMEOUT_SECONDS`) for the deliveries to finish rather than
+answering 409, so its restart cannot race one. `POST .../handoff/cancel` calls it off before switching begins and
 returns the confirming message for the composer; a step that fails past the
 point of no return -- the create, the model pick, a delivery, or one mngr
 refuses -- leaves the chat in the `failed` phase with the reason and the step
@@ -320,16 +374,23 @@ carries the switch out: once its message is sent the chip names the target,
 unmarked, until the new agent reports its model, and a failed switch leaves it
 on the agent the chat still runs on.
 While the chat converges the held messages render from the snapshot's
-`handoff.held_sends` (each carries the display decision its text would get in
+`handoff.held_sends`, which keeps listing each one the switch has delivered
+until the switch is done, so a message stays on the page until its turn is in
+the transcript (each carries the display decision its text would get in
 the transcript, so a held background-task report shows as its notice; the
 message the user switched with stands down once the `agent_switch` marker
 carrying it is on the transcript, where it renders as the successor's opening
-bubble), one handoff node in the transcript shows the switch's
-progress ("Handing off to Codex...", then "Handed off from Claude Code to Codex",
-expandable to the summary turn and the handoff prompt, with a rule under it
-once the switch has landed; a fresh start, which asked for no summary and sent
-no prompt, leaves no node once it has landed), the status row and the placeholder say
-what is happening, and for a handoff the Stop button is "Cancel switch" until
+bubble), one node in the transcript is the one place that shows the switch's
+progress: its phase while it runs ("Wrapping up with Claude Code...", "Claude
+Code is writing a summary...", "Starting Codex...", or "Restarting Claude Code
+on Anthropic 2..." for a rebind; "Starting Codex..." throughout for a fresh
+start), then "Handed off from Claude Code to Codex", expandable to the summary
+turn and the handoff prompt, with a rule under it once the switch has landed (a
+fresh start, which asked for no summary and sent no prompt, and a rebind leave
+no node once they have landed). The status row shows nothing until the
+switch lands, the placeholder says where a message typed
+meanwhile goes, the model chip names the target (the picked model, else the
+harness) until the switch lands, and for a handoff the Stop button is "Cancel switch" until
 the old agent is stopped; a failed start or a model pick the successor cannot
 take shows its reason over the composer with a retry (on any signed-in account
 after a handoff, on the same harness and lane after a rebind) and "Start a new
@@ -338,20 +399,24 @@ written for the user, which the page shows as is.
 
 A handoff's successor is created silent: its model pick is applied first
 (`POST /api/chats/<chat-id>/handoff` takes `model`), then the handoff prompt
-goes to it through the send path, then the held messages. A rebind's pick is
+goes to it through the send path, then the held messages. A held message the
+agent refuses before anything is typed, for a reason that can clear by itself (an
+input box not drawn yet, a harness not taking messages yet), is tried again for a
+few minutes, since nobody is at a composer to retry it. A rebind's pick is
 applied the same way once the agent is back on the new account, retried for a
 while since `mngr start` does not wait for the harness to come up. A new chat
 created with a pick (`POST /api/chats/create` takes `model` too) is set up the
 same way. `GET /api/accounts/<account-id>/model-options` is where the dialog
 gets the target account's models, for a handoff's successor and a rebound agent
-alike: the catalog for a static harness, for codex the options an agent of the
-account was last offered, and nothing for antigravity, whose model is changed
-from the agent's terminal.
+alike: the catalog for a static harness, and for codex the options an agent of
+the account was last offered. An antigravity pick is typed into the agent as
+`/model <slug>` by the same worker that delivers its held messages, once no turn
+is open, so a pick made mid-turn takes effect when that turn ends.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
 wake-ups, a lead's replies to a worker, the automation runner, and the
-`<background-task-report>` that `system/scripts/run_in_background.py` sends when
+`<background-task-report>` that `system/scripts/workspace_bare_scripts/run_in_background.py` sends when
 a command it ran exits, which the page shows as a one-line notice) and falls back
 to `mngr message` only when the chat app cannot be reached or does not know the
 chat. A send that names no client (no `client_id` or `desktop_id`) posts no
@@ -359,18 +424,66 @@ client-activity report. The route answers 503 until
 the agent list has been read from mngr once, so a send during the app's first
 seconds is retried rather than mistaken for an unknown chat. See `docs/system/blueprint/chat-agent-split/`.
 
+A send naming its send-time id (`message_id`) goes through `send_ledger.py`: a
+page whose request got no answer sends it again under the same id, marked
+`is_repeat`, and the repeat gets the first send's answer, a refusal included
+(waiting for it while it is still under way), rather than a second delivery. A
+Retry under the same id gets a taken send's answer, but is sent afresh after a
+refusal. A page whose request still gets no answer cannot know whether the chat
+app took it, and the chat app is out of its reach, so nothing sends it again: it
+gets the "Couldn't confirm your message arrived" notice.
+
+A send mngr reports `agent_not_found` (the agent moved) or `not_submitted`
+(Claude never took it, and mngr cleared it from the input box) is sent again
+once, by discovery or at the same place. One the agent is not accepting yet
+(`not_ready`), or whose host is too loaded to say (`state_unknown`), typed
+nothing, so it is tried again after 1, 2 and 4 seconds before it fails. One for
+an agent that was down and would not start (`agent_unreachable`) typed nothing
+either, and is tried once more. One mngr could not confirm
+(`submission_unconfirmed`), or failed in a way it could not classify
+(`unknown`), may or may not have arrived; not sending one that never arrived is
+worse than sending it twice, so it is sent again once at the same place, and
+the route answers a send that then lands `{"status": "resent"}` (as the ledger
+answers its repeats). The page shows "Sent again" under the message, with a "?" saying the agent may see it twice,
+and folds a second copy that reaches the transcript into that line
+(`frontend/src/models/ResentSends.ts`). A send still unconfirmed the second
+time is not sent a third: its failure gets the "Couldn't confirm your message
+arrived" notice. Antigravity's flush, which sends again a block it did not see
+land on its own later pass, asks for no such repeat
+(`is_resent_when_unsure=False`). A stop of the agent ends all of these repeats:
+Stop hands the in-flight message back to the composer, so nothing more is sent.
+Since mngr counts a Claude message as delivered once Claude shows it, which
+during its startup hooks is before it is written down, the chat app keeps each
+delivered Claude send until the agent's process ends: when the process exits
+(lifecycle `DONE`, a crash or a kill), the sends made after the last user
+message its final transcript recorded are sent again, once. This goes by
+recording order, not by text, since Claude records messages in the order it
+took them but in its own words (a bash-mode command, a notice, queued messages
+merged into one turn); a user message with no timestamp counts as recorded
+after every send. The cost is that of two messages taken together, a crash
+between recording them loses the second. A deliberate stop, Stop taking the
+turn back, the agent's removal, or half an hour lets them go.
+
 The intake route is how a text enters a chat from outside a chat page
 (`docs/system/blueprint/post-launch-paths/`): `POST /api/chats/intake` takes the
 text, how the receiving chat is chosen (`target`: `new_chat`, `main_chat` (the
 main chat, else the most recently messaged chat, else a new one; the desktop launcher's Enter), `current_chat` from
 the `window_path` the text was typed into, else the main chat, else the most recently messaged chat;
-`chat_selector`, the one chat there is or the user's pick; or `chat` with a
-`chat_id`), and whether the text is sent or drafted (`is_draft`), plus the
-sender's `client_id` and `desktop_id` for the shell's activity log. The chat's
-manifest declares the desktop's `new`, `send`, and `draft` launch paths as POSTs
-onto it with those fields preset, so the launcher's rows, the Getting Started
-tiles, the avatar dialog's "Design your own...", and `workspace-layout open chat
---launch new --param message=...` all arrive here through the shell. The route
+`chat_selector`, the one chat there is or the user's pick; `lounge`, the chat
+titled Lounge, made as a room when there is none; `app_chat`, the chat labelled `app_chat` with the `app`'s
+registered name, else the one titled "<app_display_name> Chat" by the rule a
+create refuses a taken name by (`naming.py`'s `is_name_conflict`: canonical
+forms compared case-insensitively, so "docs chat" is found rather than refused),
+made with that title and label on the default account when there is none (a
+window's "Chat about this app"; the intake is held with a `hint` the root puts
+on the composer); or `chat` with a `chat_id`),
+and whether the text is sent or drafted (`is_draft`), plus the sender's
+`client_id` and `desktop_id` for the shell's activity log. The chat's manifest
+declares the desktop's `main`, `new`, `send`, `draft`, `lounge`, and `app-chat`
+launch paths as POSTs onto it with those fields preset, so the launcher's rows, the
+Getting Started tiles, the avatar dialog's "Design your own...", a click on a
+person in the tray, and `workspace-layout open chat --launch new --param
+message=...` all arrive here through the shell. The route
 answers the pure path the shell opens or navigates a window at: `/?chat=<id>` for
 a send or a create it finished on the server (a send is delivered in the
 background unless `is_delivery_awaited`), `/?chat=<id>&intake=<token>` for a
@@ -400,22 +513,34 @@ element context menu; a chat page drafts into its own composer, the root into
 the selected chat's (else through the shell), and a sub-agent view through the
 shell, its `shell:draft-text` relayed by the root.
 
+A long paste enters a composer as an attachment too (`models/pastedText.ts`):
+a paste of at least 4,000 characters or 80 lines is uploaded as a
+`pasted-text-<n>.txt` file instead of going into the box, so the draft stays
+short enough to read and edit and the agent opens the whole text from the file
+the sent message names, whatever its harness. The file is the chat's own
+content, so it goes to the chat's own folder
+(`data/.apps/chat/chats/<chat-id>/uploads/`, through
+`/api/chats/<chat-id>/uploads`) rather than the workspace's `data/uploads/`,
+and the chat's destroy removes it with the rest of the chat. Its chip
+says "Pasted text, N lines", and its "Paste as text" button puts the text back
+where the caret is (read from memory, or from the uploaded copy after a
+reload) and deletes the upload. A pasted image is still attached as an image,
+and a shorter paste stays text. The sent bubble names the paste by its file
+name, a link that opens it in Files.
+
 The create route is likewise how a chat is made from outside the chat page:
 `message_chat.py --create` posts to `/api/chats/create` (the Imbue Studio app's assist
 and update chats go through it, run inside the workspace by `mngr exec`). Beside
 `name`, `account_id`, and `message`, the request takes `labels` for the chat's
 agent (`auto_open=true` has the shell surface its window; the labels the app sets
-itself are refused), `is_installation_check_skipped` (a waiver of the claude
-version check the in-container mngr would otherwise fail the create on, which the
-script sends on every create so the update chat that repairs it can be made), and
-`should_wait`, which holds the answer until `mngr create` has finished:
-the chat's identity when it landed, a 500 carrying the create's own reason when
-it failed, a 504 if it is still running at the wait's ceiling. The script falls
-back to a plain `mngr create --template chat` on the send's terms plus one of
-its own: a chat app that cannot be reached, one with no create route, and one
-whose create route predates these fields, which it tells apart by the 400 naming
-the field it does not know (a workspace that has taken a template update and has
-not restarted its chat app yet).
+itself are refused) and `should_wait`, which holds the answer until `mngr create`
+has finished: the chat's identity when it landed, a 500 carrying the create's own
+reason when it failed, a 504 if it is still running at the wait's ceiling. The
+script falls back to a plain `mngr create --template chat` on the send's terms
+plus one of its own: a chat app that cannot be reached, one with no create
+route, and one whose create route predates these fields, which it tells apart by
+the 400 naming the field it does not know (a workspace that has taken a template
+update and has not restarted its chat app yet).
 
 A chat can also start from a conversation that happened before the workspace
 existed. `POST /api/chats/seed` (`chat_seed.py`; the Imbue Studio app runs
@@ -488,12 +613,14 @@ first one. Fast mode is a per-chat setting with three modes
 (fast throughout). A new chat starts in the workspace's default mode
 (`fast_mode_default` in `GET`/`PUT /api/settings`, `chat_settings.py`, stored
 at `data/.apps/chat/settings.json`; off unless changed, auto's limit 2), and
-a chat whose mode calls for it launches through the `fast` create template, a
-handoff's successor included. The model picker's fast row states the chat's
-mode and opens a submenu where the mode, auto's turn limit and the default for
-new chats are set; `/fast on` and `/fast off` typed in the composer choose the
-mode too. The first time auto switches a chat in a workspace, a one-time notice
-over the model bar explains it.
+a chat whose mode calls for it launches fast, a handoff's successor included:
+claude through the `fast` create template, codex through a switch of the fast
+axis once its agent is up and before its first message
+(`is_launch_fast_switched` in `harnesses/registry.py`). The model picker's
+fast row states the chat's mode and opens a submenu where the mode, auto's turn
+limit and the default for new chats are set; `/fast on` and `/fast off` typed
+in the composer choose the mode too. The first time auto switches a chat in a
+workspace, a one-time notice over the model bar explains it.
 
 ## Chat names
 
@@ -515,10 +642,15 @@ call to the new model instead of breaking it:
 The message goes to the model inside `<message>` tags, with the instruction
 repeated after it, and the system prompt says it is text to title: a small model
 handed a bare "what's 2+2?" answers "4" rather than naming the chat. The title
-names the subject in two to five words, short enough for the chat list to show
-whole. A leading label ("Title: ") is dropped from the answer, and an answer
-with a colon is refused: a "Short name: description" title's two halves restate
-each other ("Map app: build a simple map application").
+names the message's one main subject as tersely as it can while still saying
+what the chat is about, in fewer than 40 characters and preferably far fewer,
+and leaves out the details a long message lists (the tools, sources, places or
+steps it names). A leading label ("Title: ") is
+dropped from the answer, and an answer with a colon is refused: a "Short name:
+description" title's two halves restate each other ("Map app: build a simple map
+application"). A title longer than 40 characters is cut at a word and ends in
+"..." ("Information flow diagram for Obsidian..."), and the cut is logged as a
+warning.
 
 Names are ASCII. A chat's true name is the ASCII part of its name, so a name in
 another script would leave it a fragment ("React 待办应用" -> "React") or nothing,
@@ -590,8 +722,8 @@ their model menu has no Auto-compact row.
 **The Auto-compact setting.** Each chat is On or Off, chosen in the model menu's
 Auto-compact submenu, which ends with a "New chats start with" row whose On /
 Off segments show and set the workspace default, independent of the chat's own
-choice; a read-only menu shows the value alone. The setting is kept in the
-chat's folder as `autocompact.json` (`chat_autocompact.py`,
+choice. The setting is kept in the chat's folder as `autocompact.json`
+(`chat_autocompact.py`,
 `GET`/`PUT /api/chats/<chat-id>/autocompact` with `{"is_enabled": true}`). A
 new chat copies the workspace default (`autocompact_default` in
 `GET`/`PUT /api/settings`, stored at `data/.apps/chat/settings.json`; on unless
@@ -632,6 +764,8 @@ it again, as the command's expansion, once the compaction ends; the session
 parser emits the first as an ordinary user message and the second hidden, both
 marked `non_turn_tail`. The first one's arrival is what retires the composer's
 "Sending…" bubble for it, so a message queued behind the compaction shows once.
+The idle sweep's `/compact` is recorded the same way, but the user never typed
+it, so it shows on its compaction's start chip (below) instead of as a bubble.
 
 **The "Compacting…" status.** While a chat's context is being compacted its
 activity state is `COMPACTING` (`compaction_status.py`, applied in
@@ -703,14 +837,17 @@ Where they land depends on who started it:
 - `manual` (a `/compact`): directly below the `/compact` bubble; a Codex or Pi
   chat shows no such bubble, so there they follow the last turn, as for `idle`.
 - `idle` (the sweep): after the last turn, below its reply, or appended to its
-  last chip run when it ended with no reply.
+  last chip run when it ended with no reply. In a Claude chat the sweep's
+  `/compact` lands too, and the page pairs it with the idle compaction it
+  directly precedes (running or landed): it shows no bubble and opens no turn.
 
 A step's calls live inside its collapsible step node, so a compaction that
 lands while a step is open does not join them: its chips follow that step's
 node as a chip row of their own. The event never opens a turn of its own. Either chip opens the tool chips'
-detail panel, titled with that chip's label and glyph: first a sentence saying
-why it ran, then, under a dashed rule, the summary in an output pane, clamped
-like a long tool output.
+detail panel, titled with that chip's label and glyph, on a sentence saying why
+it ran. Under a dashed rule, the start chip's panel then shows the sweep's
+`/compact` when the page paired one with it, and the finish chip's the summary,
+in an output pane clamped like a long tool output.
 
 **Why a chat was compacted.** The start chip is named for the event's
 `compaction_cause`, and the panel's sentence says why:
@@ -729,9 +866,9 @@ The finish chip reads "Compacted" whatever the cause, since the start chip
 beside it already names it.
 
 The sentence is composed by the page from the cause. It is not part of the
-event, so the transcript, the events API, and the agent never see it. A
-compaction whose event carries no summary, or one still running, opens on the
-sentence alone.
+event, so the transcript, the events API, and the agent never see it. A finish
+chip whose event carries no summary, and a start chip with no `/compact` paired
+with it, open on the sentence alone.
 
 The cause is what the app saw while the compaction ran, else what it asked for,
 else the request it recorded in the agent's `compaction_request.json` within the
@@ -741,7 +878,8 @@ compaction reading `idle` after the app restarts, since the sweep's `/compact`
 leaves `last_compaction.json` saying manual. The cause is attached in memory as
 the event is stored and streamed, so a page reload keeps it, but a compaction
 older than 10 minutes when the app first reads it has no cause and shows the
-unknown text.
+unknown text. The page then cannot tell the sweep's `/compact` before it from a
+typed one, so that `/compact` shows as a bubble.
 
 Under the chip row holding the latest idle compaction of whichever chat is open,
 a notice says "Idle chats now compact automatically to keep replies fast and
@@ -793,7 +931,6 @@ pinned as the default in a chat's provider menu, else to the most recently used
 one (the account of the latest sign-in, chat create, or switch); pressing
 another account in that menu switches the chat to it (through the dialog, or at
 once for a chat with nothing to hand over -- see the switch above).
-`system/scripts/migrate_claude_auth.py` imports this package from the root venv.
 
 Removing (signing out of) an account deletes its credential files and its index
 row; its chats keep running, since their harness already holds the credential,
@@ -819,6 +956,14 @@ since claude sends the browser to its success page before its token exchange
 has succeeded. When a flow ends the chooser sends `minds:provider-sign-in-end`,
 so the desktop app frees the port.
 
+Claude's CLI draws its callback port at random, so the desktop app may find
+something on the user's machine already answering there (a Docker container's
+published SSH port, say). It then answers `reason: "port_taken"`, and the
+chooser starts the same sign-in again for a fresh port, trying up to three
+ports in all before it falls back as below. A fresh sign-in that lands on a
+port already found taken falls back at once: ChatGPT's CLI (codex) listens on a
+fixed port, so a ChatGPT sign-in whose port is taken is started only once more.
+
 Every way in stays reachable. With no desktop app to relay, Claude falls back to
 pasting the code its page shows, and ChatGPT to its one-time-code login. While
 the browser is out ("Finish signing in to <provider> in your browser", with
@@ -828,10 +973,28 @@ login, alongside the lane's other methods; a failed sign-in offers the same. A
 Claude sign-in succeeds on the CLI's clean exit with its success line, or, if
 the line was reworded, on its own probe; a denial the browser reports says
 access wasn't approved (claude.ai's own Deny reports nothing, so the chooser
-keeps waiting with Try again). A ChatGPT code login that ChatGPT refuses says to turn on device code
-sign-in for Codex in ChatGPT's security settings. "Sign in again" on an API-key
+keeps waiting with Try again). A ChatGPT code login that cannot start says so
+and offers trying again or an API key. "Sign in again" on an API-key
 account asks for a key again; any other account signs in through its lane's
-first way in (`reauth_method` on each account row).
+first way in (`reauth_method` on each account row). Signing in again
+restarts the live agents bound to the account (by the `account=<id>` label described below),
+and once a restarted agent is back, the message (or messages) its sign-in error
+answered is sent to it again through the delivery the message route uses, so
+the user does not retype it. Nothing is sent when the agent had already worked
+on that turn before the sign-in failed, when the user has written since, or while
+the chat is switching to another agent or account (or once it has switched).
+Which messages a sign-in error refused goes by timestamp, on both the page
+(`auth-recovery.ts`) and the chat app: claude can write the error into its
+transcript ahead of the message it refused.
+
+A sign-in error only shows to someone looking at the chat, so the chat app also
+tells the Imbue Studio app's feed (`sign_in_notices.py`,
+`imbue_studio_notifications.py`). A chat's refusals form a run, from its first
+live reply flagged `is_auth_error` to its next reply that is not, and only the
+run's first refusal is posted: one notification as the chat's own agent, so a
+click opens the chat, carrying the chat's watchers as `watched_by`, so a reader
+already in the chat gets no toast. The backlog a watcher reads when it starts is
+history and is never announced.
 
 Only the workspace's owner can deliver a relayed callback: the callback route
 answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.
@@ -868,17 +1031,114 @@ exception is a workspace with no ledger to read (its chats predate this app
 keeping one, or the file was lost): every labeled chat it already has is adopted
 as shown, since a window for each is worse than missing one.
 
+## Dictation
+
+The composer dictates (the workspace-voice-input spec in the mngr repository):
+a mic button left of Send, and Cmd+Shift+M (Ctrl+Shift+M off a Mac) anywhere in
+the chat page, turn speech into text on the user's own device. The speech model
+(Moonshine Base on a desktop; Moonshine Tiny, lighter and a third of the
+download, on a phone or tablet, told by a finger being the primary pointer) is
+downloaded by the page from Hugging Face at a pinned commit, checked against its
+size and SHA-256, kept in the browser's Cache Storage for the workspace's origin
+(one checked copy, which the browser evicts under storage pressure like any
+site's and which is checked again on every read), and run in a SharedWorker
+every chat page of the workspace shares for as long as any of them is open; the
+workspace stores and runs nothing for voice. A phone or tablet also runs the
+model on WebAssembly's quantized weights even where it has WebGPU: the
+full-precision ones take three times the memory, more than a phone's browser
+gives a page. While a dictation runs or the model's load is shown, the page holds a screen wake lock
+(`frontend/src/models/screenWakeLock.ts`), so a phone's screen does not dim and
+lock mid-sentence while the person speaks without touching it; the lock is best
+effort, asked for again when the page comes back into view, and nothing is said
+when a browser refuses it. The root's inner frames, like the shell's, allow it
+beside the microphone.
+Silero VAD splits speech into utterances, and a bounded streaming window keeps
+every inference job short, so dictation has no length limit. The words land at
+the caret, fitted to the sentence around them; the unfinished tail is rewritten
+in place, and only final words reach the saved draft. The box is read-only while
+listening; Enter or Send finishes the words first and then sends; Escape drops
+the words that are not yet final.
+
+The speech model's load and dictation are two things. The model is the page's:
+one managed load, kept in step across the workspace's pages by the worker that
+holds the model. Dictation is the composer's, needs the model loaded, and loads
+nothing itself. The mic shows one of six states, named by its
+`data-dictation-state`:
+
+- `load-needed`: the model is not loaded. The glyph sits faint with a warning
+  badge on its corner, and the tooltip says what a press has to do before it
+  dictates: the one-time download with its size, when the page's own Cache
+  Storage does not hold the files of the variant this device runs, or the load
+  of files already here. A press means the whole of it: it asks for the model,
+  shows its load, and goes on to dictate when the load ends.
+- `loading`: the load is shown. The mic eases into a `Loading voice model` label
+  with the download's progress as a bar under it. The box around it is left as
+  it is: the text box stays live, so a press or a tap in it sets where the
+  dictated words will land.
+- `ready`: the model is loaded, and a press dictates at once.
+- `starting`, `listening`, `stopping`: a dictation is running (a spinner while
+  starting and stopping, the neutral pressed tint with its capsule filling to the
+  input level while listening). Two short bell tones say when the microphone is
+  open.
+
+A shown load can be dismissed: a press on the label, Escape, the mic's shortcut,
+text entered into the box, or the page going out of view. A press or a tap in
+the text box alone dismisses nothing, and neither does a press right behind the
+one that asked for the load, which is that press landing twice. Dismissing calls
+off the dictation the load was to go on to, but not the load: it runs on with
+the mic `load-needed`, and a press shows it again from where it has got to.
+After a dismissal made on the label, with the shortcut or with Escape, the text
+box takes the focus on a desktop; a touch device's focus stays where it is, so
+no keyboard comes up unasked. A load that ends while shown goes straight on to
+dictation, with no second press; one that fails is told in a notice over the
+composer, whose Retry asks again. A load that ends after a dismissal turns the
+mic `ready` with no sound and no notice, and starts nothing; one that fails
+then says nothing. A model loaded from another page of the workspace turns this page's mic
+`ready` as well. Until a page has found out the model's state as its composer
+mounts (five seconds at most), the mic is drawn `ready`, so a loaded model never
+flashes the badge.
+
+A problem with the microphone or with words that could not be transcribed is
+told in the same notice. The library is `system/libs/workspace_voice/` (its
+README has the pieces); `frontend/src/views/DictationButton.ts` draws the mic
+and the notice, and `MessageInput.ts` follows the page's speech model, drives
+the dictation, and writes its words. The page's policy admits the model's
+WebAssembly (`'wasm-unsafe-eval'`) and Hugging Face's hosts (see
+`create_application`), the manifest declares `uses_microphone`, and the root's
+inner frames allow the microphone. For a side-by-side evaluation, a browser's
+`localStorage` may name another registered engine under
+`workspace-voice:engine` and insist on a device (`webgpu` or `wasm`) under
+`workspace-voice:device`.
+
+Speech recognition mishears, so a message sent from a draft that dictation wrote
+into tells the model so: it ends with a dictation note, a short paragraph in a
+`<dictation-note>` tag pair set off from the words by a blank line (and ahead of
+the attachment block, which has to end the message). The composer keeps one mark
+per chat's draft, in `localStorage` under `message-dictated:<chat id>` beside
+the draft itself: set when final words land, kept through edits and partial
+deletes, and dropped once the box is emptied or the message is sent. A message
+put back in the composer (a failed send, a draft the switch dialog handed back)
+is marked again, and queued text returned to it comes back without its notes and
+marks the draft instead. A slash command or bash-mode input is sent without the
+note, since a harness reads one only as the whole message. The note is for the
+model alone: the agent receives it and the transcript keeps it, while every
+bubble that shows a person's message, the tray's notification bubbles, the
+notification the owner gets for a mention, and the chat-naming prompt take it
+out by its tags.
+`frontend/src/models/dictationNote.ts` holds the note and the marks, and
+`imbue/chat/dictation_note.py` the backend's half.
+
 ## Development
 
 ```bash
 # Backend, from the repo root (the app's data paths are relative to it)
-uv run chat-app --no-register
+.venv/bin/chat-app --no-register
 
 # Tests
 cd system/apps/chat
-uv run pytest                   # skips the browser and real_claude tests
-uv run pytest -m ''             # everything, as CI runs it
-uv run pytest --no-cov -m browser   # just the browser tests
+uv run --no-sync pytest                   # skips the browser and real_claude tests
+uv run --no-sync pytest -m ''             # everything, as CI runs it
+uv run --no-sync pytest --no-cov -m browser   # just the browser tests
 ```
 
 The suite fails any run that covers less than 75% of the app, so a run of only
@@ -927,6 +1187,152 @@ Studio app shows nothing to a user already reading the chat. When a report turns
 chat from unwatched to watched, the app is told the chat was read
 (`imbue_studio_notifications.py`, through the latchkey gateway as the chat's current
 agent, off the request thread).
+
+## Who said what
+
+Every request reaches the chat app with the shell's `X-Imbue-Identity` header
+(`identity.py`; the keys are `workspace_layout.identity`): the owner, a signed-in
+person the workspace is shared with (`user:<id>`), or a visiting agent
+(`agent:<id>`). A present header that does not parse is refused with 400; only a
+missing or blank one reads as the owner (an in-workspace caller, such as a
+script), and only from loopback under a loopback `Host`, since the workspace's
+own browser is on loopback too; a request a browser marks as a page of another
+origin's is refused with 403 before any route runs (the request guard every app
+installs, `app_schema.request_guard`). Every route that delivers a person's words attributes them the same
+way: the message route, a new chat's first message (the create's and the
+new-chat intake's), and the message that confirms a switch. A send from anyone but the owner is delivered
+to the harness as `[from: <name>] <text>` when the harness the words are for reads
+a prefix (`authors.py`; an agent's chat does, a room does not, the harness being the
+switch's target while one is in flight, the room being created for a chat with no
+agent yet, else the active agent's; never for a slash command or bash-mode input,
+which the harness would not understand prefixed), and every sender a proxy vouched
+for, the owner's page included, is recorded in the chat's `authors.jsonl` beside
+its transcript: the message id, the sender's key and name, and the hash of the
+delivered text. The owner's sends are never prefixed, and a request with no header
+is delivered as typed and recorded nowhere. A send to an id the app does not know
+(no listed agent, no chat being created) answers 404 before anything is written.
+When the transcript's `user_message` events are
+read (the backlog, the live stream, `GET /api/chats/<chat-id>/events`), each is
+stamped `author` and `author_name` from the nearest annotation whose hash matches
+its text, else from a `[from: <name>]` prefix the harness kept (a turn merged from
+several queued messages), else not at all: an unstamped turn is the owner's. The
+prefix is stripped into `display_body` so the page never shows it; the
+terminal view shows the pane as it is. A message the page shows before its turn
+exists is drawn under its sender the same way: each of the harness queue's entries
+(`active_agent.queued_messages`) is joined to its annotation like a turn and gets the
+words behind its prefix as `display_body`, and each send held while the chat
+converges (`handoff.held_sends`) or is being created (the provisional chat's
+`held_sends`) is listed without the prefix and with the author of the annotation
+recorded under its message id.
+
+The page draws its own turns on the right and another person's on the left under
+their name and picture, from two routes: `GET /api/me` answers the page's own
+participant key, and `GET /api/participants` relays the shell's roster
+(`GET /api/roster` there; `roster_client.py` caches it briefly), with every
+picture the shell serves from its own origin (a person's profile picture, the
+workspace agent's avatar icon) rewritten to `GET /api/participants/<key>/picture`
+(the shell URL's query kept, so a versioned picture stays cached), which the chat
+app proxies from the shell -- asked at that path with the page's own query, its
+caching answer relayed -- so the page needs no second origin.
+A stretch of the agent's output -- everything it does until a person speaks or another
+agent takes over -- sits under the workspace's name, once, with its picture beside the
+first piece. Each message's prose is a grey bubble of its own. Its tool chips, step
+timeline and the system notices among them sit on the chat between the bubbles, on the
+bubbles' text edge, and its cards line up with the bubbles. One thin line threads the
+stretch, through the chip icons, step bullets and notice ticks, stopping short of each
+piece; the pieces sit 12px apart. The call the agent is running shows in its chip on the
+line (the working dot, the harness's caption, and how long the turn has run); a call in a
+step's work is said by the status line instead, which is the stretch's last piece on the
+line whenever it shows; the done mark sits just under the stretch. A command a person
+runs in bash mode (`!ls`) and its output are theirs, not the agent's: they stand on the
+person's side and end the stretch (display `person_chip`). The reply the agent is still
+writing, and a switch the transcript does not show yet, end the last stretch while it is
+open, and open a stretch of their own after a person's turn or a switch to another agent.
+A run of one person's turns names them once, over its first bubble ("You" for the
+viewer's own); pictures are 24px.
+
+## Rooms and mentions
+
+A room is a second kind of chat (the multiplayer spec, section 7.3): a message log
+among the workspace's people with no AI agent. Like every chat it is an mngr agent,
+of the template's `room` type (`[agent_types.room]` in `.mngr/settings.toml`): its
+process is the room's reader, `system/scripts/workspace_bare_scripts/room_agent.py`, which appends what
+`mngr message <room>` types into its pane to the room's transcript, the common
+transcript at `events/room/common_transcript/events.jsonl` under the agent's state
+dir, which `mngr transcript <room>` renders. The chat app's `room` harness
+(`harnesses/room/`) tails that one file and appends people's messages to it through
+the room's harness session, so the chat routes serve a room as they serve any chat:
+`/events` and `/stream` answer its messages as `user_message` events stamped with
+their authors from the chat's annotations (a message the reader appended is the
+workspace agent's), `/message` appends, and rename, delete, stop, start, presence,
+and watchers work unchanged. A chat snapshot's `kind` says which a chat is, from
+the harness its active agent runs; the main chat may be switched into a room and
+keeps its star, though make-main never stars a room and the star never falls to
+one. Agent chats and rooms are one list, one id shape, and one push.
+
+A room starts from the awaiting chat's provider chooser ("Chat room (no provider)",
+`POST /api/chats/create` with `"kind": "room"`), which the create guard
+(`system/scripts/require_create_account.py`) lets through on no account; the
+awaiting chat's provider chip opens that chooser, as does its first send while
+nothing is signed in. A chat
+converts to a room and back through the ordinary switch (`POST /api/chats/<id>/handoff`
+with `"kind": "room"`, or with an account): a switch to a room is a fresh-start
+handoff on no account, and a switch off a room takes the room's transcript as the
+summary its successor reads, so a converted chat keeps its whole history as segments.
+The workspace agent reads a room with `mngr transcript <room>` and answers into it
+with `mngr message --start <room>` (a bare `mngr message` refuses a stopped room);
+a visiting agent reads and posts through the chat routes
+with its own identity.
+
+A mention is `@<handle>` (`mention_parser.py`, section 7.1): the roster's handles as
+the shell assigned them, `@agent` for the workspace's agent, and every chat's title
+(spaces as hyphens, `@Main-chat`), resolved case-insensitively after the people;
+`GET /api/mentions` answers the table a room's composer offers from its `@` popover.
+A mention acts only in a room (`mentions.py`, section 7.4): a mentioned person's
+pending mentions (`data/.apps/chat/mentions/<key>.jsonl`; `GET /api/mentions/pending`
+answers the requester's own, `mentions_updated` on `/api/ws` says they changed) mark
+the room's row with an `@` until a page of theirs watches it, and the owner is told
+through the Imbue Studio app's feed as the room's own agent, so the notification opens
+the room (a room the app cannot post as sends none); `@agent` or a chat's title sends
+that chat (the main chat for `@agent`) the room's message as `[from: <name> in #<room>]
+<text>` through the ordinary send path, and the room's snapshot names the chat in
+`awaiting_chat_ids` (its row shows a working dot) until the workspace agent posts into
+the room. In an agent chat a handle is a word the agent reads like any other, and the
+composer offers no popover.
+
+The Lounge (`lounge.py`, section 7.5) is the chat titled "Lounge", of either kind, that a
+click on a person in the desktop's tray opens: found by title alone, so a Lounge converted
+into an agent chat through the switch, or a chat the user named so, is the Lounge. A room
+under that title is made the first time the roster the shell answers holds anyone besides
+the owner (a person, an invited email, or a visiting agent; the roster is read once a
+minute), and again when a click needs the Lounge after it was deleted or renamed, only
+while no chat of any kind carries the title. The `lounge` intake target resolves to it,
+making the room when there is no such chat; the manifest's `lounge` launch path
+(`presets = {target = "lounge", is_draft = "true"}`, `mention_param = "message"`) is what
+the shell runs with `@<handle> ` when a person's entry is clicked, so the mention lands in
+the Lounge's composer, unsent. A secondary chat makes no Lounge (403).
+
+The tray's feed (`tray_feed.py`, sections 6.4 and 6.5): every message a person or a
+visiting agent sends (the send route, an intake's send, a room's first message once it has
+landed, a new agent chat's first message as its create is accepted) is posted to the shell
+as a `message` (`POST /api/bubbles`, with the people it mentions when the chat is a
+room), as is every post the workspace agent makes into a room (with the people it
+mentions), cut to the bubble's length; the agent's turns in an agent chat are not posted.
+A `message` hops its speaker's tray entry everywhere and raises a speech bubble
+only on the clients of the people it mentions. Every notification a chat sends the user
+is posted as a `notification` over the agent's entry, which raises a bubble on every
+client not looking at the chat: the notify-user skill's script tells the chat app with
+`POST /api/chats/<chat-id>/notification` (loopback only; `{"message", "title"}`, the
+title shown as a prefix), whether or not the Imbue Studio app takes the notification.
+The agent's room posts reach the feed through the session watcher a page's stream
+builds (`ChatAppState.post_agents_room_posts`, in its `on_events`), which memory shedding
+evicts, so they are posted for the rooms a page is reading: a post in a room nobody has
+open posts nothing (the spec's section 11). And every chat-list push is
+posted as what each chat is doing (`POST /api/chats-activity`), the last report posted
+again once a minute, since the shell keeps it in memory alone and one restarted since the
+last chat-list change would otherwise paint nothing on the agent's card. Both go through
+`ShellLayoutInterface`, best-effort, on a thread of their own, the activity reports
+coalesced; a secondary chat posts neither.
 
 ## Memory shedding
 

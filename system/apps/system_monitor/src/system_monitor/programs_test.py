@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from oom_priority.testing import FAKE_BOOT_ID, write_fake_process
 
 from system_monitor import programs
 
@@ -125,19 +126,34 @@ def test_chats_on_any_harness_are_found_through_the_agent_registry(
     registry = tmp_path / "agent_pids"
     registry.mkdir()
     # A codex chat registers both its TUI and its app-server; a pi chat its one process.
+    proc = tmp_path / "proc"
     for pid, agent_id in (
         (20, "agent-codex"),
         (21, "agent-codex"),
         (30, "agent-pi"),
         (31, "agent-gone"),
     ):
+        write_fake_process(proc, pid, start_ticks=pid)
         (registry / f"{pid}.json").write_text(
-            json.dumps({"agent_name": "x", "is_worker": False, "agent_id": agent_id})
+            json.dumps(
+                {
+                    "agent_name": "x",
+                    "is_worker": False,
+                    "agent_id": agent_id,
+                    "start_ticks": pid,
+                    "boot_id": FAKE_BOOT_ID,
+                }
+            )
         )
-    (registry / "40.json").write_text(json.dumps({"agent_name": "no-id"}))
+    # 31's agent exited and its pid was reused.
+    write_fake_process(proc, 31, start_ticks=999)
+    write_fake_process(proc, 40, start_ticks=40)
+    (registry / "40.json").write_text(
+        json.dumps({"agent_name": "no-id", "start_ticks": 40})
+    )
     (registry / "notes.txt").write_text("ignored")
 
-    assert programs.agents_by_pid(is_alive=lambda pid: pid != 31) == {
+    assert programs.agents_by_pid(proc) == {
         20: "agent-codex",
         21: "agent-codex",
         30: "agent-pi",
@@ -153,6 +169,11 @@ def test_chats_and_code_checkers_are_recognised_by_their_command_lines() -> None
     )
     assert (
         programs.chat_agent_id("claude /home/user/.mngr/agents/agent-abc --resume")
+        == "agent-abc"
+    )
+    # A Modal sandbox keeps mngr's host dir at /mngr rather than under a home directory.
+    assert (
+        programs.chat_agent_id("claude --settings /mngr/agents/agent-abc/x.json")
         == "agent-abc"
     )
     assert programs.chat_agent_id("claude --print hi") is None
@@ -236,3 +257,8 @@ def test_program_names_come_from_the_name_table_then_the_registry_then_the_progr
     assert programs.program_names({"chat": 1}, tmp_path / "missing.toml") == {
         "chat": "chat"
     }
+
+
+def test_agent_records_are_read_from_the_host_dir_the_environment_names() -> None:
+    assert programs.mngr_agents_dir({"MNGR_HOST_DIR": "/mngr"}) == Path("/mngr/agents")
+    assert programs.mngr_agents_dir({}) == Path("/home/user/.mngr/agents")

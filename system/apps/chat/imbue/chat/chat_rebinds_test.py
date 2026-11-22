@@ -64,6 +64,8 @@ class _FakeWorkspace(MutableModel):
     store: InMemoryChatRecordStore = Field(default_factory=InMemoryChatRecordStore)
     agents: dict[str, AgentStateItem] = Field(default_factory=dict)
     delivered: list[tuple[str, str, str]] = Field(default_factory=list)
+    # The message ids the rebind lists as delivered at each delivery, the one being delivered last.
+    delivered_lists_seen: list[list[str]] = Field(default_factory=list)
     drained: list[str] = Field(default_factory=list)
     stopped: list[str] = Field(default_factory=list)
     evicted: list[str] = Field(default_factory=list)
@@ -78,6 +80,8 @@ class _FakeWorkspace(MutableModel):
     # The steps that reach the agent, in order: the start, the pick, and each delivery.
     agent_steps: list[str] = Field(default_factory=list)
     clock: float = 0.0
+    # Each held send reported as never landing, as ``(chat_id, message_id, detail, kind)``.
+    undelivered: list[tuple[str, str, str, str]] = Field(default_factory=list)
     slept: list[float] = Field(default_factory=list)
     drain_block: str = ""
     is_delivery_refused: bool = False
@@ -110,8 +114,7 @@ class _FakeWorkspace(MutableModel):
             rebind = record.rebind
             assert rebind is not None
             if rebind.held_sends:
-                remaining = rebind.model_copy_update(to_update(rebind.field_ref().held_sends, rebind.held_sends[1:]))
-                self.store.write(record.with_converging(remaining))
+                self.store.write(record.with_converging(rebind.with_oldest_held_send_delivered()))
                 return rebind.held_sends[0]
             # The manager drops a one-agent chat's record with the finished rebind.
             if len(record.agents) == 1:
@@ -153,6 +156,9 @@ class _FakeWorkspace(MutableModel):
         return self.tmp_path / "accounts" / account_id
 
     def deliver(self, agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        record = self.record()
+        if record is not None and record.rebind is not None:
+            self.delivered_lists_seen.append([held.message_id for held in record.rebind.delivered_sends])
         if self.is_delivery_refused:
             raise SendFailedError("the agent is in shell mode", kind="INPUT_BLOCKED")
         self.delivered.append((agent_info.id, text, message_id))
@@ -170,6 +176,9 @@ class _FakeWorkspace(MutableModel):
 
     def monotonic(self) -> float:
         return self.clock
+
+    def report_undelivered(self, chat_id: ChatId, message_id: str, detail: str, kind: str) -> None:
+        self.undelivered.append((str(chat_id), message_id, detail, kind))
 
     def sleep(self, seconds: float) -> None:
         self.slept.append(seconds)
@@ -296,6 +305,7 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> RebindRunner:
         note_agent_alive=workspace.note_agent_alive,
         monotonic=workspace.monotonic,
         sleep=workspace.sleep,
+        report_undelivered=workspace.report_undelivered,
         model_pick_budget_seconds=5.0,
         model_pick_retry_interval_seconds=1.0,
     )
@@ -633,8 +643,10 @@ def test_a_refused_held_send_does_not_stop_the_ones_behind_it(tmp_path: Path) ->
 
     _runner(workspace).run(workspace.chat_id, "rebind-1")
 
-    # Both were popped (a refusal is logged, not raised), and the rebind finished.
+    # Both were taken to be delivered (a refusal is logged, not raised), each leaving the delivered list once
+    # refused, and the rebind finished.
     assert workspace.delivered == [] and workspace.record() is None
+    assert workspace.delivered_lists_seen == [["trigger-1"], ["m-2"]]
 
 
 def test_a_runner_for_a_rebind_that_is_gone_does_nothing(tmp_path: Path) -> None:

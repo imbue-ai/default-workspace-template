@@ -39,11 +39,37 @@ export const OPEN_SHARE_SETTINGS: "minds:open-share-settings" =
 // whose manifest registers the type.
 const FOCUS_CHAT: "minds:focus-chat" = "FOCUS_CHAT" in embedContract ? embedContract.FOCUS_CHAT : "minds:focus-chat";
 // Workspace -> embedder: this page's endpoint is listening. Payload:
-// { opensLinks, opensCustomSchemeLinks } (see ReadyAnnouncement). The
+// { opensLinks, opensCustomSchemeLinks, reportsChatOnScreen, reportsProviderChooserOnScreen } (see
+// ReadyAnnouncement). The
 // embedder holds a focus-chat ask until it arrives, rather than guessing when
 // a freshly-mounted frame's page is live.
 export const WORKSPACE_READY: "minds:workspace-ready" =
   "WORKSPACE_READY" in embedContract ? embedContract.WORKSPACE_READY : "minds:workspace-ready";
+// Workspace -> embedder (contract v15): this chat's transcript is drawn in a window the user can see. Payload:
+// { chatId }. The Imbue Studio creation page keeps its wash over a new workspace until the welcome chat says this.
+export const CHAT_ON_SCREEN: "minds:chat-on-screen" =
+  "CHAT_ON_SCREEN" in embedContract ? embedContract.CHAT_ON_SCREEN : "minds:chat-on-screen";
+// Workspace -> embedder (contract v16): the chat list's provider chooser is drawn in a window the user can see.
+// Payload: {}. Accounts are the workspace's, so it names no chat; the Imbue Studio creation page lifts its wash over a
+// new workspace with nothing signed in on it, without waiting for the welcome chat.
+export const PROVIDER_CHOOSER_ON_SCREEN: "minds:provider-chooser-on-screen" =
+  "PROVIDER_CHOOSER_ON_SCREEN" in embedContract
+    ? embedContract.PROVIDER_CHOOSER_ON_SCREEN
+    : "minds:provider-chooser-on-screen";
+// Whether the vendored contract lets a FOCUS_CHAT without a chatId through (v16, the contract that also defines
+// PROVIDER_CHOOSER_ON_SCREEN). An older one drops that message before any handler sees it, so the chat root could not
+// be raised on entry; the shell promises reportsProviderChooserOnScreen, which covers taking that message, only when
+// this holds.
+export const IS_CHAT_ROOT_FOCUS_ACCEPTED: boolean = "PROVIDER_CHOOSER_ON_SCREEN" in embedContract;
+// Workspace -> embedder (contract v17): whether the first run's provider page covers the workspace. Payload:
+// { isPending }. While it does the chrome stays in the first run's cream; when it ends, a chrome that announced
+// `washesFirstRunExit` grows the workspace's color over the window, whole after FIRST_RUN_EXIT_COVER_MS, and the
+// workspace takes its page down then, under the color.
+export const FIRST_RUN_PROVIDER_STEP: "minds:first-run-provider-step" =
+  "FIRST_RUN_PROVIDER_STEP" in embedContract ? embedContract.FIRST_RUN_PROVIDER_STEP : "minds:first-run-provider-step";
+// The contract's own value where it has one; a chrome that announces `washesFirstRunExit` ships it.
+export const FIRST_RUN_EXIT_COVER_MS: number =
+  "FIRST_RUN_EXIT_COVER_MS" in embedContract ? embedContract.FIRST_RUN_EXIT_COVER_MS : 560;
 // The pull-out window set (contract v6, the pull-out-window spec), probed the same way.
 // Workspace -> embedder: show one pulled-out window in a desktop window of the chrome's own, opened
 // if it has none. Payload: { windowId, title, width, height } (the window's rendered size in CSS px).
@@ -63,8 +89,8 @@ export const WINDOW_DRAG_ENDED: "minds:window-drag-ended" =
 export const DETACHED_WINDOWS: "minds:detached-windows" =
   "DETACHED_WINDOWS" in embedContract ? embedContract.DETACHED_WINDOWS : "minds:detached-windows";
 // Embedder -> workspace: what the chrome can do, right after WORKSPACE_READY. Payload: { canPopOut,
-// opensExternalLinks?, opensCustomSchemeLinks?, opensLocalFiles? }: whether it takes OPEN_EXTERNAL, custom-scheme
-// links there, and OPEN_LOCAL_FILES.
+// opensExternalLinks?, opensCustomSchemeLinks?, opensLocalFiles?, immersive? }: whether it takes
+// OPEN_EXTERNAL, custom-scheme links there, OPEN_LOCAL_FILES, and IMMERSIVE_REQUEST.
 export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities" =
   "EMBEDDER_CAPABILITIES" in embedContract ? embedContract.EMBEDDER_CAPABILITIES : "minds:embedder-capabilities";
 // Embedder -> workspace: return a pulled-out window to the desktop. Payload: { windowId, frame? }.
@@ -109,7 +135,7 @@ export const HIGHLIGHT_CHROME: "minds:highlight-chrome" =
 export const OPEN_LOCAL_FILES: "minds:open-local-files" =
   "OPEN_LOCAL_FILES" in embedContract ? embedContract.OPEN_LOCAL_FILES : "minds:open-local-files";
 
-// Exporting a workspace app as a Mac app (contract v12; Imbue Studio's specs/studio-app-export). Workspace ->
+// Exporting a workspace app as a Mac app (contract v18; Imbue Studio's specs/studio-app-export). Workspace ->
 // embedder: an exportable app's desktop shortcut drag began ({ serviceName }), which the embedder hands to the OS at
 // once, and a menu action on an exportable app ({ serviceName, action }, action "add-to-applications" or "reveal").
 // Embedder -> workspace: which apps are ready to drag out ({ serviceNames }), and that it handed a shortcut drag to the
@@ -122,6 +148,16 @@ export const EXPORTABLE_APPS: "minds:exportable-apps" =
   "EXPORTABLE_APPS" in embedContract ? embedContract.EXPORTABLE_APPS : "minds:exportable-apps";
 export const APP_DRAG_HANDED_OFF: "minds:app-drag-handed-off" =
   "APP_DRAG_HANDED_OFF" in embedContract ? embedContract.APP_DRAG_HANDED_OFF : "minds:app-drag-handed-off";
+// The immersive-mode pair (contract v12, the Screen integration spec section 5), probed the same way.
+// Workspace -> embedder: take the app window Fullscreen-API fullscreen with the keyboard locked for this window
+// (``on: true``), or give it back. Payload: { windowId, on }. Sent only to an embedder that said ``immersive`` with
+// EMBEDDER_CAPABILITIES, and from a user gesture when entering.
+export const IMMERSIVE_REQUEST: "minds:immersive-request" =
+  "IMMERSIVE_REQUEST" in embedContract ? embedContract.IMMERSIVE_REQUEST : "minds:immersive-request";
+// Embedder -> workspace: immersive mode is now on or off, by a request or on the chrome's own (the user held
+// Escape, the OS left fullscreen). Payload: { on, keyboardLocked, error? }.
+export const IMMERSIVE_CHANGED: "minds:immersive-changed" =
+  "IMMERSIVE_CHANGED" in embedContract ? embedContract.IMMERSIVE_CHANGED : "minds:immersive-changed";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
@@ -143,6 +179,7 @@ const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   OPEN_LINK,
   EXPORTABLE_APPS,
   APP_DRAG_HANDED_OFF,
+  IMMERSIVE_CHANGED,
 ];
 
 // One replaceable handler per embedder->workspace type, registered by the
@@ -210,6 +247,11 @@ export interface ReadyAnnouncement {
   readonly opensLinks: boolean;
   /** Whether it takes custom-scheme links (``slack:``, ``vscode:``) among them. */
   readonly opensCustomSchemeLinks: boolean;
+  /** Whether a chat of this workspace reports itself with CHAT_ON_SCREEN once it is drawn. */
+  readonly reportsChatOnScreen: boolean;
+  /** Whether the chat list reports its provider chooser with PROVIDER_CHOOSER_ON_SCREEN once it is drawn (and so
+   * opens it on a workspace with nothing signed in before any chat exists). */
+  readonly reportsProviderChooserOnScreen: boolean;
 }
 
 /** Tell the embedder this page is listening, so it can send what it held, and what it handles.
@@ -218,7 +260,19 @@ export function announceReadyToEmbedder(announcement: ReadyAnnouncement): void {
   sendToEmbedder(WORKSPACE_READY, {
     opensLinks: announcement.opensLinks,
     opensCustomSchemeLinks: announcement.opensCustomSchemeLinks,
+    reportsChatOnScreen: announcement.reportsChatOnScreen,
+    reportsProviderChooserOnScreen: announcement.reportsProviderChooserOnScreen,
   });
+}
+
+/** Tell the embedder this chat's transcript is drawn in a window the user can see. */
+export function reportChatOnScreen(chatId: string): void {
+  sendToEmbedder(CHAT_ON_SCREEN, { chatId });
+}
+
+/** Tell the embedder the chat list's provider chooser is drawn in a window the user can see. */
+export function reportProviderChooserOnScreen(): void {
+  sendToEmbedder(PROVIDER_CHOOSER_ON_SCREEN, {});
 }
 
 /** Clear the handler for one embedder->workspace type. */

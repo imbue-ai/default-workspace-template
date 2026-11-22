@@ -1,1 +1,0 @@
-The template detail page's second action is now "Create a new workspace from this" (was "Create a new machine from this"), and the chat it starts asks for a new Imbue Studio workspace rather than a machine.

@@ -18,7 +18,7 @@ default to the browser (row 6) unless they take it.
 One tool call, nothing else in it, output untouched, then end the turn:
 
 ```bash
-python3 .agents/skills/connect-external-service/scripts/request_secret.py \
+python3 .agents/skills/connect-external-service/python/connect_external_service_skill/request_secret.py \
   --file example --var EXAMPLE_API_KEY --rationale "I need your Example API key to look up the part numbers you asked about."
 ```
 
@@ -51,19 +51,19 @@ The only way a value reaches a process:
 
 ```bash
 python3 system/scripts/with_secrets.py data/.secrets/example.env -- example-cli projects list
-python3 system/scripts/with_secrets.py data/.secrets/example.env -- uv run python scripts/pull_example.py
+python3 system/scripts/with_secrets.py data/.secrets/example.env -- uv run --no-sync python scripts/pull_example.py
 ```
 
 The wrapper loads the file's variables into the child's environment and execs the
 command; the SDK reads `EXAMPLE_API_KEY` from `os.environ` like any other
 setting. The same prefix goes into a supervisord program's `bash -c` (the
-`build-app` skill's scaffold takes `--secrets-file`), a scheduled job's command,
-and an MCP server command. A guard refuses `cat`, `source`, `sed`, `python3 -c`,
-a redirect, or a `Read` of the file, because a value that lands in a tool call
-lands in the transcript. The guard catches the slips it can recognise; it cannot
-tell what the wrapped command does with its environment, so the rule is yours
-to keep: never run `env`, a debugger, or anything that prints its environment
-under the wrapper.
+`build-app` skill's scaffold takes `--secrets-file`) and a scheduled job's
+command. A guard refuses `cat`, `source`, `sed`, `python3 -c`, a redirect, or
+a `Read` of the file, because a value that lands in a tool call lands in the
+transcript. The guard catches the slips it can recognise; it cannot tell what
+the wrapped command does with its environment, so the rule is yours to keep:
+never run `env`, a debugger, or anything that prints its environment under the
+wrapper.
 
 ## The OAuth-app recipe
 

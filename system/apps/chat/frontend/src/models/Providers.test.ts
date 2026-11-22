@@ -72,6 +72,64 @@ describe("loadAccountsWithRetry", () => {
   });
 });
 
+describe("loadLanesAndAccountsWithRetry", () => {
+  // A fresh module per test: whether the lanes have loaded is module state.
+  let providers: typeof import("./Providers");
+  const LANES_BODY = { lanes: [{ id: "anthropic", provider_name: "Anthropic", methods: [], key_providers: [] }] };
+
+  function requestFailure(code: number): Error {
+    return Object.assign(new Error(`request failed with ${code}`), { code });
+  }
+
+  function lanesRequestCount(): number {
+    return mockRequest.mock.calls.filter(([args]) => args.url === "/api/lanes").length;
+  }
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    mockRequest.mockReset();
+    vi.resetModules();
+    providers = await import("./Providers");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("asks again after the workspace connection drops, and loads the lanes once it is back", async () => {
+    mockRequest
+      .mockRejectedValueOnce(requestFailure(503))
+      .mockResolvedValueOnce(LANES_BODY)
+      .mockResolvedValueOnce(ACCOUNTS_BODY);
+    const outcome = providers.loadLanesAndAccountsWithRetry().then(
+      () => "loaded",
+      (error: Error) => error,
+    );
+
+    await vi.advanceTimersByTimeAsync(RECONNECT_BASE_MS * 1.3);
+
+    expect(await outcome).toBe("loaded");
+    expect(lanesRequestCount()).toBe(2);
+    expect(providers.areLanesLoaded()).toBe(true);
+    expect(providers.getLanes().map((lane) => lane.id)).toEqual(["anthropic"]);
+    expect(providers.getAccounts().map((account) => account.id)).toEqual(["acct-1"]);
+  });
+
+  it("gives up after five failed attempts and passes on the last failure", async () => {
+    mockRequest.mockRejectedValue(requestFailure(502));
+    const outcome = providers.loadLanesAndAccountsWithRetry().then(
+      () => "loaded",
+      (error: Error) => error,
+    );
+
+    await vi.advanceTimersByTimeAsync(RECONNECT_BASE_MS * (1 + 2 + 4 + 8) * 1.3);
+
+    expect(await outcome).toMatchObject({ code: 502 });
+    expect(lanesRequestCount()).toBe(5);
+    expect(providers.areLanesLoaded()).toBe(false);
+  });
+});
+
 describe("whenAccountsReadyToChoose", () => {
   // A fresh module per test: the first account read it waits for is module state.
   let providers: typeof import("./Providers");
@@ -168,6 +226,23 @@ describe("startFlow", () => {
     arrive({ flow_id: "flow-api-key", shape: "paste", url: null, code: null });
     await started;
     expect(getFlow()?.flow_id).toBe("flow-api-key");
+  });
+
+  it("says whether the flow it started is the live one, which a newer start overtakes", async () => {
+    let arriveOlder: (value: unknown) => void = () => {};
+    mockRequest.mockReturnValueOnce(
+      new Promise((resolve) => {
+        arriveOlder = resolve;
+      }),
+    );
+    const older = startFlow("anthropic", "subscription");
+    mockRequest.mockResolvedValueOnce({ flow_id: "flow-newer", shape: "paste", url: null, code: null });
+    const newer = startFlow("anthropic", "api_key");
+
+    expect(await newer).toBe(true);
+    arriveOlder({ flow_id: "flow-older", shape: "code_then_wait", url: null, code: "ABCD-1234" });
+    expect(await older).toBe(false);
+    expect(getFlow()?.flow_id).toBe("flow-newer");
   });
 });
 

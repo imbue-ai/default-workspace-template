@@ -6,18 +6,17 @@ from typing import Final
 from app_schema.routes import error_response
 from flask import request
 from flask.typing import ResponseReturnValue
+from workspace_layout.identity import IDENTITY_HEADER
+from workspace_layout.identity import RequestIdentity
+from workspace_layout.identity import is_loopback_address
+from workspace_layout.identity import parse_identity_header
 from workspace_layout.ops import OpRequester
 from workspace_layout.primitives import ClientId
 
 from imbue.system_interface.shell.client_activity import find_client_id_for_page
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import NoTargetClientError
-from imbue.system_interface.shell.identity import IDENTITY_HEADER
-from imbue.system_interface.shell.identity import RequestIdentity
-from imbue.system_interface.shell.identity import parse_identity_header
 from imbue.system_interface.shell.state import ShellState
-
-LOOPBACK_CLIENT_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "localhost"})
 
 HTTP_OK: Final[int] = 200
 HTTP_CREATED: Final[int] = 201
@@ -32,6 +31,11 @@ HTTP_INTERNAL_ERROR: Final[int] = 500
 HTTP_BAD_GATEWAY: Final[int] = 502
 HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 
+# What an image the shell serves is sent under beside its type: never sniffed into another type, and, since an svg
+# can carry script, a document that runs nothing and loads nothing but its own inline styles on a direct visit.
+IMAGE_CONTENT_SECURITY_POLICY: Final[str] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+
+
 def detail_response(message: str, status_code: int) -> ResponseReturnValue:
     """A refusal or a failure as the ``ErrorResponse`` every route answers them with."""
     return error_response(message, status_code)
@@ -43,7 +47,7 @@ def request_identity() -> RequestIdentity:
 
 
 def require_loopback() -> ResponseReturnValue | None:
-    if (request.remote_addr or "") not in LOOPBACK_CLIENT_HOSTS:
+    if not is_loopback_address(request.remote_addr):
         return detail_response("this route is only callable from loopback", HTTP_FORBIDDEN)
     return None
 

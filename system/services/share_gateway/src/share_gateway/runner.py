@@ -41,6 +41,9 @@ from pathlib import Path
 import httpx
 from inotify_simple import INotify
 from inotify_simple import flags as inotify_flags
+from share_grants.agent_grants import AGENT_LAST_SEEN_FILE
+from share_grants.agent_grants import AgentGrantsError
+from share_grants.agent_grants import utc_now as agent_access_now
 from werkzeug.serving import BaseWSGIServer
 from werkzeug.serving import make_server
 
@@ -49,9 +52,6 @@ from share_gateway.agent_access import LastSeenStore
 from share_gateway.agent_access import default_agent_access_paths
 from share_gateway.agent_access import reconcile as reconcile_agent_access
 from share_gateway.agent_audit import events_dir_from_environ
-from share_gateway.agent_grants import AGENT_ACCESS_STATE_DIR
-from share_gateway.agent_grants import AgentGrantsError
-from share_gateway.agent_grants import utc_now as agent_access_now
 from share_gateway.agent_orientation import SKILLS_INDEX_CACHE_PATH
 from share_gateway.agent_routes import AgentAccessContext
 from share_gateway.agent_routes import register_agent_routes
@@ -66,10 +66,13 @@ from share_gateway.caddyfile import read_registered_apps
 from share_gateway.caddyfile import render_caddyfile
 from share_gateway.certs import CertProvisioningError
 from share_gateway.certs import ensure_share_certificate
+from share_gateway.connect_info import build_connect_info
+from share_gateway.frpc_config import SCREEN_MEDIA_LOCAL_PORT
 from share_gateway.frpc_config import render_frpc_toml
 from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.identity import AgentIdentity
+from share_gateway.local_address import primary_address
 from share_gateway.log import log as _log
 from share_gateway.materials import ShareMaterials
 from share_gateway.materials import discard_signing_secret
@@ -77,6 +80,10 @@ from share_gateway.materials import load_or_create_auth_label
 from share_gateway.materials import load_or_create_signing_secret
 from share_gateway.materials import read_share_materials
 from share_gateway.materials import record_share_domain
+from share_gateway.request_counts import RequestCountFlusher
+from share_gateway.request_counts import RequestCounter
+from share_gateway.request_counts import events_path_from_environ as request_counts_events_path
+from share_gateway.request_handler import SilentRequestHandler
 from share_gateway.retry_state import ProvisioningRetryState
 from share_gateway.retry_state import STATUS_HALTED
 from share_gateway.retry_state import STATUS_RETRYING
@@ -87,10 +94,15 @@ from share_gateway.retry_state import utc_now
 from share_gateway.retry_state import write_gateway_status
 from share_gateway.server import PendingLoginRegistry
 from share_gateway.server import build_gateway_app
+from share_gateway.turn import TurnCredentialCache
 
 POLL_INTERVAL_SECONDS = 10
 _CADDY_ADMIN_URL = "http://localhost:2019"
 _RENEWAL_CHECK_INTERVAL = timedelta(hours=24)
+# How often a running stack restamps its "up" status, so a reader can tell a live
+# "up" from one a runner wrote before it died with its container (the Imbue Studio
+# desktop disbelieves an "up" stamped more than five minutes ago).
+STATUS_HEARTBEAT_INTERVAL = timedelta(minutes=1)
 
 
 def _try_setup_inotify(paths: list[Path]) -> object | None:
@@ -179,13 +191,16 @@ def _reload_frpc(config_path: Path) -> bool:
 
 
 class ShareStack:
-    """The running pieces of one active share: gateway server, caddy, one frpc per assigned relay."""
+    """The running pieces of one active share: gateway server, caddy, one frpc per assigned relay, and the relay
+    credential brokered for the Screen."""
 
     def __init__(self, materials: ShareMaterials, auth_label: str, assignment: RelayAssignment) -> None:
         self.materials = materials
         self.auth_label = auth_label
         self.assignment = assignment
+        self.turn = TurnCredentialCache(materials.connector_url, materials.relay_token)
         self.gateway_server: BaseWSGIServer | None = None
+        self.request_count_flusher: RequestCountFlusher | None = None
         self.caddy_process: subprocess.Popen[bytes] | None = None
         self.frpc_process_by_relay_id: dict[str, subprocess.Popen[bytes]] = {}
         self.frpc_config_text_by_relay_id: dict[str, str] = {}
@@ -195,6 +210,7 @@ class ShareStack:
         self.last_caddyfile_text = ""
         self.last_assignment_fetch = time.monotonic()
         self.last_renewal_check = datetime.now(timezone.utc)
+        self.last_status_heartbeat = datetime.now(timezone.utc)
 
     def render_current_caddyfile(self) -> str:
         return render_caddyfile(
@@ -206,6 +222,7 @@ class ShareStack:
             https_port=materials_module.CADDY_HTTPS_PORT,
             gateway_port=materials_module.GATEWAY_PORT,
             chrome_origin=self.materials.chrome_origin,
+            access_log_path=materials_module.ACCESS_LOG_PATH.resolve(),
         )
 
     def admin_port_for(self, relay_id: str) -> int:
@@ -230,7 +247,23 @@ class ShareStack:
             auth_label=self.auth_label,
             local_https_port=materials_module.CADDY_HTTPS_PORT,
             admin_port=self.admin_port_for(relay_id),
+            media_port=self.assignment.media_port,
+            local_media_address=self._media_proxy_address(),
+            local_media_port=SCREEN_MEDIA_LOCAL_PORT,
         )
+
+    def _media_proxy_address(self) -> str | None:
+        if self.assignment.media_port is None:
+            return None
+        address = primary_address()
+        if address is None:
+            _log("No routable address for the screen-media proxy; the relay media path is not offered")
+        return address
+
+    def connect_info(self) -> dict[str, object]:
+        """The loopback ``GET /connect-info`` answer for the Screen service, from the current assignment and
+        credential."""
+        return build_connect_info(self.assignment, self.turn.ice_servers(), SCREEN_MEDIA_LOCAL_PORT)
 
 
 def _start_frpc_for_relay(stack: ShareStack, relay_id: str) -> None:
@@ -274,16 +307,19 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
             retry_after_seconds=exc.retry_after_seconds,
         ) from exc
 
-    assignment = load_assignment(materials.connector_url, materials.relay_token, materials_module.ASSIGNMENT_CACHE_PATH)
+    assignment = load_assignment(
+        materials.connector_url, materials.relay_token, materials_module.ASSIGNMENT_CACHE_PATH
+    )
     if assignment is None:
-        raise ShareStackStartError(
-            "no relay assignment available yet", is_retryable=True, retry_after_seconds=None
-        )
+        raise ShareStackStartError("no relay assignment available yet", is_retryable=True, retry_after_seconds=None)
 
     auth_label = load_or_create_auth_label(materials_module.AUTH_LABEL_FILE)
     stack = ShareStack(materials, auth_label, assignment)
+    # The credential is an enhancement of the Screen's stream: a refusal here never fails the share.
+    stack.turn.refresh_if_due()
     signing_secret = load_or_create_signing_secret(materials_module.SIGNING_SECRET_FILE, materials.relay_token)
     agent_access = _build_agent_access_context(materials.workspace_domain)
+    request_counter = RequestCounter(request_counts_events_path(os.environ))
     app = build_gateway_app(
         materials=materials,
         grants_path=materials_module.GRANTS_FILE,
@@ -293,8 +329,12 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         pending_logins=PendingLoginRegistry(),
         auth_label=auth_label,
         get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
+        get_connect_info=stack.connect_info,
         admit_agent=build_agent_admitter(agent_access, lambda: read_registered_apps(APPS_TOML_PATH)),
+        request_counter=request_counter,
     )
+    stack.request_count_flusher = RequestCountFlusher(request_counter)
+    stack.request_count_flusher.start()
     register_agent_routes(
         app,
         context=agent_access,
@@ -304,7 +344,9 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         share_grants_path=materials_module.GRANTS_FILE,
         get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
     )
-    stack.gateway_server = make_server("127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True)
+    stack.gateway_server = make_server(
+        "127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True, request_handler=SilentRequestHandler
+    )
     threading.Thread(target=stack.gateway_server.serve_forever, name="share-gateway-http", daemon=True).start()
 
     materials_module.STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -345,16 +387,21 @@ def _try_start_stack(materials: ShareMaterials, retry_state: ProvisioningRetrySt
         )
         return None
     retry_state.reset()
+    _write_up_status(materials.workspace_domain, utc_now())
+    return stack
+
+
+def _write_up_status(workspace_domain: str, now: datetime) -> None:
+    """Write the "up" status document, stamped ``now``; the heartbeat rewrites this same document."""
     write_gateway_status(
         materials_module.GATEWAY_STATUS_FILE,
         state=STATUS_UP,
-        workspace_domain=materials.workspace_domain,
+        workspace_domain=workspace_domain,
         failed_attempt_count=0,
         last_error="",
         next_retry_in_seconds=None,
-        now=utc_now(),
+        now=now,
     )
-    return stack
 
 
 def _stop_stack(stack: ShareStack | None) -> None:
@@ -366,6 +413,8 @@ def _stop_stack(stack: ShareStack | None) -> None:
     _stop_child(stack.caddy_process, "caddy")
     if stack.gateway_server is not None:
         stack.gateway_server.shutdown()
+    if stack.request_count_flusher is not None:
+        stack.request_count_flusher.stop()
     _log("Share stack stopped")
 
 
@@ -393,14 +442,27 @@ def _repoll_assignment(stack: ShareStack) -> None:
     _converge_frpc_processes(stack)
 
 
+def _is_status_heartbeat_due(last_status_heartbeat: datetime, now: datetime) -> bool:
+    return now - last_status_heartbeat >= STATUS_HEARTBEAT_INTERVAL
+
+
+def _heartbeat_gateway_status(stack: ShareStack, now: datetime) -> None:
+    """Rewrite the "up" status with a fresh stamp once per heartbeat interval."""
+    if not _is_status_heartbeat_due(stack.last_status_heartbeat, now):
+        return
+    stack.last_status_heartbeat = now
+    _write_up_status(stack.materials.workspace_domain, now)
+
+
 def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
-    """Periodic upkeep for a running stack: restart dead children, re-render configs, renew the cert."""
+    """Periodic upkeep for a running stack: restart dead children, re-render configs, restamp the status, renew the cert."""
     if stack.caddy_process is not None and stack.caddy_process.poll() is not None:
         _log(f"caddy exited with {stack.caddy_process.returncode}; restarting the stack")
         _stop_stack(stack)
         return None
     _restart_dead_frpc_processes(stack)
     _repoll_assignment(stack)
+    stack.turn.refresh_if_due()
 
     current_caddyfile = stack.render_current_caddyfile()
     if current_caddyfile != stack.last_caddyfile_text:
@@ -410,8 +472,9 @@ def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
             _log("Reloaded caddy for a service-registry change")
 
     # A service registered while shared needs its label claimed on EVERY
-    # relay; hot-reload each frpc (admin API) so the new claim lands without
-    # dropping existing viewers' tunnels.
+    # relay, and a media port the assignment gained needs its proxy; hot-reload
+    # each frpc (admin API) so the new claim lands without dropping existing
+    # viewers' tunnels.
     for relay_id in sorted(stack.frpc_process_by_relay_id):
         current_frpc_config = stack.render_frpc_config_for(relay_id)
         if current_frpc_config != stack.frpc_config_text_by_relay_id.get(relay_id):
@@ -422,6 +485,7 @@ def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
                 _log(f"Reloaded frpc[{relay_id}] for a service-registry change")
 
     now = datetime.now(timezone.utc)
+    _heartbeat_gateway_status(stack, now)
     if now - stack.last_renewal_check >= _RENEWAL_CHECK_INTERVAL:
         stack.last_renewal_check = now
         cert_before = materials_module.TLS_CERT_FILE.read_text() if materials_module.TLS_CERT_FILE.exists() else ""
@@ -453,7 +517,7 @@ def _build_agent_access_context(workspace_domain: str) -> AgentAccessContext:
         coordinates=coordinates,
         repo_root=Path.cwd(),
         environ=os.environ,
-        last_seen=LastSeenStore(AGENT_ACCESS_STATE_DIR / "last_seen.json"),
+        last_seen=LastSeenStore(AGENT_LAST_SEEN_FILE),
         skills_cache_path=SKILLS_INDEX_CACHE_PATH,
         now=agent_access_now,
     )

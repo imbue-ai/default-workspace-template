@@ -1,18 +1,23 @@
-"""Tests for the OOM drill's prediction and its wrong-victim check.
+"""Tests for the OOM drill.
 
 The drill itself needs real memory pressure and a running earlyoom, so only its
-pieces that need neither are tested here; the drill is run for real in the
-staging rehearsal and the AWS release test.
+pieces that need neither are tested here; ``OOM_DRILL.md`` says where the drill
+runs for real.
 """
 
 import json
 import re
+import stat
 from collections import deque
 from pathlib import Path
 
 import oom_drill
+import pytest
 from oom_drill import ProcessSample
+from oom_priority import bands
+from oom_priority.supervisord_testing import supervisord_commands
 
+_SUPERVISORD_CONF = Path(__file__).resolve().parents[3] / "supervisord.conf"
 # One oom_score_adj point is worth (MemTotal + SwapTotal) / 1000 KiB: 1000 KiB here.
 _TOTAL_KIB = 1_000_000
 _AVOID = re.compile(r"^(sshd|supervisord|earlyoom|tini)$|^tmux")
@@ -39,10 +44,82 @@ _WORKSPACE = [
     _sample(31, "chat-app", 25, 300_000),
     _sample(40, "claude", 560, 250_000),  # an idle chat
     _sample(50, "pytest", 900, 20_000),
-    _sample(60, "tilion", 1000, 150_000),  # a Chromium renderer
+    _sample(60, "tilion", 960, 150_000),  # a Chromium renderer
     _sample(70, "python3", -1000, 600_000),  # the drill's hog
     _sample(80, "kworker", 0, None),  # no mm
 ]
+
+
+def test_the_default_bands_are_the_scores_the_shed_policy_assigns() -> None:
+    stages = list(bands.CHAT_STAGES.values())
+    # What Chromium writes for its GPU and utility processes, between its main
+    # process's 0 and a renderer's 300.
+    chromium_gpu_self_assigned = 200
+    policy_scores = {
+        stages[-1].adj,
+        bands.SHARED_BROWSER,
+        bands.shared_browser_oom_score_adj(chromium_gpu_self_assigned),
+        bands.SHARED_BROWSER_FLOOR,
+        bands.AGENT_SUBPROCESS,
+        bands.SCREEN_STACK,
+        bands.WORKER_AGENT,
+        stages[0].adj,
+        bands.USER_AGENT,
+    }
+
+    assert oom_drill.DEFAULT_BANDS == tuple(sorted(policy_scores, reverse=True))
+
+
+def test_built_in_services_are_protected_and_an_agents_commands_expendable() -> None:
+    builtin_service_bands = [
+        adj for adj in bands.SERVICE_BANDS.values() if adj < bands.USER_SERVICE
+    ]
+
+    assert oom_drill.PROTECTED_MAX_ADJ == max(builtin_service_bands)
+    assert oom_drill.EXPENDABLE_MIN_ADJ == bands.AGENT_SUBPROCESS
+
+
+def _write_stub_supervisorctl(tmp_path: Path, exit_code: int = 0) -> tuple[Path, Path]:
+    """A supervisorctl that records each call's arguments, one line per call, and exits ``exit_code``."""
+    calls = tmp_path / "supervisorctl-calls"
+    stub = tmp_path / "supervisorctl"
+    stub.write_text(f'#!/bin/sh\necho "$*" >> {calls}\nexit {exit_code}\n')
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    return stub, calls
+
+
+def test_the_screen_is_stopped_desktop_first_and_its_watcher_started_again(
+    tmp_path: Path,
+) -> None:
+    stub, calls = _write_stub_supervisorctl(tmp_path)
+
+    oom_drill.stop_the_screen(str(stub))
+    oom_drill.start_the_screen_watcher(str(stub))
+
+    assert calls.read_text().splitlines() == [
+        "stop screen-stack:*",
+        "stop screen-watch",
+        "start screen-watch",
+    ]
+
+
+def test_a_screen_program_supervisord_does_not_know_stops_the_drill(
+    tmp_path: Path,
+) -> None:
+    # supervisorctl exits 1 for "ERROR (no such group)" and 0 for one already stopped.
+    stub, _calls = _write_stub_supervisorctl(tmp_path, exit_code=1)
+
+    with pytest.raises(SystemExit, match="screen-stack"):
+        oom_drill.stop_the_screen(str(stub))
+
+
+def test_the_screen_programs_the_drill_stops_are_the_templates_own() -> None:
+    desktop_group = oom_drill.SCREEN_DESKTOP_PROGRAMS.removesuffix(":*")
+
+    assert desktop_group in supervisord_commands(_SUPERVISORD_CONF, ("group",))
+    assert oom_drill.SCREEN_WATCHER_PROGRAM in supervisord_commands(
+        _SUPERVISORD_CONF, ("eventlistener",)
+    )
 
 
 def test_prediction_follows_the_bands_and_skips_what_earlyoom_cannot_pick() -> None:
@@ -55,7 +132,7 @@ def test_prediction_follows_the_bands_and_skips_what_earlyoom_cannot_pick() -> N
     assert [process.pid for process in ranking] == [60, 50, 40, 30, 31, 7]
     # pid 7 is --avoid-ed: 40000 KiB of RSS, 300 points below 0.
     assert ranking[-1].badness_kib == 40_000 - 300_000
-    assert ranking[0].badness_kib == 150_000 + 1000 * 1000
+    assert ranking[0].badness_kib == 150_000 + 960 * 1000
 
 
 def test_swap_and_page_tables_count_like_rss() -> None:

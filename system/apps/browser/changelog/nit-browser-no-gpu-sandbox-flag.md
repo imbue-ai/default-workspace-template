@@ -1,1 +1,0 @@
-Browsers no longer show Chromium's permanent "You are using an unsupported command-line flag" bar above every page -- the fleet must launch with `--no-sandbox` as root, which Chromium blocklists, so it now also passes `--test-type` to suppress the warning (the only suppression that does not set `navigator.webdriver` and break Fortress's stealth).

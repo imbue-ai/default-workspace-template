@@ -12,7 +12,8 @@ scripts, references, or assets. The SKILL.md reads like a recipe: "do X,
 then Y, then Z." Each step of that process is one of three kinds:
 
 - **`[script]`** -- deterministic. Runs the same code every time, only the
-  data varies. Lives in `.agents/skills/<name>/scripts/`.
+  data varies. Lives in the skill's `python/` package, run through an entry
+  file in `.agents/skills/<name>/scripts/`.
 - **`[ai-script]`** -- needs a model's judgement, but is a *fixed part of
   the flow* (the same prompt/criteria every run, only the data varies).
   Script it as an AI call following the `use-ai-integration` skill (see
@@ -72,16 +73,38 @@ A mixed flow of all three kinds is the norm for useful skills.
 ```
 .agents/skills/<name>/
   SKILL.md                  # required; body <= 500 lines (progressive disclosure)
-  scripts/
-    run.py                  # optional; include when there are deterministic steps
-    *.py                    # optional helpers
+  scripts/                  # optional; any shell scripts
+    *.sh
+  python/                   # the skill's uv project, whenever it has Python (see Packaging)
+    pyproject.toml
+    <name_with_underscores>_skill/
+      __init__.py           # empty
+      run.py                # the entry point, run by its own path
+      *.py                  # the implementation, one module per concern
+      *_test.py             # tests, beside the modules they cover
   references/*.md           # optional long-form docs; load on demand
   assets/...                # optional static resources (templates, samples)
 ```
 
-A skill's scripts live in the skill's own `scripts/` directory, i.e.
-`.agents/skills/<name>/scripts/`. The repo-root `system/scripts/` is an
-unrelated place, for workspace provisioning and utility scripts.
+A skill's Python lives in its own `python/` project, and any shell scripts in
+its `scripts/` directory, i.e. `.agents/skills/<name>/scripts/`. The repo-root
+`system/scripts/` is an unrelated place, for workspace provisioning and utility
+scripts.
+
+Start a new skill with the scaffold, which writes this layout, installs the
+package and validates the result (`--python` for a skill with scripted steps;
+`--crystallized` for one this lifecycle produces):
+
+```bash
+uv run --no-sync .agents/shared/scripts/agents_shared/scaffold_skill.py <name> \
+    --description "<what-and-when>" --python --crystallized
+```
+
+This layout is for the workspace's own skills. A skill installed or copied in
+from elsewhere (a skills marketplace, another repository, a download) keeps the
+layout it came with: list it in `.agents/third-party-skills.toml` with where it
+came from, and the root suite's checks on skills leave it out. Every skill not
+listed there is held to them.
 
 The `name` used in `.agents/skills/<name>/` must match the `name` field in
 SKILL.md frontmatter (1-64 chars, lowercase letters/digits + single hyphens,
@@ -115,7 +138,7 @@ secrets:
     note: an Example API key from the account's settings page
 ```
 
-## .agents/skills/<name>/scripts/run.py (optional)
+## The entry point, `run.py` (optional)
 
 Include `run.py` when the skill has `[script]` or `[ai-script]` steps that
 benefit from automation. A skill can be pure SKILL.md prose with no scripts
@@ -123,8 +146,11 @@ only when every step is `[prose]` executor meta-work; if any flow step is
 deterministic or model-driven, it belongs in a script. Use scripts where
 they earn their keep; don't force a script for genuine executor meta-work.
 
-When you do include `run.py`, write the flow's logic as small helper
-functions (one per step) and expose them two ways:
+`run.py` is a module of the skill's package
+(`python/<name_with_underscores>_skill/run.py`) with its own
+`if __name__ == "__main__":` block. When you do include it, write the flow's logic as small helper
+functions (one per step) in the skill's package (see Packaging below), and
+have `run.py` expose them two ways:
 
 - **A subcommand per step**, whenever the step's inputs and outputs serialize
   cleanly -- data, not live handles. (A step that hands the next one an open
@@ -146,17 +172,68 @@ chain runs end-to-end.
 
 ### Packaging
 
-Packaging: `run.py` should be an ordinary self-contained PEP 723 script. 
-For [ai-script] steps, make sure to read and follow the instructions in the **`use-ai-integration`** skill;
-add appropriate dependencies to your PEP 723 header.
+A skill's Python lives in its own uv project, `python/`, a member of the root
+workspace (the `.agents/skills/*/python` glob), so its dependencies resolve in
+the one workspace lock and its package installs into the root venv:
 
-- Begin every `run.py` with a PEP 723 header pinning its inline deps:
-  ```python
-  # /// script
-  # requires-python = ">=3.11"
-  # dependencies = ["rich>=13"]
-  # ///
+- `python/pyproject.toml` names the project `<name>-skill` and its package
+  `<name_with_underscores>_skill`, built with hatchling:
+  ```toml
+  [project]
+  name = "<name>-skill"
+  version = "0.1.0"
+  requires-python = ">=3.12"
+  dependencies = ["rich>=13"]
+
+  [build-system]
+  requires = ["hatchling"]
+  build-backend = "hatchling.build"
+
+  [tool.hatch.build.targets.wheel]
+  packages = ["<name_with_underscores>_skill"]
   ```
+  Never leave a `python/` dir without its `pyproject.toml`: uv refuses a
+  member directory without one, and that breaks every `uv` command in the
+  workspace. A skill whose `scripts/` holds only shell scripts needs no
+  `python/` at all.
+- The code lives in the package, `run.py` included, and runs by its path from
+  the root venv; it imports its siblings through the package
+  (`from <name_with_underscores>_skill.parse import parse_rows`), so a new
+  skill runs once `uv sync --all-packages` has installed it (the scaffold
+  does). Tests sit in the package beside their modules and import them the
+  same way. A new skill gets no entry stub in `scripts/`: everything that runs
+  it is in the workspace and names the module's path from the start.
+- Keep the entry cheap to start: it runs on every call, so its module imports
+  only what every invocation needs at the top, and each subcommand imports its
+  implementation (and any heavy library -- pydantic, loguru, click, httpx, ...)
+  inside the function that runs it. A test fails an entry that loads one of
+  those at import time. Code whose signatures name a heavy library's types
+  goes in a module of its own, imported inside the subcommands that need it.
+- A skill is a member of the shared workspace, so a dependency must co-resolve
+  with the built-in packages'. After adding or changing one, run `uv lock` and
+  then `uv sync --all-packages`, and commit `uv.lock` with the change; a clash
+  surfaces at `uv lock`. A path dependency on a user lib (a standalone project
+  under `system/libs`) pulls that lib's dependencies into the shared lock too.
+
+A skill whose whole Python is one script that imports only the standard
+library may instead be a **bare skill**: the script is
+`scripts/<name_with_underscores>.py`, its test (if any) sits beside it as
+`scripts/<name_with_underscores>_test.py` and imports it by that name, and there
+is no `python/` dir and no PEP 723 header. It runs under the system `python3`
+with no venv:
+
+```bash
+python3 .agents/skills/<name>/scripts/<name_with_underscores>.py <args>
+```
+
+It needs no `uv lock` or sync, and starts faster. The moment it needs a
+dependency or a second module, move it into the `python/` project above.
+
+See `.agents/shared/references/running-python.md` for why, and for the bare
+tier (code the system `python3` runs) in general.
+
+For [ai-script] steps, make sure to read and follow the instructions in the **`use-ai-integration`** skill.
+
 - `argparse` entry point; no interactive prompts.
 - Stateless across runs by default -- transient per-step I/O between
   subcommands is fine, durable cross-run state is not. If durable state is
@@ -164,21 +241,25 @@ add appropriate dependencies to your PEP 723 header.
   unilaterally.
 - Fail loudly: exit non-zero on error, write the error to stderr.
 - Document the invocation in SKILL.md:
-  `uv run .agents/skills/<name>/scripts/run.py <args>`
+  `uv run --no-sync .agents/skills/<name>/python/<name_with_underscores>_skill/run.py <args>`
 
 ## Validation
 
-`uv run .agents/shared/scripts/validate_skill.py <skill_dir>` checks SKILL.md
+`uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py <skill_dir>` checks SKILL.md
 frontmatter, the kebab-case name rules, directory-name match, description
-length, 500-line body limit, and that any `run.py` begins with a PEP 723
-header. When those static checks pass and a `run.py` exists, it also runs
-`uv run .agents/skills/<name>/scripts/run.py --help`, which forces `uv` to
-resolve the script's PEP 723 dependencies and import the module -- so a broken
-import or unresolvable dependency fails validation here rather than only at
-scenario time. (This is a shallow import check: `--help` exercises top-level
-imports and the argparse wiring, not imports done lazily inside subcommand
-bodies -- those are left to scenario testing.) Prints `ok` and exits 0 on
-success; exits 1 with a clear error on failure.
+length and the 500-line body limit. For a bare skill it checks that the one
+script imports only the standard library, carries no PEP 723 header, and that
+`python3 -S -s <script> --help` (no site-packages) exits 0. When the skill has
+Python otherwise (a `python/` dir, or a built-in skill's entry stub in
+`scripts/`) it checks that `python/pyproject.toml` exists and names the project
+`<name>-skill` and the package `<name_with_underscores>_skill`, that `uv lock
+--check` passes (the workspace lock includes the skill's dependencies), and
+that `uv run --no-sync <entry> --help` exits 0 for every package module with
+its own `if __name__ == "__main__":` block (and any entry stub in `scripts/`) -- so a broken import or a missing dependency fails validation
+here rather than only at scenario time. (This is a shallow import check:
+`--help` exercises top-level imports and the argparse wiring, not imports done
+lazily inside subcommand bodies -- those are left to scenario testing.) Prints
+`ok` and exits 0 on success; exits 1 with a clear error on failure.
 
 ## Scenario template
 
@@ -188,7 +269,7 @@ Record each scenario in the transcript in this form:
 
 ```
 ### Scenario: <one-line description>
-- Command: `uv run .agents/skills/<name>/scripts/run.py <args>`
+- Command: `uv run --no-sync .agents/skills/<name>/python/<name_with_underscores>_skill/run.py <args>`
 - Input: <stdin / files / env / CLI args>
 - Expected: <exit code + stdout/file contents assertion>
 - Actual: <observed>

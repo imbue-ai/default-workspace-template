@@ -6,8 +6,10 @@
  * whose comma-separated values are the markdown for each uploaded file: an
  * inline image (``![path](path)``) for images, a file link (``[path](path)``, which
  * opens the file in Files) otherwise, each referencing the file by its absolute path on the agent VM
- * (e.g. "/code/uploads/<id>/<name>"). The line stays visible in the bubble and
- * renders through the shared markdown renderer -- the chat app serves
+ * (e.g. "/code/uploads/<id>/<name>", or "/code/uploads/<id>-<width>x<height>/<name>" for an
+ * image whose size was read); a long paste's link is labelled with its file name instead
+ * (``[pasted-text-1.txt](path)``). The bubble drops the label and renders the
+ * values through the shared markdown renderer -- the chat app serves
  * the file at that absolute path -- so the attachment is transparent to both the
  * reader and the agent (which records the same text in its transcript, and can
  * open the file at the path it names). Appending in the frontend (rather than
@@ -16,6 +18,7 @@
  */
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
+import { isPastedTextFileName } from "./pastedText";
 
 /** Marker segment present in every stored-attachment path. Used to detect the
  *  appended attachment block in persisted message content and to derive a
@@ -45,12 +48,11 @@ const MULTIPLE_ATTACHMENT_PREFIX = "See attachments here: ";
 // link (``[]``) instead. Matches the inline formats the file server serves.
 const IMAGE_EXTENSION_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico)$/i;
 
-// Group 1 captures the whole "See attachment here: ..." block (rendered as
-// markdown by the bubble); group 2 captures just the newline-separated values,
-// used to verify the block is genuinely ours before treating it as one. The
-// user text is set off by a blank line (\n\n), while the items within the block
-// are single-newline separated -- so ([\s\S]+?) may span lines to the end.
-const ATTACHMENT_BLOCK_RE = /(?:^|\n\n)(See attachments? here: ([\s\S]+?))\s*$/;
+// The group captures the newline-separated values after the label, which the
+// bubble renders as markdown and which are checked to verify the block is
+// genuinely ours. The user text is set off by a blank line (\n\n), while the
+// items within the block are single-newline separated -- so ([\s\S]+?) may span lines to the end.
+const ATTACHMENT_BLOCK_RE = /(?:^|\n\n)See attachments? here: ([\s\S]+?)\s*$/;
 
 export function isImagePath(path: string): boolean {
   return IMAGE_EXTENSION_RE.test(path);
@@ -61,14 +63,25 @@ export function attachmentBasename(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-export function attachmentServeUrl(path: string): string {
-  const markerIndex = path.indexOf(UPLOADS_PATH_MARKER);
-  const relativePath = markerIndex >= 0 ? path.slice(markerIndex + UPLOADS_PATH_MARKER.length) : path;
-  const encodedRelativePath = relativePath
+// A chat's own upload (a long paste) lives in the chat's folder, ``.../chats/<chat-id>/uploads/...``, and is
+// served by that chat's route.
+const CHAT_UPLOAD_PATH_RE = /\/chats\/(agent-[A-Za-z0-9_-]+)\/uploads\/(.+)$/;
+
+function encodedPath(relativePath: string): string {
+  return relativePath
     .split("/")
     .map((segment) => encodeURIComponent(segment))
     .join("/");
-  return apiUrl(`/api/uploads/${encodedRelativePath}`);
+}
+
+export function attachmentServeUrl(path: string): string {
+  const chatUpload = path.match(CHAT_UPLOAD_PATH_RE);
+  if (chatUpload !== null) {
+    return apiUrl(`/api/chats/${encodeURIComponent(chatUpload[1])}/uploads/${encodedPath(chatUpload[2])}`);
+  }
+  const markerIndex = path.indexOf(UPLOADS_PATH_MARKER);
+  const relativePath = markerIndex >= 0 ? path.slice(markerIndex + UPLOADS_PATH_MARKER.length) : path;
+  return apiUrl(`/api/uploads/${encodedPath(relativePath)}`);
 }
 
 /**
@@ -76,15 +89,19 @@ export function attachmentServeUrl(path: string): string {
  * path. An image renders inline (``![path](path)``); any other file becomes a
  * file link (``[path](path)``), which opens it in Files. The absolute path is used as both the label
  * / alt text and the URL, so the chat app serves the file at that path
- * and the path stays visible to the reader.
+ * and the path stays visible to the reader. A long paste's link is labelled with its file name instead.
  *
  * No escaping is needed: the backend stores each upload under a hex uuid dir
- * with a ``secure_filename``-sanitized basename, so a stored path only contains
+ * (``<id>-<width>x<height>`` for an image whose size it read) with a
+ * ``secure_filename``-sanitized basename, so a stored path only contains
  * ``[A-Za-z0-9._-]`` segments -- no spaces, parentheses, or brackets that would
  * break the markdown link or its URL.
  */
 export function attachmentMarkdown(path: string): string {
-  return isImagePath(path) ? `![${path}](${path})` : `[${path}](${path})`;
+  if (isImagePath(path)) return `![${path}](${path})`;
+  // A long paste is the user's own words rather than a file they picked, so its link reads as its name.
+  const basename = attachmentBasename(path);
+  return isPastedTextFileName(basename) ? `[${basename}](${path})` : `[${path}](${path})`;
 }
 
 /**
@@ -106,21 +123,79 @@ export function buildMessageWithAttachments(text: string, attachmentPaths: reado
  * Split a sent message's content into the user-visible text and the trailing
  * "See attachment here:" block built by ``buildMessageWithAttachments``. The
  * block is recognized only when every listed item references an uploads path,
- * so a user who merely types a similar sentence is never misread. The block is
- * returned verbatim (its values are markdown) for the bubble to render inline;
- * ``attachmentBlock`` is null when there is no block.
+ * so a user who merely types a similar sentence is never misread. The block's
+ * values are returned without the label (they are markdown) for the bubble to
+ * render inline; ``attachmentBlock`` is null when there is no block.
  */
 export function parseMessageAttachments(content: string): { visibleText: string; attachmentBlock: string | null } {
   const match = content.match(ATTACHMENT_BLOCK_RE);
   if (match === null) {
     return { visibleText: content, attachmentBlock: null };
   }
-  const items = match[2].split("\n").map((item) => item.trim());
+  const items = match[1].split("\n").map((item) => item.trim());
   if (!items.every((item) => item.includes(UPLOADS_PATH_MARKER))) {
     return { visibleText: content, attachmentBlock: null };
   }
   const visibleText = content.slice(0, match.index ?? 0).replace(/\s+$/, "");
   return { visibleText, attachmentBlock: match[1] };
+}
+
+// A stored image's subdirectory carries the size it is drawn at (``<id>-<width>x<height>``, named by
+// the backend's ``store_uploaded_file``), so its box can be held before it loads.
+const UPLOADED_IMAGE_SIZE_RE = /\/uploads\/[0-9a-f]{32}-(\d+)x(\d+)\//;
+
+/** The width and height an image is drawn at, in CSS pixels. */
+export interface ImageSize {
+  width: number;
+  height: number;
+}
+
+/** The size an uploaded image is drawn at, read off its path; null for a path that carries none
+ *  (an upload from before sizes were recorded, or a file whose size could not be read). */
+export function uploadedImageSize(path: string): ImageSize | null {
+  const match = path.match(UPLOADED_IMAGE_SIZE_RE);
+  if (match === null) return null;
+  return { width: Number(match[1]), height: Number(match[2]) };
+}
+
+/** The most bytes of local image copies a document holds; past it the oldest are released, and a
+ *  message naming one draws from the served copy instead. The newest is held even when it alone is
+ *  over. */
+export const LOCAL_IMAGE_BUDGET_BYTES = 25 * 1024 * 1024;
+
+interface LocalImage {
+  url: string;
+  bytes: number;
+}
+
+// Blob URLs of the images this document uploaded, by stored path, oldest first.
+const _localImagesByPath = new Map<string, LocalImage>();
+let _localImageBytes = 0;
+
+/** Hold ``url`` (a blob URL of the ``bytes``-long file uploaded to ``path``), so a message naming that
+ *  path draws at once instead of waiting on the served copy. */
+export function rememberLocalImage(path: string, url: string, bytes: number): void {
+  forgetLocalImage(path);
+  _localImagesByPath.set(path, { url, bytes });
+  _localImageBytes += bytes;
+  for (const oldestPath of _localImagesByPath.keys()) {
+    if (_localImageBytes <= LOCAL_IMAGE_BUDGET_BYTES || oldestPath === path) break;
+    forgetLocalImage(oldestPath);
+  }
+}
+
+/** The local copy of the image uploaded to ``path``, when this document uploaded it and still holds it. */
+export function localImageUrl(path: string): string | undefined {
+  return _localImagesByPath.get(path)?.url;
+}
+
+/** Release the local copy of ``path`` (its upload was removed from the draft, or it fell out of the budget). */
+export function forgetLocalImage(path: string): void {
+  const image = _localImagesByPath.get(path);
+  if (image === undefined) return;
+  _localImagesByPath.delete(path);
+  _localImageBytes -= image.bytes;
+  URL.revokeObjectURL(image.url);
 }
 
 export function formatFileSize(bytes: number): string {
@@ -153,17 +228,28 @@ function makeUploadedAttachment(path: string, size: number): UploadedAttachment 
   };
 }
 
-/** Upload a single file to the agent VM, returning its stored metadata. Throws
- *  on a non-2xx response. */
-export async function uploadAttachment(file: File): Promise<UploadedAttachment> {
+/** Upload a single file to the agent VM, returning its stored metadata. Throws on a non-2xx response. A file
+ *  given ``ownerChatId`` is stored in that chat's folder, so it is destroyed with the chat; any other goes to
+ *  the workspace's uploads. */
+export async function uploadAttachment(file: File, ownerChatId: string | null = null): Promise<UploadedAttachment> {
   const formData = new FormData();
   formData.append("file", file, file.name);
-  const response = await fetch(apiUrl("/api/uploads"), { method: "POST", body: formData });
+  const route = ownerChatId === null ? "/api/uploads" : `/api/chats/${encodeURIComponent(ownerChatId)}/uploads`;
+  const response = await fetch(apiUrl(route), { method: "POST", body: formData });
   if (!response.ok) {
     throw new Error(`Upload failed (HTTP ${response.status})`);
   }
   const body = (await response.json()) as AttachmentUploadResponseBody;
   return makeUploadedAttachment(body.path, body.size);
+}
+
+/** The text of a previously-uploaded attachment, read back from the agent VM. Throws on a non-2xx response. */
+export async function readAttachmentText(attachment: UploadedAttachment): Promise<string> {
+  const response = await fetch(attachment.url);
+  if (!response.ok) {
+    throw new Error(`Reading ${attachment.name} back failed (HTTP ${response.status})`);
+  }
+  return response.text();
 }
 
 /** Delete a previously-uploaded attachment from the agent VM. Best-effort: a
