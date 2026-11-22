@@ -221,13 +221,28 @@ def _write_pending(repo_root: Path, name: str, pending: PendingPublish) -> None:
     path.write_text(pending.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
 
-def _version_key(version: str) -> tuple[int, int, int, int, str]:
+def _pre_release_key(pre_release: str) -> tuple[tuple[int, int, str], ...]:
+    """A pre-release's place among the pre-releases of one version: its dot-separated identifiers are compared
+    in turn, a number by its value and before anything that is not one, and ``rc`` comes before ``rc.1``."""
+    return tuple(
+        (0, int(identifier), "") if identifier.isdecimal() else (1, 0, identifier)
+        for identifier in pre_release.split(".")
+    )
+
+
+def _version_key(version: str) -> tuple[int, int, int, int, tuple[tuple[int, int, str], ...]]:
     """A version's place in semantic order: a pre-release comes before the release it leads to."""
     match = _VERSION_CORE_PATTERN.fullmatch(version)
     if match is None:
         raise PublishError(f"{version!r} is not a semantic version such as 1.2.3")
     pre_release = match.group(4) or ""
-    return int(match.group(1)), int(match.group(2)), int(match.group(3)), 0 if pre_release else 1, pre_release
+    return (
+        int(match.group(1)),
+        int(match.group(2)),
+        int(match.group(3)),
+        0 if pre_release else 1,
+        _pre_release_key(pre_release),
+    )
 
 
 def _check_follows_published(version: str, record: AppRecord) -> None:

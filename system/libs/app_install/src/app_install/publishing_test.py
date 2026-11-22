@@ -130,6 +130,18 @@ def test_a_version_that_is_malformed_or_not_newer_than_the_published_one_is_refu
     assert set_version(workspace, "notes", "2.0.0-rc1", runtime).version == "2.0.0-rc1"
 
 
+def test_a_pre_release_is_ordered_by_its_identifiers_with_a_number_read_as_a_number(tmp_path: Path) -> None:
+    workspace, _published, runtime = _publisher(tmp_path, is_python=False)
+    _publish(workspace, runtime, "1.0.0-rc.9")
+
+    for version in ("1.0.0-rc.9", "1.0.0-rc.2", "1.0.0-rc", "1.0.0-beta.10", "1.0.0-9"):
+        with pytest.raises(PublishError, match="the next version must be newer"):
+            set_version(workspace, "notes", version, runtime)
+
+    for version in ("1.0.0-rc.10", "1.0.0-rc.9.1", "1.0.0-rd", "1.0.0"):
+        assert set_version(workspace, "notes", version, runtime).version == version
+
+
 def test_a_version_that_cannot_be_written_everywhere_is_written_nowhere(tmp_path: Path) -> None:
     workspace, _published, runtime = _publisher(tmp_path)
     manifest_file = workspace / "system" / "apps" / "notes" / "app.toml"
