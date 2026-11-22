@@ -390,7 +390,9 @@ class PushDispatcher(MutableModel):
             if entry is None:
                 continue
             fields = entry.field_ref()
-            if send_id == carrier_id:
+            if not outcome.deliveries:
+                updated.append(entry.model_copy_update(to_update(fields.status, SendStatus.NO_DEVICES)))
+            elif send_id == carrier_id:
                 updated.append(
                     entry.model_copy_update(
                         to_update(fields.status, SendStatus.SENT),

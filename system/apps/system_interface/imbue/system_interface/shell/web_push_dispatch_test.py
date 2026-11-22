@@ -225,6 +225,22 @@ def test_a_send_with_no_device_is_logged_and_posts_nothing(tmp_path: Path) -> No
     assert [entry.status for entry in dispatcher.log.entries()] == [SendStatus.NO_DEVICES]
 
 
+def test_a_queued_send_whose_devices_went_away_before_it_posted_is_logged_as_reaching_none(tmp_path: Path) -> None:
+    dispatcher, clock, transport = _dispatcher(tmp_path)
+    dispatcher.submit(_send("one"), "Studio")
+    dispatcher.flush_due()
+    queued = dispatcher.submit(_send("two"), "Studio")
+
+    dispatcher.notifier.forget(frozenset(device.device_id for device in dispatcher.notifier.list_devices()))
+    clock.now += COALESCE_SECONDS
+    dispatcher.flush_due()
+
+    assert len(transport.posted) == 1
+    (entry,) = [entry for entry in dispatcher.log.entries() if entry.send_id == queued.send_id]
+    assert entry.status is SendStatus.NO_DEVICES
+    assert entry.shown_title is None
+
+
 def test_forgetting_pending_sends_posts_none_of_them(tmp_path: Path) -> None:
     dispatcher, clock, transport = _dispatcher(tmp_path)
     dispatcher.submit(_send("one"), "Studio")
