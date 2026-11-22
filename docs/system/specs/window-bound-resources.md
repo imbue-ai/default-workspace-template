@@ -39,7 +39,7 @@ Facts this design builds on, as of `mngr/desktop-ui-phase-6` with the cleanup fi
 
 Recorded here so the implementation need not re-argue them.
 
-1. Every seeded shortcut is in `new` mode: a shortcut is "a new window of this app".
+1. A seeded shortcut is in `new` mode, "a new window of this app", except the two of decision 7.
    A shortcut is labelled with its app's display name whatever its mode; launch path labels appear only on the launcher's rows.
 2. A new chat window is the chat list at `/`.
    The chat app creates chats only from its own page (the New chat button) and through its intake route (the launcher's free-text rows and the Getting Started app's seeded prompts, posted by the shell as the `new` launch path; the post-launch-paths plan); the desktop shortcut and `workspace-layout open chat` never create one.
@@ -52,7 +52,7 @@ Recorded here so the implementation need not re-argue them.
 6. The fleet holds **one browser**.
    Closing its last window **stops** it (profile and tabs kept); `/new` brings the same browser back.
    Its profile is never deleted by the desktop; only the fleet CLI's explicit `close` deletes it.
-7. The browser shortcut is the one `focus`-mode shortcut: "show me the browser".
+7. The browser shortcut and the chat shortcut are the `focus`-mode shortcuts: "show me the browser", "show me the chat"; the chat's raises its pinned window in either mode (section 3.2).
 8. An agent that wants a terminal or a browser opens a window for it, minimized, on the desktop of the client it serves; with no client connected the window is still opened, unplaced.
    The lease stays purely "who is driving".
 
