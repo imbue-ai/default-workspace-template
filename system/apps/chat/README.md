@@ -733,11 +733,32 @@ reply the chat has moved past. A failed call is logged and not tried again for t
 file is pushed as `suggestions_updated`, and a page showing the chat reads the route again. A
 chat on a harness with no one-shot call (Pi, Antigravity, OpenCode) gets no generated sets.
 
-A strip's suggestions are drawn as pills in a list on the user's side of the composer's column
+A strip's suggestions are drawn as pills in a list on the user's side of the transcript's column
 (`views/SuggestionStrip.ts`): one pill to a row, every pill as wide as the widest, the group set
 in 16px from the column's right edge, and a label too long for the column wrapping inside its
-pill. A pill has a dashed outline, small corners, the body text size and a light shadow, and the
-recommended one (at most one, and the first) is green. The pills rise into place over 150 ms.
+pill. A pill has a dashed outline, small corners, the body text size, a light shadow and a solid
+fill, the chat's own background (`--c-bg-chat`), and the recommended one (at most one, and the
+first) is green. The pills rise into place over 150 ms.
+
+The pills of the strip above the composer float over the end of the transcript, directly above
+the footer, which holds the strip's line and nothing else of it: the footer's height and the
+composer's place are the same with pills shown, hidden or absent. They are drawn in a layer
+(`views/SuggestionLayer.ts`, `suggestion-layer`) that is the last thing in the transcript's
+scroll element and sticks to its bottom edge. So the transcript keeps its full height and scrolls
+underneath, the layer's own height is the room at the transcript's end that lets the last reply
+be scrolled clear of the pills, and a wheel or a finger on a pill scrolls the transcript. The
+layer takes no pointer events and each pill takes its own, so a click or a selection beside and
+between the pills reaches the transcript. It is at most 60% of the scroll element's height, and
+a longer list scrolls inside it. The scroll engine is told which element the layer is
+(`getEndOverlayEl`, `views/transcript-scroll-engine.ts`): a reader following the end of the chat
+is put at the new end in the same frame as the pills appear, so the reply ends just above them
+with nothing of it underneath; a reader who is at the end without following (they pressed on the
+transcript there) is carried along too; a reader who has scrolled up sees nothing move; and a
+press on a pill does not count as one on the transcript.
+
+A chat's transcript ends with no padding of its own. What it ends on (the last reply's "Done"
+mark, a person's bubble, the status row) brings a 20px margin, which is all that separates it
+from the footer's line, and the first pill of a shown strip sits 4px under that.
 
 Next-step suggestions wait on one quiet line directly above the composer
 (`views/NextStepSuggestions.ts`). In a chat with an agent the line's height is always kept,
@@ -900,11 +921,12 @@ shows the first three suggestions the page can act on and is absent when there a
 page keeps only a suggestion whose action it knows, so a newer backend never produces a dead
 pill.
 
-The strips of the two placements share the composer's column (`views/ChatSuggestions.ts`), and
-both read alike: the pills (`suggestion-strip-pills`) over one quiet line (`suggestion-line`).
-The new-chat strip's line holds its disable link alone, at its right end, and stands where the
-next-step line would, at the same height, so the column holds one quiet line directly above
-the composer whichever strip is drawn and the strip's going moves nothing. The two strips are
+The strips of the two placements read alike: the pills (`suggestion-strip-pills`), in the layer
+over the transcript's end, over one quiet line (`suggestion-line`), in a column at the
+composer's width in the footer (`views/ChatSuggestions.ts`). The new-chat strip's line holds its
+disable link alone, at its right end, and stands where the next-step line would, at the same
+height, so the column holds one quiet line directly above the composer whichever strip is drawn
+and the strip's going moves nothing. The two strips are
 never drawn together: a chat nobody has spoken in has no reply to suggest answers to, and the
 first-run chat is offered no new-chat suggestions. Should both ever be there, the next-step
 strip is the one drawn.

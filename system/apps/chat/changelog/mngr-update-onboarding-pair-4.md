@@ -14,7 +14,9 @@
 
 - Each strip is its pills over one quiet line, which holds the strip's link with Undo: "disable new chat suggestions" at the right end of the new-chat strip's line, and "disable suggestions" immediately left of "Hide suggestions" on the next-step line while its pills are shown.
 
-- A strip's suggestions are a list on the user's side of the composer's column: one pill to a row, all as wide as the widest, set in 16px from its right edge, with a light shadow.
+- A strip's suggestions are a list on the user's side of the transcript's column: one pill to a row, all as wide as the widest, set in 16px from its right edge, with a solid fill and a light shadow. While shown they float over the end of the transcript, directly above the footer, which keeps its height: the transcript scrolls underneath, a click beside the pills reaches it, a reader at its end stays there with the last reply clear of the pills, and one who has scrolled up sees nothing move. A list taller than 60% of the transcript scrolls in place.
+
+- A chat ends closer to the composer: about 20px separates the end of the last reply (its "Done" mark) from the line above the composer, and about 24px from the first shown pill, where about 70px did.
 
 - A reply's suggestions wait on one quiet line directly above the composer, whose height is always kept in a chat with an agent so their arrival moves nothing: "See N suggestions" shows them above it and becomes "Hide suggestions". The first conversation's fixed sets start shown and a generated set hidden. Every suggestion is drawn, and the "Next steps" toggle and "Show more" are gone.
 
