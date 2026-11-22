@@ -85,12 +85,14 @@ from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import seed_context_message
+from imbue.chat.chat_seed import write_first_run_context
 from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
 from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.first_run_tree import FirstRunTreeStep
+from imbue.chat.first_run_tree import write_first_run_tree_step
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.chat.harnesses.codex.ledger import CodexMessageLedger
 from imbue.chat.harnesses.codex.ledger import ShoulderTapResult
@@ -4309,6 +4311,29 @@ def test_a_send_held_for_the_first_run_chats_agent_moves_its_tree_and_a_refused_
     assert step_after_the_refusal is FirstRunTreeStep.START
     assert held.status_code == 202
     assert manager.get_first_run_tree_step(chat_id) is FirstRunTreeStep.CATEGORIES
+
+
+def test_a_first_run_chats_tree_moves_with_a_delivered_send_and_with_an_intakes(
+    app: Flask, client: FlaskClient, messenger: RecordingMngrMessenger, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once the first-run chat has its agent, a message reaches the tree by whichever route delivers it: the message
+    route, or an intake."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    chat_id = ChatId("agent-00000000000000000000000000000001")
+    _track_claude_agent(app, chat_id, "only", tmp_path / "claude_config")
+    manager: AgentManager = state_of(app).agent_manager
+    write_first_run_context(manager.chat_files_root / chat_id, "")
+    write_first_run_tree_step(manager.chat_files_root / chat_id, FirstRunTreeStep.START)
+
+    sent = client.post(f"/api/chats/{chat_id}/message", json={"message": "Get ideas for what to make"})
+    step_after_the_send = manager.get_first_run_tree_step(chat_id)
+    intake = _intake(client, message="Sales, Money, ", target="chat_selector", is_delivery_awaited=True)
+
+    assert sent.status_code == 200
+    assert step_after_the_send is FirstRunTreeStep.CATEGORIES
+    assert intake.status_code == 200
+    assert manager.get_first_run_tree_step(chat_id) is FirstRunTreeStep.CONNECTORS
+    assert messenger.sent == [(chat_id, "Get ideas for what to make"), (chat_id, "Sales, Money, ")]
 
 
 def test_a_chat_with_no_stored_suggestions_answers_none(tmp_path: Path) -> None:
