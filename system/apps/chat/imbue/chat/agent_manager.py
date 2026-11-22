@@ -7170,8 +7170,10 @@ class AgentManager:
         changed, so a streamed line that moves nothing skips both the recompute
         and its per-event marker stat.
 
-        No-op for agents not being tracked for activity (e.g. remote agents, or
-        stale callbacks for an agent that was just destroyed).
+        A permission request filed in the batch also sets the ``permission_request_filed``
+        onboarding marker, whichever agent the batch is from. The activity signals are left
+        alone for agents not being tracked for activity (e.g. remote agents, or stale
+        callbacks for an agent that was just destroyed).
         """
         self._note_filed_permission_requests(events)
         is_pending_compaction_ended = self._end_pending_compaction_by_a_later_turn(agent_id, events)
