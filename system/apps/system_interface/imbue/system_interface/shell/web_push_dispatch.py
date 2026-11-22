@@ -337,7 +337,8 @@ class PushDispatcher(MutableModel):
                     receipt = PushSendReceipt(send_id=send_id, status=SendStatus.QUEUED, detail="Queued.")
                 else:
                     receipt = PushSendReceipt(send_id=send_id, status=SendStatus.LIMITED, detail=limit_reason)
-        self.log.put((entry.model_copy_update(to_update(entry.field_ref().status, receipt.status)),))
+            # Logged before the lock is let go, so the worker never posts a batch whose send is not yet in the log.
+            self.log.put((entry.model_copy_update(to_update(entry.field_ref().status, receipt.status)),))
         if receipt.status is SendStatus.LIMITED:
             logger.warning("Dropped a notification from {}: {}", request.chat_id, receipt.detail)
         self._wake.set()
