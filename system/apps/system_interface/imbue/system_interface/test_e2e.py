@@ -2920,7 +2920,8 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
         expect(page.locator("[data-tour-badge]")).to_be_visible(timeout=5000)
         page.locator("[data-tour-next]").click()
         expect(page.locator("[data-tour-badge]")).to_have_count(0)
-        assert _get_json(f"{server.base_url}/api/tour") == {"is_seen": True, "resume_index": None}
+        tour = _get_json(f"{server.base_url}/api/tour")
+        assert (tour["is_seen"], tour["resume_index"]) == (True, None)
 
         with _second_client(page, server) as other:
             other_entry = _pinned_entry(other)

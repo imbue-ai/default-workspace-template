@@ -111,7 +111,8 @@ observe`, its own supervised service) writes, and serves:
   destroy, rename, make-main, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats/awaiting` (the chat an empty chat list opens on), `/api/chats`,
-  `/api/harnesses`, `/api/uploads` (and a chat's own uploads under
+  `/api/harnesses`, `/api/suggestions/activity` (the things to try in Studio, and
+  `/api/suggestions/activity/clicked`), `/api/uploads` (and a chat's own uploads under
   `/api/chats/<chat-id>/uploads`),
   `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/latchkey`, and
   `/api/secret-requests` (an agent's `request_secret.py` files a secret request;
@@ -671,7 +672,8 @@ chat's folder, `data/.apps/chat/chats/<chat-id>/suggestions.json`:
 
 `source` is `fixed` for a set the chat app wrote itself (the first-run seed's start suggestions,
 and the tree's below) and `generated` for one a model worked out. `action` is null in every
-stored suggestion, and a file written without the field reads the same. `GET /api/chats/<chat-id>/suggestions`
+stored suggestion, and a file written without the field reads the same.
+`GET /api/chats/<chat-id>/suggestions`
 answers `{"status", "after_event_id", "source", "suggestions"}`: `ready` with the stored set,
 `pending` while a set is being worked out (naming the reply it is for, with an empty list), or
 `none` with nulls and an empty list. It answers for a seeded chat still awaiting its first agent
