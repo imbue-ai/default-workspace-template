@@ -1,0 +1,1 @@
+The terminal's pty registers its row with `register_app_now`, without the background retry `register_app` now starts on a full disk, since the pty replaces itself with ttyd and would discard that thread. A disk too full to write its row still fails its start, and supervisord retries it.
