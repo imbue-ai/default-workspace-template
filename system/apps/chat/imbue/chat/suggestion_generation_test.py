@@ -36,6 +36,7 @@ from imbue.chat.suggestion_generation import parse_generated_suggestions
 from imbue.chat.suggestion_generation import read_conversation_end
 from imbue.chat.suggestion_generation import reason_chat_gets_no_suggestions
 from imbue.chat.suggestion_generation import suggestion_generation_prompt
+from imbue.chat.suggestion_store import ChatSuggestionStore
 from imbue.chat.suggestions import ChatSuggestions
 from imbue.chat.suggestions import Suggestion
 from imbue.chat.suggestions import SuggestionSource
@@ -379,8 +380,9 @@ class _GenerationHarness:
         self.pushed_chat_ids: list[ChatId] = []
         # The reply the generator held as pending at each push, which is what a page's read on that push is answered.
         self.pending_reply_event_id_at_each_push: list[str | None] = []
+        self.suggestion_store = ChatSuggestionStore(chat_files_root=self.chat_files_root)
         self.generator = SuggestionGenerator(
-            chat_files_root=self.chat_files_root,
+            suggestion_store=self.suggestion_store,
             read_chat_settings=lambda: self.settings,
             get_chat_snapshot=lambda _chat_id: self.snapshot,
             read_tail_events=self._read_tail_events,
@@ -463,6 +465,31 @@ def test_an_answer_with_no_suggestions_removes_the_earlier_replys_set(tmp_path: 
 
     assert harness.stored() is None
     assert harness.pushed_chat_ids == [_CHAT_ID]
+
+
+def test_the_set_of_a_reply_that_was_answered_stays_remembered_under_that_reply(tmp_path: Path) -> None:
+    """The file holds one set, the last reply's; the store keeps the earlier replies' too, and one that was found
+    stored when the turn ended, through a turn's end that removes the file."""
+    harness = _GenerationHarness(tmp_path, [_TWO_SUGGESTIONS, "<suggestion>Thanks, that is all</suggestion>", ""])
+    found_stored = harness.store_a_set_after("a0")
+
+    harness.end_turn()
+    after_the_first_reply = harness.stored()
+    assert harness.events is not None
+    harness.events += [_user("u2", "Yes, add reminders"), _assistant("a2", "Reminders are in.")]
+    harness.end_turn()
+    after_the_second_reply = harness.stored()
+    harness.events += [_user("u3", "Thanks, that is all"), _assistant("a3", "Any time.")]
+    harness.end_turn()
+
+    assert after_the_first_reply is not None and after_the_first_reply.after_event_id == "a1"
+    assert after_the_second_reply is not None and after_the_second_reply.after_event_id == "a2"
+    assert harness.stored() is None
+    assert harness.suggestion_store.remembered(_CHAT_ID) == (
+        found_stored,
+        after_the_first_reply,
+        after_the_second_reply,
+    )
 
 
 def test_an_answer_with_no_suggestions_tells_the_pages_nothing_when_no_set_was_stored(tmp_path: Path) -> None:
@@ -722,11 +749,13 @@ def test_the_question_about_apps_gets_its_fixed_reply_with_no_model_asked(tmp_pa
 
     harness.end_turn()
 
-    assert harness.stored() == ChatSuggestions(
+    fixed = ChatSuggestions(
         after_event_id="a1",
         source=SuggestionSource.FIXED,
         suggestions=(Suggestion(suggestion_id="show-ideas", label="Show me some ideas"),),
     )
+    assert harness.stored() == fixed
+    assert harness.suggestion_store.remembered(_CHAT_ID) == (fixed,)
     assert harness.pushed_chat_ids == [_CHAT_ID]
     assert harness.completion.prompts == []
 

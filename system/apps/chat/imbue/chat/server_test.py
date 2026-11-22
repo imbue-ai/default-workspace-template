@@ -4706,6 +4706,13 @@ def test_a_first_run_chat_awaiting_its_first_agent_answers_its_start_suggestions
                 "is_recommended": False,
             },
         ],
+        "sets": [
+            {
+                "after_event_id": last_event["event_id"],
+                "source": "fixed",
+                "suggestions": response.get_json()["suggestions"],
+            }
+        ],
     }
 
 
@@ -4778,6 +4785,15 @@ def test_a_first_run_chats_tree_moves_with_a_delivered_send_and_with_an_intakes(
     assert messenger.sent == [(chat_id, "Get ideas for what to make"), (chat_id, "Sales, Money, ")]
 
 
+_NO_SUGGESTIONS: Final[dict[str, Any]] = {
+    "status": "none",
+    "after_event_id": None,
+    "source": None,
+    "suggestions": [],
+    "sets": [],
+}
+
+
 def test_a_chat_with_no_stored_suggestions_answers_none(tmp_path: Path) -> None:
     agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
     agent_manager.note_agent_list_known()
@@ -4787,7 +4803,7 @@ def test_a_chat_with_no_stored_suggestions_answers_none(tmp_path: Path) -> None:
     response = client.get(f"/api/chats/{chat_id}/suggestions")
 
     assert response.status_code == 200
-    assert response.get_json() == {"status": "none", "after_event_id": None, "source": None, "suggestions": []}
+    assert response.get_json() == _NO_SUGGESTIONS
 
 
 def test_a_listed_chat_answers_the_suggestions_stored_in_its_folder(app: Flask, client: FlaskClient) -> None:
@@ -4807,17 +4823,93 @@ def test_a_listed_chat_answers_the_suggestions_stored_in_its_folder(app: Flask, 
 
     response = client.get("/api/chats/agent-suggested/suggestions")
 
-    assert none_yet.get_json() == {"status": "none", "after_event_id": None, "source": None, "suggestions": []}
+    suggestions = [
+        {"suggestion_id": "s1", "label": "Yes, go ahead", "action": None, "is_recommended": True},
+        {"suggestion_id": "s2", "label": "Show me the plan first", "action": None, "is_recommended": False},
+    ]
+    assert none_yet.get_json() == _NO_SUGGESTIONS
     assert response.status_code == 200
     assert response.get_json() == {
         "status": "ready",
         "after_event_id": "evt-reply-7",
         "source": "generated",
-        "suggestions": [
-            {"suggestion_id": "s1", "label": "Yes, go ahead", "action": None, "is_recommended": True},
-            {"suggestion_id": "s2", "label": "Show me the plan first", "action": None, "is_recommended": False},
-        ],
+        "suggestions": suggestions,
+        "sets": [{"after_event_id": "evt-reply-7", "source": "generated", "suggestions": suggestions}],
     }
+
+
+def _reply_suggestions(reply_event_id: str, label: str) -> ChatSuggestions:
+    return ChatSuggestions(
+        after_event_id=reply_event_id,
+        source=SuggestionSource.GENERATED,
+        suggestions=(Suggestion(suggestion_id="generated-1", label=label),),
+    )
+
+
+def test_the_route_lists_every_set_stored_for_the_chat_since_the_app_started_oldest_first(
+    app: Flask, client: FlaskClient
+) -> None:
+    """A reply that has been answered keeps its set for the pages: the stored set is the last reply's alone, and
+    ``sets`` holds the earlier ones too, through the stored one's removal."""
+    _register_agent(app, "agent-suggested", "Chat-1", "RUNNING")
+    _register_agent(app, "agent-elsewhere", "Chat-2", "RUNNING")
+    store = state_of(app).agent_manager.suggestion_store
+    store.write(ChatId("agent-suggested"), _reply_suggestions("evt-reply-1", "Yes, go ahead"))
+    store.write(ChatId("agent-suggested"), _reply_suggestions("evt-reply-2", "Show me the app"))
+    store.write(ChatId("agent-elsewhere"), _reply_suggestions("evt-reply-9", "Not now"))
+
+    with_the_second_stored = client.get("/api/chats/agent-suggested/suggestions").get_json()
+    store.remove(ChatId("agent-suggested"))
+    with_none_stored = client.get("/api/chats/agent-suggested/suggestions").get_json()
+
+    first = [{"suggestion_id": "generated-1", "label": "Yes, go ahead", "action": None, "is_recommended": False}]
+    second = [{"suggestion_id": "generated-1", "label": "Show me the app", "action": None, "is_recommended": False}]
+    sets = [
+        {"after_event_id": "evt-reply-1", "source": "generated", "suggestions": first},
+        {"after_event_id": "evt-reply-2", "source": "generated", "suggestions": second},
+    ]
+    assert with_the_second_stored == {
+        "status": "ready",
+        "after_event_id": "evt-reply-2",
+        "source": "generated",
+        "suggestions": second,
+        "sets": sets,
+    }
+    assert with_none_stored == {**_NO_SUGGESTIONS, "sets": sets}
+
+
+def test_a_destroyed_chats_sets_are_forgotten(tmp_path: Path) -> None:
+    mngr_binary, _log_path = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(
+        WebSocketBroadcaster(),
+        messenger=RecordingMngrMessenger(),
+        mngr_binary=mngr_binary,
+        chat_files_root=tmp_path / "chats",
+    )
+    manager.note_agent_list_known()
+    seed_agent_state(manager, "agent-suggested", name="Chat-1")
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    manager.suggestion_store.write(ChatId("agent-suggested"), _reply_suggestions("evt-reply-1", "Yes, go ahead"))
+    remembered_while_listed = manager.get_remembered_suggestions(ChatId("agent-suggested"))
+
+    destroyed = client.post("/api/chats/agent-suggested/destroy")
+
+    assert len(remembered_while_listed) == 1
+    assert destroyed.status_code == 200
+    assert manager.get_remembered_suggestions(ChatId("agent-suggested")) == ()
+
+
+def test_a_seeded_chat_deleted_before_its_first_send_has_its_sets_forgotten(app: Flask, client: FlaskClient) -> None:
+    """A first-run chat is seeded with its start suggestions, which go from the memory with the chat."""
+    agent_manager = state_of(app).agent_manager
+    chat_id = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True}).get_json()["chat_id"]
+    remembered_while_listed = agent_manager.get_remembered_suggestions(ChatId(chat_id))
+
+    deleted = client.post(f"/api/chats/{chat_id}/destroy")
+
+    assert [suggestions.source for suggestions in remembered_while_listed] == [SuggestionSource.FIXED]
+    assert deleted.status_code == 200
+    assert agent_manager.get_remembered_suggestions(ChatId(chat_id)) == ()
 
 
 def test_a_turns_end_works_out_suggestions_the_route_reads_pending_and_then_ready(
@@ -4855,26 +4947,26 @@ def test_a_turns_end_works_out_suggestions_the_route_reads_pending_and_then_read
     completion = ScriptedOneShotCompletion(['<suggestion recommended="true">Yes, add reminders</suggestion>'])
     answers_while_asked: list[dict[str, Any]] = []
     completion.on_call = lambda: answers_while_asked.append(client.get("/api/chats/agent-123/suggestions").get_json())
-    install_suggestion_generator(
-        state, state.agent_manager.chat_files_root, lambda _harness: completion, InlineExecutor()
-    )
+    install_suggestion_generator(state, lambda _harness: completion, InlineExecutor())
     reply_event_id = client.get("/api/chats/agent-123/events").get_json()["events"][-1]["event_id"]
     pushes = state.broadcaster.register()
     assert state.suggestion_generator is not None
 
     state.suggestion_generator.consider_turn_end(ChatId("agent-123"))
 
+    suggestions = [
+        {"suggestion_id": "generated-1", "label": "Yes, add reminders", "action": None, "is_recommended": True}
+    ]
     assert answers_while_asked == [
-        {"status": "pending", "after_event_id": reply_event_id, "source": None, "suggestions": []}
+        {"status": "pending", "after_event_id": reply_event_id, "source": None, "suggestions": [], "sets": []}
     ]
     assert drain_pushes(pushes) == [{"type": "suggestions_updated", "chat_id": "agent-123"}]
     assert client.get("/api/chats/agent-123/suggestions").get_json() == {
         "status": "ready",
         "after_event_id": reply_event_id,
         "source": "generated",
-        "suggestions": [
-            {"suggestion_id": "generated-1", "label": "Yes, add reminders", "action": None, "is_recommended": True}
-        ],
+        "suggestions": suggestions,
+        "sets": [{"after_event_id": reply_event_id, "source": "generated", "suggestions": suggestions}],
     }
     assert completion.prompts == [
         '<turn speaker="user">\nBuild me a plant tracker\n</turn>\n'

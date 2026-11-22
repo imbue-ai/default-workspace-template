@@ -23,7 +23,6 @@ from collections.abc import Sequence
 from concurrent.futures import Executor
 from concurrent.futures import Future
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any
 from typing import Final
 
@@ -48,14 +47,12 @@ from imbue.chat.models import ChatSnapshot
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
+from imbue.chat.suggestion_store import ChatSuggestionStore
 from imbue.chat.suggestions import ChatSuggestions
 from imbue.chat.suggestions import MAX_SUGGESTION_COUNT
 from imbue.chat.suggestions import MAX_SUGGESTION_LABEL_LENGTH
 from imbue.chat.suggestions import Suggestion
 from imbue.chat.suggestions import SuggestionSource
-from imbue.chat.suggestions import read_chat_suggestions
-from imbue.chat.suggestions import remove_chat_suggestions
-from imbue.chat.suggestions import write_chat_suggestions
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
@@ -311,7 +308,9 @@ class SuggestionGenerator(MutableModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
-    chat_files_root: Path = Field(frozen=True, description="The folder holding one folder per chat")
+    suggestion_store: ChatSuggestionStore = Field(
+        frozen=True, description="Where each chat's set is stored, and every set stored is remembered"
+    )
     read_chat_settings: Callable[[], ChatSettings] = Field(
         frozen=True, description="The workspace's chat settings as they stand"
     )
@@ -382,7 +381,7 @@ class SuggestionGenerator(MutableModel):
                 self.consider_turn_end(chat_id)
 
     def _settle_turn_end(self, chat_id: ChatId) -> None:
-        stored = read_chat_suggestions(self.chat_files_root / chat_id)
+        stored = self.suggestion_store.read(chat_id)
         tree_step = self.get_first_run_tree_step(chat_id)
         is_tree_in_progress = tree_step is not None and tree_step is not FirstRunTreeStep.DONE
         if stored is None and not is_tree_in_progress:
@@ -501,11 +500,10 @@ class SuggestionGenerator(MutableModel):
 
     def _store(self, chat_id: ChatId, suggestions: ChatSuggestions | None) -> None:
         """Make the chat's stored set ``suggestions``, or none at all, and tell the pages when that changed it."""
-        chat_dir = self.chat_files_root / chat_id
         if suggestions is None:
-            is_changed = remove_chat_suggestions(chat_dir)
+            is_changed = self.suggestion_store.remove(chat_id)
         else:
-            write_chat_suggestions(chat_dir, suggestions)
+            self.suggestion_store.write(chat_id, suggestions)
             is_changed = True
         if is_changed:
             self.broadcast_suggestions_updated(chat_id)

@@ -454,7 +454,7 @@ def test_suggestions_worked_out_after_a_reply_rise_above_the_composer_with_the_r
         for index, label in enumerate(labels)
     )
     completion = ScriptedOneShotCompletion([answer])
-    install_suggestion_generator(state, manager.chat_files_root, lambda _harness: completion, InlineExecutor())
+    install_suggestion_generator(state, lambda _harness: completion, InlineExecutor())
     assert state.suggestion_generator is not None
     _open_fixture_chat(page, e2e_server)
     expect(_chat(page).locator(".message-assistant").first).to_contain_text("Hello! How can I help you?")

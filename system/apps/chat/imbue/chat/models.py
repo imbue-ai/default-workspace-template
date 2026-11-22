@@ -253,8 +253,23 @@ class ChatSettingsResponse(FrozenModel):
     settings: ChatSettings = Field(description="The settings")
 
 
+class ReplySuggestionSet(FrozenModel):
+    """The next-step suggestions offered under one assistant message, as the read route lists them."""
+
+    after_event_id: str = Field(description="The event id of the assistant message the set follows")
+    source: SuggestionSource = Field(description="Where the set came from")
+    suggestions: tuple[Suggestion, ...] = Field(description="The suggestions, in the order they are drawn")
+
+    @classmethod
+    def of(cls, suggestions: ChatSuggestions) -> "ReplySuggestionSet":
+        return cls(
+            after_event_id=suggestions.after_event_id, source=suggestions.source, suggestions=suggestions.suggestions
+        )
+
+
 class ChatSuggestionsResponse(FrozenModel):
-    """Response from GET /api/chats/<chat_id>/suggestions: the next-step suggestions stored for the chat."""
+    """Response from GET /api/chats/<chat_id>/suggestions: the next-step suggestions stored for the chat, and
+    every set the app remembers for it."""
 
     status: SuggestionsStatus = Field(
         description="ready when the chat has a stored set, pending while one is being worked out, else none"
@@ -265,23 +280,35 @@ class ChatSuggestionsResponse(FrozenModel):
     )
     source: SuggestionSource | None = Field(description="Where the set came from; None when there is no set")
     suggestions: tuple[Suggestion, ...] = Field(description="The suggestions in order; empty when there is no set")
+    sets: tuple[ReplySuggestionSet, ...] = Field(
+        description="Every set the app remembers for the chat, the stored one included, oldest first: a page draws "
+        "the set of a reply that has been answered under that reply"
+    )
 
     @classmethod
-    def of(cls, stored: ChatSuggestions | None) -> "ChatSuggestionsResponse":
-        """The answer for a chat's stored set, or for a chat that has none."""
+    def of(cls, stored: ChatSuggestions | None, remembered: tuple[ChatSuggestions, ...]) -> "ChatSuggestionsResponse":
+        """The answer for a chat's stored set, or for a chat that has none, with what is remembered for it."""
+        sets = tuple(ReplySuggestionSet.of(suggestions) for suggestions in remembered)
         if stored is None:
-            return cls(status=SuggestionsStatus.NONE, after_event_id=None, source=None, suggestions=())
+            return cls(status=SuggestionsStatus.NONE, after_event_id=None, source=None, suggestions=(), sets=sets)
         return cls(
             status=SuggestionsStatus.READY,
             after_event_id=stored.after_event_id,
             source=stored.source,
             suggestions=stored.suggestions,
+            sets=sets,
         )
 
     @classmethod
-    def pending(cls, after_event_id: str) -> "ChatSuggestionsResponse":
+    def pending(cls, after_event_id: str, remembered: tuple[ChatSuggestions, ...]) -> "ChatSuggestionsResponse":
         """The answer while a set for the reply ``after_event_id`` is being worked out."""
-        return cls(status=SuggestionsStatus.PENDING, after_event_id=after_event_id, source=None, suggestions=())
+        return cls(
+            status=SuggestionsStatus.PENDING,
+            after_event_id=after_event_id,
+            source=None,
+            suggestions=(),
+            sets=tuple(ReplySuggestionSet.of(suggestions) for suggestions in remembered),
+        )
 
 
 class ActivitySuggestionsResponse(FrozenModel):

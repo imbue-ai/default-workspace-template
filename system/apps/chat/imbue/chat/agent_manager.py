@@ -231,9 +231,8 @@ from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_MESSAGE
 from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_TITLE
 from imbue.chat.sign_in_notices import SignInFailureNotices
+from imbue.chat.suggestion_store import ChatSuggestionStore
 from imbue.chat.suggestions import ChatSuggestions
-from imbue.chat.suggestions import read_chat_suggestions
-from imbue.chat.suggestions import write_chat_suggestions
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ConcurrencyGroupError
@@ -1496,6 +1495,8 @@ class AgentManager:
     _chat_settings: ChatSettingsStore
     # Where a chat's handoff files live (its summaries and prompts), beside its record.
     _chat_files_root: Path
+    # Each chat's next-step suggestions: the set stored in its folder, and the sets remembered for it.
+    _suggestions: ChatSuggestionStore
     _prompt_template_path: Path
     # The handoff runner's tie to the app state, set at composition (``set_handoff_capabilities``);
     # None (tests that never hand off) refuses every handoff.
@@ -1772,6 +1773,7 @@ class AgentManager:
         manager._awaiting_by_chat = {}
         manager._chat_settings = chat_settings if chat_settings is not None else ChatSettingsStore(path=None)
         manager._chat_files_root = chat_files_root
+        manager._suggestions = ChatSuggestionStore(chat_files_root=chat_files_root)
         manager._prompt_template_path = prompt_template_path
         manager._handoff_capabilities = None
         manager._own_agent_id = os.environ.get("MNGR_AGENT_ID", "")
@@ -4812,7 +4814,7 @@ class AgentManager:
                 chat_dir = self._chat_files_root / provisional.chat_id
                 write_first_run_context(chat_dir, first_run_context)
                 write_first_run_tree_step(chat_dir, FirstRunTreeStep.START)
-                write_chat_suggestions(chat_dir, first_run_start_suggestions(provisional.chat_id, turns))
+                self._suggestions.write(provisional.chat_id, first_run_start_suggestions(provisional.chat_id, turns))
         self._publish_seeded_chat(provisional)
         if is_first_run:
             # A page that read the accounts before this seed does not know the provider page is owed.
@@ -4944,9 +4946,18 @@ class AgentManager:
         self._provisional_chats[chat_id] = provisional
         return provisional
 
+    @property
+    def suggestion_store(self) -> ChatSuggestionStore:
+        """Where chats' next-step suggestions are kept, for what works them out to store them through."""
+        return self._suggestions
+
     def get_chat_suggestions(self, chat_id: ChatId) -> ChatSuggestions | None:
         """The next-step suggestions stored for the chat (``suggestions.py``), or None when it has none."""
-        return read_chat_suggestions(self._chat_files_root / chat_id)
+        return self._suggestions.read(chat_id)
+
+    def get_remembered_suggestions(self, chat_id: ChatId) -> tuple[ChatSuggestions, ...]:
+        """Every set of next-step suggestions remembered for the chat (``suggestion_store.py``), oldest first."""
+        return self._suggestions.remembered(chat_id)
 
     def get_first_run_tree_step(self, chat_id: ChatId) -> FirstRunTreeStep | None:
         """Where the chat's first conversation stands in its tree (``first_run_tree.py``); None for any chat but
@@ -5075,6 +5086,7 @@ class AgentManager:
                 if record is None or record.is_seed_only:
                     self._delete_record_locked(parsed)
         self._auto_open.forget(parsed)
+        self._suggestions.forget(parsed)
         self._broadcaster.broadcast_provisional_chat_completed(chat_id=parsed, success=False, error=None)
         self._broadcast_chats_updated()
         return True
@@ -5777,6 +5789,7 @@ class AgentManager:
         self._oom_prioritizer.forget_chat(chat_id)
         self._message_stamps.forget(chat_id)
         self._auto_open.forget(chat_id)
+        self._suggestions.forget(chat_id)
         with self._lock:
             self._creation_settled_by_chat.pop(chat_id, None)
             self._background_tasks_by_chat.pop(chat_id, None)

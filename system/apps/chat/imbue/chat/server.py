@@ -1508,17 +1508,21 @@ def _known_chat_or_not_found(chat_id: str) -> ChatId | Response:
 def _get_suggestions_endpoint(chat_id: str) -> Response:
     """``GET /api/chats/<chat_id>/suggestions``: the next-step suggestions stored for the chat, with the message
     they follow; ``pending`` while a set for the chat's last reply is being worked out; else ``none``. A page shows
-    a set only while that message is still the chat's last assistant message, so the route answers a set left from
-    an earlier turn as it stands."""
+    that set above its composer only while the message is still the chat's last assistant message, so the route
+    answers a set left from an earlier turn as it stands. ``sets`` is every set the app remembers for the chat,
+    which a page draws under the replies that have been answered."""
     parsed = _known_chat_or_not_found(chat_id)
     if isinstance(parsed, Response):
         return parsed
     state = get_state()
     generator = state.suggestion_generator
     pending_reply_event_id = None if generator is None else generator.get_pending_reply_event_id(parsed)
+    # Read before the remembered sets are, since reading the stored set is what remembers it after a start.
+    stored = state.agent_manager.get_chat_suggestions(parsed)
+    remembered = state.agent_manager.get_remembered_suggestions(parsed)
     if pending_reply_event_id is not None:
-        return model_response(ChatSuggestionsResponse.pending(pending_reply_event_id))
-    return model_response(ChatSuggestionsResponse.of(state.agent_manager.get_chat_suggestions(parsed)))
+        return model_response(ChatSuggestionsResponse.pending(pending_reply_event_id, remembered))
+    return model_response(ChatSuggestionsResponse.of(stored, remembered))
 
 
 def _get_activity_suggestions_endpoint() -> Response:

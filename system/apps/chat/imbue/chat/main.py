@@ -238,13 +238,12 @@ def build_production_state(
     agent_manager.set_chat_stream_ender(state.event_queues.end_streams)
     # A secondary's chats are the live chat's, which works out their suggestions.
     if not is_secondary:
-        install_suggestion_generator(state, chat_records_root, build_one_shot_completion, DaemonThreadExecutor())
+        install_suggestion_generator(state, build_one_shot_completion, DaemonThreadExecutor())
     return state
 
 
 def install_suggestion_generator(
     state: ChatAppState,
-    chat_files_root: Path,
     build_completion: Callable[[HarnessType], OneShotCompletion | None],
     executor: Executor,
 ) -> None:
@@ -254,7 +253,7 @@ def install_suggestion_generator(
     """
     agent_manager = state.agent_manager
     suggestion_generator = SuggestionGenerator(
-        chat_files_root=chat_files_root,
+        suggestion_store=agent_manager.suggestion_store,
         read_chat_settings=state.chat_settings.read,
         get_chat_snapshot=agent_manager.get_chat_snapshot,
         read_tail_events=lambda chat_id, limit: read_chat_tail_events(state, chat_id, limit),
