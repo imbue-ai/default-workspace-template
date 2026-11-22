@@ -1,7 +1,7 @@
 /**
  * The next-step strip: the suggested replies to the reply the chat waits on its user to answer
  * (``models/Suggestions.ts`` decides which set that is, from what is read of the chat here on every draw).
- * ``views/ChatSuggestions.ts`` draws it, with the other placements' strips. Once the reply is answered its set is
+ * ``views/ChatSuggestions.ts`` draws it, as it does the new-chat strip. Once the reply is answered its set is
  * drawn in the transcript instead (``views/AnsweredReplySuggestions.ts``), from the same read of the chat.
  *
  * The chat app says when the chat's stored set changes, and the sets are read again. A click on a suggestion sends
@@ -11,7 +11,6 @@
 import { isSuggestionSwitchOn } from "../models/ChatSettings";
 import { addSuggestionsUpdatedListener, isRoomChat, removeSuggestionsUpdatedListener } from "../models/Chats";
 import {
-  collapseNextStepSuggestions,
   getNextStepSuggestions,
   reconcileNextStepSuggestions,
   rereadNextStepSuggestions,
@@ -64,6 +63,5 @@ export function nextStepStrip(chatId: string): PlacementStrip | null {
     isOpen: adopted.isOpen,
     onPick: (suggestion) => submitSuggestion(chatId, suggestion.label),
     onToggle: () => toggleNextStepSuggestions(chatId),
-    collapse: () => collapseNextStepSuggestions(chatId),
   };
 }

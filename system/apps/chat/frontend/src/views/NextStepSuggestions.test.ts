@@ -41,14 +41,13 @@ vi.mock("../shell", () => ({
   opensWorkspaceSettings: () => mocks.opensWorkspaceSettings,
   openWorkspaceSettings: mocks.openWorkspaceSettings,
   showsCoachMarks: () => false,
-  reportAgentWorking: () => undefined,
 }));
 vi.mock("./MessageInput", () => ({ submitSuggestion: mocks.submitSuggestion }));
 
-import { resetActivitySuggestionsForTests } from "../models/ActivitySuggestions";
 import type { ChatSettings } from "../models/ChatSettings";
 import { DEFAULT_CHAT_SETTINGS, resetChatSettingsForTests } from "../models/ChatSettings";
 import { chatSnapshotFixture, provisionalChatFixture } from "../models/chatSnapshotFixture";
+import { resetNewChatSuggestionsForTests } from "../models/NewChatSuggestions";
 import { addOutgoing, clearOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { ownerAndVisitorRosterFixture } from "../models/participantFixture";
 import { setParticipantsForTesting } from "../models/Participants";
@@ -174,7 +173,7 @@ function writes(): unknown[] {
 
 beforeEach(() => {
   resetSuggestionsForTests();
-  resetActivitySuggestionsForTests();
+  resetNewChatSuggestionsForTests();
   resetChatSettingsForTests();
   setParticipantsForTesting("owner", []);
   stored = { settings: { ...DEFAULT_CHAT_SETTINGS }, suggestions: START_SET, isWriteRefused: false };
@@ -193,7 +192,7 @@ beforeEach(() => {
   vi.spyOn(m, "request").mockImplementation((async (options: { method: string; url: string; body?: unknown }) => {
     requests.push({ method: options.method, url: options.url, body: options.body });
     if (options.url === "/api/settings") return { settings: stored.settings };
-    if (options.url === "/api/suggestions/activity") return { suggestions: [] };
+    if (options.url === "/api/suggestions/new-chat") return { suggestions: [] };
     if (options.url === "/api/settings/suggestions") {
       if (stored.isWriteRefused) throw new Error("400");
       stored.settings = { ...stored.settings, ...(options.body as Partial<ChatSettings>) };
@@ -335,7 +334,7 @@ describe("the next-step strip", () => {
     expect(requests.map((request) => `${request.method} ${request.url}`).sort()).toEqual([
       "GET /api/chats/:chatId/suggestions",
       "GET /api/settings",
-      "GET /api/suggestions/activity",
+      "GET /api/suggestions/new-chat",
     ]);
     expect(pillLabels()).toEqual(START_LABELS);
     expect(root.querySelector(".suggestion-strip")?.getAttribute("data-placement")).toBe("next_step");
@@ -412,7 +411,7 @@ describe("the next-step strip", () => {
 
     expect(pillLabels()).toEqual([]);
     expect(root.querySelector(".suggestion-strip")).toBeNull();
-    expect(root.querySelector(".suggestion-strip-toggle")).toBeNull();
+    expect(root.querySelectorAll("button")).toHaveLength(0);
     expect(lineText()).toBe("");
   });
 
@@ -561,9 +560,10 @@ describe("the line above the composer", () => {
 
     const link = root.querySelector<HTMLElement>(".suggestion-strip-disable")!;
     const toggle = root.querySelector<HTMLElement>(".suggestion-line-toggle")!;
-    expect(link.textContent).toBe("disable next step suggestions");
-    expect(link.parentElement).toBe(toggle.parentElement);
-    expect(link.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(link.textContent).toBe("disable suggestions");
+    // Immediately left of the button that hides the suggestions, both at the line's right end.
+    expect([...toggle.parentElement!.children]).toEqual([link, toggle]);
+    expect(toggle.parentElement!.classList.contains("justify-end")).toBe(true);
 
     click(".suggestion-line-toggle");
     expect(root.querySelector(".suggestion-strip-disable")).toBeNull();
@@ -596,7 +596,7 @@ describe("the line above the composer", () => {
 describe("the link that switches next-step suggestions off", () => {
   it("is shown to the workspace's owner only", async () => {
     await load();
-    expect(root.querySelector(".suggestion-strip-disable")?.textContent).toBe("disable next step suggestions");
+    expect(root.querySelector(".suggestion-strip-disable")?.textContent).toBe("disable suggestions");
 
     setParticipantsForTesting("user:owner-1", ownerAndVisitorRosterFixture());
     draw();

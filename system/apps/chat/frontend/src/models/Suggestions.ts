@@ -15,14 +15,13 @@ import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { addChatSettingsUpdatedListener, type SuggestionSwitch } from "./ChatSettings";
 
-/** Where a strip of suggestions is offered: under a reply, while waiting for one, or on a chat with no message yet
- *  (the backend's ``SuggestionPlacement``). */
-export type SuggestionPlacement = "next_step" | "activity" | "new_chat";
+/** Where a strip of suggestions is offered: under a reply, or on a chat with no message yet (the backend's
+ *  ``SuggestionPlacement``). */
+export type SuggestionPlacement = "next_step" | "new_chat";
 
 /** The workspace setting that switches each placement on and off. */
 export const SUGGESTION_SWITCHES: Record<SuggestionPlacement, SuggestionSwitch> = {
   next_step: "is_next_step_suggestions_enabled",
-  activity: "is_activity_suggestions_enabled",
   new_chat: "is_new_chat_suggestions_enabled",
 };
 
@@ -38,7 +37,7 @@ export interface Suggestion {
 /** What clicking an action suggestion does (the backend's ``SuggestionAction``). */
 export type SuggestionAction = "new_chat_coach" | "phone_access" | "build_app_coach" | "connect_data_coach";
 
-/** A suggestion whose click does something other than send its label (``models/ActivitySuggestions.ts``). A
+/** A suggestion whose click does something other than send its label (``models/NewChatSuggestions.ts``). A
  *  next-step suggestion is never one. */
 export interface ActionSuggestion extends Suggestion {
   action: SuggestionAction;
@@ -265,14 +264,6 @@ export function reconcileNextStepSuggestions(chatId: string, facts: NextStepFact
 /** The set the chat's page draws above its composer, or null when it draws none there. */
 export function getNextStepSuggestions(chatId: string): DrawnSuggestions | null {
   return stateByChat.get(chatId)?.adopted ?? null;
-}
-
-/** Hide the pills of the set above the composer behind its line, because another strip opened. */
-export function collapseNextStepSuggestions(chatId: string): void {
-  const state = stateByChat.get(chatId);
-  if (state === undefined || state.adopted === null || !state.adopted.isOpen) return;
-  state.adopted = { ...state.adopted, isOpen: false };
-  m.redraw();
 }
 
 /** Show the pills of the set above the composer, or hide them behind its line. */

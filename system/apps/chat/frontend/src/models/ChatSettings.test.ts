@@ -115,13 +115,12 @@ describe("the suggestion switches", () => {
     // STORED names none of the switches, as an older backend's answer does.
     const chatSettings = await loadWithSettings();
     expect(chatSettings.isSuggestionSwitchOn("is_next_step_suggestions_enabled")).toBe(true);
-    expect(chatSettings.isSuggestionSwitchOn("is_activity_suggestions_enabled")).toBe(true);
     expect(chatSettings.isSuggestionSwitchOn("is_new_chat_suggestions_enabled")).toBe(true);
   });
 
   it("change alone through their own route, at once on the page, and keep what the backend answers", async () => {
     const chatSettings = await loadWithSettings();
-    const answered = { ...STORED, is_next_step_suggestions_enabled: false, is_activity_suggestions_enabled: true };
+    const answered = { ...STORED, is_next_step_suggestions_enabled: false, is_new_chat_suggestions_enabled: true };
     mockRequest.mockResolvedValueOnce({ settings: answered });
 
     const pending = chatSettings.updateSuggestionSwitches({ is_next_step_suggestions_enabled: false });

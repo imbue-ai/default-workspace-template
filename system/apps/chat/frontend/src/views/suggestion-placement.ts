@@ -1,5 +1,5 @@
 /**
- * What the three placements of suggestions share above the composer (``views/ChatSuggestions.ts``): the shape of a
+ * What the two placements of suggestions share above the composer (``views/ChatSuggestions.ts``): the shape of a
  * strip a placement hands over to be drawn, and the link of a strip that switches its placement off.
  *
  * The link switches the placement off for the whole workspace: the strip goes, a line saying so takes its place for
@@ -18,13 +18,13 @@ export interface PlacementStrip {
   // Names the set the strip holds, so another set's strip rises in rather than changing in place.
   setKey: string;
   suggestions: readonly Suggestion[];
-  /** Its pills are shown: an activity or a new-chat strip is not collapsed to its toggle, and the next-step
-   *  strip's are not waiting behind its line. */
+  /** Its pills are shown: the next-step strip's are not waiting behind its line, and a new-chat strip's always
+   *  are. */
   isOpen: boolean;
   onPick: (suggestion: Suggestion) => void;
-  onToggle: () => void;
-  /** Take the strip's pills away, because another strip opened. */
-  collapse: () => void;
+  /** Shows the pills from the strip's line, or hides them behind it; null for a strip whose pills are always
+   *  shown. */
+  onToggle: (() => void) | null;
 }
 
 // The group of the chrome's workspace settings that holds the suggestion switches.

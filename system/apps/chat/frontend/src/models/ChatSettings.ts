@@ -11,7 +11,6 @@ import type { FastModeMode } from "./FastMode";
 /** The switch of each suggestion placement (``models/Suggestions.ts``), workspace-wide. */
 export interface SuggestionSwitches {
   is_next_step_suggestions_enabled: boolean;
-  is_activity_suggestions_enabled: boolean;
   is_new_chat_suggestions_enabled: boolean;
 }
 

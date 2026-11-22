@@ -1,5 +1,5 @@
 /**
- * What a click on an action suggestion does (``models/ActivitySuggestions.ts``), and whether this page can do it.
+ * What a click on an action suggestion does (``models/NewChatSuggestions.ts``), and whether this page can do it.
  *
  * Each action points the user at a control, and the layer that owns the control draws the bubble: the chat root for
  * its New chat button, this page for its own composer, the shell for a card under the Imbue Studio chrome's

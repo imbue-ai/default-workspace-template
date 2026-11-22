@@ -1,6 +1,6 @@
-/** The four activity suggestions for tests, as the chat app answers them (``GET /api/suggestions/activity``). */
+/** The four new-chat suggestions for tests, as the chat app answers them (``GET /api/suggestions/new-chat``). */
 
-import type { ActivityAnswer } from "./ActivitySuggestions";
+import type { NewChatAnswer } from "./NewChatSuggestions";
 
 export const NEW_CHAT = {
   suggestion_id: "new_chat",
@@ -16,4 +16,4 @@ export const CONNECT_DATA = {
 };
 
 /** What the chat app answers a workspace whose owner has done none of it: all four, in their fixed order. */
-export const ALL_FOUR: ActivityAnswer = { suggestions: [NEW_CHAT, PHONE, BUILD_APP, CONNECT_DATA] };
+export const ALL_FOUR: NewChatAnswer = { suggestions: [NEW_CHAT, PHONE, BUILD_APP, CONNECT_DATA] };

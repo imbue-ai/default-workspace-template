@@ -29,14 +29,13 @@ vi.mock("../shell", () => ({
   opensWorkspaceSettings: () => false,
   openWorkspaceSettings: () => undefined,
   showsCoachMarks: () => false,
-  reportAgentWorking: () => undefined,
 }));
 vi.mock("./MessageInput", () => ({ submitSuggestion: mocks.submitSuggestion }));
 
-import { resetActivitySuggestionsForTests } from "../models/ActivitySuggestions";
 import type { ChatSettings } from "../models/ChatSettings";
 import { DEFAULT_CHAT_SETTINGS, resetChatSettingsForTests } from "../models/ChatSettings";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
+import { resetNewChatSuggestionsForTests } from "../models/NewChatSuggestions";
 import { addOutgoing, clearOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { setParticipantsForTesting } from "../models/Participants";
 import type { TranscriptEvent } from "../models/Response";
@@ -128,7 +127,7 @@ function answeredTwice(): void {
 
 beforeEach(() => {
   resetSuggestionsForTests();
-  resetActivitySuggestionsForTests();
+  resetNewChatSuggestionsForTests();
   resetChatSettingsForTests();
   setParticipantsForTesting("owner", []);
   stored = { settings: { ...DEFAULT_CHAT_SETTINGS }, suggestions: remembering([FIRST]) };
@@ -141,7 +140,7 @@ beforeEach(() => {
   vi.spyOn(m, "redraw").mockImplementation(() => undefined);
   vi.spyOn(m, "request").mockImplementation((async (options: { url: string }) => {
     if (options.url === "/api/settings") return { settings: stored.settings };
-    if (options.url === "/api/suggestions/activity") return { suggestions: [] };
+    if (options.url === "/api/suggestions/new-chat") return { suggestions: [] };
     setReadCount++;
     return stored.suggestions;
   }) as unknown as typeof m.request);

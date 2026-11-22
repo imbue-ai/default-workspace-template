@@ -10,7 +10,6 @@ vi.mock("./ChatSettings", () => ({
 }));
 
 import {
-  collapseNextStepSuggestions,
   getAnsweredReplySuggestions,
   getNextStepSuggestions,
   type NextStepFacts,
@@ -206,17 +205,13 @@ describe("the set a chat's page draws", () => {
     expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(false);
   });
 
-  it("shows its pills from its line and hides them again, and hides them when another strip opens", async () => {
+  it("shows its pills from its line and hides them again", async () => {
     mockRequest.mockResolvedValue(ready("reply-1", ["Yes", "No"], "generated"));
     await look();
 
     toggleNextStepSuggestions(CHAT);
     expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(true);
     toggleNextStepSuggestions(CHAT);
-    expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(false);
-
-    toggleNextStepSuggestions(CHAT);
-    collapseNextStepSuggestions(CHAT);
     expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(false);
     expect(shownLabels()).toEqual(["Yes", "No"]);
   });
