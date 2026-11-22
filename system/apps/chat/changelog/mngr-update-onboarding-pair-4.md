@@ -15,3 +15,13 @@
 - Each of the two strips has its own "disable ..." link with Undo, as the next-step strip has.
 
 - The chat list's New chat button names the browser it was pressed in (`client_id`) when it creates a chat, as does "Start a new chat" in the switch dialog and the failed-switch notice, and a chat waiting for its first send names it when it launches.
+
+- The first run's provider page reads "Studio runs your agents and apps 24/7. Connect your provider to start.", and "Add another (optional)" over "Studio can use multiple subscriptions and switch between providers mid-conversation." The first account connected there is pinned as the workspace's default, so connecting a second provider no longer moves the first conversation onto it. With two or more connected, the page marks the default and a click on another connected account makes that one the default.
+
+- A first-run chat's start suggestions stay open while the agent the provider page started comes up: a chat whose first agent is starting with nothing sent to it counts as having no turn under way, for the next-step strip and for a picker in a message.
+
+- The category picker offers Books, Movies and Music in place of "Books, movies & music", and each picker ends in an "Other" pill that puts a prompt to write over in the draft ("Write whatever you want!", "Write whatever data you want here!").
+
+- The prompt that works out next-step suggestions asks for a question's own answers when the reply's one main question has a small set of them.
+
+- A chat page tells the shell when a reply starts or stops being under way in its chat (`shell:agent-working {isWorking}`, which the chat root forwards), so the show-around tour starts on every harness.

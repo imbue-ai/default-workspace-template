@@ -98,7 +98,7 @@ observe`, its own supervised service) writes, and serves:
   (`frontend/src/embedApi.ts`), and through `frontend/src/root/relay.ts`, the
   one module the embed ratchet allows, hands them the shell's handshake and
   forwards their `minds:`, `shell:focused`, `shell:open`, `shell:draft-text`,
-  `shell:show-coach-card`, `shell:message`, and `shell:open-link` messages, and passes the desktop
+  `shell:show-coach-card`, `shell:agent-working`, `shell:message`, and `shell:open-link` messages, and passes the desktop
   app's answers to them (`minds:provider-sign-in-ack`,
   `minds:permission-resolutions`) back down.
 - `GET /<chat-id>` (and `/<chat-id>.<agent-id>.<session-id>` for a subagent view): the
@@ -582,7 +582,11 @@ app's: a seed request with `is_first_run` and no turns opens the chat on `FIRST_
 workspace's owner the provider page (`first_run.py`), and writes the chat's start suggestions
 (below), "Describe what you want to make", "Get ideas for what to make" and "See what Studio can
 do", under the welcome's last turn, with the step its first conversation stands at (the tree,
-below). Leaving the provider page with a provider connected starts the chat's agent at once, with no
+below). The provider page (`frontend/src/views/FirstRunProvidersPage.ts`) lists what is connected
+under its lanes; the first account connected there is pinned as the workspace's default (see
+"Provider accounts"), and with two or more connected the page marks the default's row "Default"
+and makes every other row a button that pins that account instead. Leaving the provider page with
+a provider connected starts the chat's agent at once, on the default account and with no
 message, as any sign-in's launch does: the agent says nothing until the user picks a suggestion or
 types, and that first send carries the welcome. For this chat the context block also says that
 this is the user's first conversation in a new workspace and that the agent reads
@@ -696,7 +700,8 @@ alias for Claude, the newest "terra" model of the account's list for Codex, each
 the account's default model) with an allowance for thinking (for Codex, a `medium` reasoning
 effort where the model offers one). The system prompt asks for a draft,
 a critique, and a shorter second list, usually two or three suggestions, each as a
-`<suggestion>` element with `recommended="true"` on a clear best one. The prompt is the end of
+`<suggestion>` element with `recommended="true"` on a clear best one; a reply whose one main
+question has a few possible answers gets those answers themselves. The prompt is the end of
 the conversation as tagged turns: the reply, always whole, under up to five turns before it,
 cut from the oldest end to 12,000 characters. A turn is what one side said in a row, as the page
 shows it: a person's own words without the context sent along with them, and the agent's text
@@ -716,8 +721,11 @@ The page draws the set as the next-step strip, directly above the composer and a
 pills in a wrapping row with a dashed outline, the recommended one (at most one, and the first)
 in green. It takes a set up only when the answer's `after_event_id` is the id of the last
 assistant message the page holds, no user message follows that message, the page holds the
-transcript's end, and the chat's turn is done, a seeded chat awaiting its first agent counting
-as done; so a set left from an earlier turn never shows. A generated set arrives a few seconds
+transcript's end, and the chat's turn is done; so a set left from an earlier turn never shows. A
+chat nobody has spoken in has no turn to be in and counts as done: a seeded chat awaiting its
+first agent, and one whose first agent is starting with nothing sent to it (no message brought by
+its launch, held for it, or on its way from the page), which is how a first-run chat's start
+suggestions stay open while the agent the provider page started comes up. A generated set arrives a few seconds
 after its reply, with the push; nothing is drawn in its place meanwhile. A generated set longer
 than three draws its first three and a "Show more" that reveals the rest; a fixed set is drawn
 whole. Clicking a suggestion sends its label
@@ -771,7 +779,11 @@ with its bundled service mark (`views/service-marks.ts`) or its name alone when 
 bundled for it. A click on a pill adds its label and a comma to the composer's draft, or takes
 them out again (`models/ComposerDraft.ts`), and the pill reads as pressed while the draft holds
 them, so a picker has no state of its own and the user sends the draft themselves, with anything
-of their own typed in. A picker takes clicks only in the reply the chat waits on its user to
+of their own typed in. Each picker ends in an "Other" pill (the category picker's at the end of
+its Creative column) that says so: it works as every pill does, but what it puts in the draft is
+a prompt to write over in place of its label, "Write whatever you want!" from the category picker
+and "Write whatever data you want here!" from the connector picker. It is no category and no
+app, so the skill's lists leave it out and name the two prompts instead. A picker takes clicks only in the reply the chat waits on its user to
 answer (its last assistant message, with nothing said since and its turn done); in an earlier
 message it is drawn disabled. The first category picked in a workspace points a coach mark
 (`@imbue/workspace-ui`'s `components/CoachMark.ts`) at the composer's send button, "Click this
@@ -839,7 +851,13 @@ The page draws them as two strips (`frontend/src/models/ActivitySuggestions.ts`,
 when a turn starts in the chat the page shows, with what the route answers then, and closes into
 its toggle when the reply ends; the toggle stays until the next turn opens the strip again with
 a fresh read. A chat whose agent is stopped, or whose create or switch to another agent failed,
-has no reply on its way, so no turn is under way in it until a message is sent. The new-chat strip, "Things to try", is open on a chat nobody has said anything
+has no reply on its way, so no turn is under way in it until a message is sent. The page tells the
+shell the same thing, whether or not a strip is drawn: `shell:agent-working {isWorking}` when a
+reply starts or stops being under way in its chat (never for a room, nor for a first agent
+starting with nothing sent to it), again when a shell greets it while one is, and `false` when
+the page stops showing the chat. The chat root forwards it, and the shell's show-around tour
+begins on it, since the avatar's status is prompt only for a harness that reports its activity to
+mngr. The new-chat strip, "Things to try", is open on a chat nobody has said anything
 in, as soon as the chat is on screen, with what the route answers for `placement=new_chat`. On
 the chat's first message it collapses to its toggle, unless the activity strip opens with the
 same suggestions in the same order, in which case it is dropped for good, so the two are never
@@ -1202,10 +1220,14 @@ signed-in provider account plus an index, minted by the sign-in flows
 (`harnesses/auth_flows.py`) the chat page's provider chooser drives. A chat
 binds to an account when it is created and moves to another only through a
 switch (a handoff or a rebind, above). A launch that names no account (the
-launcher, a desktop shortcut, `workspace-layout open chat`) goes to the account the user
-pinned as the default in a chat's provider menu, else to the most recently used
-one (the account of the latest sign-in, chat create, or switch); pressing
-another account in that menu switches the chat to it (through the dialog, or at
+launcher, a desktop shortcut, `workspace-layout open chat`) goes to the account
+pinned as the default, else to the most recently used
+one (the account of the latest sign-in, chat create, or switch). The user pins one in a chat's
+provider menu, and a sign-in pins its own account when it lands while the first run's provider
+page is still owed and nothing is pinned (`commit_account`'s `is_default_when_none_pinned`), so
+the provider connected first on that page stays the default whatever is connected after it;
+removing the pinned account clears the pin. Pressing
+another account in a chat's provider menu switches the chat to it (through the dialog, or at
 once for a chat with nothing to hand over -- see the switch above).
 
 Removing (signing out of) an account deletes its credential files and its index
