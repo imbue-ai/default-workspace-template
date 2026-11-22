@@ -51,7 +51,6 @@ from imbue.chat.authors import new_author_annotation
 from imbue.chat.auto_open import chat_root_path
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
-from imbue.chat.chat_settings import SuggestionSettingsUpdate
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.registry import get_model_state_path
@@ -475,10 +474,6 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
         )
         manager._broadcast_chats_updated()
 
-    # The other placements' strips share the column; they are switched off so only a reply's suggestions are drawn.
-    state.chat_settings.update(
-        SuggestionSettingsUpdate(is_activity_suggestions_enabled=False, is_new_chat_suggestions_enabled=False).apply_to
-    )
     set_agent("WAITING", ActivityState.IDLE)
     generated_labels = ["Show me what you can do", "Help me plan my week", "Build me an app", "Connect my email", "No"]
     answer = "\n".join(
@@ -523,13 +518,15 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
     expect(pills).to_have_text(fixed_labels, timeout=15000)
     expect(toggle).to_have_text("Hide suggestions")
     disable = column.locator(".suggestion-strip-disable")
-    expect(disable).to_have_text("disable next step suggestions")
+    expect(disable).to_have_text("disable suggestions")
     _assert_pills_are_a_list_on_the_users_side(pills, column)
     assert _box(pills.last)["bottom"] <= _box(line)["top"]
     assert _box(line) == empty_line_box, "the line stays where it was"
     assert _box(composer) == composer_box, "the composer does not move"
     assert abs(_box(toggle)["right"] - _box(composer)["right"]) < 1
-    assert abs(_box(disable)["left"] - _box(composer)["left"]) < 1
+    # The link sits immediately left of the button that hides the suggestions, 16px away, on the same line.
+    assert abs(_box(toggle)["left"] - _box(disable)["right"] - 16) < 1
+    assert abs(_box(toggle)["top"] - _box(disable)["top"]) < 1
     page.screenshot(path=str(tmp_path / "1-fixed-set-shown.png"))
 
     # A turn starts: the set leaves the composer for the transcript, under its reply and hidden.
@@ -594,82 +591,49 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
 
 
 @pytest.mark.timeout(90, func_only=False)
-def test_things_to_try_are_offered_while_the_agent_works_and_fold_into_a_toggle_when_the_reply_ends(
-    e2e_server: RunningWorkspace, page: Page, tmp_path: Path
+def test_things_to_try_are_offered_on_a_chat_nobody_has_spoken_in_and_go_for_good_on_its_first_message(
+    tmp_path: Path, page: Page
 ) -> None:
-    """Once the tour has finished, a turn that starts opens the While you wait strip above the composer, holding
-    the things this page can point at. Its first pill has the chat list point at its New chat button; the reply's
-    end folds the strip into its toggle, which opens it again."""
-    manager = e2e_server.chat_state.agent_manager
-    agent = manager.get_agent_by_id(FIXTURE_AGENT_ID)
-    assert agent is not None
+    """Once the tour has finished, a chat nobody has spoken in shows the Things to try strip above the composer:
+    the things this page can point at, over a quiet line with the link that switches them off. The chat's first
+    message takes the strip away, and nothing is left to open it by."""
+    with _running_e2e_server(tmp_path, session_events=_WELCOME_ONLY_SESSION_EVENTS) as server:
+        mark(Marker.TOUR_FINISHED)
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator(".message-list")).to_contain_text("Welcome! What shall we build?")
+        column = chat.locator(".chat-suggestions")
+        strip = column.locator('.suggestion-strip[data-placement="new_chat"]')
+        pills = strip.locator(".suggestion-strip-pills .suggestion-pill")
+        line = column.locator(".suggestion-line")
+        disable = strip.locator(".suggestion-line .suggestion-strip-disable")
+        composer = chat.locator(".message-input-box")
 
-    def set_agent(agent_state: str, activity_state: ActivityState) -> None:
-        seed_agent_state(
-            manager,
-            FIXTURE_AGENT_ID,
-            name=agent.name,
-            state=agent_state,
-            labels=agent.labels,
-            activity_state=activity_state,
-        )
-        manager._broadcast_chats_updated()
+        # No Imbue Studio app frames this workspace, so the two suggestions that need one are not offered.
+        expect(pills).to_have_text(["Work in parallel by starting a new chat", "Build an app"], timeout=15000)
+        expect(strip).to_have_attribute("aria-label", "Things to try")
+        expect(disable).to_have_text("disable new chat suggestions")
+        # The strip's line is the column's one quiet line, and holds the link alone.
+        expect(line).to_have_count(1)
+        expect(line).to_have_text("disable new chat suggestions")
+        expect(column.get_by_role("button")).to_have_count(3)
+        _assert_pills_are_a_list_on_the_users_side(pills, column)
+        assert _box(disable)["top"] >= _box(pills.last)["bottom"]
+        assert abs(_box(disable)["right"] - _box(composer)["right"]) < 1
+        assert _box(line)["bottom"] <= _box(composer)["top"]
+        page.screenshot(path=str(tmp_path / "new-chat-strip.png"))
 
-    mark(Marker.TOUR_FINISHED)
-    set_agent("WAITING", ActivityState.IDLE)
-    _open_fixture_chat(page, e2e_server)
-    chat = _chat(page)
-    expect(chat.locator(".message-assistant").first).to_contain_text("Hello! How can I help you?")
-    expect(chat.locator(".suggestion-strip")).to_have_count(0)
+        textbox = chat.locator(".message-input-textbox")
+        textbox.fill("Plan my week")
+        textbox.press("Enter")
 
-    _append_user_turn(e2e_server.session_file, "wait-u-1", "Plan my week")
-    set_agent("RUNNING", ActivityState.THINKING)
-
-    # No Imbue Studio app frames this workspace, so the two suggestions that need one are not offered.
-    strip = chat.locator('.suggestion-strip[data-placement="activity"]')
-    pills = strip.locator(".suggestion-pill")
-    offered = ["Work in parallel by starting a new chat", "Build an app"]
-    expect(pills).to_have_text(offered, timeout=15000)
-    expect(strip).to_have_class(re.compile(r"suggestion-strip--open"))
-    disable = strip.locator(".suggestion-strip-disable")
-    expect(disable).to_have_text("disable activity suggestions")
-    composer = chat.locator(".message-input-box")
-    assert _box(strip)["bottom"] <= _box(composer)["top"]
-    # The strip is a list on the user's side, its own link under it, over the next-step line's kept height.
-    _assert_pills_are_a_list_on_the_users_side(pills, chat.locator(".chat-suggestions"))
-    assert _box(disable)["top"] >= _box(pills.last)["bottom"]
-    assert abs(_box(disable)["right"] - _box(composer)["right"]) < 1
-    next_step_line = chat.locator(".chat-suggestions .suggestion-line")
-    expect(next_step_line).to_have_text("")
-    assert _box(strip)["bottom"] <= _box(next_step_line)["top"]
-    page.screenshot(path=str(tmp_path / "while-you-wait.png"))
-
-    pills.first.click()
-
-    new_chat_button = _chat_root(page).locator(".chat-rail-new")
-    coach_mark = _chat_root(page).locator(".coach-mark")
-    expect(coach_mark).to_contain_text("Start a new chat here any time.")
-    expect(new_chat_button).to_have_class(re.compile(r"coach-pulse"))
-    mark_box, button_box = _box(coach_mark), _box(new_chat_button)
-    assert mark_box["top"] >= button_box["bottom"] or mark_box["left"] >= button_box["right"]
-    page.screenshot(path=str(tmp_path / "new-chat-coach-mark.png"))
-    coach_mark.get_by_role("button", name="Got it").click()
-    expect(coach_mark).to_have_count(0)
-    expect(new_chat_button).not_to_have_class(re.compile(r"coach-pulse"))
-
-    answer = [{"type": "text", "text": "Here is a plan for your week."}]
-    with open(e2e_server.session_file, "a") as handle:
-        handle.write(json.dumps(_assistant_line("wait-a-1", "2026-01-01T00:02:00Z", answer, "end_turn")) + "\n")
-    set_agent("WAITING", ActivityState.IDLE)
-
-    toggle = strip.locator(".suggestion-strip-toggle")
-    expect(toggle).to_have_text("While you wait", timeout=15000)
-    expect(pills).to_have_count(0)
-    page.screenshot(path=str(tmp_path / "while-you-wait-toggle.png"))
-
-    toggle.click()
-
-    expect(pills).to_have_text(offered)
+        expect(strip).to_have_count(0)
+        expect(column.locator(".suggestion-pill")).to_have_count(0)
+        # Nothing is left to bring the strip back: the column holds the line's kept height, with nothing to click.
+        expect(column.get_by_role("button")).to_have_count(0)
+        expect(line).to_have_count(1)
+        expect(line).to_have_text("")
+        page.screenshot(path=str(tmp_path / "new-chat-strip-gone.png"))
 
 
 @pytest.mark.timeout(90, func_only=False)
