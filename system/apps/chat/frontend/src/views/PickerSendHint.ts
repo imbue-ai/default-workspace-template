@@ -3,11 +3,13 @@
  * (``views/StudioPickers.ts``), a coach mark at the composer's send button says what to press next. A pick only
  * edits the draft, and somebody who has never sent a message here may not know the arrow sends it.
  *
- * Shown once per workspace: the chat settings record it, as they record the other one-time notices.
+ * Shown once per workspace: the chat settings record it, as they record the other one-time notices. It goes as any
+ * coach mark does, and when a message is sent by any other way than the button (the Enter key, a suggestion).
  */
 
 import { showCoachMark } from "@imbue/workspace-ui/src/components/CoachMark";
 import { ensureChatSettings, getChatSettings, updateChatSettings } from "../models/ChatSettings";
+import { addMessageSentListener, removeMessageSentListener } from "../models/Response";
 
 export const PICKER_SEND_HINT_TEXT = "Click this button to send your message";
 // The composer's send button (``views/MessageInput.ts``), of which a page has one.
@@ -26,7 +28,13 @@ export function showPickerSendHintOnce(): void {
       const settings = getChatSettings();
       const sendButton = document.querySelector<HTMLElement>(SEND_BUTTON_SELECTOR);
       if (settings === null || settings.is_picker_send_hint_shown === true || sendButton === null) return;
-      showCoachMark({ anchor: sendButton, text: PICKER_SEND_HINT_TEXT });
+      const dismissOnSend = (): void => hint.dismiss();
+      const hint = showCoachMark({
+        anchor: sendButton,
+        text: PICKER_SEND_HINT_TEXT,
+        onDismiss: () => removeMessageSentListener(dismissOnSend),
+      });
+      addMessageSentListener(dismissOnSend);
       void updateChatSettings({ ...settings, is_picker_send_hint_shown: true });
     })
     .finally(() => {

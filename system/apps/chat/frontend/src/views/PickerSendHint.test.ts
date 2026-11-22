@@ -6,6 +6,7 @@ vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => 
 
 import type { ChatSettings } from "../models/ChatSettings";
 import { DEFAULT_CHAT_SETTINGS, resetChatSettingsForTests } from "../models/ChatSettings";
+import { announceMessageSent } from "../models/Response";
 import { PICKER_SEND_HINT_TEXT, showPickerSendHintOnce } from "./PickerSendHint";
 
 /** What the backend holds, which the page's requests read and replace. */
@@ -99,6 +100,19 @@ describe("showPickerSendHintOnce", () => {
     sendButton.click();
 
     expect(hintText()).toBeNull();
+  });
+
+  it("goes when the message is sent some other way than by the button", async () => {
+    mountSendButton();
+    showPickerSendHintOnce();
+    await settle();
+    expect(hintText()).toBe(PICKER_SEND_HINT_TEXT);
+
+    announceMessageSent("agent-first-run");
+
+    expect(hintText()).toBeNull();
+    // Taken down, it no longer listens: a later send has nothing of the hint's to run.
+    expect(() => announceMessageSent("agent-first-run")).not.toThrow();
   });
 
   it("neither shows nor records anything while the settings cannot be read, and shows it once they can", async () => {

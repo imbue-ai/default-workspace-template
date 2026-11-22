@@ -749,10 +749,10 @@ the form the skill has the agent write; up to ten are read, each one line of at 
 characters, in order and without repeats. A fixed set needs neither the switch (the page hides
 it while the switch is off) nor a harness with a one-shot call, but like any set it is stored
 only under a reply the agent wrote, in a chat that is idle with nothing queued. A reply at
-`ideas` that lists no idea in that form is the one case a model is asked while the tree is in
-progress: the generator runs with a "Fixed onboarding suggestions" section added to its system
-prompt, and the set is stored as `generated`. Once the step is `done` the chat gets suggestions
-like any other.
+`ideas` that lists no idea in that form is left to a model: the generator runs with a "Fixed
+onboarding suggestions" section added to its system prompt, and the set is stored as
+`generated`. A reply at `start` (the answer to a slash command, which moves nothing) and every
+reply once the step is `done` get suggestions as in any other chat.
 
 The tree's two questions come with pickers. An assistant message that carries
 `<studio_category_picker/>` or `<studio_connector_picker/>` on a line of its own, outside a code
@@ -767,7 +767,8 @@ answer (its last assistant message, with nothing said since and its turn done); 
 message it is drawn disabled. The first category picked in a workspace points a coach mark
 (`@imbue/workspace-ui`'s `components/CoachMark.ts`) at the composer's send button, "Click this
 button to send your message", recorded as `is_picker_send_hint_shown` in the chat settings so it
-shows once.
+shows once; it goes on "Got it", on a click of the button, and when a message is sent any other
+way.
 
 Three workspace-wide switches say which suggestions are offered, each on unless changed:
 `is_next_step_suggestions_enabled`, `is_activity_suggestions_enabled`, and

@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
@@ -130,5 +132,22 @@ describe("the connector picker", () => {
     expect(readComposerDraft(CHAT)).toBe("Gmail, Google Calendar, ");
     expect(pressedLabels()).toEqual(["Gmail", "Google Calendar"]);
     expect(mocks.showPickerSendHintOnce).not.toHaveBeenCalled();
+  });
+});
+
+describe("the first-run skill", () => {
+  it("tells the agent of every category and app the pickers offer, by the names the pills put in the draft", () => {
+    // The agent reads the user's answer against these lists, so a pill the skill does not name would arrive as
+    // a category or an app "of their own".
+    const skill = readFileSync(
+      join(__dirname, "../../../../../../.agents/skills/first-run-onboarding/SKILL.md"),
+      "utf8",
+    );
+
+    for (const column of PICKER_CATEGORY_COLUMNS) {
+      expect(skill).toContain(`- ${column.title}: ${column.categories.join(", ")}\n`);
+    }
+    const names = PICKER_CONNECTORS.map((connector) => connector.name);
+    expect(skill).toContain(`The picker offers ${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}.`);
   });
 });
