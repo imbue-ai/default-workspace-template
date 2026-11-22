@@ -96,18 +96,19 @@ def test_default_roots_fall_back_to_the_home_folder(tmp_path: Path) -> None:
 
 
 def test_summary_counts_agents_and_bytes() -> None:
+    agent_id = AgentId.generate()
     removals = (
         Removal(
             path=Path("/a"),
             size_bytes=1024**2,
             reason=RemovalReason.ORPHANED_SESSION_COPY,
-            agent_id="agent-1",
+            agent_id=agent_id,
         ),
         Removal(
             path=Path("/b"),
             size_bytes=1024**2,
             reason=RemovalReason.EXPIRED_ARCHIVE,
-            agent_id="agent-1",
+            agent_id=agent_id,
         ),
     )
 

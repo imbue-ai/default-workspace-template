@@ -31,6 +31,7 @@ from imbue.mngr.api.preservation import (
     PreservedAgentArchive,
     discover_preserved_agent_archives,
 )
+from imbue.mngr.primitives import AgentId
 from pydantic import Field
 
 RETENTION: Final[timedelta] = timedelta(days=30)
@@ -67,7 +68,7 @@ class Removal(FrozenModel):
         ge=0, description="Bytes it holds on disk, by apparent size"
     )
     reason: RemovalReason = Field(description="Why it goes")
-    agent_id: str = Field(description="The destroyed agent it belonged to")
+    agent_id: AgentId = Field(description="The destroyed agent it belonged to")
 
 
 def plan_sweep(
@@ -97,7 +98,7 @@ def plan_sweep(
 
     removals: list[Removal] = []
     for archive in unprotected_archives:
-        agent_id = str(archive.agent_id)
+        agent_id = archive.agent_id
         session_ids = (
             read_session_ids(archive.path / SESSION_ID_HISTORY_FILENAME)
             - protected_session_ids
@@ -219,7 +220,7 @@ def _has_preserved_raw_transcript(archive_dir: Path) -> bool:
         return False
 
 
-def _removal(path: Path, reason: RemovalReason, agent_id: str) -> Removal:
+def _removal(path: Path, reason: RemovalReason, agent_id: AgentId) -> Removal:
     return Removal(
         path=path, size_bytes=_size_bytes(path), reason=reason, agent_id=agent_id
     )
