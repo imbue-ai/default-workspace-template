@@ -4,9 +4,11 @@ from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 
+import pytest
 from py_vapid import Vapid
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import ValidationError
 
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.web_push import BrowserPushSubscription
@@ -93,6 +95,13 @@ def test_the_longest_chat_id_a_send_takes_composes_a_notification() -> None:
     )
 
     assert notification.tag == f"chat-{chat_id}"
+
+
+def test_a_send_whose_link_would_be_too_long_for_a_notification_is_refused() -> None:
+    with pytest.raises(ValidationError, match="link"):
+        PushSendRequest(
+            chat_id=_CHAT, chat_title="Research", message="m", app="chat", app_path="/?q=" + "\u00e9" * 400
+        )
 
 
 def test_full_text_shows_the_agents_words_cut_short_for_a_lock_screen() -> None:

@@ -76,6 +76,8 @@ _ACCEPTED_STATUS_CODES: Final[frozenset[int]] = frozenset({200, 201, 202})
 # The longest payload one aes128gcm record carries within the push services' 4096-byte message limit (RFC 8291): the
 # record's 86-byte header, its padding delimiter and its 16-byte tag take the rest.
 MAX_PUSH_PAYLOAD_BYTES: Final[int] = 3993
+# The longest path a notification opens on a tap.
+MAX_NOTIFICATION_PATH_LENGTH: Final[int] = 2048
 # How much of a push service's answer a delivery keeps, for the page's raw view and the log.
 _ANSWER_EXCERPT_LENGTH: Final[int] = 500
 _DEVICE_ID_LENGTH: Final[int] = 16
@@ -218,7 +220,7 @@ class PushNotification(FrozenModel):
     body: str = Field(default="", max_length=1000, description="The notification's text")
     path: str = Field(
         default="/",
-        max_length=2048,
+        max_length=MAX_NOTIFICATION_PATH_LENGTH,
         description="The page of the workspace a tap opens, relative to the shell's root: '/' for the desktop, or a "
         "deep link such as '/?open=chat:/?chat=<chat-id>'",
     )

@@ -29,6 +29,7 @@ from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import field_validator
+from pydantic import model_validator
 
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -42,6 +43,7 @@ from imbue.system_interface.shell.state_files import parse_versioned_document
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 from imbue.system_interface.shell.web_push import DeviceDelivery
+from imbue.system_interface.shell.web_push import MAX_NOTIFICATION_PATH_LENGTH
 from imbue.system_interface.shell.web_push import NotificationSettings
 from imbue.system_interface.shell.web_push import PushNotification
 from imbue.system_interface.shell.web_push import WebPushNotifier
@@ -112,6 +114,16 @@ class PushSendRequest(FrozenModel):
         if not value.startswith("/") or value.startswith("//") or "\\" in value:
             raise InvalidShellValueError("the app path is a path under the app's origin, starting with a single '/'")
         return value
+
+    @model_validator(mode="after")
+    def _deep_link_fits_a_notification(self) -> "PushSendRequest":
+        length = len(deep_link_path(self.app, self.app_path))
+        if length > MAX_NOTIFICATION_PATH_LENGTH:
+            raise InvalidShellValueError(
+                f"the app path makes a {length}-character link; a notification opens at most "
+                f"{MAX_NOTIFICATION_PATH_LENGTH}"
+            )
+        return self
 
 
 class PushSendReceipt(FrozenModel):
