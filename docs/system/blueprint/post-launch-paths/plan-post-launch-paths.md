@@ -375,4 +375,4 @@ One pull request per repository; every step leaves the tree green.
 - Moving `system/scripts/message_chat.py` onto the intake route (it keeps the send and create routes, which stay).
 - Persisting pending intakes or unseeded awaiting chats across a chat-app restart.
 - Surfacing a background send's failure in the chat page (it is logged).
-- The desktop shortcut opening a second chat list while a pinned one exists (window-bound-resources decision 2).
+- ~~The desktop shortcut opening a second chat list while a pinned one exists (window-bound-resources decision 2)~~: resolved by the window-bound-resources spec section 3.2, under which a shortcut to its app's pin path raises the pinned window in either mode.
