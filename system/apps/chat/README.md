@@ -101,7 +101,7 @@ observe`, its own supervised service) writes, and serves:
   `shell:show-coach-card`, `shell:message`, and `shell:open-link` messages, and passes the desktop
   app's answers to them (`minds:provider-sign-in-ack`,
   `minds:permission-resolutions`) back down. Their `shell:agent-working` it keeps, and sends
-  the shell one of its own for all of them (see "Suggestions").
+  the shell one of its own for all of them (see "Telling the shell a reply is under way").
 - `GET /<chat-id>` (and `/<chat-id>.<agent-id>.<session-id>` for a subagent view): the
   chat document, the built `chat.html` with the chat's ids, the workspace
   hostname, and the origin label of the terminal's pty (the terminal app's while
@@ -112,8 +112,8 @@ observe`, its own supervised service) writes, and serves:
   destroy, rename, make-main, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats/awaiting` (the chat an empty chat list opens on), `/api/chats`,
-  `/api/harnesses`, `/api/suggestions/activity` (the things to try in Studio, and
-  `/api/suggestions/activity/clicked`), `/api/uploads` (and a chat's own uploads under
+  `/api/harnesses`, `/api/suggestions/new-chat` (the things to try in Studio on a chat nobody
+  has spoken in), `/api/uploads` (and a chat's own uploads under
   `/api/chats/<chat-id>/uploads`),
   `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/latchkey`, and
   `/api/secret-requests` (an agent's `request_secret.py` files a secret request;
@@ -655,11 +655,11 @@ workspace, a one-time notice over the model bar explains it.
 
 Suggestions are short entries the user can click instead of typing, above the composer and,
 for a reply that has been answered, in the transcript under it
-(`suggestions.py`; `specs/chat-suggestions` in the mngr repository). They are offered at three
-placements: under an agent's reply (`next_step`), while an agent works on a reply (`activity`),
-and on a chat with no message yet (`new_chat`). A reply suggestion sends its label when clicked.
-An action suggestion carries an `action` and sends nothing: its click does what the action
-names. Only the activity and new-chat placements offer those, and a next-step set never does.
+(`suggestions.py`; `specs/chat-suggestions` in the mngr repository). They are offered at two
+placements: under an agent's reply (`next_step`), and on a chat with no message yet
+(`new_chat`). A reply suggestion sends its label when clicked. An action suggestion carries an
+`action` and sends nothing: its click does what the action names. Only the new-chat placement
+offers those, and a next-step set never does.
 
 A chat's next-step
 suggestions are the replies offered under one assistant message, kept whole as one file in the
@@ -739,10 +739,10 @@ in 16px from the column's right edge, and a label too long for the column wrappi
 pill. A pill has a dashed outline, small corners, the body text size and a light shadow, and the
 recommended one (at most one, and the first) is green. The pills rise into place over 150 ms.
 
-Next-step suggestions wait on one quiet line directly above the composer, under any other
-strip (`views/NextStepSuggestions.ts`). In a chat with an agent the line's height is always
-kept, with or without a set, so a set that arrives moves nothing; it is given up only in a room
-and once next-step suggestions are known to be switched off. The line is empty while a reply is
+Next-step suggestions wait on one quiet line directly above the composer
+(`views/NextStepSuggestions.ts`). In a chat with an agent the line's height is always kept,
+with or without a set, so a set that arrives moves nothing; it is given up only in a room and
+once next-step suggestions are known to be switched off. The line is empty while a reply is
 under way and while no set is ready. The page takes a set up there only when the answer's
 `after_event_id` is the id of the last assistant message the page holds, no user message follows
 that message, the page holds the transcript's end, and the chat's turn is done; so a set left
@@ -754,7 +754,8 @@ provider page started comes up. A generated set arrives a few seconds after its 
 push. Once a set is taken up, the line says "See N suggestions" ("See 1 suggestion" for one) at
 its right end, as quietly as a strip's disable link. A click shows the pills above the line and
 turns the words into "Hide suggestions", which hides them again; while they are shown the line
-carries "disable next step suggestions" at its left end, for the workspace's owner. A fixed set
+carries "disable suggestions" immediately left of that, 16px away, for the workspace's owner.
+A fixed set
 starts shown, so the first conversation's choices are never behind a click, and a generated set
 starts hidden. Every suggestion of a shown set is drawn.
 
@@ -835,20 +836,26 @@ button to send your message", recorded as `is_picker_send_hint_shown` in the cha
 shows once; it goes on "Got it", on a click of the button, and when a message is sent any other
 way.
 
-Activity suggestions are things worth trying in Studio that this workspace's owner has not done
-yet (`activity_suggestions.py`). The activity and new-chat placements offer the same ones, each
-an action suggestion with a condition that holds until the owner has done the thing:
+New-chat suggestions are things worth trying in Studio that this workspace's owner has not done
+yet, offered on a chat nobody has spoken in (`new_chat_suggestions.py`). They are the
+workspace's four onboarding items, whose order, labels and rule for when one is done are kept
+in `system/libs/onboarding_activity` (`items.py`). Each is an action suggestion, offered until
+its item is done:
 
-| Id | Label | Action | Offered while |
+| Id | Label | Action | Done when |
 |---|---|---|---|
-| `new_chat` | Work in parallel by starting a new chat | `new_chat_coach` | `second_chat_started` is not set |
-| `phone_access` | Access Studio from your phone | `phone_access` | `phone_layout_used` is not set |
-| `build_app` | Build an app | `build_app_coach` | the registry holds no app the user built, and `app_build_started` is not set or was last set more than an hour ago |
-| `connect_data` | Connect some data | `connect_data_coach` | neither `permission_request_filed` nor `connect_data_coach_shown` is set |
+| `new_chat` | Work in parallel by starting a new chat | `new_chat_coach` | `second_chat_started` is set |
+| `phone_access` | Access Studio from your phone | `phone_access` | `phone_layout_used` is set |
+| `build_app` | Build an app | `build_app_coach` | the registry holds an app the user built |
+| `connect_data` | Connect some data | `connect_data_coach` | `permission_request_filed` is set |
 
-The names in the last column are onboarding markers (`system/libs/onboarding_activity`): empty
-files under `data/.state/onboarding_activity/` that are only ever set, so a fact stays true
-after what proved it is gone (a deleted chat, a phone put away). The chat app sets three of them
+`build_app` is also held back while a build may be under way, which is while
+`app_build_started` was last set within the past hour. The onboarding checklist app
+(`system/apps/onboarding_checklist`) shows the same four items from the same library.
+
+The names in the last column are onboarding markers: empty files under
+`data/.state/onboarding_activity/` that are only ever set, so a fact stays true after what
+proved it is gone (a deleted chat, a phone put away). The chat app sets two of them
 (`onboarding_markers.py`):
 
 - `second_chat_started`, when a person starts an agent chat while another chat a person talks
@@ -866,7 +873,6 @@ after what proved it is gone (a deleted chat, a phone put away). The chat app se
   request, in any chat it follows, whether or not the request has been settled since. It is
   written once per run of the app, so a transcript read again does not write it again. A request
   filed in a chat the app follows no transcript of is not seen.
-- `connect_data_coach_shown`, when the owner clicks the `connect_data` suggestion.
 
 The shell sets `tour_finished` and `phone_layout_used`, and the build-app skill's scaffolder sets
 `app_build_started` on every run. An app the user built is what `app_manifest.has_user_built_app`
@@ -874,58 +880,38 @@ says it is: a registry row that is neither `system` nor `internal`, registered b
 root `pyproject.toml` does not list as its own, which leaves out the template's apps, a new
 app's mock frame, and a preview.
 
-`GET /api/suggestions/activity?placement=activity|new_chat&chat_id=<chat-id>` answers
-`{"suggestions": [...]}`: every suggestion whose condition holds, in the table's order, each as
+`GET /api/suggestions/new-chat?chat_id=<chat-id>` answers `{"suggestions": [...]}`: every
+suggestion that is offered, in the table's order, each as
 `{"suggestion_id", "label", "action", "is_recommended": false}`. The list is empty when none is
 offered here at all, which is when any of these holds: the requester is not the workspace's
-owner (`X-Imbue-Identity`; a request with no header is the owner's); the placement's switch is
-off; `tour_finished` is not set; or `chat_id` names
-the first-run chat while its tree's step is not `done`. `chat_id` may be left out or name a chat
-the app does not know yet, and then no tree holds anything back. A `placement` that is missing
-or anything else answers 400. The route answers every suggestion that holds and leaves it to the
-page to drop the ones it cannot carry out and to decide how many to draw.
+owner (`X-Imbue-Identity`; a request with no header is the owner's); new-chat suggestions are
+switched off; `tour_finished` is not set; or `chat_id` names the first-run chat while its
+tree's step is not `done`. `chat_id` may be left out or name a chat the app does not know yet,
+and then no tree holds anything back. The route answers every suggestion that is offered and
+leaves it to the page to drop the ones it cannot carry out and to decide how many to draw.
 
-`POST /api/suggestions/activity/clicked` takes `{"suggestion_id": "<id>"}` and answers `{}`. The
-owner's click on `connect_data` sets `connect_data_coach_shown`, which retires that suggestion;
-a click on any of the other three records nothing, since doing the thing is what retires them,
-and so does a visitor's click. An id that is no activity suggestion's answers 400.
+The page draws them as one strip (`frontend/src/models/NewChatSuggestions.ts`,
+`views/NewChatStrip.ts`), named "Things to try" to a screen reader. It is there on a chat
+nobody has said anything in, as soon as the chat is on screen, with what the route answers. On
+the chat's first message, one of this page's still on its way included, the strip goes for
+good, and nothing is left to open it by. The first-run chat never shows it: the route answers
+that chat nothing while its tree is in progress, and its first strip is the tree's. The strip
+shows the first three suggestions the page can act on and is absent when there are none. The
+page keeps only a suggestion whose action it knows, so a newer backend never produces a dead
+pill.
 
-The page draws them as two strips (`frontend/src/models/ActivitySuggestions.ts`,
-`views/ActionSuggestions.ts`). The activity strip, "While you wait", opens above the composer
-when a turn starts in the chat the page shows, with what the route answers then, and closes into
-its toggle when the reply ends; the toggle stays until the next turn opens the strip again with
-a fresh read. A chat whose agent is stopped, or whose create or switch to another agent failed,
-has no reply on its way, so no turn is under way in it until a message is sent. The page tells the
-shell the same thing, whether or not a strip is drawn: `shell:agent-working {isWorking}` when a
-reply starts or stops being under way in its chat (never for a room, nor for a first agent
-starting with nothing sent to it), again when a shell greets it while one is, and `false` when
-the page stops showing the chat. The shell hears every page the chat root frames as the root, so
-the root does not pass the message on: it keeps each page's last word
-(`frontend/src/root/agentWorkingReports.ts`) and tells the shell `isWorking: true` while any
-page it holds says so and `false` once none does, when that changes and again when the shell
-greets the root while one does. A page whose frame is evicted, removed, or loads again takes its
-word with it, so a chat that finishes while another still works does not read as stopped, and
-one deleted mid-turn leaves nothing behind. The shell's show-around tour begins on the message,
-since the avatar's status is prompt only for a harness that reports its activity to mngr. The new-chat strip, "Things to try", is open on a chat nobody has said anything
-in, as soon as the chat is on screen, with what the route answers for `placement=new_chat`. On
-the chat's first message it collapses to its toggle, unless the activity strip opens with the
-same suggestions in the same order, in which case it is dropped for good, so the two are never
-on screen together. Opened again from its toggle, it collapses again when the next message is
-sent from the page. The first-run chat never shows it: the route answers that chat nothing
-while its tree is in progress, and its first strip is the tree's. A strip shows the first three
-suggestions the page can act on and is absent when there are none. The page keeps only a
-suggestion whose action it knows, so a newer backend never produces a dead pill.
+The strips of the two placements share the composer's column (`views/ChatSuggestions.ts`), and
+both read alike: the pills (`suggestion-strip-pills`) over one quiet line (`suggestion-line`).
+The new-chat strip's line holds its disable link alone, at its right end, and stands where the
+next-step line would, at the same height, so the column holds one quiet line directly above
+the composer whichever strip is drawn and the strip's going moves nothing. The two strips are
+never drawn together: a chat nobody has spoken in has no reply to suggest answers to, and the
+first-run chat is offered no new-chat suggestions. Should both ever be there, the next-step
+strip is the one drawn.
 
-The strips of the three placements share the composer's column (`views/ChatSuggestions.ts`). An
-open activity or new-chat strip is its pills over its own disable link, right-aligned under
-them; collapsed, it is its toggle. The next-step line is last, directly above the composer. At
-most one strip has its pills shown: one that opens, by itself, from its toggle, or from the
-next-step line, takes the others' pills away, an activity or a new-chat strip to its toggle and
-the next-step strip's back behind its line, and the toggles sit side by side in one row over
-the open strip.
-
-A click on one sends nothing. It points the user at a control, and the layer that owns the
-control draws the bubble (`views/suggestion-actions.ts`); every bubble has one button, "Got it":
+A click on a new-chat suggestion sends nothing and records nothing. It points the user at a
+control, every time it is clicked, and the layer that owns the control draws the bubble
+(`views/suggestion-actions.ts`); every bubble has one button, "Got it":
 
 | Action | Who draws | What the page does |
 |---|---|---|
@@ -934,9 +920,8 @@ control draws the bubble (`views/suggestion-actions.ts`); every bubble has one b
 | `connect_data_coach` | the shell | posts `shell:show-coach-card {text, chromeAnchor: "permissions"}`, which the chat root forwards; the shell shows the words as a card under the Imbue Studio app's permissions button and rings the button |
 | `phone_access` | the Imbue Studio app | posts `minds:open-share-settings {coachMark: "mobile-access"}`, naming no app; the Imbue Studio app opens its share panel on the workspace with a bubble at its phone-access control |
 
-After any click the page posts the suggestion's id to the clicked route and reads the activity
-route again. Before it takes the first three, the page drops the suggestions whose click needs
-a layer it cannot reach: `new_chat` in a chat page no chat list frames, and `phone_access` and
+Before it takes the first three, the page drops the suggestions whose click needs a layer it
+cannot reach: `new_chat` in a chat page no chat list frames, and `phone_access` and
 `connect_data` unless the shell's handshake says `showsCoachMarks`, which is what an Imbue
 Studio app that draws coach marks announces (the chat root keeps the handshake it hands its
 pages up to date when the app speaks after the shell did).
@@ -953,22 +938,42 @@ A marker that cannot be written is logged, and the request or the transcript rea
 the fact goes on as it would have; the suggestion it would have retired may then be offered
 again.
 
-Three workspace-wide switches say which suggestions are offered, each on unless changed:
-`is_next_step_suggestions_enabled`, `is_activity_suggestions_enabled`, and
-`is_new_chat_suggestions_enabled` in the chat settings (`chat_settings.py`, `GET /api/settings`).
-The next-step switch governs the line above the composer and the lines in the transcript, and
-the other two govern what `GET /api/suggestions/activity` answers at their placement. `PUT /api/settings` replaces the settings
-whole, so a writer that knows fewer fields would reset the rest; `PUT /api/settings/suggestions`
-takes any of the three switches, changes only those (one left out or null stays as it is), and
-answers the settings as `GET /api/settings` does. Each placement's strip shows the workspace's
-owner its own link ("disable next step suggestions" on the next-step line while its pills are
-shown, "disable activity suggestions" and "disable new chat suggestions" under those strips'
-pills), which switches that placement off through that route: the
-strip goes, a notice with "Undo" takes its place for a few seconds, and where the Imbue Studio
-app says it opens workspace settings the link opens them on their Suggestions group, whose
-switches write through the same route. Every write through either settings route is pushed to
-every page as `settings_updated` on `/api/ws`, and each page reads the settings again, so a
-strip switched off on one page goes at once on all of them.
+Two workspace-wide switches say which suggestions are offered, each on unless changed:
+`is_next_step_suggestions_enabled` and `is_new_chat_suggestions_enabled` in the chat settings
+(`chat_settings.py`, `GET /api/settings`). The next-step switch governs the line above the
+composer and the lines in the transcript, and the new-chat switch what
+`GET /api/suggestions/new-chat` answers. `PUT /api/settings` replaces the settings whole, so a
+writer that knows fewer fields would reset the rest; `PUT /api/settings/suggestions` takes
+either switch or both, changes only those (one left out or null stays as it is), and answers
+the settings as `GET /api/settings` does. The settings file and both routes drop a field the
+settings do not hold, so a file or a writer that carries one keeps every other value. Each
+placement's strip shows the workspace's owner its own link on its line ("disable suggestions"
+on the next-step line while its pills are shown, "disable new chat suggestions" on the
+new-chat strip's), which switches that placement off through that route: the strip goes, a
+notice with "Undo" takes its place for a few seconds, and where the Imbue Studio app says it
+opens workspace settings the link opens them on their Suggestions group, whose switches write
+through the same route. Every write through either settings route is pushed to every page as
+`settings_updated` on `/api/ws`, and each page reads the settings again, so a strip switched
+off on one page goes at once on all of them.
+
+## Telling the shell a reply is under way
+
+A chat page tells the shell whether a reply is under way in the chat it shows
+(`frontend/src/views/AgentWorkingReport.ts`, which the chat panel draws in every chat, whatever
+suggestions are drawn or switched off): `shell:agent-working {isWorking}` when a reply starts
+or stops being under way in its chat (never for a room, nor for a first agent starting with
+nothing sent to it), again when a shell greets it while one is, and `false` when the page stops
+showing the chat. While the page cannot tell, the chat or its transcript not having arrived,
+it says nothing new. A chat whose agent is stopped, or whose create or switch to another agent
+failed, has no reply on its way, so no turn is under way in it until a message is sent. The
+shell hears every page the chat root frames as the root, so the root does not pass the message
+on: it keeps each page's last word (`frontend/src/root/agentWorkingReports.ts`) and tells the
+shell `isWorking: true` while any page it holds says so and `false` once none does, when that
+changes and again when the shell greets the root while one does. A page whose frame is
+evicted, removed, or loads again takes its word with it, so a chat that finishes while another
+still works does not read as stopped, and one deleted mid-turn leaves nothing behind. The
+shell's show-around tour begins on the message, since the avatar's status is prompt only for a
+harness that reports its activity to mngr.
 
 ## Chat names
 

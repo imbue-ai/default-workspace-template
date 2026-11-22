@@ -192,7 +192,7 @@ Beside the shell's own directory, not in it, and shared with the rest of the wor
 | `tour_finished` | `tour.json` is written with `is_finished` true |
 | `phone_layout_used` | the workspace owner's client reports what its phone layout shows (`POST /api/clients/<client_id>/shown`); a visitor's report sets nothing |
 
-The other markers (`second_chat_started`, `permission_request_filed`, `connect_data_coach_shown`, `app_build_started`) are set by their own writers, which that library's README lists. A marker that cannot be written is logged, and the request that noticed the fact answers as it would have.
+The other markers (`second_chat_started`, `permission_request_filed`, `app_build_started`) are set by their own writers, which that library's README lists. A marker that cannot be written is logged, and the request that noticed the fact answers as it would have.
 
 ### 4.6 Wallpapers
 

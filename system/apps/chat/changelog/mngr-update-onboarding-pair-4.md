@@ -1,18 +1,18 @@
-- New route `GET /api/suggestions/activity?placement=activity|new_chat&chat_id=<chat-id>`: the things worth trying in Studio that the workspace's owner has not done yet (start a second chat, open Studio on a phone, build an app, connect some data), each an action suggestion. It answers nothing to a visitor, with the placement switched off, before the tour has finished, or in the first-run chat while its first conversation follows its tree.
-
-- New route `POST /api/suggestions/activity/clicked`, which records a click; a click on "Connect some data" retires that suggestion.
+- New route `GET /api/suggestions/new-chat?chat_id=<chat-id>`: the things worth trying in Studio that the workspace's owner has not done yet (start a second chat, open Studio on a phone, build an app, connect some data), each an action suggestion. They are the four onboarding items the `onboarding_activity` library names, which the onboarding checklist shows too. It answers nothing to a visitor, with new chat suggestions switched off, before the tour has finished, or in the first-run chat while its first conversation follows its tree.
 
 - A suggestion gains `action`, null for a reply suggestion, which every next-step suggestion is.
 
 - `POST /api/chats/create` takes an optional `client_id`, naming the page a person asked for the chat from.
 
-- The chat app sets three onboarding markers: `second_chat_started` when a person starts a chat (through the create route, or through an intake that makes a new chat, as the shell launcher's "New Chat" does) while another chat a person talks to exists, `permission_request_filed` when it reads a filed permission request, and `connect_data_coach_shown` on the click above.
+- The chat app sets two onboarding markers: `second_chat_started` when a person starts a chat (through the create route, or through an intake that makes a new chat, as the shell launcher's "New Chat" does) while another chat a person talks to exists, and `permission_request_filed` when it reads a filed permission request.
 
-- While the agent works on a reply, a "While you wait" strip above the composer offers the workspace's owner up to three things worth trying in Studio; it closes into a toggle when the reply ends. A chat nobody has said anything in shows the same offers as "Things to try". Only one strip has its pills shown at a time, and a collapsed one of these two is a toggle, the two side by side in one row.
+- The chat settings hold two suggestion switches, `is_next_step_suggestions_enabled` and `is_new_chat_suggestions_enabled`, and `PUT /api/settings/suggestions` takes those two. The settings file and both settings routes drop a field they do not know, so a file or a writer that carries one keeps every other value.
 
-- Clicking one of these sends nothing: it points a bubble at the chat list's New chat button, at the message box, at the Imbue Studio app's permissions button, or at the phone-access control of its share panel. A suggestion whose bubble this page cannot have drawn is not offered.
+- A chat nobody has said anything in shows a strip above the composer offering the workspace's owner up to three of those things. It goes for good on the chat's first message.
 
-- Each of the two strips has its own "disable ..." link with Undo under its pills. The next-step one, "disable next step suggestions", is at the left end of the next-step line while its pills are shown.
+- Clicking one of these sends nothing: it points a bubble at the chat list's New chat button, at the message box, at the Imbue Studio app's permissions button, or at the phone-access control of its share panel, every time it is clicked. A suggestion whose bubble this page cannot have drawn is not offered.
+
+- Each strip is its pills over one quiet line, which holds the strip's link with Undo: "disable new chat suggestions" at the right end of the new-chat strip's line, and "disable suggestions" immediately left of "Hide suggestions" on the next-step line while its pills are shown.
 
 - A strip's suggestions are a list on the user's side of the composer's column: one pill to a row, all as wide as the widest, set in 16px from its right edge, with a light shadow.
 
