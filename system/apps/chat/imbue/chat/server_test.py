@@ -1,5 +1,6 @@
 """Tests for the Flask server."""
 
+import errno
 import fcntl
 import io
 import json
@@ -15,6 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from typing import Final
+from typing import IO
 from unittest.mock import patch
 from urllib.parse import parse_qs
 from urllib.parse import quote
@@ -26,7 +28,9 @@ import pytest
 from app_manifest.testing import assert_document_policy_admits_page
 from app_schema.testing import assert_api_schema_describes_app
 from chat_background_tasks.listing import chats_from_agents_payload
+from disk_headroom.full import DISK_FULL_MESSAGE
 from flask import Flask
+from flask import Request
 from flask.testing import FlaskClient
 from latchkey_access.gateway import GatewayAccess
 from mngr_cli_contract.contract import assert_mngr_argv_valid
@@ -73,6 +77,7 @@ from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
+from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.authors import author_prefix
 from imbue.chat.authors import text_sha256
 from imbue.chat.background_tasks import BackgroundTaskReader
@@ -660,6 +665,46 @@ def test_a_chat_upload_refuses_an_id_that_is_not_a_chats(client: FlaskClient) ->
     assert response.status_code == 404
     assert client.get("/api/chats/not-a-chat/uploads/abc/pasted-text-1.txt").status_code == 404
     assert client.delete("/api/chats/not-a-chat/uploads/abc/pasted-text-1.txt").status_code == 404
+
+
+class _DiskFullUploadStream(io.BytesIO):
+    """Takes the request's bytes, then fails the copy into the uploads directory as a full disk does."""
+
+    def read(self, size: int | None = -1) -> bytes:
+        raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+
+
+class _DiskFullUploadRequest(Request):
+    def _get_file_stream(
+        self,
+        total_content_length: int | None,
+        content_type: str | None,
+        filename: str | None = None,
+        content_length: int | None = None,
+    ) -> IO[bytes]:
+        return _DiskFullUploadStream()
+
+
+@pytest.mark.parametrize("is_chat_scoped", [False, True], ids=["workspace", "chat"])
+def test_an_upload_the_full_disk_refuses_answers_the_disk_full_line(app: Flask, is_chat_scoped: bool) -> None:
+    """Both upload routes answer 507 with the one line the composer shows, and leave no partial copy behind."""
+    app.request_class = _DiskFullUploadRequest
+    if is_chat_scoped:
+        route = f"/api/chats/{_UPLOAD_CHAT_ID}/uploads"
+        uploads_directory = state_of(app).agent_manager.chat_files_root / _UPLOAD_CHAT_ID / "uploads"
+    else:
+        route = "/api/uploads"
+        uploads_directory = get_uploads_directory()
+
+    response = app.test_client().post(
+        route,
+        data={"file": (io.BytesIO(b"too big"), "big.bin")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 507
+    assert response.get_json()["detail"] == DISK_FULL_MESSAGE
+    assert list(uploads_directory.iterdir()) == []
 
 
 def test_a_chats_uploads_go_with_the_chat_when_it_is_destroyed(tmp_path: Path) -> None:
