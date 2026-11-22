@@ -136,7 +136,7 @@ export function FirstRunProvidersPage(): m.Component<FirstRunProvidersPageAttrs>
       return m("div", { id: "first-run-providers", class: "first-run-page" }, [
         m("div", { class: "flex w-full max-w-[660px] flex-col" }, [
           m("h1", { class: "first-run-headline text-center" }, FIRST_RUN_PROVIDERS_TITLE),
-          m("p", { class: "mt-3 text-center text-[18px] font-medium" }, FIRST_RUN_PROVIDERS_LINE),
+          m("p", { class: "first-run-lead mt-3 text-center" }, FIRST_RUN_PROVIDERS_LINE),
           hasAccount
             ? m("div", { class: "mt-10 flex flex-col" }, [
                 m("h2", { class: "px-4 text-[15px] font-semibold" }, FIRST_RUN_CONNECTED_HEADING),

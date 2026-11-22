@@ -61,6 +61,15 @@ export const PROVIDER_CHOOSER_ON_SCREEN: "minds:provider-chooser-on-screen" =
 // be raised on entry; the shell promises reportsProviderChooserOnScreen, which covers taking that message, only when
 // this holds.
 export const IS_CHAT_ROOT_FOCUS_ACCEPTED: boolean = "PROVIDER_CHOOSER_ON_SCREEN" in embedContract;
+// Workspace -> embedder (contract v17): whether the first run's provider page covers the workspace. Payload:
+// { isPending }. While it does the chrome stays in the first run's cream; when it ends, a chrome that announced
+// `washesFirstRunExit` grows the workspace's color over the window, whole after FIRST_RUN_EXIT_COVER_MS, and the
+// workspace takes its page down then, under the color.
+export const FIRST_RUN_PROVIDER_STEP: "minds:first-run-provider-step" =
+  "FIRST_RUN_PROVIDER_STEP" in embedContract ? embedContract.FIRST_RUN_PROVIDER_STEP : "minds:first-run-provider-step";
+// The contract's own value where it has one; a chrome that announces `washesFirstRunExit` ships it.
+export const FIRST_RUN_EXIT_COVER_MS: number =
+  "FIRST_RUN_EXIT_COVER_MS" in embedContract ? embedContract.FIRST_RUN_EXIT_COVER_MS : 560;
 // The pull-out window set (contract v6, the pull-out-window spec), probed the same way.
 // Workspace -> embedder: show one pulled-out window in a desktop window of the chrome's own, opened
 // if it has none. Payload: { windowId, title, width, height } (the window's rendered size in CSS px).
@@ -125,7 +134,7 @@ export const HIGHLIGHT_CHROME: "minds:highlight-chrome" =
 // EMBEDDER_CAPABILITIES.
 export const OPEN_LOCAL_FILES: "minds:open-local-files" =
   "OPEN_LOCAL_FILES" in embedContract ? embedContract.OPEN_LOCAL_FILES : "minds:open-local-files";
-// Workspace -> embedder (contract v17): open the chrome's workspace settings at one of their groups. Payload:
+// Workspace -> embedder (contract v18): open the chrome's workspace settings at one of their groups. Payload:
 // { group? }, a group's name ("suggestions"); absent, or one the chrome does not know, opens General. Sent only to
 // an embedder that said ``opensWorkspaceSettings`` with EMBEDDER_CAPABILITIES.
 export const OPEN_WORKSPACE_SETTINGS: "minds:open-workspace-settings" =
