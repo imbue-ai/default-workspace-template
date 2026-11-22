@@ -41,6 +41,7 @@ function render(overrides: Partial<BackdropAttrs> = {}): HTMLElement {
     onEntryClick: vi.fn(),
     onEntryContextMenu: vi.fn(),
     isOverlayOpen: false,
+    isAppShareOffered: false,
     onSelectShortcut: vi.fn(),
     onRunShortcut: vi.fn(),
     onShortcutContextMenu: vi.fn(),
@@ -124,6 +125,36 @@ describe("the stage while viewing", () => {
 
     await store.stopViewing();
     expect(stageOf(render()).hasAttribute("inert")).toBe(false);
+  });
+});
+
+describe("Share in a window's title bar", () => {
+  const shareOf = (root: HTMLElement, windowId: string): Element | null =>
+    root.querySelector(`[data-window-id="${windowId}"] [data-window-control="share"]`);
+
+  it("is drawn on the focused window alone, and only where the shell offers it", () => {
+    const offered = render({ isAppShareOffered: true });
+    expect(shareOf(offered, "win-2")).not.toBeNull();
+    expect(shareOf(offered, "win-1")).toBeNull();
+    unmountViews();
+
+    expect(shareOf(render({ isAppShareOffered: false }), "win-2")).toBeNull();
+  });
+
+  it("is drawn for a critical app such as the chat or the terminal, and never for an internal one", () => {
+    socket.deliver().onAppsUpdated([appRecord("docs", { critical: true })]);
+    expect(shareOf(render({ isAppShareOffered: true }), "win-2")).not.toBeNull();
+    unmountViews();
+
+    socket.deliver().onAppsUpdated([appRecord("docs", { internal: true })]);
+    expect(shareOf(render({ isAppShareOffered: true }), "win-2")).toBeNull();
+  });
+
+  it("is not drawn on a window whose app the shell no longer lists", () => {
+    socket.deliver().onAppsUpdated([]);
+    const root = render({ isAppShareOffered: true });
+    expect(root.querySelector('[data-window-id="win-2"] [data-window-control="refresh"]')).not.toBeNull();
+    expect(shareOf(root, "win-2")).toBeNull();
   });
 });
 

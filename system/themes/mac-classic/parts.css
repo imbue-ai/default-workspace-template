@@ -110,6 +110,10 @@ kbd {
 [data-part="window-control"]:is([data-control="refresh"], [data-control="menu"]):active {
   color: #ffffff;
 }
+/* Share is a button with a word on it, which a box this size cannot hold: the window menu offers it instead. */
+[data-part="window-control"][data-control="share"] {
+  display: none;
+}
 
 /* Push buttons: system.css's rounded button for anything with words on it; the default (primary)
    button wears the thick ring Return would press. Icon-only buttons are bare glyphs that invert

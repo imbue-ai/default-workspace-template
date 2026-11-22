@@ -34,6 +34,7 @@ import { ShortcutIcon } from "./ShortcutIcon";
 import { SnapPreview } from "./SnapPreview";
 import { Window } from "./Window";
 import type { WindowControl } from "./TitleBar";
+import { isAppShareable } from "./WindowMenu";
 
 export interface BackdropAttrs {
   readonly store: DesktopStore;
@@ -51,6 +52,9 @@ export interface BackdropAttrs {
   readonly onEntryContextMenu: (windowId: string, x: number, y: number, target: Element) => void;
   /** Whether a menu or the launcher is open: every window is shielded, so the press that closes it reaches the shell. */
   readonly isOverlayOpen: boolean;
+  /** Whether a window's title bar may offer Share: under an Imbue Studio chrome that has said what it can do, and
+   *  to the workspace's owner alone, since the chrome opens its share settings for nobody else. */
+  readonly isAppShareOffered: boolean;
   readonly onSelectShortcut: (key: string | null) => void;
   readonly onRunShortcut: (shortcut: DesktopShortcut) => void;
   readonly onShortcutContextMenu: (shortcut: DesktopShortcut, point: PixelPoint, target: Element) => void;
@@ -222,6 +226,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                           isTouch: state.modes.isTouch,
                           isMenuOpen: attrs.openMenuWindowId === window.id,
                           hasAppChat: isAppChatOffered && app !== undefined && !app.internal,
+                          hasShare: attrs.isAppShareOffered && isAppShareable(app),
                           sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
                           isShielded: attrs.isOverlayOpen || (state.modes.isTouch && window.id !== focusedWindowId),
                           isStopped: isAppShownStopped(state, app),
