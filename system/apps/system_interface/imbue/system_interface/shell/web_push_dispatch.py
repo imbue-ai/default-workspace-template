@@ -88,6 +88,8 @@ class SendStatus(LowerCaseStrEnum):
     LIMITED = auto()
     # Dropped: no device has notifications on.
     NO_DEVICES = auto()
+    # Dropped: the owner reset notifications while it was queued.
+    CANCELLED = auto()
 
 
 class PushSendRequest(FrozenModel):
@@ -337,9 +339,18 @@ class PushDispatcher(MutableModel):
             return min((batch.due_at for batch in self._pending_by_chat.values()), default=None)
 
     def forget_pending(self) -> None:
-        """Drop every queued batch (a reset): nothing queued for the old devices goes out to new ones."""
+        """Drop every queued batch (a reset), logging its sends as cancelled: nothing queued for the old devices goes
+        out to new ones."""
         with self._lock:
+            dropped_ids = {send_id for batch in self._pending_by_chat.values() for send_id in batch.send_ids}
             self._pending_by_chat.clear()
+        cancelled = tuple(
+            entry.model_copy_update(to_update(entry.field_ref().status, SendStatus.CANCELLED))
+            for entry in self.log.entries()
+            if entry.send_id in dropped_ids
+        )
+        if cancelled:
+            self.log.put(cancelled)
 
     def _post(self, batch: _PendingBatch) -> None:
         notification = compose_notification(

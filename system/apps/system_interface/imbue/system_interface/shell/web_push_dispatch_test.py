@@ -212,7 +212,7 @@ def test_forgetting_pending_sends_posts_none_of_them(tmp_path: Path) -> None:
     dispatcher, clock, transport = _dispatcher(tmp_path)
     dispatcher.submit(_send("one"), "Studio")
     dispatcher.flush_due()
-    dispatcher.submit(_send("two"), "Studio")
+    dropped = dispatcher.submit(_send("two"), "Studio")
 
     dispatcher.forget_pending()
     clock.now += COALESCE_SECONDS
@@ -220,6 +220,9 @@ def test_forgetting_pending_sends_posts_none_of_them(tmp_path: Path) -> None:
 
     assert len(transport.posted) == 1
     assert dispatcher.next_due_at() is None
+    assert [entry.status for entry in dispatcher.log.entries() if entry.send_id == dropped.send_id] == [
+        SendStatus.CANCELLED
+    ]
 
 
 def test_the_log_keeps_only_the_latest_sends(tmp_path: Path) -> None:

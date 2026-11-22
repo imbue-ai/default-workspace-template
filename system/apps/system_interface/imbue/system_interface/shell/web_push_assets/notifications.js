@@ -277,6 +277,7 @@ const SEND_STATUS_TEXT = {
   merged: "Sent as part of a later notification from the same chat",
   limited: "Not sent: too many notifications in a short time",
   no_devices: "Not sent: no device had notifications on",
+  cancelled: "Not sent: notifications were reset before it went out",
 };
 
 function deliveryText(delivery) {
