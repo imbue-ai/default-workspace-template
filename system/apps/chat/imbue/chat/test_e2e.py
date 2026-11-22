@@ -813,6 +813,16 @@ def test_suggestion_pills_come_and_go_without_moving_a_reader_who_scrolled_up_or
         assert frame.evaluate(_MAX_TRANSCRIPT_BOTTOM_GAP_JS) <= 1
         assert 12 <= _box(pills.first)["top"] - _box(done_mark)["bottom"] <= 32
 
+        # A press on the transcript stops it following its end, and the reader there is still kept at the end.
+        toggle.click()
+        expect(pills).to_have_count(0)
+        transcript.click(position={"x": 80, "y": 80})
+        toggle.click()
+        expect(pills).to_have_count(3)
+        frame.wait_for_function(_PILLS_HAVE_RISEN_JS, timeout=5000)
+        assert frame.evaluate(_MAX_TRANSCRIPT_BOTTOM_GAP_JS) <= 1
+        assert 12 <= _box(pills.first)["top"] - _box(done_mark)["bottom"] <= 32
+
 
 @pytest.mark.timeout(90, func_only=False)
 def test_the_space_beside_floating_suggestion_pills_is_the_transcripts_and_a_pill_takes_its_own_click(
