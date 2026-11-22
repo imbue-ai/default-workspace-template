@@ -226,9 +226,7 @@ def test_a_refresh_whose_split_cannot_start_from_the_marker_reads_the_whole_hist
     run_git(workspace, ["merge", "--quiet", "--no-ff", "-m", "Merge the new release", "upstream"])
     write_app_file(workspace, "notes", "notes.py", "GREETING = 'good morning'\n")
     changed_tip = commit_all(workspace, "Greet in the morning")
-    monkeypatch.setenv(
-        "GIT_EXEC_PATH", str(make_git_exec_path_whose_split_leaves_its_marker(tmp_path / "git-core"))
-    )
+    monkeypatch.setenv("GIT_EXEC_PATH", str(make_git_exec_path_whose_split_leaves_its_marker(tmp_path / "git-core")))
 
     refreshed = link_app(workspace, "notes", True, False, runtime)
 

@@ -151,7 +151,11 @@ def test_a_directory_removed_and_made_again_is_not_split_into_the_workspaces_own
     # git subtree keeps the commit that removed the directory as it is, with
     # everything the workspace held before it.
     raw_split = git_output(
-        workspace, "subtree", "split", "--quiet", f"--prefix={app_directory_prefix(record)}"
+        workspace,
+        "subtree",
+        "split",
+        "--quiet",
+        f"--prefix={app_directory_prefix(record)}",
     )
     run_git(workspace, "merge-base", "--is-ancestor", initial, raw_split)
 
