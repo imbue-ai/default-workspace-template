@@ -22,7 +22,8 @@ import type { ActionSuggestion, SuggestionAction, SuggestionPlacement } from "./
 /** The placements whose suggestions are actions. */
 export type ActionPlacement = Exclude<SuggestionPlacement, "next_step">;
 
-const ACTION_PLACEMENTS: readonly ActionPlacement[] = ["activity", "new_chat"];
+/** Those placements, in the order their strips are handed over to be drawn. */
+export const ACTION_PLACEMENTS: readonly ActionPlacement[] = ["activity", "new_chat"];
 
 /** How many suggestions a strip shows, of those the page can act on. */
 export const MAX_ACTION_SUGGESTIONS_SHOWN = 3;

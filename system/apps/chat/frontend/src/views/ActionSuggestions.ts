@@ -7,6 +7,7 @@
  */
 
 import {
+  ACTION_PLACEMENTS,
   collapseActionStrip,
   getActionStrip,
   reconcileActivitySuggestions,
@@ -61,7 +62,7 @@ export function actionStrips(chatId: string, isEnabled: Record<ActionPlacement, 
     canActOn: (suggestion) => canRunSuggestionAction(suggestion.action),
   });
   const strips: PlacementStrip[] = [];
-  for (const placement of ["activity", "new_chat"] as const) {
+  for (const placement of ACTION_PLACEMENTS) {
     const strip = getActionStrip(chatId, placement);
     if (strip !== null) strips.push(placementStrip(chatId, placement, strip));
   }
