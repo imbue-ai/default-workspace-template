@@ -71,16 +71,80 @@ dev repository:
    forced.
 3. It records what it pushed in `data/.state/app_sync/<name>.json`.
 
-The split writes loose objects only: no ref of the workspace repository
-moves, so the pass cannot disturb an update that is being applied.
+The pass writes nothing to the workspace repository, so it cannot disturb an
+update that is being applied. The split is made in a scratch clone under
+`/var/tmp` that shares the workspace repository's objects
+(`git clone --shared --no-checkout`), with hooks off, and the commits it
+makes stay in that clone. The push runs in the workspace repository, with
+its configuration, and is lent the clone's objects for that one command
+(`GIT_ALTERNATE_OBJECT_DIRECTORIES`). The clone is removed when the push is
+over, whether or not it went through; one left behind by a service that was
+stopped in the middle of a split is removed by the next split.
+
+### Where a split starts
+
+`git subtree split` reads one workspace commit at a time, a few commands
+each, about 12 ms a commit where it was measured: three minutes for the
+history a workspace starts with. So a split is not given the whole history.
+The scratch clone is cut at the app's **bound**, the commit before which
+nothing can add to the app's own history:
+
+- for an app this workspace built, the commit its newest join marker was
+  made on. The marker says which commit of the app's history that commit
+  stands for;
+- for an installed app, the merge that installed it
+  (`git subtree add --squash`). No commit before it held the app, and that
+  merge and the merge of each later update reach the publisher's history
+  through their squash commits.
+
+In the clone, git reads the bound as having no earlier workspace commit
+before it, and reads every merge made since the bound as following only its
+parents that follow the bound (one replace ref each; no object of the
+history changes). `git subtree`, which reads history through ordinary git
+commands, therefore reads the commits made since the bound and nothing else.
+
+A merge is cut when it brings in commits that do not follow the bound: an
+update of the workspace merges the template's history, and a worker's branch
+can have left before the bound. Without the cut `git subtree` goes back
+through all of those commits' ancestors, one shell call deep per commit, and
+the shell stops it ("Maximum function recursion depth") long before the root
+of a workspace's history. With it:
+
+- An update's merge, whose older parent never held the app, splits exactly
+  as it would if `git subtree` read the whole history: the same commits.
+- A change to the app made on a branch that left before the bound is in the
+  split, as part of the merge that brought it in rather than as a commit of
+  its own. Nothing in the app's directory is lost.
+
+The cut depends on the history alone. The same history gives the same split,
+a longer history gives those commits and new ones after them, and the split
+starts from the commit the marker names, so a dev repository's history is
+continued and never rewritten. `app-install link --refresh` makes its split
+through the same cut (`cut_history_at_bound`), so the marker it leaves joins
+exactly what the pass has been pushing.
+
+A split still reads every commit made since the bound, so its time grows
+with them. For an app this workspace built, `app-install link <name>
+--refresh` makes a new marker at the current commit, which the update pass
+runs; an installed app's bound stays at its install. A split is given ten
+minutes, and one that runs out is reported as `failed` with how many commits
+it had to read.
+
+A history that holds no bound is read whole: that of an installed app that
+arrived as files in a template or a migrated workspace, with no squash
+commit.
+
+### What is never pushed
 
 A split is pushed only when its history is the app's own. When an app's
-directory was removed and made again, `git subtree split` keeps the commit
-that removed it as it is, with everything the workspace held before it, so
-the split would hand the dev repository the whole workspace. The pass checks
-that the split's history does not hold the workspace's first commit
-(`require_split_holds_only_the_app`), pushes nothing when it does, and
-reports the app as `failed` with the reason.
+directory was removed and made again by ordinary commits, `git subtree
+split` keeps the commit that removed it as it is, with everything the
+workspace held before it, so the split would hand the dev repository the
+whole workspace. The pass checks that the split's history does not hold the
+workspace's first commit (`require_split_holds_only_the_app`), pushes
+nothing when it does, and reports the app as `failed` with the reason. An
+app that was uninstalled and installed again is not such a case: its bound
+is the newest install, and the removal lies before it.
 
 Which apps the pass pushes:
 
@@ -88,16 +152,9 @@ Which apps the pass pushes:
   history of the checked-out commit holds a join marker for the app's
   directory, a commit whose message carries the trailer
   `git-subtree-dir: system/apps/<package>`. `app-install link` leaves one
-  (`git subtree split --rejoin`), and a split then starts from the marker
-  instead of walking the whole workspace history, which takes minutes. That
-  holds while every commit made since the marker follows commits no older
-  than it. A merge that brings in older ones (an update of the workspace
-  merges the template's history, and a worker's branch can have left before
-  the marker) sends `git subtree` back through all of their ancestors, which
-  the shell refuses long before the root of a workspace's history. The pass
-  does not read the whole history in their place: it reports the app as
-  `failed`, saying to run `app-install link <name> --refresh`, which does,
-  once, and leaves a marker past the merge.
+  (`git subtree split --rejoin`), and it is the bound every later split
+  starts from. Until there is one, the app's first split would read the
+  whole workspace history, which the pass never does.
   `git rev-list --max-count=1 --grep='^git-subtree-dir: system/apps/<package>/*$' HEAD`
   is the test, the same search `git subtree` makes, and `app-install link`
   and the pass both ask it through `github_sync.app_history.is_app_linked`.
@@ -107,10 +164,8 @@ Which apps the pass pushes:
   the regenerable set (`uv.lock`). The squash commits an install and an
   update leave carry the same trailer, so the search above finds them and
   the split builds the adopter's history on top of the publisher's commits.
-  They do not shorten the split, though: `git subtree` leaves history out
-  only for a `--rejoin` marker, and refuses to make one for an app that came
-  in as a squash, so each change to a modified installed app is split by
-  reading the whole workspace history, which takes minutes on a large one.
+  `git subtree` refuses to make a `--rejoin` marker for an app that came in
+  as a squash, so its bound is its install.
 
 Everything else is skipped and named in the status with a reason:
 `no_dev_repository` (the record has no `dev_repo_url`; an app this workspace
@@ -196,9 +251,13 @@ than keep copies:
   says what a push git refused most likely means, when it is a refusal it
   knows.
 - `github_sync.app_history`: `is_app_linked`, `is_app_modified`, `app_tree`,
-  `split_app`, `is_primary_checkout`, and `require_git_subtree`, which raises
+  `is_primary_checkout`, and `require_git_subtree`, which raises
   `GitSubtreeMissingError` naming the command when this git has no
-  `git subtree`.
+  `git subtree`. `open_app_split(repo_root, record)` is a context that holds
+  the app's split (`commit`, `tree`, and the scratch `clone` it was made in)
+  until it closes, and `cut_history_at_bound(scratch_clone, record, commit)`
+  cuts a clone a caller made itself, as `app-install link --refresh` does
+  before it splits with `--rejoin`.
 - `github_sync.wiring`: `gateway_git_config()` and
   `git_environment_through_gateway(environment)`, for one git command that
   goes through the gateway without the container being wired.

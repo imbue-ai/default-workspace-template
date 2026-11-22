@@ -148,7 +148,7 @@ Run it from the workspace root on the primary checkout; in a linked worktree it 
 **The join marker.**
 Without one, a split walks the whole workspace history, which takes minutes.
 For an app this workspace built, `link` makes the app's first split with `git subtree split --rejoin`, which leaves a marker: a merge commit whose message carries `git-subtree-dir: system/apps/<package>`, whose first parent is the commit it was made on and whose second is the split.
-A later split starts from the newest marker.
+A later split reads only the commits made since the newest marker: the sync service makes each one in a scratch clone cut there (`system/libs/github_sync/README.md`, "Where a split starts").
 
 - The marker is made in a clone under `/var/tmp`, never in the checkout, with hooks off, and the primary branch is then moved to it.
   Its tree is its first parent's tree, so no file changes and uncommitted work is left exactly as it is.
@@ -160,19 +160,21 @@ A later split starts from the newest marker.
 - **An app is linked** when the history of the checked-out commit holds such a marker: `git rev-list --max-count=1 --grep='^git-subtree-dir: system/apps/<package>/*$' HEAD` names a commit.
   This is the search `git subtree` itself makes, and `link`, `list`, and the sync service all ask it through one function, `github_sync.app_history.is_app_linked`.
   Linking an app that is linked makes nothing.
-- `--refresh` makes a new marker at the current commit when a commit has touched the app since its newest marker, which keeps later splits fast as workspace commits accumulate.
+- `--refresh` makes a new marker at the current commit when a commit has touched the app since its newest marker, which keeps later splits short as workspace commits accumulate: a split reads every commit made since the newest marker.
   When the app has not changed since, there is no newer split to join and none is made: `git subtree` cannot read a history that holds two markers for one split.
-- A marker bounds a split only while every commit made since follows commits no older than the marker.
-  A merge that brings in older ones, which every update of the workspace does with the template's history, sends `git subtree` back through all of their ancestors, and the shell refuses that long before the root of a workspace's history.
-  The sync service then reports the app as `failed` and names `link --refresh`, which tries the split from the marker and, when that fails, makes it again with the markers ignored (`--ignore-joins`): every commit of the workspace is read once, which takes minutes, the same split commits come out, and the marker it leaves is past the merge.
-  An app that has not changed since its marker cannot be given a new one, so after such a merge its next change is not pushed until `link --refresh` is run for it.
+  Nothing depends on a refresh being run: the sync service pushes an app's changes from whichever marker is its newest.
+- A refresh makes its split in a clone of the whole history cut at the marker before it, with the function the sync service cuts its own clone with (`github_sync.app_history.cut_history_at_bound`).
+  A merge made since that marker that also follows older commits, as every update of the workspace does with the template's history and a worker's branch that left before the marker does, is read as following only the commits made since the marker.
+  A change to the app that came in through such a branch is in the app's history as part of the merge.
+  The split a refresh joins is therefore the history the service has been pushing, and a split of the uncut history would not be: it lists that branch's commits apart, which the dev repository would refuse as a continuation.
 - An installed app gets no marker.
   The squash commits `install` and `update` leave carry the same trailer, so the app counts as linked and its split builds on the publisher's commits, and `git subtree` refuses to make a `--rejoin` marker for an app that came in as a squash.
   `link` therefore only creates its dev repository, and only once the app is `modified`; an unchanged installed app is refused.
-  A squash commit shortens no split: each one of an installed app reads the whole workspace history.
-- An app whose directory was removed and made again (an app uninstalled and built or installed again under the same name) is refused.
+  Its splits start at the merge that installed it.
+- An app this workspace built whose directory was removed and made again (uninstalled, then built again under the same name) is refused.
   `git subtree split` keeps the commit that removed the directory as it is, and everything the workspace held before it comes along, so the split would carry the workspace's own history, with every file of it, into the app's.
   `link` and the sync service both check that a split's history does not hold the workspace's first commit (`github_sync.app_history.require_split_holds_only_the_app`), and neither joins nor pushes one that does.
+  An app that was uninstalled and installed again is not refused: its history starts at its newest install.
 
 **The dev repository.**
 When GitHub sync is enabled for the workspace (`data/system/github_sync.toml` exists) and the app's record has no `dev_repo_url`, `link` creates the private repository `<name>-dev` under the workspace's GitHub account through `latchkey curl`, closes it to outside contributions as a published template's repository is closed, writes its URL to the record, and commits that one file under the installer's own author.
@@ -185,7 +187,7 @@ The result is `linked` (the first marker was made), `refreshed` (a new one was m
 | --- | --- |
 | `marker_commit` | The marker that was made, else empty. |
 | `split_commit` | The commit of the app's own history the marker joins, else empty. |
-| `is_full_clone_used` | Whether the marker was made in a clone of the whole workspace history. |
+| `is_full_clone_used` | Whether the marker was made in a clone of the whole workspace history, as every refresh's is. |
 | `dev_repo_url` | The record's dev repository, empty when the app has none. |
 | `is_dev_repository_created` | Whether this run created it. |
 | `remaining` | What is left before the app is synced, in sentences: for example "GitHub sync is not enabled, so no dev repository was created; pass --create-dev-repo to make one for this app alone". |

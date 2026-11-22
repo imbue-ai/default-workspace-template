@@ -30,6 +30,7 @@ from github_sync.testing import (
     add_owned_app,
     always_private,
     commit_all,
+    commit_on_branch,
     git_output,
     init_bare_repo,
     init_published_app,
@@ -38,7 +39,6 @@ from github_sync.testing import (
     install_app,
     install_fake_latchkey,
     link_app,
-    make_git_exec_path_whose_split_leaves_its_marker,
     run_git,
     write_app_file,
 )
@@ -372,31 +372,45 @@ def test_a_failure_in_one_app_does_not_stop_the_next(tmp_path: Path) -> None:
     assert load_pushed_state(workspace, "notes") is None
 
 
-def test_a_split_that_cannot_start_from_its_marker_names_the_refresh_that_makes_a_new_one(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_a_change_made_after_an_update_of_the_workspace_is_pushed(
+    tmp_path: Path,
 ) -> None:
     workspace = init_workspace(tmp_path / "workspace")
+    run_git(workspace, "branch", "template")
     dev_repository = init_bare_repo(tmp_path / "notes-dev.git")
     record = _linked_app(workspace, dev_repository)
     assert _states(workspace) == {"notes": AppSyncState.PUSHED}
     pushed_before = _dev_main(dev_repository)
+    # An update merges the template's commits, which follow one from before the
+    # app's marker, and the app changes afterwards.
+    commit_on_branch(
+        workspace, "template", "RELEASE.md", "a release\n", "A template release"
+    )
+    run_git(
+        workspace, "merge", "-q", "--no-ff", "-m", "Update the workspace", "template"
+    )
     write_app_file(workspace, record, "notes.py", "GREETING = 'hello'\n")
     commit_all(workspace, "Greet")
-    monkeypatch.setenv(
-        "GIT_EXEC_PATH",
-        str(make_git_exec_path_whose_split_leaves_its_marker(tmp_path / "git-core")),
+    held_before = (
+        git_output(workspace, "for-each-ref"),
+        git_output(workspace, "count-objects", "-v"),
+        git_output(workspace, "status", "--porcelain"),
     )
 
     (report,) = run_app_pass(workspace, VisibilityLedger(), always_private)
 
-    assert report.state == AppSyncState.FAILED
-    assert "app-install link notes --refresh" in report.detail
-    assert "recursion depth" in report.detail
-    assert _dev_main(dev_repository) == pushed_before
-    assert load_pushed_state(workspace, "notes") == PushedState(
-        dev_repo_url=str(dev_repository),
-        pushed_commit=pushed_before,
-        pushed_tree=git_output(workspace, "rev-parse", f"{pushed_before}^{{tree}}"),
+    assert report.state == AppSyncState.PUSHED
+    assert _dev_main(dev_repository) == report.pushed_commit
+    assert git_output(dev_repository, "rev-parse", "main^@") == pushed_before
+    assert git_output(dev_repository, "log", "--format=%s", "main").splitlines() == [
+        "Greet",
+        "Add the notes app",
+    ]
+    # The pass wrote no ref, no object, and no file of the workspace repository.
+    assert held_before == (
+        git_output(workspace, "for-each-ref"),
+        git_output(workspace, "count-objects", "-v"),
+        git_output(workspace, "status", "--porcelain"),
     )
 
 

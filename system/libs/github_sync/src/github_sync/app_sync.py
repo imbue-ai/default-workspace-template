@@ -4,8 +4,10 @@ the app's directory.
 For every app that has a dev repository the pass compares the tree of the
 app's committed directory with the tree it last pushed, and when they differ
 splits the app's own history out of the workspace history and pushes it to
-the dev repository's `main`, fast-forward only. It never commits, never moves
-a ref of the workspace repository, and never forces a push.
+the dev repository's `main`, fast-forward only. The split is made in a scratch
+clone, so the pass writes nothing to the workspace repository: it never
+commits, never moves a ref, and leaves no object behind. It never forces a
+push.
 
 What was last pushed is machine state, one file per app under
 `data/.state/app_sync/`. The file only saves work: without it the pass splits
@@ -36,12 +38,13 @@ from pydantic import Field
 
 from github_sync.app_history import (
     AppHistoryError,
+    AppSplit,
     app_tree,
     is_app_linked,
     is_app_modified,
     is_primary_checkout,
+    open_app_split,
     run_git,
-    split_app,
 )
 from github_sync.config import GithubSyncError
 from github_sync.visibility import (
@@ -57,9 +60,6 @@ APP_SYNC_STATE_DIRECTORY = Path("data/.state/app_sync")
 DEV_REPOSITORY_BRANCH = "main"
 # What git says of a push the remote branch is not an ancestor of.
 _NON_FAST_FORWARD_MARKERS = ("(non-fast-forward)", "(fetch first)")
-# What a split says when it had to leave the commits made since the app's
-# newest marker: the shell's refusal to go deeper, or the time it is given.
-_SPLIT_LEFT_ITS_MARKER_SIGNS = ("recursion depth", "timed out")
 
 
 class AppSyncError(GithubSyncError):
@@ -177,17 +177,23 @@ def _write_pushed_state(repo_root: Path, name: str, state: PushedState) -> None:
     os.replace(incoming, path)
 
 
-def _push_split(repo_root: Path, dev_repo_url: str, commit: str) -> None:
-    """Push `commit` to the dev repository's branch as a fast-forward, through
-    the latchkey gateway when the workspace has one. Never forced."""
-    environment = git_environment_through_gateway(os.environ)
+def _push_split(repo_root: Path, dev_repo_url: str, split: AppSplit) -> None:
+    """Push the split to the dev repository's branch as a fast-forward, through
+    the latchkey gateway when the workspace has one. Never forced.
+
+    The push runs in the workspace repository, so its own configuration applies,
+    and is lent the split's commits for this one command: they are written
+    nowhere in the workspace repository.
+    """
+    environment = dict(git_environment_through_gateway(os.environ) or os.environ)
+    environment["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = str(split.object_directory)
     run_git(
         repo_root,
         [
             "push",
             "--quiet",
             dev_repo_url,
-            f"{commit}:refs/heads/{DEV_REPOSITORY_BRANCH}",
+            f"{split.commit}:refs/heads/{DEV_REPOSITORY_BRANCH}",
         ],
         environment,
     )
@@ -257,40 +263,26 @@ def _sync_app(
             f"skipped: the app's first split has not been made; run `app-install link {name}`",
         )
 
-    try:
-        commit = split_app(repo_root, record)
-    except AppHistoryError as e:
-        if is_owned and any(sign in str(e) for sign in _SPLIT_LEFT_ITS_MARKER_SIGNS):
-            return _reported(
-                unsynced,
-                AppSyncState.FAILED,
-                "nothing was pushed: the app's history could not be read from its newest marker on, as "
-                "happens once a merge brings in commits older than the marker (an update of the workspace "
-                f"does); run `app-install link {name} --refresh`, which makes a marker past the merge ({e})",
-            )
-        raise
-    try:
-        _push_split(repo_root, record.dev_repo_url, commit)
-    except AppHistoryError as e:
-        if any(marker in str(e) for marker in _NON_FAST_FORWARD_MARKERS):
-            return _reported(
-                unsynced,
-                AppSyncState.PUSH_REFUSED,
-                "nothing was pushed: the dev repository holds history this workspace's copy of the app does "
-                f"not continue, as when another workspace pushes to it too ({e})",
-            )
-        raise
-    _write_pushed_state(
-        repo_root,
-        name,
-        PushedState(
+    with open_app_split(repo_root, record) as split:
+        try:
+            _push_split(repo_root, record.dev_repo_url, split)
+        except AppHistoryError as e:
+            if any(marker in str(e) for marker in _NON_FAST_FORWARD_MARKERS):
+                return _reported(
+                    unsynced,
+                    AppSyncState.PUSH_REFUSED,
+                    "nothing was pushed: the dev repository holds history this workspace's copy of the app does "
+                    f"not continue, as when another workspace pushes to it too ({e})",
+                )
+            raise
+        pushed_now = PushedState(
             dev_repo_url=record.dev_repo_url,
-            pushed_commit=commit,
-            pushed_tree=run_git(repo_root, ["rev-parse", f"{commit}^{{tree}}"]),
-        ),
-    )
+            pushed_commit=split.commit,
+            pushed_tree=split.tree,
+        )
+    _write_pushed_state(repo_root, name, pushed_now)
     return _reported(unsynced, AppSyncState.PUSHED, "").model_copy_update(
-        to_update(unsynced.field_ref().pushed_commit, commit)
+        to_update(unsynced.field_ref().pushed_commit, pushed_now.pushed_commit)
     )
 
 

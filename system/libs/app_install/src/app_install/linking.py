@@ -2,10 +2,11 @@
 
 An app's dev repository is fed by ``git subtree split``, which turns the workspace commits that touched the
 app's directory into commits of the app's own history. Without a join marker a split walks the whole workspace
-history, which takes minutes; after one it processes only the commits made since. Linking makes that marker,
-with ``git subtree split --rejoin``, in a clone of the workspace bounded by the age of the app rather than the
-age of the workspace, and fast-forwards the primary branch to it. The marker's tree is its parent's tree, so no
-file changes.
+history, which takes minutes; after one it reads only the commits made since. Linking makes that marker, with
+``git subtree split --rejoin``, in a clone of the workspace bounded by the age of the app rather than the age
+of the workspace, and fast-forwards the primary branch to it. The marker's tree is its parent's tree, so no
+file changes. A later marker is made from a split cut at the one before it, exactly as the sync service makes
+its splits, so the split a marker joins is the history the service has been pushing.
 
 The sync service never does this: it never commits to the workspace repository. It only splits and pushes the
 apps that are linked.
@@ -43,6 +44,8 @@ from app_manifest.records import app_directory_prefix
 from app_manifest.records import join_marker_pattern
 from app_manifest.records import load_record
 from app_manifest.records import write_record
+from github_sync.app_history import AppHistoryError
+from github_sync.app_history import cut_history_at_bound
 from github_sync.config import is_sync_configured
 
 # A clone of a workspace can be large, which the small in-memory /tmp of a workspace is not for.
@@ -50,9 +53,9 @@ _SCRATCH_PARENT: Final[Path] = Path("/var/tmp")
 _SCRATCH_PREFIX: Final[str] = "app-install-link-"
 # How many times the marker is made again because the primary branch moved while it was being made.
 _MAXIMUM_ATTEMPTS: Final[int] = 5
-# A split that has to read the whole workspace history takes minutes (about 12 ms a commit where it was
-# measured, and a workspace starts with the template's history), which the time given to an ordinary git
-# command does not cover.
+# A first split whose clone could not be bounded by the app's age reads the whole workspace history, which takes
+# minutes (about 12 ms a commit where it was measured, and a workspace starts with the template's history):
+# more than the time given to an ordinary git command.
 _SPLIT_TIMEOUT_SECONDS: Final[float] = 1800.0
 _DEV_REPOSITORY_SUFFIX: Final[str] = "-dev"
 
@@ -163,24 +166,13 @@ def _clone_bounded_by_app_age(
     return (clone, True) if clone is not None else None
 
 
-def _rejoin_in_clone(clone: Path, start_head: str, name: str, prefix: str, is_first: bool) -> tuple[str, str]:
-    """Split the app's history in the clone and join it back; the marker commit and the split commit.
-
-    A split that starts from an earlier marker reads only the commits made since, as long as each of them
-    follows commits no older than the marker. A merge that brings in older ones (every update of the workspace
-    merges the template's history) sends git subtree back through all of their ancestors, one shell call deep
-    per commit, which the shell refuses long before the root of a workspace's history. The split is then made
-    again with the markers ignored: every commit is read once, in order, the same split commits come out, and
-    the marker it leaves is past the merge.
-    """
-    arguments = ["subtree", "split", f"--prefix={prefix}", "--rejoin", "-m", f"app-install: link {name}"]
-    try:
-        output = run_git(clone, arguments, timeout_seconds=_SPLIT_TIMEOUT_SECONDS)
-    except GitCommandError as e:
-        if is_first:
-            raise
-        logger.info("The split of {} from its newest marker failed, so the whole history is read: {}", prefix, e)
-        output = run_git(clone, [*arguments, "--ignore-joins"], timeout_seconds=_SPLIT_TIMEOUT_SECONDS)
+def _rejoin_in_clone(clone: Path, start_head: str, name: str, prefix: str) -> tuple[str, str]:
+    """Split the app's history in the clone and join it back; the marker commit and the split commit."""
+    output = run_git(
+        clone,
+        ["subtree", "split", f"--prefix={prefix}", "--rejoin", "-m", f"app-install: link {name}"],
+        timeout_seconds=_SPLIT_TIMEOUT_SECONDS,
+    )
     split_commit = output.splitlines()[-1].strip()
     marker = run_git(clone, ["rev-parse", "HEAD"])
     if marker == start_head:
@@ -198,8 +190,10 @@ def _make_marker_once(
     meanwhile, with nothing changed.
 
     The first marker is made in a clone bounded by the app's age where that is sound, since the split behind it
-    walks every commit of the clone. A later one is made in a clone of the whole history: the split starts from
-    the marker before it wherever that is.
+    walks every commit of the clone. A later one is made in a clone of the whole history that is cut at the
+    marker before it, as the sync service's clone is: the split reads the commits made since that marker and
+    comes out as the history the service has been pushing, which a split of the uncut history does not once a
+    merge has brought in a change to the app from a branch that left before the marker.
     """
     prefix = app_directory_prefix(record)
     with _scratch_directory() as directory:
@@ -211,7 +205,12 @@ def _make_marker_once(
         if cloned is None:
             return None
         clone, is_full_clone_used = cloned
-        marker, split_commit = _rejoin_in_clone(clone, start_head, str(record.name), prefix, is_first)
+        if not is_first:
+            try:
+                cut_history_at_bound(clone, record, start_head)
+            except AppHistoryError as e:
+                raise GitCommandError(str(e)) from e
+        marker, split_commit = _rejoin_in_clone(clone, start_head, str(record.name), prefix)
         run_git(repo_root, ["fetch", "--quiet", "--no-tags", str(clone), f"refs/heads/{branch}"])
     # Asked of the workspace repository, which holds the history a bounded clone cuts off.
     require_split_holds_only_the_app(repo_root, record, split_commit)

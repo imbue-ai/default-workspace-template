@@ -13,7 +13,9 @@ from app_manifest.records import (
     app_directory_prefix,
     write_record,
 )
+from imbue.imbue_common.model_update import to_update
 
+from github_sync.app_history import AppSplit, open_app_split
 from github_sync.visibility import VISIBILITY_PRIVATE
 
 
@@ -62,15 +64,10 @@ def install_fake_latchkey(bin_dir: Path, script_body: str) -> None:
     script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def make_git_exec_path_whose_split_leaves_its_marker(directory: Path) -> Path:
-    """A git command directory (for `GIT_EXEC_PATH`) whose `git subtree` fails
-    the way the shell stops a split that had to read back past the app's newest
-    marker, unless it is told to ignore the markers, which it then really does.
-
-    The real failure needs a merge that brings in a commit with hundreds of
-    ancestors older than the marker, and a `/bin/sh` that limits how deep a
-    function calls itself (dash does, at 1000).
-    """
+def make_git_exec_path_whose_split_never_ends(directory: Path) -> Path:
+    """A git command directory (for `GIT_EXEC_PATH`) whose `git subtree` only
+    waits, as a split does that has more history to read than it is given time
+    for."""
     real_exec_path = Path(
         subprocess.run(
             ["git", "--exec-path"], check=True, capture_output=True, text=True
@@ -81,16 +78,39 @@ def make_git_exec_path_whose_split_leaves_its_marker(directory: Path) -> Path:
         if command.name != "git-subtree":
             os.symlink(command, directory / command.name)
     stand_in = directory / "git-subtree"
-    stand_in.write_text(
-        "#!/bin/sh\n"
-        'case " $* " in\n'
-        f'    *" --ignore-joins "*) exec "{real_exec_path / "git-subtree"}" "$@" ;;\n'
-        "esac\n"
-        'echo "git-subtree: 316: Maximum function recursion depth (1000) reached" >&2\n'
-        "exit 2\n"
-    )
+    stand_in.write_text("#!/bin/sh\nexec sleep 3\n")
     stand_in.chmod(stand_in.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return directory
+
+
+def add_history(repo: Path, branch: str, count: int) -> None:
+    """Add `count` commits to `branch` of `repo`, each changing one file of the
+    workspace and none of any app, without checking anything out: a long
+    history, made in a moment, of commits dated before anything a test commits.
+    """
+    tip = git_output(
+        repo, "for-each-ref", "--format=%(objectname)", f"refs/heads/{branch}"
+    )
+    already = int(git_output(repo, "rev-list", "--count", tip)) if tip else 0
+    stream: list[str] = []
+    for number in range(already + 1, already + count + 1):
+        message = f"Template commit {number}\n"
+        text = f"release {number}\n"
+        stream.append(
+            f"commit refs/heads/{branch}\n"
+            f"committer test <test@test.local> {1_600_000_000 + number * 60} +0000\n"
+            f"data {len(message)}\n{message}"
+        )
+        if tip and number == already + 1:
+            stream.append(f"from {tip}\n")
+        stream.append(f"M 100644 inline RELEASE.md\ndata {len(text)}\n{text}\n")
+    subprocess.run(
+        ["git", "-C", str(repo), "fast-import", "--quiet"],
+        input="".join(stream),
+        text=True,
+        check=True,
+        capture_output=True,
+    )
 
 
 def git_output(repo: Path, *args: str) -> str:
@@ -163,6 +183,33 @@ def link_app(workspace: Path, record: AppRecord) -> str:
     return split.splitlines()[-1]
 
 
+def split_commit(workspace: Path, record: AppRecord) -> str:
+    """The commit of the app's own history the workspace's checked-out commit
+    splits to, as the sync pass makes it. Its objects are gone again with the
+    scratch clone, so this is for comparing one split with another."""
+    with open_app_split(workspace, record) as split:
+        return split.commit
+
+
+def split_output(split: AppSplit, *args: str) -> str:
+    """Run a git command in the scratch clone of an open split, reading the
+    history as it is rather than as the clone was cut for the split."""
+    return git_output(split.clone, "--no-replace-objects", *args)
+
+
+def commit_on_branch(
+    repo: Path, branch: str, name: str, text: str, message: str
+) -> str:
+    """Commit one file on another branch of `repo` and come back to `main`."""
+    run_git(repo, "checkout", "-q", branch)
+    path = repo / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    commit = commit_all(repo, message)
+    run_git(repo, "checkout", "-q", "main")
+    return commit
+
+
 def init_published_app(path: Path, name: str) -> Path:
     """A repo holding one published app at its root, with two commits."""
     init_repo(path)
@@ -200,6 +247,35 @@ def install_app(workspace: Path, published: Path, name: str) -> AppRecord:
     write_record(workspace, record)
     commit_all(workspace, f"Register {name}")
     return record
+
+
+def update_installed_app(
+    workspace: Path, published: Path, record: AppRecord
+) -> AppRecord:
+    """Bring the published app's newest commit into the workspace over its own
+    changes, as `app-install update` does, and return the record."""
+    commit = git_output(published, "rev-parse", "HEAD")
+    run_git(
+        workspace,
+        "subtree",
+        "pull",
+        f"--prefix={app_directory_prefix(record)}",
+        str(published),
+        "main",
+        "--squash",
+        "-m",
+        f"Update {record.name}",
+    )
+    updated = record.model_copy_update(
+        to_update(record.field_ref().upstream_commit, commit),
+        to_update(
+            record.field_ref().upstream_tree,
+            git_output(published, "rev-parse", f"{commit}^{{tree}}"),
+        ),
+    )
+    write_record(workspace, updated)
+    commit_all(workspace, f"Record the update of {record.name}")
+    return updated
 
 
 def always_private(repo_url: str) -> str:

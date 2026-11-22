@@ -31,8 +31,9 @@ from app_install.testing import write_user_app
 from app_install.testing import write_workspace_file
 from app_manifest.records import AppRecord
 from app_manifest.records import load_record
-from github_sync.app_history import split_app
-from github_sync.testing import make_git_exec_path_whose_split_leaves_its_marker
+from github_sync.app_history import open_app_split
+from github_sync.testing import split_commit
+from github_sync.testing import split_output
 
 _PREFIX = "system/apps/notes"
 
@@ -58,7 +59,7 @@ def _split_of_the_whole_history(workspace: Path, tmp_path: Path) -> str:
     workspace so the workspace itself is left as it is."""
     copy = tmp_path / "copy-for-the-full-walk"
     run_git(tmp_path, ["clone", "--quiet", str(workspace), str(copy)])
-    return split_app(copy, load_record(workspace, "notes"))
+    return split_commit(copy, load_record(workspace, "notes"))
 
 
 def _enable_sync(workspace: Path) -> None:
@@ -159,17 +160,17 @@ def test_a_split_after_more_commits_continues_the_first(tmp_path: Path) -> None:
     workspace = _workspace_with_notes(tmp_path)
     outcome = link_app(workspace, "notes", False, False, RecordingRuntime(repo_root=workspace))
     # Nothing new in the app: a split from the marker is the split the link made.
-    assert split_app(workspace, outcome.record) == outcome.split_commit
+    assert split_commit(workspace, outcome.record) == outcome.split_commit
 
     write_workspace_file(workspace, "README.md", "a workspace, later\n")
     commit_all(workspace, "Workspace work after the link")
     write_app_file(workspace, "notes", "notes.py", "GREETING = 'good morning'\n")
     commit_all(workspace, "Greet in the morning")
-    second = split_app(workspace, outcome.record)
 
-    assert run_git(workspace, ["rev-parse", f"{second}^1"]) == outcome.split_commit
-    assert run_git(workspace, ["log", "-1", "--format=%s", second]) == "Greet in the morning"
-    assert run_git(workspace, ["show", f"{second}:notes.py"]) == "GREETING = 'good morning'"
+    with open_app_split(workspace, outcome.record) as second:
+        assert split_output(second, "rev-parse", f"{second.commit}^@") == outcome.split_commit
+        assert split_output(second, "log", "-1", "--format=%s", second.commit) == "Greet in the morning"
+        assert split_output(second, "show", f"{second.commit}:notes.py") == "GREETING = 'good morning'"
 
 
 def test_linking_again_makes_no_marker_and_a_refresh_makes_one_once_the_app_has_changed(tmp_path: Path) -> None:
@@ -189,7 +190,7 @@ def test_linking_again_makes_no_marker_and_a_refresh_makes_one_once_the_app_has_
     app_unchanged = link_app(workspace, "notes", True, False, runtime)
 
     assert (app_unchanged.result, _head(workspace)) == (LinkResult.ALREADY_LINKED, tip)
-    assert split_app(workspace, app_unchanged.record) == linked.split_commit
+    assert split_commit(workspace, app_unchanged.record) == linked.split_commit
 
     # The app changes: a refresh joins the app's new commit, which continues the first split, at the tip.
     write_app_file(workspace, "notes", "notes.py", "GREETING = 'good morning'\n")
@@ -205,45 +206,62 @@ def test_linking_again_makes_no_marker_and_a_refresh_makes_one_once_the_app_has_
     assert run_git(workspace, ["diff", "--stat", changed_tip, "HEAD"]) == ""
     assert run_git(workspace, ["status", "--porcelain"]) == "?? draft.txt"
     # A split from the new marker is the one it joins, and the next change continues it.
-    assert split_app(workspace, refreshed.record) == refreshed.split_commit
+    assert split_commit(workspace, refreshed.record) == refreshed.split_commit
     write_app_file(workspace, "notes", "notes.py", "GREETING = 'good evening'\n")
     commit_all(workspace, "Greet in the evening")
-    assert run_git(workspace, ["rev-parse", f"{split_app(workspace, refreshed.record)}^1"]) == refreshed.split_commit
+    with open_app_split(workspace, refreshed.record) as later:
+        assert split_output(later, "rev-parse", f"{later.commit}^@") == refreshed.split_commit
 
 
-def test_a_refresh_whose_split_cannot_start_from_the_marker_reads_the_whole_history_instead(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_a_refresh_after_merges_of_older_commits_joins_the_history_the_sync_pass_has_been_pushing(
+    tmp_path: Path,
 ) -> None:
     workspace = _workspace_with_notes(tmp_path)
     runtime = RecordingRuntime(repo_root=workspace)
+    # Two branches leave the workspace before the app is linked: the template's, which never held the app, and
+    # a worker's, which changes it.
+    run_git(workspace, ["branch", "template", "HEAD~3"])
+    run_git(workspace, ["branch", "worker", "HEAD~1"])
     linked = link_app(workspace, "notes", False, False, runtime)
-    # A branch that left the workspace before the marker is merged after it, as an update merges the template's.
-    run_git(workspace, ["branch", "upstream", f"{linked.marker_commit}~2"])
-    upstream = tmp_path / "upstream"
-    run_git(workspace, ["worktree", "add", "--quiet", str(upstream), "upstream"])
-    write_workspace_file(upstream, "RELEASE.md", "a new release of the template\n")
-    commit_all(upstream, "A template release")
-    run_git(workspace, ["merge", "--quiet", "--no-ff", "-m", "Merge the new release", "upstream"])
+    template = tmp_path / "template"
+    run_git(workspace, ["worktree", "add", "--quiet", str(template), "template"])
+    write_workspace_file(template, "RELEASE.md", "a new release of the template\n")
+    commit_all(template, "A template release")
+    worker = tmp_path / "worker"
+    run_git(workspace, ["worktree", "add", "--quiet", str(worker), "worker"])
+    write_app_file(worker, "notes", "bye.py", "BYE = 'bye'\n")
+    commit_all(worker, "Say goodbye")
+    # Both are merged after the marker, as an update of the workspace and a worker's finished task are.
+    run_git(workspace, ["merge", "--quiet", "--no-ff", "-m", "Update the workspace", "template"])
+    run_git(workspace, ["merge", "--quiet", "--no-ff", "-m", "Merge the worker's goodbye", "worker"])
     write_app_file(workspace, "notes", "notes.py", "GREETING = 'good morning'\n")
     changed_tip = commit_all(workspace, "Greet in the morning")
-    monkeypatch.setenv("GIT_EXEC_PATH", str(make_git_exec_path_whose_split_leaves_its_marker(tmp_path / "git-core")))
+    pushed_by_the_pass = split_commit(workspace, linked.record)
 
     refreshed = link_app(workspace, "notes", True, False, runtime)
 
-    assert refreshed.result == LinkResult.REFRESHED
+    assert (refreshed.result, refreshed.split_commit) == (LinkResult.REFRESHED, pushed_by_the_pass)
     assert run_git(workspace, ["rev-parse", "HEAD^1", "HEAD^2"]).split() == [changed_tip, refreshed.split_commit]
-    assert run_git(workspace, ["rev-parse", f"{refreshed.split_commit}^1"]) == linked.split_commit
+    assert run_git(workspace, ["diff", "--stat", changed_tip, "HEAD"]) == ""
+    # The worker's commit did not follow the first marker, so its change is in the app's history as part of the
+    # merge that brought it in; the update's merge changed nothing in the app and is not in it.
     assert run_git(workspace, ["log", "--format=%s", refreshed.split_commit]).splitlines() == [
         "Greet in the morning",
+        "Merge the worker's goodbye",
         "Greet, and edit the workspace too",
         "Add the notes app",
     ]
-    # With the marker past the merge, a split starts from it again and the next change continues it.
-    monkeypatch.delenv("GIT_EXEC_PATH")
-    assert split_app(workspace, refreshed.record) == refreshed.split_commit
+    assert run_git(workspace, ["rev-parse", f"{refreshed.split_commit}~2"]) == linked.split_commit
+    assert "bye.py" in run_git(workspace, ["ls-tree", "--name-only", refreshed.split_commit]).splitlines()
+    # A split of the uncut history lists the worker's commit apart from its merge: another history, which the
+    # dev repository would refuse as a continuation of what the pass pushed.
+    assert pushed_by_the_pass != run_git(workspace, ["subtree", "split", f"--prefix={_PREFIX}", "--ignore-joins"])
+    # With the marker past both merges a split starts from it, and the next change continues it.
+    assert split_commit(workspace, refreshed.record) == refreshed.split_commit
     write_app_file(workspace, "notes", "notes.py", "GREETING = 'good evening'\n")
     commit_all(workspace, "Greet in the evening")
-    assert run_git(workspace, ["rev-parse", f"{split_app(workspace, refreshed.record)}^1"]) == refreshed.split_commit
+    with open_app_split(workspace, refreshed.record) as later:
+        assert split_output(later, "rev-parse", f"{later.commit}^@") == refreshed.split_commit
 
 
 def test_a_merge_that_brings_in_older_commits_makes_the_link_use_the_whole_history(tmp_path: Path) -> None:
@@ -257,7 +275,7 @@ def test_a_merge_that_brings_in_older_commits_makes_the_link_use_the_whole_histo
     runtime = RecordingRuntime(repo_root=workspace)
     copy = tmp_path / "copy-for-the-full-walk"
     run_git(tmp_path, ["clone", "--quiet", str(workspace), str(copy)])
-    expected_shelf_split = split_app(copy, load_record(workspace, "shelf"))
+    expected_shelf_split = split_commit(copy, load_record(workspace, "shelf"))
     notes = link_app(workspace, "notes", False, False, runtime)
 
     shelf = link_app(workspace, "shelf", False, False, runtime)
@@ -266,8 +284,8 @@ def test_a_merge_that_brings_in_older_commits_makes_the_link_use_the_whole_histo
     assert shelf.split_commit == expected_shelf_split
     assert run_git(workspace, ["log", "--format=%s", shelf.split_commit]) == "Add the shelf app"
     # Each app splits from its own marker, with the other's in the history between.
-    assert split_app(workspace, notes.record) == notes.split_commit
-    assert split_app(workspace, shelf.record) == shelf.split_commit
+    assert split_commit(workspace, notes.record) == notes.split_commit
+    assert split_commit(workspace, shelf.record) == shelf.split_commit
 
     # Neither app has changed, so a refresh has nothing to join, whatever the other app's marker added.
     head_before = _head(workspace)
