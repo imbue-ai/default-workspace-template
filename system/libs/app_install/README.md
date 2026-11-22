@@ -207,7 +207,7 @@ A publish is driven by the `publish-app` skill, which asks the user twice before
 | `publish set-version <name> <version>` | Writes the version into `app.toml`, with `verified_template` set to the template release the workspace is on, and for a Python app into `pyproject.toml`, whose lock is made again. Commits nothing. | `versioned` |
 | `publish assemble <name> [--commit <rev>]` | Builds the tree in a directory under `/var/tmp`, outside the workspace, and finds it fit to publish. Pushes nothing. | `assembled` |
 | `publish push <name> [--repo-name <repository>]` | Creates the repository on the first publish and writes its URL to the record, then pushes the assembled tree as one commit and tags it. | `pushed` |
-| `publish record <name>` | Writes `published_repo_url`, `published_commit`, `published_version` and `verified_template` to the app's record and commits that one file. | `recorded` |
+| `publish record <name>` | Writes `published_commit`, `published_version` and `verified_template` to the app's record, beside the `published_repo_url` the push wrote, and commits that one file. | `recorded` |
 
 **The version.**
 A version is three numbers, with an optional pre-release after a hyphen, and each published version is newer than the last.
