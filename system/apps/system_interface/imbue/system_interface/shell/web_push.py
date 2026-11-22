@@ -224,7 +224,7 @@ class PushNotification(FrozenModel):
     )
     tag: str | None = Field(
         default=None,
-        max_length=120,
+        max_length=200,
         description="A notification with the same tag replaces the earlier one on the device instead of adding one",
     )
 

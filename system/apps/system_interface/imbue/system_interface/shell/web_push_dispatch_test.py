@@ -78,6 +78,15 @@ def test_a_notification_names_the_chat_and_says_nothing_the_agent_said_by_defaul
     assert notification.tag == "chat-agent-research"
 
 
+def test_the_longest_chat_id_a_send_takes_composes_a_notification() -> None:
+    chat_id = "agent-" + "a" * 120
+    request = _send("Report ready", chat_id=chat_id)
+
+    notification = compose_notification(request.chat_id, "Research", ("Report ready",), "Studio", _PREVIEW_SAFE)
+
+    assert notification.tag == f"chat-{chat_id}"
+
+
 def test_full_text_shows_the_agents_words_cut_short_for_a_lock_screen() -> None:
     short = compose_notification(_CHAT, "Research", ("Report ready",), "Studio", _FULL_TEXT)
     long = compose_notification(_CHAT, "Research", ("x" * 1000,), "Studio", _FULL_TEXT)
