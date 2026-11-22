@@ -394,7 +394,7 @@ def push_to_devices(
 ) -> bool:
     """Ask the shell to push the notification to the owner's devices; return whether it queued it. Only from the
     owner's own chat, and not while one of the owner's pages is watching it. Why nothing was pushed is said on
-    stderr, except for a workspace with no registered device."""
+    stderr, except while the owner is watching the chat or the workspace has no registered device."""
     chat_id = _chat_id(environ)
     if watch is None or not chat_id:
         sys.stderr.write(
