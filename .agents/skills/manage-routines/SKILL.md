@@ -52,7 +52,7 @@ are a chat, so ask for the `minds-workspaces-update` permission on that id (the
 
 ```bash
 WORKSPACE_AGENT_ID="$(mngr ls --include 'has(labels.is_primary)' --ids)"
-latchkey curl -XPATCH "http://latchkey-self.invalid/minds-api-proxy/api/v1/workspaces/$WORKSPACE_AGENT_ID" \
+latchkey curl -XPATCH "http://latchkey-self.invalid/minds-api-proxy/api/v1/workspaces/${WORKSPACE_AGENT_ID:-$MNGR_AGENT_ID}" \
   -H 'Content-Type: application/json' -d '{"timezone": "<Area/City>"}'
 ```
 
