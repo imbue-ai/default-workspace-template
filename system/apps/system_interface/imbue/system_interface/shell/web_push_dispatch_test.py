@@ -46,9 +46,9 @@ class _Clock:
 
 
 def _dispatcher(
-    tmp_path: Path, is_device_registered: bool = True
+    tmp_path: Path, is_device_registered: bool = True, transport: RecordingPushTransport | None = None
 ) -> tuple[PushDispatcher, _Clock, RecordingPushTransport]:
-    transport = RecordingPushTransport()
+    transport = transport if transport is not None else RecordingPushTransport()
     notifier = WebPushNotifier(directory=tmp_path, transport=transport)
     if is_device_registered:
         notifier.register(
@@ -293,18 +293,7 @@ class _FailingOnceTransport(RecordingPushTransport):
 
 
 def test_a_failed_batch_does_not_hold_back_another_chats(tmp_path: Path) -> None:
-    transport = _FailingOnceTransport()
-    notifier = WebPushNotifier(directory=tmp_path, transport=transport)
-    notifier.register(
-        DeviceRegistrationRequest.model_validate(
-            {
-                "subscription": {"endpoint": "https://web.push.apple.com/a", "keys": {"p256dh": "B", "auth": "s"}},
-                "label": "x",
-            }
-        ),
-        _NOW,
-    )
-    dispatcher = PushDispatcher(notifier=notifier, log=SendLog(path=tmp_path / "send_log.json"), clock=_Clock())
+    dispatcher, _, transport = _dispatcher(tmp_path, transport=_FailingOnceTransport())
     dispatcher.submit(_send("one"), "Studio")
     second = dispatcher.submit(_send("two", chat_id="agent-other"), "Studio")
 
@@ -317,17 +306,7 @@ def test_a_failed_batch_does_not_hold_back_another_chats(tmp_path: Path) -> None
 
 def test_the_worker_thread_posts_without_anyone_flushing(tmp_path: Path) -> None:
     transport = _SignallingTransport()
-    notifier = WebPushNotifier(directory=tmp_path, transport=transport)
-    notifier.register(
-        DeviceRegistrationRequest.model_validate(
-            {
-                "subscription": {"endpoint": "https://web.push.apple.com/a", "keys": {"p256dh": "B", "auth": "s"}},
-                "label": "x",
-            }
-        ),
-        _NOW,
-    )
-    dispatcher = PushDispatcher(notifier=notifier, log=SendLog(path=tmp_path / "send_log.json"))
+    dispatcher, _, _ = _dispatcher(tmp_path, transport=transport)
     dispatcher.start()
     try:
         dispatcher.submit(_send("one"), "Studio")
