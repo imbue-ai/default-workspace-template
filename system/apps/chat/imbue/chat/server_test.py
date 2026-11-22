@@ -1793,7 +1793,6 @@ def test_a_send_to_a_claude_agent_still_starting_reads_as_connecting_until_it_re
     assert status == 200
     assert (True, False) in connecting_pushes
     assert connecting_pushes[-1] == (False, False)
-    # The harness was already starting: nothing was woken up.
     assert (True, True) not in connecting_pushes
 
 
