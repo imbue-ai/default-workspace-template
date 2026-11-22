@@ -810,6 +810,7 @@ def _workspace_for_a_real_lock(root: Path) -> Path:
         "system/libs/app_schema",
         "system/libs/app_manifest",
         "system/libs/app_registration",
+        "system/libs/disk_headroom",
         "system/libs/workspace_layout",
     ):
         shutil.rmtree(root / library)

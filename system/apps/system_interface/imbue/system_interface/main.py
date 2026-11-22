@@ -5,7 +5,10 @@ import signal
 from collections.abc import Sequence
 from pathlib import Path
 from types import FrameType
+from typing import Final
 
+from app_manifest.primitives import AppUrl
+from app_manifest.registry import register_app
 from app_manifest.registry_location import registry_path
 from flask import Flask
 from loguru import logger
@@ -35,6 +38,11 @@ from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.workspace_name import workspace_name_source
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
+
+# The shell's manifest, relative to the repo root every supervised program runs from.
+# ``test_app_manifests.py`` reads this constant from the source to check the program registers
+# with this manifest.
+MANIFEST_PATH: Final[Path] = Path("system/apps/system_interface/app.toml")
 
 
 def _exit_on_signal(signum: int, frame: FrameType | None) -> None:
@@ -185,6 +193,8 @@ def main() -> None:
         config.system_interface_port,
         application,
     )
+    if not args.preview:
+        register_app(MANIFEST_PATH, AppUrl(f"http://localhost:{config.system_interface_port}"))
     server.serve_forever()
 
 

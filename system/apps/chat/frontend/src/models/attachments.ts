@@ -228,14 +228,24 @@ function makeUploadedAttachment(path: string, size: number): UploadedAttachment 
   };
 }
 
-/** Upload a single file to the agent VM, returning its stored metadata. Throws on a non-2xx response. A file
- *  given ``ownerChatId`` is stored in that chat's folder, so it is destroyed with the chat; any other goes to
- *  the workspace's uploads. */
+/** The status the chat app answers an upload the workspace's full disk refused. */
+const DISK_FULL_HTTP_STATUS = 507;
+
+/** An upload the workspace's full disk refused; its message is the server's one line for the user. */
+export class DiskFullUploadError extends Error {}
+
+/** Upload a single file to the agent VM, returning its stored metadata. Throws on a non-2xx response: a
+ *  DiskFullUploadError when the workspace's disk is full. A file given ``ownerChatId`` is stored in that chat's
+ *  folder, so it is destroyed with the chat; any other goes to the workspace's uploads. */
 export async function uploadAttachment(file: File, ownerChatId: string | null = null): Promise<UploadedAttachment> {
   const formData = new FormData();
   formData.append("file", file, file.name);
   const route = ownerChatId === null ? "/api/uploads" : `/api/chats/${encodeURIComponent(ownerChatId)}/uploads`;
   const response = await fetch(apiUrl(route), { method: "POST", body: formData });
+  if (response.status === DISK_FULL_HTTP_STATUS) {
+    const body = (await response.json()) as { detail: string };
+    throw new DiskFullUploadError(body.detail);
+  }
   if (!response.ok) {
     throw new Error(`Upload failed (HTTP ${response.status})`);
   }

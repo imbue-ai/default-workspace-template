@@ -9,6 +9,7 @@ from app_manifest.manifest import PinStyle
 from app_manifest.primitives import AppName
 from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
+from disk_headroom.full import is_disk_full_error
 from flask import Flask
 from flask import request
 from flask.typing import ResponseReturnValue
@@ -34,6 +35,7 @@ from workspace_layout.shell_url import POPPED_OUT_REFUSAL_STATUS
 
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.presence import utc_now
+from imbue.system_interface.request_helpers import answer_disk_full
 from imbue.system_interface.shell.api_models import AppRunningState
 from imbue.system_interface.shell.api_models import EmbedderMessageRelayResponse
 from imbue.system_interface.shell.api_models import PendingUpdateResponse
@@ -102,6 +104,8 @@ from imbue.system_interface.shell.tray_feed import speakers_client_ids
 
 
 def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
+    if is_disk_full_error(error):
+        return answer_disk_full(error)
     match error:
         case (
             UnknownAppError()

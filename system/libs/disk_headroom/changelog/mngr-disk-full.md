@@ -1,0 +1,1 @@
+New `disk_headroom.full`: `is_disk_full_error` tells a write refused for lack of space (ENOSPC, or EDQUOT for a cloud machine's disk quota) apart from other failures, through any wrapping error, and `DISK_FULL_MESSAGE` is the one line the user is told about it.

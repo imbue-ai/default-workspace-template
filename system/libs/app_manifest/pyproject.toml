@@ -8,6 +8,8 @@ dependencies = [
     # register_app writes the app's registry row through it.
     "app-registration",
     "click>=8.1",
+    # register_app tells a full disk apart from a refused registration through it.
+    "disk-headroom",
     # The Content-Security-Policy helper hooks a Flask app or blueprint; every workspace app is one.
     "flask>=3.0",
     "imbue-common",

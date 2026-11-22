@@ -598,14 +598,16 @@ def test_parse_supervisord_ports_reads_the_real_template_config(
             conf.read_text(encoding="utf-8")
         )
     ]
-    # The chat, the terminal, and Files register from inside their own processes (the
-    # registry scan covers them); the others register from their program lines.
-    assert {(port.name, port.port) for port in ports} >= {
-        ("system_interface", 8000),
-        ("screen", 8090),
+    # The shell, the chat, the terminal, and Files register from inside their own processes
+    # (the registry scan covers them); the others register from their program lines.
+    assert ("screen", 8090) in {(port.name, port.port) for port in ports}
+    assert not {port.name for port in ports} & {
+        "system_interface",
+        "terminal",
+        "chat",
+        "files",
     }
-    assert not {port.name for port in ports} & {"terminal", "chat", "files"}
-    assert [port.name for port in ports].count("system_interface") == 1
+    assert [port.name for port in ports].count("screen") == 1
 
 
 def _write_dropin_workspace(root: Path) -> Path:

@@ -1443,7 +1443,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           clearActionFailureNotice();
           actionFailureTitle =
             failedAttachments.length === 1 ? "An attachment didn't upload" : "Some attachments didn't upload";
-          actionFailureDetail = `${names} could not be uploaded, so the message was not sent. Remove the attachment, or try again.`;
+          const diskFullAttachment = failedAttachments.find((attachment) => attachment.isDiskFull === true);
+          actionFailureDetail =
+            diskFullAttachment?.error ??
+            `${names} could not be uploaded, so the message was not sent. Remove the attachment, or try again.`;
           m.redraw();
           return null;
         }

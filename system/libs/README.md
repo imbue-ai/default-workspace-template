@@ -35,6 +35,9 @@ README for details.
   the apps and services.
 - `chat_background_tasks/` - The marker files recording the background tasks
   each chat waits on, and their readers.
+- `history_sweep/` - Removes what deleted chats leave on disk (their claude
+  session files at once, their preserved transcripts after 30 days), never
+  anything a listed chat can open; run daily by the `history-sweep` routine.
 - `disk_headroom/` - How much the workspace can still write to its disk: the
   filesystem's free space, or the room left under a cloud machine's disk
   quota when that runs out first, and the agent-facing

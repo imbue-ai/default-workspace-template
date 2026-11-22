@@ -1,4 +1,5 @@
 import os
+import shutil
 import uuid
 from pathlib import Path
 
@@ -66,6 +67,8 @@ def store_uploaded_file(uploads_directory: Path, original_filename: str, file_st
         unique_subdirectory.mkdir(parents=True, exist_ok=True)
         file_storage.save(destination_path)
     except OSError as e:
+        # A partial copy is useless, and on a full disk it holds the room the user is trying to free.
+        shutil.rmtree(unique_subdirectory, ignore_errors=True)
         raise AttachmentError(f"Could not store uploaded file '{original_filename}'") from e
     size = read_image_size(destination_path)
     if size is None:

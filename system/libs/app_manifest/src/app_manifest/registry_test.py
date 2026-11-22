@@ -1,3 +1,7 @@
+import errno
+import os
+import threading
+from collections.abc import Callable
 from pathlib import Path
 from uuid import uuid4
 
@@ -12,6 +16,8 @@ from app_manifest.primitives import AppUrl
 from app_manifest.registry import read_origin_label
 from app_manifest.registry import read_registry
 from app_manifest.registry import register_app
+from app_manifest.registry import register_app_now
+from app_manifest.registry import register_or_retry_while_disk_full
 from app_manifest.registry_location import DEFAULT_APPS_FILE
 from app_manifest.registry_location import ENV_APPS_FILE
 from app_manifest.registry_location import registry_path
@@ -254,12 +260,15 @@ def test_register_app_writes_the_manifests_row(tmp_path: Path, registration_regi
     assert [launch_path.id for launch_path in rows[0].launch_paths] == ["new"]
 
 
-def test_register_app_reports_the_refusal_of_a_bad_manifest(tmp_path: Path, registration_registry: Path) -> None:
+@pytest.mark.parametrize("register", [register_app, register_app_now], ids=["retrying", "now"])
+def test_register_app_reports_the_refusal_of_a_bad_manifest(
+    tmp_path: Path, registration_registry: Path, register: Callable[[Path, AppUrl], None]
+) -> None:
     manifest_path = tmp_path / "app.toml"
     manifest_path.write_text('name = "Not A Name"\n')
 
     with pytest.raises(AppRegistrationError, match="invalid app name"):
-        register_app(manifest_path, AppUrl("http://localhost:8300"))
+        register(manifest_path, AppUrl("http://localhost:8300"))
 
 
 def test_register_app_reports_a_registry_that_does_not_parse(tmp_path: Path, registration_registry: Path) -> None:
@@ -270,3 +279,78 @@ def test_register_app_reports_a_registry_that_does_not_parse(tmp_path: Path, reg
 
     with pytest.raises(AppRegistrationError, match="registration of"):
         register_app(manifest_path, AppUrl("http://localhost:8300"))
+
+
+def _disk_full_refusal() -> AppRegistrationError:
+    try:
+        raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+    except OSError as e:
+        refusal = AppRegistrationError(f"registration failed: {e}")
+        refusal.__cause__ = e
+        return refusal
+
+
+class _FlakyRegistration:
+    """A registration the disk refuses ``refusals`` times, then lands."""
+
+    def __init__(self, refusals: list[AppRegistrationError]) -> None:
+        self.refusals = refusals
+        self.attempts = 0
+        self.landed = threading.Event()
+
+    def __call__(self) -> None:
+        self.attempts += 1
+        if self.refusals:
+            raise self.refusals.pop(0)
+        self.landed.set()
+
+
+def test_a_registration_the_full_disk_refuses_lands_once_there_is_room() -> None:
+    registration = _FlakyRegistration([_disk_full_refusal(), _disk_full_refusal(), _disk_full_refusal()])
+
+    retry = register_or_retry_while_disk_full(
+        registration, "app.toml", first_delay_seconds=0.01, max_delay_seconds=0.02
+    )
+
+    assert retry is not None
+    retry.join(timeout=5)
+    assert registration.landed.is_set()
+    assert registration.attempts == 4
+
+
+def test_a_registration_that_lands_at_once_starts_no_retry() -> None:
+    registration = _FlakyRegistration([])
+
+    assert register_or_retry_while_disk_full(registration, "app.toml") is None
+    assert registration.attempts == 1
+
+
+def test_a_refusal_other_than_a_full_disk_still_raises() -> None:
+    registration = _FlakyRegistration([AppRegistrationError("invalid app name")])
+
+    with pytest.raises(AppRegistrationError, match="invalid app name"):
+        register_or_retry_while_disk_full(registration, "app.toml")
+
+
+def test_the_retry_gives_up_on_a_refusal_other_than_a_full_disk() -> None:
+    registration = _FlakyRegistration([_disk_full_refusal(), AppRegistrationError("invalid app name")])
+
+    retry = register_or_retry_while_disk_full(registration, "app.toml", first_delay_seconds=0.01)
+
+    assert retry is not None
+    retry.join(timeout=5)
+    assert not retry.is_alive()
+    assert not registration.landed.is_set()
+    assert registration.attempts == 2
+
+
+def test_a_stopped_retry_ends_without_registering() -> None:
+    registration = _FlakyRegistration([_disk_full_refusal()])
+    stop = threading.Event()
+    stop.set()
+
+    retry = register_or_retry_while_disk_full(registration, "app.toml", stop=stop, first_delay_seconds=0.01)
+
+    assert retry is not None
+    retry.join(timeout=5)
+    assert registration.attempts == 1
