@@ -712,9 +712,10 @@ owner's settings (`web_push/settings.json`) and the log of the latest 100 sends
   and registers the subscription. On iPhone and iPad (iOS 16.4 or later) Web
   Push works only in the home-screen app, which the page says when opened in
   Safari.
-- **The page.** It lists every device with when its push service last took a
-  message, removes any of them, sends this one a test, and shows the push
-  service's raw answer. For the owner alone it also has the full-text switch
+- **The page.** It is the owner's alone (anyone else is refused all of it). It
+  lists every device with when its push service last took a message, removes
+  any of them, sends this one a test, and shows the push service's raw answer.
+  It also has the full-text switch
   (`GET` and `POST /api/web-push/settings`, `{"is_full_text"}`, off by
   default), the recent sends (`GET /api/web-push/sends`: when, which chat, what
   was asked, what the devices showed, each push service's answer), and the
