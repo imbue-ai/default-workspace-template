@@ -248,7 +248,7 @@ Creating switches the creating client to the new desktop.
 
 ### 4.9 Shortcut gestures
 
-Single click selects; double click, Enter, or Space runs; on touch a tap runs, since a finger has no double tap worth asking for and nothing to select for; a drag beyond the threshold lifts the icon, shows the target cell, and drops it there; right-click or long-press opens the shortcut menu (Open, the complementary mode, Remove from desktop).
+Single click selects; double click, Enter, or Space runs; on touch a tap runs, since a finger has no double tap worth asking for and nothing to select for; a drag beyond the threshold lifts the icon, shows the target cell, and drops it there; right-click or long-press opens the shortcut menu (Open, the complementary mode, Remove from desktop; a shortcut to its app's pin path raises the pinned window in either mode, so its menu offers no mode rows).
 Adding a shortcut: the right-click menu of the launcher row of each of an app's default shortcuts (3.6), and of a taskbar entry of the app (for its first), offers "Add to desktop", placed at the first free cell in reading order in the shortcut's mode, or "Remove from desktop" when the active desktop holds it (launcher plan section 4.2); no other launch path is offered.
 
 ### 4.10 The taskbar
