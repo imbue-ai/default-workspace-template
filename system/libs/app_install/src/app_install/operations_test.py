@@ -607,6 +607,52 @@ def test_the_real_runtime_commits_exactly_the_removal_under_the_installers_own_a
     assert [problem.split(":")[0] for problem in outcome.problems] == ["supervisord did not drop the app's programs"]
 
 
+def test_the_command_says_what_an_uninstall_removed_and_what_it_left(tmp_path: Path) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    add_app(workspace, write_user_app(workspace, "notes"), None, never_bound)
+    record = load_record(workspace, "notes")
+    write_record(
+        workspace,
+        record.model_copy_update(to_update(record.field_ref().dev_repo_url, "https://github.com/octo/notes-dev")),
+    )
+    commit_all(workspace, "a workspace with notes")
+    write_workspace_file(workspace, "data/.apps/notes/notes.json", "[]")
+    root = ["--repo-root", str(workspace)]
+
+    uninstalled = CliRunner().invoke(main, [*root, "uninstall", "notes"])
+    again = CliRunner().invoke(main, [*root, "uninstall", "notes"])
+
+    report = json.loads(uninstalled.output)
+    (problem,) = report.pop("problems")
+    assert problem.startswith("supervisord did not drop the app's programs")
+    assert (uninstalled.exit_code, report) == (
+        0,
+        {
+            "result": "uninstalled",
+            "name": "notes",
+            "removed_paths": [
+                "system/supervisord.conf.d/notes.conf",
+                "system/apps/notes",
+                "system/config/apps/notes.toml",
+            ],
+            "removed_state_paths": [],
+            "kept_paths": ["data/.apps/notes"],
+            "kept_share_grants": None,
+            "kept_routine_state": [],
+            "kept_repositories": ["https://github.com/octo/notes-dev"],
+            "dependents": [],
+        },
+    )
+    assert (again.exit_code, json.loads(again.output)) == (
+        1,
+        {
+            "result": "refused",
+            "name": "notes",
+            "detail": "no app record for 'notes' (expected system/config/apps/notes.toml)",
+        },
+    )
+
+
 def test_the_real_runtime_commits_a_removal_that_holds_a_file_no_commit_had(tmp_path: Path) -> None:
     workspace = make_workspace_repository(tmp_path / "workspace")
     package = write_user_app(workspace, "notes")

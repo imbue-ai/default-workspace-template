@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from app_install.errors import DevRepositoryError
 from app_install.errors import PublishedNameTakenError
 from app_install.errors import PublishError
 from app_install.runtime import WorkspaceRuntime
@@ -52,6 +53,30 @@ def test_a_published_repository_is_created_public_closed_to_outsiders_and_given_
     assert '"private": false' in creation and '"description": "Keep short notes"' in creation
     assert '{"names": ["imbue-studio-app"]}' in topic
     assert '"has_issues": false' in lockdown and '"pull_request_creation_policy": "collaborators_only"' in lockdown
+
+
+def test_a_dev_repository_is_created_private_and_closed_to_outsiders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests = _latchkey_answering_a_publish(
+        tmp_path, monkeypatch, '{"name": "notes", "owner": {"login": "octo"}}', "{}"
+    )
+    runtime = WorkspaceRuntime(repo_root=tmp_path)
+
+    created = runtime.create_private_repository("notes", "Private development history of the notes app")
+
+    assert created.model_dump() == {
+        "url": "https://github.com/octo/notes",
+        "lockdown_problem": "",
+        "topic_problem": "",
+    }
+    creation, lockdown = requests.read_text().splitlines()
+    assert '"private": true' in creation and '"name": "notes"' in creation
+    assert '"has_issues": false' in lockdown and '"pull_request_creation_policy": "collaborators_only"' in lockdown
+
+    (tmp_path / "bin" / "creation.json").write_text('{"errors": [{"message": "name already exists on this account"}]}')
+    with pytest.raises(DevRepositoryError, match="name already exists"):
+        runtime.create_private_repository("notes", "Private development history of the notes app")
 
 
 def test_a_topic_that_is_not_set_is_a_problem_of_a_repository_that_was_created(

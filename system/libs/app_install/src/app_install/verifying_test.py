@@ -99,6 +99,30 @@ def test_verifying_again_on_the_same_version_writes_nothing(tmp_path: Path) -> N
     assert run_git(workspace, ["rev-parse", "HEAD"]) == before
 
 
+def test_the_command_says_whether_the_checks_passed_and_which_version_it_recorded(tmp_path: Path) -> None:
+    workspace = make_workspace_repository(tmp_path / "workspace")
+    # An app with no Python project has no environment to sync and no tests to run: its checks pass. One whose
+    # project has no lock does not sync from it.
+    add_app(workspace, write_user_app(workspace, "notes", is_python=False), None, never_bound)
+    add_app(workspace, write_user_app(workspace, "shelf"), None, never_bound)
+    commit_all(workspace, "Add the notes and shelf apps")
+    root = ["--repo-root", str(workspace)]
+
+    verified = CliRunner().invoke(main, [*root, "verify", "notes", "--template", "minds-v0.12.0"])
+    failed = CliRunner().invoke(main, [*root, "verify", "shelf", "--template", "minds-v0.12.0"])
+
+    assert (verified.exit_code, json.loads(verified.output)) == (
+        0,
+        {"result": "verified", "name": "notes", "verified_template": "minds-v0.12.0", "problems": []},
+    )
+    assert load_record(workspace, "notes").verified_template == "minds-v0.12.0"
+    assert run_git(workspace, ["log", "-1", "--format=%s"]) == "app-install: notes passes its checks on minds-v0.12.0"
+    refusal = json.loads(failed.output)
+    assert (failed.exit_code, refusal["result"], refusal["name"]) == (1, "tests_failed", "shelf")
+    assert "the checks of shelf fail" in refusal["detail"]
+    assert load_record(workspace, "shelf").verified_template == ""
+
+
 def test_the_command_refuses_a_value_that_is_no_template_version(tmp_path: Path) -> None:
     workspace = _workspace_with_notes(tmp_path)
 
