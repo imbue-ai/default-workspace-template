@@ -141,7 +141,10 @@ def apply_sweep(
     first_error_by_agent: dict[AgentId, OSError] = {}
     for removal in removals:
         earlier_error = first_error_by_agent.get(removal.agent_id)
-        if removal.reason == RemovalReason.EXPIRED_ARCHIVE and earlier_error is not None:
+        if (
+            removal.reason == RemovalReason.EXPIRED_ARCHIVE
+            and earlier_error is not None
+        ):
             failed.append((removal, earlier_error))
             continue
         try:
