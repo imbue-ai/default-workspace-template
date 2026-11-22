@@ -58,8 +58,9 @@ export const ESTIMATED_CHIP_ROW_HEIGHT_PX = 48;
 
 // Layout for the centered message column. Shared by the live transcript views
 // and the offscreen measurer, whose rows must lay out identically to measure
-// identically.
-export const MESSAGE_LIST_CLASS = "message-list mx-auto w-full max-w-(--width-message-column) flex flex-col py-6";
+// identically. No padding at its end: the last row's own margin is the space
+// under the transcript.
+export const MESSAGE_LIST_CLASS = "message-list mx-auto w-full max-w-(--width-message-column) flex flex-col pt-6";
 
 export interface RowDescriptor {
   key: string;

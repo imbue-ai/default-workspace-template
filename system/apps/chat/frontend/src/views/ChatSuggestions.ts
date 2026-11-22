@@ -3,9 +3,11 @@
  * nobody has spoken in ("Things to try", ``views/NewChatStrip.ts``), and the suggested answers to the reply the
  * chat waits on (``views/NextStepSuggestions.ts``).
  *
- * A strip is its pills over one quiet line, and the column holds exactly one such line directly above the
- * composer in every chat with an agent, with or without anything to say, so a strip that comes or goes moves
- * nothing; only next-step suggestions known to be switched off take it away.
+ * A strip is its pills over one quiet line. This module's component draws the lines, in a column in the footer
+ * that holds exactly one such line directly above the composer in every chat with an agent, with or without
+ * anything to say, so a strip that comes or goes moves nothing; only next-step suggestions known to be switched
+ * off take it away. The pills are drawn over the end of the transcript (``views/SuggestionLayer.ts``), from the
+ * same read of the chat (``chatStrips``).
  *
  * The two strips are never there together: a chat nobody has spoken in has no reply to suggest answers to, and
  * the first-run chat, whose first strip is its tree's, is offered no new-chat suggestions. Should both ever be,
@@ -36,6 +38,23 @@ function isPlacementEnabled(placement: SuggestionPlacement): boolean {
   return isSuggestionSwitchOn(SUGGESTION_SWITCHES[placement]) === true;
 }
 
+/** The strip each placement has for the chat now, or null for none: one at most, the next-step strip when both
+ *  could be. Each part of the page that draws a strip reads it on its own draw. */
+export function chatStrips(chatId: string): Record<SuggestionPlacement, PlacementStrip | null> {
+  void ensureChatSettings();
+  const nextStep = nextStepStrip(chatId);
+  // Read on every draw, so the chat's first message is seen whichever strip is drawn.
+  const newChat = newChatStrip(chatId, isPlacementEnabled("new_chat"));
+  return { new_chat: nextStep === null ? newChat : null, next_step: nextStep };
+}
+
+/** The strip whose pills are shown for the chat now, or null when none are. */
+export function openStrip(chatId: string): PlacementStrip | null {
+  const strips = chatStrips(chatId);
+  const strip = strips.next_step ?? strips.new_chat;
+  return strip !== null && strip.isOpen ? strip : null;
+}
+
 export function ChatSuggestions(): m.Component<{ chatId: string }> {
   let shownChatId: string | null = null;
   let stopFollowingNextStep: () => void = () => undefined;
@@ -57,14 +76,7 @@ export function ChatSuggestions(): m.Component<{ chatId: string }> {
     view(vnode) {
       const chatId = vnode.attrs.chatId;
       shownChatId = chatId;
-      void ensureChatSettings();
-      const nextStep = nextStepStrip(chatId);
-      // Read on every draw, so the chat's first message is seen whichever strip is drawn.
-      const newChat = newChatStrip(chatId, isPlacementEnabled("new_chat"));
-      const strips: Record<SuggestionPlacement, PlacementStrip | null> = {
-        new_chat: nextStep === null ? newChat : null,
-        next_step: nextStep,
-      };
+      const strips = chatStrips(chatId);
       // A new-chat strip's own line stands where the next-step line would, at the same height.
       const isEmptyLineKept = !isRoomChat(chatId) && !isNextStepSwitchedOff() && strips.new_chat === null;
       const isOwner = isViewerOwner();
@@ -86,9 +98,8 @@ export function ChatSuggestions(): m.Component<{ chatId: string }> {
           m(SuggestionStrip, {
             key: `${placement}:${strip.setKey}`,
             placement,
-            suggestions: strip.suggestions,
+            count: strip.suggestions.length,
             isOpen: strip.isOpen,
-            onPick: strip.onPick,
             onToggle: strip.onToggle,
             onDisable: isOwner ? link.disable : null,
           }),

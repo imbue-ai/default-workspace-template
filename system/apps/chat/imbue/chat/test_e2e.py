@@ -433,6 +433,43 @@ def test_conversation_and_composer_render(e2e_server: RunningWorkspace, page: Pa
     expect(send_button).to_be_enabled()
 
 
+def _set_fixture_agent(server: RunningWorkspace, agent_state: str, activity_state: ActivityState) -> None:
+    """Put the fixture chat's agent in a state, and tell the pages."""
+    manager = server.chat_state.agent_manager
+    agent = manager.get_agent_by_id(FIXTURE_AGENT_ID)
+    assert agent is not None
+    seed_agent_state(
+        manager,
+        FIXTURE_AGENT_ID,
+        name=agent.name,
+        state=agent_state,
+        labels=agent.labels,
+        activity_state=activity_state,
+    )
+    manager._broadcast_chats_updated()
+
+
+def _offer_fixed_suggestions(server: RunningWorkspace, labels: Sequence[str]) -> str:
+    """Store a set of the chat app's own under the fixture chat's last reply, and tell the pages: its pills show at
+    once. Return that reply's event id."""
+    state = server.chat_state
+    chat_id = ChatId(FIXTURE_AGENT_ID)
+    events = get_json(f"{server.chat_url}/api/chats/{FIXTURE_AGENT_ID}/events")["events"]
+    reply_event_id = [event["event_id"] for event in events if event["type"] == "assistant_message"][-1]
+    state.agent_manager.suggestion_store.write(
+        chat_id,
+        ChatSuggestions(
+            after_event_id=reply_event_id,
+            source=SuggestionSource.FIXED,
+            suggestions=tuple(
+                Suggestion(suggestion_id=f"start-{index}", label=label) for index, label in enumerate(labels)
+            ),
+        ),
+    )
+    state.broadcaster.broadcast_suggestions_updated(chat_id)
+    return reply_event_id
+
+
 def _assert_pills_are_a_list_on_the_users_side(pills: Locator, column: Locator) -> None:
     """One pill to a row, all as wide as the widest, their right edge 16px in from the column's."""
     boxes = [_box(pills.nth(index)) for index in range(pills.count())]
@@ -460,19 +497,9 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
     messenger = manager._messenger
     assert isinstance(messenger, RecordingMngrMessenger)
     chat_id = ChatId(FIXTURE_AGENT_ID)
-    agent = manager.get_agent_by_id(FIXTURE_AGENT_ID)
-    assert agent is not None
 
     def set_agent(agent_state: str, activity_state: ActivityState) -> None:
-        seed_agent_state(
-            manager,
-            FIXTURE_AGENT_ID,
-            name=agent.name,
-            state=agent_state,
-            labels=agent.labels,
-            activity_state=activity_state,
-        )
-        manager._broadcast_chats_updated()
+        _set_fixture_agent(e2e_server, agent_state, activity_state)
 
     set_agent("WAITING", ActivityState.IDLE)
     generated_labels = ["Show me what you can do", "Help me plan my week", "Build me an app", "Connect my email", "No"]
@@ -489,7 +516,7 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
     column = chat.locator(".chat-suggestions")
     line = column.locator(".suggestion-line")
     toggle = column.locator(".suggestion-line-toggle")
-    pills = column.locator(".suggestion-pill")
+    pills = chat.locator(".suggestion-layer .suggestion-pill")
     composer = chat.locator(".message-input-box")
     answered_lines = chat.locator(".answered-reply-suggestions")
 
@@ -500,20 +527,8 @@ def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_t
     empty_line_box, composer_box = _box(line), _box(composer)
 
     # The chat app's own set, under the fixture's reply, shows at once.
-    events = get_json(f"{e2e_server.chat_url}/api/chats/{FIXTURE_AGENT_ID}/events")["events"]
-    first_reply_event_id = [event["event_id"] for event in events if event["type"] == "assistant_message"][-1]
     fixed_labels = ["Describe what you want to make", "Get ideas for what to make", "See what Studio can do"]
-    manager.suggestion_store.write(
-        chat_id,
-        ChatSuggestions(
-            after_event_id=first_reply_event_id,
-            source=SuggestionSource.FIXED,
-            suggestions=tuple(
-                Suggestion(suggestion_id=f"start-{index}", label=label) for index, label in enumerate(fixed_labels)
-            ),
-        ),
-    )
-    state.broadcaster.broadcast_suggestions_updated(chat_id)
+    first_reply_event_id = _offer_fixed_suggestions(e2e_server, fixed_labels)
 
     expect(pills).to_have_text(fixed_labels, timeout=15000)
     expect(toggle).to_have_text("Hide suggestions")
@@ -604,19 +619,20 @@ def test_things_to_try_are_offered_on_a_chat_nobody_has_spoken_in_and_go_for_goo
         expect(chat.locator(".message-list")).to_contain_text("Welcome! What shall we build?")
         column = chat.locator(".chat-suggestions")
         strip = column.locator('.suggestion-strip[data-placement="new_chat"]')
-        pills = strip.locator(".suggestion-strip-pills .suggestion-pill")
+        shown = chat.locator('.suggestion-layer [data-placement="new_chat"]')
+        pills = shown.locator(".suggestion-strip-pills .suggestion-pill")
         line = column.locator(".suggestion-line")
         disable = strip.locator(".suggestion-line .suggestion-strip-disable")
         composer = chat.locator(".message-input-box")
 
         # No Imbue Studio app frames this workspace, so the two suggestions that need one are not offered.
         expect(pills).to_have_text(["Work in parallel by starting a new chat", "Build an app"], timeout=15000)
-        expect(strip).to_have_attribute("aria-label", "Things to try")
+        expect(shown).to_have_attribute("aria-label", "Things to try")
         expect(disable).to_have_text("disable new chat suggestions")
         # The strip's line is the column's one quiet line, and holds the link alone.
         expect(line).to_have_count(1)
         expect(line).to_have_text("disable new chat suggestions")
-        expect(column.get_by_role("button")).to_have_count(3)
+        expect(column.get_by_role("button")).to_have_count(1)
         _assert_pills_are_a_list_on_the_users_side(pills, column)
         assert _box(disable)["top"] >= _box(pills.last)["bottom"]
         assert abs(_box(disable)["right"] - _box(composer)["right"]) < 1
@@ -628,12 +644,278 @@ def test_things_to_try_are_offered_on_a_chat_nobody_has_spoken_in_and_go_for_goo
         textbox.press("Enter")
 
         expect(strip).to_have_count(0)
-        expect(column.locator(".suggestion-pill")).to_have_count(0)
+        expect(chat.locator(".suggestion-pill")).to_have_count(0)
         # Nothing is left to bring the strip back: the column holds the line's kept height, with nothing to click.
         expect(column.get_by_role("button")).to_have_count(0)
         expect(line).to_have_count(1)
         expect(line).to_have_text("")
         page.screenshot(path=str(tmp_path / "new-chat-strip-gone.png"))
+
+
+# Whether the pills in the layer over the transcript have finished rising in, so their boxes are where they stay.
+_PILLS_HAVE_RISEN_JS = "() => document.querySelector('.suggestion-layer-scroll')?.getAnimations().length === 0"
+
+# Whether the transcript is taller than its viewport and scrolled all the way down.
+_TRANSCRIPT_SCROLLS_AND_IS_AT_BOTTOM_JS = (
+    "() => { const el = document.querySelector('.transcript-scroll'); "
+    "return el.scrollHeight > el.clientHeight * 2 && el.scrollHeight - el.scrollTop - el.clientHeight <= 1; }"
+)
+
+# Whether the transcript has moved up from ``before`` by more than 100px.
+_TRANSCRIPT_SCROLLED_UP_FROM_JS = "(before) => document.querySelector('.transcript-scroll').scrollTop < before - 100"
+
+# The transcript's scrollTop once it has stopped moving: unchanged over ten animation frames.
+_TRANSCRIPT_SCROLL_TOP_ONCE_STILL_JS = """
+async () => {
+  const el = document.querySelector('.transcript-scroll');
+  let last = el.scrollTop;
+  let stillFrames = 0;
+  while (stillFrames < 10) {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    stillFrames = el.scrollTop === last ? stillFrames + 1 : 0;
+    last = el.scrollTop;
+  }
+  return last;
+}
+"""
+
+# What lies under a point beside the pills and under the middle of the first pill: the point is inside the layer's
+# box, level with the first pill and 40px in from the layer's left edge.
+_HITS_BESIDE_AND_ON_THE_FIRST_PILL_JS = """
+() => {
+  const layer = document.querySelector('.suggestion-layer').getBoundingClientRect();
+  const pill = document.querySelector('.suggestion-layer .suggestion-pill').getBoundingClientRect();
+  const y = (pill.top + pill.bottom) / 2;
+  const beside = document.elementFromPoint(layer.left + 40, y);
+  const onPill = document.elementFromPoint((pill.left + pill.right) / 2, y);
+  return {
+    isPointLeftOfThePill: layer.left + 40 < pill.left,
+    isPointInTheLayerBox: layer.top <= y && y <= layer.bottom,
+    isBesideInTheLayer: beside.closest('.suggestion-layer') !== null,
+    isBesideInTheMessageList: beside.closest('.message-list') !== null,
+    isOnPillAPill: onPill.classList.contains('suggestion-pill'),
+  };
+}
+"""
+
+_START_LABELS = ["Describe what you want to make", "Get ideas for what to make", "See what Studio can do"]
+
+
+def _open_long_idle_chat(page: Page, server: RunningWorkspace) -> None:
+    """Open the fixture chat, whose turn is over and whose transcript is taller than its window, at its end."""
+    _set_fixture_agent(server, "WAITING", ActivityState.IDLE)
+    _open_fixture_chat(page, server)
+    expect(_chat(page).locator(".turn-done-mark")).to_have_count(1, timeout=15000)
+    _chat_frame(page).wait_for_function(_TRANSCRIPT_SCROLLS_AND_IS_AT_BOTTOM_JS, timeout=15000)
+
+
+def _show_start_pills(page: Page, server: RunningWorkspace, labels: Sequence[str] = _START_LABELS) -> Locator:
+    """Offer the fixture chat's last reply a set whose pills show at once, and return the pills once in place."""
+    _offer_fixed_suggestions(server, labels)
+    pills = _chat(page).locator(".suggestion-layer .suggestion-pill")
+    expect(pills).to_have_text(list(labels), timeout=15000)
+    _chat_frame(page).wait_for_function(_PILLS_HAVE_RISEN_JS, timeout=5000)
+    return pills
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_open_suggestion_pills_float_over_the_end_of_the_transcript_and_leave_the_footer_as_it_is(
+    tmp_path: Path, page: Page
+) -> None:
+    """At the end of a chat, the last reply's done mark ends some 20px above what follows it: the footer's quiet line,
+    or the first pill once pills are shown. The pills are drawn over the transcript's area, above the footer, whose
+    box and composer stay where they are as the pills come and go."""
+    with _running_e2e_server(tmp_path, session_events=_make_long_conversation_events(12)) as server:
+        _open_long_idle_chat(page, server)
+        chat = _chat(page)
+        frame = _chat_frame(page)
+        area = chat.locator(".chat-transcript-area")
+        footer = chat.locator(".app-footer")
+        line = chat.locator(".chat-suggestions .suggestion-line")
+        toggle = chat.locator(".chat-suggestions .suggestion-line-toggle")
+        composer = chat.locator(".message-input-box")
+        done_mark = chat.locator(".turn-done-mark")
+
+        footer_box, composer_box, line_box = _box(footer), _box(composer), _box(line)
+        assert 12 <= line_box["top"] - _box(done_mark)["bottom"] <= 32
+
+        pills = _show_start_pills(page, server)
+
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        assert 12 <= _box(pills.first)["top"] - _box(done_mark)["bottom"] <= 32
+        area_box = _box(area)
+        for index in range(pills.count()):
+            pill_box = _box(pills.nth(index))
+            assert area_box["top"] <= pill_box["top"] and pill_box["bottom"] <= area_box["bottom"]
+            assert pill_box["bottom"] <= footer_box["top"]
+        assert _box(footer) == footer_box, "the footer keeps its box with the pills shown"
+        assert _box(composer) == composer_box
+        assert _box(line) == line_box
+        page.screenshot(path=str(tmp_path / "1-pills-shown-at-the-end.png"))
+
+        toggle.click()
+
+        expect(pills).to_have_count(0)
+        expect(toggle).to_have_text("See 3 suggestions")
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        assert _box(footer) == footer_box, "the footer keeps its box with the pills hidden"
+        assert _box(composer) == composer_box
+        assert 12 <= _box(line)["top"] - _box(done_mark)["bottom"] <= 32
+        page.screenshot(path=str(tmp_path / "2-pills-hidden-at-the-end.png"))
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_suggestion_pills_come_and_go_without_moving_a_reader_who_scrolled_up_or_one_off_the_end(
+    tmp_path: Path, page: Page
+) -> None:
+    """A reader who has scrolled up sees nothing move as the pills are hidden and shown: the transcript keeps its
+    place under them. A reader at the end stays at the end, with the last reply clear of the pills."""
+    with _running_e2e_server(tmp_path, session_events=_make_long_conversation_events(30)) as server:
+        _open_long_idle_chat(page, server)
+        chat = _chat(page)
+        frame = _chat_frame(page)
+        transcript = chat.locator(".transcript-scroll")
+        message_list = chat.locator(".message-list")
+        toggle = chat.locator(".chat-suggestions .suggestion-line-toggle")
+        done_mark = chat.locator(".turn-done-mark")
+        pills = _show_start_pills(page, server)
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        top_at_the_end = frame.evaluate(_TRANSCRIPT_SCROLL_TOP_ONCE_STILL_JS)
+
+        transcript.hover(position={"x": 80, "y": 80})
+        page.mouse.wheel(0, -700)
+        frame.wait_for_function(_TRANSCRIPT_SCROLLED_UP_FROM_JS, arg=top_at_the_end, timeout=5000)
+        top_scrolled_up = frame.evaluate(_TRANSCRIPT_SCROLL_TOP_ONCE_STILL_JS)
+        list_box = _box(message_list)
+        page.screenshot(path=str(tmp_path / "1-scrolled-up-under-the-pills.png"))
+
+        toggle.click()
+        expect(pills).to_have_count(0)
+        assert frame.evaluate(_TRANSCRIPT_SCROLL_TOP_ONCE_STILL_JS) == top_scrolled_up
+        assert _box(message_list)["top"] == list_box["top"]
+
+        toggle.click()
+        expect(pills).to_have_count(3)
+        assert frame.evaluate(_TRANSCRIPT_SCROLL_TOP_ONCE_STILL_JS) == top_scrolled_up
+        assert _box(message_list)["top"] == list_box["top"]
+
+        # Back at the end, the reader stays there as the pills go and come back.
+        transcript.hover(position={"x": 80, "y": 80})
+        page.mouse.wheel(0, 100000)
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        toggle.click()
+        expect(pills).to_have_count(0)
+        assert frame.evaluate(_MAX_TRANSCRIPT_BOTTOM_GAP_JS) <= 1
+
+        toggle.click()
+        expect(pills).to_have_count(3)
+        frame.wait_for_function(_PILLS_HAVE_RISEN_JS, timeout=5000)
+        assert frame.evaluate(_MAX_TRANSCRIPT_BOTTOM_GAP_JS) <= 1
+        assert 12 <= _box(pills.first)["top"] - _box(done_mark)["bottom"] <= 32
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_the_space_beside_floating_suggestion_pills_is_the_transcripts_and_a_pill_takes_its_own_click(
+    tmp_path: Path, page: Page
+) -> None:
+    """The layer the pills float in takes no pointer: a wheel turned over a pill scrolls the transcript, a point
+    beside the pills hits the message underneath, and a pill is still a button that sends its label."""
+    with _running_e2e_server(tmp_path, session_events=_make_long_conversation_events(30)) as server:
+        messenger = server.chat_state.agent_manager._messenger
+        assert isinstance(messenger, RecordingMngrMessenger)
+        _open_long_idle_chat(page, server)
+        frame = _chat_frame(page)
+        pills = _show_start_pills(page, server)
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        top_at_the_end = frame.evaluate(_TRANSCRIPT_SCROLL_TOP_ONCE_STILL_JS)
+
+        pills.first.hover()
+        page.mouse.wheel(0, -700)
+        frame.wait_for_function(_TRANSCRIPT_SCROLLED_UP_FROM_JS, arg=top_at_the_end, timeout=5000)
+        frame.evaluate(_TRANSCRIPT_SCROLL_TOP_ONCE_STILL_JS)
+
+        assert frame.evaluate(_HITS_BESIDE_AND_ON_THE_FIRST_PILL_JS) == {
+            "isPointLeftOfThePill": True,
+            "isPointInTheLayerBox": True,
+            "isBesideInTheLayer": False,
+            "isBesideInTheMessageList": True,
+            "isOnPillAPill": True,
+        }
+        page.screenshot(path=str(tmp_path / "beside-the-pills.png"))
+
+        pills.nth(1).click()
+
+        wait_for(lambda: (FIXTURE_AGENT_ID, _START_LABELS[1]) in messenger.sent, timeout=10.0)
+        expect(pills).to_have_count(0)
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_tall_list_of_suggestion_pills_keeps_to_its_share_of_the_transcript_and_scrolls_inside_it(
+    tmp_path: Path, page: Page
+) -> None:
+    """Ten pills do not cover the transcript: the layer stops at about 60% of the transcript's height, the last
+    reply still ends above it, and the list scrolls inside the layer to its last pill."""
+    labels = [f"Suggestion number {index + 1}" for index in range(10)]
+    with _running_e2e_server(tmp_path, session_events=_make_long_conversation_events(12)) as server:
+        _open_long_idle_chat(page, server)
+        chat = _chat(page)
+        frame = _chat_frame(page)
+        layer = chat.locator(".suggestion-layer")
+        pills = _show_start_pills(page, server, labels)
+
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        area_box, layer_box = _box(chat.locator(".chat-transcript-area")), _box(layer)
+        area_height = area_box["bottom"] - area_box["top"]
+        assert layer_box["bottom"] - layer_box["top"] <= 0.6 * area_height + 1
+        assert layer_box["bottom"] - layer_box["top"] >= 0.4 * area_height
+        assert abs(layer_box["bottom"] - area_box["bottom"]) <= 1
+        assert 8 <= layer_box["top"] - _box(chat.locator(".turn-done-mark"))["bottom"] <= 32
+        assert _box(pills.last)["top"] >= layer_box["bottom"], "the last pill waits below the layer's edge"
+        page.screenshot(path=str(tmp_path / "1-ten-pills.png"))
+
+        pills.nth(2).hover()
+        page.mouse.wheel(0, 2000)
+
+        frame.wait_for_function(
+            "() => { const el = document.querySelector('.suggestion-layer-scroll'); "
+            "return el.scrollTop > 0 && el.scrollHeight - el.scrollTop - el.clientHeight <= 1; }",
+            timeout=5000,
+        )
+        expect(pills.last).to_be_in_viewport()
+        assert _box(pills.last)["bottom"] <= _box(layer)["bottom"]
+        page.screenshot(path=str(tmp_path / "2-ten-pills-scrolled-to-the-last.png"))
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_suggestion_pills_float_over_the_transcript_in_the_phone_layout_in_line_with_its_messages(
+    tmp_path: Path, page: Page
+) -> None:
+    """At a phone's width the pills float over the transcript the same way: set in 16px from the edge of the
+    transcript's own column, above a footer that keeps its box, the last reply ending just above them."""
+    with _running_e2e_server(tmp_path, session_events=_make_long_conversation_events(12)) as server:
+        _set_fixture_agent(server, "WAITING", ActivityState.IDLE)
+        _open_narrow_chat_root(page, server)
+        chat = _shown_chat_of_root(page)
+        frame = _chat_frame(page)
+        expect(chat.locator(".turn-done-mark")).to_have_count(1, timeout=15000)
+        frame.wait_for_function(_TRANSCRIPT_SCROLLS_AND_IS_AT_BOTTOM_JS, timeout=15000)
+        footer = chat.locator(".app-footer")
+        footer_box = _box(footer)
+
+        # Short enough to leave the far side of a phone's column clear.
+        labels = ["Go ahead", "Change the plan", "Stop here"]
+        _offer_fixed_suggestions(server, labels)
+        pills = chat.locator(".suggestion-layer .suggestion-pill")
+        expect(pills).to_have_text(labels, timeout=15000)
+        frame.wait_for_function(_PILLS_HAVE_RISEN_JS, timeout=5000)
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+
+        _assert_pills_are_a_list_on_the_users_side(pills, chat.locator(".message-list"))
+        assert _box(pills.last)["bottom"] <= footer_box["top"]
+        assert _box(pills.first)["top"] >= _box(chat.locator(".chat-transcript-area"))["top"]
+        assert _box(footer) == footer_box
+        assert 12 <= _box(pills.first)["top"] - _box(chat.locator(".turn-done-mark"))["bottom"] <= 32
+        page.screenshot(path=str(tmp_path / "phone-pills-shown.png"))
 
 
 @pytest.mark.timeout(90, func_only=False)

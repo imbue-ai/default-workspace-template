@@ -850,7 +850,9 @@
 /* The pills of a strip of suggestions (views/SuggestionStrip.ts) rise into place above the composer as they
    appear. They are dashed, to read as offers rather than as controls of the page, under a shadow light enough to
    lift them off the chat without boxing them; the recommended one is the success green. Reduced motion shows them
-   in place. */
+   in place. A pill is filled with the chat's own background, since the open pills of the strip above the composer
+   float over the transcript's text; its hover tint is laid over that fill rather than replacing it, the tint being
+   translucent. */
 @keyframes suggestion-rise {
   from {
     opacity: 0;
@@ -867,7 +869,7 @@
   padding: 4px 10px;
   border: 1px dashed var(--c-border-strong);
   border-radius: var(--radius-md);
-  background: transparent;
+  background-color: var(--c-bg-chat);
   box-shadow:
     0 1px 2px rgba(0, 0, 0, 0.045),
     0 1px 1px rgba(0, 0, 0, 0.03);
@@ -883,7 +885,7 @@
 }
 
 .suggestion-pill:hover {
-  background: var(--c-fill-hover);
+  background-image: linear-gradient(var(--c-fill-hover), var(--c-fill-hover));
 }
 
 .suggestion-pill:focus-visible {
@@ -897,7 +899,29 @@
 }
 
 .suggestion-pill--recommended:hover {
-  background: var(--c-success-bg);
+  background-color: var(--c-success-bg);
+  background-image: none;
+}
+
+/* The layer the open pills float in over the transcript's end (views/SuggestionLayer.ts). It takes no pointer
+   events, so a click or a selection beside and between the pills reaches the transcript underneath; each pill
+   takes its own. A list taller than the layer scrolls inside it with no scrollbar of its own, which would need
+   the pointer the layer gives up. */
+.suggestion-layer {
+  pointer-events: none;
+  user-select: none;
+}
+
+.suggestion-layer .suggestion-pill {
+  pointer-events: auto;
+}
+
+.suggestion-layer-scroll {
+  scrollbar-width: none;
+}
+
+.suggestion-layer-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

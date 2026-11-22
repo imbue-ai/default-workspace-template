@@ -47,6 +47,7 @@ import {
 import { assistantMessageFixture, userMessageFixture } from "../models/transcriptEventFixture";
 import { answeredReplySuggestions } from "./AnsweredReplySuggestions";
 import { ChatSuggestions } from "./ChatSuggestions";
+import { SuggestionLayer } from "./SuggestionLayer";
 
 const CHAT = "agent-chat";
 
@@ -79,7 +80,7 @@ function draw(): void {
       m("div", { key: eventId, "data-reply": eventId }, answeredReplySuggestions(CHAT, [eventId])),
     ),
   );
-  m.render(composerRoot, m(ChatSuggestions, { chatId: CHAT }));
+  m.render(composerRoot, [m(SuggestionLayer, { chatId: CHAT }), m(ChatSuggestions, { chatId: CHAT })]);
 }
 
 /** Let the page's requests answer, then draw what they brought. */

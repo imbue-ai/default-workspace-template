@@ -62,6 +62,7 @@ import {
 } from "../models/suggestionsAnswerFixture";
 import { assistantMessageFixture, userMessageFixture } from "../models/transcriptEventFixture";
 import { ChatSuggestions } from "./ChatSuggestions";
+import { SuggestionLayer } from "./SuggestionLayer";
 import { hasUserMessage } from "./last-reply";
 import { SUGGESTIONS_OFF_NOTICE_MS } from "./suggestion-placement";
 
@@ -102,8 +103,10 @@ let requests: { method: string; url: string; params?: unknown; body?: unknown }[
 let root: HTMLElement;
 let showNewChatCoachMark: ReturnType<typeof vi.fn>;
 
+/** A strip's two parts, in the order the chat panel draws them: its open pills in the layer over the transcript,
+ *  then its line above the composer. */
 function draw(): void {
-  m.render(root, m(ChatSuggestions, { chatId: CHAT }));
+  m.render(root, [m(SuggestionLayer, { chatId: CHAT }), m(ChatSuggestions, { chatId: CHAT })]);
 }
 
 /** Let the page's requests answer, then draw what they brought. */
@@ -120,6 +123,14 @@ async function drawAndSettle(): Promise<void> {
   await settle();
 }
 
+/** Whether the page draws nothing of any strip: no column above the composer, and nothing in the layer. */
+function drawsNoStrip(): boolean {
+  return (
+    root.querySelector(".chat-suggestions") === null &&
+    root.querySelector(".suggestion-layer")?.childElementCount === 0
+  );
+}
+
 function strips(): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>(".suggestion-strip")];
 }
@@ -132,8 +143,15 @@ function isOpen(placement: string): boolean | null {
   return strip(placement)?.classList.contains("suggestion-strip--open") ?? null;
 }
 
+/** The open pills of a placement's strip, in the layer over the transcript. */
+function layerStrip(placement: string): HTMLElement | null {
+  return root.querySelector<HTMLElement>(`.suggestion-layer [data-placement="${placement}"]`);
+}
+
 function pillLabels(placement: string): string[] {
-  return [...(strip(placement)?.querySelectorAll(".suggestion-pill") ?? [])].map((pill) => pill.textContent ?? "");
+  return [...(layerStrip(placement)?.querySelectorAll(".suggestion-pill") ?? [])].map(
+    (pill) => pill.textContent ?? "",
+  );
 }
 
 /** What the next-step line above the composer says: "" for an empty one, null when its height is not kept. */
@@ -151,7 +169,7 @@ function click(selector: string): void {
 }
 
 function clickPill(placement: string, label: string): void {
-  const pill = [...(strip(placement)?.querySelectorAll<HTMLElement>(".suggestion-pill") ?? [])].find(
+  const pill = [...(layerStrip(placement)?.querySelectorAll<HTMLElement>(".suggestion-pill") ?? [])].find(
     (candidate) => candidate.textContent === label,
   );
   expect(pill, `${label} should be offered`).toBeDefined();
@@ -297,7 +315,7 @@ describe("the new-chat strip", () => {
 
     expect(newChatReads()).toEqual([{ chat_id: CHAT }]);
     expect(isOpen("new_chat")).toBe(true);
-    expect(strip("new_chat")?.getAttribute("aria-label")).toBe("Things to try");
+    expect(layerStrip("new_chat")?.getAttribute("aria-label")).toBe("Things to try");
     expect(pillLabels("new_chat")).toEqual(FIRST_THREE_LABELS);
     // Its line is the one quiet line above the composer, and holds its link alone.
     expect(nextStepLineText()).toBe("disable new chat suggestions");
@@ -354,7 +372,7 @@ describe("the new-chat strip", () => {
     newAndEmpty();
     await drawAndSettle();
 
-    expect(root.firstElementChild).toBeNull();
+    expect(drawsNoStrip()).toBe(true);
     expect(newChatReads()).toEqual([]);
   });
 
@@ -550,5 +568,114 @@ describe("the link that switches a placement off", () => {
 
     expect(strip("new_chat")).toBeNull();
     expect(root.querySelector(".suggestions-off-notice")).toBeNull();
+  });
+});
+
+describe("where a strip's two parts are drawn", () => {
+  let onElement: ReturnType<typeof vi.fn<(element: HTMLElement | null) => void>>;
+
+  /** The chat panel's two homes for a strip: the transcript's scroll element, which the layer ends, and the footer. */
+  function drawPage(): void {
+    m.render(root, [
+      m("main", m(SuggestionLayer, { chatId: CHAT, onElement })),
+      m("footer", m(ChatSuggestions, { chatId: CHAT })),
+    ]);
+  }
+
+  async function drawPageAndSettle(): Promise<void> {
+    drawPage();
+    for (let pass = 0; pass < 2; pass++) {
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      drawPage();
+    }
+  }
+
+  function layer(): HTMLElement {
+    return root.querySelector<HTMLElement>("main > .suggestion-layer")!;
+  }
+
+  beforeEach(() => {
+    onElement = vi.fn();
+  });
+
+  it("draws the shown pills in the layer over the transcript, and the line alone in the footer", async () => {
+    stored.nextSteps = nextSteps("a-1", "fixed");
+    await drawPageAndSettle();
+
+    const group = layer().querySelector<HTMLElement>('[data-placement="next_step"]')!;
+    expect(group.getAttribute("role")).toBe("group");
+    expect(group.getAttribute("aria-label")).toBe("Suggestions");
+    expect([...group.querySelectorAll(".suggestion-pill")].map((pill) => pill.textContent)).toEqual([
+      "Go ahead",
+      "Change the plan",
+    ]);
+    expect(root.querySelectorAll("footer .suggestion-pill")).toHaveLength(0);
+    expect(root.querySelectorAll("main .suggestion-line")).toHaveLength(0);
+    expect(root.querySelector("footer .chat-suggestions .suggestion-line")?.textContent).toBe(
+      "disable suggestionsHide suggestions",
+    );
+  });
+
+  it("ends the scroll element at its bottom edge, at most 60% of its height, scrolling a taller list inside", async () => {
+    stored.nextSteps = nextSteps("a-1", "fixed");
+    await drawPageAndSettle();
+
+    expect([...layer().classList]).toEqual(expect.arrayContaining(["sticky", "bottom-0", "mt-auto", "max-h-[60%]"]));
+    expect(layer().nextElementSibling).toBeNull();
+    const scroller = layer().querySelector<HTMLElement>(".suggestion-layer-scroll")!;
+    expect([...scroller.classList]).toEqual(expect.arrayContaining(["min-h-0", "overflow-y-auto"]));
+    // The pills alone rise in.
+    expect(scroller.classList.contains("suggestion-rise")).toBe(true);
+    expect(scroller.firstElementChild?.classList.contains("suggestion-strip-pills")).toBe(true);
+  });
+
+  it("holds nothing while the pills wait behind their line, and is still there", async () => {
+    stored.nextSteps = nextSteps("a-1");
+    await drawPageAndSettle();
+
+    expect(layer().childElementCount).toBe(0);
+    expect(root.querySelector("footer .suggestion-line")?.textContent).toBe("See 2 suggestions");
+
+    click("footer .suggestion-line-toggle");
+    drawPage();
+    expect(layer().querySelectorAll(".suggestion-pill")).toHaveLength(2);
+
+    click("footer .suggestion-line-toggle");
+    drawPage();
+    expect(layer().childElementCount).toBe(0);
+  });
+
+  it("draws a new-chat strip's pills there too, under its own name", async () => {
+    newAndEmpty();
+    await drawPageAndSettle();
+
+    const group = layer().querySelector<HTMLElement>('[data-placement="new_chat"]')!;
+    expect(group.getAttribute("aria-label")).toBe("Things to try");
+    expect(group.querySelectorAll(".suggestion-pill")).toHaveLength(FIRST_THREE_LABELS.length);
+    expect(root.querySelector("footer .suggestion-line")?.textContent).toBe("disable new chat suggestions");
+    expect(root.querySelectorAll("footer .suggestion-pill")).toHaveLength(0);
+  });
+
+  it("draws another reply's pills as new ones, so they rise in rather than change in place", async () => {
+    stored.nextSteps = nextSteps("a-1", "fixed");
+    await drawPageAndSettle();
+    const first = layer().firstElementChild;
+
+    mocks.events = [userMessage("u-1"), reply("a-1"), userMessage("u-2"), reply("a-2")];
+    stored.nextSteps = nextSteps("a-2", "fixed");
+    resetSuggestionsForTests();
+    await drawPageAndSettle();
+
+    expect(layer().firstElementChild).not.toBeNull();
+    expect(layer().firstElementChild).not.toBe(first);
+  });
+
+  it("tells its element once it is drawn, and null as it goes", async () => {
+    await drawPageAndSettle();
+    expect(onElement.mock.calls).toEqual([[layer()]]);
+
+    m.render(root, null);
+    expect(onElement.mock.calls).toHaveLength(2);
+    expect(onElement.mock.calls[1]).toEqual([null]);
   });
 });

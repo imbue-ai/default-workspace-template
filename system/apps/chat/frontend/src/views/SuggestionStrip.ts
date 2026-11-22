@@ -3,13 +3,15 @@
  * side of the column, one to a row and all as wide as the widest (the recommended one in green); their look is
  * ``style.css``'s (``suggestion-pill``).
  *
- * Both placements read alike: the pills, and one quiet line under them. The next-step strip's line is always there:
- * it says how many suggestions wait and shows them above itself, then offers to hide them again, with the link
- * that switches the placement off beside that. The same line stands in the transcript under a reply that has been
- * answered (``views/AnsweredReplySuggestions.ts``). A new-chat strip's pills are always shown, and its line holds
- * its link alone.
+ * Both placements read alike: the pills, and one quiet line under them. The two are drawn apart: the pills float
+ * over the end of the transcript (``views/SuggestionLayer.ts``), and the line, which this module's component
+ * draws, stays in the footer directly above the composer, so showing or hiding the pills moves nothing there. The
+ * next-step strip's line is always there: it says how many suggestions wait and shows them, then offers to hide
+ * them again, with the link that switches the placement off beside that. The same line stands in the transcript
+ * under a reply that has been answered (``views/AnsweredReplySuggestions.ts``). A new-chat strip's pills are always
+ * shown, and its line holds its link alone.
  *
- * The strips of a chat share one column at the composer's width (``views/ChatSuggestions.ts``).
+ * The lines of a chat's strips share one column at the composer's width (``views/ChatSuggestions.ts``).
  */
 
 import m from "mithril";
@@ -39,10 +41,10 @@ export const SUGGESTION_PLACEMENT_WORDS: Record<SuggestionPlacement, PlacementWo
 
 export interface SuggestionStripAttrs {
   placement: SuggestionPlacement;
-  suggestions: readonly Suggestion[];
-  /** The pills are shown. */
+  /** How many suggestions the strip holds. */
+  count: number;
+  /** The pills are shown, in the layer over the transcript's end. */
   isOpen: boolean;
-  onPick: (suggestion: Suggestion) => void;
   /** Shows the pills from the strip's line, or hides them behind it; null for a strip whose pills are always
    *  shown, whose line then holds its link alone. */
   onToggle: (() => void) | null;
@@ -135,33 +137,24 @@ function linkLine(placement: SuggestionPlacement, onDisable: (() => void) | null
   return m("div", { class: LINE_CLASS }, onDisable === null ? null : disableLink(placement, onDisable));
 }
 
+/** A strip's part in the footer: its line. */
 export function SuggestionStrip(): m.Component<SuggestionStripAttrs> {
   return {
     view({ attrs }) {
       return m(
         "div",
         {
-          class:
-            `suggestion-strip ${attrs.isOpen ? "suggestion-strip--open" : "suggestion-strip--collapsed"} ` +
-            "flex flex-col gap-1.5",
+          class: `suggestion-strip ${attrs.isOpen ? "suggestion-strip--open" : "suggestion-strip--collapsed"}`,
           "data-placement": attrs.placement,
-          role: "group",
-          "aria-label": SUGGESTION_PLACEMENT_WORDS[attrs.placement].label,
         },
-        [
-          // The pills alone rise in: the line under them stays where it is.
-          attrs.isOpen
-            ? m("div", { class: "suggestion-rise" }, suggestionPills(attrs.suggestions, attrs.onPick))
-            : null,
-          attrs.onToggle === null
-            ? linkLine(attrs.placement, attrs.onDisable)
-            : suggestionLine({
-                count: attrs.suggestions.length,
-                isOpen: attrs.isOpen,
-                onToggle: attrs.onToggle,
-                onDisable: attrs.onDisable,
-              }),
-        ],
+        attrs.onToggle === null
+          ? linkLine(attrs.placement, attrs.onDisable)
+          : suggestionLine({
+              count: attrs.count,
+              isOpen: attrs.isOpen,
+              onToggle: attrs.onToggle,
+              onDisable: attrs.onDisable,
+            }),
       );
     },
   };

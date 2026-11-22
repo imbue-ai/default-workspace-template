@@ -23,9 +23,8 @@ function renderStrip(overrides: Partial<SuggestionStripAttrs> = {}): {
 } {
   const attrs: SuggestionStripAttrs = {
     placement: "next_step",
-    suggestions: START,
+    count: START.length,
     isOpen: true,
-    onPick: vi.fn(),
     onToggle: vi.fn(),
     onDisable: vi.fn(),
     ...overrides,
@@ -49,10 +48,6 @@ function renderNewChatStrip(overrides: Partial<SuggestionStripAttrs> = {}): {
   attrs: SuggestionStripAttrs;
 } {
   return renderStrip({ placement: "new_chat", onToggle: null, ...overrides });
-}
-
-function isBefore(first: Element, second: Element): boolean {
-  return Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
 }
 
 describe("the pills of a set", () => {
@@ -87,45 +82,42 @@ describe("the pills of a set", () => {
       label,
       is_recommended: false,
     }));
+    const root = document.createElement("div");
+    m.render(root, suggestionPills(long, vi.fn()));
 
-    expect(pills(renderStrip({ suggestions: long }).root).map((pill) => pill.textContent)).toEqual([
-      "One",
-      "Two",
-      "Three",
-      "Four",
-      "Five",
-    ]);
-    expect(pills(renderNewChatStrip({ suggestions: long }).root)).toHaveLength(5);
+    expect(pills(root).map((pill) => pill.textContent)).toEqual(["One", "Two", "Three", "Four", "Five"]);
   });
 
   it("marks the recommended suggestion alone for the green look", () => {
-    const { root } = renderStrip({
-      suggestions: [
-        { suggestion_id: "go", label: "Go with your recommendations", is_recommended: true },
-        { suggestion_id: "wait", label: "Let me think about it", is_recommended: false },
-      ],
-    });
+    const root = document.createElement("div");
+    m.render(
+      root,
+      suggestionPills(
+        [
+          { suggestion_id: "go", label: "Go with your recommendations", is_recommended: true },
+          { suggestion_id: "wait", label: "Let me think about it", is_recommended: false },
+        ],
+        vi.fn(),
+      ),
+    );
 
     expect(pills(root).map((pill) => pill.classList.contains("suggestion-pill--recommended"))).toEqual([true, false]);
   });
 });
 
 describe("the new-chat strip", () => {
-  it("is its pills, rising in, over a quiet line that holds the link that switches the placement off", () => {
+  it("is, in the footer, a quiet line that holds the link that switches the placement off", () => {
     const { root, attrs } = renderNewChatStrip();
     const strip = root.querySelector<HTMLElement>(".suggestion-strip");
     const line = root.querySelector<HTMLElement>(".suggestion-line");
     const link = root.querySelector<HTMLButtonElement>(".suggestion-strip-disable");
 
     expect(strip?.classList.contains("suggestion-strip--open")).toBe(true);
-    expect(pills(root)).toHaveLength(START.length);
-    // The pills and the line under them are two parts of the strip, and only the pills rise in.
-    expect([...strip!.children].map((child) => child.className.split(" ")[0])).toEqual([
-      "suggestion-rise",
-      "suggestion-line",
-    ]);
-    expect(root.querySelector(".suggestion-rise > .suggestion-strip-pills")).not.toBeNull();
-    expect(strip?.classList.contains("suggestion-rise")).toBe(false);
+    // The pills are drawn elsewhere, over the transcript: the line is all of the strip the footer holds, and
+    // nothing of it rises in.
+    expect([...strip!.children]).toEqual([line]);
+    expect(pills(root)).toEqual([]);
+    expect(root.querySelector(".suggestion-rise")).toBeNull();
     // The line is a reply's line in height and look, and holds the link alone, at its right end.
     expect([...line!.classList]).toEqual(expect.arrayContaining(["h-5", "justify-end"]));
     expect([...line!.children]).toEqual([link]);
@@ -134,16 +126,14 @@ describe("the new-chat strip", () => {
 
     link!.click();
     expect(attrs.onDisable).toHaveBeenCalledTimes(1);
-    expect(attrs.onPick).not.toHaveBeenCalled();
   });
 
   it("offers no such link to a viewer who may not switch it off, and keeps the line's height", () => {
     const { root } = renderNewChatStrip({ onDisable: null });
 
     expect(root.querySelector(".suggestion-strip-disable")).toBeNull();
-    expect(root.querySelectorAll("button")).toHaveLength(START.length);
+    expect(root.querySelectorAll("button")).toHaveLength(0);
     expect(root.querySelector(".suggestion-line")?.classList.contains("h-5")).toBe(true);
-    expect(pills(root)).toHaveLength(START.length);
   });
 });
 
@@ -169,21 +159,19 @@ describe("the next-step strip", () => {
   });
 
   it("counts one suggestion in the singular", () => {
-    const { root } = renderStrip({ placement: "next_step", isOpen: false, suggestions: START.slice(0, 1) });
+    const { root } = renderStrip({ placement: "next_step", isOpen: false, count: 1 });
 
     expect(lineToggle(root)?.textContent).toBe("See 1 suggestion");
   });
 
-  it("shows its pills above the line, which offers to hide them and, just left of that, to switch them off", () => {
+  it("offers, with its pills shown, to hide them and, just left of that, to switch them off", () => {
     const { root, attrs } = renderStrip({ placement: "next_step" });
     const toggle = lineToggle(root);
     const link = root.querySelector<HTMLButtonElement>(".suggestion-strip-disable");
 
     expect(root.querySelector(".suggestion-strip--open")).not.toBeNull();
-    expect(pills(root).map((pill) => pill.textContent)).toEqual(START.map((suggestion) => suggestion.label));
     expect(toggle?.textContent).toBe("Hide suggestions");
     expect(toggle?.getAttribute("aria-expanded")).toBe("true");
-    expect(isBefore(pills(root)[2], toggle!)).toBe(true);
     expect(link?.textContent).toBe("disable suggestions");
     // Both sit at the line's right end, the link immediately left of the button, 16px apart.
     const line = toggle!.parentElement!;
@@ -197,12 +185,14 @@ describe("the next-step strip", () => {
     expect(attrs.onToggle).toHaveBeenCalledTimes(1);
   });
 
-  it("has the pills rise in and leaves the line where it is", () => {
-    const { root } = renderStrip({ placement: "next_step" });
+  it("holds the same one line, and nothing else, with its pills shown as with them hidden", () => {
+    for (const isOpen of [true, false]) {
+      const { root } = renderStrip({ placement: "next_step", isOpen });
+      const strip = root.querySelector<HTMLElement>(".suggestion-strip")!;
 
-    expect(root.querySelector(".suggestion-rise .suggestion-pill")).not.toBeNull();
-    expect(root.querySelector(".suggestion-rise .suggestion-line")).toBeNull();
-    expect(root.querySelector(".suggestion-strip")?.classList.contains("suggestion-rise")).toBe(false);
+      expect([...strip.children].map((child) => child.className.split(" ")[0])).toEqual(["suggestion-line"]);
+      expect(pills(root)).toEqual([]);
+    }
   });
 
   it("offers the link to switch them off to nobody but a viewer who may", () => {
@@ -255,24 +245,19 @@ describe("the line a reply's suggestions wait behind", () => {
 });
 
 describe("what each placement's strip says", () => {
-  it("new_chat names its group, and its link and its notice say what they do", () => {
+  it("new_chat's link and its notice say what they do", () => {
     const { root: strip } = renderNewChatStrip();
     expect(strip.querySelector(".suggestion-strip-disable")?.textContent).toBe("disable new chat suggestions");
-    expect(strip.querySelector('[role="group"]')?.getAttribute("aria-label")).toBe("Things to try");
-    // The group's name is for a screen reader alone: the strip draws no label.
-    expect(strip.textContent).toBe(
-      START.map((suggestion) => suggestion.label).join("") + "disable new chat suggestions",
-    );
+    expect(strip.textContent).toBe("disable new chat suggestions");
 
     const root = document.createElement("div");
     m.render(root, suggestionsOffNotice("new_chat", vi.fn()));
     expect(root.querySelector(".suggestions-off-notice span")?.textContent).toBe("New chat suggestions are off.");
   });
 
-  it("next_step names its group, and its line and its notice say what they do", () => {
+  it("next_step's line and its notice say what they do", () => {
     const hidden = renderStrip({ placement: "next_step", isOpen: false }).root;
     expect(hidden.textContent).toBe("See 3 suggestions");
-    expect(hidden.querySelector('[role="group"]')?.getAttribute("aria-label")).toBe("Suggestions");
 
     const onUndo = vi.fn();
     const root = document.createElement("div");

@@ -61,6 +61,7 @@ import {
 import { assistantMessageFixture, userMessageFixture } from "../models/transcriptEventFixture";
 import { isTurnDoneForSuggestions, lastReplyEventId } from "./last-reply";
 import { ChatSuggestions } from "./ChatSuggestions";
+import { SuggestionLayer } from "./SuggestionLayer";
 import { SUGGESTIONS_OFF_NOTICE_MS } from "./suggestion-placement";
 
 const CHAT = "agent-first-run";
@@ -100,10 +101,11 @@ let heldWriteAnswers: (() => void)[] | null;
 let requests: { method: string; url: string; body?: unknown }[];
 let root: HTMLElement;
 
-/** The strips above the composer, of which these tests offer the next-step one alone: the chat app answers the
- *  other placements with nothing. */
+/** The strips of the page, of which these tests offer the next-step one alone (the chat app answers the other
+ *  placement with nothing), in the order the chat panel draws a strip's two parts: its open pills in the layer
+ *  over the transcript, then its line above the composer. */
 function draw(): void {
-  m.render(root, m(ChatSuggestions, { chatId: CHAT }));
+  m.render(root, [m(SuggestionLayer, { chatId: CHAT }), m(ChatSuggestions, { chatId: CHAT })]);
 }
 
 /** Let the page's requests answer, then draw what they brought. */
@@ -116,6 +118,14 @@ async function settle(): Promise<void> {
 async function load(): Promise<void> {
   draw();
   await settle();
+}
+
+/** Whether the page draws nothing of any strip: no column above the composer, and nothing in the layer. */
+function drawsNoStrip(): boolean {
+  return (
+    root.querySelector(".chat-suggestions") === null &&
+    root.querySelector(".suggestion-layer")?.childElementCount === 0
+  );
 }
 
 function pillLabels(): string[] {
@@ -577,7 +587,7 @@ describe("the line above the composer", () => {
     await settle();
 
     expect(lineText()).toBeNull();
-    expect(root.firstElementChild).toBeNull();
+    expect(drawsNoStrip()).toBe(true);
   });
 
   it("keeps no height once next-step suggestions are known to be switched off", async () => {
@@ -589,7 +599,7 @@ describe("the line above the composer", () => {
     await settle();
 
     expect(lineText()).toBeNull();
-    expect(root.firstElementChild).toBeNull();
+    expect(drawsNoStrip()).toBe(true);
   });
 });
 
@@ -661,7 +671,7 @@ describe("the link that switches next-step suggestions off", () => {
     draw();
     expect(root.querySelector(".suggestions-off-notice")).toBeNull();
     expect(root.querySelector(".suggestion-strip")).toBeNull();
-    expect(root.firstElementChild).toBeNull();
+    expect(drawsNoStrip()).toBe(true);
     expect(SUGGESTIONS_OFF_NOTICE_MS).toBe(8_000);
   });
 
