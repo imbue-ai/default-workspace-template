@@ -134,7 +134,7 @@ export const HIGHLIGHT_CHROME: "minds:highlight-chrome" =
 // EMBEDDER_CAPABILITIES.
 export const OPEN_LOCAL_FILES: "minds:open-local-files" =
   "OPEN_LOCAL_FILES" in embedContract ? embedContract.OPEN_LOCAL_FILES : "minds:open-local-files";
-// Workspace -> embedder (contract v17): open the chrome's workspace settings at one of their groups. Payload:
+// Workspace -> embedder (contract v18): open the chrome's workspace settings at one of their groups. Payload:
 // { group? }, a group's name ("suggestions"); absent, or one the chrome does not know, opens General. Sent only to
 // an embedder that said ``opensWorkspaceSettings`` with EMBEDDER_CAPABILITIES.
 export const OPEN_WORKSPACE_SETTINGS: "minds:open-workspace-settings" =
