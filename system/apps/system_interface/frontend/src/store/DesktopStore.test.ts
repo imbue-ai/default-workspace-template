@@ -2462,29 +2462,26 @@ describe("pulled-out windows", () => {
     expect(socket.reports).toEqual([]);
   });
 
-  it("hides a pulled-out window's ghost and shows it again from its taskbar entry, the window staying out", async () => {
+  it("shows a pulled-out window's own desktop window from its taskbar entry, minimized or not, the window staying out", async () => {
     const { store, calls, reports } = makePopOutStore();
     await store.start(NO_LINK);
     store.setCanPopOut(true);
     await store.detachWindow("win-1");
     expect(calls).toHaveLength(1);
-    // The ghost's "Hide": out of sight, but still out, and still reported as such.
-    store.minimizeWindow("win-1");
-    expect(placementOf(store.getState().layout, "win-1")).toMatchObject({ is_detached: true, is_minimized: true });
-    expect(last(reports)).toMatchObject([{ windowId: "win-1" }]);
-    // The entry's click shows the ghost again where it stood, asking the chrome for nothing.
-    store.toggleTaskbarEntry("win-1");
-    expect(placementOf(store.getState().layout, "win-1")).toMatchObject({ is_detached: true, is_minimized: false });
-    expect(calls).toHaveLength(1);
-    // With the ghost showing, the click shows the window's own desktop window as before.
     store.toggleTaskbarEntry("win-1");
     expect(calls).toHaveLength(2);
     expect(calls[1]).toMatchObject(["request", { windowId: "win-1" }]);
-    await settle();
-    expect(storedPlacement("win-1")).toMatchObject({ is_detached: true, is_minimized: false });
+    // Minimized (an agent's ``layout.py minimize``): still out, still reported, and the click still shows it.
+    store.minimizeWindow("win-1");
+    expect(placementOf(store.getState().layout, "win-1")).toMatchObject({ is_detached: true, is_minimized: true });
+    expect(last(reports)).toMatchObject([{ windowId: "win-1" }]);
+    store.toggleTaskbarEntry("win-1");
+    expect(calls).toHaveLength(3);
+    expect(calls[2]).toMatchObject(["request", { windowId: "win-1" }]);
+    expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
   });
 
-  it("shows the avatar's pulled-out pinned window for a click on the agent, and its ghost when hidden", async () => {
+  it("shows the avatar's pulled-out pinned window for a click on the agent, minimized or not", async () => {
     api.apps = [chatLikeAppRecord("chat")];
     api.desktops = [
       desktopRecord("home", { windows: [windowRecord("win-chat", "chat", "/?chat=agent-2", { is_pinned: true })] }),
@@ -2500,8 +2497,9 @@ describe("pulled-out windows", () => {
     expect(calls[1]).toMatchObject(["request", { windowId: "win-chat" }]);
     store.minimizeWindow("win-chat");
     await store.openAgentChat();
-    expect(placementOf(store.getState().layout, "win-chat")).toMatchObject({ is_detached: true, is_minimized: false });
-    expect(calls).toHaveLength(2);
+    expect(placementOf(store.getState().layout, "win-chat")).toMatchObject({ is_detached: true });
+    expect(calls).toHaveLength(3);
+    expect(calls[2]).toMatchObject(["request", { windowId: "win-chat" }]);
     expect(api.calls.filter((call) => call.startsWith("launch:"))).toEqual([]);
   });
 
@@ -2942,6 +2940,87 @@ describe("the phone layout", () => {
     expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-3" });
   });
 
+  it("revives the socket at once on coming back into sight, and not on going out of it", async () => {
+    const store = await phoneStore(["win-1"]);
+    store.onVisibilityChange(false);
+    expect(socket.reviveRequests).toBe(0);
+    store.onVisibilityChange(true);
+    expect(socket.reviveRequests).toBe(1);
+  });
+
+  it("lands on the window it last showed before its desktop's layout is read, so that page need not wait", async () => {
+    api.apps = [appRecord("docs"), chat];
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("chat-1", "chat", "/", { is_pinned: true }), windowRecord("win-1", "docs", "/a")],
+      }),
+    ];
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home", shown_history: ["win-1"] })];
+    let answerLayout: () => void = () => undefined;
+    api.layoutReadGate = new Promise((resolve) => {
+      answerLayout = resolve;
+    });
+    const store = makeStore();
+    store.setThemeMetrics(METRICS, PHONE);
+    const starting = store.start(NO_LINK);
+    await settle();
+    expect(api.calls).toContain("fetchPlacements:home");
+    expect(store.getState().isLayoutLoaded).toBe(false);
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-1" });
+    answerLayout();
+    await starting;
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-1" });
+  });
+
+  it("lands home when the workspace has no desktop, without recording it, and lands properly once one comes", async () => {
+    api.apps = [appRecord("docs"), chat];
+    api.desktops = [];
+    api.clients = [clientRecord(CLIENT)];
+    const store = makeStore();
+    store.setThemeMetrics(METRICS, PHONE);
+    await store.start(NO_LINK);
+    expect(store.getState().phone.shown).toEqual({ kind: "home" });
+    // A reread that still finds no desktop does not record home as where this client was.
+    store.onVisibilityChange(false);
+    store.onVisibilityChange(true);
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("recordShown:"))).toEqual([]);
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("chat-1", "chat", "/", { is_pinned: true })] })];
+    socket.deliver().onDesktopsUpdated([...api.desktops]);
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "chat-1" });
+  });
+
+  it("lands home rather than on nothing when the startup read fails, and where it was once a push brings desktops", async () => {
+    api.apps = [appRecord("docs"), chat];
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("chat-1", "chat", "/", { is_pinned: true }), windowRecord("win-1", "docs", "/a")],
+      }),
+    ];
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home", shown_history: ["win-1"] })];
+    api.refusal = "the shell is restarting";
+    const store = makeStore();
+    store.setThemeMetrics(METRICS, PHONE);
+    await store.start(NO_LINK);
+    expect(store.getState().phone.shown).toEqual({ kind: "home" });
+    // The shell back: its socket pushes the desktops, and the phone reads where this client was before landing.
+    api.refusal = null;
+    socket.deliver().onAppsUpdated([...api.apps]);
+    socket.deliver().onDesktopsUpdated([...api.desktops]);
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-1" });
+    expect(api.clients.find((client) => client.id === CLIENT)?.shown_history).toEqual(["win-1"]);
+  });
+
+  it("lands home when the startup read fails before the phone layout is known", async () => {
+    api.refusal = "the shell is restarting";
+    const store = makeStore();
+    await store.start(NO_LINK);
+    store.setThemeMetrics(METRICS, PHONE);
+    expect(store.getState().phone.shown).toEqual({ kind: "home" });
+  });
+
   it("tells the shell again what it shows when a reread finds the show unrecorded", async () => {
     const store = await phoneStore(["win-1"]);
     api.refusal = "the shell is restarting";
@@ -2972,6 +3051,26 @@ describe("the phone layout", () => {
     store.onVisibilityChange(false);
     socket.deliver().onConnected();
     expect(reloaded).toEqual(["win-1"]);
+  });
+
+  it("does not reload the shown page on a later reconnect when the socket held while the page was away", async () => {
+    const store = await phoneStore(["win-1"]);
+    const reloaded: string[] = [];
+    store.setPageDriver({
+      reload: (id) => void reloaded.push(id),
+      reloadApp: () => undefined,
+      resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
+      requestClose: () => undefined,
+      ownsCloseChord: () => false,
+    });
+    socket.deliver().onConnected();
+    store.onVisibilityChange(false);
+    store.onVisibilityChange(true);
+    socket.deliver().onLiveConfirmed();
+    // A blip long after the page came back: the page's own connections were never in doubt.
+    socket.deliver().onConnected();
+    expect(reloaded).toEqual([]);
   });
 });
 

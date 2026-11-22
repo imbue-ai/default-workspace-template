@@ -1,1 +1,0 @@
-The workspace app model contract and plan now say that only a delete through the shell removes an address from the tab sets and layouts; an address its app does not list keeps its tabs, shown as unavailable until it is listed again.

@@ -85,12 +85,14 @@ from imbue.chat.chat_fast_mode import read_fast_mode_state
 from imbue.chat.chat_handoffs import ALLOW_SETTINGS_NARROWING_ENV
 from imbue.chat.chat_handoffs import CREATE_WITHOUT_ACCOUNT_ENV
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
+from imbue.chat.chat_handoffs import UNDELIVERED_HELD_SEND_DETAIL
 from imbue.chat.chat_handoffs import create_command_env
 from imbue.chat.chat_rebinds import RebindCancelledError
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_records import InMemoryChatRecordStore
+from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import read_seed_events
@@ -114,6 +116,7 @@ from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
+from imbue.chat.harnesses.message_display import FIRST_RUN_KICKOFF_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
 from imbue.chat.harnesses.model import ModelIdentity
@@ -187,6 +190,7 @@ from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.errors import ConcurrencyGroupError
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
+from imbue.concurrency_group.thread_utils import ObservableThread
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import acquire_observe_lock
@@ -308,6 +312,13 @@ def test_get_agents_initially_empty(agent_manager: AgentManager) -> None:
 def test_get_provisional_chats_initially_empty(agent_manager: AgentManager) -> None:
     protos = agent_manager.get_provisional_chats()
     assert protos == []
+
+
+def test_the_shown_chat_ids_are_the_listed_chats_then_the_provisional_ones(agent_manager: AgentManager) -> None:
+    seed_agent_state(agent_manager, "agent-listed-1", name="Chat-1")
+    seed_failed_chat(agent_manager, ChatId("agent-provisional-2"), "Chat-2")
+
+    assert agent_manager.get_shown_chat_ids() == [ChatId("agent-listed-1"), ChatId("agent-provisional-2")]
 
 
 @pytest.mark.parametrize("chat_ref", ["", "   "])
@@ -947,6 +958,35 @@ def test_a_send_to_an_unseeded_or_unknown_chat_is_delivered_as_given(
         assert delivered == ["hello"]
     finally:
         manager.stop()
+
+
+def test_a_first_run_chat_launched_with_no_words_is_started_with_the_kickoff_note_and_owes_no_seed(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A first-run workspace's owner connects a provider and has typed nothing: the agent is started with a note
+    of the chat app's own (the welcome, what they picked, what to open with), so it speaks first, and since the
+    note carries the seed no later send owes it."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    try:
+        seeded = manager.seed_chat(
+            "Main", FIRST_RUN_WELCOME, first_run_context="I want to use Studio for: Music.", is_first_run=True
+        )
+        manager.create_chat("", chat_id=seeded.chat_id)
+        wait_until_true(
+            lambda: manager.get_provisional_chat(seeded.chat_id) is None, 10, "the provisional chat's completion"
+        )
+        record = store.read(ChatId(seeded.chat_id))
+    finally:
+        manager.stop()
+
+    (recorded,) = argv_log.read_text().splitlines()
+    assert f"<{FIRST_RUN_KICKOFF_TAG}>" in recorded and recorded.rstrip().endswith(f"</{FIRST_RUN_KICKOFF_TAG}>")
+    assert "I want to use Studio for: Music." in recorded
+    assert FIRST_RUN_WELCOME[0].text in recorded
+    assert record is not None and record.is_seed_pending is False
 
 
 def test_a_waited_launch_of_a_seeded_chat_reports_the_member_agent_it_created(
@@ -2597,10 +2637,12 @@ def test_run_creation_tells_the_page_the_chat_landed_even_when_settling_it_fails
 
 
 def test_a_first_message_that_landed_is_told_of_under_its_own_id_and_a_refused_one_is_not(
-    agent_manager: AgentManager, tmp_path: Path
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     """The message a create leaves out is handed over under the id the sender's annotation carries, and what a
-    landed message does next (a room's mentions) runs only for one that landed."""
+    landed message does next (a room's mentions) runs only for one that landed. A refused one is told to the pages
+    instead, so the one that sent it can hand it back to its composer."""
+    q = broadcaster.register()
     sent: list[tuple[str, str, str]] = []
     told: list[tuple[ChatId, str]] = []
 
@@ -2634,6 +2676,20 @@ def test_a_first_message_that_landed_is_told_of_under_its_own_id_and_a_refused_o
 
     assert sent == [("test-id", "@agent hello", "m-test-id"), ("test-id-2", "refused", "m-test-id-2")]
     assert told == [(ChatId("test-id"), "m-test-id")]
+    broadcasts: list[dict[str, Any]] = []
+    while not q.empty():
+        raw = q.get_nowait()
+        assert raw is not None
+        broadcasts.append(json.loads(raw))
+    assert [message for message in broadcasts if message["type"] == "held_send_failed"] == [
+        {
+            "type": "held_send_failed",
+            "chat_id": "test-id-2",
+            "message_id": "m-test-id-2",
+            "detail": UNDELIVERED_HELD_SEND_DETAIL,
+            "kind": "not_ready",
+        }
+    ]
 
 
 def test_run_creation_leaves_a_failed_chat_in_the_failed_phase_with_the_output_tail(
@@ -7201,7 +7257,7 @@ def test_a_handoff_moves_a_chat_to_a_new_agent_on_another_harness(
         assert archived.labels["chat_seq"] == "1" and archived.labels["chat_id"] == first
 
         verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
-        assert verbs == ["stop", "rename", "create"]
+        assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
         assert sent[0][0] == first and sent[0][1].startswith("/handoff-summary ")
         # The prompt reached the successor through the send path, with the message at its end.
         assert sent[1][0] == successor and sent[1][2].startswith("handoff-prompt-")
@@ -7253,7 +7309,8 @@ def test_a_handoff_off_an_agent_with_no_user_turn_is_a_fresh_start(
         assert [entry.is_fresh_start for entry in record.agents] == [False, True]
         assert sent == []
         assert not (tmp_path / "chats" / first / "summaries").exists()
-        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "rename", "create"]
+        verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
+        assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
         # The snapshot never listed a confirming message, since none was typed.
         assert manager.get_handoff_state(ChatId(first)) is None
     finally:
@@ -7320,21 +7377,23 @@ def test_a_model_pick_the_successor_cannot_take_fails_the_switch_at_the_model_st
         (snapshot,) = manager.get_chat_snapshots()
         assert snapshot.status is ChatStatus.ERROR and snapshot.handoff is not None
         assert snapshot.handoff.failed_step is HandoffFailedStep.MODEL
-        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "rename", "create"]
+        verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
+        assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
         # Only the summary request went out: the prompt waits for the pick.
         assert [message_id for _agent, _text, message_id in sent] == [f"handoff-summary-{record.handoff.handoff_id}"]
 
         # A retry on the same account adopts the successor: no create, the pick fails again the same way.
         assert manager.retry_handoff(chat_id, record.handoff.target_account_id) is HandoffPhase.SWITCHING
         wait_for(is_failed, timeout=15.0)
-        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "rename", "create"]
+        verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
+        assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
 
         # A retry on another account of the same harness keeps the pick, destroys the successor, and
         # creates afresh under the same pre-minted id.
         assert manager.retry_handoff(chat_id, _openai_account()) is HandoffPhase.SWITCHING
         wait_for(is_failed, timeout=15.0)
         verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
-        assert verbs == ["stop", "rename", "create", "destroy", "create"]
+        assert verbs[0] == "rename" and sorted(verbs[1:3]) == ["create", "stop"] and verbs[3:] == ["destroy", "create"]
         assert f"destroy {successor} --force" in argv_log.read_text().splitlines()
         assert argv_log.read_text().splitlines()[-1].split(" ")[3] == successor
         retried = store.read(chat_id)
@@ -7500,6 +7559,61 @@ def _converging_chat(
     store.write(ChatRecord(chat_id=ChatId(first), agents=(entry,), handoff=handoff))
     manager.refresh_chat_records()
     return first, successor
+
+
+def test_a_landed_handoff_reads_as_its_successor_and_a_wait_on_it_ends_with_the_delivery(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """Once the successor is the chat's last member, only the deliveries to it remain: the chat's status is the
+    successor's own, and a request waiting on the switch goes ahead the moment the record lets the switch go."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first, successor = _converging_chat(manager, store, phase=HandoffPhase.SWITCHING, is_retiring_archived=True)
+    chat_id = ChatId(first)
+    seed_agent_state(
+        manager,
+        successor,
+        name="Chat-1",
+        labels={"display_name": "Chat 1", "account": "acct-openai"},
+        harness=HarnessType.CODEX,
+        activity_state=ActivityState.IDLE,
+    )
+    try:
+        before = manager.get_handoff_state(chat_id)
+        assert before is not None and before.has_landed is False
+        # Not landed: nothing to wait for, and the chat still converges.
+        assert manager.wait_for_landed_switch(chat_id, timeout=0.0) is False
+
+        record = store.read(chat_id)
+        assert record is not None and record.handoff is not None
+        landed = record.model_copy_update(
+            to_update(
+                record.field_ref().agents,
+                (*record.agents, make_chat_agent_entry(2, successor, is_archived=False, harness=HarnessType.CODEX)),
+            )
+        )
+        store.write(landed)
+        manager.refresh_chat_records()
+        state = manager.get_handoff_state(chat_id)
+        assert state is not None and state.has_landed is True
+        snapshot = manager.get_chat_snapshot(first)
+        assert snapshot is not None and snapshot.active_agent.agent_id == successor
+        assert snapshot.status is ChatStatus.IDLE
+        assert manager.wait_for_landed_switch(chat_id, timeout=0.05) is False
+
+        outcomes: list[bool] = []
+        waiter = ObservableThread(
+            target=lambda: outcomes.append(manager.wait_for_landed_switch(chat_id, timeout=10.0)), name="waiter"
+        )
+        waiter.start()
+        waiter.join(timeout=0.2)
+        assert waiter.is_alive() and outcomes == []
+        store.write(landed.model_copy_update(to_update(landed.field_ref().handoff, None)))
+        manager.refresh_chat_records()
+        waiter.join(timeout=5.0)
+        assert outcomes == [True]
+    finally:
+        manager.stop()
 
 
 def test_a_converging_chat_holds_sends_refuses_the_verbs_and_can_be_cancelled(

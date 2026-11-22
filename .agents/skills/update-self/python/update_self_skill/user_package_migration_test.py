@@ -266,6 +266,39 @@ def test_a_uv_run_program_line_ends_standalone_and_its_comment_names_the_project
     )
 
 
+def test_the_root_changelogs_keep_a_one_off_as_it_was_written(
+    workspace: Path, tmp_path: Path
+) -> None:
+    released = (
+        "- Added: `uv run --no-sync widget-app --report` prints today's numbers.\n"
+    )
+    changelogs = [
+        _write(workspace / name, released)
+        for name in ("CHANGELOG.md", "UNABRIDGED_CHANGELOG.md")
+    ]
+    subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
+
+    code = migration.main(
+        [
+            "--repo-root",
+            str(workspace),
+            "migrate",
+            "system/apps/widget",
+            "--shared-lock",
+            str(tmp_path / "pre-merge.lock"),
+        ],
+        run=_Uv(tmp_path / "cache" / "uv"),
+    )
+
+    assert code == 0
+    assert [path.read_text() for path in changelogs] == [released, released]
+    # The same one-off in a skill is rewritten, so the changelogs were skipped, not missed.
+    assert (
+        "--project system/apps/widget widget-app"
+        in (workspace / ".agents/skills/report/SKILL.md").read_text()
+    )
+
+
 def test_a_dry_run_says_what_it_would_change_and_changes_nothing(
     workspace: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

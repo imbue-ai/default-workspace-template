@@ -1,6 +1,6 @@
 ---
 name: submit-upstream-changes
-description: Push local improvements to shared infrastructure (skills, scripts, CLAUDE.md scaffolding, Dockerfile, system/supervisord.conf) back to the parent template repo so other agents derived from the template benefit. Opens a separate per-feature PR per logical fix; never pushes directly to upstream `main`. Do not push agent-specific content (PURPOSE.md, memory, runtime state). For pulling updates from upstream, use the `update-self` skill instead.
+description: Push local improvements to shared infrastructure (skills, scripts, AGENTS.md scaffolding, Dockerfile, system/supervisord.conf) back to the parent template repo so other agents derived from the template benefit. Opens a separate per-feature PR per logical fix; never pushes directly to upstream `main`. Do not push agent-specific content (PURPOSE.md, memory, runtime state). For pulling updates from upstream, use the `update-self` skill instead.
 metadata:
   author: imbue
 ---
@@ -15,7 +15,7 @@ Push **shared infrastructure** that benefits other agents derived from the templ
 
 - Skills (`.agents/skills/`)
 - Scripts (`system/scripts/`, `.agents/shared/scripts/`)
-- CLAUDE.md scaffolding (template-level sections only)
+- AGENTS.md scaffolding (template-level sections only)
 - Dockerfile
 - `system/supervisord.conf` and `system/supervisord.conf.d/` (template-level service programs)
 
@@ -24,7 +24,7 @@ Do **not** push agent-specific content:
 - `PURPOSE.md`
 - Memory contents
 - Workspace data and runtime state (`data/`)
-- Agent-specific services, settings, or CLAUDE.md sections
+- Agent-specific services, settings, or AGENTS.md / CLAUDE.md sections
 
 mngr changes are not template changes: mngr is installed here from the commit
 `pyproject.toml` pins, and a change to it gets its own PR on the mngr repo. See

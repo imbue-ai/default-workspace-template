@@ -702,6 +702,159 @@ def test_a_stretch_of_the_agents_output_is_prose_bubbles_and_work_on_one_line(tm
                 )
 
 
+def _bash_line(uuid: str, timestamp: str, tool_use_id: str, command: str) -> dict[str, Any]:
+    return _assistant_line(
+        uuid,
+        timestamp,
+        [{"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {"command": command}}],
+        "tool_use",
+    )
+
+
+def _text_line(uuid: str, timestamp: str, text: str) -> dict[str, Any]:
+    return _assistant_line(uuid, timestamp, [{"type": "text", "text": text}], "tool_use")
+
+
+def _question_mid_task_session(question_line: dict[str, Any]) -> list[dict[str, Any]]:
+    """The shape of a real Opus run: asked mid-task, the agent moves a step and looks it up before answering."""
+    return [
+        {
+            "type": "user",
+            "uuid": "uuid-mt-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": "Summarize each app, one at a time"},
+        },
+        _bash_line("uuid-mt-2", "2026-01-01T00:00:01Z", "toolu_mt1", "tk start ws-step-chat"),
+        _tool_result_line(
+            "uuid-mt-3",
+            "2026-01-01T00:00:02Z",
+            "toolu_mt1",
+            "Updated ws-step-chat -> in_progress\ntk-step ws-step-chat title: Summarize the chat app",
+        ),
+        _bash_line("uuid-mt-4", "2026-01-01T00:00:03Z", "toolu_mt2", "cat system/apps/chat/README.md"),
+        _tool_result_line("uuid-mt-5", "2026-01-01T00:00:04Z", "toolu_mt2", "readme"),
+        question_line,
+        _bash_line(
+            "uuid-mt-7", "2026-01-01T00:00:06Z", "toolu_mt3", "tk close ws-step-chat done; tk start ws-step-data"
+        ),
+        _tool_result_line(
+            "uuid-mt-8",
+            "2026-01-01T00:00:07Z",
+            "toolu_mt3",
+            "Updated ws-step-chat -> closed\ntk-step ws-step-chat title: Summarize the chat app\n"
+            "tk-step ws-step-chat summary: Read it\n"
+            "Updated ws-step-data -> in_progress\ntk-step ws-step-data title: Summarize the data library",
+        ),
+        _bash_line("uuid-mt-9", "2026-01-01T00:00:08Z", "toolu_mt4", "du -sh system/apps/*"),
+        _tool_result_line("uuid-mt-10", "2026-01-01T00:00:09Z", "toolu_mt4", "92K chat"),
+        _text_line("uuid-mt-11", "2026-01-01T00:00:10Z", "The chat folder is the biggest, at 92 KB."),
+        _bash_line("uuid-mt-12", "2026-01-01T00:00:11Z", "toolu_mt5", "cat system/apps/datalib/README.md"),
+        _tool_result_line("uuid-mt-13", "2026-01-01T00:00:12Z", "toolu_mt5", "readme"),
+    ]
+
+
+_QUEUED_QUESTION = {
+    "type": "attachment",
+    "uuid": "uuid-mt-6",
+    "timestamp": "2026-01-01T00:00:05Z",
+    "attachment": {"type": "queued_command", "prompt": "Which app folder is the biggest?", "commandMode": "prompt"},
+}
+
+_NEW_TURN_QUESTION = {
+    "type": "user",
+    "uuid": "uuid-mt-6",
+    "timestamp": "2026-01-01T00:00:05Z",
+    "message": {"role": "user", "content": "Which app folder is the biggest?"},
+}
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_answer_to_a_question_asked_mid_task_is_a_bubble(tmp_path: Path, page: Page) -> None:
+    """A question the agent took into its running turn: its answer, given after a step move and a lookup, is a
+    bubble the user reads without opening a step."""
+    with _running_e2e_server(tmp_path, session_events=_question_mid_task_session(_QUEUED_QUESTION)) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator(".message-user", has_text="Which app folder is the biggest?")).to_be_visible(timeout=15000)
+        expect(chat.locator("[data-machine-bubble]", has_text="The chat folder is the biggest")).to_be_visible()
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_progress_line_after_a_message_that_started_a_turn_stays_in_its_step(tmp_path: Path, page: Page) -> None:
+    """The same lines after a message that started a turn of its own (sent after a Stop): once the agent has moved a
+    step, what it says is that step's progress, not a bubble."""
+    with _running_e2e_server(tmp_path, session_events=_question_mid_task_session(_NEW_TURN_QUESTION)) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator(".message-user", has_text="Which app folder is the biggest?")).to_be_visible(timeout=15000)
+        expect(chat.get_by_text("Summarize the data library", exact=True)).to_be_visible()
+        expect(chat.locator("[data-machine-bubble]", has_text="The chat folder is the biggest")).to_have_count(0)
+
+
+_REFUSED_CLOSE_SESSION: list[dict[str, Any]] = [
+    {
+        "type": "user",
+        "uuid": "uuid-rc-1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "message": {"role": "user", "content": "Summarize each app; tell me anything surprising"},
+    },
+    _bash_line("uuid-rc-2", "2026-01-01T00:00:01Z", "toolu_rc1", "tk start ws-step-short"),
+    _tool_result_line(
+        "uuid-rc-3",
+        "2026-01-01T00:00:02Z",
+        "toolu_rc1",
+        "Updated ws-step-short -> in_progress\ntk-step ws-step-short title: Read the shorter write-ups",
+    ),
+    _bash_line("uuid-rc-4", "2026-01-01T00:00:03Z", "toolu_rc2", "cat system/apps/datalib/README.md"),
+    _tool_result_line("uuid-rc-5", "2026-01-01T00:00:04Z", "toolu_rc2", "readme"),
+    _text_line(
+        "uuid-rc-6", "2026-01-01T00:00:05Z", "Datalib stays off by default, and its server can run shell commands."
+    ),
+    _bash_line("uuid-rc-7", "2026-01-01T00:00:06Z", "toolu_rc3", "cd /repo && tk close ws-step-short done"),
+    {
+        "type": "user",
+        "uuid": "uuid-rc-8",
+        "timestamp": "2026-01-01T00:00:07Z",
+        "message": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_rc3",
+                    "is_error": True,
+                    "content": "PreToolUse:Bash hook error: Blocked: a `tk start` / `tk close` may share its tool call "
+                    "only with other tk commands",
+                }
+            ],
+        },
+    },
+    _bash_line("uuid-rc-9", "2026-01-01T00:00:08Z", "toolu_rc4", "tk close ws-step-short done"),
+    _tool_result_line(
+        "uuid-rc-10",
+        "2026-01-01T00:00:09Z",
+        "toolu_rc4",
+        "Updated ws-step-short -> closed\ntk-step ws-step-short title: Read the shorter write-ups\n"
+        "tk-step ws-step-short summary: Read them",
+    ),
+    _assistant_line(
+        "uuid-rc-11", "2026-01-01T00:00:10Z", [{"type": "text", "text": "I wrote a summary of each app."}], "end_turn"
+    ),
+]
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_finding_said_before_a_refused_close_is_a_bubble(tmp_path: Path, page: Page) -> None:
+    """The agent says a finding at the end of a step, then its first try at closing the step is refused (a `cd`
+    before `tk close`): the refused call did no work, so the finding is a bubble, not folded into the step."""
+    with _running_e2e_server(tmp_path, session_events=_REFUSED_CLOSE_SESSION) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator("[data-machine-bubble]", has_text="I wrote a summary of each app.")).to_be_visible(
+            timeout=15000
+        )
+        expect(chat.locator("[data-machine-bubble]", has_text="Datalib stays off by default")).to_be_visible()
+
+
 @pytest.mark.timeout(60, func_only=False)
 def test_live_stream_delivers_new_events(e2e_server: RunningWorkspace, page: Page) -> None:
     """New events written to the session file appear in the UI as they stream in."""
@@ -1516,20 +1669,20 @@ def test_making_a_chat_the_main_chat_from_its_menu_moves_it_to_the_head_of_the_l
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_on_its_own_page(
+def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_over_the_chat_list(
     tmp_path: Path, page: Page
 ) -> None:
-    """With no account the chat app mints a chat that waits for its first send, and that chat's page offers the
-    provider chooser, so signing in happens where the chat will be rather than on the shell or the chat list; no agent
-    is created until an account is chosen (post-launch-paths plan section 4.6)."""
+    """With no account the chat app mints a chat that waits for its first send, and the chat list showing it opens the
+    provider chooser over everything it frames, so the chooser outlives a change of the chat on screen; no agent is
+    created until an account is chosen (post-launch-paths plan section 4.6)."""
     with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
         chat_frame = _start_new_chat(page, server)
-        expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        expect(_chat_root(page).locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
         # Under the chooser, the composer's provider row already says there is no provider to start on.
         expect(chat_frame.locator(".model-selector-not-connected")).to_have_text("Not connected", timeout=15000)
-        # Neither the shell nor the chat list draws a chooser of its own: the chat's page is the one place it opens.
+        # Neither the shell nor the chat's page draws a chooser of its own: the chat list's is the one that opens.
         assert page.locator('[data-e2e="provider-chooser"]').count() == 0
-        assert _chat_root(page).locator('[data-e2e="provider-chooser"]').count() == 0
+        assert chat_frame.locator('[data-e2e="provider-chooser"]').count() == 0
         assert [str(chat.chat_id) for chat in server.chat_state.agent_manager.get_chat_snapshots()] == [
             FIXTURE_AGENT_ID
         ]
@@ -1542,7 +1695,7 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_on_its_ow
         page.reload()
         expect(page.locator("iframe[data-live-page]")).to_have_count(1, timeout=15000)
         expect(_chat_root(page).locator(".chat-root")).to_be_visible(timeout=15000)
-        expect(_shown_chat(page).locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        expect(_chat_root(page).locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -1710,6 +1863,78 @@ def test_a_send_mngr_could_not_confirm_is_sent_again_and_says_so_under_the_messa
         expect(reloaded.locator(".message-resent-note")).to_have_count(1)
 
 
+_PASTE_JS = """(textbox, text) => {
+    const data = new DataTransfer();
+    data.setData("text/plain", text);
+    textbox.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+}"""
+
+# Long enough to become an attachment, its last line one a truncated copy would lose.
+_LONG_PASTE = "".join(f"line {index} of the pasted report\n" for index in range(1, 500)) + "LAST-LINE-OF-THE-PASTE"
+
+
+def _paste(textbox: Locator, text: str) -> None:
+    textbox.evaluate(_PASTE_JS, text)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_long_paste_is_sent_as_an_attachment_the_agent_reads_whole(tmp_path: Path, page: Page) -> None:
+    """A long paste becomes a chip saying how many lines it holds, the typed words stay in the box, and the agent is
+    sent those words with a line naming the uploaded file, which holds the whole paste and lives in the chat's own
+    folder."""
+    sent: list[str] = []
+    messenger = scripted_send_mngr_messenger([], sent)
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+        _allow_mngr_config_in_pytest(tmp_path)
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        textbox = chat.locator(".message-input-textbox")
+        expect(textbox).to_be_editable(timeout=15000)
+
+        textbox.fill("Summarize this:")
+        _paste(textbox, _LONG_PASTE)
+        chip = chat.locator(".composer-attachment--ready")
+        expect(chip).to_contain_text("pasted-text-1.txt", timeout=15000)
+        expect(chip).to_contain_text("Pasted text, 500 lines")
+        expect(textbox).to_have_value("Summarize this:")
+
+        textbox.press("Enter")
+        wait_for(lambda: len(sent) == 1, timeout=15.0, error_message="the message with the paste was never sent")
+        match = re.fullmatch(r"Summarize this:\n\nSee attachment here: \[pasted-text-1\.txt\]\((\S+)\)", sent[0])
+        assert match is not None, sent[0]
+        stored = Path(match.group(1))
+        assert stored.name == "pasted-text-1.txt"
+        assert stored.parent.parent == (tmp_path / "chats" / FIXTURE_AGENT_ID / "uploads").absolute()
+        assert stored.read_text() == _LONG_PASTE
+        expect(chat.locator(".composer-attachment")).to_have_count(0)
+        link = chat.locator(".message-user", has_text="Summarize this:").get_by_role("link", name="pasted-text-1.txt")
+        expect(link).to_be_visible(timeout=15000)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_long_paste_goes_back_into_the_box_as_text(tmp_path: Path, page: Page) -> None:
+    """The chip's "Paste as text" puts the whole paste back where the caret is and deletes its uploaded copy."""
+    with running_workspace(tmp_path, find_free_port(), find_free_port()) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        textbox = chat.locator(".message-input-textbox")
+        expect(textbox).to_be_editable(timeout=15000)
+
+        textbox.fill("Before: ")
+        _paste(textbox, _LONG_PASTE)
+        chip = chat.locator(".composer-attachment--ready")
+        expect(chip).to_contain_text("pasted-text-1.txt", timeout=15000)
+        chip.hover()
+        chip.get_by_role("button", name="Paste as text").click()
+        expect(chat.locator(".composer-attachment")).to_have_count(0)
+        expect(textbox).to_have_value(f"Before: {_LONG_PASTE}")
+        wait_for(
+            lambda: not list((tmp_path / "chats").rglob("pasted-text-1.txt")),
+            timeout=15.0,
+            error_message="the pasted text's uploaded copy was left behind",
+        )
+
+
 @pytest.mark.timeout(120, func_only=False)
 def test_a_send_still_unconfirmed_when_sent_again_asks_the_user_to_check_before_sending_it_once_more(
     tmp_path: Path, page: Page
@@ -1786,17 +2011,175 @@ def test_a_chat_awaiting_its_first_send_with_nothing_signed_in_offers_a_provider
     tmp_path: Path, page: Page
 ) -> None:
     """A message typed before a provider is connected could not be sent, so with the chooser dismissed the composer
-    stays in view but disabled, under a sentence and a button that opens the same chooser again."""
+    stays in view but disabled, under a sentence and a button that opens the same chooser again, over the chat list
+    that opened it."""
     with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
         chat_frame = _start_new_chat(page, server)
-        expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
-        chat_frame.locator('[data-e2e="provider-chooser"] [aria-label="Close"]').click()
+        chooser = _chat_root(page).locator('[data-e2e="provider-chooser"]')
+        expect(chooser).to_be_visible(timeout=15000)
+        chooser.locator('[aria-label="Close"]').click()
+        expect(chooser).to_have_count(0, timeout=15000)
         expect(chat_frame.locator(".message-input-no-provider")).to_contain_text(
             "Connect an AI provider to start chatting.", timeout=15000
         )
         expect(chat_frame.locator(".message-input-textbox")).to_be_disabled()
         chat_frame.locator(".message-input-choose-provider").click()
-        expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        expect(chooser).to_be_visible(timeout=15000)
+        assert chat_frame.locator('[data-e2e="provider-chooser"]').count() == 0
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_provider_chooser_stays_up_when_the_seeded_welcome_chat_arrives_over_an_awaiting_chat(
+    tmp_path: Path, page: Page
+) -> None:
+    """The welcome chat the Imbue Studio app seeds can arrive after the chat list has opened a chat awaiting its first
+    send, and its window moves the list onto it. The chooser the list opened is the same one throughout, so a
+    sign-in the user has started is neither lost nor redrawn, and the welcome chat's page opens no second one."""
+    with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
+        awaiting_frame = _start_new_chat(page, server)
+        chooser = _chat_root(page).locator('[data-e2e="provider-chooser"]')
+        expect(chooser).to_be_visible(timeout=15000)
+        expect(awaiting_frame.locator(".message-input-no-provider")).to_be_visible(timeout=15000)
+        drawn = chooser.element_handle()
+
+        welcome = server.chat_state.agent_manager.seed_chat(
+            "Welcome",
+            (SeedTurn(role=SeedRole.ASSISTANT, text="Your workspace is ready! How would you like to start?"),),
+        )
+        # What the Imbue Studio app sends once its seed answers, as the shell's relay hands it to this app.
+        _post_chat_json(
+            server,
+            "/api/focus-chat",
+            {"type": "minds:focus-chat", "client_id": _client_id(page), "chatId": welcome.chat_id},
+        )
+
+        _wait_for_chat_window_path(
+            server, lambda path: path == chat_root_path(welcome.chat_id), "the welcome chat's selection"
+        )
+        welcome_frame = _chat(page, welcome.chat_id)
+        expect(welcome_frame.locator(".message-input-no-provider")).to_be_visible(timeout=15000)
+        expect(chooser).to_be_visible()
+        assert drawn.evaluate("element => element.isConnected") is True
+        assert welcome_frame.locator('[data-e2e="provider-chooser"]').count() == 0
+
+
+# Installed in every frame before its scripts run: the shell's document (the top frame here, with no Imbue Studio chrome
+# above it) records each ``minds:provider-chooser-on-screen`` a frame of it posts, into ``window.__chooserReports``.
+_RECORD_CHOOSER_REPORTS_SCRIPT = """
+(() => {
+  if (window !== window.top) return;
+  window.__chooserReports = [];
+  window.addEventListener("message", (event) => {
+    if (event.data?.type === "minds:provider-chooser-on-screen") window.__chooserReports.push(event.data);
+  });
+})();
+"""
+
+_WELCOME_TURNS = {"turns": [{"role": "assistant", "text": "Your workspace is ready! How would you like to start?"}]}
+
+
+def _seed_welcome_chat(page: Page, server: RunningWorkspace) -> str:
+    """Seed the welcome chat and show it, as the Imbue Studio app does once the seed answers; its id."""
+    seeded = _post_chat_json(server, "/api/chats/seed", _WELCOME_TURNS, expected_status=201)
+    _post_chat_json(
+        server,
+        "/api/focus-chat",
+        {"type": "minds:focus-chat", "client_id": _client_id(page), "chatId": seeded["chat_id"]},
+    )
+    return str(seeded["chat_id"])
+
+
+def _enter_new_workspace(page: Page, server: RunningWorkspace) -> Locator:
+    """Land on a brand-new workspace's shell and ask for the chat list as the Imbue Studio app does on entry (a
+    ``minds:focus-chat`` with no chat, as the shell's relay hands it to the chat app); the chat list's chooser."""
+    page.add_init_script(_RECORD_CHOOSER_REPORTS_SCRIPT)
+    _land(page, server)
+    _post_chat_json(server, "/api/focus-chat", {"type": "minds:focus-chat", "client_id": _client_id(page)})
+    return _chat_root(page).locator('[data-e2e="provider-chooser"]')
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_new_workspace_with_nothing_signed_in_shows_the_provider_chooser_before_any_chat_exists(
+    tmp_path: Path, page: Page
+) -> None:
+    """Entering a brand-new workspace, the chat list comes up from its pinned window with the provider chooser over it
+    before the welcome chat is seeded and before the first agent listing, and tells the chrome once that the chooser
+    is on screen. The listing finding no chats starts no empty chat beside the welcome chat to come; the welcome chat
+    lands under the same chooser, whose page opens no second one."""
+    with running_workspace(
+        tmp_path,
+        find_free_port(),
+        find_free_port(),
+        is_account_signed_in=False,
+        is_first_listing_running=True,
+        is_chat_pinned=True,
+    ) as server:
+        chooser = _enter_new_workspace(page, server)
+        expect(chooser).to_be_visible(timeout=15000)
+        expect(chooser).not_to_contain_text("Loading providers", timeout=15000)
+        page.wait_for_function("() => window.__chooserReports.length === 1", timeout=15000)
+        assert page.evaluate("() => window.__chooserReports") == [{"type": "minds:provider-chooser-on-screen"}]
+        (window,) = _chat_windows(server)
+        assert window["path"] == "/"
+        manager = server.chat_state.agent_manager
+        assert not manager.is_agent_list_known()
+        expect(_chat_root(page).locator(".chat-root-empty")).to_contain_text(
+            "Connect an AI provider to start chatting."
+        )
+        drawn = chooser.element_handle()
+
+        manager._adopt_initial_listing([])
+        expect(_chat_root(page).locator(".chat-root-empty")).to_be_visible()
+        page.wait_for_timeout(1000)
+        assert manager.get_provisional_chats() == []
+        expect(_chat_root(page).locator(".chat-rail-row")).to_have_count(0)
+
+        welcome_id = _seed_welcome_chat(page, server)
+        expect(_chat_root(page).locator(f'iframe.chat-root-frame[data-chat-id="{welcome_id}"]')).to_be_visible(
+            timeout=15000
+        )
+        welcome_frame = _chat(page, welcome_id)
+        expect(welcome_frame.locator(".message-input-no-provider")).to_be_visible(timeout=15000)
+        expect(_chat_root(page).locator(".chat-rail-row")).to_have_count(1)
+        expect(chooser).to_be_visible()
+        assert drawn.evaluate("element => element.isConnected") is True
+        assert welcome_frame.locator('[data-e2e="provider-chooser"]').count() == 0
+        assert page.evaluate("() => window.__chooserReports.length") == 1
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_provider_chooser_shown_at_entry_closes_reopens_from_the_empty_list_and_stays_closed_for_the_welcome_chat(
+    tmp_path: Path, page: Page
+) -> None:
+    """The chooser a new workspace opens before any chat exists can be closed: the empty list then says a provider
+    comes first, with a button that opens it again. Closed when the welcome chat arrives, it stays closed, and the
+    welcome chat's own notice offers it."""
+    with running_workspace(
+        tmp_path,
+        find_free_port(),
+        find_free_port(),
+        is_account_signed_in=False,
+        is_first_listing_running=True,
+        is_chat_pinned=True,
+    ) as server:
+        chooser = _enter_new_workspace(page, server)
+        expect(chooser).to_be_visible(timeout=15000)
+        chooser.locator('[aria-label="Close"]').click()
+        expect(chooser).to_have_count(0, timeout=15000)
+        empty = _chat_root(page).locator(".chat-root-empty")
+        expect(empty).to_contain_text("Connect an AI provider to start chatting.")
+        empty.locator(".chat-root-choose-provider").click()
+        expect(chooser).to_be_visible(timeout=15000)
+        chooser.locator('[aria-label="Close"]').click()
+        expect(chooser).to_have_count(0, timeout=15000)
+
+        server.chat_state.agent_manager._adopt_initial_listing([])
+        welcome_frame = _chat(page, _seed_welcome_chat(page, server))
+        expect(welcome_frame.locator(".message-input-no-provider")).to_be_visible(timeout=15000)
+        page.wait_for_timeout(1000)
+        expect(chooser).to_have_count(0)
+        welcome_frame.locator(".message-input-choose-provider").click()
+        expect(chooser).to_be_visible(timeout=15000)
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -1818,7 +2201,7 @@ def test_a_first_message_sent_with_nothing_signed_in_waits_in_the_chat_composer(
         menu.locator(f'[data-launch="{CHAT_APP_NAME}:new"]').click()
         expect(page.locator("iframe[data-live-page]")).to_have_count(1, timeout=15000)
         chat_frame = _chat(page, None)
-        expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        expect(_chat_root(page).locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
         expect(chat_frame.locator(".message-input-textbox")).to_have_value("Plan my week", timeout=15000)
         expect(chat_frame.locator(".message-input-textbox")).to_be_disabled()
         assert dialogs == []
@@ -2082,10 +2465,13 @@ def test_a_chat_with_no_user_turn_switches_at_once_and_leaves_no_handoff_node(tm
         _open_provider_menu(chat)
         chat.locator('[data-menu-part="submenu"] button', has_text="OpenAI").first.click()
 
-        # Nothing to hand over, so nothing asks and nothing is armed: the switch runs at once, and only the
-        # line by the composer reports it while it does.
-        expect(chat.locator('.agent-activity-indicator[data-state^="HANDOFF_"]')).to_contain_text("Starting Codex")
-        expect(chat.locator("[data-handoff-status]")).to_have_count(0)
+        # Nothing to hand over, so nothing asks and nothing is armed: the switch runs at once, one line in the
+        # conversation says the chat is starting on Codex (no handoff, and nothing by the composer), and the chip
+        # names Codex rather than the model it is leaving.
+        expect(chat.locator('[data-handoff-status="active"]')).to_contain_text("Starting Codex")
+        expect(chat.locator(".message-list")).not_to_contain_text("Handing off")
+        expect(chat.locator(".agent-activity-indicator")).to_have_count(0)
+        expect(chat.locator(".model-selector-trigger")).to_contain_text("Codex")
         expect(chat.locator(".modal-card")).to_have_count(0)
         expect(chat.locator(".message-input-switch-strip")).to_have_count(0)
 
@@ -2125,12 +2511,12 @@ def test_a_chat_switches_to_another_harness_from_the_page(tmp_path: Path, page: 
         _choose_pending_account(chat, "OpenAI", "OpenAI (Codex)")
         _switch_and_send(chat, "Carry on in Codex")
 
-        # The typed message stays visible as a held bubble, the handoff node reports the switch's
-        # progress, and the strip above the composer reports the switch rather than a turn.
+        # The typed message stays visible as a held bubble, and the handoff node in the conversation is the one
+        # place that reports the switch's progress: nothing by the composer meanwhile.
         held = chat.locator(".held-send", has_text="Carry on in Codex")
         expect(held).to_be_visible(timeout=15000)
-        expect(chat.locator('[data-handoff-status="active"]')).to_contain_text("Handing off to Codex")
-        expect(chat.locator('.agent-activity-indicator[data-state^="HANDOFF_"]')).to_be_visible()
+        expect(chat.locator('[data-handoff-status="active"]')).to_be_visible()
+        expect(chat.locator(".agent-activity-indicator")).to_have_count(0)
         expect(chat.locator(".message-input-send-button--switch")).to_have_count(0)
         expect(chat.locator(".message-input-switch-strip")).to_have_count(0)
 
@@ -2443,7 +2829,7 @@ def test_a_switch_is_cancelled_while_the_summary_is_written_and_the_message_come
         # period, long enough to call the switch off. The node reports the switch meanwhile.
         cancel = chat.locator(".message-input-cancel-switch-button")
         expect(cancel).to_be_visible(timeout=15000)
-        expect(chat.locator('[data-handoff-status="active"]')).to_contain_text("Handing off to Codex")
+        expect(chat.locator('[data-handoff-status="active"]')).to_contain_text("Claude Code is writing a summary")
         cancel.click()
 
         expect(chat.locator(".message-input-textbox")).to_have_value("Carry on in Codex", timeout=15000)

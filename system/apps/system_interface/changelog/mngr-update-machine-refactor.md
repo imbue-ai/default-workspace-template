@@ -1,1 +1,0 @@
-Merged the workspace-id claude sign-in branch (`mngr/fix-machine-workspace-naming`, default-workspace-template PR #443) into this branch. The change itself is described in this project's `mngr-fix-machine-workspace-naming` changelog entry.
