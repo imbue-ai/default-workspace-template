@@ -103,6 +103,22 @@ uv run --no-sync app-install publish compare <name>
 reads the committed app: commit anything uncommitted in the app's directory
 first.
 
+**A publish that was pushed and never finished.** Before going on, look for
+one an earlier attempt left between its steps:
+
+```bash
+cat data/.state/app_install/publish/<name>.json
+```
+
+No such file means nothing is waiting: go on. A file whose `is_commit_pushed`
+is `true` means that version is ALREADY PUBLIC and only its record (and
+perhaps its tag) is missing. Do not start over, and do not remove the worker
+or its branch `mngr/<slug>`: that branch holds the published version's own
+changes to the app, and step 7 merges it. Go straight to step 6, which sends
+only what is still missing, then step 7. A file with `is_commit_pushed`
+`false` is a tree that was assembled and never pushed; nothing is public, and
+starting over replaces it.
+
 ## 1. Somewhere to publish to
 
 On a first publish, ask before anything else:
@@ -198,7 +214,9 @@ Dispatch the worker. Per `launch-task`, the delegation is one step in your
 timeline ("Get the app ready (in the background)"). If an earlier attempt left
 a worker or branch named `<slug>`, remove it first
 (`create_worker.py destroy --name <slug>`, then
-`git branch -D mngr/<slug>`). The task file holds parameters only; the
+`git branch -D mngr/<slug>`), unless step 0 found a version that was pushed
+and not recorded, in which case you are not at this step at all. The task
+file holds parameters only; the
 instructions are in `references/scan-worker.md`:
 
 ````bash
