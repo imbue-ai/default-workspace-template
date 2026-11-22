@@ -1251,11 +1251,11 @@ message of a chat that is not working, a line says when that message was, from e
 side and by the transcript's own time ("Last message 3 days ago", the exact time on
 hover); it hides while a turn runs, during a switch, and while a message is on its way.
 A command a person runs in bash mode (`!ls`) and its output are theirs, not the agent's:
-they stand on the person's side and end the stretch (display `person_chip`). The reply the agent is still
-writing, and a switch the transcript does not show yet, end the last stretch while it is
-open, and open a stretch of their own after a person's turn or a switch to another agent.
-A run of one person's turns names them once, over its first bubble ("You" for the
-viewer's own); pictures are 24px.
+they stand on the person's side and end the stretch (display `person_chip`). The reply
+the agent is still writing, and a switch the transcript does not show yet, end the last
+stretch while it is open, and open a stretch of their own after a person's turn or a
+switch to another agent. A run of one person's turns names them once, over its first
+bubble ("You" for the viewer's own); pictures are 24px.
 
 ## Rooms and mentions
 
