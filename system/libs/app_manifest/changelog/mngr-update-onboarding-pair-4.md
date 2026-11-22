@@ -1,0 +1,1 @@
+New `user_apps` module: `has_user_built_app(repo_root, registry)` says whether the registry holds an app the workspace's user built, which is a row that is neither `system` nor `internal` and that a package outside the root workspace's members registered. The template's own apps, a new app's mock frame and a preview never count. The chat's "Build an app" suggestion reads it.

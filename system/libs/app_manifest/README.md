@@ -131,6 +131,13 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   upgraded and who depends on it (`classify_lockfile_change`).
   `scope.list_changed_files` is the diff both `footprint` and `select-tests`
   read, and `select_tests_for_pass_scope` selects from a pass scope file.
+- `app_manifest.user_apps`: `has_user_built_app(repo_root, registry)`, whether
+  the registry holds an app the workspace's user built: a row that is neither
+  `system` nor `internal`, registered by a package under `system/apps/` that
+  the root `pyproject.toml` does not list as a workspace member, under its
+  manifest's name. The template's own apps never count, and neither does a
+  new app's mock frame or a preview: a frame's row belongs to no package, and
+  the app behind one is `internal` while the frame is up.
 - `app_manifest.primitives`: the validated string types (`AppName`,
   `DisplayName`, `KeybindingActionId` (the profile files' action id rule),
   `KeybindingActionLabel` (one line, at most 80 characters), `LaunchPathId`,
