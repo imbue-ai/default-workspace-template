@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   isRoom: false,
   events: [] as unknown[],
   hasMoreAfter: false,
+  isTranscriptLoaded: true,
   submitSuggestion: vi.fn(),
   opensWorkspaceSettings: false,
   openWorkspaceSettings: vi.fn(),
@@ -34,6 +35,7 @@ vi.mock("../models/Response", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Response")>()),
   getEventsForChat: () => mocks.events,
   hasMoreAfter: () => mocks.hasMoreAfter,
+  isTranscriptLoaded: () => mocks.isTranscriptLoaded,
 }));
 vi.mock("../shell", () => ({
   opensWorkspaceSettings: () => mocks.opensWorkspaceSettings,
@@ -123,6 +125,14 @@ function seededAndAwaiting(): void {
   mocks.events = [reply(`${CHAT}:seed:0`), reply(SEED_END)];
 }
 
+/** The same chat once its first agent is being created with nothing sent to it, as the chat app starts it when its
+ *  owner leaves the first run's provider page. */
+function firstAgentStarting(): void {
+  mocks.chat = undefined;
+  mocks.provisional = provisionalChatFixture(CHAT, { phase: "creating", is_seeded: true, message: "" });
+  mocks.events = [reply(`${CHAT}:seed:0`), reply(SEED_END)];
+}
+
 /** The chat app saying, over the page's socket, that a chat's stored set was replaced or removed. */
 function announceSuggestionsUpdated(chatId: string): void {
   for (const listener of mocks.suggestionsUpdatedListeners) listener(chatId);
@@ -144,6 +154,7 @@ beforeEach(() => {
   mocks.isLaunchInFlight = false;
   mocks.isRoom = false;
   mocks.hasMoreAfter = false;
+  mocks.isTranscriptLoaded = true;
   mocks.opensWorkspaceSettings = false;
   mocks.submitSuggestion.mockClear();
   mocks.openWorkspaceSettings.mockClear();
@@ -183,11 +194,52 @@ describe("whether the chat's turn is done, for its suggestions", () => {
     expect(isTurnDoneForSuggestions(CHAT)).toBe(false);
     mocks.isLaunchInFlight = false;
 
-    mocks.provisional = provisionalChatFixture(CHAT, { phase: "creating", is_seeded: true });
+    addOutgoing(CHAT, "See what Studio can do");
+    expect(isTurnDoneForSuggestions(CHAT)).toBe(false);
+  });
+
+  it("counts a chat whose first agent is starting with nothing sent to it as done", () => {
+    firstAgentStarting();
+    expect(isTurnDoneForSuggestions(CHAT)).toBe(true);
+
+    // A page that cannot tell yet whether anybody has spoken does not take it that nobody has.
+    mocks.isTranscriptLoaded = false;
+    expect(isTurnDoneForSuggestions(CHAT)).toBe(false);
+  });
+
+  it("does not count a starting chat a message is on its way to", () => {
+    // The launch brought the first message, as another page's send of it does.
+    mocks.provisional = provisionalChatFixture(CHAT, {
+      phase: "creating",
+      is_seeded: true,
+      message: "See what Studio can do",
+    });
     expect(isTurnDoneForSuggestions(CHAT)).toBe(false);
 
-    seededAndAwaiting();
+    // A message sent while the agent starts is held for it.
+    mocks.provisional = provisionalChatFixture(CHAT, {
+      phase: "creating",
+      is_seeded: true,
+      held_sends: [{ message_id: "m-1", text: "See what Studio can do" }],
+    });
+    expect(isTurnDoneForSuggestions(CHAT)).toBe(false);
+
+    firstAgentStarting();
+    mocks.isLaunchInFlight = true;
+    expect(isTurnDoneForSuggestions(CHAT)).toBe(false);
+    mocks.isLaunchInFlight = false;
+
     addOutgoing(CHAT, "See what Studio can do");
+    expect(isTurnDoneForSuggestions(CHAT)).toBe(false);
+  });
+
+  it("does not count a starting chat somebody has spoken in, nor one whose create failed", () => {
+    firstAgentStarting();
+    mocks.events = [reply(SEED_END), userMessage("u-1")];
+    expect(isTurnDoneForSuggestions(CHAT)).toBe(false);
+
+    firstAgentStarting();
+    mocks.provisional = provisionalChatFixture(CHAT, { phase: "failed", is_seeded: true, error: "no such account" });
     expect(isTurnDoneForSuggestions(CHAT)).toBe(false);
   });
 
@@ -200,6 +252,14 @@ describe("whether the chat's turn is done, for its suggestions", () => {
     expect(isTurnDoneForSuggestions(CHAT)).toBe(false);
 
     mocks.chat = chatSnapshotFixture(CHAT, { status: "attention", active_agent: { activity_state: "IDLE" } });
+    expect(isTurnDoneForSuggestions(CHAT)).toBe(false);
+  });
+
+  it("does not count a listed chat whose agent is working, though nobody has spoken in it on this page", () => {
+    // A chat an agent started: its first message is not one this page holds, and its agent is mid-turn.
+    mocks.provisional = undefined;
+    mocks.events = [reply(SEED_END)];
+    mocks.chat = chatSnapshotFixture(CHAT, { status: "working", active_agent: { activity_state: "TOOL_RUNNING" } });
     expect(isTurnDoneForSuggestions(CHAT)).toBe(false);
   });
 
@@ -249,6 +309,25 @@ describe("the next-step strip", () => {
     ]);
     expect(pillLabels()).toEqual(START_LABELS);
     expect(root.querySelector(".suggestion-strip")?.getAttribute("data-placement")).toBe("next_step");
+  });
+
+  it("keeps the start suggestions open while the chat's first agent starts with nothing sent to it", async () => {
+    await load();
+    expect(pillLabels()).toEqual(START_LABELS);
+
+    firstAgentStarting();
+    draw();
+    expect(pillLabels()).toEqual(START_LABELS);
+    expect(root.querySelector(".suggestion-strip-toggle")).toBeNull();
+
+    // The agent is up, idle, and still has been sent nothing.
+    mocks.provisional = undefined;
+    mocks.chat = chatSnapshotFixture(CHAT, { active_agent: { activity_state: "IDLE" } });
+    await settle();
+
+    expect(pillLabels()).toEqual(START_LABELS);
+    // No turn ended, so the set was read once, when the page first looked.
+    expect(requests.filter((request) => request.url === "/api/chats/:chatId/suggestions")).toHaveLength(1);
   });
 
   it("draws a generated set's first three with Show more for the rest, and a fixed set whole", async () => {

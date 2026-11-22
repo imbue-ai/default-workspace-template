@@ -287,6 +287,13 @@ describe("what the page reads of a chat for its activity and new-chat strips", (
       held_sends: [{ message_id: "m-1", text: "Plan my week" }],
     });
     expect(hasUserMessage(CHAT)).toBe(true);
+
+    // The message a chat's create or launch brought, which a page that did not send it holds nowhere else.
+    mocks.events = [];
+    mocks.provisional = provisionalChatFixture(CHAT, { phase: "creating", message: "Plan my week" });
+    expect(hasUserMessage(CHAT)).toBe(true);
+    mocks.provisional = provisionalChatFixture(CHAT, { phase: "creating", message: "" });
+    expect(hasUserMessage(CHAT)).toBe(false);
   });
 
   it("cannot tell before the transcript has loaded, except for a chat still awaiting its first send", () => {

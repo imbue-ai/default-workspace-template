@@ -218,6 +218,9 @@ export interface ProvisionalChat {
   // What it launches as: an agent chat, or a room.
   kind: ChatKind;
   phase: ProvisionalChatPhase;
+  // The first message the chat sends once it launches: what its create or its launch brought. Empty for none, as
+  // for a chat awaiting its first send and for one launched with nothing to say.
+  message: string;
   // Why the create failed, in the failed phase.
   error: string | null;
   // Whether the chat has a seed segment to show while it is created: turns written before any agent

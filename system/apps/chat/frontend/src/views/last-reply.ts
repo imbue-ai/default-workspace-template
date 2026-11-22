@@ -11,18 +11,13 @@ import { getEventsForChat, hasMoreAfter, hasMoreBefore, isTranscriptLoaded } fro
 import { isNonBoundaryUserMessage } from "./message-classification";
 import { isChatTurnOver } from "./TurnDoneMark";
 
-/** Whether the chat's turn is done, as the done mark reads it. A chat still awaiting its first send (a seeded one,
- *  before its first agent) has no turn to be in, and counts as done until something is sent. */
+/** Whether the chat's turn is done, as the done mark reads it. A chat nobody has spoken in has no turn to be in, and
+ *  counts as done until something is sent: one still awaiting its first send (a seeded one, before its first agent),
+ *  and one whose first agent is starting with nothing sent to it. */
 export function isTurnDoneForSuggestions(chatId: string): boolean {
   if (isChatTurnOver(chatId)) return true;
-  const provisional = getProvisionalChat(chatId);
-  return (
-    provisional !== undefined &&
-    provisional.phase === "awaiting_first_send" &&
-    getChatById(chatId) === undefined &&
-    !isLaunchInFlight(chatId) &&
-    getOutgoingMessages(chatId).length === 0
-  );
+  if (isFirstAgentStartingUnasked(chatId)) return true;
+  return isAwaitingFirstSend(chatId) && !isLaunchInFlight(chatId) && getOutgoingMessages(chatId).length === 0;
 }
 
 /** The event id of the reply a set of suggestions may follow: the last assistant message the page holds, when the
@@ -50,11 +45,24 @@ function isAwaitingFirstSend(chatId: string): boolean {
   return provisional !== undefined && provisional.phase === "awaiting_first_send" && getChatById(chatId) === undefined;
 }
 
-/** Whether anybody has said anything in the chat, a message of this page's still on its way included; null while
- *  the page cannot tell, its transcript not having loaded. */
+/** Whether the chat's first agent is being created with nobody having said anything: a launch that brought no
+ *  message, as a first-run chat's is from the moment its owner leaves the provider page. */
+function isFirstAgentStartingUnasked(chatId: string): boolean {
+  const provisional = getProvisionalChat(chatId);
+  return (
+    provisional !== undefined &&
+    provisional.phase === "creating" &&
+    getChatById(chatId) === undefined &&
+    hasUserMessage(chatId) === false
+  );
+}
+
+/** Whether anybody has said anything in the chat, a message still on its way included: one of this page's, one its
+ *  launch brings, or one held for it. Null while the page cannot tell, its transcript not having loaded. */
 export function hasUserMessage(chatId: string): boolean | null {
   if (getOutgoingMessages(chatId).length > 0 || isLaunchInFlight(chatId)) return true;
-  if ((getProvisionalChat(chatId)?.held_sends.length ?? 0) > 0) return true;
+  const provisional = getProvisionalChat(chatId);
+  if (provisional !== undefined && (provisional.message !== "" || provisional.held_sends.length > 0)) return true;
   if (getEventsForChat(chatId).some((event) => event.type === "user_message" && !isNonBoundaryUserMessage(event))) {
     return true;
   }

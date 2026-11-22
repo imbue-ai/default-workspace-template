@@ -59,6 +59,7 @@ function proto(chatId: string, phase: ProvisionalChat["phase"], error: string | 
     account_id: "acct-1",
     kind: "agent",
     phase,
+    message: "",
     error,
     is_seeded: false,
     held_sends: [],
