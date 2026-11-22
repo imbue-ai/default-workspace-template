@@ -186,7 +186,10 @@ def _present_agent_dirs(host_dir: Path) -> tuple[Path, ...]:
 
 
 def _listed_agent_ids(chats_root: Path) -> set[str]:
-    """Every agent a chat record names. An unreadable record refuses the sweep."""
+    """Every agent a chat record names: its agents, and the successor its handoff is making.
+
+    An unreadable record refuses the sweep.
+    """
     if not chats_root.is_dir():
         return set()
     agent_ids: set[str] = set()
@@ -197,6 +200,9 @@ def _listed_agent_ids(chats_root: Path) -> set[str]:
         try:
             record = json.loads(record_file.read_text())
             agent_ids.update(str(entry["agent_id"]) for entry in record["agents"])
+            handoff = record.get("handoff")
+            if handoff is not None:
+                agent_ids.add(str(handoff["next_agent_id"]))
         except (OSError, ValueError, KeyError, TypeError) as e:
             raise SweepRefusedError(
                 f"cannot read chat record {record_file}: {e}"

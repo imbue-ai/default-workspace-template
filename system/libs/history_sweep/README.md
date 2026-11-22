@@ -20,7 +20,8 @@ Deleting a chat destroys its agents. For each one:
 ## What the sweep removes
 
 For each archive whose agent is neither present under `~/.mngr/agents/` nor named
-by any chat record (`data/.apps/chat/chats/*/record.json`):
+by any chat record (`data/.apps/chat/chats/*/record.json`: its agents, and the
+successor of its handoff in progress):
 
 | When | What |
 | --- | --- |

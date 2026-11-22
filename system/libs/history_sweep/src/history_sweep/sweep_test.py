@@ -53,12 +53,17 @@ def _write_present_agent(
     )
 
 
-def _write_chat_record(roots: SweepRoots, agent_ids: list[str]) -> None:
+def _write_chat_record(
+    roots: SweepRoots, agent_ids: list[str], handoff_successor_id: str | None = None
+) -> None:
     chat_dir = roots.chats_root / agent_ids[0]
     chat_dir.mkdir(parents=True)
     record = {
         "chat_id": agent_ids[0],
         "agents": [{"seq": i + 1, "agent_id": a} for i, a in enumerate(agent_ids)],
+        "handoff": None
+        if handoff_successor_id is None
+        else {"next_agent_id": handoff_successor_id},
     }
     (chat_dir / "record.json").write_text(json.dumps(record))
 
@@ -170,6 +175,18 @@ def test_archive_of_an_agent_a_chat_record_lists_is_never_touched(
     write_session(roots, session_id)
     _write_chat_record(roots, [_new_agent_id(), agent_id])
     write_archive(roots, agent_id, [session_id], preserved_at=_NOW - timedelta(days=90))
+
+    assert _planned(roots) == {}
+
+
+def test_archive_of_a_handoffs_successor_is_never_touched(roots: SweepRoots) -> None:
+    successor_id = _new_agent_id()
+    session_id = str(uuid4())
+    write_session(roots, session_id)
+    _write_chat_record(roots, [_new_agent_id()], handoff_successor_id=successor_id)
+    write_archive(
+        roots, successor_id, [session_id], preserved_at=_NOW - timedelta(days=90)
+    )
 
     assert _planned(roots) == {}
 
