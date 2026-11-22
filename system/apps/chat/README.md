@@ -579,13 +579,15 @@ A new workspace's first chat is seeded by the chat app's own words rather than t
 app's: a seed request with `is_first_run` and no turns opens the chat on `FIRST_RUN_WELCOME`
 (the agent introducing itself, what Studio is for, and "**How do you want to start?**"), owes the
 workspace's owner the provider page (`first_run.py`), and writes the chat's start suggestions
-(below), "Describe what you want to make" and "See what Studio can do", under the welcome's last
-turn. Leaving the provider page with a provider connected starts the chat's agent at once, with no
+(below), "Describe what you want to make", "Get ideas for what to make" and "See what Studio can
+do", under the welcome's last turn, with the step its first conversation stands at (the tree,
+below). Leaving the provider page with a provider connected starts the chat's agent at once, with no
 message, as any sign-in's launch does: the agent says nothing until the user picks a suggestion or
 types, and that first send carries the welcome. For this chat the context block also says that
 this is the user's first conversation in a new workspace and that the agent reads
 `.agents/skills/first-run-onboarding/SKILL.md` before replying; the skill holds the reply to each
-start suggestion word for word, and has the agent treat anything else as an ordinary request. An
+start suggestion word for word, the questions and idea lists that follow "Get ideas for what to
+make", and has the agent treat anything else as an ordinary request. An
 Imbue Studio app that still asks what type of studio the user wants sends the answer as `context`:
 it is kept beside the seed in `first_run_context.txt` (the file that marks the chat as the first
 run's, empty when nothing was said), rides the same block without being shown, and is taken again
@@ -661,8 +663,8 @@ chat's folder, `data/.apps/chat/chats/<chat-id>/suggestions.json`:
 }
 ```
 
-`source` is `fixed` for a set the chat app wrote word for word (the first-run seed's start
-suggestions) and `generated` for one a model worked out. `GET /api/chats/<chat-id>/suggestions`
+`source` is `fixed` for a set the chat app wrote itself (the first-run seed's start suggestions,
+and the tree's below) and `generated` for one a model worked out. `GET /api/chats/<chat-id>/suggestions`
 answers `{"status", "after_event_id", "source", "suggestions"}`: `ready` with the stored set,
 `pending` while a set is being worked out (naming the reply it is for, with an empty list), or
 `none` with nulls and an empty list. It answers for a seeded chat still awaiting its first agent
@@ -719,6 +721,53 @@ click; while a switch is being prepared or dictation owns the box it does nothin
 message is sent, by a suggestion or by typing, or a turn starts from anywhere else, the strip
 collapses to a "Next steps" toggle above the composer that opens it again, and the toggle goes
 when that turn ends. A room shows no strip.
+
+A first-run chat's first conversation is a small tree (`first_run_tree.py`), and the
+suggestions under its scripted replies are the chat app's own. The chat's folder holds the step
+the conversation stands at, `first_run_tree.json` (`{"version": 1, "step": "start"}`), written
+with the seed and moved by each message the chat takes from its user, whether delivered to its
+agent or held for one still being created; a send the chat refuses and a slash command move
+nothing:
+
+| From | Message | To |
+|---|---|---|
+| `start` | "Get ideas for what to make" | `categories` |
+| `start` | anything else | `done` |
+| `categories` | anything | `connectors` |
+| `connectors` | anything | `ideas` |
+| `ideas` | "More ideas" | `ideas` |
+| `ideas` | anything else | `done` |
+
+The message is compared trimmed, so a click and the same words typed are one thing. A first-run
+chat with no step file (one seeded before the tree was recorded) is at `start` until its first
+agent joins it and `done` afterwards. While the step is not `done`, a turn's end stores the
+tree's set under the reply with no model asked, as `source: fixed`: none at `categories` (the
+reply asks what the workspace is for), "Show me some ideas" at `connectors` (it asks which apps
+the user has), and at `ideas` one suggestion per idea the reply lists, then "More ideas" and
+"Something else". An idea's name is the bold text that opens a list item (`- **<name>**: ...`),
+the form the skill has the agent write; up to ten are read, each one line of at most 80
+characters, in order and without repeats. A fixed set needs neither the switch (the page hides
+it while the switch is off) nor a harness with a one-shot call, but like any set it is stored
+only under a reply the agent wrote, in a chat that is idle with nothing queued. A reply at
+`ideas` that lists no idea in that form is the one case a model is asked while the tree is in
+progress: the generator runs with a "Fixed onboarding suggestions" section added to its system
+prompt, and the set is stored as `generated`. Once the step is `done` the chat gets suggestions
+like any other.
+
+The tree's two questions come with pickers. An assistant message that carries
+`<studio_category_picker/>` or `<studio_connector_picker/>` on a line of its own, outside a code
+fence, is drawn with the picker in the tag's place (`studio-widgets.ts`, `views/StudioPickers.ts`):
+three columns of category pills (Work, Life, Creative), or a wrapping row of fifteen apps, each
+with its bundled service mark (`views/service-marks.ts`) or its name alone when no mark is
+bundled for it. A click on a pill adds its label and a comma to the composer's draft, or takes
+them out again (`models/ComposerDraft.ts`), and the pill reads as pressed while the draft holds
+them, so a picker has no state of its own and the user sends the draft themselves, with anything
+of their own typed in. A picker takes clicks only in the reply the chat waits on its user to
+answer (its last assistant message, with nothing said since and its turn done); in an earlier
+message it is drawn disabled. The first category picked in a workspace points a coach mark
+(`@imbue/workspace-ui`'s `components/CoachMark.ts`) at the composer's send button, "Click this
+button to send your message", recorded as `is_picker_send_hint_shown` in the chat settings so it
+shows once.
 
 Three workspace-wide switches say which suggestions are offered, each on unless changed:
 `is_next_step_suggestions_enabled`, `is_activity_suggestions_enabled`, and

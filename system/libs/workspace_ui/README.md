@@ -17,7 +17,9 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   them.
 - `src/components/`: the shared Mithril recipes (Button, Modal, NoticeDialog,
   the Menu, the Dropdown that picks a value, the SegmentedControl, icons,
-  badges, tooltips, toasts, the modal backdrop); beside it at `src/`, `DestroyConfirmDialog.ts`, `portal.ts`, and
+  badges, tooltips, toasts, the modal backdrop, and the coach mark, a bubble
+  with an arrow and a "Got it" button that points at one control of the page
+  that draws it); beside it at `src/`, `DestroyConfirmDialog.ts`, `portal.ts`, and
   `menu-position.ts` (the pure geometry the Menu and the Dropdown place
   themselves with).
 - `src/base-path.ts`, `src/origin.ts`, and

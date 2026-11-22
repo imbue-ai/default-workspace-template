@@ -474,6 +474,77 @@ def test_suggestions_worked_out_after_a_reply_rise_above_the_composer_with_the_r
     expect(_chat(page).locator(".suggestion-strip-more")).to_have_count(0)
 
 
+@pytest.mark.timeout(90, func_only=False)
+def test_a_picker_in_the_agents_reply_toggles_its_labels_in_the_draft_and_points_at_send_once(
+    e2e_server: RunningWorkspace, page: Page, tmp_path: Path
+) -> None:
+    """A reply that carries a picker's tag draws the picker in its place. A pill puts its label in the composer and
+    takes it out again; the first category picked points a coach mark at the send button, once per workspace; and
+    a picker in a reply that has been answered takes no more clicks."""
+    state = e2e_server.chat_state
+    manager = state.agent_manager
+    agent = manager.get_agent_by_id(FIXTURE_AGENT_ID)
+    assert agent is not None
+    seed_agent_state(
+        manager,
+        FIXTURE_AGENT_ID,
+        name=agent.name,
+        state="WAITING",
+        labels=agent.labels,
+        activity_state=ActivityState.IDLE,
+    )
+    _open_fixture_chat(page, e2e_server)
+    chat = _chat(page)
+    expect(chat.locator(".message-assistant").first).to_contain_text("Hello! How can I help you?")
+
+    asked = [{"type": "text", "text": "**What do you want to use this Studio for?**\n\n<studio_category_picker/>"}]
+    with open(e2e_server.session_file, "a") as handle:
+        handle.write(json.dumps(_assistant_line("picker-a-1", "2026-01-01T00:02:00Z", asked, "end_turn")) + "\n")
+    categories = chat.locator('[data-studio-picker="category"]')
+    expect(categories.locator(".studio-picker-pill")).to_have_count(21, timeout=15000)
+    expect(categories.locator(".studio-picker-heading")).to_have_text(["Work", "Life", "Creative"])
+    textarea = chat.locator(".message-input-textbox")
+    send_button = chat.locator(".message-input-send-button")
+    hint = chat.locator(".coach-mark")
+
+    categories.get_by_role("button", name="Money", exact=True).click()
+    categories.get_by_role("button", name="Sales", exact=True).click()
+
+    expect(textarea).to_have_value("Money, Sales, ")
+    expect(categories.get_by_role("button", name="Money", exact=True)).to_have_attribute("aria-pressed", "true")
+    expect(hint).to_have_count(1)
+    expect(hint).to_contain_text("Click this button to send your message")
+    hint_box, send_box = _box(hint), _box(send_button)
+    assert hint_box["left"] <= (send_box["left"] + send_box["right"]) / 2 <= hint_box["right"]
+    assert hint_box["bottom"] <= send_box["top"] or hint_box["top"] >= send_box["bottom"]
+    assert state.chat_settings.read().is_picker_send_hint_shown is True
+    page.screenshot(path=str(tmp_path / "category-picker.png"))
+
+    hint.get_by_role("button", name="Got it").click()
+    categories.get_by_role("button", name="Money", exact=True).click()
+    categories.get_by_role("button", name="Health", exact=True).click()
+
+    expect(textarea).to_have_value("Sales, Health, ")
+    expect(hint).to_have_count(0)
+
+    _append_user_turn(e2e_server.session_file, "picker-u-1", "Sales, Health, ")
+    apps = [{"type": "text", "text": "**Which apps do you use most?**\n\n<studio_connector_picker/>"}]
+    with open(e2e_server.session_file, "a") as handle:
+        handle.write(json.dumps(_assistant_line("picker-a-2", "2026-01-01T00:03:00Z", apps, "end_turn")) + "\n")
+    connectors = chat.locator('[data-studio-picker="connector"]')
+    expect(connectors.locator(".studio-picker-pill")).to_have_count(15, timeout=15000)
+    expect(categories.get_by_role("button", name="Money", exact=True)).to_be_disabled()
+    gmail = connectors.get_by_role("button", name="Gmail", exact=True)
+    expect(gmail).to_be_enabled()
+    assert gmail.locator("img").evaluate("image => image.complete && image.naturalWidth > 0") is True
+
+    textarea.fill("")
+    gmail.click()
+
+    expect(textarea).to_have_value("Gmail, ")
+    page.screenshot(path=str(tmp_path / "connector-picker.png"))
+
+
 @pytest.mark.timeout(60, func_only=False)
 def test_composer_bar_survives_a_shorter_window(e2e_server: RunningWorkspace, page: Page) -> None:
     """A browser window that gets shorter keeps the whole composer on screen.
