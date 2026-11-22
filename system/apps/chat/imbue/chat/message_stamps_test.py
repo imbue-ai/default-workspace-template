@@ -23,3 +23,10 @@ def test_a_memory_only_store_and_an_unreadable_file_start_empty(tmp_path: Path) 
     path = tmp_path / "last_messaged.json"
     path.write_text("{not json")
     assert MessageStampStore(path=path).read() == {}
+
+
+def test_stores_under_different_keys_read_only_their_own_stamps(tmp_path: Path) -> None:
+    path = tmp_path / "stamps.json"
+    MessageStampStore(path=path, key="replies").record(ChatId("agent-1"), at=100.0)
+    assert MessageStampStore(path=path, key="replies").read() == {"agent-1": 100.0}
+    assert MessageStampStore(path=path).read() == {}

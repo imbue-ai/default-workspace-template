@@ -44,6 +44,8 @@ from imbue.chat.main_chat import MainChatStore
 from imbue.chat.mentions import MENTIONS_DIRNAME
 from imbue.chat.mentions import MentionStore
 from imbue.chat.message_stamps import MessageStampStore
+from imbue.chat.message_stamps import REPLY_STAMPS_FILENAME
+from imbue.chat.message_stamps import REPLY_STAMPS_KEY
 from imbue.chat.message_stamps import STAMPS_FILENAME
 from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import DEFAULT_SECRETS_DIRECTORY
@@ -143,6 +145,7 @@ def build_production_state(
     agent_manager = AgentManager.build(
         broadcaster,
         message_stamps=MessageStampStore(path=data_dir / STAMPS_FILENAME),
+        reply_stamps=MessageStampStore(path=data_dir / REPLY_STAMPS_FILENAME, key=REPLY_STAMPS_KEY),
         main_chat=MainChatStore(path=data_dir / MAIN_CHAT_FILENAME),
         # The main chat never sleeps; a secondary's chats are a preview's, so it wakes nothing.
         keeps_main_chat_awake=not is_secondary,

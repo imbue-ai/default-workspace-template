@@ -22,7 +22,7 @@ function provisional(chatId: string, phase: ProvisionalChat["phase"], name = "")
 describe("rowsFromSnapshots", () => {
   it("lists every chat, then the provisional chats the list does not name yet", () => {
     const rows = rowsFromSnapshots(
-      [chatSnapshotFixture("agent-a", { title: "Plan", last_messaged_at: 1_700_000_000 })],
+      [chatSnapshotFixture("agent-a", { title: "Plan", last_active_at: 1_700_000_000 })],
       [provisional("agent-a", "creating"), provisional("agent-b", "failed")],
       null,
     );
@@ -52,9 +52,9 @@ describe("groupedRows", () => {
   it("orders by recency with never-messaged chats last, and a chat started here first", () => {
     const rows = rowsFromSnapshots(
       [
-        chatSnapshotFixture("agent-old", { last_messaged_at: 100 }),
+        chatSnapshotFixture("agent-old", { last_active_at: 100 }),
         chatSnapshotFixture("agent-never"),
-        chatSnapshotFixture("agent-new", { last_messaged_at: 200 }),
+        chatSnapshotFixture("agent-new", { last_active_at: 200 }),
         chatSnapshotFixture("agent-mine"),
       ],
       [],
@@ -72,14 +72,14 @@ describe("groupedRows", () => {
   it("files a worker under the chat that owns its lead agent, and moves the pair together", () => {
     const rows = rowsFromSnapshots(
       [
-        chatSnapshotFixture("agent-lead", { last_messaged_at: 100, agent_ids: ["agent-first", "agent-lead"] }),
-        chatSnapshotFixture("agent-other", { last_messaged_at: 150 }),
+        chatSnapshotFixture("agent-lead", { last_active_at: 100, agent_ids: ["agent-first", "agent-lead"] }),
+        chatSnapshotFixture("agent-other", { last_active_at: 150 }),
         chatSnapshotFixture("agent-worker", {
-          last_messaged_at: 300,
+          last_active_at: 300,
           labels: { agent_created: "true", lead_agent: "agent-first" },
         }),
         chatSnapshotFixture("agent-grandchild", {
-          last_messaged_at: 50,
+          last_active_at: 50,
           labels: { agent_created: "true", lead_agent: "agent-worker" },
         }),
       ],
@@ -112,10 +112,10 @@ describe("groupedRows", () => {
   it("leads with the main chat and its helpers whatever was messaged since, a chat started here included", () => {
     const rows = rowsFromSnapshots(
       [
-        chatSnapshotFixture("agent-recent", { last_messaged_at: 300 }),
-        chatSnapshotFixture("agent-welcome", { last_messaged_at: 100 }),
+        chatSnapshotFixture("agent-recent", { last_active_at: 300 }),
+        chatSnapshotFixture("agent-welcome", { last_active_at: 100 }),
         chatSnapshotFixture("agent-helper", {
-          last_messaged_at: 50,
+          last_active_at: 50,
           labels: { agent_created: "true", lead_agent: "agent-welcome" },
         }),
         chatSnapshotFixture("agent-mine"),
@@ -132,7 +132,7 @@ describe("groupedRows", () => {
 
   it("leads with a main chat still awaiting its first send", () => {
     const rows = rowsFromSnapshots(
-      [chatSnapshotFixture("agent-recent", { last_messaged_at: 300 })],
+      [chatSnapshotFixture("agent-recent", { last_active_at: 300 })],
       [provisional("agent-welcome", "awaiting_first_send")],
       "agent-welcome",
     );
@@ -153,9 +153,24 @@ describe("groupedRows", () => {
   });
 });
 
+describe("recency of a helper chat", () => {
+  it("orders a helper the user never messaged by its agent's last finished turn", () => {
+    const rows = rowsFromSnapshots(
+      [
+        chatSnapshotFixture("agent-older", { last_messaged_at: 100, last_active_at: 100 }),
+        chatSnapshotFixture("agent-helper-replied", { last_messaged_at: null, last_active_at: 200 }),
+      ],
+      [],
+      null,
+    );
+
+    expect(groupedRows(rows, NONE).map((row) => row.chatId)).toEqual(["agent-helper-replied", "agent-older"]);
+  });
+});
+
 describe("rowsFromSnapshots with rooms", () => {
-  const room = (id: string, title: string, awaiting: string[] = [], lastMessagedAt: number | null = null) =>
-    chatSnapshotFixture(id, { kind: "room", title, awaiting_chat_ids: awaiting, last_messaged_at: lastMessagedAt });
+  const room = (id: string, title: string, awaiting: string[] = [], lastActiveAt: number | null = null) =>
+    chatSnapshotFixture(id, { kind: "room", title, awaiting_chat_ids: awaiting, last_active_at: lastActiveAt });
 
   it("lists a room as a row of its kind, with the mention mark the viewer's unseen mentions give", () => {
     const rows = rowsFromSnapshots(

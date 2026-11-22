@@ -437,7 +437,7 @@ function onChatsUpdated(): void {
   settleAcceptedRenames();
   const rows = allRows();
   noteStatuses(new Map(rows.map((row) => [row.chatId, row.status])), isRootShown ? selectedChatId : null);
-  // A chat that has messaged is no longer new; a deleted chat's frame goes with it.
+  // A chat that has been active is no longer new; a deleted chat's frame goes with it.
   for (const chatId of startedHere) {
     if (rows.some((row) => row.chatId === chatId && row.lastActiveMs !== null)) startedHere.delete(chatId);
   }
