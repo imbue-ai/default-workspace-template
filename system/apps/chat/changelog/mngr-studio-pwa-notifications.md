@@ -1,0 +1,1 @@
+The watchers answer (`GET /api/chats/<id>/watchers`) also says which watching pages are the owner's, whether the chat is the owner's own (no one else has written in it), and the chat's title, so a phone notification goes only from the owner's own chats and is held back only while the owner, not a visitor, is reading the chat.
