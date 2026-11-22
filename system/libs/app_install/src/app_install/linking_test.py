@@ -32,6 +32,7 @@ from app_install.testing import write_workspace_file
 from app_manifest.records import AppRecord
 from app_manifest.records import load_record
 from github_sync.app_history import split_app
+from github_sync.testing import make_git_exec_path_whose_split_leaves_its_marker
 
 _PREFIX = "system/apps/notes"
 
@@ -204,6 +205,43 @@ def test_linking_again_makes_no_marker_and_a_refresh_makes_one_once_the_app_has_
     assert run_git(workspace, ["diff", "--stat", changed_tip, "HEAD"]) == ""
     assert run_git(workspace, ["status", "--porcelain"]) == "?? draft.txt"
     # A split from the new marker is the one it joins, and the next change continues it.
+    assert split_app(workspace, refreshed.record) == refreshed.split_commit
+    write_app_file(workspace, "notes", "notes.py", "GREETING = 'good evening'\n")
+    commit_all(workspace, "Greet in the evening")
+    assert run_git(workspace, ["rev-parse", f"{split_app(workspace, refreshed.record)}^1"]) == refreshed.split_commit
+
+
+def test_a_refresh_whose_split_cannot_start_from_the_marker_reads_the_whole_history_instead(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace_with_notes(tmp_path)
+    runtime = RecordingRuntime(repo_root=workspace)
+    linked = link_app(workspace, "notes", False, False, runtime)
+    # A branch that left the workspace before the marker is merged after it, as an update merges the template's.
+    run_git(workspace, ["branch", "upstream", f"{linked.marker_commit}~2"])
+    upstream = tmp_path / "upstream"
+    run_git(workspace, ["worktree", "add", "--quiet", str(upstream), "upstream"])
+    write_workspace_file(upstream, "RELEASE.md", "a new release of the template\n")
+    commit_all(upstream, "A template release")
+    run_git(workspace, ["merge", "--quiet", "--no-ff", "-m", "Merge the new release", "upstream"])
+    write_app_file(workspace, "notes", "notes.py", "GREETING = 'good morning'\n")
+    changed_tip = commit_all(workspace, "Greet in the morning")
+    monkeypatch.setenv(
+        "GIT_EXEC_PATH", str(make_git_exec_path_whose_split_leaves_its_marker(tmp_path / "git-core"))
+    )
+
+    refreshed = link_app(workspace, "notes", True, False, runtime)
+
+    assert refreshed.result == LinkResult.REFRESHED
+    assert run_git(workspace, ["rev-parse", "HEAD^1", "HEAD^2"]).split() == [changed_tip, refreshed.split_commit]
+    assert run_git(workspace, ["rev-parse", f"{refreshed.split_commit}^1"]) == linked.split_commit
+    assert run_git(workspace, ["log", "--format=%s", refreshed.split_commit]).splitlines() == [
+        "Greet in the morning",
+        "Greet, and edit the workspace too",
+        "Add the notes app",
+    ]
+    # With the marker past the merge, a split starts from it again and the next change continues it.
+    monkeypatch.delenv("GIT_EXEC_PATH")
     assert split_app(workspace, refreshed.record) == refreshed.split_commit
     write_app_file(workspace, "notes", "notes.py", "GREETING = 'good evening'\n")
     commit_all(workspace, "Greet in the evening")

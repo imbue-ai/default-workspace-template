@@ -163,13 +163,24 @@ def _clone_bounded_by_app_age(
     return (clone, True) if clone is not None else None
 
 
-def _rejoin_in_clone(clone: Path, start_head: str, name: str, prefix: str) -> tuple[str, str]:
-    """Split the app's history in the clone and join it back; the marker commit and the split commit."""
-    output = run_git(
-        clone,
-        ["subtree", "split", f"--prefix={prefix}", "--rejoin", "-m", f"app-install: link {name}"],
-        timeout_seconds=_SPLIT_TIMEOUT_SECONDS,
-    )
+def _rejoin_in_clone(clone: Path, start_head: str, name: str, prefix: str, is_first: bool) -> tuple[str, str]:
+    """Split the app's history in the clone and join it back; the marker commit and the split commit.
+
+    A split that starts from an earlier marker reads only the commits made since, as long as each of them
+    follows commits no older than the marker. A merge that brings in older ones (every update of the workspace
+    merges the template's history) sends git subtree back through all of their ancestors, one shell call deep
+    per commit, which the shell refuses long before the root of a workspace's history. The split is then made
+    again with the markers ignored: every commit is read once, in order, the same split commits come out, and
+    the marker it leaves is past the merge.
+    """
+    arguments = ["subtree", "split", f"--prefix={prefix}", "--rejoin", "-m", f"app-install: link {name}"]
+    try:
+        output = run_git(clone, arguments, timeout_seconds=_SPLIT_TIMEOUT_SECONDS)
+    except GitCommandError as e:
+        if is_first:
+            raise
+        logger.info("The split of {} from its newest marker failed, so the whole history is read: {}", prefix, e)
+        output = run_git(clone, [*arguments, "--ignore-joins"], timeout_seconds=_SPLIT_TIMEOUT_SECONDS)
     split_commit = output.splitlines()[-1].strip()
     marker = run_git(clone, ["rev-parse", "HEAD"])
     if marker == start_head:
@@ -200,7 +211,7 @@ def _make_marker_once(
         if cloned is None:
             return None
         clone, is_full_clone_used = cloned
-        marker, split_commit = _rejoin_in_clone(clone, start_head, str(record.name), prefix)
+        marker, split_commit = _rejoin_in_clone(clone, start_head, str(record.name), prefix, is_first)
         run_git(repo_root, ["fetch", "--quiet", "--no-tags", str(clone), f"refs/heads/{branch}"])
     # Asked of the workspace repository, which holds the history a bounded clone cuts off.
     require_split_holds_only_the_app(repo_root, record, split_commit)

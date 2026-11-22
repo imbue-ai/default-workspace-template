@@ -57,6 +57,9 @@ APP_SYNC_STATE_DIRECTORY = Path("data/.state/app_sync")
 DEV_REPOSITORY_BRANCH = "main"
 # What git says of a push the remote branch is not an ancestor of.
 _NON_FAST_FORWARD_MARKERS = ("(non-fast-forward)", "(fetch first)")
+# What a split says when it had to leave the commits made since the app's
+# newest marker: the shell's refusal to go deeper, or the time it is given.
+_SPLIT_LEFT_ITS_MARKER_SIGNS = ("recursion depth", "timed out")
 
 
 class AppSyncError(GithubSyncError):
@@ -254,7 +257,18 @@ def _sync_app(
             f"skipped: the app's first split has not been made; run `app-install link {name}`",
         )
 
-    commit = split_app(repo_root, record)
+    try:
+        commit = split_app(repo_root, record)
+    except AppHistoryError as e:
+        if is_owned and any(sign in str(e) for sign in _SPLIT_LEFT_ITS_MARKER_SIGNS):
+            return _reported(
+                unsynced,
+                AppSyncState.FAILED,
+                "nothing was pushed: the app's history could not be read from its newest marker on, as "
+                "happens once a merge brings in commits older than the marker (an update of the workspace "
+                f"does); run `app-install link {name} --refresh`, which makes a marker past the merge ({e})",
+            )
+        raise
     try:
         _push_split(repo_root, record.dev_repo_url, commit)
     except AppHistoryError as e:

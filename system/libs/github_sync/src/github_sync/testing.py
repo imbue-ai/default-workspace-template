@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import stat
 import subprocess
 from pathlib import Path
@@ -59,6 +60,37 @@ def install_fake_latchkey(bin_dir: Path, script_body: str) -> None:
     script = bin_dir / "latchkey"
     script.write_text(f"#!/usr/bin/env bash\n{script_body}\n")
     script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def make_git_exec_path_whose_split_leaves_its_marker(directory: Path) -> Path:
+    """A git command directory (for `GIT_EXEC_PATH`) whose `git subtree` fails
+    the way the shell stops a split that had to read back past the app's newest
+    marker, unless it is told to ignore the markers, which it then really does.
+
+    The real failure needs a merge that brings in a commit with hundreds of
+    ancestors older than the marker, and a `/bin/sh` that limits how deep a
+    function calls itself (dash does, at 1000).
+    """
+    real_exec_path = Path(
+        subprocess.run(
+            ["git", "--exec-path"], check=True, capture_output=True, text=True
+        ).stdout.strip()
+    )
+    directory.mkdir(parents=True)
+    for command in real_exec_path.iterdir():
+        if command.name != "git-subtree":
+            os.symlink(command, directory / command.name)
+    stand_in = directory / "git-subtree"
+    stand_in.write_text(
+        "#!/bin/sh\n"
+        'case " $* " in\n'
+        f'    *" --ignore-joins "*) exec "{real_exec_path / "git-subtree"}" "$@" ;;\n'
+        "esac\n"
+        'echo "git-subtree: 316: Maximum function recursion depth (1000) reached" >&2\n'
+        "exit 2\n"
+    )
+    stand_in.chmod(stand_in.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return directory
 
 
 def git_output(repo: Path, *args: str) -> str:
