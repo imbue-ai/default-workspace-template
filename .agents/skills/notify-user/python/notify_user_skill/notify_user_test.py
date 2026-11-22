@@ -25,6 +25,23 @@ _CHAT_APP_URL = "http://127.0.0.1:18731"
 
 _WATCH_WARNING = "notify-user: could not check who is watching this chat ("
 
+# What the shell answers a push when the owner has turned notifications on nowhere.
+_NO_DEVICES = (
+    200,
+    json.dumps({"send_id": "send-1", "status": "no_devices", "detail": "No device."}),
+)
+# What it answers a push it queued for the devices.
+_QUEUED = (
+    202,
+    json.dumps({"send_id": "send-1", "status": "queued", "detail": "Queued."}),
+)
+_TOKEN = "the-send-token"
+
+
+def _is_push(url: str) -> bool:
+    return url.endswith(notify_user.WEB_PUSH_SEND_PATH)
+
+
 _DESKTOP_WARNING = (
     "notify-user: could not show the notification on the workspace's desktop ("
 )
@@ -46,37 +63,64 @@ def environ(tmp_path: Path) -> dict[str, str]:
 def _env_with_chat_app_at(
     base_env: dict[str, str], registry: Path, url: str
 ) -> dict[str, str]:
-    """``base_env`` pointed at an app registry, written to ``registry``, whose chat app is at ``url``."""
+    """``base_env`` pointed at an app registry, written to ``registry``, whose chat app is at ``url``, and at a send
+    token file beside it."""
     registry.write_text(f'[[apps]]\nname = "chat"\nurl = "{url}"\n')
-    return {**base_env, "MINDS_APPS_FILE": str(registry)}
+    token_file = registry.with_name("send_token")
+    token_file.write_text(f"{_TOKEN}\n")
+    return {
+        **base_env,
+        "MINDS_APPS_FILE": str(registry),
+        "MINDS_WEB_PUSH_SEND_TOKEN_FILE": str(token_file),
+    }
 
 
-def _watchers_answer(*instance_ids: str) -> tuple[int | None, str]:
-    return 200, json.dumps({"watched_by": list(instance_ids)})
+def _watchers_answer(
+    *instance_ids: str,
+    owner_watched_by: tuple[str, ...] | None = None,
+    is_owners_chat: bool = True,
+    chat_title: str | None = "Research",
+) -> tuple[int | None, str]:
+    return 200, json.dumps(
+        {
+            "watched_by": list(instance_ids),
+            "owner_watched_by": list(
+                instance_ids if owner_watched_by is None else owner_watched_by
+            ),
+            "is_owners_chat": is_owners_chat,
+            "chat_title": chat_title,
+        }
+    )
 
 
 class _RecordingHttp(notify_user.HttpClient):
-    """Records the app's POST, the chat app's desktop POST, and the watcher question, and answers each with a
-    caller-supplied result."""
+    """Records the POST to the app, the push to the shell, the chat app's desktop POST, and the watcher question, and
+    answers each with a caller-supplied result."""
 
     def __init__(
         self,
         status: int | None,
         text: str = "",
-        watchers: tuple[int | None, str] = (200, '{"watched_by": []}'),
+        watchers: tuple[int | None, str] = _watchers_answer(),
+        push: tuple[int | None, str] = _NO_DEVICES,
         desktop: tuple[int | None, str] = (200, '{"status": "ok"}'),
     ) -> None:
         self._status = status
         self._text = text
         self._watchers = watchers
+        self._push = push
         self._desktop = desktop
         self.posts: list[tuple[str, dict, dict]] = []
+        self.pushes: list[tuple[str, dict, dict, float]] = []
         self.desktop_posts: list[tuple[str, dict, float]] = []
         self.gets: list[tuple[str, float]] = []
 
     def post_json(
         self, url: str, payload: dict, headers: dict, timeout: float
     ) -> tuple[int | None, str]:
+        if _is_push(url):
+            self.pushes.append((url, payload, headers, timeout))
+            return self._push
         if not _is_to_the_app(url):
             self.desktop_posts.append((url, payload, timeout))
             return self._desktop
@@ -149,6 +193,10 @@ def test_asks_about_the_agents_own_chat_when_it_has_no_chat_id(
             (200, '{"watched_by": "page-a"}'),
             "the chat app's answer carries no list of watchers",
         ),
+        (
+            (200, '{"watched_by": []}'),
+            "the chat app's answer does not say whose chat this is",
+        ),
     ],
 )
 def test_sends_anyway_with_a_warning_when_the_watchers_are_unknown(
@@ -189,7 +237,7 @@ def silent_chat_app(
 
 
 class _RecordingPostHttp(notify_user.HttpClient):
-    """The real chat app calls, and a recorded POST that the app accepts."""
+    """The real chat app calls, and a recorded POST that the app accepts (a push finds no device)."""
 
     def __init__(self) -> None:
         self.posts: list[dict] = []
@@ -197,6 +245,8 @@ class _RecordingPostHttp(notify_user.HttpClient):
     def post_json(
         self, url: str, payload: dict, headers: dict, timeout: float
     ) -> tuple[int | None, str]:
+        if _is_push(url):
+            return _NO_DEVICES
         if not _is_to_the_app(url):
             return super().post_json(url, payload, headers, timeout)
         self.posts.append(payload)
@@ -400,6 +450,216 @@ def test_requires_a_runtime_agent_id(capsys: pytest.CaptureFixture[str]) -> None
 def test_main_exit_code_follows_acceptance(monkeypatch: pytest.MonkeyPatch) -> None:
     for key, value in _GATEWAY_ENV.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setenv("LATCHKEY_GATEWAY", "http://127.0.0.1:1")  # nothing listens here
+    # Nothing listens on either address.
+    monkeypatch.setenv("LATCHKEY_GATEWAY", "http://127.0.0.1:1")
+    monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", "http://127.0.0.1:1")
 
     assert notify_user.main(["Done."]) == 1
+
+
+def test_asks_the_shell_to_push_naming_the_chat_with_the_send_token(
+    environ: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    http = _RecordingHttp(200, push=_QUEUED)
+
+    assert (
+        notify_user.notify("The build is green.", "CI", http=http, environ=environ)
+        is True
+    )
+
+    ((url, payload, headers, timeout),) = http.pushes
+    assert url == "http://127.0.0.1:8000/api/web-push/send"
+    assert payload == {
+        "chat_id": "agent-chat",
+        "app": "chat",
+        "app_path": "/?chat=agent-chat",
+        "chat_title": "Research",
+        "title": "CI",
+        "message": "The build is green.",
+    }
+    assert headers["X-Web-Push-Token"] == _TOKEN
+    assert timeout == 5.0
+    assert "also queued for your devices" in capsys.readouterr().err
+
+
+def test_an_untitled_chat_and_overlong_words_are_cut_to_what_the_shell_takes() -> None:
+    watch = notify_user.ChatWatch(
+        watched_by=[], owner_watched_by=[], is_owners_chat=True, chat_title=None
+    )
+
+    request = notify_user.push_request("x" * 5000, "t" * 300, watch, "agent-chat")
+
+    assert request["chat_title"] == "A chat"
+    assert len(request["message"]) == 4000 and request["message"].endswith("...")
+    assert len(request["title"]) == 200
+
+
+def test_a_message_whose_bytes_are_not_utf8_still_makes_a_push_request() -> None:
+    # What argv holds for a message whose bytes are not UTF-8: lone surrogates.
+    message = b"caf\xe9 is open".decode("utf-8", "surrogateescape")
+    watch = notify_user.ChatWatch(
+        watched_by=[], owner_watched_by=[], is_owners_chat=True, chat_title="Research"
+    )
+
+    request = notify_user.push_request(message, None, watch, "agent-chat")
+
+    assert request["message"] == "caf? is open"
+    assert "title" not in request
+    json.dumps(request).encode("utf-8")
+
+
+def test_does_not_push_while_one_of_the_owners_pages_is_watching_the_chat(
+    environ: dict[str, str],
+) -> None:
+    http = _RecordingHttp(200, watchers=_watchers_answer("page-a"), push=_QUEUED)
+
+    notify_user.notify("Done.", None, http=http, environ=environ)
+
+    assert http.pushes == []
+
+
+def test_a_visitor_watching_the_chat_does_not_hold_back_the_owners_push(
+    environ: dict[str, str],
+) -> None:
+    http = _RecordingHttp(
+        200,
+        watchers=_watchers_answer("visitor-page", owner_watched_by=()),
+        push=_QUEUED,
+    )
+
+    notify_user.notify("Done.", None, http=http, environ=environ)
+
+    assert len(http.pushes) == 1
+    ((_url, payload, _headers),) = http.posts
+    assert payload["watched_by"] == ["visitor-page"]
+
+
+def test_a_chat_someone_else_wrote_in_pushes_nothing(
+    environ: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    http = _RecordingHttp(
+        200, watchers=_watchers_answer(is_owners_chat=False), push=_QUEUED
+    )
+
+    assert notify_user.notify("Done.", None, http=http, environ=environ) is True
+
+    assert http.pushes == []
+    assert "someone other than the owner wrote in this chat" in capsys.readouterr().err
+
+
+def test_a_chat_whose_owner_cannot_be_told_pushes_nothing(
+    environ: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    http = _RecordingHttp(200, watchers=(None, "timed out"), push=_QUEUED)
+
+    assert notify_user.notify("Done.", None, http=http, environ=environ) is True
+
+    assert http.pushes == []
+    assert "whose chat this is could not be told" in capsys.readouterr().err
+
+
+def test_an_unreadable_send_token_pushes_nothing(
+    environ: dict[str, str], capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    http = _RecordingHttp(200, push=_QUEUED)
+    environ = {**environ, "MINDS_WEB_PUSH_SEND_TOKEN_FILE": str(tmp_path / "absent")}
+
+    notify_user.notify("Done.", None, http=http, environ=environ)
+
+    assert http.pushes == []
+    assert "send token is unreadable" in capsys.readouterr().err
+
+
+def test_a_device_push_the_shell_queued_counts_when_the_app_did_not(
+    environ: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    http = _RecordingHttp(None, "connection refused", push=_QUEUED)
+
+    assert notify_user.notify("Done.", None, http=http, environ=environ) is True
+
+    stderr = capsys.readouterr().err
+    assert "the Imbue Studio app was unreachable" in stderr
+    assert "queued for your devices, though not taken by the Imbue Studio app" in stderr
+    assert "did not go out" not in stderr
+
+
+@pytest.mark.parametrize(
+    ("push", "expected_fragment"),
+    [
+        (
+            (None, "connection refused"),
+            "could not push the notification to your devices (the workspace was unreachable: connection",
+        ),
+        (
+            (403, '{"detail": "no valid send token"}'),
+            "could not push the notification to your devices (the workspace answered 403: no valid send token",
+        ),
+        (
+            (
+                429,
+                json.dumps(
+                    {
+                        "send_id": "s",
+                        "status": "limited",
+                        "detail": "Too many; not sent.",
+                    }
+                ),
+            ),
+            "not pushed to your devices: Too many; not sent.",
+        ),
+    ],
+)
+def test_a_push_the_shell_did_not_queue_is_reported_and_leaves_the_outcome_to_the_app(
+    push: tuple[int | None, str],
+    expected_fragment: str,
+    environ: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    http = _RecordingHttp(200, push=push)
+
+    assert notify_user.notify("Done.", None, http=http, environ=environ) is True
+
+    assert expected_fragment in capsys.readouterr().err
+
+
+def test_no_registered_device_says_nothing(
+    environ: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    http = _RecordingHttp(200)
+
+    notify_user.notify("Done.", None, http=http, environ=environ)
+
+    assert len(http.pushes) == 1
+    assert "device" not in capsys.readouterr().err
+
+
+class _RealPushHttp(_RecordingHttp):
+    """The app accepts and no page watches the chat, while the push to the shell goes out for real."""
+
+    def __init__(self) -> None:
+        super().__init__(200)
+
+    def post_json(
+        self, url: str, payload: dict, headers: dict, timeout: float
+    ) -> tuple[int | None, str]:
+        if _is_push(url):
+            return notify_user.HttpClient.post_json(
+                self, url, payload, headers, timeout
+            )
+        return super().post_json(url, payload, headers, timeout)
+
+
+def test_a_malformed_shell_address_is_an_unreachable_push_not_a_crash(
+    environ: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A typo in the port, which urllib reports as a ValueError rather than a URLError.
+    environ = {**environ, "MINDS_WORKSPACE_SERVER_URL": "http://127.0.0.1:80o0"}
+
+    assert (
+        notify_user.notify("Done.", None, http=_RealPushHttp(), environ=environ) is True
+    )
+
+    assert (
+        "could not push the notification to your devices (the workspace was unreachable: nonnumeric port"
+        in capsys.readouterr().err
+    )

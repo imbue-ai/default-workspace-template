@@ -6,6 +6,7 @@
 
 import { mostRecentlyFocusedWindowOfApp } from "../geometry/stack";
 import { appLaunchesOf, orderAppLaunches } from "../model/launch";
+import type { NotificationsOffer } from "../model/notificationsPage";
 import type { AppRecord, WindowRecord } from "../model/records";
 import { SHOWN_HOME } from "../model/records";
 import { activeDesktop, appByName, effectiveWindowTitle, findWindow, openableApps } from "./desktopState";
@@ -82,17 +83,25 @@ export function windowsSheetRows(state: DesktopState): PhoneWindowRow[] {
 }
 
 /** The start sheet's rows: the launcher's, its window rows narrowed to the windows the phone lists (of the
- *  pinned windows, the active desktop's alone). */
-export function startSheetRows(state: DesktopState, query: string): LauncherMenuRows {
-  const menu = launcherRowsOf(state, query, { isTourOffered: false });
+ *  pinned windows, the active desktop's alone), with the notifications page's row as it is offered. */
+export function startSheetRows(
+  state: DesktopState,
+  query: string,
+  notificationsOffer: NotificationsOffer = "hidden",
+): LauncherMenuRows {
+  const menu = launcherRowsOf(state, query, { isTourOffered: false, notificationsOffer });
   const listedIds = new Set(phoneWindows(state).map((window) => window.id));
   const windowRows = menu.windowRows.filter((row) => listedIds.has(row.window.id));
   return {
     ...menu,
     windowRows,
-    rows: [...menu.launchRows, ...windowRows, ...menu.textRows],
+    rows: [...menu.launchRows, ...menu.notificationsRows, ...windowRows, ...menu.textRows],
     isNoMatch:
-      menu.isNoMatch || (menu.windowRows.length > 0 && windowRows.length === 0 && menu.launchRows.length === 0),
+      menu.isNoMatch ||
+      (menu.windowRows.length > 0 &&
+        windowRows.length === 0 &&
+        menu.launchRows.length === 0 &&
+        menu.notificationsRows.length === 0),
   };
 }
 

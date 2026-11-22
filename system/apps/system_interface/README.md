@@ -106,6 +106,13 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
 - The home-screen tile: `/apple-touch-icon.png` and `/manifest.webmanifest`,
   from the selected avatar design and the workspace's name, which also titles
   the page.
+- Notifications on a phone (see that section): the page that turns them on
+  for a device (`/notifications`, `/notifications.js`), the service worker
+  that shows them (`/sw.js`), the signing key (`GET /api/web-push/key`), the
+  owner's devices (`GET` and `POST /api/web-push/devices`,
+  `DELETE /api/web-push/devices/<id>`, `POST .../<id>/test`), the owner's
+  settings, send log and reset (`/api/web-push/settings`, `/sends`, `/reset`),
+  and the loopback-only send (`POST /api/web-push/send`).
 - Presence (`/api/presence`, `/api/presence/heartbeat`) and the roster
   (`/api/roster`): who is connected right now, with their identity and
   profile, and everyone who may be here (see "Who is here").
@@ -135,7 +142,8 @@ offered), `placements/<desktop>/<client>.json`,
 `window_paths/<client>.json` (a client's own paths for independent windows),
 `clients.json`, `users.json` (the desktop made for each visiting user),
 `visitor_desktops_adopted` (the mark that the visitors' desktops from before desktop owners were given their visitors),
-`avatar_selection.json`, and the client-activity
+`avatar_selection.json`, `web_push/` (the Web Push signing key, send token,
+owner's devices, settings and send log, see "Notifications on a phone"), and the client-activity
 event log (`events/client_activity/events.jsonl`, what `workspace-layout context`
 reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
 `data/.apps/system_interface/wallpapers/` (files the user adds); avatar designs
@@ -678,6 +686,73 @@ first desktop, placed minimized for itself alone, and it follows the `show`,
 `open`, and `focus` ops an agent aims at it. Only the shown window's page and
 the pinned chat window's are mounted (`pages/livePages.ts`, the `shown` mount
 policy).
+
+### Notifications on a phone
+
+A phone with the workspace on its home screen (or any browser that opened a
+share link directly) can get a notification when a chat of the owner's has
+something for them, with the Imbue Studio app closed. It is standard Web Push:
+the shell's origin is the one a phone saves, so the shell holds a VAPID signing
+key (`data/.state/system_interface/web_push/vapid_private_key.pem`), a send
+token (`web_push/send_token`), both made on first use and readable by its user
+alone, the push subscription of each device the owner turned notifications on
+for (`web_push/devices.json`, at most 20, the oldest dropped first), the
+owner's settings (`web_push/settings.json`) and the log of the latest 100 sends
+(`web_push/send_log.json`).
+
+- **Turning it on.** The launcher's "Notifications on this device" row goes to
+  `/notifications`. It is offered only to the owner and only where the shell is
+  the top-level page, never inside the Imbue Studio app's frame, whose own
+  notifications already reach the user; on a phone or tablet (a coarse pointer)
+  it is in the menu as it opens, on a computer only for a search that names it,
+  and the page there asks for an explicit "Turn on in this browser anyway",
+  since the Imbue Studio app already notifies the owner on that computer. Its
+  button asks for permission on the tap itself, which Safari requires,
+  subscribes through the service worker at `/sw.js` (scope: the shell's root),
+  and registers the subscription. On iPhone and iPad (iOS 16.4 or later) Web
+  Push works only in the home-screen app, which the page says when opened in
+  Safari.
+- **The page.** It is the owner's alone (anyone else is refused all of it). It
+  lists every device with when its push service last took a message, removes
+  any of them, sends this one a test, and shows the push service's raw answer.
+  It also has the full-text switch
+  (`GET` and `POST /api/web-push/settings`, `{"is_full_text"}`, off by
+  default), the recent sends (`GET /api/web-push/sends`: when, which chat, what
+  was asked, what the devices showed, each push service's answer), and the
+  reset (`POST /api/web-push/reset`), which makes a new signing key and send
+  token and forgets every device and every queued send.
+- **Sending.** `POST /api/web-push/send` takes `{"chat_id", "chat_title",
+  "title", "message", "app", "app_path"}` from a chat's `notify-user`, the
+  last two naming the app and the page of it a tap opens (the shell knows no
+  app by name). It is loopback-only,
+  refuses a request a share's proxy stamped, and refuses one without the send
+  token in `X-Web-Push-Token`, which `notify-user` reads from the shell's state
+  and app code is never given, so an app's backend cannot reach the owner's
+  phone with a bare post. It answers at once: 202 queued, 200 when no device
+  has notifications on, 429 when posting would pass a limit (4 per chat in 10
+  minutes, 20 for the workspace in an hour); every send is logged. A worker
+  thread posts: a chat's first notification at once, a later one at the end of
+  the minute after the chat's last post, folded with every other that arrived
+  meanwhile ("3 updates"). The notification's title is the chat's name; its
+  text is "Has something for you in <workspace>" unless the owner turned full
+  text on, when it is the agent's words cut to 200 characters. A tap opens the
+  chat, and a later notification from the same chat replaces the earlier one.
+  A device whose push service says the subscription is gone (404, 410) is
+  forgotten; one that refuses the shell's signature (401, 403: the key was lost
+  or reset) is marked stale, skipped by later sends, and shown as needing to
+  turn notifications on again. `notify-user` asks only for a chat no one but
+  the owner wrote in, and not while one of the owner's own pages watches it
+  (the chat app's watchers answer).
+- **Showing.** The service worker shows every push it receives (a browser
+  that sees a silent one withdraws the permission), with the avatar's icon,
+  and on a tap focuses an open window of the workspace and navigates it to
+  the chat, or opens one. It handles no fetches.
+- A preview shell refuses every verb here but the reads: its state is a copy
+  of the live one, key and devices included.
+- The send token keeps out code that was never given it, not code that reads
+  the shell's state files: everything in the workspace runs as one user, and
+  anything that reads the signing key and `devices.json` can push from
+  anywhere. The reset is the way back from that.
 
 ## Running and developing
 

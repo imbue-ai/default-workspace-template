@@ -178,7 +178,7 @@ class ChatOomPrioritizer:
             for chat_id, messaged_at in last_message_at_by_chat_id.items():
                 self._stamp_message_locked(chat_id, messaged_at)
 
-    def record_presence(self, chat_id: ChatId, report: PresenceReport) -> PresenceTransition:
+    def record_presence(self, chat_id: ChatId, report: PresenceReport, is_owner: bool) -> PresenceTransition:
         """Apply one page instance's presence report about one chat, re-tag if it changed anything, and say what.
 
         The report replaces that instance's standing one unless it is numbered at or
@@ -193,7 +193,7 @@ class ChatOomPrioritizer:
         write is already written, and a page that vanished unannounced stops
         counting by expiry, which the sweep notices.
         """
-        transition = self._presence.record(chat_id, report)
+        transition = self._presence.record(chat_id, report, is_owner)
         if transition.is_newly_visible:
             now = self._clock()
             with self._lock:

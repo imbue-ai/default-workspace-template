@@ -2879,11 +2879,11 @@ class AgentManager:
                 queued.content.strip() == text.strip() for queued in agent.queued_messages
             )
 
-    def record_presence(self, chat_id: ChatId, report: PresenceReport) -> None:
-        """Record one chat page's presence report: has the chats re-tagged when it changed whether the chat is
-        open or showing, and marks the chat read in the Imbue Studio app when the report is what made someone
-        watch it."""
-        transition = self._oom_prioritizer.record_presence(chat_id, report)
+    def record_presence(self, chat_id: ChatId, report: PresenceReport, is_owner: bool) -> None:
+        """Record one chat page's presence report (``is_owner``: whether the page is the owner's): has the chats
+        re-tagged when it changed whether the chat is open or showing, and marks the chat read in the Imbue Studio
+        app when the report is what made someone watch it."""
+        transition = self._oom_prioritizer.record_presence(chat_id, report, is_owner)
         if transition.is_newly_watched:
             self._imbue_studio_notifications.mark_chat_read(chat_id)
 
@@ -2916,6 +2916,14 @@ class AgentManager:
     def chat_watchers(self, chat_id: ChatId) -> list[str]:
         """The page instances watching the chat now (shown and focused, recently reported)."""
         return self._presence.watchers(chat_id)
+
+    def chat_owner_watchers(self, chat_id: ChatId) -> list[str]:
+        """The watchers of the chat whose pages are the owner's."""
+        return self._presence.owner_watchers(chat_id)
+
+    def chat_participants(self, chat_id: ChatId) -> tuple[ParticipantKey, ...]:
+        """Who has written in the chat, each once, in order of first message (never the workspace agent)."""
+        return participant_keys_of(self._author_annotations_of(chat_id))
 
     def current_agent_id_of_chat(self, chat_id: ChatId) -> str | None:
         """The tracked agent the chat runs on now; None for an id that names no chat, or a chat with no agent yet."""

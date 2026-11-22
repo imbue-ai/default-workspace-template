@@ -231,3 +231,38 @@ describe("the tour row", () => {
     expect(launcherRowsOf(state(), "tour", { isTourOffered: false }).isNoMatch).toBe(true);
   });
 });
+
+describe("the notifications row", () => {
+  const offered = { notificationsOffer: "shown" as const };
+  const searchOnly = { notificationsOffer: "on-search" as const };
+
+  it("follows the tour's row where the page is shown, with no query and for its words", () => {
+    const withNoQuery = launcherRowsOf(state(), "", offered);
+    expect(withNoQuery.notificationsRows).toEqual([
+      { kind: "notifications", key: "notifications", label: "Notifications on this device" },
+    ]);
+    expect(keys(withNoQuery.rows)).toEqual([
+      "launch:chatty:root",
+      "launch:terminal:new",
+      "tour",
+      "notifications",
+      "text:chatty:new",
+    ]);
+    expect(launcherRowsOf(state(), "push", offered)).toMatchObject({ isNoMatch: false });
+    expect(keys(launcherRowsOf(state(), "push", offered).notificationsRows)).toEqual(["notifications"]);
+    expect(launcherRowsOf(state(), "terminal", offered).notificationsRows).toEqual([]);
+    expect(launcherRowsOf(state(), "notifications\n", offered).notificationsRows).toEqual([]);
+    expect(isRowEnabled(withNoQuery.notificationsRows[0])).toBe(true);
+  });
+
+  it("is left out unless the page is offered, and its words then match nothing", () => {
+    expect(launcherRowsOf(state(), "").notificationsRows).toEqual([]);
+    expect(launcherRowsOf(state(), "push").isNoMatch).toBe(true);
+    expect(launcherRowsOf(state(), "push", { notificationsOffer: "hidden" }).isNoMatch).toBe(true);
+  });
+
+  it("comes only for a search that names it where the page is offered on search", () => {
+    expect(launcherRowsOf(state(), "", searchOnly).notificationsRows).toEqual([]);
+    expect(keys(launcherRowsOf(state(), "notifications", searchOnly).notificationsRows)).toEqual(["notifications"]);
+  });
+});

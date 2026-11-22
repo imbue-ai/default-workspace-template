@@ -44,6 +44,7 @@ from workspace_layout.identity import IDENTITY_HEADER
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import parse_identity_header
 from workspace_layout.primitives import BubbleKind
+from workspace_layout.primitives import OWNER_PARTICIPANT_KEY
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ParticipantKind
 from workspace_layout.roster import RosterDocument
@@ -74,6 +75,7 @@ from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.authors import author_prefix
+from imbue.chat.authors import new_author_annotation
 from imbue.chat.authors import text_sha256
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_fast_mode import ChatFastModeState
@@ -891,20 +893,28 @@ def test_reply_drafts_read_only_a_chat_a_page_streams_and_shows_focused(tmp_path
     chat_id = ChatId("looked-at-agent")
     try:
         state.get_or_create_watcher(agent_info)
-        state.agent_manager.record_presence(chat_id, _presence(1, PresenceState.VISIBLE, is_focused=True))
+        state.agent_manager.record_presence(
+            chat_id, _presence(1, PresenceState.VISIBLE, is_focused=True), is_owner=True
+        )
         # Shown and focused, but no page streams it.
         assert state.list_watched_agents() == []
 
         stream = state.event_queues.register(str(chat_id))
         assert [agent_id for _, agent_id, _ in state.list_watched_agents()] == ["looked-at-agent"]
 
-        state.agent_manager.record_presence(chat_id, _presence(2, PresenceState.VISIBLE, is_focused=False))
+        state.agent_manager.record_presence(
+            chat_id, _presence(2, PresenceState.VISIBLE, is_focused=False), is_owner=True
+        )
         assert state.list_watched_agents() == []
 
-        state.agent_manager.record_presence(chat_id, _presence(3, PresenceState.HIDDEN, is_focused=True))
+        state.agent_manager.record_presence(
+            chat_id, _presence(3, PresenceState.HIDDEN, is_focused=True), is_owner=True
+        )
         assert state.list_watched_agents() == []
 
-        state.agent_manager.record_presence(chat_id, _presence(4, PresenceState.VISIBLE, is_focused=True))
+        state.agent_manager.record_presence(
+            chat_id, _presence(4, PresenceState.VISIBLE, is_focused=True), is_owner=True
+        )
         state.event_queues.unregister(str(chat_id), stream)
         assert state.list_watched_agents() == []
     finally:
@@ -2848,14 +2858,49 @@ def test_watchers_route_lists_the_pages_shown_and_focused_and_no_other() -> None
     client = _client_with_tracked_chat([], "agent-c0ffee", 4242)
     client.post("/api/chats/agent-c0ffee/presence", json=_presence_body("visible", "page-shown-blurred"))
     client.post("/api/chats/agent-c0ffee/presence", json=_presence_body("hidden", "page-hidden", is_focused=True))
-    assert client.get("/api/chats/agent-c0ffee/watchers").get_json() == {"watched_by": []}
+    assert client.get("/api/chats/agent-c0ffee/watchers").get_json()["watched_by"] == []
 
     client.post("/api/chats/agent-c0ffee/presence", json=_presence_body("visible", "page-watching", is_focused=True))
     response = client.get("/api/chats/agent-c0ffee/watchers")
 
     assert response.status_code == 200
-    assert response.get_json() == {"watched_by": ["page-watching"]}
-    assert client.get("/api/chats/agent-beef01/watchers").get_json() == {"watched_by": []}
+    assert response.get_json()["watched_by"] == ["page-watching"]
+    assert response.get_json()["owner_watched_by"] == ["page-watching"]
+    assert client.get("/api/chats/agent-beef01/watchers").get_json()["watched_by"] == []
+
+
+def test_a_visitor_watching_a_chat_does_not_count_as_the_owner_watching_it() -> None:
+    client = _client_with_tracked_chat([], "agent-c0ffee", 4242)
+    client.post(
+        "/api/chats/agent-c0ffee/presence",
+        json=_presence_body("visible", "visitor-page", is_focused=True),
+        headers=_identity_header(_VISITOR),
+    )
+
+    answer = client.get("/api/chats/agent-c0ffee/watchers").get_json()
+
+    assert answer["watched_by"] == ["visitor-page"]
+    assert answer["owner_watched_by"] == []
+
+
+def test_a_chat_is_the_owners_until_a_visitor_writes_in_it() -> None:
+    manager = _manager_with_capturing_prioritizer([], pids={"agent-c0ffee": 4242})
+    with manager._lock:
+        manager._agents["agent-c0ffee"] = AgentStateItem(
+            id="agent-c0ffee", name="chat", state="RUNNING", labels={"user_created": "true"}, work_dir=None
+        )
+    state = build_test_state(agent_manager=manager)
+    client = create_application(state).test_client()
+    chat_id = ChatId("agent-c0ffee")
+    assert client.get("/api/chats/agent-c0ffee/watchers").get_json()["is_owners_chat"] is True
+
+    state.authors.record(chat_id, new_author_annotation("m-1", OWNER_PARTICIPANT_KEY, "Owner", "hello"))
+    assert client.get("/api/chats/agent-c0ffee/watchers").get_json()["is_owners_chat"] is True
+
+    state.authors.record(
+        chat_id, new_author_annotation("m-2", ParticipantKey("user:user-bob-4471"), "Bob", "tell them...")
+    )
+    assert client.get("/api/chats/agent-c0ffee/watchers").get_json()["is_owners_chat"] is False
 
 
 def test_watchers_route_answers_only_loopback_callers() -> None:
