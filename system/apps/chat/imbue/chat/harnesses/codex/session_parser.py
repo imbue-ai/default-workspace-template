@@ -485,8 +485,9 @@ def parse_lines(
     assistant message is stamped with it, so the bar can reflect the model the turn actually ran on
     (a framework fallback, not just the selected setting). It also records, under
     ``SETTINGS_CHANGED_SINCE_TURN_KEY``, whether a ``thread_settings_applied`` line came after that
-    ``turn_context``. ``None`` disables the tracking (the model stays ``_UNKNOWN_MODEL``) -- used by
-    callers that only want the transcript events.
+    ``turn_context``, and the user messages committed in the open turn, so a later one is stamped
+    ``delivered_mid_turn``. ``None`` disables the tracking (the model stays ``_UNKNOWN_MODEL`` and
+    nothing is stamped) -- used by callers that only want the transcript events.
     """
     outer = record.get("type")
     payload = record.get("payload")
