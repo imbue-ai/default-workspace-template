@@ -480,10 +480,10 @@ def test_prevent_application_terminology() -> None:
 # identifiers that still say "service" so the count never grows.
 # Identifiers only, never prose: Python names come from the tokenizer (so
 # docstrings and comments do not count), TypeScript names from the source with
-# its comments and string literals blanked. The remainder is the Imbue Studio embed
-# contract's own vocabulary, which the shell speaks but does not own: the
-# ``serviceName`` payload key of ``minds:open-share-settings`` (its vendored
-# declaration file is skipped whole), and one HTTP status name.
+# its comments and string literals blanked. Names the shell speaks but does not
+# own -- the Imbue Studio embed contract's payload keys (its vendored
+# declaration file is skipped whole) and one HTTP status name -- are exempt by
+# token.
 
 _SHELL_IDENTIFIER_SCAN_ROOTS = (
     Path("system/apps/system_interface/imbue/system_interface"),
@@ -499,6 +499,10 @@ _SERVICE_IDENTIFIER_EXEMPT_TOKENS = frozenset(
         "needs_system_services_restart",
         "needsSystemServicesRestart",
         "SYSTEM_SERVICES_RESTART_DETAILS",
+        # The embed contract's payload keys, which mngr defines and the shell
+        # can only spell as the contract does.
+        "serviceName",
+        "serviceNames",
     }
 )
 
@@ -576,7 +580,7 @@ def _find_service_identifiers_in_the_shell() -> list[str]:
 def test_prevent_service_identifiers_in_the_shell() -> None:
     """The shell, its frontend, and the shared frontend library call an app an app: no new identifier may say 'service'."""
     violations = _find_service_identifiers_in_the_shell()
-    assert len(violations) <= snapshot(1), (
+    assert len(violations) <= snapshot(0), (
         "Identifiers naming an app a 'service' in the shell's code:\n"
         + "\n".join(f"  - {v}" for v in violations)
     )

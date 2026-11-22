@@ -135,6 +135,19 @@ export const HIGHLIGHT_CHROME: "minds:highlight-chrome" =
 export const OPEN_LOCAL_FILES: "minds:open-local-files" =
   "OPEN_LOCAL_FILES" in embedContract ? embedContract.OPEN_LOCAL_FILES : "minds:open-local-files";
 
+// Exporting a workspace app as a Mac app (contract v18; Imbue Studio's specs/studio-app-export). Workspace ->
+// embedder: an exportable app's desktop shortcut drag began ({ serviceName }), which the embedder hands to the OS at
+// once, and a menu action on an exportable app ({ serviceName, action }, action "add-to-applications" or "reveal").
+// Embedder -> workspace: which apps are ready to drag out ({ serviceNames }), and that it handed a shortcut drag to the
+// OS ({ serviceName }). Sent only to and from an embedder that said ``exportsApps`` with EMBEDDER_CAPABILITIES.
+export const APP_DRAG_STARTED: "minds:app-drag-started" =
+  "APP_DRAG_STARTED" in embedContract ? embedContract.APP_DRAG_STARTED : "minds:app-drag-started";
+export const EXPORT_APP_ACTION: "minds:export-app-action" =
+  "EXPORT_APP_ACTION" in embedContract ? embedContract.EXPORT_APP_ACTION : "minds:export-app-action";
+export const EXPORTABLE_APPS: "minds:exportable-apps" =
+  "EXPORTABLE_APPS" in embedContract ? embedContract.EXPORTABLE_APPS : "minds:exportable-apps";
+export const APP_DRAG_HANDED_OFF: "minds:app-drag-handed-off" =
+  "APP_DRAG_HANDED_OFF" in embedContract ? embedContract.APP_DRAG_HANDED_OFF : "minds:app-drag-handed-off";
 // The immersive-mode pair (contract v12, the Screen integration spec section 5), probed the same way.
 // Workspace -> embedder: take the app window Fullscreen-API fullscreen with the keyboard locked for this window
 // (``on: true``), or give it back. Payload: { windowId, on }. Sent only to an embedder that said ``immersive`` with
@@ -164,6 +177,8 @@ const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   TEAR_OUT,
   PROVIDER_SIGN_IN_ACK,
   OPEN_LINK,
+  EXPORTABLE_APPS,
+  APP_DRAG_HANDED_OFF,
   IMMERSIVE_CHANGED,
 ];
 

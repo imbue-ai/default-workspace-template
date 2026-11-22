@@ -1,0 +1,1 @@
+The workspace app model's contracts document lists `start_path` among the fields the services event announces: the page an app's first desktop shortcut opens by GET, which Imbue Studio's app export opens an exported Mac app on.

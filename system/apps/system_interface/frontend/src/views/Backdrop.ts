@@ -174,6 +174,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                     isAppsLoaded: state.isAppsLoaded,
                     isSelected: attrs.selectedShortcutKey === key,
                     lift: lifted === null ? null : lifted.lift,
+                    isCarriedByOs: lifted?.isCarriedByOs === true,
                     isSliding: held !== null,
                     isRunOnClick: state.modes.isTouch,
                     onSelect: () => attrs.onSelectShortcut(key),

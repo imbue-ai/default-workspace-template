@@ -103,7 +103,7 @@ Each `[[apps]]` row:
 `--remove` deletes the row.
 The script validates only what it copies from files; the shell validates every row against the `RegistryRow` model on read and logs and skips a row that fails, so a hand-edited registry degrades to a missing app rather than a crashed shell.
 
-The shell's services event writer announces each row's `name` (as `service`), `url`, `label`, `icon`, `display_name`, `system`, and `internal`; the minds side reads only the event. Its Share tab never lists an app announced `internal`, lists one announced `system` under its System group, and offers the rest up front.
+The shell's services event writer announces each row's `name` (as `service`), `url`, `label`, `icon`, `display_name`, `system`, and `internal`; the minds side reads only the event. Its Share tab never lists an app announced `internal`, lists one announced `system` under its System group, and offers the rest up front. It also announces `start_path`, the page the app's desktop shortcut opens when that is a plain GET (its presets as the query), else empty: Imbue Studio exports an app that is neither `system` nor `internal` and has a `start_path` as a Mac app the user can drag to the Dock, which opens on that page.
 
 ## 4. The instances API
 

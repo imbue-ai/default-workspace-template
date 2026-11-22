@@ -46,6 +46,7 @@ from imbue.system_interface.shell.desktop_document import backdrop_frame_of
 from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.desktop_document import clamp_frame_into_unit_square
 from imbue.system_interface.shell.desktop_document import default_launch_path_id
+from imbue.system_interface.shell.desktop_document import default_shortcut_start_path
 from imbue.system_interface.shell.desktop_document import default_shortcut_targets
 from imbue.system_interface.shell.desktop_document import default_shortcut_targets_on
 from imbue.system_interface.shell.desktop_document import desktop_seeded_from
@@ -475,6 +476,47 @@ def test_moving_a_shortcut_onto_an_occupied_cell_displaces_the_occupant_to_the_n
         "chat": GridCell(column=0, row=1),
     }
     assert with_shortcut_moved(desktop, AppName("nope"), LaunchPathId("new"), GridCell(column=3, row=3)) is desktop
+
+
+def test_the_start_path_is_the_page_a_get_shortcut_opens_with_its_presets(tmp_path: Path) -> None:
+    rows = read_registry(
+        write_registry(
+            tmp_path / "apps.toml",
+            registry_row_toml("todo", "http://localhost:7", default_shortcuts=[("open", "focus")]),
+            registry_row_toml(
+                "notes",
+                "http://localhost:8",
+                launch_paths=[("today", "Today", "/today")],
+                launch_presets={"today": {"view": "list"}},
+                default_shortcuts=[("today", "focus")],
+            ),
+            registry_row_toml(
+                "chat",
+                "http://localhost:9",
+                launch_paths=[("new", "New Chat", "/new")],
+                launch_methods={"new": "POST"},
+                default_shortcuts=[("new", "new")],
+            ),
+            registry_row_toml(
+                "plumbing", "http://localhost:10", is_internal=True, default_shortcuts=[("open", "focus")]
+            ),
+            registry_row_toml("bare", "http://localhost:11"),
+            registry_row_toml(
+                "board",
+                "http://localhost:12",
+                launch_paths=[("all", "All", "/all"), ("mine", "Mine", "/mine")],
+                default_shortcuts=[("mine", "focus"), ("all", "focus")],
+            ),
+        )
+    )
+    assert {str(row.name): default_shortcut_start_path(row) for row in rows} == {
+        "todo": "/",
+        "notes": "/today?view=list",
+        "chat": None,
+        "plumbing": None,
+        "bare": None,
+        "board": "/mine",
+    }
 
 
 def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one_row(tmp_path: Path) -> None:

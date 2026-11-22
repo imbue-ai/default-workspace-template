@@ -174,6 +174,9 @@ function withReferenceRows(rows: MenuRow[] | null, referenceRows: readonly MenuR
 const WINDOW_DRAGGING_ATTRIBUTE = "data-window-dragging";
 /** Set on the layout root while a shortcut is in the hand, so the closed hand holds for the whole gesture. */
 const SHORTCUT_DRAGGING_ATTRIBUTE = "data-shortcut-dragging";
+/** How long an OS drag over the desktop may go without a dragover before the shortcut it carries goes back to its
+ *  cell: past the gap browsers leave between dragovers of a still drag (350 ms, give or take 200). */
+const HANDED_OFF_DRAG_LEAVE_MS = 600;
 
 /** Set on the desktop's root for the length of a press, which is longer than the drag it may
  *  become, so a window the pointer carries is held by it rather than trailing it (style.css). The
@@ -307,7 +310,72 @@ export function App(): m.Component<AppAttrs> {
     if (root === gestureRoot) return;
     detachGestures?.();
     gestureRoot = root;
-    detachGestures = gestures.attach(root, gestureListener(current, root));
+    const detachPointerGestures = gestures.attach(root, gestureListener(current, root));
+    const detachHandedOffDrags = attachHandedOffShortcutDrags(current, root);
+    detachGestures = () => {
+      detachPointerGestures();
+      detachHandedOffDrags();
+    };
+  }
+
+  /** A shortcut drag the chrome handed to the OS as the app's Mac app comes back as the OS's own drag: over the
+   *  desktop it carries the shortcut as the pointer drag did, and dropped there it lands like one. */
+  function attachHandedOffShortcutDrags(current: DesktopStore, root: HTMLElement): () => void {
+    const backdropPoint = (event: MouseEvent): PixelPoint => {
+      const origin = (backdropArea ?? root).getBoundingClientRect();
+      return { x: event.clientX - origin.left, y: event.clientY - origin.top };
+    };
+    const paintHeld = (): void => {
+      const gesture = current.getGesture();
+      if (gesture !== null && gesture.kind === "shortcut") paintShortcut(current, gesture.app, gesture.launch);
+    };
+    // An OS drag over the page fires dragover every few dozen milliseconds even when still. When they stop it has left
+    // the desktop or been cancelled (Escape), which the page is not reliably told: dragleave also fires between the
+    // page's own elements, and a cancel may send nothing at all.
+    let leaveTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearLeaveTimer = (): void => {
+      if (leaveTimer !== null) clearTimeout(leaveTimer);
+      leaveTimer = null;
+    };
+    const onDragOver = (event: DragEvent): void => {
+      if (!current.returnHandedOffShortcutDrag(backdropPoint(event))) return;
+      event.preventDefault();
+      if (event.dataTransfer !== null) event.dataTransfer.dropEffect = "move";
+      root.setAttribute(SHORTCUT_DRAGGING_ATTRIBUTE, "");
+      paintHeld();
+      clearLeaveTimer();
+      leaveTimer = setTimeout(() => {
+        leaveTimer = null;
+        root.removeAttribute(SHORTCUT_DRAGGING_ATTRIBUTE);
+        current.leaveHandedOffShortcutDrag();
+      }, HANDED_OFF_DRAG_LEAVE_MS);
+    };
+    const onDrop = (event: DragEvent): void => {
+      const dropped = current.dropHandedOffShortcutDrag(backdropPoint(event));
+      if (dropped === null) return;
+      event.preventDefault();
+      clearLeaveTimer();
+      root.removeAttribute(SHORTCUT_DRAGGING_ATTRIBUTE);
+      paintShortcut(current, dropped.app, dropped.launch);
+    };
+    // Pointer events reach the page only once no OS drag holds the pointer: a handed-off drag ended elsewhere.
+    const onPointer = (event: PointerEvent): void => {
+      if (event.type === "pointermove" && event.buttons !== 0) return;
+      current.forgetHandedOffShortcutDrag();
+    };
+    root.addEventListener("dragenter", onDragOver);
+    root.addEventListener("dragover", onDragOver);
+    root.addEventListener("drop", onDrop);
+    root.addEventListener("pointerdown", onPointer, true);
+    root.addEventListener("pointermove", onPointer, true);
+    return () => {
+      clearLeaveTimer();
+      root.removeEventListener("dragenter", onDragOver);
+      root.removeEventListener("dragover", onDragOver);
+      root.removeEventListener("drop", onDrop);
+      root.removeEventListener("pointerdown", onPointer, true);
+      root.removeEventListener("pointermove", onPointer, true);
+    };
   }
 
   function closeLauncher(): void {
@@ -482,7 +550,7 @@ export function App(): m.Component<AppAttrs> {
     if (element === undefined || element === null) return;
     const gesture = current.getGesture();
     if (gesture !== null && gesture.kind === "shortcut") {
-      applyLiftStyle(element, gesture.lift);
+      applyLiftStyle(element, gesture.lift, gesture.isCarriedByOs);
       return;
     }
     const rect = current.shortcutRect(app, launch);
@@ -598,7 +666,7 @@ export function App(): m.Component<AppAttrs> {
       onCancel: (binding) => {
         root.removeAttribute(WINDOW_DRAGGING_ATTRIBUTE);
         root.removeAttribute(SHORTCUT_DRAGGING_ATTRIBUTE);
-        current.cancelGesture();
+        current.cancelPointerGesture();
         if (binding.kind === "window-move" || binding.kind === "window-resize") paintWindow(current, binding.windowId);
         if (binding.kind === "floating-entry") paintFloatingEntry(current, binding.app);
         if (binding.kind === "shortcut") paintShortcut(current, binding.app, binding.launch);
@@ -763,10 +831,32 @@ export function App(): m.Component<AppAttrs> {
         label: otherMode === "new" ? "Always open a new window" : "Focus the last window instead",
         onSelect: () => void current.setShortcut(desktop.id, { ...shortcut, mode: otherMode }),
       },
+      ...appExportRows(current, shortcut.target.app),
       { kind: "divider" },
       removeFromDesktopRow(current, shortcut.target.app, shortcut.target.launch),
     );
     return rows;
+  }
+
+  /** The app's Mac app (Imbue Studio's app export): copy it into Applications, or show it in Finder. None for an
+   *  app the chrome has not said is ready to export, which is every app outside the Imbue Studio desktop app. */
+  function appExportRows(current: DesktopStore, appName: string): MenuRow[] {
+    if (!current.isAppExportable(appName)) return [];
+    return [
+      { kind: "divider" },
+      {
+        kind: "action",
+        key: "add-to-applications",
+        label: "Add to Applications",
+        onSelect: () => current.runAppExportAction(appName, "add-to-applications"),
+      },
+      {
+        kind: "action",
+        key: "show-in-finder",
+        label: "Show in Finder",
+        onSelect: () => current.runAppExportAction(appName, "reveal"),
+      },
+    ];
   }
 
   function removeFromDesktopRow(current: DesktopStore, app: string, launch: string): MenuRow {
@@ -801,7 +891,9 @@ export function App(): m.Component<AppAttrs> {
 
   function rowsOfAppShortcutMenu(current: DesktopStore, appName: string, launch: string): MenuRow[] | null {
     const row = desktopShortcutRow(current, appName, launch);
-    return row === null ? null : [row];
+    const exportRows = appExportRows(current, appName);
+    if (row === null) return exportRows.length === 0 ? null : exportRows.slice(1);
+    return [row, ...exportRows];
   }
 
   function closeOverview(): void {

@@ -343,6 +343,22 @@ const NULL_POP_OUT_BRIDGE: PopOutBridge = {
   reportDetachedWindows: () => undefined,
 };
 
+/** What a menu asks the chrome to do with an app's Mac app: copy it into Applications, or show it in Finder. */
+export type AppExportAction = "add-to-applications" | "reveal";
+
+/** The shell's side of exporting an app as a Mac app (Imbue Studio's specs/studio-app-export): a shortcut drag the
+ *  chrome hands to the OS at once, and the menu actions. Injectable so the store is tested against a recorder; every
+ *  call is a no-op without an embedder. */
+export interface AppExportBridge {
+  beginAppDrag(app: string): void;
+  runAction(app: string, action: AppExportAction): void;
+}
+
+const NULL_APP_EXPORT_BRIDGE: AppExportBridge = {
+  beginAppDrag: () => undefined,
+  runAction: () => undefined,
+};
+
 /** Where an external link no app of the workspace takes opens: through the Imbue Studio chrome
  *  (``minds:open-external``), or in the user's own browser when no chrome can, a custom-scheme link in the app of the
  *  user's system it belongs to. */
@@ -427,6 +443,8 @@ export interface StoreDependencies {
   readonly reloadInterface: () => void;
   /** The pull-out conversation with the embedder; absent means no embedder. */
   readonly popOut?: PopOutBridge;
+  /** Exporting apps as Mac apps through the embedder; absent means no embedder. */
+  readonly appExport?: AppExportBridge;
   /** Where external links open when no app takes them; absent opens none. */
   readonly outsideLinks?: OutsideLinkOpener;
   /** The immersive-mode conversation with the embedder; absent means no embedder. */
@@ -485,6 +503,17 @@ export interface ShortcutGesture {
   readonly lift: PixelPoint;
   /** The cell the pointer is over: where the icon would land, and what the shortcut in it steps aside from. */
   readonly targetCell: GridCell;
+  /** Whether the OS carries this drag as the app's Mac app: its own drag image is the icon in the hand, so the
+   *  shortcut is not drawn while the room for it is made. */
+  readonly isCarriedByOs: boolean;
+}
+
+/** An exportable app's shortcut in a drag the chrome may hand to the OS: which one, and where the press was, so the
+ *  same drag brought back over the desktop lifts it from where it was grabbed. */
+interface ExportDragShortcut {
+  readonly app: string;
+  readonly launch: string;
+  readonly press: PixelPoint;
 }
 
 /** A floating entry being dragged: its box's top-left corner follows the pointer less the grab offset. */
@@ -577,6 +606,14 @@ export class DesktopStore {
   private readonly appsLoaded: Promise<void>;
   private markAppsLoaded: () => void = () => undefined;
   private readonly popOut: PopOutBridge;
+  private readonly appExport: AppExportBridge;
+  /** The apps whose Mac apps the embedder has ready to drag out; none until it says so (``minds:exportable-apps``). */
+  private exportableApps: ReadonlySet<string> = new Set();
+  /** The exportable shortcut a drag holds until it ends here or the chrome hands it to the OS. Kept through a
+   *  cancel: the OS taking the pointer can cancel the gesture before the hand-off is reported. */
+  private exportDragInHand: ExportDragShortcut | null = null;
+  /** The shortcut whose drag the chrome handed to the OS, until that drag drops here or is seen to have ended. */
+  private handedOffShortcut: ExportDragShortcut | null = null;
   private readonly outsideLinks: OutsideLinkOpener;
   private readonly immersiveBridge: ImmersiveBridge;
   private readonly soloWindowId: string | null;
@@ -662,6 +699,7 @@ export class DesktopStore {
     this.state = initialDesktopState(deps.clientId, deps.modes);
     this.metrics = deps.metrics;
     this.popOut = deps.popOut ?? NULL_POP_OUT_BRIDGE;
+    this.appExport = deps.appExport ?? NULL_APP_EXPORT_BRIDGE;
     this.outsideLinks = deps.outsideLinks ?? NULL_OUTSIDE_LINK_OPENER;
     this.immersiveBridge = deps.immersive ?? NULL_IMMERSIVE_BRIDGE;
     this.soloWindowId = deps.soloWindowId ?? null;
@@ -722,6 +760,93 @@ export class DesktopStore {
    *  already greeted hear it as the shell's rebroadcast of that message. */
   setOpensLocalFiles(opensLocalFiles: boolean): void {
     this.opensLocalFiles = opensLocalFiles;
+  }
+
+  /** Whether ``app`` can be dragged out of the chrome as a Mac app, and offers the menu items that copy or show it. */
+  isAppExportable(app: string): boolean {
+    return this.exportableApps.has(app);
+  }
+
+  /** The embedder said which apps' Mac apps are ready (``minds:exportable-apps``). */
+  setExportableApps(apps: readonly string[]): void {
+    this.exportableApps = new Set(apps);
+    this.notifyListeners();
+  }
+
+  /** Ask the embedder to copy an app's Mac app into Applications, or show it in Finder. */
+  runAppExportAction(app: string, action: AppExportAction): void {
+    if (this.isAppExportable(app)) this.appExport.runAction(app, action);
+  }
+
+  /** The chrome handed a shortcut drag to the OS (``minds:app-drag-handed-off``): from here the OS drag carries it,
+   *  landing it where that drag drops on the desktop; one that drops elsewhere or is cancelled leaves it in its cell.
+   *  A word about a drag this shell already ended is ignored. */
+  handOffShortcutDrag(app: string): void {
+    const inHand = this.exportDragInHand;
+    this.exportDragInHand = null;
+    if (inHand === null || inHand.app !== app) return;
+    this.handedOffShortcut = inHand;
+    const gesture = this.gesture;
+    if (gesture !== null && gesture.kind === "shortcut" && this.isHandedOffShortcutLifted()) {
+      this.gesture = { ...gesture, isCarriedByOs: true };
+      this.notifyListeners();
+    }
+  }
+
+  /** The OS drag of a handed-off shortcut is over the desktop at ``pointer``: the shortcut is held there, making room
+   *  as in any shortcut drag. False when no handed-off drag is pending, so the drag is not this shell's to take. */
+  returnHandedOffShortcutDrag(pointer: PixelPoint): boolean {
+    const handedOff = this.handedOffShortcut;
+    if (handedOff === null) return false;
+    const lift = { x: pointer.x - handedOff.press.x, y: pointer.y - handedOff.press.y };
+    if (this.isHandedOffShortcutLifted()) {
+      this.moveHeldShortcut(pointer, lift);
+      return true;
+    }
+    if (this.gesture !== null) return false;
+    if (!this.liftShortcut(handedOff.app, handedOff.launch, pointer, lift, true)) {
+      this.handedOffShortcut = null;
+      return false;
+    }
+    this.notifyListeners();
+    return true;
+  }
+
+  /** The OS drag of a handed-off shortcut left the desktop, or was cancelled over it (Escape): the shortcut goes
+   *  back to its cell, and is held again if the drag comes back. */
+  leaveHandedOffShortcutDrag(): void {
+    if (!this.isHandedOffShortcutLifted()) return;
+    this.gesture = null;
+    this.notifyListeners();
+  }
+
+  /** The OS drag of a handed-off shortcut dropped on the desktop at ``pointer``: it lands there as any shortcut drag
+   *  does. Returns the shortcut, or null when no handed-off drag was over the desktop. */
+  dropHandedOffShortcutDrag(pointer: PixelPoint): { app: string; launch: string } | null {
+    const handedOff = this.handedOffShortcut;
+    if (handedOff === null || !this.isHandedOffShortcutLifted()) return null;
+    this.handedOffShortcut = null;
+    this.settleHeldShortcut(pointer, { x: pointer.x - handedOff.press.x, y: pointer.y - handedOff.press.y });
+    return { app: handedOff.app, launch: handedOff.launch };
+  }
+
+  /** The pointer is back in this page with no drag in progress, so a handed-off drag ended elsewhere. */
+  forgetHandedOffShortcutDrag(): void {
+    if (this.handedOffShortcut === null) return;
+    this.leaveHandedOffShortcutDrag();
+    this.handedOffShortcut = null;
+  }
+
+  private isHandedOffShortcutLifted(): boolean {
+    const gesture = this.gesture;
+    const handedOff = this.handedOffShortcut;
+    return (
+      gesture !== null &&
+      gesture.kind === "shortcut" &&
+      handedOff !== null &&
+      gesture.app === handedOff.app &&
+      gesture.launch === handedOff.launch
+    );
   }
 
   /** Whether the embedder can take the app window immersive for a window of this desktop. */
@@ -3210,40 +3335,87 @@ export class DesktopStore {
 
   /** A shortcut's icon was lifted out of the cell it is drawn in. */
   beginShortcutDrag(app: string, launch: string, pointer: PixelPoint): void {
+    if (!this.liftShortcut(app, launch, pointer, { x: 0, y: 0 }, false)) return;
+    if (this.isAppExportable(app)) {
+      this.exportDragInHand = { app, launch, press: pointer };
+      this.appExport.beginAppDrag(app);
+    }
+    this.notifyListeners();
+  }
+
+  /** Hold the shortcut in a drag over ``pointer``; false when the desktop holds no such shortcut. */
+  private liftShortcut(
+    app: string,
+    launch: string,
+    pointer: PixelPoint,
+    lift: PixelPoint,
+    isCarriedByOs: boolean,
+  ): boolean {
     const key = shortcutKey(app, launch);
     const origin = this.placedShortcuts().find((entry) => placedShortcutKey(entry) === key);
-    if (origin === undefined) return;
+    if (origin === undefined) return false;
     this.gesture = {
       kind: "shortcut",
       app,
       launch,
       originCell: origin.cell,
-      lift: { x: 0, y: 0 },
+      lift,
       targetCell: cellAtPoint(pointer, this.metrics, this.gridDimensions()),
+      isCarriedByOs,
     };
-    this.notifyListeners();
+    return true;
   }
 
   /** The pointer moved during a shortcut drag. Only a new cell under it redraws: the room made is the same
-   *  until then, and the lift itself is painted straight onto the icon (``paintShortcut``), a frame at a time. */
+   *  until then, and the lift itself is painted straight onto the icon (``paintShortcut``), a frame at a time.
+   *  A shortcut the OS carries moves with the OS drag instead. */
   updateShortcutDrag(pointer: PixelPoint, lift: PixelPoint): void {
+    if (this.isShortcutCarriedByOs()) return;
+    this.moveHeldShortcut(pointer, lift);
+  }
+
+  /** The pointer released a shortcut drag: the shortcut lands in the cell under it. A shortcut the OS carries lands
+   *  where the OS drag drops instead. */
+  endShortcutDrag(pointer: PixelPoint, lift: PixelPoint): void {
+    if (this.isShortcutCarriedByOs()) return;
+    this.settleHeldShortcut(pointer, lift);
+  }
+
+  /** A pointer gesture was cancelled (the browser took the pointer). A shortcut the OS carries is not the pointer's:
+   *  the OS took the pointer for it. */
+  cancelPointerGesture(): void {
+    if (this.isShortcutCarriedByOs()) return;
+    this.cancelGesture();
+  }
+
+  private isShortcutCarriedByOs(): boolean {
+    const gesture = this.gesture;
+    return gesture !== null && gesture.kind === "shortcut" && gesture.isCarriedByOs;
+  }
+
+  private moveHeldShortcut(pointer: PixelPoint, lift: PixelPoint): void {
     const gesture = this.gesture;
     if (gesture === null || gesture.kind !== "shortcut") return;
     const targetCell = cellAtPoint(pointer, this.metrics, this.gridDimensions());
     const isSameTarget = isSameCell(targetCell, gesture.targetCell);
     this.gesture = { ...gesture, lift, targetCell };
+    const inHand = this.exportDragInHand;
+    if (!gesture.isCarriedByOs && inHand !== null && inHand.app === gesture.app && inHand.launch === gesture.launch) {
+      this.exportDragInHand = { ...inHand, press: { x: pointer.x - lift.x, y: pointer.y - lift.y } };
+    }
     if (!isSameTarget) this.notifyListeners();
   }
 
-  endShortcutDrag(pointer: PixelPoint, lift: PixelPoint): void {
+  private settleHeldShortcut(pointer: PixelPoint, lift: PixelPoint): void {
     const gesture = this.gesture;
     if (gesture === null || gesture.kind !== "shortcut") return;
-    this.updateShortcutDrag(pointer, lift);
+    this.moveHeldShortcut(pointer, lift);
     const settled = this.gesture;
     this.gesture = null;
     // The arrangement goes in BEFORE the redraw: with the gesture gone and the shortcuts still recorded
     // in the cells they were in, a redraw here would put them both back for a frame.
     if (settled !== null && settled.kind === "shortcut") {
+      this.exportDragInHand = null;
       void this.dropShortcut(settled.app, settled.launch, settled.targetCell, this.shortcutArrangement(settled));
     }
     this.notifyListeners();

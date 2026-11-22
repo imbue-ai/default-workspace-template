@@ -18,12 +18,14 @@ from urllib.parse import parse_qsl
 from urllib.parse import urlsplit
 
 from app_manifest.manifest import DefaultShortcut
+from app_manifest.manifest import LaunchPathMethod
 from app_manifest.manifest import LocationScope
 from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.registry import RegistryLaunchPath
 from app_manifest.registry import RegistryRow
+from loguru import logger
 from pydantic import Field
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import ParticipantKey
@@ -52,7 +54,9 @@ from imbue.system_interface.shell.data_types import ShowChoice
 from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.errors import GridSearchExhaustedError
 from imbue.system_interface.shell.errors import InvalidShellValueError
+from imbue.system_interface.shell.errors import LaunchRefusedError
 from imbue.system_interface.shell.errors import WindowNotFoundError
+from imbue.system_interface.shell.launches import get_launch_destination
 from imbue.system_interface.shell.primitives import mint_window_id
 
 # The cascade rule (fixed, in fractions): window ``n`` of a client's desktop steps from the origin, cycling.
@@ -719,6 +723,22 @@ def _default_shortcut_choices(row: RegistryRow) -> tuple[DefaultShortcut, ...]:
         return ()
     first = next((path for path in offered if not _takes_text_mention_or_app(path)), offered[0])
     return (DefaultShortcut(launch=first.id, mode=ShortcutMode.FOCUS),)
+
+
+def default_shortcut_start_path(row: RegistryRow) -> str | None:
+    """The page an app's first desktop shortcut opens, when that is a plain GET (its presets as the query); None when
+    the app has no shortcut or that shortcut posts. An app exported from Studio as a Mac app opens on this page."""
+    choices = _default_shortcut_choices(row)
+    if not choices:
+        return None
+    launch_path = next((path for path in effective_launch_paths(row) if path.id == choices[0].launch), None)
+    if launch_path is None or launch_path.method != LaunchPathMethod.GET:
+        return None
+    try:
+        return str(get_launch_destination(launch_path, {}))
+    except LaunchRefusedError as e:
+        logger.debug("App {} has no start path: {}", row.name, e)
+        return None
 
 
 @pure
