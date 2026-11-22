@@ -3,10 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
+// The real listeners, wrapped so a test can see which function was registered and which was taken off.
+vi.mock("../models/Response", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../models/Response")>();
+  return {
+    ...actual,
+    addMessageSentListener: vi.fn(actual.addMessageSentListener),
+    removeMessageSentListener: vi.fn(actual.removeMessageSentListener),
+  };
+});
 
 import type { ChatSettings } from "../models/ChatSettings";
 import { DEFAULT_CHAT_SETTINGS, resetChatSettingsForTests } from "../models/ChatSettings";
-import { announceMessageSent } from "../models/Response";
+import { addMessageSentListener, announceMessageSent, removeMessageSentListener } from "../models/Response";
 import { PICKER_SEND_HINT_TEXT, showPickerSendHintOnce } from "./PickerSendHint";
 
 /** What the backend holds, which the page's requests read and replace. */
@@ -34,6 +43,8 @@ beforeEach(() => {
   stored = { ...DEFAULT_CHAT_SETTINGS };
   isReadFailing = false;
   writes = [];
+  vi.mocked(addMessageSentListener).mockClear();
+  vi.mocked(removeMessageSentListener).mockClear();
   vi.spyOn(m, "redraw").mockImplementation(() => undefined);
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
   vi.spyOn(m, "request").mockImplementation((async (options: { method: string; body?: ChatSettings }) => {
@@ -111,8 +122,20 @@ describe("showPickerSendHintOnce", () => {
     announceMessageSent("agent-first-run");
 
     expect(hintText()).toBeNull();
-    // Taken down, it no longer listens: a later send has nothing of the hint's to run.
-    expect(() => announceMessageSent("agent-first-run")).not.toThrow();
+  });
+
+  it("listens for a send only while it is up", async () => {
+    mountSendButton();
+    showPickerSendHintOnce();
+    await settle();
+    expect(addMessageSentListener).toHaveBeenCalledTimes(1);
+    const listener = vi.mocked(addMessageSentListener).mock.calls[0]?.[0];
+    expect(removeMessageSentListener).not.toHaveBeenCalled();
+
+    document.querySelector<HTMLButtonElement>(".coach-mark-dismiss")?.click();
+
+    expect(removeMessageSentListener).toHaveBeenCalledTimes(1);
+    expect(removeMessageSentListener).toHaveBeenCalledWith(listener);
   });
 
   it("neither shows nor records anything while the settings cannot be read, and shows it once they can", async () => {
