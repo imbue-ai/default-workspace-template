@@ -24,7 +24,6 @@ from uuid import uuid4
 import httpx
 import pytest
 from app_manifest.testing import assert_document_policy_admits_page
-from app_manifest.testing import write_app_manifest
 from app_schema.testing import assert_api_schema_describes_app
 from chat_background_tasks.listing import chats_from_agents_payload
 from flask import Flask
@@ -177,7 +176,9 @@ from imbue.chat.testing import utc_iso_seconds_ago
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_background_task_marker
 from imbue.chat.testing import write_compacting_marker
+from imbue.chat.testing import write_plain_app_registry
 from imbue.chat.testing import write_recording_mngr_binary
+from imbue.chat.testing import write_workspace_with_a_user_built_app
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.ws_broadcaster import provisional_chat_created_message
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
@@ -4330,24 +4331,14 @@ def test_the_activity_route_stops_suggesting_an_app_once_the_user_has_built_one(
     """The registry is read against the workspace the app runs in: a registered package the root project does not
     list as its own is the user's app, and the template's own apps are not."""
     workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "pyproject.toml").write_text(
-        '[project]\nname = "workspace"\nversion = "0.1.0"\n\n[tool.uv.workspace]\nmembers = ["system/apps/chat"]\n'
-    )
-    for package, name in (("chat", "chat"), ("todo_list", "todo-list")):
-        manifest = f'name = "{name}"\ndisplay_name = "{name.title()}"\nicon = "icon.svg"\n'
-        app_directory = write_app_manifest(workspace, package, manifest, True).parent
-        (app_directory / "pyproject.toml").write_text(f'[project]\nname = "{name}"\nversion = "0.1.0"\n')
+    write_workspace_with_a_user_built_app(workspace)
     monkeypatch.chdir(workspace)
     registry = Path(os.environ["MINDS_APPS_FILE"])
     mark(Marker.TOUR_FINISHED)
 
-    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://localhost:5000"\n')
+    write_plain_app_registry(registry, "chat")
     with_the_templates_apps = _offered_activity_ids(client)
-    registry.write_text(
-        '[[apps]]\nname = "chat"\nurl = "http://localhost:5000"\n'
-        '[[apps]]\nname = "todo-list"\nurl = "http://localhost:5001"\n'
-    )
+    write_plain_app_registry(registry, "chat", "todo-list")
     with_a_built_app = _offered_activity_ids(client)
 
     assert with_the_templates_apps == ["new_chat", "phone_access", "build_app", "connect_data"]

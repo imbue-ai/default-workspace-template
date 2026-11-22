@@ -5,7 +5,6 @@ from datetime import timezone
 from pathlib import Path
 
 import pytest
-from app_manifest.testing import write_app_manifest
 from onboarding_activity.markers import MARKER_DIR_ENV
 from onboarding_activity.markers import Marker
 from onboarding_activity.markers import mark
@@ -29,7 +28,10 @@ from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.first_run_tree import FirstRunTreeStep
 from imbue.chat.suggestions import SuggestionAction
 from imbue.chat.suggestions import SuggestionPlacement
+from imbue.chat.testing import write_plain_app_registry
+from imbue.chat.testing import write_workspace_with_a_user_built_app
 from imbue.imbue_common.model_update import to_update
+from imbue.system_interface.shell.testing import write_registry
 
 _NOW = datetime(2026, 11, 21, 12, 0, 0, tzinfo=timezone.utc)
 _SET_MARKER = MarkerReading(is_readable=True, marked_at=_NOW - timedelta(days=3))
@@ -252,26 +254,9 @@ def test_a_marker_is_read_as_unset_set_with_its_time_or_unreadable(
     assert read_marker(Marker.APP_BUILD_STARTED) == UNREADABLE_MARKER
 
 
-def _write_workspace(repo_root: Path) -> Path:
-    """A workspace whose root project lists one app, with a second app its user scaffolded; answers the registry."""
-    (repo_root / "pyproject.toml").write_text(
-        '[project]\nname = "workspace"\nversion = "0.1.0"\n\n[tool.uv.workspace]\nmembers = ["system/apps/chat"]\n'
-    )
-    for package, name in (("chat", "chat"), ("todo_list", "todo-list")):
-        manifest = f'name = "{name}"\ndisplay_name = "{name.title()}"\nicon = "icon.svg"\n'
-        app_directory = write_app_manifest(repo_root, package, manifest, True).parent
-        (app_directory / "pyproject.toml").write_text(f'[project]\nname = "{name}"\nversion = "0.1.0"\n')
-    return repo_root / "data" / ".state" / "apps.toml"
-
-
-def _row(name: str) -> str:
-    return f'[[apps]]\nname = "{name}"\nurl = "http://localhost:5000"\n'
-
-
 def test_the_facts_are_read_from_the_markers_and_the_registry(tmp_path: Path) -> None:
-    registry = _write_workspace(tmp_path)
-    registry.parent.mkdir(parents=True)
-    registry.write_text(_row("chat"))
+    write_workspace_with_a_user_built_app(tmp_path)
+    registry = write_plain_app_registry(tmp_path / "data" / ".state" / "apps.toml", "chat")
 
     assert read_activity_facts(tmp_path, registry) == _NOTHING_DONE
     assert _offered_ids(read_activity_facts(tmp_path, registry)) == [
@@ -283,7 +268,7 @@ def test_the_facts_are_read_from_the_markers_and_the_registry(tmp_path: Path) ->
 
     mark(Marker.SECOND_CHAT_STARTED)
     mark(Marker.CONNECT_DATA_COACH_SHOWN)
-    registry.write_text(_row("chat") + _row("todo-list"))
+    write_plain_app_registry(registry, "chat", "todo-list")
     facts = read_activity_facts(tmp_path, registry)
 
     assert facts.has_user_built_app is True
@@ -300,9 +285,8 @@ def test_the_facts_are_read_from_the_markers_and_the_registry(tmp_path: Path) ->
 def test_a_registry_or_markers_that_cannot_be_read_offer_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    registry = _write_workspace(tmp_path)
-    registry.parent.mkdir(parents=True)
-    registry.write_text("[[apps]\nname = \n")
+    write_workspace_with_a_user_built_app(tmp_path)
+    registry = write_registry(tmp_path / "data" / ".state" / "apps.toml", "[[apps]\nname = \n")
 
     unreadable_registry = read_activity_facts(tmp_path, registry)
 

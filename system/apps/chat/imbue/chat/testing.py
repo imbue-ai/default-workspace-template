@@ -51,6 +51,7 @@ import httpx
 import pexpect
 import pytest
 import simple_websocket
+from app_manifest.testing import write_app_manifest
 from chat_background_tasks import markers
 from chat_background_tasks.markers import TaskSource
 from flask import Flask
@@ -1319,6 +1320,24 @@ def use_mngr_settings(settings: str, tmp_path: Path, monkeypatch: pytest.MonkeyP
     (config_dir / "settings.toml").write_text("is_allowed_in_pytest = true\n" + settings)
     monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(config_dir))
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
+
+
+def write_workspace_with_a_user_built_app(repo_root: Path) -> None:
+    """Lay out a workspace checkout at ``repo_root`` whose root project lists one app as its own (``chat``), beside
+    a second app its user scaffolded (``todo-list``): each a package under ``system/apps/`` with a manifest."""
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "pyproject.toml").write_text(
+        '[project]\nname = "workspace"\nversion = "0.1.0"\n\n[tool.uv.workspace]\nmembers = ["system/apps/chat"]\n'
+    )
+    for package, name in (("chat", "chat"), ("todo_list", "todo-list")):
+        manifest = f'name = "{name}"\ndisplay_name = "{name.title()}"\nicon = "icon.svg"\n'
+        app_directory = write_app_manifest(repo_root, package, manifest, True).parent
+        (app_directory / "pyproject.toml").write_text(f'[project]\nname = "{name}"\nversion = "0.1.0"\n')
+
+
+def write_plain_app_registry(path: Path, *names: str) -> Path:
+    """Write the app registry at ``path`` with one row per name, none of them ``system`` or ``internal``."""
+    return write_registry(path, *(registry_row_toml(name, "http://localhost:5000") for name in names))
 
 
 def utc_iso_seconds_ago(seconds: float = 0.0) -> str:
