@@ -1246,7 +1246,11 @@ stretch, through the chip icons, step bullets and notice ticks, stopping short o
 piece; the pieces sit 12px apart. The call the agent is running shows in its chip on the
 line (the working dot, the harness's caption, and how long the turn has run); a call in a
 step's work is said by the status line instead, which is the stretch's last piece on the
-line whenever it shows; the done mark sits just under the stretch. A command a person
+line whenever it shows; the done mark sits just under the stretch. Under the latest
+message of a chat that is not working, a line says when that message was, from either
+side and by the transcript's own time ("Last message 3 days ago", the exact time on
+hover); it hides while a turn runs, during a switch, and while a message is on its way.
+A command a person
 runs in bash mode (`!ls`) and its output are theirs, not the agent's: they stand on the
 person's side and end the stretch (display `person_chip`). The reply the agent is still
 writing, and a switch the transcript does not show yet, end the last stretch while it is
