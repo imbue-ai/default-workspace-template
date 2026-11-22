@@ -1495,6 +1495,54 @@ def test_the_users_own_first_words_follow_a_seeds_first_message(
         manager.stop()
 
 
+def test_a_seeds_first_message_follows_a_create_that_picks_a_model_and_the_users_words_follow_it(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A model picked at the launch is set before the chat's first turn, so nothing rides the create. The seed's
+    message is then sent first, under an id of its own, and the user's words after it, carrying the seeded
+    conversation the command left pending."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    _sign_out_of_every_account()
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    delivered: list[tuple[str, str]] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        delivered.append((message_id, text))
+        return SendOutcome.OK
+
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader([]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=deliver,
+        )
+    )
+    try:
+        seeded = manager.seed_chat("Getting started", _seed_turns(), first_message=_SEED_FIRST_MESSAGE)
+        _sign_in()
+
+        manager.create_chat(
+            "", chat_id=seeded.chat_id, message="1", message_id="m-1", model_pick=ModelPick(model_id="haiku")
+        )
+        _wait_until_launched(manager, seeded.chat_id)
+        wait_until_true(lambda: len(delivered) == 2, 10, "both deliveries")
+
+        (create_line,) = _create_lines(argv_log)
+        assert "--message" not in create_line.split()
+        (seed_message_id, seed_message), (user_message_id, carried) = delivered
+        assert seed_message == _SEED_FIRST_MESSAGE
+        assert seed_message_id not in ("", "m-1")
+        assert user_message_id == "m-1"
+        assert carried.startswith(f"<{SEED_CONTEXT_TAG}>") and carried.endswith(f"</{SEED_CONTEXT_TAG}>\n1")
+        wait_until_true(
+            lambda: _is_seed_pending(store, ChatId(seeded.chat_id)) is False, 10, "the seed marked as delivered"
+        )
+    finally:
+        manager.stop()
+
+
 def test_a_room_launched_on_a_seed_with_a_first_message_is_not_sent_it(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
