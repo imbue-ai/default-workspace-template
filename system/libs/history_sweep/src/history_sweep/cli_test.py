@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -8,23 +9,20 @@ from imbue.mngr.primitives import AgentId
 
 from history_sweep.cli import default_roots, main, summarize
 from history_sweep.sweep import Removal, RemovalReason
+from history_sweep.testing import write_archive, write_session
 
 
-def _deleted_chat_session_file(tmp_path: Path) -> Path:
+def _deleted_chat_session_file(tmp_path: Path, env: dict[str, str]) -> Path:
     """A just-destroyed agent's archive (with a raw transcript) and its session file in an account."""
+    roots = default_roots(env, tmp_path)
     session_id = str(uuid4())
-    archive = tmp_path / "mngr" / "preserved" / f"chat--{AgentId.generate()}"
-    (archive / "logs" / "claude_transcript").mkdir(parents=True)
-    (archive / "logs" / "claude_transcript" / "events.jsonl").write_text(
-        '{"type":"user"}\n'
+    write_archive(
+        roots,
+        str(AgentId.generate()),
+        [session_id],
+        preserved_at=datetime.now(timezone.utc) - timedelta(days=1),
     )
-    (archive / "claude_session_id_history").write_text(f"{session_id}\n")
-    session_file = (
-        tmp_path / "accounts" / "acct" / "projects" / "p" / f"{session_id}.jsonl"
-    )
-    session_file.parent.mkdir(parents=True)
-    session_file.write_text('{"type":"user"}\n')
-    return session_file
+    return write_session(roots, session_id)[0]
 
 
 @pytest.fixture
@@ -40,7 +38,7 @@ def sweep_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]
 def test_dry_run_lists_the_session_file_and_removes_nothing(
     tmp_path: Path, sweep_env: dict[str, str]
 ) -> None:
-    session_file = _deleted_chat_session_file(tmp_path)
+    session_file = _deleted_chat_session_file(tmp_path, sweep_env)
 
     result = CliRunner().invoke(main, ["--dry-run"], env=sweep_env)
 
@@ -53,7 +51,7 @@ def test_dry_run_lists_the_session_file_and_removes_nothing(
 def test_run_removes_the_session_file_and_writes_the_summary(
     tmp_path: Path, sweep_env: dict[str, str]
 ) -> None:
-    session_file = _deleted_chat_session_file(tmp_path)
+    session_file = _deleted_chat_session_file(tmp_path, sweep_env)
 
     result = CliRunner().invoke(main, [], env=sweep_env)
 
@@ -66,7 +64,7 @@ def test_run_removes_the_session_file_and_writes_the_summary(
 def test_unreadable_chat_record_exits_non_zero_and_removes_nothing(
     tmp_path: Path, sweep_env: dict[str, str]
 ) -> None:
-    session_file = _deleted_chat_session_file(tmp_path)
+    session_file = _deleted_chat_session_file(tmp_path, sweep_env)
     record = tmp_path / "data" / ".apps" / "chat" / "chats" / "broken" / "record.json"
     record.parent.mkdir(parents=True)
     record.write_text("{not json")
