@@ -49,11 +49,11 @@ class MessageStampStore(MutableModel):
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as e:
-            logger.opt(exception=e).warning("Ignored an unreadable message-stamps file at {}", self.path)
+            logger.opt(exception=e).warning("Ignored an unreadable stamps file at {}", self.path)
             return {}
         stamps = raw.get(self.key) if isinstance(raw, dict) else None
         if not isinstance(stamps, dict):
-            logger.warning("Ignored a message-stamps file of the wrong shape at {}", self.path)
+            logger.warning("Ignored a stamps file of the wrong shape at {}", self.path)
             return {}
         return {
             ChatId(str(chat_id)): float(stamp)
@@ -70,7 +70,7 @@ class MessageStampStore(MutableModel):
             temp_path.write_text(json.dumps({self.key: dict(self._stamps)}), encoding="utf-8")
             os.replace(temp_path, self.path)
         except OSError as e:
-            logger.opt(exception=e).warning("Failed to write the message stamps at {}", self.path)
+            logger.opt(exception=e).warning("Failed to write the stamps at {}", self.path)
 
     def record(self, chat_id: ChatId, at: float | None = None) -> None:
         stamp = time.time() if at is None else at
