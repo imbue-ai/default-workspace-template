@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
@@ -330,7 +331,6 @@ def test_apply_removes_planned_paths_and_reports_their_sizes(roots: SweepRoots) 
     assert all(removal.size_bytes > 0 for removal in removed)
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
 def test_apply_keeps_the_archive_when_a_session_copy_cannot_be_removed(
     roots: SweepRoots,
 ) -> None:
@@ -340,15 +340,14 @@ def test_apply_keeps_the_archive_when_a_session_copy_cannot_be_removed(
         roots, _new_agent_id(), [session_id], preserved_at=_NOW - RETENTION
     )
     planned = plan_sweep(roots, now=_NOW)
-    jsonl.parent.chmod(0o500)
-    try:
-        _removed, failed = apply_sweep(planned)
-    finally:
-        jsonl.parent.chmod(0o700)
+    # A file where the session's project folder was makes its removal fail, even for root.
+    shutil.rmtree(jsonl.parent)
+    jsonl.parent.write_text("")
+
+    _removed, failed = apply_sweep(planned)
 
     assert {removal.path for removal, _error in failed} >= {jsonl, archive}
     assert archive.exists()
-    assert jsonl.exists()
 
 
 def test_read_session_ids_takes_the_first_word_and_skips_unsafe_ids(
