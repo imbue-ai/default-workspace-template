@@ -27,6 +27,8 @@ dependencies = [
     # The scripts that read the chat's background task markers reach this library through
     # sys.path; the tests of those scripts, run from the root venv, import it directly.
     "chat-background-tasks",
+    # The build-app skill's scaffolder, run from the root venv, sets a marker through this library.
+    "onboarding-activity",
     # Agents run `uv run --no-sync workspace-layout` from the repo root, so its console script
     # must survive a sync of the root closure.
     "workspace-layout",
@@ -143,6 +145,7 @@ members = [
     "system/libs/github_sync",
     "system/libs/latchkey_access",
     "system/libs/mngr_cli_contract",
+    "system/libs/onboarding_activity",
     "system/libs/pytest_executable_tmp",
     "system/libs/pytest_workspace_env",
     "system/libs/routines",
@@ -181,6 +184,7 @@ pytest-executable-tmp = { workspace = true }
 pytest-workspace-env = { workspace = true }
 tk-command-parsing = { workspace = true }
 chat-background-tasks = { workspace = true }
+onboarding-activity = { workspace = true }
 share-grants = { workspace = true }
 event-streams = { workspace = true }
 oom-priority = { workspace = true }

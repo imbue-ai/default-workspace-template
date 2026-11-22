@@ -8,6 +8,8 @@ dependencies = [
     "agents-shared",
     "app-manifest",
     "app-registration",
+    # scaffold_flask_lib records that a build started.
+    "onboarding-activity",
     "tomlkit>=0.12",
     "workspace-layout",
     "workspace-scripts",

@@ -8,6 +8,7 @@ dependencies = [
     "app-manifest",
     "app-schema",
     "chat-background-tasks",
+    "onboarding-activity",
     "concurrency-group",
     "flask>=3.0",
     "flask-sock>=0.7",
