@@ -56,6 +56,7 @@ import { ownerAndVisitorRosterFixture } from "../models/participantFixture";
 import { setParticipantsForTesting } from "../models/Participants";
 import { announceMessageSent, type TranscriptEvent } from "../models/Response";
 import { resetSuggestionsForTests, type SuggestionsAnswer } from "../models/Suggestions";
+import { assistantMessageFixture, userMessageFixture } from "../models/transcriptEventFixture";
 import { ChatSuggestions } from "./ChatSuggestions";
 import { hasUserMessage, isTurnDoneForActivity } from "./last-reply";
 import { SUGGESTIONS_OFF_NOTICE_MS } from "./suggestion-placement";
@@ -65,32 +66,11 @@ const CHAT = "agent-chat";
 const FIRST_THREE_LABELS = [NEW_CHAT.label, PHONE.label, BUILD_APP.label];
 
 function reply(eventId: string): TranscriptEvent {
-  return {
-    type: "assistant_message",
-    event_id: eventId,
-    timestamp: "2026-11-21T10:00:00Z",
-    source: "test",
-    model: "test-model",
-    text: "Here is the plan.",
-    tool_calls: [],
-    stop_reason: "end_turn",
-    usage: null,
-    is_auth_error: false,
-    is_api_error: false,
-    api_error_kind: null,
-    is_provider_fault: false,
-  };
+  return assistantMessageFixture(eventId, "Here is the plan.");
 }
 
 function userMessage(eventId: string): TranscriptEvent {
-  return {
-    type: "user_message",
-    event_id: eventId,
-    timestamp: "2026-11-21T10:01:00Z",
-    source: "test",
-    role: "user",
-    content: "Plan my week",
-  };
+  return userMessageFixture(eventId, "Plan my week");
 }
 
 const NO_NEXT_STEPS: SuggestionsAnswer = { status: "none", after_event_id: null, source: null, suggestions: [] };

@@ -51,6 +51,7 @@ import { ownerAndVisitorRosterFixture } from "../models/participantFixture";
 import { setParticipantsForTesting } from "../models/Participants";
 import { announceMessageSent, type TranscriptEvent } from "../models/Response";
 import { resetSuggestionsForTests, type SuggestionsAnswer } from "../models/Suggestions";
+import { assistantMessageFixture, userMessageFixture } from "../models/transcriptEventFixture";
 import { isTurnDoneForSuggestions, lastReplyEventId } from "./last-reply";
 import { ChatSuggestions } from "./ChatSuggestions";
 import { SUGGESTIONS_OFF_NOTICE_MS } from "./suggestion-placement";
@@ -59,33 +60,11 @@ const CHAT = "agent-first-run";
 const SEED_END = `${CHAT}:seed:3`;
 
 function reply(eventId: string): TranscriptEvent {
-  return {
-    type: "assistant_message",
-    event_id: eventId,
-    timestamp: "2026-11-21T10:00:00Z",
-    source: "test",
-    model: "test-model",
-    text: "**How do you want to start?**",
-    tool_calls: [],
-    stop_reason: "end_turn",
-    usage: null,
-    is_auth_error: false,
-    is_api_error: false,
-    api_error_kind: null,
-    is_provider_fault: false,
-  };
+  return assistantMessageFixture(eventId, "**How do you want to start?**");
 }
 
 function userMessage(eventId: string, display?: "skill_expansion"): TranscriptEvent {
-  return {
-    type: "user_message",
-    event_id: eventId,
-    timestamp: "2026-11-21T10:01:00Z",
-    source: "test",
-    role: "user",
-    content: "See what Studio can do",
-    ...(display === undefined ? {} : { display }),
-  };
+  return userMessageFixture(eventId, "See what Studio can do", display);
 }
 
 const START_SET: SuggestionsAnswer = {
