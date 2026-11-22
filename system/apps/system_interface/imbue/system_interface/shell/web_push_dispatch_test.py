@@ -1,0 +1,236 @@
+import json
+import threading
+from datetime import datetime
+from datetime import timezone
+from pathlib import Path
+
+from py_vapid import Vapid
+from pydantic import ConfigDict
+from pydantic import Field
+
+from imbue.system_interface.shell.web_push import BrowserPushSubscription
+from imbue.system_interface.shell.web_push import DeviceRegistrationRequest
+from imbue.system_interface.shell.web_push import NotificationSettings
+from imbue.system_interface.shell.web_push import PushProviderAnswer
+from imbue.system_interface.shell.web_push import WebPushNotifier
+from imbue.system_interface.shell.web_push_dispatch import COALESCE_SECONDS
+from imbue.system_interface.shell.web_push_dispatch import FULL_TEXT_MAX_LENGTH
+from imbue.system_interface.shell.web_push_dispatch import MAX_SEND_LOG_ENTRIES
+from imbue.system_interface.shell.web_push_dispatch import PER_CHAT_POST_LIMIT
+from imbue.system_interface.shell.web_push_dispatch import PER_CHAT_WINDOW_SECONDS
+from imbue.system_interface.shell.web_push_dispatch import WORKSPACE_POST_LIMIT
+from imbue.system_interface.shell.web_push_dispatch import PushDispatcher
+from imbue.system_interface.shell.web_push_dispatch import PushSendRequest
+from imbue.system_interface.shell.web_push_dispatch import SendLog
+from imbue.system_interface.shell.web_push_dispatch import SendStatus
+from imbue.system_interface.shell.web_push_dispatch import compose_notification
+from imbue.system_interface.testing import RecordingPushTransport
+
+_NOW = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
+_CHAT = "agent-research"
+_PREVIEW_SAFE = NotificationSettings(is_full_text=False)
+_FULL_TEXT = NotificationSettings(is_full_text=True)
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = _NOW.timestamp()
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _dispatcher(
+    tmp_path: Path, is_device_registered: bool = True
+) -> tuple[PushDispatcher, _Clock, RecordingPushTransport]:
+    transport = RecordingPushTransport()
+    notifier = WebPushNotifier(directory=tmp_path, transport=transport)
+    if is_device_registered:
+        notifier.register(
+            DeviceRegistrationRequest.model_validate(
+                {
+                    "subscription": {"endpoint": "https://web.push.apple.com/a", "keys": {"p256dh": "B", "auth": "s"}},
+                    "label": "iPhone, Safari",
+                }
+            ),
+            _NOW,
+        )
+    clock = _Clock()
+    return (
+        PushDispatcher(notifier=notifier, log=SendLog(path=tmp_path / "send_log.json"), clock=clock),
+        clock,
+        transport,
+    )
+
+
+def _send(message: str, chat_id: str = _CHAT, title: str | None = None) -> PushSendRequest:
+    return PushSendRequest(chat_id=chat_id, chat_title="Research", title=title, message=message)
+
+
+def test_a_notification_names_the_chat_and_says_nothing_the_agent_said_by_default() -> None:
+    notification = compose_notification(_CHAT, "Research", ("Your code is 123456",), "Studio", _PREVIEW_SAFE)
+
+    assert notification.title == "Research"
+    assert notification.body == "Has something for you in Studio."
+    assert "123456" not in notification.body
+    assert notification.path == "/?open=chat%3A%2F%3Fchat%3Dagent-research"
+    assert notification.tag == "chat-agent-research"
+
+
+def test_full_text_shows_the_agents_words_cut_short_for_a_lock_screen() -> None:
+    short = compose_notification(_CHAT, "Research", ("Report ready",), "Studio", _FULL_TEXT)
+    long = compose_notification(_CHAT, "Research", ("x" * 1000,), "Studio", _FULL_TEXT)
+
+    assert short.body == "Report ready"
+    assert len(long.body) == FULL_TEXT_MAX_LENGTH and long.body.endswith("...")
+
+
+def test_a_burst_says_how_many_updates_it_folds() -> None:
+    safe = compose_notification(_CHAT, "Research", ("one", "two", "three"), "Studio", _PREVIEW_SAFE)
+    full = compose_notification(_CHAT, "Research", ("one", "two", "three"), "Studio", _FULL_TEXT)
+
+    assert safe.body == "3 updates for you in Studio."
+    assert full.body == "3 updates. Latest: three"
+
+
+def test_a_chats_first_notification_goes_out_at_once_on_the_worker(tmp_path: Path) -> None:
+    dispatcher, _clock, transport = _dispatcher(tmp_path)
+
+    receipt = dispatcher.submit(_send("Report ready", title="Q4"), "Studio")
+
+    assert receipt.status is SendStatus.QUEUED
+    assert transport.posted == []
+    dispatcher.flush_due()
+    ((posted,),) = [transport.posted]
+    assert json.loads(posted.payload)["title"] == "Research"
+    (entry,) = dispatcher.log.entries()
+    assert (entry.status, entry.requested_text, entry.shown_title) == (SendStatus.SENT, "Q4: Report ready", "Research")
+    assert [delivery.status_code for delivery in entry.deliveries] == [201]
+
+
+def test_a_burst_from_one_chat_waits_out_the_window_and_goes_as_one(tmp_path: Path) -> None:
+    dispatcher, clock, transport = _dispatcher(tmp_path)
+    first = dispatcher.submit(_send("one"), "Studio")
+    dispatcher.flush_due()
+
+    clock.now += 5
+    second = dispatcher.submit(_send("two"), "Studio")
+    third = dispatcher.submit(_send("three"), "Studio")
+    dispatcher.flush_due()
+    assert len(transport.posted) == 1
+
+    clock.now += COALESCE_SECONDS
+    dispatcher.flush_due()
+
+    assert len(transport.posted) == 2
+    assert json.loads(transport.posted[1].payload)["body"] == "2 updates for you in Studio."
+    by_id = {entry.send_id: entry for entry in dispatcher.log.entries()}
+    assert by_id[first.send_id].status is SendStatus.SENT
+    assert (by_id[second.send_id].status, by_id[second.send_id].carried_by) == (SendStatus.MERGED, third.send_id)
+    assert by_id[third.send_id].status is SendStatus.SENT
+
+
+def test_two_chats_do_not_wait_on_each_other(tmp_path: Path) -> None:
+    dispatcher, _clock, transport = _dispatcher(tmp_path)
+
+    dispatcher.submit(_send("one"), "Studio")
+    dispatcher.submit(_send("two", chat_id="agent-other"), "Studio")
+    dispatcher.flush_due()
+
+    assert len(transport.posted) == 2
+
+
+def test_a_chat_past_its_limit_is_dropped_and_logged(tmp_path: Path) -> None:
+    dispatcher, clock, transport = _dispatcher(tmp_path)
+    for _ in range(PER_CHAT_POST_LIMIT):
+        assert dispatcher.submit(_send("again"), "Studio").status is SendStatus.QUEUED
+        dispatcher.flush_due()
+        clock.now += COALESCE_SECONDS
+
+    refused = dispatcher.submit(_send("one more"), "Studio")
+
+    assert refused.status is SendStatus.LIMITED
+    assert "not sent" in refused.detail
+    assert len(transport.posted) == PER_CHAT_POST_LIMIT
+    assert dispatcher.log.entries()[-1].status is SendStatus.LIMITED
+    clock.now += PER_CHAT_WINDOW_SECONDS
+    assert dispatcher.submit(_send("later"), "Studio").status is SendStatus.QUEUED
+
+
+def test_the_workspace_as_a_whole_is_limited_too(tmp_path: Path) -> None:
+    dispatcher, _clock, _transport = _dispatcher(tmp_path)
+    receipts = [dispatcher.submit(_send("hi", chat_id=f"agent-c{index}"), "Studio") for index in range(30)]
+
+    statuses = [receipt.status for receipt in receipts]
+    assert statuses.count(SendStatus.QUEUED) == WORKSPACE_POST_LIMIT
+    assert statuses[WORKSPACE_POST_LIMIT:] == [SendStatus.LIMITED] * (30 - WORKSPACE_POST_LIMIT)
+
+
+def test_a_send_with_no_device_is_logged_and_posts_nothing(tmp_path: Path) -> None:
+    dispatcher, _clock, transport = _dispatcher(tmp_path, is_device_registered=False)
+
+    receipt = dispatcher.submit(_send("one"), "Studio")
+    dispatcher.flush_due()
+
+    assert receipt.status is SendStatus.NO_DEVICES
+    assert transport.posted == []
+    assert [entry.status for entry in dispatcher.log.entries()] == [SendStatus.NO_DEVICES]
+
+
+def test_forgetting_pending_sends_posts_none_of_them(tmp_path: Path) -> None:
+    dispatcher, clock, transport = _dispatcher(tmp_path)
+    dispatcher.submit(_send("one"), "Studio")
+    dispatcher.flush_due()
+    dispatcher.submit(_send("two"), "Studio")
+
+    dispatcher.forget_pending()
+    clock.now += COALESCE_SECONDS
+    dispatcher.flush_due()
+
+    assert len(transport.posted) == 1
+    assert dispatcher.next_due_at() is None
+
+
+def test_the_log_keeps_only_the_latest_sends(tmp_path: Path) -> None:
+    dispatcher, _clock, _transport = _dispatcher(tmp_path, is_device_registered=False)
+
+    for index in range(MAX_SEND_LOG_ENTRIES + 5):
+        dispatcher.submit(_send(f"message {index}"), "Studio")
+
+    entries = dispatcher.log.entries()
+    assert len(entries) == MAX_SEND_LOG_ENTRIES
+    assert entries[-1].requested_text == f"message {MAX_SEND_LOG_ENTRIES + 4}"
+
+
+class _SignallingTransport(RecordingPushTransport):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    posted_event: threading.Event = Field(default_factory=threading.Event, description="Set on the first post")
+
+    def post(self, subscription: BrowserPushSubscription, payload: str, signing_key: Vapid) -> PushProviderAnswer:
+        answer = super().post(subscription, payload, signing_key)
+        self.posted_event.set()
+        return answer
+
+
+def test_the_worker_thread_posts_without_anyone_flushing(tmp_path: Path) -> None:
+    transport = _SignallingTransport()
+    notifier = WebPushNotifier(directory=tmp_path, transport=transport)
+    notifier.register(
+        DeviceRegistrationRequest.model_validate(
+            {
+                "subscription": {"endpoint": "https://web.push.apple.com/a", "keys": {"p256dh": "B", "auth": "s"}},
+                "label": "x",
+            }
+        ),
+        _NOW,
+    )
+    dispatcher = PushDispatcher(notifier=notifier, log=SendLog(path=tmp_path / "send_log.json"))
+    dispatcher.start()
+    try:
+        dispatcher.submit(_send("one"), "Studio")
+        assert transport.posted_event.wait(10)
+    finally:
+        dispatcher.stop()
+
+    assert len(transport.posted) == 1

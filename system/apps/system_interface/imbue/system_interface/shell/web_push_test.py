@@ -12,11 +12,13 @@ from pydantic import Field
 from pydantic import ValidationError
 
 from imbue.system_interface.shell.web_push import BrowserPushSubscription
+from imbue.system_interface.shell.web_push import DEFAULT_NOTIFICATION_SETTINGS
 from imbue.system_interface.shell.web_push import DEVICES_FILENAME
 from imbue.system_interface.shell.web_push import DeviceRegistrationRequest
 from imbue.system_interface.shell.web_push import MAX_PUSH_PAYLOAD_BYTES
 from imbue.system_interface.shell.web_push import MAX_REGISTERED_DEVICES
-from imbue.system_interface.shell.web_push import PushNotificationRequest
+from imbue.system_interface.shell.web_push import NotificationSettings
+from imbue.system_interface.shell.web_push import PushNotification
 from imbue.system_interface.shell.web_push import PushProviderAnswer
 from imbue.system_interface.shell.web_push import PushTransportInterface
 from imbue.system_interface.shell.web_push import WebPushNotifier
@@ -99,7 +101,7 @@ def test_a_device_whose_push_service_did_not_answer_is_kept(tmp_path: Path) -> N
     notifier = WebPushNotifier(directory=tmp_path, transport=transport)
     notifier.register(_registration("https://push.example.org/a"), _NOW)
 
-    outcome = notifier.send(PushNotificationRequest(title="Done"), None)
+    outcome = notifier.send(PushNotification(title="Done"), None, _NOW)
 
     ((delivery,),) = [outcome.deliveries]
     assert (delivery.is_accepted, delivery.is_forgotten, delivery.detail) == (False, False, "unreachable")
@@ -124,7 +126,7 @@ def test_every_device_is_posted_to_at_once(tmp_path: Path) -> None:
     for index in range(3):
         notifier.register(_registration(f"https://push.example.org/{index}"), _NOW)
 
-    outcome = notifier.send(PushNotificationRequest(title="Done"), None)
+    outcome = notifier.send(PushNotification(title="Done"), None, _NOW)
 
     assert outcome.accepted_count == 3
     assert [delivery.device_id for delivery in outcome.deliveries] == [
@@ -135,7 +137,7 @@ def test_every_device_is_posted_to_at_once(tmp_path: Path) -> None:
 def test_a_non_ascii_message_travels_as_utf8_within_the_push_services_limit() -> None:
     body = "Отчёт готов, можно смотреть. " * 34
 
-    payload = push_payload(PushNotificationRequest(title="Отчёт готов", body=body[:1000]))
+    payload = push_payload(PushNotification(title="Отчёт готов", body=body[:1000]))
 
     assert "Отчёт готов" in payload
     assert json.loads(payload)["body"] == body[:1000]
@@ -145,11 +147,87 @@ def test_a_non_ascii_message_travels_as_utf8_within_the_push_services_limit() ->
 def test_a_notification_too_large_for_one_push_message_is_refused() -> None:
     # 1000 four-byte characters: within the body's bound in characters, over the push services' in bytes.
     with pytest.raises(ValidationError, match="bytes as sent"):
-        PushNotificationRequest(title="Done", body="\U0001f600" * 1000)
+        PushNotification(title="Done", body="\U0001f600" * 1000)
 
 
 def test_a_notification_title_is_required_and_bounded() -> None:
     with pytest.raises(ValidationError):
-        PushNotificationRequest(title="")
+        PushNotification(title="")
     with pytest.raises(ValidationError):
-        PushNotificationRequest(title="x" * 121)
+        PushNotification(title="x" * 121)
+
+
+def test_a_device_whose_push_service_refuses_the_signature_is_marked_stale_and_skipped_after(tmp_path: Path) -> None:
+    transport = RecordingPushTransport(status_code_by_endpoint={"https://push.example.org/a": 403})
+    notifier = WebPushNotifier(directory=tmp_path, transport=transport)
+    notifier.register(_registration("https://push.example.org/a"), _NOW)
+    notifier.register(_registration("https://push.example.org/b"), _NOW)
+
+    first = notifier.send(PushNotification(title="Done"), None, _NOW)
+    second = notifier.send(PushNotification(title="Again"), None, _NOW + timedelta(minutes=1))
+
+    assert {(delivery.label, delivery.is_stale, delivery.is_forgotten) for delivery in first.deliveries} == {
+        ("Android, Firefox", True, False),
+        ("Android, Firefox", False, False),
+    }
+    stale_id = device_id_of("https://push.example.org/a")
+    assert [delivery.device_id for delivery in second.deliveries] == [device_id_of("https://push.example.org/b")]
+    by_id = {device.device_id: device for device in notifier.list_devices()}
+    assert by_id[stale_id].is_stale and by_id[stale_id].last_status_code == 403
+    assert by_id[stale_id].last_accepted_at is None
+    fresh = by_id[device_id_of("https://push.example.org/b")]
+    assert (fresh.is_stale, fresh.last_status_code, fresh.last_accepted_at) == (
+        False,
+        201,
+        _NOW + timedelta(minutes=1),
+    )
+
+
+def test_a_stale_device_is_still_reached_when_named_and_turning_it_on_again_clears_it(tmp_path: Path) -> None:
+    transport = RecordingPushTransport(status_code_by_endpoint={"https://push.example.org/a": 401})
+    notifier = WebPushNotifier(directory=tmp_path, transport=transport)
+    notifier.register(_registration("https://push.example.org/a"), _NOW)
+    stale_id = device_id_of("https://push.example.org/a")
+    notifier.send(PushNotification(title="Done"), None, _NOW)
+
+    named = notifier.send(PushNotification(title="Test"), frozenset({stale_id}), _NOW)
+    notifier.register(_registration("https://push.example.org/a"), _NOW + timedelta(minutes=5))
+
+    assert [delivery.device_id for delivery in named.deliveries] == [stale_id]
+    assert [device.is_stale for device in notifier.list_devices()] == [False]
+
+
+def test_a_reset_makes_a_new_key_and_send_token_and_forgets_every_device(tmp_path: Path) -> None:
+    notifier = WebPushNotifier(directory=tmp_path, transport=RecordingPushTransport())
+    notifier.register(_registration("https://push.example.org/a"), _NOW)
+    old_key = notifier.public_key()
+    old_token = notifier.send_token()
+
+    notifier.reset()
+
+    assert notifier.list_devices() == ()
+    assert notifier.public_key() != old_key
+    assert notifier.send_token() != old_token
+    assert not notifier.is_send_token(old_token)
+
+
+def test_the_send_token_is_private_lasting_and_checked_exactly(tmp_path: Path) -> None:
+    notifier = WebPushNotifier(directory=tmp_path, transport=RecordingPushTransport())
+    token = notifier.send_token()
+
+    assert (tmp_path / "send_token").stat().st_mode & 0o777 == 0o600
+    assert len(token) >= 40
+    assert WebPushNotifier(directory=tmp_path, transport=RecordingPushTransport()).send_token() == token
+    assert notifier.is_send_token(token)
+    assert not notifier.is_send_token("")
+    assert not notifier.is_send_token(token[:-1])
+
+
+def test_notifications_show_no_agent_text_until_the_owner_turns_full_text_on(tmp_path: Path) -> None:
+    notifier = WebPushNotifier(directory=tmp_path, transport=RecordingPushTransport())
+
+    assert notifier.settings() == DEFAULT_NOTIFICATION_SETTINGS
+    assert not DEFAULT_NOTIFICATION_SETTINGS.is_full_text
+    notifier.write_settings(NotificationSettings(is_full_text=True))
+
+    assert WebPushNotifier(directory=tmp_path, transport=RecordingPushTransport()).settings().is_full_text

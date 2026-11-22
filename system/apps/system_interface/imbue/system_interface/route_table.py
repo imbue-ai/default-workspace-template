@@ -98,6 +98,7 @@ from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
 from imbue.system_interface.shell.route_helpers import HTTP_CREATED
 from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
+from imbue.system_interface.shell.route_helpers import HTTP_TOO_MANY_REQUESTS
 from imbue.system_interface.shell.theme_routes import AppThemingRequest
 from imbue.system_interface.shell.theme_routes import AppThemingResponse
 from imbue.system_interface.shell.theme_routes import DefaultThemeResponse
@@ -111,14 +112,20 @@ from imbue.system_interface.shell.wallpapers import WallpapersListing
 from imbue.system_interface.shell.web_push import DeviceRegistrationRequest
 from imbue.system_interface.shell.web_push import DeviceView
 from imbue.system_interface.shell.web_push import DevicesListing
-from imbue.system_interface.shell.web_push import PushNotificationRequest
+from imbue.system_interface.shell.web_push import NotificationSettings
 from imbue.system_interface.shell.web_push import PushSendOutcome
 from imbue.system_interface.shell.web_push import WebPushPublicKey
+from imbue.system_interface.shell.web_push_dispatch import PushSendReceipt
+from imbue.system_interface.shell.web_push_dispatch import PushSendRequest
+from imbue.system_interface.shell.web_push_dispatch import SendLogListing
 from imbue.system_interface.shell.web_push_routes import NOTIFICATIONS_PAGE_ROUTE
 from imbue.system_interface.shell.web_push_routes import NOTIFICATIONS_SCRIPT_ROUTE
 from imbue.system_interface.shell.web_push_routes import WEB_PUSH_DEVICES_ROUTE
 from imbue.system_interface.shell.web_push_routes import WEB_PUSH_KEY_ROUTE
+from imbue.system_interface.shell.web_push_routes import WEB_PUSH_RESET_ROUTE
 from imbue.system_interface.shell.web_push_routes import WEB_PUSH_SEND_ROUTE
+from imbue.system_interface.shell.web_push_routes import WEB_PUSH_SENDS_ROUTE
+from imbue.system_interface.shell.web_push_routes import WEB_PUSH_SETTINGS_ROUTE
 from imbue.system_interface.shell.web_push_routes import WORKER_SCRIPT_ROUTE
 
 PRESENCE_PATH: Final[str] = "/api/presence"
@@ -276,7 +283,21 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ),
     ("DELETE", f"{WEB_PUSH_DEVICES_ROUTE}/{{device_id}}"): RouteModels(success_status=HTTP_NO_CONTENT),
     ("POST", f"{WEB_PUSH_DEVICES_ROUTE}/{{device_id}}/test"): RouteModels(response_model=PushSendOutcome),
-    ("POST", WEB_PUSH_SEND_ROUTE): RouteModels(request_model=PushNotificationRequest, response_model=PushSendOutcome),
+    ("POST", WEB_PUSH_SEND_ROUTE): RouteModels(
+        request_model=PushSendRequest,
+        response_model=PushSendReceipt,
+        success_status=HTTP_ACCEPTED,
+        alternate_responses=(
+            AlternateResponse(status=200, model=PushSendReceipt),
+            AlternateResponse(status=HTTP_TOO_MANY_REQUESTS, model=PushSendReceipt),
+        ),
+    ),
+    ("GET", WEB_PUSH_SENDS_ROUTE): RouteModels(response_model=SendLogListing),
+    ("GET", WEB_PUSH_SETTINGS_ROUTE): RouteModels(response_model=NotificationSettings),
+    ("POST", WEB_PUSH_SETTINGS_ROUTE): RouteModels(
+        request_model=NotificationSettings, response_model=NotificationSettings
+    ),
+    ("POST", WEB_PUSH_RESET_ROUTE): RouteModels(response_model=DevicesListing),
     # The tray's resource gauge
     ("GET", RESOURCE_GAUGE_ROUTE): RouteModels(response_model=ResourceGaugeView),
     ("POST", RESOURCE_GAUGE_SETTINGS_ROUTE): RouteModels(

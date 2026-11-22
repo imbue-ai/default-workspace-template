@@ -1,10 +1,14 @@
 """The shell's Web Push routes (README, "Notifications on a phone"): the page that turns notifications on for the
-device it is opened on, the service worker that shows them, the device registrations behind both, and the loopback
-route the workspace's agents and apps send through.
+device it is opened on, the service worker that shows them, the device registrations behind both, the owner's
+settings and send log, and the loopback route a chat's ``notify-user`` sends through.
 
 The page and the worker are served from the shell's root because a push subscription belongs to the origin and the
 service worker scope it was made under, and the shell's root is what a phone saves to its home screen. Only the
-owner registers a device: what the workspace's agents send is the owner's, so a visitor's device never receives it."""
+owner registers a device: what the workspace's agents send is the owner's, so a visitor's device never receives it.
+
+The send route takes only a request carrying the shell's send token (``WebPushNotifier.send_token``), which
+``notify-user`` reads from the shell's state and app code is never given, so an app's backend cannot reach the
+owner's phone with a bare loopback post; and it answers at once, the posting happening on the dispatcher's thread."""
 
 from pathlib import Path
 from typing import Final
@@ -13,27 +17,35 @@ from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import Response
+from flask import request
 from flask import send_file
 from flask.typing import ResponseReturnValue
 from workspace_layout.identity import is_owner_participant
 
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.presence import utc_now
+from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_CREATED
 from imbue.system_interface.shell.route_helpers import HTTP_FORBIDDEN
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
 from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
+from imbue.system_interface.shell.route_helpers import HTTP_TOO_MANY_REQUESTS
 from imbue.system_interface.shell.route_helpers import detail_response
 from imbue.system_interface.shell.route_helpers import refuse_if_preview
 from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.route_helpers import require_loopback
 from imbue.system_interface.shell.web_push import DeviceRegistrationRequest
 from imbue.system_interface.shell.web_push import DevicesListing
-from imbue.system_interface.shell.web_push import PushNotificationRequest
+from imbue.system_interface.shell.web_push import NotificationSettings
+from imbue.system_interface.shell.web_push import PushNotification
 from imbue.system_interface.shell.web_push import RegisteredDevice
 from imbue.system_interface.shell.web_push import WebPushNotifier
 from imbue.system_interface.shell.web_push import WebPushPublicKey
 from imbue.system_interface.shell.web_push import device_view
+from imbue.system_interface.shell.web_push_dispatch import PushDispatcher
+from imbue.system_interface.shell.web_push_dispatch import PushSendRequest
+from imbue.system_interface.shell.web_push_dispatch import SendLogListing
+from imbue.system_interface.shell.web_push_dispatch import SendStatus
 
 NOTIFICATIONS_PAGE_ROUTE: Final[str] = "/notifications"
 NOTIFICATIONS_SCRIPT_ROUTE: Final[str] = "/notifications.js"
@@ -41,14 +53,22 @@ WORKER_SCRIPT_ROUTE: Final[str] = "/sw.js"
 WEB_PUSH_KEY_ROUTE: Final[str] = "/api/web-push/key"
 WEB_PUSH_DEVICES_ROUTE: Final[str] = "/api/web-push/devices"
 WEB_PUSH_SEND_ROUTE: Final[str] = "/api/web-push/send"
+WEB_PUSH_SENDS_ROUTE: Final[str] = "/api/web-push/sends"
+WEB_PUSH_SETTINGS_ROUTE: Final[str] = "/api/web-push/settings"
+WEB_PUSH_RESET_ROUTE: Final[str] = "/api/web-push/reset"
+# The header the send route reads the send token from.
+SEND_TOKEN_HEADER: Final[str] = "X-Web-Push-Token"
 
 _ASSETS_DIRECTORY: Final[Path] = Path(__file__).parent / "web_push_assets"
 
 OWNER_ONLY_DETAIL: Final[str] = "Only the workspace's owner can turn notifications on here."
 PROXIED_SEND_DETAIL: Final[str] = "Notifications are sent from inside the workspace, never through a share."
 WEB_PUSH_PREVIEW_DETAIL: Final[str] = "This is a preview of a proposed change; it sends no notifications."
+SEND_TOKEN_DETAIL: Final[str] = (
+    "Only a chat's notify-user can send notifications to the owner's devices; this request has no valid send token."
+)
 
-TEST_NOTIFICATION: Final[PushNotificationRequest] = PushNotificationRequest(
+TEST_NOTIFICATION: Final[PushNotification] = PushNotification(
     title="Notifications are on",
     body="This device will get a notification when your workspace has something for you.",
     path="/",
@@ -58,6 +78,10 @@ TEST_NOTIFICATION: Final[PushNotificationRequest] = PushNotificationRequest(
 
 def _web_push() -> WebPushNotifier:
     return get_state().shell.web_push
+
+
+def _dispatcher() -> PushDispatcher:
+    return get_state().shell.web_push_dispatch
 
 
 def _asset_response(filename: str, mimetype: str) -> Response:
@@ -144,12 +168,50 @@ def send_test_notification(device_id: str) -> ResponseReturnValue:
     device = _registered_device(web_push, device_id)
     if device is None:
         return detail_response(f"No registered device {device_id!r}", HTTP_NOT_FOUND)
-    return model_response(web_push.send(TEST_NOTIFICATION, frozenset({device.device_id})))
+    outcome = web_push.send(TEST_NOTIFICATION, frozenset({device.device_id}), utc_now())
+    _dispatcher().log_test(TEST_NOTIFICATION, outcome.deliveries)
+    return model_response(outcome)
+
+
+def list_sends() -> ResponseReturnValue:
+    """The latest sends, newest first, with who asked, what the devices showed, and each push service's answer; the
+    owner's alone."""
+    refusal = _refuse_unless_owner()
+    if refusal is not None:
+        return refusal
+    return model_response(SendLogListing(sends=tuple(reversed(_dispatcher().log.entries()))))
+
+
+def get_settings() -> ResponseReturnValue:
+    refusal = _refuse_unless_owner()
+    if refusal is not None:
+        return refusal
+    return model_response(_web_push().settings())
+
+
+def update_settings() -> ResponseReturnValue:
+    """Keep the owner's choice of what a notification shows."""
+    refusal = _refuse_device_change()
+    if refusal is not None:
+        return refusal
+    settings = parse_request_body(NotificationSettings)
+    _web_push().write_settings(settings)
+    return model_response(settings)
+
+
+def reset_notifications() -> ResponseReturnValue:
+    """Make a new signing key and send token and forget every device and every queued send; the owner's alone."""
+    refusal = _refuse_device_change()
+    if refusal is not None:
+        return refusal
+    _dispatcher().forget_pending()
+    _web_push().reset()
+    return model_response(DevicesListing(devices=()))
 
 
 def send_notification() -> ResponseReturnValue:
-    """Show a notification on every device the owner registered: loopback only, for the workspace's own agents and
-    apps, and never through a share's proxy."""
+    """Queue a chat's notification for every device the owner registered: loopback only, never through a share's
+    proxy, and only with the send token."""
     refusal = require_loopback()
     if refusal is None:
         refusal = refuse_if_preview(WEB_PUSH_PREVIEW_DETAIL)
@@ -157,7 +219,14 @@ def send_notification() -> ResponseReturnValue:
         return refusal
     if request_identity().is_header_present:
         return detail_response(PROXIED_SEND_DETAIL, HTTP_FORBIDDEN)
-    return model_response(_web_push().send(parse_request_body(PushNotificationRequest), None))
+    if not _web_push().is_send_token(request.headers.get(SEND_TOKEN_HEADER, "")):
+        return detail_response(SEND_TOKEN_DETAIL, HTTP_FORBIDDEN)
+    receipt = _dispatcher().submit(parse_request_body(PushSendRequest), get_state().workspace_name.resolve())
+    if receipt.status is SendStatus.LIMITED:
+        return model_response(receipt, HTTP_TOO_MANY_REQUESTS)
+    if receipt.status is SendStatus.QUEUED:
+        return model_response(receipt, HTTP_ACCEPTED)
+    return model_response(receipt)
 
 
 def register_web_push_routes(application: Flask) -> None:
@@ -173,3 +242,7 @@ def register_web_push_routes(application: Flask) -> None:
         f"{WEB_PUSH_DEVICES_ROUTE}/<device_id>/test", view_func=send_test_notification, methods=["POST"]
     )
     application.add_url_rule(WEB_PUSH_SEND_ROUTE, view_func=send_notification, methods=["POST"])
+    application.add_url_rule(WEB_PUSH_SENDS_ROUTE, view_func=list_sends, methods=["GET"])
+    application.add_url_rule(WEB_PUSH_SETTINGS_ROUTE, view_func=get_settings, methods=["GET"])
+    application.add_url_rule(WEB_PUSH_SETTINGS_ROUTE, view_func=update_settings, methods=["POST"])
+    application.add_url_rule(WEB_PUSH_RESET_ROUTE, view_func=reset_notifications, methods=["POST"])

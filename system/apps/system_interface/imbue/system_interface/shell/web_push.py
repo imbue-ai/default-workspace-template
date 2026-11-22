@@ -3,16 +3,19 @@ the shell's own VAPID signing key, the devices' push subscriptions, and one encr
 service its browser chose (Mozilla's, Google's, Apple's).
 
 A subscription belongs to one origin, and the shell's origin is the one a phone saves to its home screen, so the
-shell holds them; agents and apps in the workspace reach every device through the shell's loopback send route. Both
-files live under ``web_push/`` in the shell's state directory: ``vapid_private_key.pem``, made on first use and
-readable by this user alone, and ``devices.json``. A lost key or file means each device turns notifications on again;
-nothing else is lost."""
+shell holds them. Everything lives under ``web_push/`` in the shell's state directory: ``vapid_private_key.pem`` and
+``send_token``, each made on first use and readable by this user alone, ``devices.json``, ``settings.json`` and the
+send log (``web_push_dispatch``). A push service answers a message signed with a key other than the one a device
+subscribed under with 401 or 403, so a lost or reset key leaves every device marked stale until it turns
+notifications on again; a reset makes a new key and forgets every device at once."""
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 from abc import ABC
 from abc import abstractmethod
 from concurrent.futures import ThreadPoolExecutor
@@ -33,6 +36,7 @@ from pywebpush import WebPushException
 from pywebpush import webpush
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.errors import InvalidShellValueError
@@ -47,6 +51,10 @@ WEB_PUSH_DIRECTORY_NAME: Final[str] = "web_push"
 VAPID_KEY_FILENAME: Final[str] = "vapid_private_key.pem"
 DEVICES_FILENAME: Final[str] = "devices.json"
 DEVICES_FILE_VERSION: Final[int] = 1
+SEND_TOKEN_FILENAME: Final[str] = "send_token"
+SETTINGS_FILENAME: Final[str] = "settings.json"
+SETTINGS_FILE_VERSION: Final[int] = 1
+_SEND_TOKEN_BYTES: Final[int] = 32
 
 # The contact a push service may use about this sender. Apple's refuses a claim without a real mailto: or https:
 # subject; nothing is ever sent to it.
@@ -61,6 +69,9 @@ PUSH_POST_TIMEOUT_SECONDS: Final[float] = 5.0
 MAX_REGISTERED_DEVICES: Final[int] = 20
 # A push service's answer for a subscription that no longer exists (RFC 8030 section 7.3): the device is forgotten.
 _GONE_STATUS_CODES: Final[frozenset[int]] = frozenset({404, 410})
+# A push service's answer for a message signed with a key the subscription was not made under (Apple's 403
+# BadJwtToken among them): the device stays listed, marked stale, until it turns notifications on again.
+_STALE_STATUS_CODES: Final[frozenset[int]] = frozenset({401, 403})
 _ACCEPTED_STATUS_CODES: Final[frozenset[int]] = frozenset({200, 201, 202})
 # The longest payload one aes128gcm record carries within the push services' 4096-byte message limit (RFC 8291): the
 # record's 86-byte header, its padding delimiter and its 16-byte tag take the rest.
@@ -140,6 +151,16 @@ class RegisteredDevice(FrozenModel):
     label: str = Field(description="What to call the device")
     subscription: BrowserPushSubscription = Field(description="The device's push subscription")
     registered_at: datetime = Field(description="When the device last turned notifications on")
+    last_attempt_at: datetime | None = Field(default=None, description="When a message was last posted for it")
+    last_accepted_at: datetime | None = Field(default=None, description="When its push service last took a message")
+    last_status_code: int | None = Field(
+        default=None, description="What its push service last answered; None before any post or with no answer"
+    )
+    is_stale: bool = Field(
+        default=False,
+        description="Whether its push service refused the shell's signature (401 or 403): skipped by sends until the "
+        "device turns notifications on again",
+    )
 
 
 class _DevicesDocument(FrozenModel):
@@ -156,6 +177,9 @@ class DeviceView(FrozenModel):
     label: str = Field(description="What to call the device")
     push_provider: str = Field(description="Whose push service carries the device's messages")
     registered_at: datetime = Field(description="When the device last turned notifications on")
+    last_accepted_at: datetime | None = Field(description="When its push service last took a message")
+    last_status_code: int | None = Field(description="What its push service last answered")
+    is_stale: bool = Field(description="Whether it must turn notifications on again before it gets any")
 
 
 class DevicesListing(FrozenModel):
@@ -170,8 +194,25 @@ class WebPushPublicKey(FrozenModel):
     public_key: str = Field(description="The VAPID public key: the raw P-256 point, unpadded base64url")
 
 
-class PushNotificationRequest(FrozenModel):
-    """One notification to show on every registered device."""
+class NotificationSettings(FrozenModel):
+    """The owner's choices for what a notification shows."""
+
+    is_full_text: bool = Field(
+        description="Whether a notification shows the agent's own words; off, it names the chat and nothing it said, "
+        "which is what a locked phone's screen shows"
+    )
+
+
+DEFAULT_NOTIFICATION_SETTINGS: Final[NotificationSettings] = NotificationSettings(is_full_text=False)
+
+
+class _SettingsDocument(FrozenModel):
+    version: int = Field(description="The file format version")
+    settings: NotificationSettings = Field(description="The owner's choices")
+
+
+class PushNotification(FrozenModel):
+    """One notification as a device shows it."""
 
     title: str = Field(min_length=1, max_length=120, description="The notification's title")
     body: str = Field(default="", max_length=1000, description="The notification's text")
@@ -195,7 +236,7 @@ class PushNotificationRequest(FrozenModel):
         return value
 
     @model_validator(mode="after")
-    def _payload_fits_one_push_message(self) -> "PushNotificationRequest":
+    def _payload_fits_one_push_message(self) -> "PushNotification":
         size = len(push_payload(self).encode("utf-8"))
         if size > MAX_PUSH_PAYLOAD_BYTES:
             raise InvalidShellValueError(
@@ -224,6 +265,9 @@ class DeviceDelivery(FrozenModel):
     )
     is_forgotten: bool = Field(
         description="Whether the push service said the subscription is gone, so the device was forgotten"
+    )
+    is_stale: bool = Field(
+        description="Whether the push service refused the shell's signature, so the device was marked stale"
     )
 
 
@@ -257,11 +301,26 @@ def device_view(device: RegisteredDevice) -> DeviceView:
         label=device.label,
         push_provider=push_provider_name(device.subscription.endpoint),
         registered_at=device.registered_at,
+        last_accepted_at=device.last_accepted_at,
+        last_status_code=device.last_status_code,
+        is_stale=device.is_stale,
     )
 
 
 @pure
-def push_payload(notification: PushNotificationRequest) -> str:
+def with_delivery_recorded(device: RegisteredDevice, delivery: DeviceDelivery, now: datetime) -> RegisteredDevice:
+    """The device as its push service's latest answer leaves it."""
+    fields = device.field_ref()
+    return device.model_copy_update(
+        to_update(fields.last_attempt_at, now),
+        to_update(fields.last_accepted_at, now if delivery.is_accepted else device.last_accepted_at),
+        to_update(fields.last_status_code, delivery.status_code),
+        to_update(fields.is_stale, delivery.is_stale or (device.is_stale and not delivery.is_accepted)),
+    )
+
+
+@pure
+def push_payload(notification: PushNotification) -> str:
     """The JSON the service worker reads off a push event (``sw.js``), in plain UTF-8: an escaped non-ASCII character
     takes six bytes of the push services' 4 KB message limit."""
     return json.dumps(
@@ -335,6 +394,55 @@ class WebPushNotifier(MutableModel):
     def _devices_path(self) -> Path:
         return self.directory / DEVICES_FILENAME
 
+    def _send_token_path(self) -> Path:
+        return self.directory / SEND_TOKEN_FILENAME
+
+    def _settings_path(self) -> Path:
+        return self.directory / SETTINGS_FILENAME
+
+    def _write_private_file(self, path: Path, content: bytes) -> None:
+        """Write a file readable by this user alone, through a temp file and a rename."""
+        self.directory.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_name(f"{path.name}.tmp")
+        file_descriptor = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(file_descriptor, "wb") as private_file:
+            private_file.write(content)
+        os.replace(temp_path, path)
+
+    def send_token(self) -> str:
+        """The secret the send route asks for, made the first time it is asked for. ``notify-user`` reads it from
+        this file; app code is never given it."""
+        token_path = self._send_token_path()
+        with STATE_FILES_LOCK:
+            if not token_path.is_file():
+                self._write_private_file(token_path, secrets.token_urlsafe(_SEND_TOKEN_BYTES).encode("ascii"))
+            return token_path.read_text(encoding="ascii").strip()
+
+    def is_send_token(self, candidate: str) -> bool:
+        return hmac.compare_digest(candidate.encode("utf-8"), self.send_token().encode("ascii"))
+
+    def settings(self) -> NotificationSettings:
+        with STATE_FILES_LOCK:
+            raw = read_json_object(self._settings_path())
+        document = parse_versioned_document(raw, _SettingsDocument, SETTINGS_FILE_VERSION, self._settings_path())
+        return DEFAULT_NOTIFICATION_SETTINGS if document is None else document.settings
+
+    def write_settings(self, settings: NotificationSettings) -> None:
+        document = _SettingsDocument(version=SETTINGS_FILE_VERSION, settings=settings)
+        with STATE_FILES_LOCK:
+            write_json_atomic(self._settings_path(), document.model_dump(mode="json"))
+
+    def reset(self) -> None:
+        """Make a new signing key and send token and forget every device, so nothing signed or sent with the old
+        ones reaches a device again; each device turns notifications on again."""
+        with STATE_FILES_LOCK:
+            self._key_path().unlink(missing_ok=True)
+            self._send_token_path().unlink(missing_ok=True)
+            self._write_devices(())
+            self.signing_key()
+            self.send_token()
+        logger.info("Reset Web Push: a new signing key and send token, and no devices")
+
     def signing_key(self) -> Vapid:
         """The shell's VAPID key, made and kept (readable by this user alone) the first time it is asked for."""
         key_path = self._key_path()
@@ -342,12 +450,7 @@ class WebPushNotifier(MutableModel):
             if not key_path.is_file():
                 key = Vapid()
                 key.generate_keys()
-                self.directory.mkdir(parents=True, exist_ok=True)
-                temp_path = key_path.with_name(f"{key_path.name}.tmp")
-                file_descriptor = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                with os.fdopen(file_descriptor, "wb") as key_file:
-                    key_file.write(key.private_pem())
-                os.replace(temp_path, key_path)
+                self._write_private_file(key_path, key.private_pem())
                 logger.info("Made the shell's Web Push signing key at {}", key_path)
             return Vapid.from_pem(key_path.read_bytes())
 
@@ -387,12 +490,15 @@ class WebPushNotifier(MutableModel):
         return True
 
     def send(
-        self, notification: PushNotificationRequest, device_ids: frozenset[PushDeviceId] | None
+        self, notification: PushNotification, device_ids: frozenset[PushDeviceId] | None, now: datetime
     ) -> PushSendOutcome:
-        """Post the notification to every registered device (or to those of ``device_ids``), forgetting each one
-        whose push service says its subscription is gone."""
+        """Post the notification to every registered device that is not stale (or to those of ``device_ids``, stale
+        or not), recording each push service's answer on its device: a device whose subscription is gone is
+        forgotten, and one that refused the shell's signature is marked stale."""
         devices = tuple(
-            device for device in self.list_devices() if device_ids is None or device.device_id in device_ids
+            device
+            for device in self.list_devices()
+            if (device.device_id in device_ids if device_ids is not None else not device.is_stale)
         )
         if not devices:
             return PushSendOutcome(deliveries=(), accepted_count=0)
@@ -412,6 +518,7 @@ class WebPushNotifier(MutableModel):
                 detail=answer.detail,
                 is_accepted=answer.status_code in _ACCEPTED_STATUS_CODES,
                 is_forgotten=answer.status_code in _GONE_STATUS_CODES,
+                is_stale=answer.status_code in _STALE_STATUS_CODES,
             )
             if not delivery.is_accepted:
                 logger.warning(
@@ -422,10 +529,22 @@ class WebPushNotifier(MutableModel):
                     delivery.detail,
                 )
             deliveries.append(delivery)
-        gone = frozenset(delivery.device_id for delivery in deliveries if delivery.is_forgotten)
-        if gone:
-            self.forget(gone)
+        self._record_deliveries(tuple(deliveries), now)
         return PushSendOutcome(
             deliveries=tuple(deliveries),
             accepted_count=sum(1 for delivery in deliveries if delivery.is_accepted),
         )
+
+    def _record_deliveries(self, deliveries: tuple[DeviceDelivery, ...], now: datetime) -> None:
+        """Keep each answer on its device, re-reading the file so a device registered or removed meanwhile stays
+        as it now is."""
+        delivery_by_id = {delivery.device_id: delivery for delivery in deliveries}
+        with STATE_FILES_LOCK:
+            kept: list[RegisteredDevice] = []
+            for device in self.list_devices():
+                delivery = delivery_by_id.get(device.device_id)
+                if delivery is None:
+                    kept.append(device)
+                elif not delivery.is_forgotten:
+                    kept.append(with_delivery_recorded(device, delivery, now))
+            self._write_devices(tuple(kept))

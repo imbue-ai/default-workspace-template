@@ -163,34 +163,86 @@ def test_a_test_send_reaches_only_that_device(client: FlaskClient, app: Flask) -
     assert client.post("/api/web-push/devices/unknown/test").status_code == 404
 
 
-def test_the_loopback_send_reaches_every_device_and_forgets_a_gone_one(client: FlaskClient, app: Flask) -> None:
+def _token(app: Flask) -> dict[str, str]:
+    return {"X-Web-Push-Token": state_of(app).shell.web_push.send_token()}
+
+
+_SEND = {"chat_id": "agent-research", "chat_title": "Research", "title": "Q4", "message": "The numbers are in."}
+
+
+def test_a_send_with_the_token_is_queued_and_the_worker_posts_it_naming_the_chat(
+    client: FlaskClient, app: Flask
+) -> None:
     _register(client)
     gone_id = _register(client, _OTHER_ENDPOINT)
     _transport(app).status_code_by_endpoint[_OTHER_ENDPOINT] = 410
 
-    response = client.post(
-        "/api/web-push/send",
-        json={"title": "Report ready", "body": "The Q4 numbers are in.", "path": "/?open=chat:/?chat=c1", "tag": "t"},
-    )
+    response = client.post("/api/web-push/send", json=_SEND, headers=_token(app))
 
-    assert response.status_code == 200
-    outcome = response.get_json()
-    assert outcome["accepted_count"] == 1
-    assert {(delivery["status_code"], delivery["is_forgotten"]) for delivery in outcome["deliveries"]} == {
-        (201, False),
-        (410, True),
-    }
-    assert [json.loads(posted.payload) for posted in _transport(app).posted] == [
-        {"title": "Report ready", "body": "The Q4 numbers are in.", "path": "/?open=chat:/?chat=c1", "tag": "t"}
-    ] * 2
+    assert response.status_code == 202
+    assert response.get_json()["status"] == "queued"
+    assert _transport(app).posted == []
+    state_of(app).shell.web_push_dispatch.flush_due()
+    payloads = [json.loads(posted.payload) for posted in _transport(app).posted]
+    assert len(payloads) == 2
+    assert payloads[0]["title"] == "Research"
+    assert payloads[0]["path"] == "/?open=chat%3A%2F%3Fchat%3Dagent-research"
+    assert payloads[0]["tag"] == "chat-agent-research"
+    # Preview-safe by default: nothing the agent said reaches a lock screen.
+    assert "numbers" not in payloads[0]["body"]
     remaining = [device["device_id"] for device in client.get("/api/web-push/devices").get_json()["devices"]]
     assert gone_id not in remaining and len(remaining) == 1
 
 
-def test_a_send_with_no_device_registered_posts_nothing(client: FlaskClient, app: Flask) -> None:
-    response = client.post("/api/web-push/send", json={"title": "Done"})
+def test_with_full_text_on_the_device_shows_the_agents_words(client: FlaskClient, app: Flask) -> None:
+    _register(client)
+    owner = identity_headers(_SHARED_OWNER)
+    saved = client.post("/api/web-push/settings", json={"is_full_text": True}, headers=owner, environ_base=_REMOTE)
 
-    assert response.get_json() == {"deliveries": [], "accepted_count": 0}
+    client.post("/api/web-push/send", json=_SEND, headers=_token(app))
+    state_of(app).shell.web_push_dispatch.flush_due()
+
+    assert saved.get_json() == {"is_full_text": True}
+    assert client.get("/api/web-push/settings", headers=owner, environ_base=_REMOTE).get_json() == saved.get_json()
+    ((posted,),) = [_transport(app).posted]
+    assert json.loads(posted.payload)["body"] == "Q4: The numbers are in."
+
+
+@pytest.mark.parametrize("token", [None, "", "wrong"])
+def test_the_send_route_refuses_a_request_without_the_send_token(
+    client: FlaskClient, app: Flask, token: str | None
+) -> None:
+    _register(client)
+
+    response = client.post(
+        "/api/web-push/send", json=_SEND, headers={} if token is None else {"X-Web-Push-Token": token}
+    )
+    state_of(app).shell.web_push_dispatch.flush_due()
+
+    assert response.status_code == 403
+    assert "send token" in response.get_json()["detail"]
+    assert _transport(app).posted == []
+    assert client.get("/api/web-push/sends").get_json()["sends"] == []
+
+
+def test_a_send_past_the_limit_is_answered_429(client: FlaskClient, app: Flask) -> None:
+    _register(client)
+    statuses = [
+        client.post(
+            "/api/web-push/send", json={**_SEND, "chat_id": f"agent-c{index}"}, headers=_token(app)
+        ).status_code
+        for index in range(25)
+    ]
+
+    assert statuses.count(202) == 20
+    assert statuses[-1] == 429
+
+
+def test_a_send_with_no_device_registered_is_logged_and_posts_nothing(client: FlaskClient, app: Flask) -> None:
+    response = client.post("/api/web-push/send", json=_SEND, headers=_token(app))
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "no_devices"
     assert _transport(app).posted == []
 
 
@@ -198,27 +250,74 @@ def test_the_send_route_refuses_a_remote_caller_and_anything_that_came_through_a
     client: FlaskClient, app: Flask
 ) -> None:
     _register(client)
+    token = _token(app)
 
-    remote = client.post("/api/web-push/send", json={"title": "Phish"}, environ_base=_REMOTE)
-    proxied = client.post("/api/web-push/send", json={"title": "Phish"}, headers=identity_headers(_SHARED_OWNER))
+    remote = client.post("/api/web-push/send", json=_SEND, headers=token, environ_base=_REMOTE)
+    proxied = client.post("/api/web-push/send", json=_SEND, headers={**token, **identity_headers(_SHARED_OWNER)})
 
     assert (remote.status_code, proxied.status_code) == (403, 403)
+    state_of(app).shell.web_push_dispatch.flush_due()
     assert _transport(app).posted == []
 
 
-def test_a_send_path_must_stay_under_the_shells_root(client: FlaskClient) -> None:
-    for path in ("https://evil.example/", "//evil.example/", "relative", "/\\evil.example"):
-        assert client.post("/api/web-push/send", json={"title": "Done", "path": path}).status_code == 400
+def test_a_send_must_name_a_chat(client: FlaskClient, app: Flask) -> None:
+    for body in ({**_SEND, "chat_id": "../evil"}, {**_SEND, "chat_title": ""}, {**_SEND, "message": ""}):
+        assert client.post("/api/web-push/send", json=body, headers=_token(app)).status_code == 400
 
 
-def test_a_send_too_large_for_a_push_service_is_refused_before_any_post(client: FlaskClient, app: Flask) -> None:
+def test_the_send_log_shows_the_owner_every_send_newest_first(client: FlaskClient, app: Flask) -> None:
+    device_id = _register(client)
+    owner = identity_headers(_SHARED_OWNER)
+    client.post("/api/web-push/send", json=_SEND, headers=_token(app))
+    state_of(app).shell.web_push_dispatch.flush_due()
+    client.post(f"/api/web-push/devices/{device_id}/test", headers=owner, environ_base=_REMOTE)
+
+    sends = client.get("/api/web-push/sends", headers=owner, environ_base=_REMOTE).get_json()["sends"]
+
+    assert [(send["caller"], send["status"]) for send in sends] == [("test", "sent"), ("chat", "sent")]
+    assert sends[1]["chat_title"] == "Research"
+    assert sends[1]["requested_text"] == "Q4: The numbers are in."
+    assert [delivery["status_code"] for delivery in sends[1]["deliveries"]] == [201]
+
+
+def test_a_reset_forgets_every_device_and_makes_a_new_key_and_token(client: FlaskClient, app: Flask) -> None:
     _register(client)
+    owner = identity_headers(_SHARED_OWNER)
+    old_key = client.get("/api/web-push/key").get_json()["public_key"]
+    old_token = _token(app)
 
-    response = client.post("/api/web-push/send", json={"title": "Done", "body": "\U0001f600" * 1000})
+    response = client.post("/api/web-push/reset", headers=owner, environ_base=_REMOTE)
 
-    assert response.status_code == 400
-    assert "bytes as sent" in response.get_json()["detail"]
-    assert _transport(app).posted == []
+    assert response.get_json() == {"devices": []}
+    assert client.get("/api/web-push/devices").get_json()["devices"] == []
+    assert client.get("/api/web-push/key").get_json()["public_key"] != old_key
+    assert client.post("/api/web-push/send", json=_SEND, headers=old_token).status_code == 403
+
+
+def test_a_device_whose_push_service_refuses_the_key_is_listed_stale(client: FlaskClient, app: Flask) -> None:
+    device_id = _register(client)
+    _transport(app).status_code_by_endpoint[_ENDPOINT] = 403
+
+    outcome = client.post(f"/api/web-push/devices/{device_id}/test").get_json()
+
+    assert [delivery["is_stale"] for delivery in outcome["deliveries"]] == [True]
+    ((device,),) = [client.get("/api/web-push/devices").get_json()["devices"]]
+    assert (device["is_stale"], device["last_status_code"]) == (True, 403)
+
+
+def test_a_visitor_can_neither_read_the_log_nor_change_settings_nor_reset(client: FlaskClient) -> None:
+    _register(client)
+    visitor = identity_headers(_VISITOR)
+
+    refusals = [
+        client.get("/api/web-push/sends", headers=visitor),
+        client.get("/api/web-push/settings", headers=visitor),
+        client.post("/api/web-push/settings", json={"is_full_text": True}, headers=visitor),
+        client.post("/api/web-push/reset", headers=visitor),
+    ]
+
+    assert [refusal.status_code for refusal in refusals] == [403, 403, 403, 403]
+    assert len(client.get("/api/web-push/devices").get_json()["devices"]) == 1
 
 
 def test_a_preview_shell_reaches_no_device(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
@@ -230,9 +329,11 @@ def test_a_preview_shell_reaches_no_device(tmp_path: Path, broadcaster: WebSocke
         preview.post("/api/web-push/devices", json=_registration()),
         preview.post("/api/web-push/devices/any/test"),
         preview.delete("/api/web-push/devices/any"),
-        preview.post("/api/web-push/send", json={"title": "Done"}),
+        preview.post("/api/web-push/send", json=_SEND),
+        preview.post("/api/web-push/settings", json={"is_full_text": True}),
+        preview.post("/api/web-push/reset"),
     ]
 
-    assert [refusal.status_code for refusal in refusals] == [403, 403, 403, 403]
+    assert [refusal.status_code for refusal in refusals] == [403] * 6
     assert all("preview" in refusal.get_json()["detail"] for refusal in refusals)
     assert _transport(application).posted == []
