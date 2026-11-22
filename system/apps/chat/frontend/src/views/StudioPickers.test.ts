@@ -5,7 +5,7 @@ import m from "mithril";
 const mocks = vi.hoisted(() => ({ showPickerSendHintOnce: vi.fn() }));
 
 vi.mock("./PickerSendHint", () => ({ showPickerSendHintOnce: mocks.showPickerSendHintOnce }));
-// The marks the build bundles: every connector but the three the pinned artwork does not hold yet.
+// A build whose bundled artwork holds no mark for three of the connectors.
 vi.mock("./service-marks", () => ({
   serviceMarkUrl: (service: string) =>
     ["instagram", "youtube", "hubspot"].includes(service) ? null : `/assets/${service}.svg`,

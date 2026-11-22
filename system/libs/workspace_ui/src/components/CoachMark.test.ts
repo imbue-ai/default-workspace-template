@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { isCoachMarkShown, placeCoachMark, showCoachMark } from "./CoachMark";
+import { placeCoachMark, showCoachMark } from "./CoachMark";
 
 const VIEWPORT = { width: 1000, height: 800 };
 const BUBBLE = { width: 200, height: 80 };
@@ -77,7 +77,6 @@ describe("showCoachMark", () => {
     expect(bubble()?.querySelector(".coach-mark-dismiss")?.textContent).toBe("Got it");
     expect(bubble()?.querySelector(".coach-mark-arrow")).not.toBeNull();
     expect(bubble()?.dataset.side).toBe("below");
-    expect(isCoachMarkShown()).toBe(true);
     handle.dismiss();
   });
 
@@ -89,7 +88,6 @@ describe("showCoachMark", () => {
     handle.dismiss();
 
     expect(bubble()).toBeNull();
-    expect(isCoachMarkShown()).toBe(false);
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 

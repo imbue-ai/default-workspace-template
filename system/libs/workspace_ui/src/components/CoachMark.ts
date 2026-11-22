@@ -129,11 +129,6 @@ export interface CoachMarkHandle {
 
 let shown: CoachMarkHandle | null = null;
 
-/** Whether a coach mark is up on this page. */
-export function isCoachMarkShown(): boolean {
-  return shown !== null;
-}
-
 /** Put the arrow on the bubble's edge that faces the control, its centre ``arrowOffset`` along that edge. */
 function positionArrow(arrow: HTMLElement, placement: CoachMarkPlacement): void {
   arrow.className = ARROW_CLASS_BY_SIDE[placement.side];

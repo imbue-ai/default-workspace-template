@@ -404,7 +404,7 @@ class SuggestionGenerator(MutableModel):
         if fixed is not None:
             self._store(chat_id, self._fixed_set_under(chat_id, end, fixed))
             return
-        # Only a reply at the ideas step reaches here with the tree in progress: one whose ideas were not read.
+        # A reply at the ideas step whose ideas the tree could not read is the model's to read instead.
         system_prompt = (
             f"{SUGGESTION_GENERATION_SYSTEM_PROMPT}\n\n{FIXED_ONBOARDING_SUGGESTIONS_SECTION}"
             if tree_step is FirstRunTreeStep.IDEAS
