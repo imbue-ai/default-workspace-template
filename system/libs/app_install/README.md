@@ -164,6 +164,9 @@ A later split starts from the newest marker.
   When the app has not changed since, there is no newer split to join and none is made: `git subtree` cannot read a history that holds two markers for one split.
 - An installed app needs no marker.
   The commits `install` and `update` leave are join markers already, so `link` only creates its dev repository, and only once the app is `modified`; an unchanged installed app is refused.
+- An app whose directory was removed and made again (an app uninstalled and built or installed again under the same name) is refused.
+  `git subtree split` keeps the commit that removed the directory as it is, and everything the workspace held before it comes along, so the split would carry the workspace's own history, with every file of it, into the app's.
+  `link` and the sync service both check that a split's history does not hold the workspace's first commit (`github_sync.app_history.require_split_holds_only_the_app`), and neither joins nor pushes one that does.
 
 **The dev repository.**
 When GitHub sync is enabled for the workspace (`data/system/github_sync.toml` exists) and the app's record has no `dev_repo_url`, `link` creates the private repository `<name>-dev` under the workspace's GitHub account through `latchkey curl`, closes it to outside contributions as a published template's repository is closed, writes its URL to the record, and commits that one file under the installer's own author.

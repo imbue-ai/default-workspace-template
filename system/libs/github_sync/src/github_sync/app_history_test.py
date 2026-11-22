@@ -1,16 +1,18 @@
 """What the workspace history says about an app, against real local repositories."""
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
-from app_manifest.records import write_record
+from app_manifest.records import app_directory_prefix, write_record
 from imbue.imbue_common.model_update import to_update
 
 from github_sync.app_history import (
     AppHistoryError,
     GitSubtreeMissingError,
+    WorkspaceHistoryInSplitError,
     app_tree,
     is_app_linked,
     is_app_modified,
@@ -133,6 +135,28 @@ def test_a_split_is_the_same_commit_again_and_a_longer_history_continues_it(
     second = split_app(workspace, record)
     assert second != first
     run_git(workspace, "merge-base", "--is-ancestor", first, second)
+
+
+def test_a_directory_removed_and_made_again_is_not_split_into_the_workspaces_own_history(
+    tmp_path: Path,
+) -> None:
+    workspace = init_workspace(tmp_path / "workspace")
+    initial = git_output(workspace, "rev-parse", "HEAD")
+    record = add_owned_app(workspace, "notes")
+    shutil.rmtree(workspace / app_directory_prefix(record))
+    commit_all(workspace, "Remove the notes app")
+    write_app_file(workspace, record, "app.toml", 'name = "notes"\n')
+    commit_all(workspace, "Build the notes app again")
+
+    # git subtree keeps the commit that removed the directory as it is, with
+    # everything the workspace held before it.
+    raw_split = git_output(
+        workspace, "subtree", "split", "--quiet", f"--prefix={app_directory_prefix(record)}"
+    )
+    run_git(workspace, "merge-base", "--is-ancestor", initial, raw_split)
+
+    with pytest.raises(WorkspaceHistoryInSplitError, match="removed and made again"):
+        split_app(workspace, record)
 
 
 def test_a_split_leaves_no_scratch_behind_and_keeps_that_of_a_split_still_running(

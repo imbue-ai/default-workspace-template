@@ -74,6 +74,14 @@ dev repository:
 The split writes loose objects only: no ref of the workspace repository
 moves, so the pass cannot disturb an update that is being applied.
 
+A split is pushed only when its history is the app's own. When an app's
+directory was removed and made again, `git subtree split` keeps the commit
+that removed it as it is, with everything the workspace held before it, so
+the split would hand the dev repository the whole workspace. The pass checks
+that the split's history does not hold the workspace's first commit
+(`require_split_holds_only_the_app`), pushes nothing when it does, and
+reports the app as `failed` with the reason.
+
 Which apps the pass pushes:
 
 - **An app this workspace built** is pushed once it is **linked**: the

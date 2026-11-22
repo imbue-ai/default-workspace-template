@@ -326,6 +326,12 @@ run at all.
 | `push_refused` | The repository holds history this workspace's copy of the app does not continue, as when a second workspace (one restored from a backup, say) pushes the same app to it. Nothing was overwritten, and nothing will be. | Tell the user two workspaces are writing to one copy, and ask which one should keep it. In the other, the copy stays as it is; do not try to force it. |
 | `failed` | Anything else that stopped this app; `detail` has the reason. | Act on `detail`. The pass tries again each time. |
 
+An app whose `failed` detail says its directory "was removed and made again"
+cannot have a dev repository: its history would carry the workspace's own
+changes and files along with the app's, so nothing is ever pushed for it. Say
+so plainly if the user asks why that app has no copy; there is no command
+that changes it.
+
 A dev repository the user deleted on GitHub is never recreated behind their
 back: its pushes fail and the status says so. If they ask for it back, create
 an empty private repository of the same name under the same account (as

@@ -2,11 +2,17 @@
 repositories, and a function for GitHub's answer about each one's visibility."""
 
 import json
+import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from app_manifest.records import AppRecord, record_path, write_record
+from app_manifest.records import (
+    AppRecord,
+    app_directory_prefix,
+    record_path,
+    write_record,
+)
 from click.testing import CliRunner
 from imbue.imbue_common.model_update import to_update
 
@@ -340,6 +346,34 @@ def test_a_failure_in_one_app_does_not_stop_the_next(tmp_path: Path) -> None:
     assert "no-such-repository.git" in reports["notes"].detail
     assert "broken.toml" in reports["broken"].detail
     assert load_pushed_state(workspace, "notes") is None
+
+
+def test_the_workspaces_own_history_is_never_pushed_to_a_dev_repository(
+    tmp_path: Path,
+) -> None:
+    workspace = init_workspace(tmp_path / "workspace")
+    initial = git_output(workspace, "rev-parse", "HEAD")
+    dev_repository = init_bare_repo(tmp_path / "notes-dev.git")
+    record = _linked_app(workspace, dev_repository)
+    assert _states(workspace) == {"notes": AppSyncState.PUSHED}
+    pushed_before = _dev_main(dev_repository)
+    # The app's directory is removed and made again, as an uninstall followed
+    # by a new app of the same name leaves it.
+    shutil.rmtree(workspace / app_directory_prefix(record))
+    commit_all(workspace, "Remove the notes app")
+    write_app_file(workspace, record, "app.toml", 'name = "notes"\nversion = "2"\n')
+    commit_all(workspace, "Build the notes app again")
+
+    (report,) = run_app_pass(workspace, VisibilityLedger(), always_private)
+
+    assert report.state == AppSyncState.FAILED
+    assert "removed and made again" in report.detail
+    assert _dev_main(dev_repository) == pushed_before
+    assert (
+        git_output(dev_repository, "rev-list", "--all", "--count", "--", "README.md")
+        == "0"
+    )
+    assert initial not in git_output(dev_repository, "rev-list", "--all")
 
 
 def test_the_pass_runs_against_the_primary_checkout_only(tmp_path: Path) -> None:

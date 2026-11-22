@@ -231,3 +231,12 @@ def is_app_modified(repo_root: Path, record: AppRecord) -> bool:
         return app_history.is_app_modified(repo_root, record)
     except app_history.AppHistoryError as e:
         raise GitCommandError(str(e)) from e
+
+
+def require_split_holds_only_the_app(repo_root: Path, record: AppRecord, split_commit: str) -> None:
+    """Raise GitCommandError when the history of ``split_commit`` holds the workspace's own commits, which the
+    sync pass refuses to push for the same reason."""
+    try:
+        app_history.require_split_holds_only_the_app(repo_root, record, split_commit)
+    except app_history.AppHistoryError as e:
+        raise GitCommandError(str(e)) from e

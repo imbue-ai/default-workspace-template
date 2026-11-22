@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,7 @@ from click.testing import CliRunner
 
 from app_install.cli import main
 from app_install.errors import AppInstallError
+from app_install.errors import GitCommandError
 from app_install.errors import MissingCommandError
 from app_install.errors import NotModifiedAppError
 from app_install.errors import NotPrimaryCheckoutError
@@ -235,6 +237,28 @@ def test_a_merge_that_brings_in_older_commits_makes_the_link_use_the_whole_histo
     head_before = _head(workspace)
     unchanged = link_app(workspace, "notes", True, False, runtime)
     assert (unchanged.result, _head(workspace)) == (LinkResult.ALREADY_LINKED, head_before)
+
+
+def test_an_app_whose_directory_was_removed_and_made_again_is_not_linked_to_the_workspaces_history(
+    tmp_path: Path,
+) -> None:
+    # git subtree keeps the commit that removed the directory as it is, so the app's split would descend from
+    # the workspace's own commits and a dev repository would be handed every file the workspace ever held.
+    workspace = _workspace_with_notes(tmp_path)
+    shutil.rmtree(workspace / _PREFIX)
+    commit_all(workspace, "Remove the notes app's directory")
+    write_user_app(workspace, "notes")
+    head_before = commit_all(workspace, "Build the notes app again")
+    runtime = RecordingRuntime(repo_root=workspace)
+    _enable_sync(workspace)
+
+    with pytest.raises(GitCommandError, match="removed and made again"):
+        link_app(workspace, "notes", False, False, runtime)
+
+    assert _head(workspace) == head_before
+    assert not is_app_linked(workspace, load_record(workspace, "notes"))
+    assert load_record(workspace, "notes").dev_repo_url == ""
+    assert not any(call.startswith("create_private_repository") for call in runtime.calls)
 
 
 def test_a_marker_is_not_made_on_a_commit_the_primary_branch_has_left(tmp_path: Path) -> None:

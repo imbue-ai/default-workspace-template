@@ -34,6 +34,7 @@ from app_install.git import is_app_linked
 from app_install.git import is_app_modified
 from app_install.git import is_primary_checkout
 from app_install.git import require_git_subtree
+from app_install.git import require_split_holds_only_the_app
 from app_install.git import run_git
 from app_install.interfaces import WorkspaceRuntimeInterface
 from app_manifest.records import AppOrigin
@@ -193,6 +194,8 @@ def _make_marker_once(
         clone, is_full_clone_used = cloned
         marker, split_commit = _rejoin_in_clone(clone, start_head, str(record.name), prefix)
         run_git(repo_root, ["fetch", "--quiet", "--no-tags", str(clone), f"refs/heads/{branch}"])
+    # Asked of the workspace repository, which holds the history a bounded clone cuts off.
+    require_split_holds_only_the_app(repo_root, record, split_commit)
     first_parent = run_git(repo_root, ["rev-parse", f"{marker}^1"])
     trees = run_git(repo_root, ["rev-parse", f"{marker}^{{tree}}", f"{start_head}^{{tree}}"]).split()
     if first_parent != start_head or trees[0] != trees[1]:
@@ -319,7 +322,9 @@ def link_app(
 
     Raises MissingCommandError when git has no ``git subtree``, NotPrimaryCheckoutError when run in a linked
     worktree, AppRecordNotFoundError for an app with no record, NotModifiedAppError for an installed app nobody
-    has changed, and AppInstallError when the app has no commit yet or the primary branch would not hold still.
+    has changed, GitCommandError when the app's directory was removed and made again, so that its split would
+    hold the workspace's own commits, and AppInstallError when the app has no commit yet or the primary branch
+    would not hold still.
     A dev repository that cannot be created is reported in the outcome's ``problems``, not raised: the marker is
     made all the same.
     """

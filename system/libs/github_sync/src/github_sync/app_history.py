@@ -40,6 +40,10 @@ class GitSubtreeMissingError(AppHistoryError):
     """The git installation has no `git subtree` command."""
 
 
+class WorkspaceHistoryInSplitError(AppHistoryError):
+    """A split of an app's directory holds the workspace's own commits."""
+
+
 def run_git(
     repo_root: Path,
     arguments: Sequence[str],
@@ -190,12 +194,44 @@ def _remove_finished_split_caches(cache_root: Path) -> None:
             )
 
 
+def require_split_holds_only_the_app(
+    repo_root: Path, record: AppRecord, split_commit: str
+) -> None:
+    """Raise WorkspaceHistoryInSplitError when the history of `split_commit`
+    holds the workspace's own commits.
+
+    `git subtree split` keeps a workspace commit as it is, rather than making
+    the app's copy of it, when the commit has no app directory and the commit
+    before it had one: the directory was removed and made again. Everything
+    that commit follows comes with it, so the split would carry the whole
+    workspace, every file of it, into a repository meant to hold one app.
+    """
+    workspace_root = run_git(
+        repo_root, ["rev-list", "--first-parent", "--max-parents=0", "HEAD"]
+    )
+    # Nothing of the workspace's first commit is left once the split's history
+    # is taken away only when that history holds it.
+    outside_split = run_git(
+        repo_root, ["rev-list", "--count", workspace_root, f"^{split_commit}"]
+    )
+    if outside_split == "0":
+        raise WorkspaceHistoryInSplitError(
+            f"{app_directory_prefix(record)} was removed and made again in the "
+            "workspace's history, and a split of such a directory carries the "
+            "workspace's own commits, with every file of the workspace, into the "
+            f"app's history; nothing was done with it, and {record.name} cannot "
+            "have a repository of its own while it lives in that directory"
+        )
+
+
 def split_app(repo_root: Path, record: AppRecord) -> str:
     """The commit of the app's own history that the checked-out commit splits
     to. Writes loose objects only: no ref moves and nothing is committed.
 
-    Raises GitSubtreeMissingError when git has no `git subtree`, and
-    AppHistoryError when the split fails (no commit holds the app's directory).
+    Raises GitSubtreeMissingError when git has no `git subtree`,
+    WorkspaceHistoryInSplitError when the split holds the workspace's own
+    commits, and AppHistoryError when the split fails (no commit holds the
+    app's directory).
     """
     require_git_subtree(repo_root)
     git_directory = Path(run_git(repo_root, ["rev-parse", "--absolute-git-dir"]))
@@ -211,4 +247,6 @@ def split_app(repo_root: Path, record: AppRecord) -> str:
         raise AppHistoryError(
             f"`git subtree split` of {app_directory_prefix(record)} named no commit"
         )
-    return lines[-1].strip()
+    split_commit = lines[-1].strip()
+    require_split_holds_only_the_app(repo_root, record, split_commit)
+    return split_commit
