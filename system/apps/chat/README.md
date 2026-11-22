@@ -869,8 +869,9 @@ Studio app that draws coach marks announces (the chat root keeps the handshake i
 pages up to date when the app speaks after the shell did).
 
 The New chat button's create names the browser it came from (`client_id`, the per-browser id a
-send carries too), which is what lets the chat app count it as a chat a person started; a
-create from anywhere else names none.
+send carries too), and so does the launch of a chat that was waiting for its first send, which is
+what lets the chat app count each as a chat a person started; a create from anywhere else names
+none.
 
 A marker or a registry that cannot be read counts against the suggestions that read it, so
 nothing is offered rather than everything: an unreadable `tour_finished` closes the whole gate.

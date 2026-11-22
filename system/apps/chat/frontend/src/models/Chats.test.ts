@@ -91,10 +91,17 @@ describe("launchChat", () => {
   it("marks the chat's launch in flight from the post until the backend reports the chat creating, and not after a refusal", async () => {
     // The create route's URL is resolved off the page's base-path meta tag; the page here has none.
     vi.stubGlobal("document", { querySelector: () => null });
+    vi.stubGlobal("localStorage", { getItem: () => "client-4f1e", setItem: () => undefined });
     let settle: (response: Response) => void = () => undefined;
-    vi.stubGlobal("fetch", () => new Promise<Response>((resolve) => (settle = resolve)));
+    const bodies: unknown[] = [];
+    vi.stubGlobal("fetch", (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return new Promise<Response>((resolve) => (settle = resolve));
+    });
     const launched = launchChat("agent-7a1b", "acct-1");
     expect(isLaunchInFlight("agent-7a1b")).toBe(true);
+    // The launch names the client it came from, which is how the chat app tells a person's from a script's.
+    expect(bodies).toEqual([{ chat_id: "agent-7a1b", account_id: "acct-1", kind: "agent", client_id: "client-4f1e" }]);
     settle(new Response(JSON.stringify({ chat_id: "agent-7a1b", name: "x", display_name: "x" }), { status: 201 }));
     await launched;
     // The backend's own word (its creating push) is what ends the in-flight mark, not the 201.

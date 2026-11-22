@@ -5,6 +5,7 @@
  */
 
 import m from "mithril";
+import { getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { postJson } from "@imbue/workspace-ui/src/models/http";
 import { apiUrl, wsUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatKind, getTerminalOriginLabel } from "../document-meta";
@@ -717,7 +718,11 @@ export async function launchChat(
     // A seeded chat's launch brings the user's first message; a failed create's retry has none
     // to bring, so the field is left out then.
     const body = { chat_id: chatId, account_id: accountId, kind };
-    return await postCreateChat(message === "" ? body : { ...body, message });
+    // A launch is always a person's, from this page, so it names the client it came from as the New chat
+    // button's create does.
+    const clientId = getClientId();
+    const identified = clientId === "" ? body : { ...body, client_id: clientId };
+    return await postCreateChat(message === "" ? identified : { ...identified, message });
   } catch (error) {
     // The launch did not take: the next send may launch the chat, and a send that waited on this
     // one gets the refusal back rather than waiting for a chat that is not coming.

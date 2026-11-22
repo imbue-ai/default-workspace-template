@@ -14,4 +14,4 @@
 
 - Each of the two strips has its own "disable ..." link with Undo, as the next-step strip has.
 
-- The chat list's New chat button names the browser it was pressed in (`client_id`) when it creates a chat.
+- The chat list's New chat button names the browser it was pressed in (`client_id`) when it creates a chat, and a chat waiting for its first send names it when it launches.
