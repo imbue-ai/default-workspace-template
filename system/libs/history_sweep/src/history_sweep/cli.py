@@ -39,11 +39,11 @@ def default_roots(environ: dict[str, str], home: Path) -> SweepRoots:
 
 
 def summarize(removals: tuple[Removal, ...], is_dry_run: bool) -> str:
+    if not removals:
+        return "Nothing to remove."
     agent_count = len({removal.agent_id for removal in removals})
     freed_mib = sum(removal.size_bytes for removal in removals) / _MIB
     verb = "Would free" if is_dry_run else "Freed"
-    if not removals:
-        return "Nothing to remove."
     return f"{verb} {freed_mib:.1f} MiB from {agent_count} deleted chat agent(s)."
 
 
