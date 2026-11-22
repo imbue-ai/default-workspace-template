@@ -9,12 +9,17 @@ from werkzeug.utils import secure_filename
 
 from imbue.chat.image_sizes import read_image_size
 from imbue.chat.models import AttachmentError
+from imbue.chat.primitives import ChatId
 
 # Chat attachments live under the gitignored ``data/uploads/`` directory,
 # beside the rest of the user's workspace data. A user upload can be
 # arbitrarily large and of any format, so uploads are never committed to git;
 # they ride the restic host backup with the rest of ``data/``.
 _UPLOADS_SUBPATH = Path("data/uploads")
+
+# A file the chat made from the user's own words (a long paste) lives in the chat's folder instead,
+# so it is destroyed with the chat.
+_CHAT_UPLOADS_DIRNAME = "uploads"
 
 _DEFAULT_UPLOAD_FILENAME = "upload"
 
@@ -30,6 +35,11 @@ def get_uploads_directory() -> Path:
     work_dir = os.environ.get("MNGR_AGENT_WORK_DIR")
     base_directory = Path(work_dir) if work_dir else Path.cwd()
     return base_directory / _UPLOADS_SUBPATH
+
+
+def get_chat_uploads_directory(chat_files_root: Path, chat_id: ChatId) -> Path:
+    """Return the directory where ``chat_id``'s own uploads are stored, inside the chat's folder."""
+    return chat_files_root / chat_id / _CHAT_UPLOADS_DIRNAME
 
 
 def sanitize_upload_filename(original_filename: str) -> str:

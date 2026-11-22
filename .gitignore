@@ -74,7 +74,7 @@ data/.tickets/*
 !data/.tickets/README.md
 
 # External repos we're actively working on (e.g. mngr) live here as standalone
-# clones, separate from the read-only vendor/ subtrees. See CLAUDE.md.
+# clones, separate from the read-only vendor/ subtrees. See AGENTS.md.
 **/.external_worktrees/
 
 # Byte-compiled / optimized / DLL files

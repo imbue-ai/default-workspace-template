@@ -7,6 +7,9 @@ All three name the scripts as plain strings, and a name that no longer resolves 
 of these files, or a guard added to one harness and forgotten on another, is invisible
 without this test.
 
+It also holds every claude hook command to naming its files from `"${CLAUDE_PROJECT_DIR}"`,
+since claude runs hooks in whatever directory the agent's shell is in.
+
 See tool-call-policies-state-of-things.md; "Keeping the harnesses in step" is the invariant
 asserted here.
 """
@@ -26,7 +29,7 @@ _CODEX_HOOKS = _REPO_ROOT / ".codex" / "hooks.json"
 _PI_POLICY_GUARDS = _REPO_ROOT / ".pi" / "extensions" / "policy_guards.ts"
 
 # A `system/scripts/<name>` path inside a hook command, however the harness spells the
-# work-dir prefix (`${MNGR_AGENT_WORK_DIR:-.}/`, `"$MNGR_AGENT_WORK_DIR/`, `./`).
+# work-dir prefix (`"${CLAUDE_PROJECT_DIR}"/`, `"$MNGR_AGENT_WORK_DIR/`, `./`).
 _SCRIPT_REF_RE = re.compile(r"system/scripts/([A-Za-z0-9_]+\.(?:sh|py))")
 # The script paths policy_guards.ts builds, as `join(SCRIPTS, "<name>")`.
 _PI_SCRIPT_RE = re.compile(r'join\(SCRIPTS,\s*"([^"]+)"\)')
@@ -50,23 +53,44 @@ def _referenced_scripts(commands: list[str]) -> set[str]:
     return {name for command in commands for name in _SCRIPT_REF_RE.findall(command)}
 
 
-def _all_events(config: dict[str, Any]) -> list[str]:
-    return list(config.get("hooks", {}))
+def _all_hook_commands(config: dict[str, Any]) -> list[str]:
+    """Every hook command string registered for any event in a claude-shaped config."""
+    return [
+        c for event in config.get("hooks", {}) for c in _hook_commands(config, event)
+    ]
 
 
 def test_every_wired_hook_script_exists() -> None:
     """A hook naming a script that is not here would never run, and never say so."""
     for config_path in (_CLAUDE_SETTINGS, _CODEX_HOOKS):
         config = json.loads(config_path.read_text())
-        commands = [
-            c for event in _all_events(config) for c in _hook_commands(config, event)
-        ]
-        names = _referenced_scripts(commands)
+        names = _referenced_scripts(_all_hook_commands(config))
         assert names, f"{config_path.name} references no system/scripts hook at all"
         for name in sorted(names):
             assert (_SCRIPTS_DIR / name).is_file(), (
                 f"{config_path.name} wires a missing script: {name}"
             )
+
+
+# A repo-relative path a claude hook command names: anything under `system/`.
+_CLAUDE_HOOK_REPO_PATH_RE = re.compile(r"system/[\w./-]+")
+_CLAUDE_PROJECT_DIR_PREFIX = '"${CLAUDE_PROJECT_DIR}"/'
+
+
+def test_every_claude_hook_names_its_files_from_the_project_dir() -> None:
+    """claude runs a hook in whatever directory the agent's shell is in, so a path the
+    command leaves relative resolves against wherever the agent last `cd`ed to."""
+    commands = _all_hook_commands(json.loads(_CLAUDE_SETTINGS.read_text()))
+    unanchored = [
+        f"{command!r} names {match.group(0)}"
+        for command in commands
+        for match in _CLAUDE_HOOK_REPO_PATH_RE.finditer(command)
+        if not command[: match.start()].endswith(_CLAUDE_PROJECT_DIR_PREFIX)
+    ]
+    assert not unanchored, (
+        f"Prefix these paths with {_CLAUDE_PROJECT_DIR_PREFIX}:\n"
+        + "\n".join(unanchored)
+    )
 
 
 def test_claude_and_codex_run_the_same_pretooluse_guards() -> None:

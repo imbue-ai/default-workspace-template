@@ -7,7 +7,8 @@
  * inline image (``![path](path)``) for images, a file link (``[path](path)``, which
  * opens the file in Files) otherwise, each referencing the file by its absolute path on the agent VM
  * (e.g. "/code/uploads/<id>/<name>", or "/code/uploads/<id>-<width>x<height>/<name>" for an
- * image whose size was read). The bubble drops the label and renders the
+ * image whose size was read); a long paste's link is labelled with its file name instead
+ * (``[pasted-text-1.txt](path)``). The bubble drops the label and renders the
  * values through the shared markdown renderer -- the chat app serves
  * the file at that absolute path -- so the attachment is transparent to both the
  * reader and the agent (which records the same text in its transcript, and can
@@ -17,6 +18,7 @@
  */
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
+import { isPastedTextFileName } from "./pastedText";
 
 /** Marker segment present in every stored-attachment path. Used to detect the
  *  appended attachment block in persisted message content and to derive a
@@ -61,14 +63,25 @@ export function attachmentBasename(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-export function attachmentServeUrl(path: string): string {
-  const markerIndex = path.indexOf(UPLOADS_PATH_MARKER);
-  const relativePath = markerIndex >= 0 ? path.slice(markerIndex + UPLOADS_PATH_MARKER.length) : path;
-  const encodedRelativePath = relativePath
+// A chat's own upload (a long paste) lives in the chat's folder, ``.../chats/<chat-id>/uploads/...``, and is
+// served by that chat's route.
+const CHAT_UPLOAD_PATH_RE = /\/chats\/(agent-[A-Za-z0-9_-]+)\/uploads\/(.+)$/;
+
+function encodedPath(relativePath: string): string {
+  return relativePath
     .split("/")
     .map((segment) => encodeURIComponent(segment))
     .join("/");
-  return apiUrl(`/api/uploads/${encodedRelativePath}`);
+}
+
+export function attachmentServeUrl(path: string): string {
+  const chatUpload = path.match(CHAT_UPLOAD_PATH_RE);
+  if (chatUpload !== null) {
+    return apiUrl(`/api/chats/${encodeURIComponent(chatUpload[1])}/uploads/${encodedPath(chatUpload[2])}`);
+  }
+  const markerIndex = path.indexOf(UPLOADS_PATH_MARKER);
+  const relativePath = markerIndex >= 0 ? path.slice(markerIndex + UPLOADS_PATH_MARKER.length) : path;
+  return apiUrl(`/api/uploads/${encodedPath(relativePath)}`);
 }
 
 /**
@@ -76,7 +89,7 @@ export function attachmentServeUrl(path: string): string {
  * path. An image renders inline (``![path](path)``); any other file becomes a
  * file link (``[path](path)``), which opens it in Files. The absolute path is used as both the label
  * / alt text and the URL, so the chat app serves the file at that path
- * and the path stays visible to the reader.
+ * and the path stays visible to the reader. A long paste's link is labelled with its file name instead.
  *
  * No escaping is needed: the backend stores each upload under a hex uuid dir
  * (``<id>-<width>x<height>`` for an image whose size it read) with a
@@ -85,7 +98,10 @@ export function attachmentServeUrl(path: string): string {
  * break the markdown link or its URL.
  */
 export function attachmentMarkdown(path: string): string {
-  return isImagePath(path) ? `![${path}](${path})` : `[${path}](${path})`;
+  if (isImagePath(path)) return `![${path}](${path})`;
+  // A long paste is the user's own words rather than a file they picked, so its link reads as its name.
+  const basename = attachmentBasename(path);
+  return isPastedTextFileName(basename) ? `[${basename}](${path})` : `[${path}](${path})`;
 }
 
 /**
@@ -218,12 +234,14 @@ const DISK_FULL_HTTP_STATUS = 507;
 /** An upload the workspace's full disk refused; its message is the server's one line for the user. */
 export class DiskFullUploadError extends Error {}
 
-/** Upload a single file to the agent VM, returning its stored metadata. Throws
- *  on a non-2xx response: a DiskFullUploadError when the workspace's disk is full. */
-export async function uploadAttachment(file: File): Promise<UploadedAttachment> {
+/** Upload a single file to the agent VM, returning its stored metadata. Throws on a non-2xx response: a
+ *  DiskFullUploadError when the workspace's disk is full. A file given ``ownerChatId`` is stored in that chat's
+ *  folder, so it is destroyed with the chat; any other goes to the workspace's uploads. */
+export async function uploadAttachment(file: File, ownerChatId: string | null = null): Promise<UploadedAttachment> {
   const formData = new FormData();
   formData.append("file", file, file.name);
-  const response = await fetch(apiUrl("/api/uploads"), { method: "POST", body: formData });
+  const route = ownerChatId === null ? "/api/uploads" : `/api/chats/${encodeURIComponent(ownerChatId)}/uploads`;
+  const response = await fetch(apiUrl(route), { method: "POST", body: formData });
   if (response.status === DISK_FULL_HTTP_STATUS) {
     const body = (await response.json()) as { detail: string };
     throw new DiskFullUploadError(body.detail);
@@ -233,6 +251,15 @@ export async function uploadAttachment(file: File): Promise<UploadedAttachment> 
   }
   const body = (await response.json()) as AttachmentUploadResponseBody;
   return makeUploadedAttachment(body.path, body.size);
+}
+
+/** The text of a previously-uploaded attachment, read back from the agent VM. Throws on a non-2xx response. */
+export async function readAttachmentText(attachment: UploadedAttachment): Promise<string> {
+  const response = await fetch(attachment.url);
+  if (!response.ok) {
+    throw new Error(`Reading ${attachment.name} back failed (HTTP ${response.status})`);
+  }
+  return response.text();
 }
 
 /** Delete a previously-uploaded attachment from the agent VM. Best-effort: a

@@ -80,8 +80,12 @@ from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_records import ChatRecord
+from imbue.chat.chat_records import FileChatRecordStore
+from imbue.chat.chat_seed import FIRST_RUN_WELCOME
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_seed import first_run_kickoff_message
+from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
@@ -165,6 +169,7 @@ from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.ws_broadcaster import provisional_chat_created_message
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
+from imbue.concurrency_group.thread_utils import ObservableThread
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.errors import AgentIdNotFoundError
@@ -616,6 +621,73 @@ def test_delete_attachment_missing_is_ok(client: FlaskClient) -> None:
     response = client.delete("/api/uploads/deadbeef/missing.png")
 
     assert response.status_code == 200
+
+
+_UPLOAD_CHAT_ID = "agent-0000000000000000000000000000c4a7"
+
+
+def test_a_chat_upload_is_stored_in_the_chats_folder_served_and_deleted(client: FlaskClient, app: Flask) -> None:
+    """A chat's own upload lands under its folder in the chat files root, is served and deleted through the chat's
+    route, and is not reachable through the workspace uploads route."""
+    upload = client.post(
+        f"/api/chats/{_UPLOAD_CHAT_ID}/uploads",
+        data={"file": (io.BytesIO(b"pasted words"), "pasted-text-1.txt")},
+        content_type="multipart/form-data",
+    )
+
+    assert upload.status_code == 201
+    stored = Path(upload.get_json()["path"])
+    chats_root = state_of(app).agent_manager.chat_files_root.absolute()
+    assert stored.is_absolute()
+    assert stored.parent.parent == chats_root / _UPLOAD_CHAT_ID / "uploads"
+    assert stored.read_bytes() == b"pasted words"
+    relative_path = _upload_relative_path(str(stored))
+    assert client.get(f"/api/chats/{_UPLOAD_CHAT_ID}/uploads/{relative_path}").data == b"pasted words"
+    assert client.get(f"/api/uploads/{relative_path}").status_code == 404
+
+    assert client.delete(f"/api/chats/{_UPLOAD_CHAT_ID}/uploads/{relative_path}").status_code == 200
+    assert not stored.exists()
+
+
+def test_a_chat_upload_refuses_an_id_that_is_not_a_chats(client: FlaskClient) -> None:
+    """The chat id names a folder, so one not shaped like a chat's is refused before anything is written."""
+    response = client.post(
+        "/api/chats/not-a-chat/uploads",
+        data={"file": (io.BytesIO(b"x"), "pasted-text-1.txt")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 404
+    assert client.get("/api/chats/not-a-chat/uploads/abc/pasted-text-1.txt").status_code == 404
+    assert client.delete("/api/chats/not-a-chat/uploads/abc/pasted-text-1.txt").status_code == 404
+
+
+def test_a_chats_uploads_go_with_the_chat_when_it_is_destroyed(tmp_path: Path) -> None:
+    """A pasted text lives in the chat's folder, so the chat's destroy removes it with the rest of the chat."""
+    mngr_binary, _log_path = write_recording_mngr_binary(tmp_path)
+    chats_root = tmp_path / "chats"
+    manager = AgentManager.build(
+        WebSocketBroadcaster(),
+        messenger=RecordingMngrMessenger(),
+        mngr_binary=mngr_binary,
+        chat_record_store=FileChatRecordStore(root=chats_root),
+        chat_files_root=chats_root,
+    )
+    manager.note_agent_list_known()
+    seed_agent_state(manager, _UPLOAD_CHAT_ID, name="Chat-1")
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    upload = client.post(
+        f"/api/chats/{_UPLOAD_CHAT_ID}/uploads",
+        data={"file": (io.BytesIO(b"pasted words"), "pasted-text-1.txt")},
+        content_type="multipart/form-data",
+    )
+    stored = Path(upload.get_json()["path"])
+    assert stored.exists()
+
+    assert client.post(f"/api/chats/{_UPLOAD_CHAT_ID}/destroy").status_code == 200
+
+    assert not stored.exists()
+    assert not (chats_root / _UPLOAD_CHAT_ID).exists()
 
 
 def test_get_events_with_session_files(client: FlaskClient, app: Flask, tmp_path: Path) -> None:
@@ -1408,18 +1480,22 @@ def test_a_rooms_send_never_carries_the_pending_seed(tmp_path: Path, signed_in_a
     assert kept is not None and kept.is_seed_pending is True
 
 
-def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _client_with_chat_still_called_chat_n(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agent_id: str,
+    completion: ScriptedOneShotCompletion,
+) -> tuple[FlaskClient, RecordingMngrMessenger, list[tuple[ChatId, str]]]:
+    """A client whose chat ``agent_id`` still wears "Chat 4", the messenger its sends reach, and the renames its
+    namer makes from what ``completion`` answers."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    agent_id = "agent-00000000000000000000000000000731"
-    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
     manager.note_agent_list_known()
     with manager._lock:
         manager._agents[agent_id] = AgentStateItem(
             id=agent_id, name="Chat-4", state="RUNNING", labels={"display_name": "Chat 4"}, work_dir=None
         )
-    completion = ScriptedOneShotCompletion(["Five days in Rome"])
     renames: list[tuple[ChatId, str]] = []
     namer = ChatNamer(
         chat_files_root=tmp_path / "chats",
@@ -1433,12 +1509,40 @@ def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
         executor=InlineExecutor(),
     )
     client = create_application(build_test_state(agent_manager=manager, chat_namer=namer)).test_client()
+    return client, messenger, renames
+
+
+def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000731"
+    completion = ScriptedOneShotCompletion(["Five days in Rome"])
+    client, _messenger, renames = _client_with_chat_still_called_chat_n(tmp_path, monkeypatch, agent_id, completion)
 
     response = client.post(f"/api/chats/{agent_id}/message", json={"message": "Help me plan 5 days in Rome"})
 
     assert response.status_code == 200
     assert completion.prompts == [chat_naming_prompt("Help me plan 5 days in Rome")]
     assert renames == [(ChatId(agent_id), "Five days in Rome")]
+
+
+def test_a_dictated_message_names_its_chat_from_the_words_alone_and_reaches_the_agent_with_its_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000738"
+    completion = ScriptedOneShotCompletion(["Five days in Rome"])
+    client, messenger, renames = _client_with_chat_still_called_chat_n(tmp_path, monkeypatch, agent_id, completion)
+    dictated = (
+        "Help me plan 5 days in Rome\n\n"
+        "<dictation-note>\nSome of this message was dictated, so read it leniently.\n</dictation-note>"
+    )
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": dictated})
+
+    assert response.status_code == 200
+    assert completion.prompts == [chat_naming_prompt("Help me plan 5 days in Rome")]
+    assert renames == [(ChatId(agent_id), "Five days in Rome")]
+    assert messenger.sent == [(agent_id, dictated)]
 
 
 def _client_with_account_labeled_chat(
@@ -3923,6 +4027,73 @@ def test_a_seeded_chat_waiting_for_its_first_send_can_be_renamed_and_deleted_thr
     assert client.post(f"/api/chats/{chat_id}/destroy").status_code == 404
 
 
+def test_a_first_run_seed_opens_main_on_the_welcome_and_carries_the_users_words_to_the_first_send(
+    tmp_path: Path,
+) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+    response = client.post(
+        "/api/chats/seed",
+        json={"title": "Welcome", "turns": [], "is_first_run": True, "context": "I want to use Studio for: Writing."},
+    )
+
+    assert response.status_code == 201
+    chat_id = response.get_json()["chat_id"]
+    events = client.get(f"/api/chats/{chat_id}/events").get_json()["events"]
+    assert [event["text"] for event in events] == [turn.text for turn in FIRST_RUN_WELCOME]
+    launch = seed_context_message(tmp_path / chat_id, "Build an app with your data")
+    assert "I want to use Studio for: Writing." in launch
+    assert launch.endswith("\nBuild an app with your data")
+    assert "I want to use Studio for: Writing." not in json.dumps(events)
+
+
+def test_a_first_run_seed_owes_the_provider_page_until_the_owner_leaves_it(tmp_path: Path) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+    assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is False
+
+    client.post("/api/chats/seed", json={"turns": [], "is_first_run": True})
+    assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is True
+
+    assert client.post("/api/first-run/provider-step/done").status_code == 200
+    assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is False
+    # Finished for good: a manager built over the same files, as after a restart, still reads it finished.
+    assert (
+        AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path).is_first_run_provider_step_pending()
+        is False
+    )
+
+
+def test_a_first_run_seed_handed_over_again_updates_what_the_user_said_on_the_same_chat(tmp_path: Path) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+    first = client.post("/api/chats/seed", json={"turns": [], "is_first_run": True, "context": ""})
+
+    again = client.post(
+        "/api/chats/seed", json={"turns": [], "is_first_run": True, "context": "I want to use Studio for: Film."}
+    )
+
+    assert first.status_code == 201 and again.status_code == 201
+    chat_id = first.get_json()["chat_id"]
+    assert again.get_json()["chat_id"] == chat_id
+    assert "I want to use Studio for: Film." in first_run_kickoff_message(tmp_path / chat_id)
+    assert len(agent_manager.get_provisional_chats()) == 1
+
+
+def test_an_ordinary_seed_owes_no_provider_page(tmp_path: Path) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+    client.post("/api/chats/seed", json=_seed_body())
+
+    assert client.get("/api/accounts").get_json()["is_first_run_provider_step_pending"] is False
+
+
 def test_seeding_a_chat_refuses_a_body_without_turns(client: FlaskClient) -> None:
     response = client.post("/api/chats/seed", json={"title": "Empty", "turns": []})
     assert response.status_code == 400
@@ -4486,6 +4657,24 @@ def test_serves_the_built_bundle_from_its_static_assets(tmp_path: Path) -> None:
     assert client.get("/assets/../chat.html").status_code == 404
 
 
+def test_caches_an_asset_named_from_its_content_for_good_and_revalidates_the_rest(tmp_path: Path) -> None:
+    static = tmp_path / "static"
+    (static / "assets").mkdir(parents=True)
+    (static / "assets" / "chat-D4x_9-Qa.js").write_text("console.log('chat');")
+    (static / "assets" / "chat.js").write_text("console.log('chat');")
+    state = build_test_state()
+    state.static_directory = static
+    client = create_application(state).test_client()
+
+    hashed = client.get("/assets/chat-D4x_9-Qa.js")
+    unhashed = client.get("/assets/chat.js")
+
+    assert hashed.cache_control.max_age == 365 * 24 * 60 * 60
+    assert hashed.cache_control.immutable
+    assert unhashed.cache_control.no_cache
+    assert not unhashed.cache_control.immutable
+
+
 def test_serves_image_at_its_absolute_path(client: FlaskClient, tmp_path: Path) -> None:
     """A request for an existing image file's absolute path streams its bytes inline."""
     image_path = tmp_path / "chart.png"
@@ -4958,6 +5147,51 @@ def test_a_converging_chat_carries_the_model_it_was_switched_to(tmp_path: Path) 
     assert [chat["handoff"]["model_pick"] for chat in listed if chat["chat_id"] == other] == [None]
 
 
+def test_an_interrupt_waits_out_a_landed_handoffs_deliveries_and_then_stops_the_successor(tmp_path: Path) -> None:
+    """Once the successor is the chat's agent the page offers Stop; the route holds it until the switch has
+    delivered everything it owes the successor, so the restart cannot race a delivery, then interrupts."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first, successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SWITCHING)
+    _track_claude_agent(app, successor, "Chat-1", tmp_path / "claude_config")
+    manager: AgentManager = state_of(app).agent_manager
+    record = manager._chat_record_store.read(ChatId(first))
+    assert record is not None and record.handoff is not None
+    landed = record.model_copy_update(
+        to_update(
+            record.field_ref().agents,
+            (
+                make_chat_agent_entry(1, first, is_archived=True),
+                make_chat_agent_entry(2, successor, is_archived=False),
+            ),
+        )
+    )
+    manager._chat_record_store.write(landed)
+    manager.refresh_chat_records()
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert [(chat["handoff"]["has_landed"], chat["active_agent"]["agent_id"]) for chat in listed] == [
+        (True, successor)
+    ]
+
+    restarted = FinishedProcess(
+        returncode=0, stdout="Restarted", stderr="", command=("mngr",), is_output_already_logged=False
+    )
+    answers: list[int] = []
+    with patch("imbue.chat.server.run_local_command_modern_version", return_value=restarted) as run:
+        interrupter = ObservableThread(
+            target=lambda: answers.append(client.post(f"/api/chats/{first}/interrupt").status_code),
+            name="interrupter",
+        )
+        interrupter.start()
+        interrupter.join(timeout=0.3)
+        assert interrupter.is_alive() and answers == [] and run.call_count == 0
+        manager._chat_record_store.write(landed.model_copy_update(to_update(landed.field_ref().handoff, None)))
+        manager.refresh_chat_records()
+        interrupter.join(timeout=10.0)
+    assert answers == [200]
+    assert run.call_args.kwargs["command"][:3] == ["mngr", "start", "Chat-1"]
+
+
 def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cancelled(tmp_path: Path) -> None:
     app, log_path = _recording_app(tmp_path)
     client = app.test_client()
@@ -5114,8 +5348,10 @@ def test_a_failed_handoff_retries_the_create_through_the_route(tmp_path: Path) -
     assert retried.get_json() == {"status": "converging", "phase": "switching"}
     wait_for(lambda: manager.get_handoff_state(ChatId(first)) is None, timeout=15.0)
     argv = log_path.read_text().splitlines()
-    assert [line.split(" ")[0] for line in argv] == ["stop", "rename", "create"]
-    assert f"--id {successor}" in argv[2] and "--type codex" in argv[2]
+    verbs = [line.split(" ")[0] for line in argv]
+    assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
+    create = argv[verbs.index("create")]
+    assert f"--id {successor}" in create and "--type codex" in create
     listed_after = client.get("/api/chats").get_json()["chats"]
     assert [(chat["chat_id"], chat["active_agent"]["agent_id"], chat["agent_ids"]) for chat in listed_after] == [
         (first, successor, [first, successor])
@@ -6584,6 +6820,31 @@ def test_a_mention_of_the_owner_in_a_room_is_told_to_the_imbue_studio_app_as_the
         "message": "@Josh look at this",
         "destination": {"type": "minds:focus-chat", "chatId": _LOUNGE_ID},
     }
+
+
+def test_the_owners_mention_notification_leaves_out_a_dictated_messages_note(tmp_path: Path) -> None:
+    gateway = RecordingGateway(status=200)
+    dictated = (
+        "@Josh look at this\n\n"
+        "<dictation-note>\nSome of this message was dictated, so read it leniently.\n</dictation-note>"
+    )
+    with serve_app(gateway.application) as served:
+        access = GatewayAccess(
+            base_url=served.http_url, password=SecretStr("gateway-password-7731"), permissions_override=None
+        )
+        app = _peopled_app(tmp_path, RecordingMngrMessenger(), imbue_studio_gateway=access)
+        client = app.test_client()
+        try:
+            client.post(
+                f"/api/chats/{_LOUNGE_ID}/message",
+                json={"message": dictated, "message_id": "m-1"},
+                headers=_identity_header(_VISITOR),
+            )
+            wait_until_true(lambda: len(gateway.received) == 1, 10.0, "the owner's notification to be posted")
+        finally:
+            state_of(app).shutdown()
+    (received,) = gateway.received
+    assert received.body["message"] == "@Josh look at this"
 
 
 def test_a_mention_in_an_agent_chat_is_a_word_the_agent_reads_and_nothing_more(tmp_path: Path) -> None:

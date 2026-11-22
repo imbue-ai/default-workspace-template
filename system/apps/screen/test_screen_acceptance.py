@@ -130,7 +130,7 @@ class _Harness(FrozenModel):
     template_clone: Path = Field(description="A plain clone of this tree at its branch, the create's build context")
     template_branch: str = Field(description="The branch the clone is at")
     root_name: str = Field(description="MINDS_ROOT_NAME for this run: a `ci` env minted so no real env is touched")
-    data_home: Path = Field(description="MINDS_DATA_HOME: every minds root of this run lives under it")
+    data_home: Path = Field(description="STUDIO_ROOTS_OVERRIDE: every minds root of this run lives under it")
     host_config_root: Path = Field(description="The Electron app's cwd: a pytest-opted-in copy of mngr's config")
     viewer_chromium: Path = Field(description="The Chromium executable the viewer is shown in")
     user_data_dir: Path = Field(description="Electron's profile for this run")
@@ -287,7 +287,7 @@ def _electron_environment(harness: _Harness) -> dict[str, str]:
         {
             "MINDS_ROOT_NAME": harness.root_name,
             "MINDS_CLIENT_CONFIG_PATH": str(harness.mngr_worktree / _INERT_CLIENT_CONFIG),
-            "MINDS_DATA_HOME": str(harness.data_home),
+            "STUDIO_ROOTS_OVERRIDE": str(harness.data_home),
             "MINDS_WORKSPACE_GIT_URL": str(harness.template_clone),
             "MINDS_WORKSPACE_BRANCH": harness.template_branch,
             "MINDS_USE_LOCAL_WORKSPACE_DEFAULTS": "1",
