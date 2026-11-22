@@ -64,12 +64,23 @@ export function hasUserMessage(chatId: string): boolean | null {
   return null;
 }
 
-/** Whether no reply is being worked on in the chat: its turn is done as the next-step strip reads it, or nobody
- *  has said anything in it yet (a chat being created has an agent starting, and no reply to wait for). Null while
- *  the page knows neither the chat nor whether it has a message. */
+/** Whether nobody is left to work on a reply in the chat, and no message is on its way to bring somebody back: its
+ *  agent is dead, its switch to another agent failed, or its create failed. Such a chat's turn never reads as done
+ *  for the next-step strip, and no reply is coming in it either. */
+function hasNobodyToReply(chatId: string): boolean {
+  if (getOutgoingMessages(chatId).length > 0 || isLaunchInFlight(chatId)) return false;
+  const chat = getChatById(chatId);
+  if (chat === undefined) return getProvisionalChat(chatId)?.phase === "failed";
+  if (chat.active_agent.is_connecting || chat.active_agent.queued_messages.length > 0) return false;
+  return chat.status === "stopped" || chat.status === "error";
+}
+
+/** Whether no reply is being worked on in the chat: its turn is done as the next-step strip reads it, nobody has
+ *  said anything in it yet (a chat being created has an agent starting, and no reply to wait for), or nobody is
+ *  left to work on one. Null while the page knows neither the chat nor whether it has a message. */
 export function isTurnDoneForActivity(chatId: string): boolean | null {
   if (getChatById(chatId) === undefined && getProvisionalChat(chatId) === undefined) return null;
   const hasMessage = hasUserMessage(chatId);
   if (hasMessage === null) return null;
-  return hasMessage ? isTurnDoneForSuggestions(chatId) : true;
+  return !hasMessage || isTurnDoneForSuggestions(chatId) || hasNobodyToReply(chatId);
 }

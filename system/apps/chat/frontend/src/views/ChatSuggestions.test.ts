@@ -197,6 +197,14 @@ function answeredAgain(): void {
   mocks.events = [userMessage("u-1"), reply("a-1"), userMessage("u-2"), reply("a-2")];
 }
 
+/** The chat with its agent dead: stopped, crashed, or not started again since the workspace restarted. */
+function agentStopped(agent: { is_connecting?: boolean } = {}): void {
+  mocks.chat = chatSnapshotFixture(CHAT, {
+    status: "stopped",
+    active_agent: { state: "STOPPED", activity_state: "IDLE", ...agent },
+  });
+}
+
 /** A chat started from the New chat button: listed, idle, and nobody has said anything in it. */
 function newAndEmpty(): void {
   mocks.provisional = undefined;
@@ -328,6 +336,34 @@ describe("what the page reads of a chat for its activity and new-chat strips", (
     mocks.provisional = undefined;
     expect(isTurnDoneForActivity(CHAT)).toBeNull();
   });
+
+  it("takes no reply to be under way where nobody is left to work on one, until a message is on its way", () => {
+    agentStopped();
+    expect(isTurnDoneForActivity(CHAT)).toBe(true);
+    // The chat's switch to another agent failed.
+    mocks.chat = chatSnapshotFixture(CHAT, { status: "error", active_agent: { activity_state: "IDLE" } });
+    expect(isTurnDoneForActivity(CHAT)).toBe(true);
+
+    // A message wakes a stopped chat: one this page is sending, or one the chat app is starting the agent for.
+    agentStopped();
+    addOutgoing(CHAT, "Carry on");
+    expect(isTurnDoneForActivity(CHAT)).toBe(false);
+    clearOutgoing(
+      CHAT,
+      getOutgoingMessages(CHAT).map((message) => message.id),
+    );
+    agentStopped({ is_connecting: true });
+    expect(isTurnDoneForActivity(CHAT)).toBe(false);
+
+    // A chat whose create failed holds its first message, and nobody to answer it.
+    const heldSends = [{ message_id: "m-1", text: "Plan my week" }];
+    mocks.chat = undefined;
+    mocks.events = [];
+    mocks.provisional = provisionalChatFixture(CHAT, { phase: "failed", held_sends: heldSends });
+    expect(isTurnDoneForActivity(CHAT)).toBe(true);
+    mocks.provisional = provisionalChatFixture(CHAT, { phase: "creating", held_sends: heldSends });
+    expect(isTurnDoneForActivity(CHAT)).toBe(false);
+  });
 });
 
 describe("the activity strip", () => {
@@ -437,6 +473,22 @@ describe("the activity strip", () => {
 
     expect(strips()).toEqual([]);
     expect(requests.filter((request) => request.url === "/api/suggestions/activity")).toEqual([]);
+  });
+
+  it("is absent on a chat whose agent is stopped, and closes into its toggle when the agent stops mid-reply", async () => {
+    agentStopped();
+    await drawAndSettle();
+
+    expect(strips()).toEqual([]);
+    expect(readsOf("activity")).toBe(0);
+
+    working();
+    await drawAndSettle();
+    expect(isOpen("activity")).toBe(true);
+
+    agentStopped();
+    await drawAndSettle();
+    expect(isOpen("activity")).toBe(false);
   });
 });
 

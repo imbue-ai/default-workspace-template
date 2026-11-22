@@ -838,7 +838,8 @@ The page draws them as two strips (`frontend/src/models/ActivitySuggestions.ts`,
 `views/ActionSuggestions.ts`). The activity strip, "While you wait", opens above the composer
 when a turn starts in the chat the page shows, with what the route answers then, and closes into
 its toggle when the reply ends; the toggle stays until the next turn opens the strip again with
-a fresh read. The new-chat strip, "Things to try", is open on a chat nobody has said anything
+a fresh read. A chat whose agent is stopped, or whose create or switch to another agent failed,
+has no reply on its way, so no turn is under way in it until a message is sent. The new-chat strip, "Things to try", is open on a chat nobody has said anything
 in, as soon as the chat is on screen, with what the route answers for `placement=new_chat`. On
 the chat's first message it collapses to its toggle, unless the activity strip opens with the
 same suggestions in the same order, in which case it is dropped for good, so the two are never
