@@ -55,15 +55,15 @@ export interface SuggestionSet {
   suggestions: readonly Suggestion[];
 }
 
-/** A suggestion as the chat app sends it. An ``action`` marks one whose click does something other than send its
+/** A suggestion as the chat app serves it. An ``action`` marks one whose click does something other than send its
  *  label. */
-type AnsweredSuggestion = Suggestion & { action?: string | null };
+type ServedSuggestion = Suggestion & { action?: string | null };
 
-/** One set as the chat app sends it: the suggestions offered under the assistant message ``after_event_id``. */
-export interface AnsweredSuggestionSet {
+/** One set as the chat app serves it: the suggestions offered under the assistant message ``after_event_id``. */
+export interface ServedSuggestionSet {
   after_event_id: string;
   source: string | null;
-  suggestions: readonly AnsweredSuggestion[];
+  suggestions: readonly ServedSuggestion[];
 }
 
 /** What ``GET /api/chats/<chat-id>/suggestions`` answers: ``ready`` with the stored set, ``pending`` while one is being
@@ -73,17 +73,17 @@ export interface SuggestionsAnswer {
   status: string;
   after_event_id: string | null;
   source: string | null;
-  suggestions: readonly AnsweredSuggestion[];
-  sets: readonly AnsweredSuggestionSet[];
+  suggestions: readonly ServedSuggestion[];
+  sets: readonly ServedSuggestionSet[];
 }
 
 /**
- * A set the chat app sent as the page draws it, or null when nothing of it is left to draw. A suggestion with an
+ * A set the chat app served as the page draws it, or null when nothing of it is left to draw. A suggestion with an
  * action is dropped, since a next-step set carries none, so a newer backend never produces a dead pill; and only the
  * first suggestion may be the recommended one.
  */
-export function drawableSetOf(answered: AnsweredSuggestionSet): SuggestionSet | null {
-  const suggestions = answered.suggestions
+export function drawableSetOf(served: ServedSuggestionSet): SuggestionSet | null {
+  const suggestions = served.suggestions
     .filter((suggestion) => suggestion.action === undefined || suggestion.action === null)
     .map((suggestion, index) => ({
       suggestion_id: suggestion.suggestion_id,
@@ -91,8 +91,8 @@ export function drawableSetOf(answered: AnsweredSuggestionSet): SuggestionSet | 
       is_recommended: suggestion.is_recommended && index === 0,
     }));
   if (suggestions.length === 0) return null;
-  const source = answered.source === "fixed" || answered.source === "generated" ? answered.source : null;
-  return { after_event_id: answered.after_event_id, source, suggestions };
+  const source = served.source === "fixed" || served.source === "generated" ? served.source : null;
+  return { after_event_id: served.after_event_id, source, suggestions };
 }
 
 /** The stored set an answer carries, or null when it carries none to draw: any status but "ready" (one this page
@@ -175,9 +175,9 @@ function isSameSet(left: SuggestionSet | undefined, right: SuggestionSet): boole
  *  page knew for its reply. A set the page knows and the answer leaves out stays known. */
 function learnSets(state: ChatSuggestionState, answer: SuggestionsAnswer): void {
   state.fetched = suggestionSetOf(answer);
-  for (const answered of answer.sets) {
-    const set = drawableSetOf(answered);
-    if (set === null) state.knownByReply.delete(answered.after_event_id);
+  for (const served of answer.sets) {
+    const set = drawableSetOf(served);
+    if (set === null) state.knownByReply.delete(served.after_event_id);
     else state.knownByReply.set(set.after_event_id, set);
   }
   // Known whether or not the answer lists it among the remembered ones.

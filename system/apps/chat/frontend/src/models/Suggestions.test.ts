@@ -10,7 +10,6 @@ vi.mock("./ChatSettings", () => ({
 }));
 
 import {
-  type AnsweredSuggestionSet,
   collapseNextStepSuggestions,
   getAnsweredReplySuggestions,
   getNextStepSuggestions,
@@ -20,6 +19,7 @@ import {
   rereadNextStepSuggestions,
   resetSuggestionsForTests,
   RETRY_DELAY_MS,
+  type ServedSuggestionSet,
   type SuggestionsAnswer,
   suggestionSetOf,
   toggleAnsweredReplySuggestions,
@@ -39,7 +39,7 @@ function remembered(
   afterEventId: string,
   labels: string[] = ["Yes", "No"],
   source: string = "fixed",
-): AnsweredSuggestionSet {
+): ServedSuggestionSet {
   return suggestionSetFixture(afterEventId, labels, source);
 }
 
@@ -48,7 +48,7 @@ function ready(
   afterEventId: string,
   labels: string[] = ["Yes", "No"],
   source: string = "fixed",
-  earlier: AnsweredSuggestionSet[] = [],
+  earlier: ServedSuggestionSet[] = [],
 ): SuggestionsAnswer {
   return storedSuggestionsAnswerFixture([...earlier, remembered(afterEventId, labels, source)]);
 }

@@ -1,6 +1,6 @@
 /** What the chat app answers of a chat's next-step suggestions, for tests (``GET /api/chats/<chat-id>/suggestions``). */
 
-import type { AnsweredSuggestionSet, SuggestionsAnswer } from "./Suggestions";
+import type { ServedSuggestionSet, SuggestionsAnswer } from "./Suggestions";
 
 /** The answer for a chat with no stored set and nothing remembered. */
 export const NO_SUGGESTIONS_ANSWER: SuggestionsAnswer = {
@@ -21,7 +21,7 @@ export function suggestionSetFixture(
   afterEventId: string,
   labels: readonly string[],
   source: string,
-): AnsweredSuggestionSet {
+): ServedSuggestionSet {
   return {
     after_event_id: afterEventId,
     source,
@@ -30,6 +30,6 @@ export function suggestionSetFixture(
 }
 
 /** The answer with ``sets`` remembered, oldest first, the last of them the one stored. */
-export function storedSuggestionsAnswerFixture(sets: readonly AnsweredSuggestionSet[]): SuggestionsAnswer {
+export function storedSuggestionsAnswerFixture(sets: readonly ServedSuggestionSet[]): SuggestionsAnswer {
   return { status: "ready", ...sets[sets.length - 1], sets };
 }
