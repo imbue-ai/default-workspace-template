@@ -8,6 +8,7 @@ from py_vapid import Vapid
 from pydantic import ConfigDict
 from pydantic import Field
 
+from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.web_push import BrowserPushSubscription
 from imbue.system_interface.shell.web_push import DeviceRegistrationRequest
 from imbue.system_interface.shell.web_push import NotificationSettings
@@ -211,6 +212,41 @@ class _SignallingTransport(RecordingPushTransport):
         answer = super().post(subscription, payload, signing_key)
         self.posted_event.set()
         return answer
+
+
+class _FailingOnceTransport(RecordingPushTransport):
+    """Fails the first post as an unwritable state file would, and records the rest."""
+
+    has_failed: bool = Field(default=False, description="Whether the first post has failed yet")
+
+    def post(self, subscription: BrowserPushSubscription, payload: str, signing_key: Vapid) -> PushProviderAnswer:
+        if not self.has_failed:
+            self.has_failed = True
+            raise ShellStateError("cannot write shell state file")
+        return super().post(subscription, payload, signing_key)
+
+
+def test_a_failed_batch_does_not_hold_back_another_chats(tmp_path: Path) -> None:
+    transport = _FailingOnceTransport()
+    notifier = WebPushNotifier(directory=tmp_path, transport=transport)
+    notifier.register(
+        DeviceRegistrationRequest.model_validate(
+            {
+                "subscription": {"endpoint": "https://web.push.apple.com/a", "keys": {"p256dh": "B", "auth": "s"}},
+                "label": "x",
+            }
+        ),
+        _NOW,
+    )
+    dispatcher = PushDispatcher(notifier=notifier, log=SendLog(path=tmp_path / "send_log.json"), clock=_Clock())
+    dispatcher.submit(_send("one"), "Studio")
+    second = dispatcher.submit(_send("two", chat_id="agent-other"), "Studio")
+
+    dispatcher.flush_due()
+
+    assert len(transport.posted) == 1
+    by_id = {entry.send_id: entry for entry in dispatcher.log.entries()}
+    assert by_id[second.send_id].status is SendStatus.SENT
 
 
 def test_the_worker_thread_posts_without_anyone_flushing(tmp_path: Path) -> None:

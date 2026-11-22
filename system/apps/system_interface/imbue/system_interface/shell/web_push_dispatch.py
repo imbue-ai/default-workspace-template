@@ -324,7 +324,11 @@ class PushDispatcher(MutableModel):
                 del self._pending_by_chat[batch.chat_id]
                 self._last_post_at_by_chat[batch.chat_id] = now
         for batch in due:
-            self._post(batch)
+            try:
+                self._post(batch)
+            except (ShellError, OSError) as e:
+                # A state file it could not read or write fails that batch alone: the other chats' still go out.
+                logger.opt(exception=e).error("A Web Push batch from {} failed", batch.chat_id)
 
     def next_due_at(self) -> float | None:
         with self._lock:
@@ -407,11 +411,7 @@ class PushDispatcher(MutableModel):
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            try:
-                self.flush_due()
-            except ShellError as e:
-                # A state file it could not write fails that batch alone: the next send must still go out.
-                logger.opt(exception=e).error("A Web Push batch failed")
+            self.flush_due()
             next_due_at = self.next_due_at()
             timeout = None if next_due_at is None else max(0.0, next_due_at - self.clock())
             self._wake.wait(timeout)
