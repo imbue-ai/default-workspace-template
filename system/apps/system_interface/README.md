@@ -128,7 +128,8 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   right half of the desktop, revealing the shortcuts. The page records the
   tour as finished when Done on the last card or Exit walkthrough is pressed,
   and the owner's page does so for a record that reads seen with nothing to
-  resume.
+  resume, when it is a page the tour could begin on (the desktop layout, not a
+  pulled-out window).
 - A coach card for a page that asks (`shell:show-coach-card {text,
   chromeAnchor}`): the page's words and a Got it button under the control of
   the Imbue Studio chrome it names, which the chrome rings until the card

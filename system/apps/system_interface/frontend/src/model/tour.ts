@@ -223,11 +223,13 @@ export class TourController {
   }
 
   /** Record as finished a tour that is seen, waits to resume nowhere, and is not on screen: one a reload cut off,
-   *  or one this workspace never offered. Only the owner's page does, so a visitor's never ends the owner's tour. */
+   *  or one this workspace never offered. Only the owner's page does, so a visitor's never ends the owner's tour,
+   *  and only a page the tour could begin on: a pulled-out window or a phone loading beside a desktop whose tour
+   *  is on screen reads the same record, and would end that tour under its cards. */
   private settleFinished(): void {
     const record = this.record;
     if (record === null || !record.isSeen || record.resumeIndex !== null || record.isFinished) return;
-    if (this.state.phase === "card" || !this.deps.isViewerOwner()) return;
+    if (this.state.phase === "card" || !this.deps.isViewerOwner() || !this.deps.isAutoStartAllowed()) return;
     this.persist({ ...record, isFinished: true });
   }
 

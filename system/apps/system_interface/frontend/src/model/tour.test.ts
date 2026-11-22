@@ -369,6 +369,14 @@ describe("whether the tour is finished", () => {
     expect(api.writes).toEqual([seenRecord(null, true)]);
   });
 
+  it("is left alone by a page the tour could not begin on, such as a pulled-out window", async () => {
+    const api = new FakeTourApi({ isSeen: true });
+    const { tour } = controller(api, { isAllowed: false });
+    await tour.load();
+    tour.noteViewerChanged();
+    expect(api.writes).toEqual([]);
+  });
+
   it("is not settled under a tour that is on screen, nor for a workspace the tour is still to be offered in", async () => {
     const unseen = new FakeTourApi();
     const { tour: fresh } = controller(unseen);
