@@ -1183,7 +1183,13 @@ arrives after a later one from its page is dropped. A page is *watching* its cha
 while its last report is shown, focused, and under 90 seconds old;
 `GET /api/chats/<chat-id>/watchers` (loopback only) lists the watching instances, and
 the notify-user skill's script sends that list on with its notification so the Imbue
-Studio app shows nothing to a user already reading the chat. When a report turns a
+Studio app shows nothing to a user already reading the chat. Each report also records
+whether its page is the owner's, and the same answer says which watchers are the
+owner's (`owner_watched_by`), whether the chat is the owner's own (`is_owners_chat`:
+nobody but the owner has written in it), and the chat's title: the script pushes to
+the owner's devices only from the owner's own chat while none of the owner's pages is
+watching it, so a visitor reading the chat never holds a push back and a visitor's
+words never reach the owner's phone. When a report turns a
 chat from unwatched to watched, the app is told the chat was read
 (`imbue_studio_notifications.py`, through the latchkey gateway as the chat's current
 agent, off the request thread).
