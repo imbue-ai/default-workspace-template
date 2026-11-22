@@ -653,7 +653,8 @@ workspace, a one-time notice over the model bar explains it.
 
 ## Suggestions
 
-Suggestions are short entries above the composer that the user can click instead of typing
+Suggestions are short entries the user can click instead of typing, above the composer and,
+for a reply that has been answered, in the transcript under it
 (`suggestions.py`; `specs/chat-suggestions` in the mngr repository). They are offered at three
 placements: under an agent's reply (`next_step`), while an agent works on a reply (`activity`),
 and on a chat with no message yet (`new_chat`). A reply suggestion sends its label when clicked.
@@ -678,10 +679,24 @@ chat's folder, `data/.apps/chat/chats/<chat-id>/suggestions.json`:
 `source` is `fixed` for a set the chat app wrote itself (the first-run seed's start suggestions,
 and the tree's below) and `generated` for one a model worked out. `action` is null in every
 stored suggestion, and a file written without the field reads the same.
+
+The file holds one set, the last reply's: it is replaced when a later reply's set is ready and
+removed when a turn ends with none, and it is all that a restart of the app finds. So that a
+reply keeps its suggestions once it has been answered, the app also remembers, in memory alone,
+every set it has stored for a chat, by the reply the set follows (`suggestion_store.py`, a
+`ChatSuggestionStore` the agent manager owns and every read and write of the file goes
+through). A set is remembered when it is stored, by the seed or at a turn's end, and the file's
+own set when the app first reads it after a start. A set stored again for the same reply
+replaces the one remembered. What is remembered for a chat goes when the app stops and when the
+chat is deleted, and only the newest 200 sets of a chat are kept. Nothing of it is written to
+disk.
+
 `GET /api/chats/<chat-id>/suggestions`
-answers `{"status", "after_event_id", "source", "suggestions"}`: `ready` with the stored set,
-`pending` while a set is being worked out (naming the reply it is for, with an empty list), or
-`none` with nulls and an empty list. It answers for a seeded chat still awaiting its first agent
+answers `{"status", "after_event_id", "source", "suggestions", "sets"}`: `ready` with the stored
+set, `pending` while a set is being worked out (naming the reply it is for, with an empty list),
+or `none` with nulls and an empty list. `sets` is every set the app remembers for the chat, the
+stored one included, oldest first, each as `{"after_event_id", "source", "suggestions"}`; it is
+empty for a chat with none. The route answers for a seeded chat still awaiting its first agent
 as for any listed chat, and 404 for a chat the app does not know.
 
 When a turn ends, the chat app works out replies to suggest under the agent's last message
@@ -713,32 +728,60 @@ Only the `<suggestion>` elements of the answer are read. A label is kept when it
 recommended. Before storing, the chat is read again: an answer is dropped when the reply is no
 longer the chat's last word, a turn is in flight, or the switch went off meanwhile. A set that
 is kept replaces the stored file; an answer with no suggestions, a failed or timed-out call, and
-a turn's end at which nothing is asked all remove it, so a set never outlives the reply it was
-made for. A failed call is logged and not tried again for the same message. Each change to the
+a turn's end at which nothing is asked all remove it, so the file never holds the set of a
+reply the chat has moved past. A failed call is logged and not tried again for the same message. Each change to the
 file is pushed as `suggestions_updated`, and a page showing the chat reads the route again. A
 chat on a harness with no one-shot call (Pi, Antigravity, OpenCode) gets no generated sets.
 
-The page draws the set as the next-step strip, directly above the composer and at its width:
-pills in a wrapping row with a dashed outline, the recommended one (at most one, and the first)
-in green. It takes a set up only when the answer's `after_event_id` is the id of the last
-assistant message the page holds, no user message follows that message, the page holds the
-transcript's end, and the chat's turn is done; so a set left from an earlier turn never shows. A
-chat nobody has spoken in has no turn to be in and counts as done: a seeded chat awaiting its
-first agent, and one whose first agent is starting with nothing sent to it (no message brought by
-its launch, held for it, or on its way from the page), which is how a first-run chat's start
-suggestions stay open while the agent the provider page started comes up. A generated set arrives a few seconds
-after its reply, with the push; nothing is drawn in its place meanwhile. A generated set longer
-than three draws its first three and a "Show more" that reveals the rest; a fixed set is drawn
-whole. Clicking a suggestion sends its label
+A strip's suggestions are drawn as pills in a list on the user's side of the composer's column
+(`views/SuggestionStrip.ts`): one pill to a row, every pill as wide as the widest, the group set
+in 16px from the column's right edge, and a label too long for the column wrapping inside its
+pill. A pill has a dashed outline, small corners, the body text size and a light shadow, and the
+recommended one (at most one, and the first) is green. The pills rise into place over 150 ms.
+
+Next-step suggestions wait on one quiet line directly above the composer, under any other
+strip (`views/NextStepSuggestions.ts`). In a chat with an agent the line's height is always
+kept, with or without a set, so a set that arrives moves nothing; it is given up only in a room
+and once next-step suggestions are known to be switched off. The line is empty while a reply is
+under way and while no set is ready. The page takes a set up there only when the answer's
+`after_event_id` is the id of the last assistant message the page holds, no user message follows
+that message, the page holds the transcript's end, and the chat's turn is done; so a set left
+from an earlier turn never shows above the composer. A chat nobody has spoken in has no turn to
+be in and counts as done: a seeded chat awaiting its first agent, and one whose first agent is
+starting with nothing sent to it (no message brought by its launch, held for it, or on its way
+from the page), which is how a first-run chat's start suggestions stay shown while the agent the
+provider page started comes up. A generated set arrives a few seconds after its reply, with the
+push. Once a set is taken up, the line says "See N suggestions" ("See 1 suggestion" for one) at
+its right end, as quietly as a strip's disable link. A click shows the pills above the line and
+turns the words into "Hide suggestions", which hides them again; while they are shown the line
+carries "disable next step suggestions" at its left end, for the workspace's owner. A fixed set
+starts shown, so the first conversation's choices are never behind a click, and a generated set
+starts hidden. Every suggestion of a shown set is drawn.
+
+Clicking a suggestion sends its label
 through the composer, so the transcript shows exactly what the pill said: the label alone with
 an empty draft, else the draft's text, a newline, and the label, with the draft's attachments;
 it queues behind a running turn, launches a chat awaiting its first message, and carries out an
 armed switch, as a typed message does. With no provider signed in, or the chat's account signed
-out, the click opens the provider chooser and sends nothing, and the strip stays for a second
-click; while a switch is being prepared or dictation owns the box it does nothing. When a
-message is sent, by a suggestion or by typing, or a turn starts from anywhere else, the strip
-collapses to a "Next steps" toggle above the composer that opens it again, and the toggle goes
-when that turn ends. A room shows no strip.
+out, the click opens the provider chooser and sends nothing, and the suggestions stay for a
+second click; while a switch is being prepared or dictation owns the box it does nothing.
+
+The suggestions belong to the reply they were made for. When a message is sent, by a suggestion
+or by typing, or a turn starts from anywhere else, the set leaves the composer at once and is
+drawn in the transcript under the assistant message it follows
+(`views/AnsweredReplySuggestions.ts`): the same line, "See N suggestions", always hidden to
+begin with, whose click shows the pills under it and turns it into "Hide suggestions". A pill
+clicked there is sent now, through the composer like any other, and the line stays. It offers
+no way to switch the placement off. Every answered reply the page knows a set for keeps its
+line: the page keeps each set it is sent by the reply it follows (`sets`, and the stored set it
+drew above the composer, so the line is there the moment the message is sent), and draws one
+under its reply unless that reply is the one the chat now waits on, whose set belongs above the
+composer. Whether a line's pills are shown is the page's own memory, gone with a reload. Since
+the chat app remembers the sets in memory alone, a restart of the app leaves a newly loaded
+page with the line of the last reply only. The line is a part of its own in the reply's stretch
+of the transcript, after the message (`views/conversation-rows.ts`), not inside the message,
+which is drawn once and kept. A room shows neither the line above the composer nor any in its
+transcript, and nor does a chat while next-step suggestions are switched off.
 
 A first-run chat's first conversation is a small tree (`first_run_tree.py`), and the
 suggestions under its scripted replies are the chat app's own. The chat's folder holds the step
@@ -873,9 +916,13 @@ while its tree is in progress, and its first strip is the tree's. A strip shows 
 suggestions the page can act on and is absent when there are none. The page keeps only a
 suggestion whose action it knows, so a newer backend never produces a dead pill.
 
-The strips of the three placements share the composer's column (`views/ChatSuggestions.ts`). At
-most one is open: a strip that opens, by itself or from its toggle, collapses any other, and
-the collapsed ones are toggles side by side in one row over the open strip.
+The strips of the three placements share the composer's column (`views/ChatSuggestions.ts`). An
+open activity or new-chat strip is its pills over its own disable link, right-aligned under
+them; collapsed, it is its toggle. The next-step line is last, directly above the composer. At
+most one strip has its pills shown: one that opens, by itself, from its toggle, or from the
+next-step line, takes the others' pills away, an activity or a new-chat strip to its toggle and
+the next-step strip's back behind its line, and the toggles sit side by side in one row over
+the open strip.
 
 A click on one sends nothing. It points the user at a control, and the layer that owns the
 control draws the bubble (`views/suggestion-actions.ts`); every bubble has one button, "Got it":
@@ -909,13 +956,14 @@ again.
 Three workspace-wide switches say which suggestions are offered, each on unless changed:
 `is_next_step_suggestions_enabled`, `is_activity_suggestions_enabled`, and
 `is_new_chat_suggestions_enabled` in the chat settings (`chat_settings.py`, `GET /api/settings`).
-The next-step switch governs the strip under a reply, and the other two govern what
-`GET /api/suggestions/activity` answers at their placement. `PUT /api/settings` replaces the settings
+The next-step switch governs the line above the composer and the lines in the transcript, and
+the other two govern what `GET /api/suggestions/activity` answers at their placement. `PUT /api/settings` replaces the settings
 whole, so a writer that knows fewer fields would reset the rest; `PUT /api/settings/suggestions`
 takes any of the three switches, changes only those (one left out or null stays as it is), and
-answers the settings as `GET /api/settings` does. Under the pills of each placement's strip the
-workspace's owner is shown its own link ("disable next step suggestions", "disable activity
-suggestions", "disable new chat suggestions"), which switches that placement off through that route: the
+answers the settings as `GET /api/settings` does. Each placement's strip shows the workspace's
+owner its own link ("disable next step suggestions" on the next-step line while its pills are
+shown, "disable activity suggestions" and "disable new chat suggestions" under those strips'
+pills), which switches that placement off through that route: the
 strip goes, a notice with "Undo" takes its place for a few seconds, and where the Imbue Studio
 app says it opens workspace settings the link opens them on their Suggestions group, whose
 switches write through the same route. Every write through either settings route is pushed to

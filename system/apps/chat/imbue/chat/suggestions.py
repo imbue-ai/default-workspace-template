@@ -7,9 +7,10 @@ only the activity and new-chat placements offer those (``activity_suggestions.py
 
 A chat's next-step suggestions are the replies offered under one assistant message, kept as one
 file in the chat's own folder so every page of the chat reads the same set and it travels with
-the chat. The file names the message it follows (``after_event_id``): a page shows the set only
-while that message is still the chat's last assistant message, so a set left over from an
-earlier turn is never shown.
+the chat. The file names the message it follows (``after_event_id``): a page shows the set above
+its composer only while that message is still the chat's last assistant message, so a set left
+over from an earlier turn is never shown there. The sets of the replies before it are remembered
+beside the file, in memory (``suggestion_store.py``).
 """
 
 from enum import auto

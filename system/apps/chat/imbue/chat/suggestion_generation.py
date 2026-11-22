@@ -7,8 +7,8 @@ to read. Every chat is treated alike, whether or not a page is showing it, so a 
 are there when its user comes back to it.
 
 A turn's end always settles the stored set: it is replaced when the model suggests something, and
-removed when it suggests nothing, when the call fails, and when nothing is asked at all, so a set
-never outlives the reply it was made for. A reply is asked about once; a failed call is not retried.
+removed when it suggests nothing, when the call fails, and when nothing is asked at all, so the
+stored set is never an earlier reply's. A reply is asked about once; a failed call is not retried.
 
 The scripted replies of a first-run chat's first conversation get their sets from the tree instead
 (``first_run_tree.py``), stored here at the same turn's end with no model asked.
