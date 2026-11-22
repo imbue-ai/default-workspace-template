@@ -110,7 +110,7 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
 
   display_label?: string;
   // True for a message the agent took into the turn it was already running (the user sent
-  // it while the agent worked), rather than one that started a turn. Claude's parser stamps it.
+  // it while the agent worked), rather than one that started a turn. Claude's, Codex's and Pi's parsers stamp it.
   delivered_mid_turn?: boolean;
   // The body to display when a wrapper sentinel was stripped (a fleet nudge), a notice's
   // summary line, or the user's own words behind machine context (prompt_with_context: a

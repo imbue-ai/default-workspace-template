@@ -36,8 +36,8 @@ from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.pi_coding.inbox import is_sentinel_object
 from imbue.chat.harnesses.pi_coding.queue_tracker import PiQueueTracker
-from imbue.chat.harnesses.pi_coding.session_parser import parse_record
 from imbue.chat.harnesses.pi_coding.session_parser import parse_record_detail
+from imbue.chat.harnesses.pi_coding.session_parser import parse_record_in_chain
 from imbue.chat.harnesses.reply_draft_matching import is_landed_reply
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.session_watcher import QueueSnapshotCallback
@@ -118,6 +118,7 @@ class PiTranscriptLoader(StoreBackedTranscriptLoader):
     _byte_offset: int
     _consumed_static_paths: set[Path]
     _is_static_scan_done: bool
+    _record_links: dict[str, tuple[str | None, str | None]]
 
     @classmethod
     def build_loader(cls, agent_info: AgentInfo) -> "PiTranscriptLoader":
@@ -138,8 +139,11 @@ class PiTranscriptLoader(StoreBackedTranscriptLoader):
         # Static files only ever appear through a rotation (the marker changing) or before
         # the first scan, so the rglob sweep is gated on those rather than run per refresh.
         self._is_static_scan_done = False
+        # Record id -> (message role, parent id) for every record read, across rotations, so a
+        # user record can be placed in pi's chain (see ``parse_record_in_chain``).
+        self._record_links = {}
 
-    # -- the queue's hooks (the watcher's; a loader mirrors no live queue) -----------------
+    # The queue's hooks (the watcher's; a loader mirrors no live queue)
 
     def _consume_inbox_locked(self) -> None:
         """Fold the inbox's new lines into the live queue, before the turns they drain into are read."""
@@ -150,7 +154,7 @@ class PiTranscriptLoader(StoreBackedTranscriptLoader):
     def _on_user_turn_drained_locked(self) -> None:
         """A current-generation ``user_message`` was committed: one queued message left the queue."""
 
-    # -- base hooks -----------------------------------------------------------------------
+    # Base hooks
 
     def _refresh_locked(self) -> None:
         """Bring the store (and the watcher's queue) up to date with disk: the inbox first (so
@@ -194,7 +198,7 @@ class PiTranscriptLoader(StoreBackedTranscriptLoader):
             self._byte_offset = 0
         self._consume_live_tail_locked(target, process_started_at)
 
-    # -- session-file consumption ---------------------------------------------------------
+    # Session-file consumption
 
     def _consume_whole_file_locked(self, path: Path, process_started_at: float | None) -> bool:
         """Read and ingest a non-live session file in full. Returns whether it was fully
@@ -279,7 +283,7 @@ class PiTranscriptLoader(StoreBackedTranscriptLoader):
             return []
         if not isinstance(record, dict):
             return []
-        return parse_record(record)
+        return parse_record_in_chain(record, self._record_links)
 
     def _read_process_started_at(self) -> float | None:
         """The ``pi_process_started`` marker's mtime, or None when it is absent."""
@@ -288,7 +292,7 @@ class PiTranscriptLoader(StoreBackedTranscriptLoader):
         except OSError:
             return None
 
-    # -- on-demand payload detail ---------------------------------------------------------
+    # On-demand payload detail
 
     def _parse_detail(
         self, event: dict[str, Any], source_line: str | None, thinking_line: str | None
@@ -365,7 +369,7 @@ class PiSessionWatcher(PiTranscriptLoader, StoreBackedWatcher):
         self._last_queue_snapshot = []
         return self
 
-    # -- base hooks -----------------------------------------------------------------------
+    # Base hooks
 
     def _watch_paths(self) -> tuple[Path, ...]:
         # The sessions dir (recursive, so appends to whichever session file is live wake
@@ -400,7 +404,7 @@ class PiSessionWatcher(PiTranscriptLoader, StoreBackedWatcher):
             text="" if is_landed_reply(text, baseline.landed_reply_texts) else text,
         )
 
-    # -- inbox / queue --------------------------------------------------------------------
+    # Inbox / queue
 
     def _consume_inbox_locked(self) -> None:
         """Read new lines from ``pi_inbox`` and enqueue each into the queue populator.
@@ -470,7 +474,7 @@ class PiSessionWatcher(PiTranscriptLoader, StoreBackedWatcher):
         if callback is not None:
             callback(snapshot)
 
-    # -- queued messages (the shoulder-tap surface) ---------------------------------------
+    # Queued messages (the shoulder-tap surface)
 
     def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
         self._queue_snapshot_callback = callback

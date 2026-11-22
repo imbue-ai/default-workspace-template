@@ -1,0 +1,3 @@
+Codex and Pi chats now keep the agent's answer to a message sent mid-task visible, the way Claude chats already do. Both parsers mark a message the agent took into the turn it was running (a Codex steer, a Pi steer), so everything the agent says after it, until its turn ends, shows as messages instead of folding into a progress step. A message sent after Stop still starts a new turn and is not marked.
+
+Pi messages that hold both text and tool calls are now split into a line and the work, the shape Claude and Codex transcripts already have, so a Pi answer or closing remark written beside a tool call no longer folds into the step with it.

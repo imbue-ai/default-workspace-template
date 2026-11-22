@@ -180,6 +180,40 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
     return event
 
 
+def _tool_calls_event_id(event_id: str) -> str:
+    return f"{event_id}-tools"
+
+
+def _splits_text_from_tool_calls(content: Any) -> bool:
+    """Whether an assistant message carries both prose and tool calls.
+
+    Claude and codex write each as its own transcript line, and the chat groups by that shape: a
+    tool call is work inside a step, prose on its own is a line the user reads. pi keeps both in one
+    message, so the parser splits them, or an answer written beside a tool call would fold into the
+    step with the work.
+    """
+    if not isinstance(content, list):
+        return False
+    block_types = {block.get("type") for block in content if isinstance(block, dict)}
+    return "toolCall" in block_types and bool(_text_from_content(content))
+
+
+def _assistant_events(event_id: str, timestamp: str, message: dict[str, Any]) -> list[dict[str, Any]]:
+    """One event per assistant message, or a prose event then a tool-call event when it has both.
+
+    The tool-call event carries the stop reason and usage; the prose event comes first, the order
+    the agent writes them in.
+    """
+    event = _assistant_event(event_id, timestamp, message)
+    if not _splits_text_from_tool_calls(message.get("content")):
+        return [event]
+    tools_event_id = _tool_calls_event_id(event_id)
+    prose = {**event, "tool_calls": [], "stop_reason": None, "usage": None}
+    tool_calls = {**event, "event_id": tools_event_id, "message_uuid": tools_event_id, "text": ""}
+    tool_calls.pop("has_thinking", None)
+    return [prose, tool_calls]
+
+
 def _user_event(event_id: str, timestamp: str, message: dict[str, Any]) -> dict[str, Any]:
     content = _text_from_content(message.get("content"))
     event: dict[str, Any] = {
@@ -272,11 +306,55 @@ def parse_record(record: dict[str, Any]) -> list[dict[str, Any]]:
     if role == "user":
         return [_user_event(event_id, timestamp, message)]
     if role == "assistant":
-        return [_assistant_event(event_id, timestamp, message)]
+        return _assistant_events(event_id, timestamp, message)
     if role == "toolResult":
         return [_tool_result_event(event_id, timestamp, message)]
     # bashExecution / custom / branchSummary / compactionSummary etc. -> not rendered.
     return []
+
+
+def parse_record_in_chain(
+    record: dict[str, Any], record_links: dict[str, tuple[str | None, str | None]]
+) -> list[dict[str, Any]]:
+    """:func:`parse_record`, plus the stamp only the record's place in pi's chain can decide.
+
+    ``record_links`` is a mutable cross-record map, record id -> (message role or ``None``, parent
+    id), filled as records are read in order. A user record whose nearest conversation ancestor is
+    a tool result was steered into the running turn (pi injects a message sent while it works after
+    the current tool round), so it is stamped ``delivered_mid_turn``; one that follows the agent's
+    reply, or opens the session, started a turn.
+    """
+    record_id = record.get("id")
+    parent_id = record.get("parentId")
+    parent_id = parent_id if isinstance(parent_id, str) else None
+    message = record.get("message")
+    role = message.get("role") if record.get("type") == "message" and isinstance(message, dict) else None
+    if isinstance(record_id, str) and record_id:
+        record_links[record_id] = (role if isinstance(role, str) else None, parent_id)
+    events = parse_record(record)
+    if role == "user" and _conversation_role_before(parent_id, record_links) == "toolResult":
+        for event in events:
+            event["delivered_mid_turn"] = True
+    return events
+
+
+def _conversation_role_before(
+    parent_id: str | None, record_links: dict[str, tuple[str | None, str | None]]
+) -> str | None:
+    """The role of the nearest message up the chain from ``parent_id``, or None.
+
+    A non-message record (a model change) and a ``system`` message (pi's prompt sections) sit in the
+    chain without being part of the conversation, so they are skipped."""
+    seen: set[str] = set()
+    while parent_id is not None and parent_id not in seen:
+        seen.add(parent_id)
+        link = record_links.get(parent_id)
+        if link is None:
+            return None
+        role, parent_id = link
+        if role is not None and role != "system":
+            return role
+    return None
 
 
 def parse_record_detail(record: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -303,13 +381,26 @@ def parse_record_detail(record: dict[str, Any]) -> dict[str, dict[str, Any]]:
         thinking = _thinking_text(content)
         if not inputs_by_tool_call_id and not thinking:
             return {}
-        return {
-            event_id: {
+        if not _splits_text_from_tool_calls(content):
+            return {
+                event_id: {
+                    "inputs_by_tool_call_id": inputs_by_tool_call_id,
+                    "output": None,
+                    "thinking": thinking or None,
+                }
+            }
+        # Split like the events (see ``_assistant_events``): the thinking stays on the prose event,
+        # the inputs go with the calls.
+        details = {
+            _tool_calls_event_id(event_id): {
                 "inputs_by_tool_call_id": inputs_by_tool_call_id,
                 "output": None,
-                "thinking": thinking or None,
+                "thinking": None,
             }
         }
+        if thinking:
+            details[event_id] = {"inputs_by_tool_call_id": {}, "output": None, "thinking": thinking}
+        return details
     if role == "toolResult":
         return {
             event_id: {

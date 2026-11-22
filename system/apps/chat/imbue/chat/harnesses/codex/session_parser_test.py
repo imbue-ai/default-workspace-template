@@ -7,6 +7,7 @@ user-bubble / turn-abort sourcing, and the self-contained web-search expansion.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -655,3 +656,83 @@ def test_context_compaction_synthetic_id_when_no_turn_or_item_id() -> None:
     event = events[0]
     assert event["event_id"].startswith("codex-context_compacted-2026-09-21T19:30:50.404Z-")
 
+
+_TESTDATA = Path(__file__).parent / "testdata"
+
+
+def _user_bubbles_of_rollout(path: Path) -> list[dict[str, Any]]:
+    tool_name_by_call_id: dict[str, str] = {}
+    turn_state: dict[str, Any] = {}
+    events: list[dict[str, Any]] = []
+    for line in path.read_text().splitlines():
+        events.extend(parse_lines(json.loads(line), tool_name_by_call_id, turn_state))
+    return [event for event in events if event["type"] == "user_message" and event["role"] == "user"]
+
+
+@pytest.mark.parametrize(
+    ("fixture", "steered_text"),
+    [
+        ("rollout_steered_question_cxQ1.jsonl", "what is a harness?"),
+        ("rollout_steered_question_cxL1.jsonl", "which app folder in this workspace is the biggest on disk?"),
+    ],
+)
+def test_a_real_steer_is_stamped_delivered_mid_turn(fixture: str, steered_text: str) -> None:
+    """Real codex-cli 0.166.0 rollouts: a message sent while codex worked was committed inside the
+    running turn, after the message that opened it."""
+    opener, steer = _user_bubbles_of_rollout(_TESTDATA / fixture)
+    assert "delivered_mid_turn" not in opener
+    assert steer["content"] == steered_text
+    assert steer["delivered_mid_turn"] is True
+
+
+def _turn_marker(payload_type: str, turn_id: str) -> dict[str, Any]:
+    return {
+        "timestamp": "2026-07-19T10:00:00.000Z",
+        "type": "event_msg",
+        "payload": {"type": payload_type, "turn_id": turn_id},
+    }
+
+
+def _bubbles(lines: list[dict[str, Any]], turn_state: dict[str, Any] | None) -> list[dict[str, Any]]:
+    events = [event for line in lines for event in parse_lines(line, {}, turn_state)]
+    return [event for event in events if event["type"] == "user_message"]
+
+
+@pytest.mark.parametrize("ending", ["task_complete", "turn_aborted"])
+def test_a_message_that_opens_the_next_turn_is_not_stamped(ending: str) -> None:
+    lines = [
+        _turn_marker("task_started", "t1"),
+        _item_user_line("first", "2026-07-19T10:00:01.000Z"),
+        _turn_marker(ending, "t1"),
+        _turn_marker("task_started", "t2"),
+        _item_user_line("second", "2026-07-19T10:00:02.000Z"),
+    ]
+    assert ["delivered_mid_turn" in bubble for bubble in _bubbles(lines, {})] == [False, False]
+
+
+def test_a_reserialised_copy_of_the_opener_is_not_taken_for_a_steer() -> None:
+    lines = [
+        _turn_marker("task_started", "t1"),
+        _item_user_line("first", "2026-07-19T10:00:01.000Z"),
+        _item_user_line("first", "2026-07-19T10:00:01.000Z"),
+        _item_user_line("steer", "2026-07-19T10:00:03.000Z"),
+    ]
+    assert ["delivered_mid_turn" in bubble for bubble in _bubbles(lines, {})] == [False, False, True]
+
+
+def test_without_turn_tracking_or_a_turn_marker_nothing_is_stamped() -> None:
+    lines = [
+        _item_user_line("first", "2026-07-19T10:00:01.000Z"),
+        _item_user_line("second", "2026-07-19T10:00:02.000Z"),
+    ]
+    assert not any("delivered_mid_turn" in bubble for bubble in _bubbles(lines, {}))
+    with_marker = [_turn_marker("task_started", "t1"), *lines]
+    assert not any("delivered_mid_turn" in bubble for bubble in _bubbles(with_marker, None))
+
+
+def test_a_real_message_sent_after_stop_opens_its_own_turn_unstamped() -> None:
+    """Real codex-cli 0.166.0 rollout: Stop aborted the turn, and the next message started a new one."""
+    opener, after_stop = _user_bubbles_of_rollout(_TESTDATA / "rollout_stop_then_ask_cxX1.jsonl")
+    assert after_stop["content"] == "which app folder in this workspace is the biggest on disk?"
+    assert "delivered_mid_turn" not in opener
+    assert "delivered_mid_turn" not in after_stop
