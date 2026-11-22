@@ -23,6 +23,7 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     isTouch: false,
     isMenuOpen: false,
     hasAppChat: true,
+    hasShare: false,
     sizeMenuTrigger: {},
     isShielded: false,
     isStopped: false,
@@ -107,6 +108,27 @@ describe("Window", () => {
     expect(onControl).toHaveBeenCalledWith("close", expect.anything());
     (element.querySelector('[data-window-control="app-chat"]') as HTMLElement).click();
     expect(onControl).toHaveBeenCalledWith("app-chat", expect.anything());
+  });
+
+  it("offers Share after the balloon where the caller says so, with its word once the window is wide enough", () => {
+    const onControl = vi.fn();
+    const narrow = render({ hasShare: true, onControl });
+    expect(controlNamesOf(narrow)).toEqual(["menu", "refresh", "app-chat", "share", "minimize", "maximize", "close"]);
+    const share = narrow.querySelector('[data-window-control="share"]') as HTMLElement;
+    expect(share.textContent).toBe("");
+    share.click();
+    expect(onControl).toHaveBeenCalledWith("share", expect.anything());
+    unmountViews();
+
+    const wideRect = { x: 0, y: 0, width: 1000, height: 480 };
+    const wide = render({ hasShare: true, rect: wideRect });
+    expect(wide.querySelector('[data-window-control="share"]')?.textContent).toBe("Share");
+    unmountViews();
+    // A touch client's wider controls leave the word no room at the same width.
+    const touch = render({ hasShare: true, rect: wideRect, isTouch: true });
+    expect(touch.querySelector('[data-window-control="share"]')?.textContent).toBe("");
+    unmountViews();
+    expect(controlNamesOf(render({ hasShare: true, isFocused: false }))).toEqual(["minimize", "maximize", "close"]);
   });
 
   it("offers Chat about this app only where the caller says so, and no title action on an unfocused window", () => {

@@ -1,0 +1,3 @@
+A focused window's title bar offers Share after "Chat about this app": a glyph and the word "Share" that ask the Imbue Studio chrome to open its share settings for the window's app. It is offered to the workspace's owner, under a chrome that has announced its capabilities, on every window of an app that is not internal. On a window too narrow to keep the word clear of the centred title, it is the glyph alone.
+
+The window menu's Share row, on the desktop and on the phone, is offered by the same rule and drawn with the same glyph, so the chat and the terminal now have it: any app that is not internal can be shared, where before a critical app could not.

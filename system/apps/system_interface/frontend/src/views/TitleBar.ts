@@ -2,14 +2,18 @@
  * A window's title bar (concepts.md section 2.7; the multiplayer spec, section 9.1), drawn from the theme's
  * chrome slots (docs/system/blueprint/workspace-themes/, section 4.3): the leading slots from the left edge, the
  * trailing ones ending at the right. The standard look is, while the window is focused, the window menu (three
- * dots), Refresh, and "Chat about this app" (a speech balloon, on every window of an app that is not internal);
- * the app icon and the title centred over the bar; then minimize, maximize (fullscreen and restore when
- * maximized: the state control cycles on from maximized to the whole viewport, the Screen spec's L2 layer), and
- * close at the right edge. A theme may rearrange the slots and align the title its own way, never drop a control;
- * the balloon follows Refresh wherever the theme puts it. Resting on the maximize control opens the window's size
- * menu, which the window menu opens under Move and resize too. It is the drag handle (``data-drag-handle``); a
- * double click toggles maximize. A pinned window keeps its close control too, so the habit of reaching for it
- * holds; the desktop answers it by minimizing the window.
+ * dots), Refresh, "Chat about this app" (a speech balloon, on every window of an app that is not internal), and
+ * Share (the app's share settings in the Imbue Studio chrome: for the workspace's owner, under a chrome that can
+ * open them, on every window of an app that is not internal); the app icon and the title centred over the bar;
+ * then minimize, maximize (fullscreen and restore when maximized: the state control cycles on from maximized to
+ * the whole viewport, the Screen spec's L2 layer), and close at the right edge. Share wears its word beside its
+ * glyph on a bar wide enough to keep the word clear of the centred title, and its glyph alone on a narrower one
+ * (``isShareLabelShown``). A theme may rearrange the slots and align the title its own way, never drop a slot's
+ * control; the balloon and Share follow Refresh wherever the theme puts it, and a theme whose controls have no
+ * room for a word hides Share, which its window menu still offers. Resting on the maximize control opens the
+ * window's size menu, which the window menu opens under Move and resize too. It is the drag handle
+ * (``data-drag-handle``); a double click toggles maximize. A pinned window keeps its close control too, so the
+ * habit of reaching for it holds; the desktop answers it by minimizing the window.
  */
 
 import m from "mithril";
@@ -30,9 +34,23 @@ const TITLE_ACTION_GLYPH_SIZE = 12;
 const APP_GLYPH_SIZE = 20;
 
 export type WindowControl =
-  "minimize" | "maximize" | "fullscreen" | "restore" | "close" | "menu" | "refresh" | "app-chat";
+  "minimize" | "maximize" | "fullscreen" | "restore" | "close" | "menu" | "refresh" | "app-chat" | "share";
 
 const APP_CHAT_LABEL = "Chat about this app";
+const SHARE_LABEL = "Share";
+
+/** The bar widths from which Share wears its word. The centred title may take three fifths of the bar, so only the
+ *  fifth at each end is sure to be clear of it, and the run that ends in the labelled Share (the bar's inset, the
+ *  window menu, Refresh, the balloon, then Share and its word, at the standard look's sizes) has to fit in that
+ *  fifth with a little air after it. A touch client is asked for the width that run takes with every control as
+ *  wide as the touch target. These are breakpoints, as the phone's is, rather than metrics a theme sets. */
+const SHARE_LABEL_MIN_BAR_WIDTH = 920;
+const SHARE_LABEL_MIN_TOUCH_BAR_WIDTH = 1160;
+
+/** Whether Share wears its word on a bar this wide, or its glyph alone. */
+export function isShareLabelShown(barWidth: number, isTouch: boolean): boolean {
+  return barWidth >= (isTouch ? SHARE_LABEL_MIN_TOUCH_BAR_WIDTH : SHARE_LABEL_MIN_BAR_WIDTH);
+}
 
 export interface TitleBarAttrs {
   readonly title: string;
@@ -43,6 +61,13 @@ export interface TitleBarAttrs {
   /** Whether the bar offers "Chat about this app": an app that is not internal, on a machine with an app-chat launch
    *  path (the multiplayer spec, section 9.1); absent reads as not offered. */
   readonly hasAppChat?: boolean;
+  /** Whether the bar offers Share: an app that can be shared on its own (``isAppShareable``), to the workspace's
+   *  owner, under an Imbue Studio chrome that opens its share settings; absent reads as not offered. */
+  readonly hasShare?: boolean;
+  /** The bar's width, which is the window's, and whether the client is a touch one: Share wears its word only
+   *  where the two leave it room (``isShareLabelShown``). An absent width reads as too narrow for the word. */
+  readonly width?: number;
+  readonly isTouch?: boolean;
   /** Spread onto the maximize control: resting on it opens the window's size menu. */
   readonly sizeMenuTrigger: m.Attributes;
   readonly onControl: (control: WindowControl, event: MouseEvent) => void;
@@ -57,7 +82,12 @@ function control(
   markup: string,
   isOpen: boolean,
   onControl: TitleBarAttrs["onControl"],
-  options: { readonly extra?: string; readonly hover?: m.Attributes } = {},
+  options: {
+    readonly extra?: string;
+    readonly hover?: m.Attributes;
+    /** A word beside the glyph, which makes the control a labelled button as wide as the two need. */
+    readonly text?: string;
+  } = {},
 ): m.Vnode {
   // One box for every control in the bar, whatever size of glyph it holds: the hover boxes then
   // line up and read as one row of targets, and the pointer crosses between them without aiming.
@@ -70,8 +100,9 @@ function control(
     Button,
     {
       variant: "ghost",
-      icon: true,
+      icon: options.text === undefined,
       sm: true,
+      quiet: options.text !== undefined,
       extra,
       "data-window-control": name,
       ...partAttrs("window-control"),
@@ -89,7 +120,11 @@ function control(
       },
       ondblclick: (event: MouseEvent) => event.stopPropagation(),
     },
-    m.trust(markup),
+    options.text === undefined
+      ? m.trust(markup)
+      : // In the title's size and a lighter weight than its bold: the word belongs to the bar's type without
+        // competing with the window's name.
+        [m.trust(markup), m("span", { class: "text-(length:--font-size-row)" }, options.text)],
   );
 }
 
@@ -119,6 +154,9 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
         isFocused,
         isMenuOpen,
         hasAppChat,
+        hasShare,
+        width,
+        isTouch,
         sizeMenuTrigger,
         onControl,
         onDoubleClick,
@@ -182,13 +220,29 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
                 extra: margin,
               },
             );
-            // The balloon follows Refresh wherever the theme puts it (the multiplayer spec, section 9.1).
-            if (!hasAppChat) return refresh;
+            // The balloon follows Refresh wherever the theme puts it (the multiplayer spec, section 9.1), and Share
+            // follows the balloon.
             return [
               refresh,
-              control("app-chat", APP_CHAT_LABEL, glyph("balloon", TITLE_ACTION_GLYPH_SIZE), false, onControl, {
-                extra: "ml-0.5",
-              }),
+              hasAppChat
+                ? control("app-chat", APP_CHAT_LABEL, glyph("balloon", TITLE_ACTION_GLYPH_SIZE), false, onControl, {
+                    extra: "ml-0.5",
+                  })
+                : null,
+              hasShare
+                ? control(
+                    "share",
+                    app === undefined ? SHARE_LABEL : `${SHARE_LABEL} ${app.display_name}`,
+                    icon("share", { size: TITLE_ACTION_GLYPH_SIZE }),
+                    false,
+                    onControl,
+                    {
+                      extra: "ml-0.5",
+                      text:
+                        width !== undefined && isShareLabelShown(width, isTouch === true) ? SHARE_LABEL : undefined,
+                    },
+                  )
+                : null,
             ];
           }
           case "menu":

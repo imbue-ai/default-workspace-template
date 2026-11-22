@@ -99,12 +99,16 @@ A page that ends up somewhere else reports its real path, and the window follows
 
 ### 2.7 Title bar and window controls
 
-Left to right: while the window is focused, the window menu (three dots), Refresh, and "Chat about this app" (a speech balloon, on every window of an app that is not internal; the multiplayer spec, section 9); the app icon and the title centred over the bar; then at the right edge minimize, maximize (fullscreen and restore when maximized), close.
+Left to right: while the window is focused, the window menu (three dots), Refresh, "Chat about this app" (a speech balloon, on every window of an app that is not internal; the multiplayer spec, section 9), and Share; the app icon and the title centred over the bar; then at the right edge minimize, maximize (fullscreen and restore when maximized), close.
 No status indicator.
+Share asks the Imbue Studio chrome to open its share settings for the window's app (`minds:open-share-settings` with the app's name).
+It is offered to the workspace's owner, under a chrome that has said what it can do, on every window of an app that is not internal, the chat and the terminal included.
+It is a glyph and the word "Share" on a bar wide enough to keep the word clear of the centred title, and the glyph alone on a narrower one.
+The Classic Mac and Windows 2000 themes, whose title bar controls have no room for a word, hide it and leave Share to the window menu.
 "Chat about this app" opens the chat about the app (the one labelled `app_chat` with the app's name, else the one titled "<App display name> Chat", made with both on the default provider when there is none; the chat app's own windows open "Chat Chat") through the chat app's `app-chat` launch path, and lays the two windows out side by side for this client, the chat on the half it was already nearer and on top (section 9.2 of the spec).
 The title bar is the drag handle; double-click toggles maximize; dragging to the left or right edge snaps to that half, and to the top edge maximizes.
 A fullscreen window has no title bar: a strip at its top edge shows on hover with Exit fullscreen and, where the Imbue Studio chrome can take the whole app window with the keyboard locked, Immersive (the Screen spec, section 12; mngr's `specs/screen-studio-integration/spec.md`).
-The window menu offers Move and resize, Fullscreen, Immersive (where the chrome can), Open in its own window (where the embedding chrome can pull windows out), Share, Quit the app (which closes every window of it and stops it; `docs/system/specs/stop-when-no-windows.md`), and Close.
+The window menu offers Move and resize, Fullscreen, Immersive (where the chrome can), Open in its own window (where the embedding chrome can pull windows out), Share (for every app that is not internal), Quit the app (which closes every window of it and stops it; `docs/system/specs/stop-when-no-windows.md`), and Close.
 Close removes the window from the desktop for everyone; there is no separate "remove from desktop".
 A pinned window keeps its close control and its menus' Close, and each closes it for this client alone: the shared window is never closed, only minimized, and its entry leaves this client's bar until something shows the window again.
 
