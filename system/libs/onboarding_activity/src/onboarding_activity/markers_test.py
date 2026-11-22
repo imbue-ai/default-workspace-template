@@ -15,7 +15,6 @@ def test_the_markers_are_the_closed_set_the_writers_and_the_readers_share() -> N
         "phone_layout_used",
         "second_chat_started",
         "permission_request_filed",
-        "connect_data_coach_shown",
         "app_build_started",
     ]
 

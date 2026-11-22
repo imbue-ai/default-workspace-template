@@ -1,7 +1,7 @@
 [project]
 name = "onboarding-activity"
 version = "0.1.0"
-description = "One-way marker files recording what a workspace's owner has already done, which the chat's activity suggestions read. Stdlib-only so a skill's script can import it without the app stack."
+description = "One-way marker files recording what a workspace's owner has already done, and the onboarding items the chat's new-chat suggestions and the onboarding checklist show from them. Stdlib-only so a skill's script can import it without the app stack."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []

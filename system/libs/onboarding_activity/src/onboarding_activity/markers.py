@@ -1,8 +1,9 @@
 """One-way markers recording what a workspace's owner has already done.
 
-The chat's activity suggestions offer things the owner has not tried yet. What tells them a thing
-was tried may not last (a second chat is deleted, a phone is put away), so each fact is kept as a
-marker that is only ever set: an empty file under the marker directory::
+The chat's new-chat suggestions and the onboarding checklist show things the owner has not tried
+yet (``items.py``). What tells them a thing was tried may not last (a second chat is deleted, a
+phone is put away), so each fact is kept as a marker that is only ever set: an empty file under
+the marker directory::
 
     data/.state/onboarding_activity/<marker>
 
@@ -41,8 +42,6 @@ class Marker(StrEnum):
     SECOND_CHAT_STARTED = "second_chat_started"
     # An agent filed a permission request in a chat the chat app follows.
     PERMISSION_REQUEST_FILED = "permission_request_filed"
-    # The owner was shown where the workspace's connections live.
-    CONNECT_DATA_COACH_SHOWN = "connect_data_coach_shown"
     # The build-app skill's scaffolder ran; its time is that of the latest run.
     APP_BUILD_STARTED = "app_build_started"
 
