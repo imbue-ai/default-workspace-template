@@ -5,7 +5,7 @@
  * The time is the transcript's own timestamp of the latest message from either side, so a helper chat messaged
  * only by the agent that started it reads as right as one the user talks to. A compaction, a system chip or
  * another injection the transcript records as a user message does not count. It hides while the agent works on a
- * turn (the status row says so) and while a send of this page is on its way.
+ * turn (the status row says so) and while a message is on its way to it, from this page or another.
  */
 
 import m from "mithril";
@@ -25,7 +25,7 @@ function isMessage(event: TranscriptEvent): boolean {
 export function lastMessageAtMs(chatId: string, events: readonly TranscriptEvent[]): number | null {
   const chat = getChatById(chatId);
   if (chat === undefined || chat.status === "working" || chat.handoff !== null) return null;
-  if (getOutgoingMessages(chatId).length > 0) return null;
+  if (chat.active_agent.queued_messages.length > 0 || getOutgoingMessages(chatId).length > 0) return null;
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i];
     if (!isMessage(event)) continue;

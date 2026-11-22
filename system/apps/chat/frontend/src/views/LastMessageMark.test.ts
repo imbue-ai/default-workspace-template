@@ -47,7 +47,7 @@ function reply(timestamp: string): AssistantMessageEvent {
   };
 }
 
-function setChat(overrides: Partial<Omit<ChatSnapshot, "active_agent">> = {}): void {
+function setChat(overrides: Parameters<typeof chatSnapshotFixture>[1] = {}): void {
   chats.set(CHAT_ID, chatSnapshotFixture(CHAT_ID, overrides));
 }
 
@@ -81,7 +81,7 @@ describe("the last-message line under the latest message", () => {
     expect(lastMessageAtMs(CHAT_ID, events)).toBe(Date.parse("2026-10-24T10:00:00Z"));
   });
 
-  it("shows in every state but a working turn, a switch and this page's own send on its way", () => {
+  it("shows in every state but a working turn, a switch and a message on its way", () => {
     const events = [reply("2026-10-24T10:00:00Z")];
     for (const status of ["idle", "attention", "background", "stopped"]) {
       setChat({ status });
@@ -90,6 +90,10 @@ describe("the last-message line under the latest message", () => {
     setChat({ status: "working" });
     expect(lastMessageAtMs(CHAT_ID, events)).toBeNull();
     setChat({ handoff: handoffStateFixture() });
+    expect(lastMessageAtMs(CHAT_ID, events)).toBeNull();
+    setChat({
+      active_agent: { queued_messages: [{ queued_id: "q1", content: "next", timestamp: "2026-10-27T11:59:00Z" }] },
+    });
     expect(lastMessageAtMs(CHAT_ID, events)).toBeNull();
     setChat();
     addOutgoing(CHAT_ID, "again");
