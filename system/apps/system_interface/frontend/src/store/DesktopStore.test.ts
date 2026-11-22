@@ -103,7 +103,10 @@ function notices(): string[] {
 
 function makeStore(
   redraw: () => void = () => undefined,
-  extra: Pick<StoreDependencies, "popOut" | "appExport" | "soloWindowId" | "isSoloReopened" | "outsideLinks" | "immersive"> = {},
+  extra: Pick<
+    StoreDependencies,
+    "popOut" | "appExport" | "soloWindowId" | "isSoloReopened" | "outsideLinks" | "immersive"
+  > = {},
 ): DesktopStore {
   const store = new DesktopStore({
     clientId: CLIENT,
