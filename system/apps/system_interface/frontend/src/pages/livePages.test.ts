@@ -25,6 +25,7 @@ import {
   SHELL_OPEN,
   SHELL_OPEN_LINK,
   SHELL_SHOWN,
+  SHELL_SHOW_COACH_CARD,
   SHELL_THEME,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
@@ -53,6 +54,7 @@ import {
   WATCHER_RAISE_HOLD_TICKS,
   pageFrameAllow,
 } from "./livePages";
+import type { LivePagesOptions } from "./livePages";
 
 const METRICS = themeMetricsRecord();
 const CLIENT = "client-1";
@@ -68,6 +70,13 @@ let host: HTMLElement;
 let windows: HTMLElement;
 let overviewTiles: HTMLElement;
 let layer: LivePagesLayer;
+/** The coach cards the pages asked the layer for, as a text and the chrome control each names. */
+let coachCards: [string, string][] = [];
+const PAGE_OPTIONS: LivePagesOptions = {
+  host: "127.0.0.1:8000",
+  protocol: "http:",
+  showCoachCard: (text, chromeAnchor) => coachCards.push([text, chromeAnchor]),
+};
 /** Longer than the schedule the shell posts a raised window's page its focus grants over. */
 const FOCUS_GRANT_SCHEDULE_MS = 2000;
 
@@ -244,7 +253,8 @@ beforeEach(async () => {
   resetEmbedderRelayForTesting();
   initEmbedderRelay();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
-  layer = new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" });
+  coachCards = [];
+  layer = new LivePagesLayer(host, store, PAGE_OPTIONS);
   layer.start();
   await store.start(NO_LINK);
   socket.deliver().onAppsUpdated([docs, notes]);
@@ -777,7 +787,7 @@ describe("the contract", () => {
     ]);
 
     spy.mockClear();
-    new LivePagesLayer(document.createElement("div"), store, { host: "127.0.0.1:8000", protocol: "http:" }).start();
+    new LivePagesLayer(document.createElement("div"), store, PAGE_OPTIONS).start();
     void wearTheme({ id: "windows-2000", revision: "r2" });
     expect(spy).not.toHaveBeenCalled();
   });
@@ -819,6 +829,7 @@ describe("the contract", () => {
         path: "/?doc=1",
         opensLocalFiles: false,
         opensWorkspaceSettings: false,
+        showsCoachMarks: false,
         isViewing: false,
       },
       // The theme the page wears follows every handshake (workspace-themes plan section 5.3).
@@ -840,6 +851,7 @@ describe("the contract", () => {
         path: "/?doc=1",
         opensLocalFiles: false,
         opensWorkspaceSettings: false,
+        showsCoachMarks: false,
         isViewing: false,
       },
       { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
@@ -888,6 +900,13 @@ describe("the contract", () => {
     const spy = spyOnFrame("win-1");
     load("win-1");
     expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, opensWorkspaceSettings: true });
+  });
+
+  it("tells a page in its handshake whether the embedder draws coach marks on its own controls", () => {
+    store.setShowsCoachMarks(true);
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, showsCoachMarks: true });
   });
 
   it("greets a page reloaded while hidden with its own desktop, not the active one", async () => {
@@ -1341,6 +1360,33 @@ describe("the contract", () => {
     messageFromPage("win-1", { type: SHELL_DRAFT_TEXT });
     await settle();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("shell:draft-text ignored"));
+    warn.mockRestore();
+  });
+
+  it("shows a page's shell:show-coach-card as the page's words under the chrome control it names", () => {
+    messageFromPage("win-1", {
+      type: SHELL_SHOW_COACH_CARD,
+      text: "Your connections live here.",
+      chromeAnchor: "permissions",
+    });
+    expect(coachCards).toEqual([["Your connections live here.", "permissions"]]);
+  });
+
+  it("drops a shell:show-coach-card whose anchor is not one of the chrome's, or whose text is missing, empty or too long", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "Look here.", chromeAnchor: "taskbar" });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "Look here." });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "Look here.", chromeAnchor: 3 });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, chromeAnchor: "share" });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "", chromeAnchor: "share" });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: ["Look here."], chromeAnchor: "share" });
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "x".repeat(501), chromeAnchor: "share" });
+    expect(coachCards).toEqual([]);
+    // Dropped without a word: a page newer than this shell may name an anchor it does not know.
+    expect(warn).not.toHaveBeenCalled();
+
+    messageFromPage("win-1", { type: SHELL_SHOW_COACH_CARD, text: "x".repeat(500), chromeAnchor: "share" });
+    expect(coachCards).toEqual([["x".repeat(500), "share"]]);
     warn.mockRestore();
   });
 
@@ -1865,7 +1911,7 @@ describe("raising the window the document's focus lands in", () => {
     const timers = vi.getTimerCount();
     tick(2);
     expect(vi.getTimerCount()).toBe(timers);
-    new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" }).start();
+    new LivePagesLayer(host, store, PAGE_OPTIONS).start();
     expect(vi.getTimerCount()).toBe(timers);
     // The newer layer has no pages yet, so only the replaced layer's watcher could raise for this landing.
     frameOf("win-1").focus();
@@ -1886,7 +1932,7 @@ describe("raising the window the document's focus lands in", () => {
   it("leaves the watcher of the layer that replaced it running when a replaced layer is stopped", () => {
     vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
     const timers = vi.getTimerCount();
-    const newer = new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" });
+    const newer = new LivePagesLayer(host, store, PAGE_OPTIONS);
     newer.start();
     layer.stop();
     expect(vi.getTimerCount()).toBe(timers);
@@ -1932,7 +1978,7 @@ describe("the focus grants a raised window's page is sent", () => {
   it("drops the pending grants of a layer that a newer one replaces", () => {
     const grants = spyOnFrame("win-2");
     vi.advanceTimersByTime(100);
-    new LivePagesLayer(host, store, { host: "127.0.0.1:8000", protocol: "http:" }).start();
+    new LivePagesLayer(host, store, PAGE_OPTIONS).start();
     vi.advanceTimersByTime(FOCUS_GRANT_SCHEDULE_MS);
     expect(grantsSeen(grants)).toBe(1);
   });

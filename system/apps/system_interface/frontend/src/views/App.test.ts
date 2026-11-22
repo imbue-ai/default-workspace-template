@@ -9,7 +9,9 @@ import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import type { Desktop, DesktopShortcut } from "../model/records";
+import { SHELL_SHOW_COACH_CARD } from "@imbue/workspace-ui/src/app_contract";
 import { FOCUS_WATCH_INTERVAL_MS } from "../pages/livePages";
+import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
 import { DesktopStore } from "../store/DesktopStore";
 import { TourController } from "../model/tour";
 import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
@@ -108,6 +110,7 @@ async function mountApp(
     api: new FakeTourApi({ isSeen: true }),
     highlightChrome: () => undefined,
     isAutoStartAllowed: () => false,
+    isViewerOwner: () => true,
     redraw: () => m.redraw(),
   });
   mountView(() => m(App, { store, gestures, tour, host: "127.0.0.1:8000", protocol: "http:" }));
@@ -1367,6 +1370,30 @@ describe("a fullscreen window", () => {
     m.redraw.sync();
     expect(document.querySelector("[data-fullscreen-window]")).toBeNull();
     expect(document.querySelector('[data-window-id="win-1"]')?.getAttribute("data-window-state")).toBe("NORMAL");
+  });
+});
+
+describe("a page's coach card", () => {
+  afterEach(resetEmbedderRelayForTesting);
+
+  it("is drawn over the desktop from the page's shell:show-coach-card, and goes on Got it", () => {
+    initEmbedderRelay();
+    const frame = document.querySelector('iframe[data-live-page="win-1"]') as HTMLIFrameElement;
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { type: SHELL_SHOW_COACH_CARD, text: "Your connections live here.", chromeAnchor: "permissions" },
+        source: frame.contentWindow,
+        origin: window.location.origin,
+      }),
+    );
+    m.redraw.sync();
+    const card = document.querySelector<HTMLElement>("[data-tour-coach]");
+    expect(card?.getAttribute("data-tour-coach")).toBe("permissions");
+    expect(card?.textContent).toContain("Your connections live here.");
+
+    document.querySelector<HTMLElement>("[data-tour-coach] [data-tour-next]")?.click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-tour-coach]")).toBeNull();
   });
 });
 

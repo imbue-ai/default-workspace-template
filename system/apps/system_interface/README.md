@@ -125,7 +125,18 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   launcher's "Show me around" row runs it again from the first card any time.
   A card about a control of the Imbue Studio chrome asks the chrome to ring it
   (`minds:highlight-chrome`); the chat card's Next snaps the pinned chat to the
-  right half of the desktop, revealing the shortcuts.
+  right half of the desktop, revealing the shortcuts. The page records the
+  tour as finished when Done on the last card or Exit walkthrough is pressed,
+  and the owner's page does so for a record that reads seen with nothing to
+  resume.
+- A coach card for a page that asks (`shell:show-coach-card {text,
+  chromeAnchor}`): the page's words and a Got it button under the control of
+  the Imbue Studio chrome it names, which the chrome rings until the card
+  goes. It is drawn in the tour's box, only while the tour shows nothing and
+  no other coach card is up, and it gives way to a tour that starts. A text
+  that is empty or longer than 500 characters, or an anchor that is not one
+  of the chrome's, is dropped. The shell names no app here: the words come
+  from the page.
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
   `presence_updated`, `roster_updated`, `placements_updated`, `active_desktop_changed`,
   `client_entries_changed`, `avatar_status`, `avatar_selection_changed`,

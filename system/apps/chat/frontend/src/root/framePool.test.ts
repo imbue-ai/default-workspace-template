@@ -18,6 +18,7 @@ const HANDSHAKE: ShellHandshake = {
   path: "/",
   opensLocalFiles: false,
   opensWorkspaceSettings: false,
+  showsCoachMarks: false,
   isViewing: false,
 };
 

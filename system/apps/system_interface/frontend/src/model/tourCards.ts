@@ -6,11 +6,13 @@
  * content-addressed names; nothing is bundled.
  */
 
+import type { ShellChromeAnchor } from "@imbue/workspace-ui/src/app_contract";
+
 /** What the shell draws that a card can sit beside: the agent's avatar, the desktop's shortcuts, or the launcher. */
 export type TourTarget = "avatar" | "shortcuts" | "launcher";
 
 /** A control of the Imbue Studio chrome a card talks about, as the embed contract names it (minds:highlight-chrome). */
-export type ChromeAnchor = "workspace-switcher" | "permissions" | "settings" | "share" | "help";
+export type ChromeAnchor = ShellChromeAnchor;
 
 /** What the shell does as a card's Next is pressed: snap the window the avatar's pinned entry stands for to the
  *  right half of the desktop. The shell names no app; the avatar's window is the pinned one whose pin declares
@@ -153,6 +155,9 @@ export const TOUR_EXIT_BADGE_BUTTON_LABEL = "Got it";
 /** What the card after an interrupted one says: the agent answered while the tour was on, so it waits. */
 export const TOUR_PAUSED_TEXT = "Looks like I’m done.\n\nLet’s go take a look, and we’ll finish the tour later.";
 export const TOUR_PAUSED_BUTTON_LABEL = "OK";
+
+/** The one button of a coach card, whose words come from the page that asked for it. */
+export const COACH_CARD_BUTTON_LABEL = "Got it";
 
 /** The launcher row that runs the tour, and the words it matches. */
 export const TOUR_LAUNCHER_LABEL = "Show me around";

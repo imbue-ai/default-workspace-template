@@ -19,6 +19,7 @@ import {
   SHELL_OPEN,
   SHELL_OPEN_LINK,
   SHELL_SHOWN,
+  SHELL_SHOW_COACH_CARD,
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   ShellContractError,
@@ -95,6 +96,7 @@ describe("connectToShell", () => {
       path: "/?chat=agent-1",
       opensLocalFiles: false,
       opensWorkspaceSettings: false,
+      showsCoachMarks: false,
       isViewing: false,
     });
     expect(handlers.onShown).toHaveBeenCalledTimes(1);
@@ -124,6 +126,7 @@ describe("connectToShell", () => {
       path: "",
       opensLocalFiles: false,
       opensWorkspaceSettings: false,
+      showsCoachMarks: false,
       isViewing: false,
     });
   });
@@ -144,6 +147,16 @@ describe("connectToShell", () => {
     deliver({ ...HANDSHAKE, opensWorkspaceSettings: true }, parent);
     deliver({ ...HANDSHAKE, opensWorkspaceSettings: 1 }, parent);
     expect(onHandshake.mock.calls.map((call) => call[0].opensWorkspaceSettings)).toEqual([true, false]);
+  });
+
+  it("reads whether the embedder draws coach marks on its own controls, and anything but true as no", () => {
+    const parent = framed();
+    const onHandshake = vi.fn();
+    connection = connectToShell({ onHandshake });
+    deliver({ ...HANDSHAKE, showsCoachMarks: true }, parent);
+    deliver({ ...HANDSHAKE, showsCoachMarks: "true" }, parent);
+    deliver(HANDSHAKE, parent);
+    expect(onHandshake.mock.calls.map((call) => call[0].showsCoachMarks)).toEqual([true, false, false]);
   });
 
   it("reads whether the window is being viewed on somebody else's desktop, and anything but true as no", () => {
@@ -211,7 +224,7 @@ describe("connectToShell", () => {
     expect(onNavigate.mock.calls).toEqual([["/?chat=agent-2"]]);
   });
 
-  it("posts focused, location, openPath, draftText, sendMessage, and openLink to the parent with the contract shapes", () => {
+  it("posts focused, location, openPath, draftText, showCoachCard, sendMessage, and openLink to the parent with the contract shapes", () => {
     const parent = framed();
     connection = connectToShell({});
 
@@ -220,6 +233,7 @@ describe("connectToShell", () => {
     connection.openPath("/?chat=agent-3", "focus");
     connection.openPath("/new", "new");
     connection.draftText("Explain this element:");
+    connection.showCoachCard("Your connections live here.", "permissions");
     connection.sendMessage("open:file", { path: "/home/user/plan.md", type: "ignored" });
     connection.openLink("http://files-ab12cd34.host-0123.localhost:8421/");
 
@@ -229,6 +243,7 @@ describe("connectToShell", () => {
       [{ type: SHELL_OPEN, path: "/?chat=agent-3", ifPresent: "focus" }, "*"],
       [{ type: SHELL_OPEN, path: "/new", ifPresent: "new" }, "*"],
       [{ type: SHELL_DRAFT_TEXT, text: "Explain this element:" }, "*"],
+      [{ type: SHELL_SHOW_COACH_CARD, text: "Your connections live here.", chromeAnchor: "permissions" }, "*"],
       [{ type: SHELL_MESSAGE, message: { type: "open:file", path: "/home/user/plan.md" } }, "*"],
       [{ type: SHELL_OPEN_LINK, url: "http://files-ab12cd34.host-0123.localhost:8421/" }, "*"],
     ]);

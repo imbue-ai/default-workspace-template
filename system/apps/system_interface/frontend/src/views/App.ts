@@ -396,7 +396,11 @@ export function App(): m.Component<AppAttrs> {
   /** Build the live-pages layer over ``host`` once the render that made the host is over (the window chrome is
    *  in the DOM), and place the pages now: when every load had already landed no further redraw follows. */
   function startPagesLayer(current: DesktopStore, host: HTMLElement, attrs: AppAttrs): void {
-    pages = new LivePagesLayer(host, current, { host: attrs.host, protocol: attrs.protocol });
+    pages = new LivePagesLayer(host, current, {
+      host: attrs.host,
+      protocol: attrs.protocol,
+      showCoachCard: (text, chromeAnchor) => attrs.tour.showCoachCard(text, chromeAnchor),
+    });
     // Before the first reconcile: under the desktop's policy a phone's first pass would create a page for every
     // window its layout shows, only for the next pass to destroy them.
     pages.setMountPolicy(mountPolicyOf(current));
@@ -1282,7 +1286,7 @@ export function App(): m.Component<AppAttrs> {
     }
   }
 
-  /** The tour's card or exit badge over the desktop, while one is shown. */
+  /** The tour's card, its exit badge or pause notice, or a page's coach card over the desktop, while one is shown. */
   function tourCardView(current: DesktopStore, shownTour: TourController): m.Children {
     if (shownTour.getState().phase === "idle") return null;
     return m(TourCard, {

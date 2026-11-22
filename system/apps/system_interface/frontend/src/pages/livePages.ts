@@ -21,7 +21,7 @@
  * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
  * this client's own stored path, which arrives with the layout), and the pages' own
  * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, ``shell:start-with-text``,
- * ``shell:message``, and ``shell:open-link``. Messages cross through ``relay.ts``.
+ * ``shell:message``, ``shell:open-link``, and ``shell:show-coach-card``. Messages cross through ``relay.ts``.
  *
  * The phone layout mounts differently (plan-phone-interface.md): under the ``shown`` policy only the shown
  * window's page lives, laid over the whole host, plus the pages it keeps (the pinned chat window's, created
@@ -35,7 +35,9 @@
 
 import {
   INPUT_REPORT_INTERVAL_MS,
+  MAX_COACH_CARD_TEXT_LENGTH,
   SHELL_CAPABILITIES,
+  SHELL_CHROME_ANCHORS,
   SHELL_CLOSE_REQUEST,
   SHELL_DRAFT_TEXT,
   SHELL_FOCUSED,
@@ -48,10 +50,12 @@ import {
   SHELL_OPEN,
   SHELL_OPEN_LINK,
   SHELL_SHOWN,
+  SHELL_SHOW_COACH_CARD,
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
+import type { ShellChromeAnchor } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { viewportRect } from "../geometry/frames";
 import type { PixelRect } from "../geometry/frames";
@@ -204,6 +208,8 @@ export interface LivePagesOptions {
   /** The shell document's host and protocol, which every page URL derives from. */
   readonly host: string;
   readonly protocol: string;
+  /** Shows a page's coach card: its words under a control of the Imbue Studio chrome (``shell:show-coach-card``). */
+  readonly showCoachCard: (text: string, chromeAnchor: ShellChromeAnchor) => void;
 }
 
 /** The phone's pages: the shown window's, and the ones it keeps beside it. */
@@ -275,6 +281,7 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
     setChildFrameMessageHandler(SHELL_MESSAGE, (frame, payload) => this.takeMessage(frame, payload));
     setChildFrameMessageHandler(SHELL_OPEN_LINK, (frame, payload) => this.takeOpenLink(frame, payload));
+    setChildFrameMessageHandler(SHELL_SHOW_COACH_CARD, (frame, payload) => this.takeShowCoachCard(frame, payload));
     // Focusable, so the shell has somewhere of its own to put the document's focus (``takeFocusFromOtherPages``).
     this.host.tabIndex = -1;
     this.store.setPageDriver(this);
@@ -1008,6 +1015,7 @@ export class LivePagesLayer implements PageDriver {
       path,
       opensLocalFiles: this.store.getOpensLocalFiles(),
       opensWorkspaceSettings: this.store.getOpensWorkspaceSettings(),
+      showsCoachMarks: this.store.getShowsCoachMarks(),
       isViewing,
     });
     page.greetedDesktopId = desktopId;
@@ -1161,6 +1169,19 @@ export class LivePagesLayer implements PageDriver {
       return;
     }
     void this.store.openLink(url, window.location.host, page.app);
+  }
+
+  /** ``shell:show-coach-card {text, chromeAnchor}`` from a page: the page's words as a one-button card under a
+   *  control of the Imbue Studio chrome. The frame has to be one the shell created; a text that is empty or too
+   *  long, or an anchor that is not one of the chrome's, is dropped without a word, since the page that sent it
+   *  may be newer than this shell. */
+  private takeShowCoachCard(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    if (this.pageOfFrame(frame) === undefined) return;
+    const { text, chromeAnchor } = payload;
+    if (typeof text !== "string" || text === "" || text.length > MAX_COACH_CARD_TEXT_LENGTH) return;
+    const anchor = SHELL_CHROME_ANCHORS.find((known) => known === chromeAnchor);
+    if (anchor === undefined) return;
+    this.options.showCoachCard(text, anchor);
   }
 
   private takeOpen(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

@@ -201,7 +201,7 @@ function bootstrap(): void {
   // The show-around tour: by itself the first time the agent goes to work on a fresh workspace, for the owner
   // looking at the whole desktop, resumed the same way after the agent's reply interrupted it; from the launcher's
   // row any time. A card about a chrome control asks the chrome to ring it; the chat card's Next snaps the avatar's
-  // window aside.
+  // window aside. The owner's page also records as finished a tour that has nothing left to show.
   const runTourAction = (action: TourAction): void => {
     switch (action) {
       case "snap-avatar-window-right": {
@@ -220,11 +220,14 @@ function bootstrap(): void {
       !isPreviewShell() &&
       !isFirstRunProviderStepPending() &&
       (getOwnIdentity()?.owner ?? true),
+    // Unknown until the first heartbeat answers, and nobody's record is settled on a guess.
+    isViewerOwner: () => getOwnIdentity()?.owner === true,
     performAction: runTourAction,
     startAfterWorkingMs: tourStartDelayFromSearch(window.location.search),
     redraw: () => m.redraw(),
   });
   desktopStore.subscribe(() => tour.noteAgentWorking(desktopStore.getState().avatar.status.mood === "working"));
+  onOwnIdentityChanged(() => tour.noteViewerChanged());
   // The chat app says whether the first run's provider page is owed; the cover follows it (views/FirstRunCover.ts).
   setChildFrameMessageHandler(SHELL_FIRST_RUN_PROVIDER_STEP, (frame, payload) => {
     if (typeof payload.isPending !== "boolean") return;

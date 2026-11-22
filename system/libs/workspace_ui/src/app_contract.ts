@@ -89,6 +89,19 @@ export const SHELL_OPEN_LINK = "shell:open-link";
  *  shell covers the desktop with that page, and takes the cover down when it stops being owed. */
 export const SHELL_FIRST_RUN_PROVIDER_STEP = "shell:first-run-provider-step";
 
+/** App to shell: show a one-button card with the page's words under a control of the Imbue Studio chrome, and ring
+ *  that control while the card is up. The shell shows it only while it has nothing else of the kind on screen, and
+ *  drops a text that is empty or longer than ``MAX_COACH_CARD_TEXT_LENGTH`` and an anchor it does not know. */
+export const SHELL_SHOW_COACH_CARD = "shell:show-coach-card";
+
+/** The controls of the Imbue Studio chrome a coach card can sit under, as the embed contract names them
+ *  (``minds:highlight-chrome``). */
+export const SHELL_CHROME_ANCHORS = ["workspace-switcher", "permissions", "settings", "share", "help"] as const;
+export type ShellChromeAnchor = (typeof SHELL_CHROME_ANCHORS)[number];
+
+/** The longest text a coach card carries. */
+export const MAX_COACH_CARD_TEXT_LENGTH = 500;
+
 /** The bare host names of this machine (a ``*.localhost`` host is local too). */
 export const LOCAL_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
@@ -157,8 +170,9 @@ export function hasWorkspaceCoordinate(host: string): boolean {
 /**
  * What the shell says about the frame it created: the client, the window, its desktop, the app
  * the window belongs to, the path the window is at, whether the Imbue Studio chrome around the
- * shell opens its settings for the files shared from the user's computer and its workspace settings
- * (desktop-interface contracts.md section 7), and whether the window is being viewed on somebody else's desktop. The
+ * shell opens its settings for the files shared from the user's computer and its workspace settings and draws coach
+ * marks on its own controls (desktop-interface contracts.md section 7), and whether the window is being viewed on
+ * somebody else's desktop. The
  * client id is required; a text field the shell does not send, a page reads as "", and a flag it
  * does not send, as false.
  */
@@ -170,6 +184,7 @@ export interface ShellHandshake {
   path: string;
   opensLocalFiles: boolean;
   opensWorkspaceSettings: boolean;
+  showsCoachMarks: boolean;
   /** Whether the window is being looked at on somebody else's desktop (the multiplayer spec, section 8.3): the page
    *  is inert there, and one that attaches to something shared (a terminal's tmux session) attaches as a viewer. */
   isViewing: boolean;
@@ -218,6 +233,9 @@ export interface ShellConnection {
   startWithText(text: string): void;
   /** Ask the shell to draft ``text`` into a chat's composer, unsent (the chat on screen on a stock machine). */
   draftText(text: string): void;
+  /** Ask the shell to show ``text`` as a one-button card under ``chromeAnchor``, a control of the Imbue Studio
+   *  chrome, ringed while the card is up. */
+  showCoachCard(text: string, chromeAnchor: ShellChromeAnchor): void;
   /** Say whether the first run's provider page is still owed to this workspace's owner. */
   firstRunProviderStep(isPending: boolean): void;
   /** Send the shell a message for the apps registered for ``type``, with ``fields`` as its own fields. */
@@ -241,7 +259,17 @@ function optionalString(value: unknown): string {
 }
 
 function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
-  const { clientId, windowId, desktopId, app, path, opensLocalFiles, opensWorkspaceSettings, isViewing } = data;
+  const {
+    clientId,
+    windowId,
+    desktopId,
+    app,
+    path,
+    opensLocalFiles,
+    opensWorkspaceSettings,
+    showsCoachMarks,
+    isViewing,
+  } = data;
   if (typeof clientId !== "string" || clientId === "") return null;
   return {
     clientId,
@@ -251,6 +279,7 @@ function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
     path: optionalString(path),
     opensLocalFiles: opensLocalFiles === true,
     opensWorkspaceSettings: opensWorkspaceSettings === true,
+    showsCoachMarks: showsCoachMarks === true,
     isViewing: isViewing === true,
   };
 }
@@ -507,6 +536,8 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
     startWithText: (text: string) => send(SHELL_START_WITH_TEXT, { text }),
     draftText: (text: string) => send(SHELL_DRAFT_TEXT, { text }),
+    showCoachCard: (text: string, chromeAnchor: ShellChromeAnchor) =>
+      send(SHELL_SHOW_COACH_CARD, { text, chromeAnchor }),
     firstRunProviderStep: (isPending: boolean) => send(SHELL_FIRST_RUN_PROVIDER_STEP, { isPending }),
     sendMessage: (type: string, fields: Readonly<Record<string, unknown>>) =>
       send(SHELL_MESSAGE, { message: { ...fields, type } }),

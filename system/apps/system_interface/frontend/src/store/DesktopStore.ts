@@ -588,6 +588,8 @@ export class DesktopStore {
   private opensLocalFiles = false;
   /** Whether the embedder opens its workspace settings when a page asks; off until it says so. */
   private opensWorkspaceSettings = false;
+  /** Whether the embedder draws coach marks on its own controls when a page asks; off until it says so. */
+  private showsCoachMarks = false;
   /** Whether the embedder takes immersive-mode requests; off until it says so (an older chrome, a plain browser). */
   private canImmerse = false;
   /** Immersive mode while the chrome says it is on; never persisted (the integration spec, S4). */
@@ -735,6 +737,18 @@ export class DesktopStore {
    *  greeted hear it as the shell's rebroadcast of that message. */
   setOpensWorkspaceSettings(opensWorkspaceSettings: boolean): void {
     this.opensWorkspaceSettings = opensWorkspaceSettings;
+  }
+
+  /** Whether the embedder draws coach marks on its own controls when a page asks, which each page is told in its
+   *  handshake. */
+  getShowsCoachMarks(): boolean {
+    return this.showsCoachMarks;
+  }
+
+  /** The embedder said whether it draws coach marks (``minds:embedder-capabilities``). Pages already greeted hear it
+   *  as the shell's rebroadcast of that message. */
+  setShowsCoachMarks(showsCoachMarks: boolean): void {
+    this.showsCoachMarks = showsCoachMarks;
   }
 
   /** Whether the embedder can take the app window immersive for a window of this desktop. */

@@ -7,6 +7,15 @@
  * works. The controller reads and writes the workspace's tour record through ``/api/tour``, runs the tour again
  * from the launcher's "Show me around" row, does a card's action as its Next is pressed, and tells the Imbue Studio
  * chrome which of its controls to ring while a card is about one.
+ *
+ * The record also says whether the tour is finished, which the rest of the workspace reads as "nothing of the tour is
+ * left to show": written when the last card's Done or Exit is pressed, and on the owner's page for a record that is
+ * seen with nothing to resume (a tour a reload cut off, or a workspace the tour was never offered in). A tour that
+ * waits to resume is not finished.
+ *
+ * The same box shows a coach card for a page that asks (``shell:show-coach-card``): the page's own words under a
+ * control of the chrome, ringed while the card is up. It is shown only while the tour is idle, and gives way to a
+ * tour that starts.
  */
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
@@ -18,7 +27,8 @@ export type TourState =
   | { readonly phase: "idle" }
   | { readonly phase: "card"; readonly index: number; readonly isInterrupted: boolean }
   | { readonly phase: "paused"; readonly resumeIndex: number }
-  | { readonly phase: "exit-badge" };
+  | { readonly phase: "exit-badge" }
+  | { readonly phase: "coach"; readonly text: string; readonly chromeAnchor: ChromeAnchor };
 
 export const IDLE_TOUR: TourState = { phase: "idle" };
 
@@ -72,22 +82,40 @@ export function dismissPause(state: TourState): TourState {
   return state.phase === "paused" ? IDLE_TOUR : state;
 }
 
+/** A page's coach card, which only an idle tour makes room for; any other state is kept. */
+export function showCoach(state: TourState, text: string, chromeAnchor: ChromeAnchor): TourState {
+  return state.phase === "idle" ? { phase: "coach", text, chromeAnchor } : state;
+}
+
+export function dismissCoach(state: TourState): TourState {
+  return state.phase === "coach" ? IDLE_TOUR : state;
+}
+
+/** Whether nothing of the tour itself is on screen, so one may begin: idle, or a coach card, which gives way. */
+function isOpenToTour(state: TourState): boolean {
+  return state.phase === "idle" || state.phase === "coach";
+}
+
 export function cardShown(state: TourState, cards: readonly TourCard[] = TOUR_CARDS): TourCard | null {
   return state.phase === "card" ? cards[state.index] : null;
 }
 
-/** The chrome control the shown card is about, or null (no card, or a card about the shell's own things). */
+/** The chrome control the shown card is about, a coach card's included, or null (no card, or a card about the
+ *  shell's own things). */
 export function chromeAnchorShown(state: TourState, cards: readonly TourCard[] = TOUR_CARDS): ChromeAnchor | null {
+  if (state.phase === "coach") return state.chromeAnchor;
   return cardShown(state, cards)?.chromeAnchor ?? null;
 }
 
-/** What the workspace remembers of the tour (``tour.json``): whether it has started, and the card it resumes at. */
+/** What the workspace remembers of the tour (``tour.json``): whether it has started, the card it resumes at, and
+ *  whether it has nothing left to show. */
 export interface TourRecord {
   readonly isSeen: boolean;
   readonly resumeIndex: number | null;
+  readonly isFinished: boolean;
 }
 
-export const UNSEEN_TOUR: TourRecord = { isSeen: false, resumeIndex: null };
+export const UNSEEN_TOUR: TourRecord = { isSeen: false, resumeIndex: null, isFinished: false };
 
 /** The routes the controller calls, injectable so it is tested against a fake. */
 export interface TourApi {
@@ -98,6 +126,7 @@ export interface TourApi {
 interface TourRecordWire {
   readonly is_seen?: unknown;
   readonly resume_index?: unknown;
+  readonly is_finished?: unknown;
 }
 
 export function parseTourRecord(body: TourRecordWire): TourRecord {
@@ -106,6 +135,7 @@ export function parseTourRecord(body: TourRecordWire): TourRecord {
     isSeen: body.is_seen === true,
     resumeIndex:
       typeof resumeIndex === "number" && Number.isInteger(resumeIndex) && resumeIndex >= 0 ? resumeIndex : null,
+    isFinished: body.is_finished === true,
   };
 }
 
@@ -114,7 +144,11 @@ export async function fetchTourRecord(): Promise<TourRecord> {
 }
 
 export async function writeTourRecord(record: TourRecord): Promise<void> {
-  await postJson<unknown>(apiUrl("/api/tour"), { is_seen: record.isSeen, resume_index: record.resumeIndex });
+  await postJson<unknown>(apiUrl("/api/tour"), {
+    is_seen: record.isSeen,
+    resume_index: record.resumeIndex,
+    is_finished: record.isFinished,
+  });
 }
 
 export const TOUR_API: TourApi = { fetch: fetchTourRecord, write: writeTourRecord };
@@ -125,6 +159,9 @@ export interface TourControllerDependencies {
   readonly highlightChrome: (anchor: ChromeAnchor | null) => void;
   /** Whether the tour may begin by itself right now: the desktop layout, no solo window, the owner looking. */
   readonly isAutoStartAllowed: () => boolean;
+  /** Whether the person looking at this page is known to be the workspace's owner, whose page alone settles a
+   *  record nobody finished. */
+  readonly isViewerOwner: () => boolean;
   readonly redraw: () => void;
   /** Do what a card's Next does in the shell (snap the chat); a controller without one skips the actions. */
   readonly performAction?: (action: TourAction) => void;
@@ -176,7 +213,22 @@ export class TourController {
     }
     // A record written while the read was out (the launcher's start) is newer than what the read answers.
     if (this.record === null) this.record = fetched;
+    this.settleFinished();
     if (this.isAgentWorking) this.considerStart();
+  }
+
+  /** Who is looking became known, or changed: the owner's page settles a record nobody finished. */
+  noteViewerChanged(): void {
+    this.settleFinished();
+  }
+
+  /** Record as finished a tour that is seen, waits to resume nowhere, and is not on screen: one a reload cut off,
+   *  or one this workspace never offered. Only the owner's page does, so a visitor's never ends the owner's tour. */
+  private settleFinished(): void {
+    const record = this.record;
+    if (record === null || !record.isSeen || record.resumeIndex !== null || record.isFinished) return;
+    if (this.state.phase === "card" || !this.deps.isViewerOwner()) return;
+    this.persist({ ...record, isFinished: true });
   }
 
   /** What the avatar says: the agent went to work (the tour may begin or resume) or stopped (a card on screen is
@@ -196,12 +248,12 @@ export class TourController {
    *  where the tour has never run; nothing when the record is unknown or says there is nothing to start, or when
    *  the card to resume at is past the list (a record from a build with more cards). */
   private considerStart(): void {
-    if (this.record === null || this.state.phase !== "idle") return;
+    if (this.record === null || !isOpenToTour(this.state)) return;
     const index = this.record.resumeIndex ?? (this.record.isSeen ? null : 0);
     if (index === null || index >= this.cards.length) return;
     const generation = (this.startGeneration += 1);
     this.schedule(() => {
-      if (generation !== this.startGeneration || !this.isAgentWorking || this.state.phase !== "idle") return;
+      if (generation !== this.startGeneration || !this.isAgentWorking || !isOpenToTour(this.state)) return;
       if (!this.deps.isAutoStartAllowed()) return;
       this.begin(index);
     }, this.startAfterWorkingMs);
@@ -215,15 +267,26 @@ export class TourController {
 
   private begin(index: number): void {
     this.apply(startTour(index));
-    this.persist({ isSeen: true, resumeIndex: null });
+    this.persist({ isSeen: true, resumeIndex: null, isFinished: this.isRecordedFinished() });
+  }
+
+  /** Whether the record already says finished, which no later write takes back: the tour run again is still one
+   *  the workspace has been through. */
+  private isRecordedFinished(): boolean {
+    return this.record?.isFinished ?? false;
   }
 
   next(): void {
+    const isCardShown = this.state.phase === "card";
     const action = this.shownCard()?.action ?? null;
     if (action !== null) this.deps.performAction?.(action);
     const next = nextCard(this.state, this.cards);
     this.apply(next);
-    if (next.phase === "paused") this.persist({ isSeen: true, resumeIndex: next.resumeIndex });
+    if (next.phase === "paused") {
+      this.persist({ isSeen: true, resumeIndex: next.resumeIndex, isFinished: this.isRecordedFinished() });
+    } else if (isCardShown && next.phase === "idle") {
+      this.persist({ isSeen: true, resumeIndex: null, isFinished: true });
+    }
   }
 
   back(): void {
@@ -231,7 +294,19 @@ export class TourController {
   }
 
   exit(): void {
+    const isCardShown = this.state.phase === "card";
     this.apply(exitTour(this.state));
+    if (isCardShown) this.persist({ isSeen: true, resumeIndex: null, isFinished: true });
+  }
+
+  /** A page asked for a coach card (``shell:show-coach-card``): shown while the tour is idle and no other coach
+   *  card is up, dropped at any other time. */
+  showCoachCard(text: string, chromeAnchor: ChromeAnchor): void {
+    this.apply(showCoach(this.state, text, chromeAnchor));
+  }
+
+  dismissCoach(): void {
+    this.apply(dismissCoach(this.state));
   }
 
   dismissBadge(): void {
@@ -248,7 +323,8 @@ export class TourController {
     if (
       this.record !== null &&
       this.record.isSeen === record.isSeen &&
-      this.record.resumeIndex === record.resumeIndex
+      this.record.resumeIndex === record.resumeIndex &&
+      this.record.isFinished === record.isFinished
     ) {
       return;
     }

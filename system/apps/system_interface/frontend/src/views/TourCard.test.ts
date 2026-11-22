@@ -16,6 +16,7 @@ function controller(): { tour: TourController; highlights: (string | null)[] } {
     api: new FakeTourApi({ isSeen: true }),
     highlightChrome: (anchor) => highlights.push(anchor),
     isAutoStartAllowed: () => true,
+    isViewerOwner: () => true,
     redraw: () => m.redraw.sync(),
     cards: CARDS,
   });
@@ -32,7 +33,7 @@ function mountCard(tour: TourController, openLink: (url: string) => void = () =>
 }
 
 function card(): HTMLElement | null {
-  return document.querySelector("[data-tour-card], [data-tour-badge], [data-tour-paused]");
+  return document.querySelector("[data-tour-card], [data-tour-badge], [data-tour-paused], [data-tour-coach]");
 }
 
 function press(marker: string): void {
@@ -105,6 +106,32 @@ describe("TourCard", () => {
     press("data-tour-next");
     expect(card()).toBeNull();
   });
+
+  it("shows a page's coach card as its words and one button, which Got it dismisses and clears the ring", () => {
+    const { tour, highlights } = controller();
+    tour.showCoachCard("Your connections live here.\n\nAsk me to connect any of them.", "permissions");
+    mountCard(tour);
+    expect(card()?.getAttribute("data-tour-coach")).toBe("permissions");
+    expect(card()?.hasAttribute("data-tour-card")).toBe(false);
+    expect([...(card()?.querySelectorAll("p") ?? [])].map((paragraph) => paragraph.textContent)).toEqual([
+      "Your connections live here.",
+      "Ask me to connect any of them.",
+    ]);
+    // One button, and none of a tour card's verbs.
+    expect(card()?.querySelectorAll("button")).toHaveLength(1);
+    expect(document.querySelector("[data-tour-next]")?.textContent).toBe("Got it");
+    expect(document.querySelector("[data-tour-exit]")).toBeNull();
+    expect(document.querySelector("[data-tour-back]")).toBeNull();
+    // Under the title bar, on the side its control is on, arrow up.
+    expect(card()?.style.top).toBe("12px");
+    expect(card()?.style.left).toBe("160px");
+    expect(card()?.querySelector(".tour-arrow")).not.toBeNull();
+    expect(highlights).toEqual(["permissions"]);
+
+    press("data-tour-next");
+    expect(card()).toBeNull();
+    expect(highlights).toEqual(["permissions", null]);
+  });
 });
 
 describe("placeCard", () => {
@@ -130,6 +157,17 @@ describe("placeCard", () => {
     // The badge points at the launcher; the pause notice pops out of the avatar.
     expect(placeCard("badge", size, root, viewport).arrow?.side).toBe("bottom");
     expect(placeCard("paused", size, root, viewport)).toEqual({ left: 24 + 72 + 12, top: 680 - 120, arrow: null });
+    // A coach card sits under the side of the title bar its control is on, wherever the shell's own markers are.
+    expect(placeCard({ coachAnchor: "permissions" }, size, root, viewport)).toEqual({
+      left: 160,
+      top: 12,
+      arrow: { side: "top", offset: 40 },
+    });
+    expect(placeCard({ coachAnchor: "help" }, size, root, viewport)).toEqual({
+      left: 1200 - 360 - 12,
+      top: 12,
+      arrow: { side: "top", offset: 320 },
+    });
     expect(chromeSideOf("help")).toBe("right");
     expect(chromeSideOf("share")).toBe("left");
   });
