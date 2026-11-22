@@ -40,6 +40,7 @@ from imbue.chat.authors import author_prefix
 from imbue.chat.authors import new_author_annotation
 from imbue.chat.authors import prefix_safe_text
 from imbue.chat.config import DEFAULT_CHAT_DATA_DIR
+from imbue.chat.dictation_note import without_dictation_notes
 from imbue.chat.mention_parser import MentionTarget
 from imbue.chat.mention_parser import find_mentions
 from imbue.chat.mention_parser import handle_table
@@ -256,8 +257,9 @@ class MentionHandler(MutableModel):
                 self.mentions.record(target.key, room_id, message_id, sender)
                 is_anyone_marked = True
                 if self._is_owner(target.key):
+                    # The notification shows the words to a person; a dictated message's note is for a model.
                     self.agent_manager.notify_owner_mentioned(
-                        room_id, f"{sender_name} mentioned you in {room_title}", text
+                        room_id, f"{sender_name} mentioned you in {room_title}", without_dictation_notes(text)
                     )
                 continue
             self._ask_agent(target, room_id, room_title, message_id, text, sender, sender_name)

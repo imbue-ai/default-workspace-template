@@ -606,6 +606,13 @@ export class DesktopStore {
   /** Whether the page was out of sight since the socket last connected: a reconnect then reloads the phone's page,
    *  whose own connection most likely went down with the shell's. */
   private isHiddenSinceConnect = false;
+  /** The phone shows home only for want of anything to land on: the startup read of the desktops failed, or there
+   *  is no desktop yet. Never recorded as where this client was, and the next read that has a desktop lands it. */
+  private isLandingProvisional = false;
+  /** The startup read of the desktops failed, so the phone lands home (provisionally) rather than on nothing. */
+  private isStartupReadFailed = false;
+  /** The inventory read in flight after the start, which a second ask joins. */
+  private inventoryRefresh: Promise<void> | null = null;
   /** The notes a refusal leaves on screen (plan-phone-interface.md's toasts). */
   readonly toasts: ToastQueue;
   /** The speech bubbles up over the tray (the multiplayer spec, section 6.5), in arrival order. */
@@ -776,12 +783,12 @@ export class DesktopStore {
 
   /** The chrome reported a step of the drag it watches. "out": the window is detached where it stood, its
    *  frame untouched, and saved at once, so the chrome's own desktop window (which stands in for it under the
-   *  cursor from here) reads a placement that already says so, in this shell's stacking order; the ghost
-   *  stands where the drag began. "in": the chrome dropped that window, and this one is brought back and shown
-   *  again where the drag has it, saved at once too. "released": the button came up while out, and the gesture
-   *  is over; the placement is already what it is to be, so nothing is written. This shell is the one writer
-   *  during a drag; the chrome's window only reads. A word on a watched drag this shell already ended on its own
-   *  release still stands (``takeLateTearOut``). */
+   *  cursor from here) reads a placement that already says so, in this shell's stacking order. "in": the chrome
+   *  dropped that window, and this one is brought back and shown again where the drag has it, saved at once
+   *  too. "released": the button came up while out, and the gesture is over; the placement is already what it
+   *  is to be, so nothing is written. This shell is the one writer during a drag; the chrome's window only
+   *  reads. A word on a watched drag this shell already ended on its own release still stands
+   *  (``takeLateTearOut``). */
   setTearOut(windowId: string, phase: TearOutPhase): void {
     const gesture = this.moveGestureOf(windowId);
     if (gesture === null) {
@@ -803,8 +810,8 @@ export class DesktopStore {
     this.notifyListeners();
   }
 
-  /** Out: the window is detached where it stood, its frame untouched, so the ghost stands where the drag began
-   *  and a return lands there. Saved at once, since the chrome's window reads the placement as soon as it loads. */
+  /** Out: the window is detached where it stood, its frame untouched, so a return lands where the drag began.
+   *  Saved at once, since the chrome's window reads the placement as soon as it loads. */
   private detachDraggedWindow(windowId: string): void {
     this.dispatch({ type: "window_detached", windowId });
     void this.flushPendingSave();
@@ -980,6 +987,7 @@ export class DesktopStore {
    *  reload lands there, and an agent reading the client sees it. Closes any open sheet. */
   showOnPhone(shown: PhoneShown): void {
     this.pendingPhoneShowId = null;
+    this.isLandingProvisional = false;
     this.dispatch({ type: "phone_shown", shown });
     this.recordShownWithShell(shown);
   }
@@ -996,7 +1004,12 @@ export class DesktopStore {
    *  the shell, the windows sheet's order and the screen agree. */
   private takeShownHistory(history: readonly string[]): void {
     const shown = this.state.phone.shown;
-    if (!this.isPhoneLayout() || shown === null || history[history.length - 1] === shownHistoryEntry(shown)) {
+    if (
+      !this.isPhoneLayout() ||
+      shown === null ||
+      this.isLandingProvisional ||
+      history[history.length - 1] === shownHistoryEntry(shown)
+    ) {
       this.dispatch({ type: "phone_history_loaded", history });
       return;
     }
@@ -1018,9 +1031,20 @@ export class DesktopStore {
   }
 
   /** Where the phone lands: what this client recorded last, else the pinned chat window, else home. Taken without
-   *  recording, since the history already says it. */
+   *  recording, since the history already says it. With nothing to land on yet (the startup read failed, or there
+   *  is no desktop), home, provisionally: the page is never left blank, and a later landing replaces it. */
   private landPhone(): void {
-    if (!this.isPhoneLayout() || this.state.phone.shown !== null || !this.state.isDesktopsLoaded) return;
+    if (!this.isPhoneLayout()) return;
+    if (this.state.phone.shown !== null && !this.isLandingProvisional) return;
+    const hasDesktop = this.state.isDesktopsLoaded && this.state.activeDesktopId !== null;
+    if (!hasDesktop) {
+      if (this.state.phone.shown === null && (this.isStartupReadFailed || this.state.isDesktopsLoaded)) {
+        this.isLandingProvisional = true;
+        this.dispatch({ type: "phone_shown", shown: { kind: "home" } });
+      }
+      return;
+    }
+    this.isLandingProvisional = false;
     this.dispatch({ type: "phone_shown", shown: phoneLanding(this.state) });
   }
 
@@ -1052,17 +1076,34 @@ export class DesktopStore {
     for (const window of windows) await this.closeWindow(window.id);
   }
 
-  /** The page came back into sight or went out of it. Back in sight, the shell's word is read again, since a
-   *  phone's page sleeps while hidden and the pushes of the time away may never have arrived. */
+  /** The page came back into sight or went out of it. Back in sight, the socket is made live at once (reopened,
+   *  or checked if it reads as open) and the shell's word is read again, since the pushes of the time away may
+   *  never have arrived. */
   onVisibilityChange(isVisible: boolean): void {
     if (!isVisible) {
       this.isHiddenSinceConnect = true;
       return;
     }
+    this.deps.socket.reviveNow();
     void this.refreshInventory();
   }
 
-  private async refreshInventory(): Promise<void> {
+  /** The socket held while the page was out of sight, so the shown page's own connections most likely did too: a
+   *  later reconnect is no reason to reload it. */
+  private takeLiveConfirmed(): void {
+    this.isHiddenSinceConnect = false;
+  }
+
+  private refreshInventory(): Promise<void> {
+    if (this.inventoryRefresh === null) {
+      this.inventoryRefresh = this.readInventoryAgain().finally(() => {
+        this.inventoryRefresh = null;
+      });
+    }
+    return this.inventoryRefresh;
+  }
+
+  private async readInventoryAgain(): Promise<void> {
     let inventory: Inventory;
     try {
       inventory = await this.deps.api.fetchInventory();
@@ -1076,6 +1117,14 @@ export class DesktopStore {
     this.dispatch({ type: "workspace_name_updated", workspaceName: inventory.workspace_name });
     const own = inventory.clients.find((client) => client.id === this.deps.clientId);
     if (own !== undefined) this.takeShownHistory(own.shown_history);
+    this.isStartupReadFailed = false;
+    // A window that never got onto a desktop (the startup read failed, or there was none) gets onto one now, as the
+    // start would have put it, and a phone that could only land home provisionally lands.
+    if (this.state.activeDesktopId === null) {
+      const chosen = chooseInitialDesktopId(inventory.desktops, null, own?.active_desktop ?? null);
+      if (chosen !== null) await this.switchDesktop(chosen, "landing");
+    }
+    this.landPhone();
   }
 
   /** Schedule a redraw, telling the shown-theme listeners first when the shown theme changed. */
@@ -1180,6 +1229,7 @@ export class DesktopStore {
   async start(deepLink: DeepLink): Promise<void> {
     this.deps.socket.connect({
       onConnected: () => this.takeConnected(),
+      onLiveConfirmed: () => this.takeLiveConfirmed(),
       onAppsUpdated: (apps) => this.takeApps(apps),
       onDesktopsUpdated: (desktops) => this.takeDesktops(desktops),
       onPlacementsUpdated: (event) => this.takePlacementsUpdated(event),
@@ -1236,6 +1286,8 @@ export class DesktopStore {
     } catch (error) {
       console.warn("[si] could not read the inventory", error);
       this.toast(`Could not read the desktops and apps: ${(error as Error).message}`);
+      this.isStartupReadFailed = true;
+      this.landPhone();
       return;
     }
     // The apps before the desktops, so the first draw of a desktop's shortcuts already knows every app.
@@ -1262,7 +1314,10 @@ export class DesktopStore {
     // A phone never picks a desktop: its active one is only ever the one the shell assigns on arrival.
     const deepLinkDesktopId = this.isPhoneLayout() ? null : deepLink.desktopId;
     const chosen = chooseInitialDesktopId(inventory.desktops, soloDesktopId ?? deepLinkDesktopId, landing);
-    if (chosen === null) return;
+    if (chosen === null) {
+      this.landPhone();
+      return;
+    }
     await this.switchDesktop(chosen, "landing");
     this.landPhone();
     if (deepLink.open === null && deepLink.launch === null) return;
@@ -1786,6 +1841,16 @@ export class DesktopStore {
     const wasViewing = this.viewedDesktop() !== null;
     this.desktopsRevision += 1;
     this.dispatch({ type: "desktops_updated", desktops });
+    // A window still on no desktop (the startup read failed, or there was none) gets onto one once a push brings
+    // some. The inventory is read first, for this client's record and history, which a push does not carry.
+    if (
+      this.state.activeDesktopId === null &&
+      desktops.length > 0 &&
+      (this.isStartupReadFailed || this.isLandingProvisional) &&
+      this.inventoryRefresh === null
+    ) {
+      void this.refreshInventory();
+    }
     if (this.state.activeDesktopId === previous) return;
     // The active desktop was deleted and the reducer landed on the fallback (the first desktop listed).
     this.cancelGesture();
@@ -2247,6 +2312,9 @@ export class DesktopStore {
         break;
       case "landing":
         this.reportMove("");
+        // Where a phone lands needs the desktop, not its layout, so a window other than the pinned chat (which is
+        // mounted with the desktop anyway) starts loading without waiting on the layout read.
+        this.landPhone();
         break;
       case "follow":
         this.reportFollowedDesktop();
@@ -2897,12 +2965,6 @@ export class DesktopStore {
     this.showDetachedWindow(windowId);
   }
 
-  /** Show the ghost of a pulled-out window again where it stood, after ``minimizeWindow`` hid it (the ghost's
-   *  "Hide"); the window itself stays in the chrome's desktop window. */
-  showWindowGhost(windowId: string): void {
-    this.dispatch({ type: "window_detached", windowId });
-  }
-
   /** Raise (or reopen) the desktop window a pulled-out window is shown in, at the size the window renders here. */
   showDetachedWindow(windowId: string): void {
     if (findWindow(this.state, windowId) === null) return;
@@ -2929,11 +2991,11 @@ export class DesktopStore {
     this.popOut.beginWindowDrag({ ...this.popOutRequestFor(windowId, rect), grabX: grab.x, grabY: grab.y });
   }
 
-  /** Bring a pulled-out window back to the desktop (``minds:reattach-window``, the ghost's "Bring back", the
-   *  entry's menu): shown and raised, at ``frame`` when a drop back onto the desktop named one. The window's own
-   *  desktop is shown first when the client has moved to another meanwhile (the chrome names a window, not a
-   *  desktop). Saved at once, and in a solo shell reported only once saved: the chrome closes that shell's
-   *  desktop window on the report, which would abort a save still on its way. */
+  /** Bring a pulled-out window back to the desktop (``minds:reattach-window``, the entry's menu): shown and
+   *  raised, at ``frame`` when a drop back onto the desktop named one. The window's own desktop is shown first
+   *  when the client has moved to another meanwhile (the chrome names a window, not a desktop). Saved at once,
+   *  and in a solo shell reported only once saved: the chrome closes that shell's desktop window on the report,
+   *  which would abort a save still on its way. */
   async reattachWindow(windowId: string, frame: Frame | null): Promise<void> {
     if (!this.isPopOutVerbOwn(windowId)) return;
     const found = findWindow(this.state, windowId);
@@ -2959,13 +3021,12 @@ export class DesktopStore {
     else this.showWindow(windowId);
   }
 
-  /** Put a window on screen without ever putting it away: for a pulled-out window, show its ghost again when the
-   *  ghost is hidden, else its own desktop window; otherwise restore and raise when minimized, raise otherwise. */
+  /** Put a window on screen without ever putting it away: for a pulled-out window, its own desktop window; otherwise
+   *  restore and raise when minimized, raise otherwise. */
   private showWindow(windowId: string): void {
     const placement = placementOf(this.state.layout, windowId);
     if (placement.is_detached) {
-      if (placement.is_minimized) this.showWindowGhost(windowId);
-      else this.showDetachedWindow(windowId);
+      this.showDetachedWindow(windowId);
       return;
     }
     if (placement.is_minimized) this.restoreWindow(windowId);
@@ -3428,6 +3489,12 @@ export class DesktopStore {
   windowGesture(): MoveGesture | ResizeGesture | null {
     const gesture = this.gesture;
     return gesture !== null && (gesture.kind === "move" || gesture.kind === "resize") ? gesture : null;
+  }
+
+  /** The window a drag is moving, else null. */
+  movingWindowId(): string | null {
+    const gesture = this.gesture;
+    return gesture !== null && gesture.kind === "move" ? gesture.windowId : null;
   }
 
   /** The frame a placement renders at while a gesture moves or resizes it, else its own. */
