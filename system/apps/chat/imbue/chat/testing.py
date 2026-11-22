@@ -537,10 +537,11 @@ def drain_pushes(client_queue: queue.Queue[str | None]) -> list[dict[str, Any]]:
     return messages
 
 
-def drain_is_connecting_pushes(client_queue: queue.Queue[str | None], chat_id: str) -> list[bool]:
-    """Every ``is_connecting`` value the ``chats_updated`` pushes queued so far carried for ``chat_id``, in order."""
+def drain_connecting_pushes(client_queue: queue.Queue[str | None], chat_id: str) -> list[tuple[bool, bool]]:
+    """Every ``(is_connecting, is_waking_up)`` pair the ``chats_updated`` pushes queued so far carried for
+    ``chat_id``, in order."""
     return [
-        chat["active_agent"]["is_connecting"]
+        (chat["active_agent"]["is_connecting"], chat["active_agent"]["is_waking_up"])
         for message in drain_pushes(client_queue)
         if message["type"] == "chats_updated"
         for chat in message["chats"]
@@ -548,11 +549,23 @@ def drain_is_connecting_pushes(client_queue: queue.Queue[str | None], chat_id: s
     ]
 
 
+def drain_is_connecting_pushes(client_queue: queue.Queue[str | None], chat_id: str) -> list[bool]:
+    """Every ``is_connecting`` value the ``chats_updated`` pushes queued so far carried for ``chat_id``, in order."""
+    return [is_connecting for is_connecting, _is_waking_up in drain_connecting_pushes(client_queue, chat_id)]
+
+
 def is_chat_connecting(manager: AgentManager, chat_id: str) -> bool:
     """The ``is_connecting`` the chat's current snapshot reports; the chat must have one."""
     snapshot = manager.get_chat_snapshot(chat_id)
     assert snapshot is not None
     return snapshot.active_agent.is_connecting
+
+
+def is_chat_waking_up(manager: AgentManager, chat_id: str) -> bool:
+    """The ``is_waking_up`` the chat's current snapshot reports; the chat must have one."""
+    snapshot = manager.get_chat_snapshot(chat_id)
+    assert snapshot is not None
+    return snapshot.active_agent.is_waking_up
 
 
 def is_chat_resending_after_sign_in(manager: AgentManager, chat_id: str) -> bool:
@@ -1427,6 +1440,7 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
             queued_messages=(),
             shoulder_tap_available=False,
             is_connecting=False,
+            is_waking_up=False,
             is_resending_after_sign_in=False,
             is_busy=False,
             background_tasks=(),

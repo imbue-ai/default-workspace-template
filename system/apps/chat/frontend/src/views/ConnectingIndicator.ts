@@ -1,7 +1,9 @@
 /**
  * Whether a sent message is waiting for the agent to come up, and what the status row at the end of
  * the transcript says about it: "Connecting to Opus 5.5 on Anthropic...", naming the model and the
- * provider as far as the chat knows them yet (the row itself is ActivityIndicator).
+ * provider as far as the chat knows them yet (the row itself is ActivityIndicator). A send that is
+ * starting a stopped agent (an older chat left idle) says "Waking up Opus 5.5 on Anthropic..." instead,
+ * so the wait reads as the agent coming back rather than as a connection that should already be there.
  *
  * Connecting is a sub-state of Sending (contract A1): the message already shows as sent, and
  * this says where the wait is. The backend reports it on the chat's snapshot
@@ -26,7 +28,8 @@ export function isChatConnecting(chatId: string): boolean {
   );
 }
 
-/** What the status row says: the model and the provider the message is waiting for, as far as they are known. */
+/** What the status row says: the model and the provider the message is waiting for, as far as they are known,
+ *  and whether that agent is being woken up from stopped. */
 export function connectingLabel(chatId: string): string {
   const chat = getChatById(chatId);
   const account =
@@ -36,6 +39,11 @@ export function connectingLabel(chatId: string): string {
   const model =
     chat === undefined ? null : (effectiveChoice(chatId, chat.active_agent.model_choice)?.matched?.label ?? null);
   const provider = account?.provider ?? null;
+  if (chat?.active_agent.is_waking_up === true) {
+    if (model !== null && provider !== null) return `Waking up ${model} on ${provider}…`;
+    if (model !== null) return `Waking up ${model}…`;
+    return provider === null ? "Waking up the agent…" : `Waking up the agent on ${provider}…`;
+  }
   if (model !== null && provider !== null) return `Connecting to ${model} on ${provider}…`;
   const target = model ?? provider;
   return target === null ? "Connecting…" : `Connecting to ${target}…`;

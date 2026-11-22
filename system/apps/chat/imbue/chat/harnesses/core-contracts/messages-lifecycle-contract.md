@@ -33,7 +33,8 @@ when the CONTRACT changes.
 **Connecting — a sub-state of Sending.** A send that has to wait for the agent to come up
 before it can be delivered (the agent was stopped and the send starts it, or its harness has
 launched but not yet reported it accepts input) is **Connecting**: the placeholder stays as it
-is, and "Connecting…" with a pulsing dot shows on the status row under it until the send resolves. The
+is, and "Connecting…" with a pulsing dot shows on the status row under it until the send resolves
+("Waking up…" when the send is starting a stopped agent, ``active_agent.is_waking_up``). The
 backend decides it (``active_agent.is_connecting`` on the chat's snapshot), from the agent's
 lifecycle and the harness's own signal that it accepts input; the frontend only renders it. A
 message sent to a chat still being created is waiting on the same thing and reads the same way:

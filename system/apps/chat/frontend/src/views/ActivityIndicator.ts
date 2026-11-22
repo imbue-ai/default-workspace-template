@@ -22,7 +22,8 @@
  *
  * Before the agent's turn starts, the row stands for the user's send (contract A1/A2): a send
  * waiting on the agent to come up says "Connecting to <model> on <provider>…" (the backend's
- * ``is_connecting``), and any other send still in flight shows the row's dot at once, captioned
+ * ``is_connecting``), or "Waking up <model> on <provider>…" when the send is starting a stopped
+ * agent (``is_waking_up``), and any other send still in flight shows the row's dot at once, captioned
  * "Sending to <harness>…" only if it is still in flight after `SENDING_LABEL_AFTER_MS`. Both
  * are the Sending state drawn on the agent's side; neither resolves anything, and both give way
  * as soon as the backend reports the turn. Once the agent's turn ends the row goes, though its
