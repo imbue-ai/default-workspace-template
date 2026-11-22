@@ -235,8 +235,8 @@ def parse_generated_suggestions(answer: str) -> tuple[Suggestion, ...]:
     """The suggestions in a model's answer, in order; none is a valid answer.
 
     Only the ``<suggestion>`` elements are read, so whatever else the model wrote (a draft, a critique) is no part
-    of the set. A label is kept when it is one line of 1 to ``MAX_SUGGESTION_LABEL_LENGTH`` characters and no earlier one says
-    the same, up to ``MAX_SUGGESTION_COUNT`` of them; only the first one kept may be the recommended one.
+    of the set. A label is kept when it is one line of 1 to ``MAX_SUGGESTION_LABEL_LENGTH`` characters and no earlier
+    one says the same, up to ``MAX_SUGGESTION_COUNT`` of them; only the first one kept may be the recommended one.
     """
     suggestions: list[Suggestion] = []
     seen_labels: set[str] = set()

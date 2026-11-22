@@ -89,7 +89,13 @@ def test_bold_text_that_opens_no_list_item_is_no_idea() -> None:
 
 
 def test_an_idea_is_read_from_any_list_marker_and_loses_a_colon_inside_its_bold() -> None:
-    reply = "A few more:\n\n* **Trip planner:** one page per trip.\n1. **Gift tracker** - who gets what.\n  + **My week**: the week ahead."
+    reply = (
+        "A few more:\n"
+        "\n"
+        "* **Trip planner:** one page per trip.\n"
+        "1. **Gift tracker** - who gets what.\n"
+        "  + **My week**: the week ahead."
+    )
 
     assert idea_names(reply) == ("Trip planner", "Gift tracker", "My week")
 
