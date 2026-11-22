@@ -1,6 +1,6 @@
 /**
  * What the three placements of suggestions share above the composer (``views/ChatSuggestions.ts``): the shape of a
- * strip a placement hands over to be drawn, and the link under a strip that switches its placement off.
+ * strip a placement hands over to be drawn, and the link of a strip that switches its placement off.
  *
  * The link switches the placement off for the whole workspace: the strip goes, a line saying so takes its place for
  * a few seconds with a way back, and an Imbue Studio chrome that opens its workspace settings is asked to.
@@ -18,12 +18,12 @@ export interface PlacementStrip {
   // Names the set the strip holds, so another set's strip rises in rather than changing in place.
   setKey: string;
   suggestions: readonly Suggestion[];
-  /** How many suggestions are drawn before "Show more" is clicked; null draws every one. */
-  foldAfter: number | null;
+  /** Its pills are shown: an activity or a new-chat strip is not collapsed to its toggle, and the next-step
+   *  strip's are not waiting behind its line. */
   isOpen: boolean;
   onPick: (suggestion: Suggestion) => void;
   onToggle: () => void;
-  /** Collapse the strip to its toggle, because another strip opened. */
+  /** Take the strip's pills away, because another strip opened. */
   collapse: () => void;
 }
 

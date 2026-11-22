@@ -89,6 +89,7 @@ import { renderQueuedMessages } from "./QueuedMessageView";
 import { closedPendingRun, renderOutgoingMessages, type PendingBubbleRun } from "./OutgoingMessageView";
 import { renderHeldSends, renderProvisionalHeldSends } from "./HeldSendView";
 import { HandoffFailedNotice } from "./HandoffFailedNotice";
+import { answeredReplySuggestions } from "./AnsweredReplySuggestions";
 import { ChatSuggestions } from "./ChatSuggestions";
 import { renderHandoffTailNode } from "./handoff-node";
 import { SwitchDialog } from "./SwitchDialog";
@@ -858,6 +859,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 ...renderAgentLiveTail(chatId, false, isReplyDraftInStep),
                 ...stretchStatusNodes(chatId, getEventsForChat(chatId), isRunningCallInline(chatId, cachedRows)),
               ],
+        (eventIds) => answeredReplySuggestions(chatId, eventIds),
       );
       cachedRows = view.rows;
       isReplyDraftInStep = view.isReplyDraftInStep;

@@ -75,18 +75,26 @@ function userMessage(eventId: string): TranscriptEvent {
   return userMessageFixture(eventId, "Plan my week");
 }
 
-const NO_NEXT_STEPS: SuggestionsAnswer = { status: "none", after_event_id: null, source: null, suggestions: [] };
+const NO_NEXT_STEPS: SuggestionsAnswer = {
+  status: "none",
+  after_event_id: null,
+  source: null,
+  suggestions: [],
+  sets: [],
+};
 
-function nextSteps(afterEventId: string): SuggestionsAnswer {
-  return {
-    status: "ready",
+/** A set stored for the reply ``afterEventId``: a model's, which waits behind its line, unless ``source`` says the
+ *  chat app's own, which starts shown. */
+function nextSteps(afterEventId: string, source: "generated" | "fixed" = "generated"): SuggestionsAnswer {
+  const set = {
     after_event_id: afterEventId,
-    source: "generated",
+    source,
     suggestions: [
       { suggestion_id: "go", label: "Go ahead", is_recommended: false },
       { suggestion_id: "change", label: "Change the plan", is_recommended: false },
     ],
   };
+  return { status: "ready", ...set, sets: [set] };
 }
 
 /** What the backend holds, which the page's requests read and write. */
@@ -131,6 +139,13 @@ function isOpen(placement: string): boolean | null {
 
 function pillLabels(placement: string): string[] {
   return [...(strip(placement)?.querySelectorAll(".suggestion-pill") ?? [])].map((pill) => pill.textContent ?? "");
+}
+
+/** What the next-step line above the composer says: "" for an empty one, null when its height is not kept. */
+function nextStepLineText(): string | null {
+  const drawn = root.querySelectorAll(".suggestion-line");
+  expect(drawn.length).toBeLessThanOrEqual(1);
+  return drawn[0]?.textContent ?? null;
 }
 
 function click(selector: string): void {
@@ -431,7 +446,9 @@ describe("the activity strip", () => {
     await drawAndSettle();
 
     expect(strips()).toEqual([]);
-    expect(root.querySelector(".chat-suggestions")).toBeNull();
+    // The column holds the next-step line's kept height alone.
+    expect(root.querySelector(".chat-suggestions")?.children).toHaveLength(1);
+    expect(nextStepLineText()).toBe("");
     expect(readsOf("activity")).toBe(0);
   });
 
@@ -444,10 +461,16 @@ describe("the activity strip", () => {
     expect(isOpen("activity")).toBe(true);
     expect(strip("activity")?.getAttribute("aria-label")).toBe("While you wait");
     expect(pillLabels("activity")).toEqual(FIRST_THREE_LABELS);
-    expect(root.querySelector(".suggestion-strip-more")).toBeNull();
+    // Its own link is under its pills, and the next-step line under the strip, empty while the reply is on its way.
+    expect(strip("activity")?.querySelector(".suggestion-strip-disable")?.textContent).toBe(
+      "disable activity suggestions",
+    );
+    expect(nextStepLineText()).toBe("");
+    const line = root.querySelector(".suggestion-line")!;
+    expect(strip("activity")!.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("closes into its While you wait toggle when the reply ends, and the reply's own suggestions open", async () => {
+  it("closes into its While you wait toggle when the reply ends, and the line says the reply's suggestions wait", async () => {
     await drawAndSettle();
     working();
     await drawAndSettle();
@@ -458,6 +481,21 @@ describe("the activity strip", () => {
 
     expect(isOpen("activity")).toBe(false);
     expect(strip("activity")?.querySelector(".suggestion-strip-toggle")?.textContent).toBe("While you wait");
+    expect(isOpen("next_step")).toBe(false);
+    expect(nextStepLineText()).toBe("See 2 suggestions");
+    expect(root.querySelectorAll(".suggestion-strip--open")).toHaveLength(0);
+  });
+
+  it("closes into its toggle when the reply ends with a fixed set, which shows at once", async () => {
+    await drawAndSettle();
+    working();
+    await drawAndSettle();
+
+    stored.nextSteps = nextSteps("a-2", "fixed");
+    answeredAgain();
+    await drawAndSettle();
+
+    expect(isOpen("activity")).toBe(false);
     expect(isOpen("next_step")).toBe(true);
     expect(pillLabels("next_step")).toEqual(["Go ahead", "Change the plan"]);
     expect(root.querySelectorAll(".suggestion-strip--open")).toHaveLength(1);
@@ -467,7 +505,7 @@ describe("the activity strip", () => {
     await drawAndSettle();
     working();
     await drawAndSettle();
-    stored.nextSteps = nextSteps("a-2");
+    stored.nextSteps = nextSteps("a-2", "fixed");
     answeredAgain();
     await drawAndSettle();
 
@@ -475,6 +513,7 @@ describe("the activity strip", () => {
 
     expect(isOpen("activity")).toBe(true);
     expect(isOpen("next_step")).toBe(false);
+    expect(nextStepLineText()).toBe("See 2 suggestions");
     expect(root.querySelectorAll(".suggestion-strip--open")).toHaveLength(1);
     const textbox = document.createElement("textarea");
     textbox.className = "message-input-textbox";
@@ -485,14 +524,14 @@ describe("the activity strip", () => {
     );
     expect(mocks.focusComposer).toHaveBeenCalledTimes(1);
 
-    // And back: opening the reply's suggestions collapses the activity strip.
-    click('.suggestion-strip[data-placement="next_step"] .suggestion-strip-toggle');
+    // And back: showing the reply's suggestions from their line collapses the activity strip.
+    click(".suggestion-line-toggle");
     expect(isOpen("next_step")).toBe(true);
     expect(isOpen("activity")).toBe(false);
   });
 
-  it("collapses the reply's suggestions, already a toggle, no further when the next turn opens it", async () => {
-    stored.nextSteps = nextSteps("a-1");
+  it("opens over an empty line when the next turn starts: the reply's suggestions have left the composer", async () => {
+    stored.nextSteps = nextSteps("a-1", "fixed");
     await drawAndSettle();
     expect(isOpen("next_step")).toBe(true);
 
@@ -500,7 +539,8 @@ describe("the activity strip", () => {
     await drawAndSettle();
 
     expect(isOpen("activity")).toBe(true);
-    expect(isOpen("next_step")).toBe(false);
+    expect(strip("next_step")).toBeNull();
+    expect(nextStepLineText()).toBe("");
   });
 
   it("skips what this page cannot act on before taking the first three", async () => {
@@ -666,46 +706,55 @@ describe("the strips together", () => {
     stored.offered.activity = { suggestions: [PHONE, BUILD_APP, CONNECT_DATA] };
     firstMessageSent();
     await drawAndSettle();
-    stored.nextSteps = nextSteps("a-1");
+    stored.nextSteps = nextSteps("a-1", "fixed");
     firstReplyIn();
     await drawAndSettle();
   }
 
-  it("share one column, the collapsed ones as toggles side by side and the open one in a row of its own", async () => {
+  it("share one column, the collapsed ones as toggles side by side and the next-step strip last, in a row of its own", async () => {
     await allThreeStrips();
 
     const column = root.querySelector<HTMLElement>(".chat-suggestions");
     expect(column).not.toBeNull();
     expect(strips().every((drawn) => drawn.parentElement === column)).toBe(true);
     expect(column!.classList.contains("flex-wrap")).toBe(true);
+    // The next-step strip is drawn last, so its line is the one directly above the composer.
     expect(strips().map((drawn) => drawn.getAttribute("data-placement"))).toEqual([
-      "next_step",
       "activity",
       "new_chat",
+      "next_step",
     ]);
+    expect(column!.lastElementChild).toBe(strip("next_step"));
     expect([isOpen("next_step"), isOpen("activity"), isOpen("new_chat")]).toEqual([true, false, false]);
-    // The open strip takes a whole row, after the toggles, which keep their own width.
+    // It takes a whole row, after the toggles, which keep their own width.
     expect(strip("next_step")!.classList.contains("w-full")).toBe(true);
     expect(strip("next_step")!.classList.contains("order-last")).toBe(true);
     for (const placement of ["activity", "new_chat"]) {
       expect(strip(placement)!.classList.contains("w-full")).toBe(false);
       expect(strip(placement)!.querySelector(".suggestion-strip-toggle")).not.toBeNull();
     }
+    expect(root.textContent).not.toContain("Next steps");
   });
 
-  it("keep one open at a time, whichever toggle is clicked", async () => {
+  it("keep one open at a time, whichever is opened", async () => {
     await allThreeStrips();
 
     click('.suggestion-strip[data-placement="new_chat"] .suggestion-strip-toggle');
     expect([isOpen("next_step"), isOpen("activity"), isOpen("new_chat")]).toEqual([false, false, true]);
     expect(pillLabels("new_chat")).toEqual(FIRST_THREE_LABELS);
+    // The strip that opened sits over the next-step line, which keeps its place and says what waits behind it.
+    expect(nextStepLineText()).toBe("See 2 suggestions");
+    expect(root.querySelector(".chat-suggestions")!.lastElementChild).toBe(strip("next_step"));
 
     click('.suggestion-strip[data-placement="activity"] .suggestion-strip-toggle');
     expect([isOpen("next_step"), isOpen("activity"), isOpen("new_chat")]).toEqual([false, true, false]);
 
-    // Nothing reopens the ones that gave way: they stay toggles through later draws.
+    // Nothing reopens the ones that gave way: they stay as they are through later draws.
     draw();
     expect(root.querySelectorAll(".suggestion-strip--open")).toHaveLength(1);
+
+    click(".suggestion-line-toggle");
+    expect([isOpen("next_step"), isOpen("activity"), isOpen("new_chat")]).toEqual([true, false, false]);
   });
 });
 

@@ -847,18 +847,19 @@
   }
 }
 
-/* A strip of suggestions above the composer (views/SuggestionStrip.ts) rises into place as it appears. Its pills
-   are dashed, to read as offers rather than as controls of the page; the recommended one is the success green.
-   Reduced motion shows the strip in place. */
-@keyframes suggestion-strip-rise {
+/* The pills of a strip of suggestions (views/SuggestionStrip.ts) rise into place above the composer as they
+   appear. They are dashed, to read as offers rather than as controls of the page, under a shadow light enough to
+   lift them off the chat without boxing them; the recommended one is the success green. Reduced motion shows them
+   in place. */
+@keyframes suggestion-rise {
   from {
     opacity: 0;
     transform: translateY(6px);
   }
 }
 
-.suggestion-strip--open {
-  animation: suggestion-strip-rise 150ms ease-out;
+.suggestion-rise {
+  animation: suggestion-rise 150ms ease-out;
 }
 
 .suggestion-pill {
@@ -867,10 +868,14 @@
   border: 1px dashed var(--c-border-strong);
   border-radius: var(--radius-md);
   background: transparent;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.045),
+    0 1px 1px rgba(0, 0, 0, 0.03);
   color: var(--c-text-primary);
   font-size: var(--font-size-body);
   line-height: 18px;
   text-align: left;
+  overflow-wrap: anywhere;
   cursor: pointer;
   transition:
     background-color var(--dur-base) ease,
@@ -896,7 +901,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .suggestion-strip--open {
+  .suggestion-rise {
     animation: none;
   }
 }

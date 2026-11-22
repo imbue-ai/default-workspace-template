@@ -10,7 +10,9 @@ vi.mock("./ChatSettings", () => ({
 }));
 
 import {
+  type AnsweredSuggestionSet,
   collapseNextStepSuggestions,
+  getAnsweredReplySuggestions,
   getNextStepSuggestions,
   type NextStepFacts,
   readNextStepSuggestions,
@@ -20,24 +22,40 @@ import {
   RETRY_DELAY_MS,
   type SuggestionsAnswer,
   suggestionSetOf,
+  toggleAnsweredReplySuggestions,
   toggleNextStepSuggestions,
 } from "./Suggestions";
 
 const CHAT = "agent-1";
-const NONE: SuggestionsAnswer = { status: "none", after_event_id: null, source: null, suggestions: [] };
+const NONE: SuggestionsAnswer = { status: "none", after_event_id: null, source: null, suggestions: [], sets: [] };
 
 /** What the route answers while a set for ``afterEventId`` is being worked out. */
 function pending(afterEventId: string): SuggestionsAnswer {
-  return { status: "pending", after_event_id: afterEventId, source: null, suggestions: [] };
+  return { status: "pending", after_event_id: afterEventId, source: null, suggestions: [], sets: [] };
 }
 
-function ready(afterEventId: string, labels: string[] = ["Yes", "No"]): SuggestionsAnswer {
+/** A set as the chat app remembers it for the reply ``afterEventId``. */
+function remembered(
+  afterEventId: string,
+  labels: string[] = ["Yes", "No"],
+  source: string = "fixed",
+): AnsweredSuggestionSet {
   return {
-    status: "ready",
     after_event_id: afterEventId,
-    source: "fixed",
+    source,
     suggestions: labels.map((label) => ({ suggestion_id: label.toLowerCase(), label, is_recommended: false })),
   };
+}
+
+/** What the route answers with a set stored for ``afterEventId``, which the chat app remembers after ``earlier``. */
+function ready(
+  afterEventId: string,
+  labels: string[] = ["Yes", "No"],
+  source: string = "fixed",
+  earlier: AnsweredSuggestionSet[] = [],
+): SuggestionsAnswer {
+  const stored = remembered(afterEventId, labels, source);
+  return { status: "ready", ...stored, sets: [...earlier, stored] };
 }
 
 /** A reply's turn is done, next-step suggestions are on, and ``lastReplyEventId`` is the chat's last reply. */
@@ -59,6 +77,15 @@ async function look(overrides: Partial<NextStepFacts> = {}): Promise<void> {
 
 function shownLabels(): string[] | null {
   return getNextStepSuggestions(CHAT)?.set.suggestions.map((suggestion) => suggestion.label) ?? null;
+}
+
+/** The set drawn in the transcript under the reply ``eventId``, with the chat as ``overrides`` have it. */
+function answeredReply(eventId: string, overrides: Partial<NextStepFacts> = {}) {
+  return getAnsweredReplySuggestions(CHAT, eventId, () => facts(overrides));
+}
+
+function answeredLabels(eventId: string, overrides: Partial<NextStepFacts> = {}): string[] | null {
+  return answeredReply(eventId, overrides)?.set.suggestions.map((suggestion) => suggestion.label) ?? null;
 }
 
 beforeEach(() => {
@@ -118,7 +145,7 @@ describe("suggestionSetOf", () => {
 });
 
 describe("the set a chat's page draws", () => {
-  it("reads the stored set when the page first looks, and draws it open under the reply it follows", async () => {
+  it("reads the stored set when the page first looks, and draws a fixed one with its pills shown", async () => {
     mockRequest.mockResolvedValue(ready("reply-1"));
 
     await look();
@@ -172,33 +199,48 @@ describe("the set a chat's page draws", () => {
     expect(mockRequest).not.toHaveBeenCalled();
   });
 
-  it("collapses to its toggle when a message is sent, and opens again from it", async () => {
-    mockRequest.mockResolvedValue(ready("reply-1"));
+  it("draws a generated set behind its line, and one of a source it does not know", async () => {
+    mockRequest.mockResolvedValue(ready("reply-1", ["Yes", "No"], "generated"));
+    await look();
+    expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(false);
+    expect(shownLabels()).toEqual(["Yes", "No"]);
+
+    resetSuggestionsForTests();
+    mockRequest.mockResolvedValue(ready("reply-1", ["Yes", "No"], "imported"));
+    await look();
+    expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(false);
+  });
+
+  it("shows its pills from its line and hides them again, and hides them when another strip opens", async () => {
+    mockRequest.mockResolvedValue(ready("reply-1", ["Yes", "No"], "generated"));
     await look();
 
+    toggleNextStepSuggestions(CHAT);
+    expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(true);
+    toggleNextStepSuggestions(CHAT);
+    expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(false);
+
+    toggleNextStepSuggestions(CHAT);
     collapseNextStepSuggestions(CHAT);
     expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(false);
     expect(shownLabels()).toEqual(["Yes", "No"]);
-
-    toggleNextStepSuggestions(CHAT);
-    expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(true);
-    expect(shownLabels()).toEqual(["Yes", "No"]);
   });
 
-  it("collapses when a turn starts, whoever started it, and stays reopened through that turn", async () => {
+  it("leaves the composer the moment a turn starts, whoever started it", async () => {
     mockRequest.mockResolvedValue(ready("reply-1"));
     await look();
 
-    await look({ isTurnDone: false, lastReplyEventId: null });
-    expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(false);
+    // A message is on its way: the reply is still the chat's last, and its turn is no longer done.
+    reconcileNextStepSuggestions(CHAT, facts({ isTurnDone: false }));
+    expect(getNextStepSuggestions(CHAT)).toBeNull();
 
-    toggleNextStepSuggestions(CHAT);
+    await look({ isTurnDone: false, lastReplyEventId: null });
     await look({ isTurnDone: false, lastReplyEventId: "reply-2" });
-    expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(true);
-    expect(shownLabels()).toEqual(["Yes", "No"]);
+    expect(getNextStepSuggestions(CHAT)).toBeNull();
+    expect(mockRequest).toHaveBeenCalledTimes(1);
   });
 
-  it("is dropped when the next turn ends, whether or not the new reply has suggestions, and reads again", async () => {
+  it("stays away when the next turn ends, whether or not the new reply has suggestions, and reads again", async () => {
     mockRequest.mockResolvedValue(ready("reply-1"));
     await look();
     await look({ isTurnDone: false, lastReplyEventId: "reply-2" });
@@ -236,14 +278,17 @@ describe("the set a chat's page draws", () => {
     expect(getNextStepSuggestions(CHAT)).toBeNull();
   });
 
-  it("comes back open when the send that collapsed it never left the page", async () => {
+  it("comes back above the composer when the send that took it away never left the page", async () => {
     mockRequest.mockResolvedValue(ready("reply-1"));
     await look();
     // The send is on its way, then fails: nothing reached the chat, and the stored set is still the reply's.
     await look({ isTurnDone: false });
-    expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(false);
+    expect(getNextStepSuggestions(CHAT)).toBeNull();
+    expect(answeredLabels("reply-1", { isTurnDone: false })).toEqual(["Yes", "No"]);
 
     await look();
+
+    expect(answeredReply("reply-1")).toBeNull();
 
     expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(true);
     expect(shownLabels()).toEqual(["Yes", "No"]);
@@ -260,10 +305,10 @@ describe("the set a chat's page draws", () => {
     expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(true);
   });
 
-  it("keeps a collapsed strip collapsed when the same set is read again", async () => {
+  it("keeps a set's pills hidden when the same set is read again", async () => {
     mockRequest.mockResolvedValue(ready("reply-1"));
     await look();
-    collapseNextStepSuggestions(CHAT);
+    toggleNextStepSuggestions(CHAT);
 
     rereadNextStepSuggestions(CHAT);
     await look();
@@ -272,10 +317,10 @@ describe("the set a chat's page draws", () => {
     expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(false);
   });
 
-  it("replaces the drawn set with a different one read for the same reply, open", async () => {
+  it("replaces the drawn set with a different one read for the same reply, as a set newly drawn", async () => {
     mockRequest.mockResolvedValue(ready("reply-1"));
     await look();
-    collapseNextStepSuggestions(CHAT);
+    toggleNextStepSuggestions(CHAT);
 
     mockRequest.mockResolvedValue(ready("reply-1", ["Show me some ideas"]));
     rereadNextStepSuggestions(CHAT);
@@ -320,8 +365,7 @@ describe("a set worked out after the turn ended", () => {
     mockRequest.mockResolvedValue(ready("reply-2", ["Thanks, that is all"]));
     rereadNextStepSuggestions(CHAT);
     await look({ isTurnDone: false, lastReplyEventId: "reply-2" });
-    expect(shownLabels()).toEqual(["Yes", "No"]);
-    expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(false);
+    expect(getNextStepSuggestions(CHAT)).toBeNull();
 
     await look({ lastReplyEventId: "reply-2" });
 
@@ -340,6 +384,119 @@ describe("a set worked out after the turn ended", () => {
     await look({ lastReplyEventId: "reply-2" });
 
     expect(getNextStepSuggestions(CHAT)).toBeNull();
+  });
+});
+
+describe("the set a reply keeps in the transcript once it has been answered", () => {
+  it("is drawn under its reply the moment a turn starts, behind its line, with nothing read again", async () => {
+    mockRequest.mockResolvedValue(ready("reply-1"));
+    await look();
+    expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(true);
+    expect(answeredReply("reply-1")).toBeNull();
+
+    // A message is on its way, and then is the chat's last word.
+    expect(answeredReply("reply-1", { isTurnDone: false })).toEqual({
+      set: getNextStepSuggestions(CHAT)?.set,
+      isOpen: false,
+    });
+    expect(answeredLabels("reply-1", { isTurnDone: false, lastReplyEventId: null })).toEqual(["Yes", "No"]);
+    expect(answeredLabels("reply-1", { lastReplyEventId: "reply-2" })).toEqual(["Yes", "No"]);
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows its pills from its line and hides them again, each reply's line by itself", async () => {
+    mockRequest.mockResolvedValue(ready("reply-2", ["More ideas"], "generated", [remembered("reply-1")]));
+    await look({ lastReplyEventId: "reply-3" });
+
+    toggleAnsweredReplySuggestions(CHAT, "reply-1");
+    expect(answeredReply("reply-1", { lastReplyEventId: "reply-3" })?.isOpen).toBe(true);
+    expect(answeredReply("reply-2", { lastReplyEventId: "reply-3" })?.isOpen).toBe(false);
+    expect(mockRedraw).toHaveBeenCalled();
+
+    toggleAnsweredReplySuggestions(CHAT, "reply-1");
+    expect(answeredReply("reply-1", { lastReplyEventId: "reply-3" })?.isOpen).toBe(false);
+
+    // A reply the page knows no set for has no line to open.
+    toggleAnsweredReplySuggestions(CHAT, "reply-9");
+    expect(answeredReply("reply-9", { lastReplyEventId: "reply-3" })).toBeNull();
+  });
+
+  it("is kept for every answered reply the chat app remembers a set for, and none for the reply waited on", async () => {
+    mockRequest.mockResolvedValue(
+      ready("reply-3", ["Thanks"], "generated", [remembered("reply-1"), remembered("reply-2", ["More ideas"])]),
+    );
+    await look({ lastReplyEventId: "reply-3" });
+
+    expect(answeredLabels("reply-1", { lastReplyEventId: "reply-3" })).toEqual(["Yes", "No"]);
+    expect(answeredLabels("reply-2", { lastReplyEventId: "reply-3" })).toEqual(["More ideas"]);
+    expect(answeredReply("reply-3", { lastReplyEventId: "reply-3" })).toBeNull();
+    expect(shownLabels()).toEqual(["Thanks"]);
+  });
+
+  it("stays known when a later answer leaves it out, as the chat app's does after a restart", async () => {
+    mockRequest.mockResolvedValue(ready("reply-1"));
+    await look();
+    await look({ isTurnDone: false, lastReplyEventId: "reply-2" });
+
+    mockRequest.mockResolvedValue(ready("reply-2", ["More ideas"]));
+    await look({ lastReplyEventId: "reply-2" });
+
+    expect(answeredLabels("reply-1", { lastReplyEventId: "reply-2" })).toEqual(["Yes", "No"]);
+    expect(shownLabels()).toEqual(["More ideas"]);
+  });
+
+  it("starts behind its line though its pills were shown above the composer, each time it is answered", async () => {
+    mockRequest.mockResolvedValue(ready("reply-1"));
+    await look();
+    expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(true);
+    await look({ isTurnDone: false });
+    toggleAnsweredReplySuggestions(CHAT, "reply-1");
+    expect(answeredReply("reply-1", { isTurnDone: false })?.isOpen).toBe(true);
+
+    // The turn ends with nothing new said, so the reply is waited on again, and then a message is sent.
+    await look();
+    expect(getNextStepSuggestions(CHAT)?.isOpen).toBe(true);
+
+    expect(answeredReply("reply-1", { isTurnDone: false })?.isOpen).toBe(false);
+  });
+
+  it("is not drawn in a room, or with the setting off or not yet read", async () => {
+    mockRequest.mockResolvedValue(ready("reply-1"));
+    await look();
+
+    expect(answeredReply("reply-1", { lastReplyEventId: "reply-2", isRoom: true })).toBeNull();
+    expect(answeredReply("reply-1", { lastReplyEventId: "reply-2", isEnabled: false })).toBeNull();
+    expect(answeredLabels("reply-1", { lastReplyEventId: "reply-2" })).toEqual(["Yes", "No"]);
+  });
+
+  it("is not drawn for a set with nothing left to draw, which also replaces the one known for its reply", async () => {
+    mockRequest.mockResolvedValue(ready("reply-2", ["More ideas"], "generated", [remembered("reply-1")]));
+    await look({ lastReplyEventId: "reply-3" });
+    expect(answeredLabels("reply-1", { lastReplyEventId: "reply-3" })).toEqual(["Yes", "No"]);
+
+    const actionsOnly = remembered("reply-1", ["Open the share panel"]);
+    mockRequest.mockResolvedValue({
+      ...NONE,
+      sets: [{ ...actionsOnly, suggestions: [{ ...actionsOnly.suggestions[0], action: "phone_access" }] }],
+    });
+    rereadNextStepSuggestions(CHAT);
+    await settle();
+
+    expect(answeredReply("reply-1", { lastReplyEventId: "reply-3" })).toBeNull();
+    expect(answeredLabels("reply-2", { lastReplyEventId: "reply-3" })).toEqual(["More ideas"]);
+  });
+
+  it("reads nothing of the chat for a reply the page knows no set for, nor for a chat it has never looked at", async () => {
+    const readFacts = vi.fn(() => facts());
+    mockRequest.mockResolvedValue(ready("reply-1"));
+    await look();
+
+    expect(getAnsweredReplySuggestions(CHAT, "reply-0", readFacts)).toBeNull();
+    expect(getAnsweredReplySuggestions("agent-elsewhere", "reply-1", readFacts)).toBeNull();
+    expect(readFacts).not.toHaveBeenCalled();
+
+    expect(getAnsweredReplySuggestions(CHAT, "reply-1", readFacts)).toBeNull();
+    expect(readFacts).toHaveBeenCalledTimes(1);
   });
 });
 

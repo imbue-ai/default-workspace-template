@@ -58,6 +58,9 @@ from imbue.chat.main import install_suggestion_generator
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
+from imbue.chat.suggestions import ChatSuggestions
+from imbue.chat.suggestions import Suggestion
+from imbue.chat.suggestions import SuggestionSource
 from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import FIXTURE_SESSION_ID
 from imbue.chat.testing import HookedSendMngrMessenger
@@ -430,50 +433,159 @@ def test_conversation_and_composer_render(e2e_server: RunningWorkspace, page: Pa
     expect(send_button).to_be_enabled()
 
 
-@pytest.mark.timeout(90, func_only=False)
-def test_suggestions_worked_out_after_a_reply_rise_above_the_composer_with_the_rest_behind_show_more(
+def _assert_pills_are_a_list_on_the_users_side(pills: Locator, column: Locator) -> None:
+    """One pill to a row, all as wide as the widest, their right edge 16px in from the column's."""
+    boxes = [_box(pills.nth(index)) for index in range(pills.count())]
+    assert len(boxes) > 1
+    column_box = _box(column)
+    for upper, lower in zip(boxes, boxes[1:], strict=False):
+        assert lower["top"] >= upper["bottom"], "each pill has a row of its own"
+    assert max(box["right"] - box["left"] for box in boxes) - min(box["right"] - box["left"] for box in boxes) < 1
+    for box in boxes:
+        assert abs(column_box["right"] - 16 - box["right"]) < 1, "the pills are set in 16px from the column's edge"
+        assert box["left"] > column_box["left"] + (column_box["right"] - column_box["left"]) / 3, (
+            "the pills sit on the user's side of the column"
+        )
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_replys_suggestions_wait_on_a_line_above_the_composer_and_stay_under_the_reply_once_answered(
     e2e_server: RunningWorkspace, page: Page, tmp_path: Path
 ) -> None:
-    """The page is already showing the reply when its suggestions are stored: the push brings the strip in with no
-    reload, a set longer than three keeps the rest behind Show more, and the first pill wears the recommended look."""
+    """The line above the composer keeps its height, so a set that arrives moves nothing. The chat app's own set
+    shows at once, as a list on the user's side; a model's waits behind "See N suggestions". Once the reply is
+    answered its set is the same line in the transcript, hidden, and a pill clicked there is sent."""
     state = e2e_server.chat_state
     manager = state.agent_manager
+    messenger = manager._messenger
+    assert isinstance(messenger, RecordingMngrMessenger)
+    chat_id = ChatId(FIXTURE_AGENT_ID)
     agent = manager.get_agent_by_id(FIXTURE_AGENT_ID)
     assert agent is not None
-    seed_agent_state(
-        manager,
-        FIXTURE_AGENT_ID,
-        name=agent.name,
-        state="WAITING",
-        labels=agent.labels,
-        activity_state=ActivityState.IDLE,
-    )
-    labels = ["Show me what you can do", "Help me plan my week", "Build me an app", "Connect my email", "Not now"]
+
+    def set_agent(agent_state: str, activity_state: ActivityState) -> None:
+        seed_agent_state(
+            manager,
+            FIXTURE_AGENT_ID,
+            name=agent.name,
+            state=agent_state,
+            labels=agent.labels,
+            activity_state=activity_state,
+        )
+        manager._broadcast_chats_updated()
+
+    set_agent("WAITING", ActivityState.IDLE)
+    generated_labels = ["Show me what you can do", "Help me plan my week", "Build me an app", "Connect my email", "No"]
     answer = "\n".join(
         f'<suggestion recommended="true">{label}</suggestion>' if index == 0 else f"<suggestion>{label}</suggestion>"
-        for index, label in enumerate(labels)
+        for index, label in enumerate(generated_labels)
     )
     completion = ScriptedOneShotCompletion([answer])
     install_suggestion_generator(state, lambda _harness: completion, InlineExecutor())
     assert state.suggestion_generator is not None
     _open_fixture_chat(page, e2e_server)
-    expect(_chat(page).locator(".message-assistant").first).to_contain_text("Hello! How can I help you?")
-    pills = _chat(page).locator(".suggestion-pill")
+    chat = _chat(page)
+    expect(chat.locator(".message-assistant").first).to_contain_text("Hello! How can I help you?")
+    column = chat.locator(".chat-suggestions")
+    line = column.locator(".suggestion-line")
+    toggle = column.locator(".suggestion-line-toggle")
+    pills = column.locator(".suggestion-pill")
+    composer = chat.locator(".message-input-box")
+    answered_lines = chat.locator(".answered-reply-suggestions")
+
+    # With no set, the line is there and empty.
+    expect(line).to_have_count(1)
+    expect(line).to_have_text("")
     expect(pills).to_have_count(0)
+    empty_line_box, composer_box = _box(line), _box(composer)
 
-    state.suggestion_generator.consider_turn_end(ChatId(FIXTURE_AGENT_ID))
+    # The chat app's own set, under the fixture's reply, shows at once.
+    events = get_json(f"{e2e_server.chat_url}/api/chats/{FIXTURE_AGENT_ID}/events")["events"]
+    first_reply_event_id = [event["event_id"] for event in events if event["type"] == "assistant_message"][-1]
+    fixed_labels = ["Describe what you want to make", "Get ideas for what to make", "See what Studio can do"]
+    manager.suggestion_store.write(
+        chat_id,
+        ChatSuggestions(
+            after_event_id=first_reply_event_id,
+            source=SuggestionSource.FIXED,
+            suggestions=tuple(
+                Suggestion(suggestion_id=f"start-{index}", label=label) for index, label in enumerate(fixed_labels)
+            ),
+        ),
+    )
+    state.broadcaster.broadcast_suggestions_updated(chat_id)
 
-    expect(pills).to_have_text(labels[:3], timeout=15000)
+    expect(pills).to_have_text(fixed_labels, timeout=15000)
+    expect(toggle).to_have_text("Hide suggestions")
+    disable = column.locator(".suggestion-strip-disable")
+    expect(disable).to_have_text("disable next step suggestions")
+    _assert_pills_are_a_list_on_the_users_side(pills, column)
+    assert _box(pills.last)["bottom"] <= _box(line)["top"]
+    assert _box(line) == empty_line_box, "the line stays where it was"
+    assert _box(composer) == composer_box, "the composer does not move"
+    assert abs(_box(toggle)["right"] - _box(composer)["right"]) < 1
+    assert abs(_box(disable)["left"] - _box(composer)["left"]) < 1
+    page.screenshot(path=str(tmp_path / "1-fixed-set-shown.png"))
+
+    # A turn starts: the set leaves the composer for the transcript, under its reply and hidden.
+    _append_user_turn(e2e_server.session_file, "sugg-u-1", "Plan my week")
+    set_agent("RUNNING", ActivityState.THINKING)
+
+    expect(answered_lines).to_have_count(1, timeout=15000)
+    first_answered = chat.locator(f'.answered-reply-suggestions[data-after-event-id="{first_reply_event_id}"]')
+    answered_toggle = first_answered.locator(".suggestion-line-toggle")
+    expect(answered_toggle).to_have_text("See 3 suggestions")
+    expect(answered_toggle).to_have_attribute("aria-expanded", "false")
+    expect(pills).to_have_count(0)
+    expect(line).to_have_text("")
+    assert _box(line) == empty_line_box
+
+    # The reply lands, and a model's set for it waits behind the line.
+    reply = [{"type": "text", "text": "Here is a plan for your week."}]
+    with open(e2e_server.session_file, "a") as handle:
+        handle.write(json.dumps(_assistant_line("sugg-a-1", "2026-01-01T00:02:00Z", reply, "end_turn")) + "\n")
+    set_agent("WAITING", ActivityState.IDLE)
+    expect(chat.locator(".message-assistant").last).to_contain_text("Here is a plan for your week.", timeout=15000)
+    composer_box_before_the_set = _box(composer)
+    state.suggestion_generator.consider_turn_end(chat_id)
+
+    expect(toggle).to_have_text("See 5 suggestions", timeout=15000)
+    expect(pills).to_have_count(0)
+    expect(column.locator(".suggestion-strip-disable")).to_have_count(0)
+    assert _box(composer) == composer_box_before_the_set, "the set's arrival moves nothing"
+    assert abs(_box(toggle)["right"] - _box(composer)["right"]) < 1
+    page.screenshot(path=str(tmp_path / "2-generated-set-line.png"))
+
+    toggle.click()
+
+    expect(pills).to_have_text(generated_labels)
     expect(pills.first).to_have_class(re.compile(r"suggestion-pill--recommended"))
-    strip = _chat(page).locator(".suggestion-strip--open")
-    composer = _chat(page).locator(".message-input-textbox")
-    assert _box(strip)["bottom"] <= _box(composer)["top"]
-    page.screenshot(path=str(tmp_path / "generated-suggestions.png"))
+    expect(toggle).to_have_text("Hide suggestions")
+    _assert_pills_are_a_list_on_the_users_side(pills, column)
+    assert _box(composer) == composer_box_before_the_set
+    page.screenshot(path=str(tmp_path / "3-generated-set-shown.png"))
 
-    _chat(page).locator(".suggestion-strip-more").click()
+    # The answered reply kept its line: its pills open under it, and one clicked there is sent.
+    toggle.click()
+    expect(pills).to_have_count(0)
+    expect(answered_lines).to_have_count(1)
+    answered_toggle.click()
 
-    expect(pills).to_have_text(labels)
-    expect(_chat(page).locator(".suggestion-strip-more")).to_have_count(0)
+    answered_pills = first_answered.locator(".suggestion-pill")
+    expect(answered_pills).to_have_text(fixed_labels)
+    expect(answered_toggle).to_have_text("Hide suggestions")
+    expect(first_answered.locator(".suggestion-strip-disable")).to_have_count(0)
+    assert _box(answered_toggle)["bottom"] <= _box(answered_pills.first)["top"]
+    _assert_pills_are_a_list_on_the_users_side(answered_pills, chat.locator(".message-list"))
+    page.screenshot(path=str(tmp_path / "4-answered-reply-line-shown.png"))
+
+    answered_pills.nth(1).click()
+
+    wait_for(lambda: (FIXTURE_AGENT_ID, fixed_labels[1]) in messenger.sent, timeout=10.0)
+    expect(answered_toggle).to_have_text("Hide suggestions")
+    # That send answered the second reply, whose set joins the first's in the transcript.
+    expect(answered_lines).to_have_count(2)
+    expect(toggle).to_have_count(0)
 
 
 @pytest.mark.timeout(90, func_only=False)
@@ -514,9 +626,17 @@ def test_things_to_try_are_offered_while_the_agent_works_and_fold_into_a_toggle_
     offered = ["Work in parallel by starting a new chat", "Build an app"]
     expect(pills).to_have_text(offered, timeout=15000)
     expect(strip).to_have_class(re.compile(r"suggestion-strip--open"))
-    expect(strip.locator(".suggestion-strip-disable")).to_have_text("disable activity suggestions")
-    composer = chat.locator(".message-input-textbox")
+    disable = strip.locator(".suggestion-strip-disable")
+    expect(disable).to_have_text("disable activity suggestions")
+    composer = chat.locator(".message-input-box")
     assert _box(strip)["bottom"] <= _box(composer)["top"]
+    # The strip is a list on the user's side, its own link under it, over the next-step line's kept height.
+    _assert_pills_are_a_list_on_the_users_side(pills, chat.locator(".chat-suggestions"))
+    assert _box(disable)["top"] >= _box(pills.last)["bottom"]
+    assert abs(_box(disable)["right"] - _box(composer)["right"]) < 1
+    next_step_line = chat.locator(".chat-suggestions .suggestion-line")
+    expect(next_step_line).to_have_text("")
+    assert _box(strip)["bottom"] <= _box(next_step_line)["top"]
     page.screenshot(path=str(tmp_path / "while-you-wait.png"))
 
     pills.first.click()

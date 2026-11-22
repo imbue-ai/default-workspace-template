@@ -48,7 +48,6 @@ function placementStrip(chatId: string, placement: ActionPlacement, strip: Actio
     placement,
     setKey: placement,
     suggestions: strip.suggestions,
-    foldAfter: null,
     isOpen: strip.isOpen,
     onPick: (picked) => {
       const suggestion = strip.suggestions.find((entry) => entry.suggestion_id === picked.suggestion_id);

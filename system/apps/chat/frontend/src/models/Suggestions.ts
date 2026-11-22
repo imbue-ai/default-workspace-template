@@ -1,12 +1,14 @@
 /**
- * Suggestions: short entries above the composer that the user can click instead of typing (the backend's
- * ``suggestions.py``).
+ * Suggestions: short entries the user can click instead of typing (the backend's ``suggestions.py``).
  *
- * A chat's next-step suggestions are one stored set, offered under one assistant message
- * (``GET /api/chats/<chat-id>/suggestions``). This module reads the set and keeps, per chat, the one the page has
- * adopted: the set it draws, open or collapsed to its toggle. A set is adopted only for the reply it names, once that
- * reply's turn is done, so a set left over from an earlier reply is never drawn: after a reload, after a reply that
- * arrived while the page was away, or on a second device.
+ * A chat's next-step suggestions are sets, each offered under one assistant message
+ * (``GET /api/chats/<chat-id>/suggestions``): the stored set, which is the last reply's, and the sets the chat app
+ * remembers of the replies before it. This module reads them and keeps, per chat, every set it knows by the reply
+ * it follows, and which of them is drawn where. The set of the reply the chat waits on its user to answer is
+ * adopted: drawn above the composer, behind a line that shows and hides it. It is adopted only for the reply it
+ * names, once that reply's turn is done, so a set left over from an earlier reply is never drawn there: after a
+ * reload, after a reply that arrived while the page was away, or on a second device. Every other set the page
+ * knows is drawn in the transcript, under its reply.
  */
 
 import m from "mithril";
@@ -53,25 +55,35 @@ export interface SuggestionSet {
   suggestions: readonly Suggestion[];
 }
 
+/** A suggestion as the chat app sends it. An ``action`` marks one whose click does something other than send its
+ *  label. */
+type AnsweredSuggestion = Suggestion & { action?: string | null };
+
+/** One set as the chat app sends it: the suggestions offered under the assistant message ``after_event_id``. */
+export interface AnsweredSuggestionSet {
+  after_event_id: string;
+  source: string | null;
+  suggestions: readonly AnsweredSuggestion[];
+}
+
 /** What ``GET /api/chats/<chat-id>/suggestions`` answers: ``ready`` with the stored set, ``pending`` while one is being
- *  worked out (a ``suggestions_updated`` push follows when one is stored), or ``none``. An ``action`` marks a
- *  suggestion whose click does something other than send its label. */
+ *  worked out (a ``suggestions_updated`` push follows when one is stored), or ``none``; and in ``sets`` every set the
+ *  chat app remembers for the chat, the stored one included. */
 export interface SuggestionsAnswer {
   status: string;
   after_event_id: string | null;
   source: string | null;
-  suggestions: readonly (Suggestion & { action?: string | null })[];
+  suggestions: readonly AnsweredSuggestion[];
+  sets: readonly AnsweredSuggestionSet[];
 }
 
 /**
- * The set an answer carries, or null when it carries none to draw: any status but "ready" (one this page does not
- * know included), or a set with nothing left in it. A suggestion with an action is dropped, since a next-step set
- * carries none, so a newer backend never produces a dead pill; and only the first suggestion may be the recommended
- * one.
+ * A set the chat app sent as the page draws it, or null when nothing of it is left to draw. A suggestion with an
+ * action is dropped, since a next-step set carries none, so a newer backend never produces a dead pill; and only the
+ * first suggestion may be the recommended one.
  */
-export function suggestionSetOf(answer: SuggestionsAnswer): SuggestionSet | null {
-  if (answer.status !== "ready" || answer.after_event_id === null) return null;
-  const suggestions = answer.suggestions
+export function drawableSetOf(answered: AnsweredSuggestionSet): SuggestionSet | null {
+  const suggestions = answered.suggestions
     .filter((suggestion) => suggestion.action === undefined || suggestion.action === null)
     .map((suggestion, index) => ({
       suggestion_id: suggestion.suggestion_id,
@@ -79,14 +91,25 @@ export function suggestionSetOf(answer: SuggestionsAnswer): SuggestionSet | null
       is_recommended: suggestion.is_recommended && index === 0,
     }));
   if (suggestions.length === 0) return null;
-  const source = answer.source === "fixed" || answer.source === "generated" ? answer.source : null;
-  return { after_event_id: answer.after_event_id, source, suggestions };
+  const source = answered.source === "fixed" || answered.source === "generated" ? answered.source : null;
+  return { after_event_id: answered.after_event_id, source, suggestions };
 }
 
-/** The set a chat's page draws. */
-export interface AdoptedSuggestions {
+/** The stored set an answer carries, or null when it carries none to draw: any status but "ready" (one this page
+ *  does not know included), or a set with nothing left in it. */
+export function suggestionSetOf(answer: SuggestionsAnswer): SuggestionSet | null {
+  if (answer.status !== "ready" || answer.after_event_id === null) return null;
+  return drawableSetOf({
+    after_event_id: answer.after_event_id,
+    source: answer.source,
+    suggestions: answer.suggestions,
+  });
+}
+
+/** A set as the page draws it: behind its line, or with its pills shown. */
+export interface DrawnSuggestions {
   set: SuggestionSet;
-  // Drawn as its pills, rather than collapsed to its toggle.
+  // Its pills are shown, rather than waiting behind its line.
   isOpen: boolean;
 }
 
@@ -102,9 +125,14 @@ export interface NextStepFacts {
 }
 
 interface ChatSuggestionState {
-  // The set the last answer carried.
+  // The stored set the last answer carried.
   fetched: SuggestionSet | null;
-  adopted: (AdoptedSuggestions & { hasTurnStartedSince: boolean }) | null;
+  // Every set the page has been sent for the chat, by the event id of the reply it follows.
+  knownByReply: Map<string, SuggestionSet>;
+  // The set drawn above the composer.
+  adopted: DrawnSuggestions | null;
+  // The replies whose set is shown in the transcript, rather than waiting behind its line there.
+  openAnsweredReplies: Set<string>;
   // Whether the turn was done at the last look; null before the first.
   wasTurnDone: boolean | null;
   // Counts the reads asked for, so an answer that a later read has overtaken is dropped.
@@ -125,7 +153,9 @@ function stateOf(chatId: string): ChatSuggestionState {
   if (state === undefined) {
     state = {
       fetched: null,
+      knownByReply: new Map(),
       adopted: null,
+      openAnsweredReplies: new Set(),
       wasTurnDone: null,
       latestRead: 0,
       isReading: false,
@@ -141,7 +171,20 @@ function isSameSet(left: SuggestionSet | undefined, right: SuggestionSet): boole
   return left !== undefined && JSON.stringify(left) === JSON.stringify(right);
 }
 
-/** Read the chat's stored set. A read that fails is warned about and keeps the set read before; one the page still
+/** Take in the sets an answer carries: the stored one, and each one the chat app remembers, which replaces what the
+ *  page knew for its reply. A set the page knows and the answer leaves out stays known. */
+function learnSets(state: ChatSuggestionState, answer: SuggestionsAnswer): void {
+  state.fetched = suggestionSetOf(answer);
+  for (const answered of answer.sets) {
+    const set = drawableSetOf(answered);
+    if (set === null) state.knownByReply.delete(answered.after_event_id);
+    else state.knownByReply.set(set.after_event_id, set);
+  }
+  // Known whether or not the answer lists it among the remembered ones.
+  if (state.fetched !== null) state.knownByReply.set(state.fetched.after_event_id, state.fetched);
+}
+
+/** Read the chat's sets. A read that fails is warned about and keeps what was read before; one the page still
  *  owes is asked for again by a later look, after ``RETRY_DELAY_MS``. */
 export async function readNextStepSuggestions(chatId: string): Promise<void> {
   const state = stateOf(chatId);
@@ -154,7 +197,7 @@ export async function readNextStepSuggestions(chatId: string): Promise<void> {
       params: { chatId },
     });
     if (read !== state.latestRead) return;
-    state.fetched = suggestionSetOf(answer);
+    learnSets(state, answer);
     state.isReadOwed = false;
   } catch (error) {
     if (read !== state.latestRead) return;
@@ -177,13 +220,20 @@ addChatSettingsUpdatedListener(() => {
   for (const chatId of stateByChat.keys()) void readNextStepSuggestions(chatId);
 });
 
+/** Whether ``eventId`` is the reply the chat waits on its user to answer, which is where a set is drawn above the
+ *  composer rather than in the transcript. */
+function isReplyAwaited(facts: NextStepFacts, eventId: string): boolean {
+  return facts.isTurnDone && facts.lastReplyEventId === eventId;
+}
+
 /**
- * Bring the chat's adopted set in line with what the page now knows, reading the stored set when the page first
+ * Bring the chat's adopted set in line with what the page now knows, reading the chat's sets when the page first
  * looks and whenever a turn ends.
  *
- * The set read is adopted, open, when its reply is the chat's last and that reply's turn is done. An adopted set
- * collapses when a turn starts, and is dropped when that turn ends, when a different set is adopted, or when the
- * setting is off. A room has none.
+ * The stored set is adopted while its reply is the one the chat waits on its user to answer: a fixed set with its
+ * pills shown, a generated one behind its line. It stops being adopted the moment a turn starts or somebody speaks,
+ * which is when it is drawn in the transcript instead (``getAnsweredReplySuggestions``), and while the setting is
+ * off. A room has none.
  */
 export function reconcileNextStepSuggestions(chatId: string, facts: NextStepFacts): void {
   const state = stateOf(chatId);
@@ -201,30 +251,23 @@ export function reconcileNextStepSuggestions(chatId: string, facts: NextStepFact
   } else if (state.isReadOwed && !state.isReading && Date.now() >= state.retryNotBefore) {
     void readNextStepSuggestions(chatId);
   }
-  if (state.adopted !== null && !facts.isTurnDone && !state.adopted.hasTurnStartedSince) {
-    state.adopted = { ...state.adopted, isOpen: false, hasTurnStartedSince: true };
-  }
-  if (!facts.isEnabled || (state.adopted !== null && state.adopted.hasTurnStartedSince && facts.isTurnDone)) {
-    state.adopted = null;
-  }
   const fetched = state.fetched;
-  if (
-    facts.isEnabled &&
-    facts.isTurnDone &&
-    fetched !== null &&
-    fetched.after_event_id === facts.lastReplyEventId &&
-    !isSameSet(state.adopted?.set, fetched)
-  ) {
-    state.adopted = { set: fetched, isOpen: true, hasTurnStartedSince: false };
+  if (!facts.isEnabled || fetched === null || !isReplyAwaited(facts, fetched.after_event_id)) {
+    state.adopted = null;
+    return;
   }
+  if (isSameSet(state.adopted?.set, fetched)) return;
+  state.adopted = { set: fetched, isOpen: fetched.source === "fixed" };
+  // Should the reply be answered later, its set starts behind its line in the transcript.
+  state.openAnsweredReplies.delete(fetched.after_event_id);
 }
 
-/** The set the chat's page draws, or null when it draws none. */
-export function getNextStepSuggestions(chatId: string): AdoptedSuggestions | null {
+/** The set the chat's page draws above its composer, or null when it draws none there. */
+export function getNextStepSuggestions(chatId: string): DrawnSuggestions | null {
   return stateByChat.get(chatId)?.adopted ?? null;
 }
 
-/** A message was sent in the chat: its open strip collapses to its toggle. */
+/** Hide the pills of the set above the composer behind its line, because another strip opened. */
 export function collapseNextStepSuggestions(chatId: string): void {
   const state = stateByChat.get(chatId);
   if (state === undefined || state.adopted === null || !state.adopted.isOpen) return;
@@ -232,11 +275,38 @@ export function collapseNextStepSuggestions(chatId: string): void {
   m.redraw();
 }
 
-/** Open the chat's collapsed strip, or collapse its open one. */
+/** Show the pills of the set above the composer, or hide them behind its line. */
 export function toggleNextStepSuggestions(chatId: string): void {
   const state = stateByChat.get(chatId);
   if (state === undefined || state.adopted === null) return;
   state.adopted = { ...state.adopted, isOpen: !state.adopted.isOpen };
+  m.redraw();
+}
+
+/**
+ * The set the page draws in the transcript under the reply ``eventId``, or null when it draws none there: the page
+ * knows no set for the reply, the reply is the one the chat waits on its user to answer (its set belongs above the
+ * composer), the chat is a room, or the setting is not known to be on. ``readFacts`` is asked only for a reply the
+ * page knows a set for, which few of a transcript's messages are.
+ */
+export function getAnsweredReplySuggestions(
+  chatId: string,
+  eventId: string,
+  readFacts: () => NextStepFacts,
+): DrawnSuggestions | null {
+  const state = stateByChat.get(chatId);
+  const set = state?.knownByReply.get(eventId);
+  if (state === undefined || set === undefined) return null;
+  const facts = readFacts();
+  if (!facts.isEnabled || facts.isRoom || isReplyAwaited(facts, eventId)) return null;
+  return { set, isOpen: state.openAnsweredReplies.has(eventId) };
+}
+
+/** Show the pills of the set under the answered reply ``eventId``, or hide them behind its line. */
+export function toggleAnsweredReplySuggestions(chatId: string, eventId: string): void {
+  const state = stateByChat.get(chatId);
+  if (state === undefined || !state.knownByReply.has(eventId)) return;
+  if (!state.openAnsweredReplies.delete(eventId)) state.openAnsweredReplies.add(eventId);
   m.redraw();
 }
 

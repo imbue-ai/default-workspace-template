@@ -52,7 +52,7 @@ import { chatSnapshotFixture, provisionalChatFixture } from "../models/chatSnaps
 import { addOutgoing, clearOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { ownerAndVisitorRosterFixture } from "../models/participantFixture";
 import { setParticipantsForTesting } from "../models/Participants";
-import { announceMessageSent, type TranscriptEvent } from "../models/Response";
+import type { TranscriptEvent } from "../models/Response";
 import { resetSuggestionsForTests, type SuggestionsAnswer } from "../models/Suggestions";
 import { assistantMessageFixture, userMessageFixture } from "../models/transcriptEventFixture";
 import { isTurnDoneForSuggestions, lastReplyEventId } from "./last-reply";
@@ -70,18 +70,25 @@ function userMessage(eventId: string, display?: "skill_expansion"): TranscriptEv
   return userMessageFixture(eventId, "See what Studio can do", display);
 }
 
-const START_SET: SuggestionsAnswer = {
-  status: "ready",
-  after_event_id: SEED_END,
-  source: "fixed",
-  suggestions: [
-    { suggestion_id: "start-describe", label: "Describe what you want to make", is_recommended: false },
-    { suggestion_id: "start-ideas", label: "Get ideas for what to make", is_recommended: false },
-    { suggestion_id: "start-features", label: "See what Studio can do", is_recommended: false },
-  ],
-};
+const START_SUGGESTIONS = [
+  { suggestion_id: "start-describe", label: "Describe what you want to make", is_recommended: false },
+  { suggestion_id: "start-ideas", label: "Get ideas for what to make", is_recommended: false },
+  { suggestion_id: "start-features", label: "See what Studio can do", is_recommended: false },
+];
 
-const START_LABELS = START_SET.suggestions.map((suggestion) => suggestion.label);
+/** What the chat app answers with one set stored, which is also all it remembers. */
+function storedSet(
+  source: string,
+  suggestions: SuggestionsAnswer["suggestions"] = START_SUGGESTIONS,
+  afterEventId: string = SEED_END,
+): SuggestionsAnswer {
+  const set = { after_event_id: afterEventId, source, suggestions };
+  return { status: "ready", ...set, sets: [set] };
+}
+
+const START_SET: SuggestionsAnswer = storedSet("fixed");
+
+const START_LABELS = START_SUGGESTIONS.map((suggestion) => suggestion.label);
 
 /** What the backend holds, which the page's requests read and write. */
 let stored: { settings: ChatSettings; suggestions: SuggestionsAnswer; isWriteRefused: boolean };
@@ -110,6 +117,24 @@ async function load(): Promise<void> {
 
 function pillLabels(): string[] {
   return [...root.querySelectorAll(".suggestion-pill")].map((pill) => pill.textContent ?? "");
+}
+
+/** The next-step lines above the composer, of which there is one or none. */
+function lines(): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>(".suggestion-line")];
+}
+
+/** What the line above the composer says, "" for an empty one, or null when its height is not kept. */
+function lineText(): string | null {
+  expect(lines().length).toBeLessThanOrEqual(1);
+  return lines()[0]?.textContent ?? null;
+}
+
+/** A listed chat whose agent has answered a message and is idle: the reply ``replyEventId`` is waited on. */
+function answeredAndIdle(replyEventId: string): void {
+  mocks.provisional = undefined;
+  mocks.chat = chatSnapshotFixture(CHAT, { active_agent: { activity_state: "IDLE" } });
+  mocks.events = [reply(SEED_END), userMessage("u-1"), reply(replyEventId)];
 }
 
 function click(selector: string): void {
@@ -312,14 +337,14 @@ describe("the next-step strip", () => {
     expect(root.querySelector(".suggestion-strip")?.getAttribute("data-placement")).toBe("next_step");
   });
 
-  it("keeps the start suggestions open while the chat's first agent starts with nothing sent to it", async () => {
+  it("keeps the start suggestions shown while the chat's first agent starts with nothing sent to it", async () => {
     await load();
     expect(pillLabels()).toEqual(START_LABELS);
 
     firstAgentStarting();
     draw();
     expect(pillLabels()).toEqual(START_LABELS);
-    expect(root.querySelector(".suggestion-strip-toggle")).toBeNull();
+    expect(lineText()).toContain("Hide suggestions");
 
     // The agent is up, idle, and still has been sent nothing.
     mocks.provisional = undefined;
@@ -331,32 +356,25 @@ describe("the next-step strip", () => {
     expect(requests.filter((request) => request.url === "/api/chats/:chatId/suggestions")).toHaveLength(1);
   });
 
-  it("draws a generated set's first three with Show more for the rest, and a fixed set whole", async () => {
+  it("draws every suggestion of a long set, with nothing folded away", async () => {
     const five = ["One", "Two", "Three", "Four", "Five"].map((label) => ({
       suggestion_id: label.toLowerCase(),
       label,
       is_recommended: false,
     }));
-    stored.suggestions = { ...START_SET, source: "generated", suggestions: five };
+    stored.suggestions = storedSet("generated", five);
     await load();
-
-    expect(pillLabels()).toEqual(["One", "Two", "Three"]);
-    click(".suggestion-strip-more");
-    expect(pillLabels()).toEqual(["One", "Two", "Three", "Four", "Five"]);
-
-    resetSuggestionsForTests();
-    m.render(root, null);
-    stored.suggestions = { ...START_SET, source: "fixed", suggestions: five };
-    await load();
+    click(".suggestion-line-toggle");
 
     expect(pillLabels()).toEqual(["One", "Two", "Three", "Four", "Five"]);
-    expect(root.querySelector(".suggestion-strip-more")).toBeNull();
+    expect(root.textContent).not.toContain("Show more");
   });
 
-  it("draws a set the chat app says was stored after the page had read none", async () => {
-    stored.suggestions = { status: "pending", after_event_id: SEED_END, source: null, suggestions: [] };
+  it("draws a set the chat app says was stored after the page had read none, moving nothing", async () => {
+    stored.suggestions = { status: "pending", after_event_id: SEED_END, source: null, suggestions: [], sets: [] };
     await load();
     expect(pillLabels()).toEqual([]);
+    expect(lineText()).toBe("");
 
     stored.suggestions = START_SET;
     announceSuggestionsUpdated("agent-some-other-chat");
@@ -367,6 +385,7 @@ describe("the next-step strip", () => {
     await settle();
 
     expect(pillLabels()).toEqual(START_LABELS);
+    expect(lines()).toHaveLength(1);
 
     m.render(root, null);
     expect(mocks.suggestionsUpdatedListeners).toEqual([]);
@@ -381,60 +400,57 @@ describe("the next-step strip", () => {
     expect(mocks.submitSuggestion).toHaveBeenCalledWith(CHAT, "Get ideas for what to make");
   });
 
-  it("collapses to the Next steps toggle when a message is sent, and opens again with its pills still clickable", async () => {
+  it("leaves the composer at once when a message is sent, with nothing left there to open it by", async () => {
     await load();
 
-    announceMessageSent(CHAT);
+    addOutgoing(CHAT, "See what Studio can do");
     draw();
-    expect(pillLabels()).toEqual([]);
-    expect(root.querySelector(".suggestion-strip-toggle")?.textContent).toBe("Next steps");
 
-    click(".suggestion-strip-toggle");
-    expect(pillLabels()).toEqual(START_LABELS);
-    click(".suggestion-pill");
-    expect(mocks.submitSuggestion).toHaveBeenCalledWith(CHAT, "Describe what you want to make");
+    expect(pillLabels()).toEqual([]);
+    expect(root.querySelector(".suggestion-strip")).toBeNull();
+    expect(root.querySelector(".suggestion-strip-toggle")).toBeNull();
+    expect(lineText()).toBe("");
   });
 
-  it("stays open when a message is sent in some other chat", async () => {
+  it("stays where it is when a message is sent in some other chat", async () => {
     await load();
 
-    announceMessageSent("agent-elsewhere");
+    const elsewhere = addOutgoing("agent-elsewhere", "Plan my week");
     draw();
+    clearOutgoing("agent-elsewhere", [elsewhere]);
 
     expect(pillLabels()).toHaveLength(3);
   });
 
-  it("goes when the turn the send opened ends, and shows nothing under a reply the stored set is not for", async () => {
+  it("stays away when the turn the send opened ends, and shows nothing for a reply the stored set is not for", async () => {
     await load();
     addOutgoing(CHAT, "See what Studio can do");
     draw();
-    expect(root.querySelector(".suggestion-strip-toggle")).not.toBeNull();
+    expect(root.querySelector(".suggestion-strip")).toBeNull();
 
     // The chat's agent is up and has answered; the start set is still the one stored.
     clearOutgoing(
       CHAT,
       getOutgoingMessages(CHAT).map((message) => message.id),
     );
-    mocks.provisional = undefined;
-    mocks.chat = chatSnapshotFixture(CHAT, { active_agent: { activity_state: "IDLE" } });
-    mocks.events = [reply(SEED_END), userMessage("u-1"), reply("a-2")];
+    answeredAndIdle("a-2");
     draw();
     await settle();
 
     expect(root.querySelector(".suggestion-strip")).toBeNull();
+    expect(lineText()).toBe("");
     expect(
       requests.filter((request) => request.url.endsWith("/suggestions") && request.method === "GET"),
     ).toHaveLength(2);
   });
 
   it("shows nothing after a reload of a chat whose stored set is for an earlier reply", async () => {
-    mocks.provisional = undefined;
-    mocks.chat = chatSnapshotFixture(CHAT, { active_agent: { activity_state: "IDLE" } });
-    mocks.events = [reply(SEED_END), userMessage("u-1"), reply("a-2")];
+    answeredAndIdle("a-2");
 
     await load();
 
     expect(root.querySelector(".suggestion-strip")).toBeNull();
+    expect(lineText()).toBe("");
   });
 
   it("shows nothing in a room, or with next-step suggestions switched off", async () => {
@@ -457,6 +473,119 @@ describe("the next-step strip", () => {
     await load();
 
     expect(pillLabels()).toHaveLength(3);
+  });
+});
+
+describe("the line above the composer", () => {
+  it("keeps its height, empty, from the first draw: while the settings load and with no set", async () => {
+    stored.suggestions = { status: "none", after_event_id: null, source: null, suggestions: [], sets: [] };
+
+    draw();
+    expect(lineText()).toBe("");
+    expect(lines()[0].classList.contains("h-5")).toBe(true);
+
+    await settle();
+    expect(lineText()).toBe("");
+    expect(root.querySelectorAll("button")).toHaveLength(0);
+  });
+
+  it("is empty while a reply is under way, and says how many suggestions wait once the reply's set is ready", async () => {
+    stored.suggestions = storedSet("generated", START_SUGGESTIONS, "a-2");
+    mocks.provisional = undefined;
+    mocks.chat = chatSnapshotFixture(CHAT, { status: "working", active_agent: { activity_state: "THINKING" } });
+    mocks.events = [reply(SEED_END), userMessage("u-1")];
+    await load();
+    expect(lineText()).toBe("");
+
+    answeredAndIdle("a-2");
+    draw();
+    await settle();
+
+    expect(lineText()).toBe("See 3 suggestions");
+    expect(lines()[0].classList.contains("h-5")).toBe(true);
+    expect(pillLabels()).toEqual([]);
+  });
+
+  it("counts one suggestion in the singular", async () => {
+    stored.suggestions = storedSet("generated", START_SUGGESTIONS.slice(0, 1));
+    await load();
+
+    expect(lineText()).toBe("See 1 suggestion");
+  });
+
+  it("shows a generated set's pills above itself when asked, and hides them again", async () => {
+    stored.suggestions = storedSet("generated");
+    await load();
+    expect(pillLabels()).toEqual([]);
+
+    click(".suggestion-line-toggle");
+
+    const toggle = root.querySelector<HTMLElement>(".suggestion-line-toggle")!;
+    const drawnPills = root.querySelectorAll(".suggestion-pill");
+    const lastPill = drawnPills[drawnPills.length - 1];
+    expect(pillLabels()).toEqual(START_LABELS);
+    expect(toggle.textContent).toBe("Hide suggestions");
+    expect(lastPill.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(root.querySelector(".suggestion-strip")?.getAttribute("data-placement")).toBe("next_step");
+
+    click(".suggestion-line-toggle");
+
+    expect(pillLabels()).toEqual([]);
+    expect(lineText()).toBe("See 3 suggestions");
+  });
+
+  it("starts a fixed set shown and a generated set hidden", async () => {
+    await load();
+    expect(pillLabels()).toEqual(START_LABELS);
+    expect(lineText()).toContain("Hide suggestions");
+
+    resetSuggestionsForTests();
+    m.render(root, null);
+    stored.suggestions = storedSet("generated");
+    await load();
+
+    expect(pillLabels()).toEqual([]);
+    expect(lineText()).toBe("See 3 suggestions");
+  });
+
+  it("offers the link that switches them off only while the suggestions are shown", async () => {
+    stored.suggestions = storedSet("generated");
+    await load();
+    expect(root.querySelector(".suggestion-strip-disable")).toBeNull();
+
+    click(".suggestion-line-toggle");
+
+    const link = root.querySelector<HTMLElement>(".suggestion-strip-disable")!;
+    const toggle = root.querySelector<HTMLElement>(".suggestion-line-toggle")!;
+    expect(link.textContent).toBe("disable next step suggestions");
+    expect(link.parentElement).toBe(toggle.parentElement);
+    expect(link.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    click(".suggestion-line-toggle");
+    expect(root.querySelector(".suggestion-strip-disable")).toBeNull();
+  });
+
+  it("keeps no height in a room", async () => {
+    mocks.isRoom = true;
+
+    draw();
+    expect(lineText()).toBeNull();
+    await settle();
+
+    expect(lineText()).toBeNull();
+    expect(root.firstElementChild).toBeNull();
+  });
+
+  it("keeps no height once next-step suggestions are known to be switched off", async () => {
+    stored.settings = { ...stored.settings, is_next_step_suggestions_enabled: false };
+
+    draw();
+    // Not known yet: the settings are still on their way.
+    expect(lineText()).toBe("");
+    await settle();
+
+    expect(lineText()).toBeNull();
+    expect(root.firstElementChild).toBeNull();
   });
 });
 
@@ -487,6 +616,7 @@ describe("the link that switches next-step suggestions off", () => {
 
     expect(writes()).toEqual([["/api/settings/suggestions", { is_next_step_suggestions_enabled: false }]]);
     expect(root.querySelector(".suggestion-strip")).toBeNull();
+    expect(lineText()).toBeNull();
     expect(root.querySelector(".suggestions-off-notice span")?.textContent).toBe("Next step suggestions are off.");
     expect(root.querySelector(".suggestions-off-undo")?.textContent).toBe("Undo");
     // No chrome said it opens workspace settings, so nothing is asked of one.
@@ -527,6 +657,7 @@ describe("the link that switches next-step suggestions off", () => {
     draw();
     expect(root.querySelector(".suggestions-off-notice")).toBeNull();
     expect(root.querySelector(".suggestion-strip")).toBeNull();
+    expect(root.firstElementChild).toBeNull();
     expect(SUGGESTIONS_OFF_NOTICE_MS).toBe(8_000);
   });
 

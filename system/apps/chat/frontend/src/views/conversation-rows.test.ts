@@ -555,6 +555,77 @@ describe("a stretch of the agent's output", () => {
   });
 });
 
+describe("what stands under a reply from outside the transcript", () => {
+  const followUp = (eventId: string): m.Vnode => m("div", { "data-follows": eventId });
+
+  it("is a part of its own after the message it follows, in the stretch that message is in", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "hello"),
+      assistantText("t2", "hi there", "end_turn"),
+      userMsg("t3", "and then?"),
+      assistantText("t4", "that is all", "end_turn"),
+    ];
+
+    const rows = buildConversationRows("agent-1", events, true, null, null, null, (eventIds) =>
+      eventIds.includes("a-t2") ? followUp("a-t2") : null,
+    );
+
+    expect(layout(rows)).toEqual(["u-t1", ["a-t2", "follow-up-a-t2"], "u-t3", ["a-t4"]]);
+    expect(vnodes(part(rows, "follow-up-a-t2")).some((v) => v.attrs?.["data-follows"] === "a-t2")).toBe(true);
+  });
+
+  it("is read when the row renders, so it comes and goes with no rows rebuilt", () => {
+    const events: TranscriptEvent[] = [userMsg("t1", "hello"), assistantText("t2", "hi there", "end_turn")];
+    let isFollowed = false;
+
+    const rows = buildConversationRows("agent-1", events, true, null, null, null, () =>
+      isFollowed ? followUp("a-t2") : null,
+    );
+
+    expect(layout(rows)).toEqual(["u-t1", ["a-t2"]]);
+    isFollowed = true;
+    expect(layout(rows)).toEqual(["u-t1", ["a-t2", "follow-up-a-t2"]]);
+  });
+
+  it("is asked for each part with the assistant messages that part draws: a message, a chip run, a turn's steps", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "hello"),
+      toolMsg("t2", "c1", "Reading the notes"),
+      toolMsg("t3", "c2", "Reading the plan"),
+      assistantText("t4", "hi there", "end_turn"),
+      userMsg("t5", "do the thing"),
+      tkMsg("t6", "tk start cod-step-aaa", "c3"),
+      result("c3", "Updated cod-step-aaa -> in_progress\ntk-step cod-step-aaa title: Look into it"),
+      assistantText("t7", "looking", null),
+      tkMsg("t8", 'tk close cod-step-aaa "looked into it"', "c4"),
+      result(
+        "c4",
+        "Updated cod-step-aaa -> closed\ntk-step cod-step-aaa title: Look into it\ntk-step cod-step-aaa summary: looked into it",
+      ),
+      assistantText("t9", "all done", "end_turn"),
+    ];
+    const asked: string[][] = [];
+
+    const rows = buildConversationRows("agent-1", events, true, null, null, null, (eventIds) => {
+      asked.push([...eventIds]);
+      return null;
+    });
+    for (const row of rows) row.render();
+
+    expect(asked).toContainEqual(["a-c1", "a-c2"]);
+    expect(asked).toContainEqual(["a-t4"]);
+    const ofTheSteps = asked.find((eventIds) => eventIds.includes("a-t9"));
+    expect(ofTheSteps).toEqual(expect.arrayContaining(["a-t7", "a-t9"]));
+    expect(ofTheSteps?.[ofTheSteps.length - 1]).toBe("a-t9");
+  });
+
+  it("draws nothing in a conversation that names none, as a subagent's does not", () => {
+    const events: TranscriptEvent[] = [userMsg("t1", "hello"), assistantText("t2", "hi there", "end_turn")];
+
+    expect(layout(buildConversationRows("agent-1", events, true))).toEqual(["u-t1", ["a-t2"]]);
+  });
+});
+
 describe("a message the chat app sent again", () => {
   function hasClass(node: unknown, className: string): boolean {
     if (node == null || typeof node !== "object") return false;
