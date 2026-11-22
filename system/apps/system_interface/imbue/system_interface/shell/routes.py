@@ -7,6 +7,7 @@ from typing import assert_never
 
 from app_manifest.manifest import PinStyle
 from app_manifest.primitives import AppName
+from app_manifest.registry import IsolatedInstanceKind
 from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
 from flask import Flask
@@ -59,6 +60,7 @@ from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import DesktopConflictError
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
+from imbue.system_interface.shell.errors import InstanceReviveError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import LastDesktopError
 from imbue.system_interface.shell.errors import LaunchRefusedError
@@ -152,11 +154,11 @@ def _shell() -> ShellState:
 
 
 # What a preview shell answers to a verb whose effect lands outside its own copy of the state: an
-# app's stop and start reach supervisord, the update notice's verbs act on the live apply's
-# rollback point, and the embedder-message relay posts to live apps. Everything else a preview
-# offers (opening, placing, and closing windows, a refresh, the interface reload, the avatar)
-# edits the preview's own state or reaches only the preview's own windows, so it stays live for
-# the person judging the change.
+# app's stop and start reach supervisord, a revive boots a preview's processes in the live
+# workspace, the update notice's verbs act on the live apply's rollback point, and the
+# embedder-message relay posts to live apps. Everything else a preview offers (opening, placing,
+# and closing windows, a refresh, the interface reload, the avatar) edits the preview's own state
+# or reaches only the preview's own windows, so it stays live for the person judging the change.
 PREVIEW_REFUSAL_DETAIL: Final[str] = "This is a preview of a proposed change; it cannot change the live workspace."
 
 
@@ -292,6 +294,34 @@ def quit_app(name: str) -> ResponseReturnValue:
 def start_app(name: str) -> ResponseReturnValue:
     """Start a stopped app's program and answer whether it is running; refused as a stop is."""
     return _lifecycle(name, AppLifecycleAction.START)
+
+
+# What the user calls the thing an isolated instance's window shows.
+INSTANCE_NOUN_BY_KIND: Final[dict[IsolatedInstanceKind, str]] = {
+    IsolatedInstanceKind.CHANGE: "preview",
+    IsolatedInstanceKind.MOCK: "UI sketch",
+}
+
+
+def revive_app(name: str) -> ResponseReturnValue:
+    """``POST /api/apps/<name>/revive``: start a stopped preview or UI sketch again, where it was, and answer
+    whether it runs; refused for any other app, and in a preview."""
+    refusal = _refuse_if_preview()
+    if refusal is not None:
+        return refusal
+    shell = _shell()
+    instance = _entry_or_raise(name).row.isolated_instance
+    if instance is None:
+        raise AppLifecycleRefusedError(f"App {name!r} is not a preview or a UI sketch, so it cannot be started again")
+    try:
+        shell.instance_reviver.revive(str(instance.app), instance.kind)
+    except InstanceReviveError:
+        return detail_response(f"This {INSTANCE_NOUN_BY_KIND[instance.kind]} didn't start.", HTTP_BAD_GATEWAY)
+    shell.inventory.sweep_once()
+    refreshed = shell.inventory.entry(name)
+    return model_response(
+        AppRunningState(name=name, is_running=refreshed.is_running if refreshed is not None else False)
+    )
 
 
 # Section 5.5: clients and the inventory
@@ -541,6 +571,12 @@ def register_shell_routes(application: Flask) -> None:
         view_func=quit_app,
         methods=["POST"],
         endpoint="quit_app",
+    )
+    application.add_url_rule(
+        "/api/apps/<name>/revive",
+        view_func=revive_app,
+        methods=["POST"],
+        endpoint="revive_app",
     )
     application.add_url_rule(CLIENTS_ROUTE, view_func=list_clients, methods=["GET"], endpoint="list_clients")
     application.add_url_rule(

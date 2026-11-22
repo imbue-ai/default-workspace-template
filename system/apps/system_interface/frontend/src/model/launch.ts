@@ -40,10 +40,26 @@ function launchesWhere(apps: readonly AppRecord[], isWanted: (launchPath: Launch
 }
 
 /** Every launch path of every openable app, in registry and manifest order, but the ones that take a mention of a
- *  person or are about an app: those are the tray's and the title bar's to run (the multiplayer spec, sections 7.5
- *  and 9.2), never a row of anything. */
+ *  person, are about an app, or draft into a named chat: those are the tray's, the title bar's, and a stopped
+ *  window's to run (the multiplayer spec, sections 7.5 and 9.2), never a row of anything. */
 export function appLaunchesOf(apps: readonly AppRecord[]): AppLaunch[] {
-  return launchesWhere(apps, (launchPath) => launchPath.mention_param === null && launchPath.app_params === null);
+  return launchesWhere(apps, (launchPath) => !isNeverARow(launchPath));
+}
+
+function isNeverARow(launchPath: LaunchPath): boolean {
+  return launchPath.mention_param !== null || launchPath.app_params !== null || launchPath.chat_draft_params !== null;
+}
+
+/** The launch path a stopped preview's or UI sketch's "Ask in chat" runs: the first of the machine that declares
+ *  ``chat_draft_params``, in launcher order; null when no app declares one. */
+export function chatDraftLaunchOf(apps: readonly AppRecord[]): AppLaunch | null {
+  return orderAppLaunches(launchesWhere(apps, (launchPath) => launchPath.chat_draft_params !== null))[0] ?? null;
+}
+
+/** The params a chat-draft launch runs with: the chat's id and the text in the params the path declares. */
+export function chatDraftParams(launchPath: LaunchPath, chatId: string, text: string): Record<string, string> {
+  if (launchPath.chat_draft_params === null) return {};
+  return { [launchPath.chat_draft_params.chat_id]: chatId, [launchPath.chat_draft_params.text]: text };
 }
 
 /** The launch path a window's "Chat about this app" button runs (the multiplayer spec, section 9.2): the first of
@@ -131,10 +147,8 @@ export function appShortcutsOf(app: AppRecord): readonly DefaultShortcut[] {
   }
   if (app.program === "") return [];
   const first =
-    app.launch_paths.find(
-      (launchPath) =>
-        fillParamOf(launchPath) === null && launchPath.mention_param === null && launchPath.app_params === null,
-    ) ?? app.launch_paths[0];
+    app.launch_paths.find((launchPath) => fillParamOf(launchPath) === null && !isNeverARow(launchPath)) ??
+    app.launch_paths[0];
   return first === undefined ? [] : [{ launch: first.id, mode: "focus" }];
 }
 

@@ -16,16 +16,20 @@ The frame records its note and page, so ``refresh`` needs only the app's name: w
 frame is up it boots the frame again as recorded, hides the app again, and reloads the
 mock window, which is what puts everything back after the app restarts (run it after
 every ``verify_app.py --restart``, in the same call) or the workspace reboots; with no
-frame up it reloads the app's own windows. ``up`` without ``--note`` keeps the current
-note too. ``down`` closes the mock window, removes the frame, and registers the app
-from its manifest again, so it is an ordinary app the user can open; for an app that has
-since been removed it takes the frame down and leaves the registry alone.
+frame up it reloads the app's own windows. ``revive`` boots a frame a workspace restart
+stopped again the same way, without touching the window (it is what a stopped UI sketch's
+window offers as "Start it again"), and leaves a frame still running alone. ``up``
+without ``--note`` keeps the current note too. ``down`` closes the mock window, removes
+the frame, and registers the app from its manifest again, so it is an ordinary app the
+user can open; for an app that has since been removed it takes the frame down and leaves
+the registry alone.
 
 Run from the repo root via ``uv run --no-sync``:
 
     uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py up \\
         --app <name> [--note "<what is not real yet>"] [--path /page] [--open | --refresh]
     uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py refresh --app <name>
+    uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py revive --app <name>
     uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py down --app <name>
 
 Exit codes:
@@ -35,8 +39,9 @@ Exit codes:
        manifest or is not registered, its registration could not be rewritten, the
        frame did not come up, or the window could not be opened or refreshed.
        ``refresh``: the frame's record could not be read, as ``up`` while a frame is
-       up, else the app's windows could not be reloaded. ``down``: the frame could not
-       be torn down, or the app's registration could not be rewritten.
+       up, else the app's windows could not be reloaded. ``revive``: no frame is
+       recorded for the app, or as ``up``. ``down``: the frame could not be torn down,
+       or the app's registration could not be rewritten.
 """
 
 from __future__ import annotations
@@ -51,6 +56,7 @@ from agents_shared import serve_isolated_instance
 from agents_shared.preview_wrapper_server import FrameKind
 from app_manifest.errors import ManifestLoadError, RegistryReadError
 from app_registration import forward_port
+from workspace_layout.agent_identity import chat_id_from_environment
 from workspace_layout.cli import context_from_environment, run_layout_cli
 
 FRAME_SUFFIX = "-sketch"
@@ -79,16 +85,25 @@ class FramedApp:
 
 @dataclass(frozen=True)
 class RecordedFrame:
-    """What an app's frame was last booted with: the note under its banner and the page it opens."""
+    """What an app's frame was last booted with: the note under its banner, the page it opens, and the chat that
+    booted it (None when no chat did)."""
 
     note: str
     inner_path: str
+    chat: str | None = None
 
 
 class Frames:
     """Indirection over the shared frame substrate, so tests can stand in for it."""
 
-    def up(self, app: FramedApp, note: str, inner_path: str, repo_root: Path) -> int:
+    def up(
+        self,
+        app: FramedApp,
+        note: str,
+        inner_path: str,
+        chat: str | None,
+        repo_root: Path,
+    ) -> int:
         return serve_isolated_instance.frame(
             frame_name(app.name),
             repo_root,
@@ -99,6 +114,7 @@ class Frames:
             kind=FrameKind.MOCK,
             note=note,
             inner_path=inner_path,
+            chat=chat,
             runner=serve_isolated_instance.Runner(),
             registry=serve_isolated_instance.Registry(),
             http=serve_isolated_instance.HttpClient(),
@@ -113,7 +129,9 @@ class Frames:
             raise MockFrameError(str(exc)) from exc
         if record is None or record.note is None:
             return None
-        return RecordedFrame(note=record.note, inner_path=record.inner_path)
+        return RecordedFrame(
+            note=record.note, inner_path=record.inner_path, chat=record.chat
+        )
 
     def down(self, app_name: str, repo_root: Path) -> int:
         return serve_isolated_instance.down(
@@ -121,6 +139,11 @@ class Frames:
             repo_root,
             runner=serve_isolated_instance.Runner(),
             registry=serve_isolated_instance.Registry(),
+        )
+
+    def is_running(self, app_name: str, repo_root: Path) -> bool:
+        return serve_isolated_instance.is_running(
+            frame_name(app_name), repo_root, runner=serve_isolated_instance.Runner()
         )
 
 
@@ -216,21 +239,54 @@ def up(
     *,
     inner_path: str | None = None,
     surface: str | None = None,
+    chat: str | None = None,
     frames: Frames,
     layout: Layout,
 ) -> int:
     """Frame the app as a mock with ``note``, then open (``surface="open"``) or reload (``"refresh"``) its window.
 
-    A ``note`` or ``inner_path`` left out is the one the app's frame was last booted
-    with (the page defaults to ``/``); a first frame needs a note. Refused from a git
+    A ``note``, ``inner_path``, or ``chat`` left out is the one the app's frame was last
+    booted with (the page defaults to ``/``); a first frame needs a note. ``chat`` is the
+    chat that booted it, which its window's "Ask in chat" drafts into. Refused from a git
     worktree, whose registry the workspace never reads.
     """
     if serve_isolated_instance.refuses_registering_from_a_worktree(
         repo_root, "mock frame", ""
     ):
         return 1
-    if note is None or inner_path is None:
+    code = _frame_up(
+        app_name,
+        note,
+        repo_root,
+        inner_path=inner_path,
+        surface=surface,
+        chat=chat,
+        frames=frames,
+        layout=layout,
+    )
+    if code == 0 and surface is None:
+        sys.stderr.write(
+            f"mock frame up: open it with `uv run --no-sync workspace-layout open {frame_name(app_name)} --beside`.\n"
+        )
+    return code
+
+
+def _frame_up(
+    app_name: str,
+    note: str | None,
+    repo_root: Path,
+    *,
+    inner_path: str | None,
+    surface: str | None,
+    chat: str | None,
+    frames: Frames,
+    layout: Layout,
+) -> int:
+    """``up`` without its hint to open the window; with no ``surface``, the window is left alone."""
+    if note is None or inner_path is None or chat is None:
         recorded = frames.recorded(app_name, repo_root)
+        if chat is None and recorded is not None:
+            chat = recorded.chat
         if note is None:
             if recorded is None:
                 sys.stderr.write(
@@ -253,13 +309,10 @@ def up(
         return 1
     app = find_app(app_name, repo_root)
     _register(app, repo_root, FRAMED_APP_OVERRIDES)
-    if frames.up(app, note, inner_path, repo_root) != 0:
+    if frames.up(app, note, inner_path, chat, repo_root) != 0:
         _register(app, repo_root, None)
         return 1
     if surface is None:
-        sys.stderr.write(
-            f"mock frame up: open it with `uv run --no-sync workspace-layout open {frame_name(app_name)} --beside`.\n"
-        )
         return 0
     return _run_layout(
         layout,
@@ -269,12 +322,19 @@ def up(
     )
 
 
-def refresh(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -> int:
+def refresh(
+    app_name: str,
+    repo_root: Path,
+    *,
+    chat: str | None = None,
+    frames: Frames,
+    layout: Layout,
+) -> int:
     """Reload what the user sees of the app: its mock frame while one is up, else its own windows.
 
-    With a frame up, the frame is booted again with its recorded note and page and the
-    app hidden again, so this is also what puts both back after the app restarts or the
-    workspace reboots.
+    With a frame up, the frame is booted again with its recorded note and page, under
+    ``chat`` (else the chat recorded with it), and the app hidden again, so this is also
+    what puts both back after the app restarts or the workspace reboots.
     """
     recorded = frames.recorded(app_name, repo_root)
     if recorded is not None:
@@ -284,10 +344,37 @@ def refresh(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -
             repo_root,
             inner_path=recorded.inner_path,
             surface="refresh",
+            chat=chat,
             frames=frames,
             layout=layout,
         )
     return _run_layout(layout, ["refresh", "--app", app_name])
+
+
+def revive(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -> int:
+    """Boot the app's frame again as recorded, with the app hidden again, unless it still runs.
+
+    Its window is left as it is; it shows the frame again once the frame answers.
+    """
+    if frames.recorded(app_name, repo_root) is None:
+        sys.stderr.write(
+            f"mock frame: no mock frame is recorded for {app_name!r}, so there is "
+            "nothing to start again.\n"
+        )
+        return 1
+    if frames.is_running(app_name, repo_root):
+        sys.stderr.write(f"mock frame: the frame of {app_name!r} is already running.\n")
+        return 0
+    return _frame_up(
+        app_name,
+        None,
+        repo_root,
+        inner_path=None,
+        surface=None,
+        chat=None,
+        frames=frames,
+        layout=layout,
+    )
 
 
 def down(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -> int:
@@ -356,13 +443,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--app", required=True, help="The app's registered name."
     )
 
+    revive_parser = subparsers.add_parser(
+        "revive",
+        help="Boot a frame a workspace restart stopped again as recorded, leaving its "
+        "window alone; a frame still running is left alone.",
+    )
+    revive_parser.add_argument(
+        "--app", required=True, help="The app's registered name."
+    )
+
     down_parser = subparsers.add_parser(
         "down",
         help="Close the mock window and remove the frame, leaving the app an ordinary one.",
     )
     down_parser.add_argument("--app", required=True, help="The app's registered name.")
 
-    for subparser in (up_parser, refresh_parser, down_parser):
+    for subparser in (up_parser, refresh_parser, revive_parser, down_parser):
         subparser.add_argument(
             "--repo-root",
             default=".",
@@ -380,11 +476,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repo_root,
                 inner_path=args.path,
                 surface="open" if args.open else "refresh" if args.refresh else None,
+                chat=chat_id_from_environment(),
                 frames=Frames(),
                 layout=layout,
             )
         if args.command == "refresh":
-            return refresh(args.app, repo_root, frames=Frames(), layout=layout)
+            return refresh(
+                args.app,
+                repo_root,
+                chat=chat_id_from_environment(),
+                frames=Frames(),
+                layout=layout,
+            )
+        if args.command == "revive":
+            return revive(args.app, repo_root, frames=Frames(), layout=layout)
         return down(args.app, repo_root, frames=Frames(), layout=layout)
     except MockFrameError as exc:
         sys.stderr.write(f"mock frame: {exc}\n")

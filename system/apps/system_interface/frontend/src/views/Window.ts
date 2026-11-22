@@ -25,7 +25,8 @@ import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import type { PixelRect, ResizeEdge } from "../geometry/frames";
 import { RESIZE_EDGES } from "../geometry/frames";
 import { windowChromeZIndex } from "../geometry/stacking";
-import type { AppRecord, WindowRecord, WindowState } from "../model/records";
+import type { InstanceRevival } from "../model/instanceRevival";
+import type { AppRecord, InstanceKind, WindowRecord, WindowState } from "../model/records";
 import { glyph } from "./glyphs";
 import { rectStyle } from "./pixelStyle";
 import { TitleBar } from "./TitleBar";
@@ -93,6 +94,9 @@ export interface WindowAttrs {
    *  the stopped placeholder. A stoppable app's window keeps its page, which the shell's parker answers with a
    *  loading page until the app is up. */
   readonly isStopped: boolean;
+  /** What the stopped placeholder offers for a preview or UI sketch, which can be started again; null for any
+   *  other app. */
+  readonly stoppedInstance: StoppedInstanceActions | null;
   /** Immersive mode's state and verbs for the fullscreen strip; null hides its control. */
   readonly immersive: ImmersiveControls | null;
   readonly onRaise: () => void;
@@ -102,9 +106,106 @@ export interface WindowAttrs {
   readonly chrome: ThemeChrome;
 }
 
+/** What a stopped preview's or UI sketch's placeholder offers: starting it again, asking in chat, closing its
+ *  window, and how the last start went. */
+export interface StoppedInstanceActions {
+  readonly revival: InstanceRevival;
+  readonly onStart: () => void;
+  readonly onClose: () => void;
+  /** Drafts what happened to it, unsent, into the chat that booted it (else where any draft goes), for the user to
+   *  say what they want. */
+  readonly onAskInChat: () => void;
+}
+
+/** The store verbs a stopped preview's or UI sketch's placeholder drives. */
+export interface StoppedInstanceVerbs {
+  canReviveApp(app: AppRecord): boolean;
+  instanceRevival(appName: string): InstanceRevival;
+  reviveApp(appName: string): Promise<void>;
+  closeOrMinimizeWindow(windowId: string): Promise<void>;
+  askInChat(app: AppRecord, windowId: string, text: string): Promise<boolean>;
+}
+
+/** What is drafted into the chat, in the user's words, about a stopped preview or UI sketch. */
+function askInChatDraft(displayName: string, kind: InstanceKind, revival: InstanceRevival): string {
+  const noun = instanceNoun(kind);
+  return revival.kind === "failed"
+    ? `The "${displayName}" ${noun} stopped, and starting it again failed.`
+    : `The "${displayName}" ${noun} stopped.`;
+}
+
+/** What the placeholder of window ``windowId`` offers when its app is a preview or UI sketch; null for any other
+ *  app. */
+export function stoppedInstanceActionsOf(
+  verbs: StoppedInstanceVerbs,
+  app: AppRecord | undefined,
+  windowId: string,
+): StoppedInstanceActions | null {
+  const kind = app?.instance_kind ?? null;
+  if (app === undefined || kind === null || !verbs.canReviveApp(app)) return null;
+  const revival = verbs.instanceRevival(app.name);
+  return {
+    revival,
+    onStart: () => void verbs.reviveApp(app.name),
+    onClose: () => void verbs.closeOrMinimizeWindow(windowId),
+    onAskInChat: () => void verbs.askInChat(app, windowId, askInChatDraft(app.display_name, kind, revival)),
+  };
+}
+
+/** What the user calls the thing an isolated instance shows. */
+function instanceNoun(kind: InstanceKind): string {
+  return kind === "mock" ? "UI sketch" : "preview";
+}
+
+function stoppedInstancePlaceholder(kind: InstanceKind, actions: StoppedInstanceActions): m.Vnode {
+  const revival = actions.revival;
+  const isStarting = revival.kind === "starting";
+  return m(
+    "div",
+    {
+      "data-stopped-app": "",
+      "data-stopped-instance": kind,
+      class: "flex h-full w-full flex-col items-center justify-center gap-3 bg-surface p-6 text-center",
+    },
+    [
+      m("div", { class: "type-label text-primary" }, `This ${instanceNoun(kind)} stopped.`),
+      revival.kind === "failed"
+        ? m("div", { "data-revive-failure": "", class: "text-(length:--font-size-row) text-faint" }, revival.reason)
+        : null,
+      m("div", { class: "flex gap-2" }, [
+        m(
+          Button,
+          {
+            variant: "primary",
+            sm: true,
+            readonly: isStarting,
+            "data-revive-start": "",
+            onclick: () => {
+              if (!isStarting) actions.onStart();
+            },
+          },
+          isStarting ? "Starting..." : "Start it again",
+        ),
+        m(
+          Button,
+          { variant: "secondary", sm: true, "data-revive-ask": "", onclick: actions.onAskInChat },
+          "Ask in chat",
+        ),
+        m(Button, { variant: "secondary", sm: true, "data-revive-close": "", onclick: actions.onClose }, "Close"),
+      ]),
+    ],
+  );
+}
+
 /** What a window shows in place of its page while the app behind it is stopped and the workspace cannot bring
- *  it back on a request. */
-export function stoppedPlaceholder(app: AppRecord | undefined): m.Vnode {
+ *  it back on a request: for a preview or UI sketch, a way to start it again. */
+export function stoppedPlaceholder(
+  app: AppRecord | undefined,
+  instance: StoppedInstanceActions | null = null,
+): m.Vnode {
+  if (app !== undefined && app.instance_kind !== null && instance !== null) {
+    return stoppedInstancePlaceholder(app.instance_kind, instance);
+  }
   const label = app?.display_name ?? "This app";
   const detail = app !== undefined && app.program !== "" ? "stopped" : "not running (managed outside the workspace)";
   return m(
@@ -241,7 +342,7 @@ export function Window(): m.Component<WindowAttrs> {
                   class: "window-content relative min-h-0 flex-1 [&>*]:pointer-events-auto",
                 },
                 [
-                  isStopped ? stoppedPlaceholder(app) : null,
+                  isStopped ? stoppedPlaceholder(app, attrs.stoppedInstance) : null,
                   // The shield: the press that closes an open menu or the launcher (or raises the window, on touch)
                   // lands here rather than in the page, and bubbles to the window's own handler and on to
                   // the document. A right-click here is that press and nothing more: handled, so the

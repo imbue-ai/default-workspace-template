@@ -41,6 +41,7 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
             "draft_param": None,
             "mention_param": None,
             "app_params": None,
+            "chat_draft_params": None,
         }
     ]
     assert serialized[0]["default_shortcuts"] == [{"launch": "new", "mode": "new"}]
@@ -57,6 +58,7 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
             "draft_param": None,
             "mention_param": None,
             "app_params": None,
+            "chat_draft_params": None,
         }
     ]
     assert set(serialized[1]) == {
@@ -78,6 +80,8 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
         "is_running",
         "share_url",
         "theming",
+        "instance_kind",
+        "instance_chat",
     }
     assert serialized[1]["pin"] is None
     # Neither app declares [theming], so each offers to be made themeable.

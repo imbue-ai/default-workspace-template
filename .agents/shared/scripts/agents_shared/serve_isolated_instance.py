@@ -368,6 +368,7 @@ class Registry:
         internal: bool,
         display_name: str | None,
         theming_mode: str | None = None,
+        isolated_instance: forward_port.IsolatedInstanceTag | None = None,
     ) -> None:
         forward_port.register(
             forward_port.apps_file(repo_root),
@@ -378,6 +379,7 @@ class Registry:
             internal=internal,
             display_name=display_name,
             theming_mode=theming_mode,
+            isolated_instance=isolated_instance,
         )
 
     def remove(self, repo_root: Path, service_name: str) -> None:
@@ -559,8 +561,10 @@ def wait_healthy(
     attempts: int,
     interval: float,
     sleeper: Callable[[float], None],
+    is_alive: Callable[[], bool] = lambda: True,
 ) -> ProbeResult:
-    """Poll ``url`` until it returns HTTP 200, up to ``attempts`` times.
+    """Poll ``url`` until it returns HTTP 200, up to ``attempts`` times, or until
+    ``is_alive`` says the server has exited, which no further wait would change.
 
     Returns the *last* probe rather than a bare bool, so a caller reporting the
     failure can say what the final attempt actually got back.
@@ -568,7 +572,7 @@ def wait_healthy(
     result = ProbeResult(None, "")
     for index in range(attempts):
         result = http.get(url, timeout=5.0)
-        if result.is_healthy:
+        if result.is_healthy or not is_alive():
             return result
         if index < attempts - 1:
             sleeper(interval)
@@ -887,6 +891,7 @@ def _register_service(
     internal: bool = False,
     display_name: str | None = None,
     theming_mode: str | None = None,
+    isolated_instance: forward_port.IsolatedInstanceTag | None = None,
 ) -> None:
     try:
         registry.register(
@@ -896,6 +901,7 @@ def _register_service(
             internal=internal,
             display_name=display_name,
             theming_mode=theming_mode,
+            isolated_instance=isolated_instance,
         )
     except forward_port.RegistryError as exc:
         raise InstanceError(f"{what} failed: {exc}") from exc
@@ -955,10 +961,11 @@ def _teardown(
 def _pids_still_ours(state: dict, runner: Runner) -> list[int]:
     """The pids ``state`` records, less any no longer the process it started.
 
-    A state that records ``pid_starts`` (a frame's, which outlives restarts) can name a
-    pid a reboot or a restore into a new container has handed to an unrelated process
-    group; signalling that group would kill it. So a pid whose recorded start time is
-    known and no longer matches is dropped; a pid with none recorded is kept.
+    A state outlives restarts, so it can name a pid a reboot or a restore into a new
+    container has handed to an unrelated process group; signalling that group would
+    kill it. So a pid whose recorded start time is known and no longer matches is
+    dropped; a pid with none recorded (a state from before start times were kept, or
+    macOS, which has none) is kept.
     """
     pids = state.get("pids") or []
     starts = state.get("pid_starts") or []
@@ -986,12 +993,15 @@ def _unwind_failed_boot(
     pids: Sequence[int],
     services: Sequence[str],
     sleeper: Callable[[float], None],
+    kept_rows: Sequence[str] = (),
 ) -> None:
     """Report a failed ``verb``, tear down what it stood up, and remove its state directory.
 
     The log is copied out and quoted *before* the teardown removes the state
     directory it lives in, so the path the message names still exists when the
-    agent goes to read the rest of it.
+    agent goes to read the rest of it. ``kept_rows`` are rows an earlier boot of the
+    instance registered, which an open window shows: they stay, and a state recording
+    only them is left so ``down`` still removes them and a later boot keeps them again.
     """
     failed_log = getattr(exc, "log_path", None)
     excerpt = ""
@@ -1002,7 +1012,12 @@ def _unwind_failed_boot(
         f"{verb} failed: {exc}\n{excerpt}tearing down partial instance...\n"
     )
     survivors = _teardown(
-        repo_root, runner, registry, pids=pids, services=services, sleeper=sleeper
+        repo_root,
+        runner,
+        registry,
+        pids=pids,
+        services=[service for service in services if service not in kept_rows],
+        sleeper=sleeper,
     )
     if survivors:
         sys.stderr.write(
@@ -1010,6 +1025,33 @@ def _unwind_failed_boot(
             "SIGKILL and may still hold their port.\n"
         )
     shutil.rmtree(_state_dir(repo_root, name), ignore_errors=True)
+    if kept_rows:
+        _write_rows_only_state(repo_root, name, kept_rows)
+
+
+def _write_rows_only_state(repo_root: Path, name: str, rows: Sequence[str]) -> None:
+    """Leave a state for ``name`` recording only its registered ``rows``: nothing running."""
+    state_path = _state_path(repo_root, name)
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps({"name": name, "pids": [], "services": list(rows)}, indent=2)
+        )
+    except OSError as exc:
+        sys.stderr.write(
+            f"warning: could not record the rows {', '.join(rows)} kept for '{name}' at "
+            f"{state_path}: {exc}; remove them with forward_port if the instance is not "
+            "booted again.\n"
+        )
+
+
+def _recorded_services(repo_root: Path, name: str) -> list[str]:
+    """The rows the state of instance ``name`` records, or none when there is no readable state."""
+    try:
+        state = json.loads(_state_path(repo_root, name).read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    return [str(service) for service in state.get("services") or []]
 
 
 def _boot_wrapper(
@@ -1083,6 +1125,8 @@ def up(
     inner_path: str = "/",
     theming_mode: str | None = None,
     project: str | None = None,
+    preview_of_app: str | None = None,
+    preview_chat: str | None = None,
     runner: Runner,
     registry: Registry,
     http: HttpClient,
@@ -1106,10 +1150,16 @@ def up(
     would the app. ``project`` names a standalone project, relative to ``cwd``, that
     ``command`` boots from: its venv is linked before each boot and ``command`` runs
     behind ``project_launcher``. A ``service_name`` from a ``repo_root`` that is a
-    linked git worktree is refused before anything boots.
+    linked git worktree is refused before anything boots. ``preview_of_app`` names
+    the app this instance previews on the row its window shows, so the shell can
+    offer to start it again once it stops, and ``preview_chat`` the chat that booted
+    it, which the window's "Ask in chat" drafts into.
 
-    On any failure the partial state is torn down and 1 is returned. On success a
-    state file records the servers + services so ``down`` can find them later.
+    An earlier instance of ``name`` is torn down first, except for the rows this boot
+    registers again: those are updated in place, so a window open on them never sees
+    its app vanish. On any failure the partial state is torn down and 1 is returned,
+    those kept rows staying recorded for ``down``. On success a state file records the
+    servers (with their start times) and services so ``down`` can find them later.
     """
     if not command:
         sys.stderr.write("up: no launch command given (pass it after `--`).\n")
@@ -1146,7 +1196,23 @@ def up(
     # Clear any stale instance for this name first so a re-run is clean. Booting
     # over one that could not be cleared would leave the old server holding its
     # port with nothing left recording its pid, so refuse instead.
-    if down(name, repo_root, runner=runner, registry=registry, sleeper=sleeper) != 0:
+    rows_to_register = {
+        row for row in (service_name, preview_service_name) if row is not None
+    }
+    kept_rows = [
+        row for row in _recorded_services(repo_root, name) if row in rows_to_register
+    ]
+    if (
+        down(
+            name,
+            repo_root,
+            runner=runner,
+            registry=registry,
+            sleeper=sleeper,
+            kept_rows=kept_rows,
+        )
+        != 0
+    ):
         sys.stderr.write(
             f"up: refusing to boot '{name}' over an instance that could not be "
             f"cleared (see above). Resolve it, or remove "
@@ -1194,12 +1260,14 @@ def up(
             )
         )
         inner_url = f"http://{LOOPBACK_HOST}:{inner_port}"
+        inner_pid = pids[0]
         probe = wait_healthy(
             http,
             f"{inner_url}{health_path}",
             _HEALTH_ATTEMPTS,
             _HEALTH_INTERVAL_SECONDS,
             sleeper,
+            is_alive=lambda: runner.process_group_alive(inner_pid),
         )
         if not probe.is_healthy:
             raise InstanceError(
@@ -1208,7 +1276,13 @@ def up(
                 log_path=inner_log_path,
             )
 
-        # 2. Register it as a service (own browser origin), if asked.
+        # 2. Register it as a service (own browser origin), if asked. The row a window
+        #    shows names the app it previews, so the shell can start it again.
+        window_tag = (
+            _instance_tag(preview_of_app, FrameKind.CHANGE, preview_chat)
+            if preview_of_app is not None
+            else None
+        )
         if service_name is not None:
             _register_service(
                 registry,
@@ -1220,6 +1294,7 @@ def up(
                 # same page unmarked; unwrapped, the inner origin is the surface.
                 internal=preview_requested,
                 theming_mode=theming_mode,
+                isolated_instance=None if preview_requested else window_tag,
             )
             services.append(service_name)
 
@@ -1259,6 +1334,7 @@ def up(
                 wrapper_port,
                 "forward_port register (wrapper)",
                 display_name=preview_title,
+                isolated_instance=window_tag,
             )
             services.append(preview_service_name)
 
@@ -1272,6 +1348,7 @@ def up(
             "wrapper_port": wrapper_port,
             "inner_path": inner_path if preview_requested else None,
             "pids": pids,
+            "pid_starts": [runner.process_start_time(pid) for pid in pids],
             "services": services,
             "inner_log": str(inner_log_path),
             "wrapper_log": str(wrapper_log_path) if preview_requested else None,
@@ -1310,6 +1387,7 @@ def up(
             pids=pids,
             services=services,
             sleeper=sleeper,
+            kept_rows=kept_rows,
         )
         return 1
 
@@ -1352,6 +1430,8 @@ class FrameRecord(NamedTuple):
     kind: FrameKind
     note: str | None
     inner_path: str
+    # The chat that booted it; None for a frame no chat booted, or one recorded before chats were.
+    chat: str | None = None
 
 
 def read_frame(name: str, repo_root: Path) -> FrameRecord | None:
@@ -1370,8 +1450,30 @@ def read_frame(name: str, repo_root: Path) -> FrameRecord | None:
         raise InstanceError(f"{state_path} records no frame to read: {exc!r}") from exc
 
 
-def _keep_frame_record(repo_root: Path, name: str, record: FrameRecord) -> None:
-    """Leave a state for ``name`` holding only its frame record: nothing running, nothing registered."""
+def _instance_tag(
+    app: str, kind: FrameKind, chat: str | None
+) -> forward_port.IsolatedInstanceTag:
+    """The tag on the row an isolated instance's window shows: the app it previews or frames, its kind, and the
+    chat that booted it, when one did."""
+    tag = forward_port.IsolatedInstanceTag(app=app, kind=kind.value)
+    if chat is not None:
+        tag["chat"] = chat
+    return tag
+
+
+def _keep_frame_record(
+    repo_root: Path,
+    name: str,
+    record: FrameRecord,
+    *,
+    wrapper_port: int | None,
+    services: Sequence[str],
+) -> None:
+    """Leave a state for ``name`` holding its frame record and nothing running.
+
+    ``services`` are the rows still registered for it, at ``wrapper_port``, so ``down``
+    removes them and the next boot takes that port again when it is free.
+    """
     state_path = _state_path(repo_root, name)
     try:
         state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1379,8 +1481,9 @@ def _keep_frame_record(repo_root: Path, name: str, record: FrameRecord) -> None:
             json.dumps(
                 {
                     "name": name,
+                    "wrapper_port": wrapper_port,
                     "pids": [],
-                    "services": [],
+                    "services": list(services),
                     FRAME_STATE_KEY: record._asdict(),
                 },
                 indent=2,
@@ -1404,6 +1507,7 @@ def frame(
     kind: FrameKind,
     note: str | None = None,
     inner_path: str = "/",
+    chat: str | None = None,
     runner: Runner,
     registry: Registry,
     http: HttpClient,
@@ -1420,14 +1524,16 @@ def frame(
     registration -- and the origin an open window shows it at -- stays put; when
     another process has taken that port, the wrapper boots on a fresh one and its
     row is re-pointed there. ``down`` with the same ``name`` kills the wrapper and
-    deregisters it, and never touches the inner service.
+    deregisters it, and never touches the inner service. The frame's row names
+    ``inner_service`` as the app it frames, and ``chat`` as the chat that booted it,
+    so the shell can offer to start the frame again once it stops, and to ask that chat.
 
-    Returns 1 on failure. A failed boot is torn down, a re-frame's row deregistered
-    with it; a failed re-frame keeps only its record (``read_frame``), so a later
-    call can boot it again on a fresh port without being told the note. An inner
-    path without a leading ``/``, a ``repo_root`` that is a linked git worktree, an
-    unreadable state file, or a previous wrapper that survives SIGKILL is refused
-    before anything changes, leaving a previous frame as it was.
+    Returns 1 on failure. A failed boot is torn down; a failed re-frame keeps its
+    record (``read_frame``) and the row an open window shows, so a later call can boot
+    it again without being told the note. An inner path without a leading ``/``, a
+    ``repo_root`` that is a linked git worktree, an unreadable state file, or a
+    previous wrapper that survives SIGKILL is refused before anything changes, leaving
+    a previous frame as it was.
     """
     if not inner_path.startswith("/"):
         sys.stderr.write(
@@ -1438,6 +1544,7 @@ def frame(
         return 1
     state_path = _state_path(repo_root, name)
     previous_port: int | None = None
+    recorded_port: int | None = None
     has_row = False
     is_reframe = state_path.exists()
     if is_reframe:
@@ -1461,7 +1568,8 @@ def frame(
                 f"{state_path} so it stays findable.\n"
             )
             return 1
-        previous_port = previous.get("wrapper_port")
+        recorded_port = previous.get("wrapper_port")
+        previous_port = recorded_port
         has_row = previous_port is not None
         # After a reboot the port can be another server's, which would answer the
         # health probe in place of a wrapper that could not bind it.
@@ -1497,11 +1605,12 @@ def frame(
         kind=kind,
         note=note,
         inner_path=inner_path,
+        chat=chat,
     )
     pids: list[int] = []
-    # Counted as registered from the start when re-framing a frame that had a port: its
-    # row is already there, and a failed re-boot must not leave it routing at a dead port.
-    services: list[str] = [frame_service_name] if has_row else []
+    # A re-frame of a frame that had a port starts with its row already there.
+    kept_rows = [frame_service_name] if has_row else []
+    services: list[str] = list(kept_rows)
     try:
         wrapper_port = _boot_wrapper(
             repo_root,
@@ -1521,6 +1630,7 @@ def frame(
             wrapper_port,
             "forward_port register (frame)",
             display_name=display_name,
+            isolated_instance=_instance_tag(inner_service, kind, chat),
         )
         if frame_service_name not in services:
             services.append(frame_service_name)
@@ -1545,9 +1655,16 @@ def frame(
             pids=pids,
             services=services,
             sleeper=sleeper,
+            kept_rows=kept_rows,
         )
         if is_reframe:
-            _keep_frame_record(repo_root, name, record)
+            _keep_frame_record(
+                repo_root,
+                name,
+                record,
+                wrapper_port=recorded_port if kept_rows else None,
+                services=kept_rows,
+            )
         return 1
     sys.stderr.write(
         f"frame up: '{frame_service_name}' frames '{inner_service}' (wrapper on port "
@@ -1563,9 +1680,10 @@ def down(
     runner: Runner,
     registry: Registry,
     sleeper: Callable[[float], None] = time.sleep,
+    kept_rows: Sequence[str] = (),
 ) -> int:
     """Tear down the instance for ``name``: kill the server(s), deregister the
-    service(s), delete the state directory.
+    service(s) other than ``kept_rows``, delete the state directory.
 
     Idempotent: a missing state file is a no-op success, so this is safe to run to
     clean up after a successful test, a rejected preview, or a half-set-up
@@ -1587,7 +1705,9 @@ def down(
         sys.stderr.write(f"error: could not read instance state {state_path}: {exc}\n")
         return 1
     pids = _pids_still_ours(state, runner)
-    services = state.get("services") or []
+    services = [
+        service for service in state.get("services") or [] if service not in kept_rows
+    ]
     survivors = _teardown(
         repo_root, runner, registry, pids=pids, services=services, sleeper=sleeper
     )
@@ -1602,6 +1722,34 @@ def down(
     shutil.rmtree(_state_dir(repo_root, name), ignore_errors=True)
     sys.stderr.write(f"instance for '{name}' torn down.\n")
     return 0
+
+
+def is_running(name: str, repo_root: Path, *, runner: Runner) -> bool:
+    """Whether every process instance ``name`` recorded is still the one it started.
+
+    False with no readable state, with nothing recorded running, or once any of its
+    processes has exited or had its pid handed to another process by a restart. A pid
+    recorded with no start time, where start times can be read, is from a state older
+    than them and cannot be told from a pid a restart reused, so it does not count as
+    running; only where none can be read (macOS) does a live process group.
+    """
+    try:
+        state = json.loads(_state_path(repo_root, name).read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    pids = [int(pid) for pid in state.get("pids") or []]
+    starts = state.get("pid_starts") or []
+    if not pids:
+        return False
+    for index, pid in enumerate(pids):
+        recorded = str(starts[index]) if index < len(starts) else ""
+        current = runner.process_start_time(pid)
+        if recorded:
+            if current != recorded:
+                return False
+        elif current or not runner.process_group_alive(pid):
+            return False
+    return True
 
 
 def refresh(
@@ -1674,8 +1822,15 @@ def refresh(
         return 1
     # 1. Stop the old inner server and wait for it to release the port. A live
     #    listening socket cannot be rebound, so we must not respawn until it is
-    #    gone -- otherwise the new process fails to bind.
-    if not _kill_process_group_and_wait(runner, old_pid, sleeper):
+    #    gone -- otherwise the new process fails to bind. A pid a restart handed to
+    #    another process is left alone: the server it named is already gone.
+    starts = list(state.get("pid_starts") or [])
+    if starts and starts[0] and runner.process_start_time(old_pid) != starts[0]:
+        sys.stderr.write(
+            f"note: inner server pid {old_pid} is no longer the process this instance "
+            "started (it exited, or the workspace restarted); leaving it alone.\n"
+        )
+    elif not _kill_process_group_and_wait(runner, old_pid, sleeper):
         sys.stderr.write(
             f"refresh: inner server pid {old_pid} survived SIGKILL; its port "
             f"{port} may still be held. Aborting rather than risk a bind clash.\n"
@@ -1713,6 +1868,9 @@ def refresh(
     # even if it never becomes healthy (no leaked server).
     pids[0] = new_pid
     state["pids"] = pids
+    if starts:
+        starts[0] = runner.process_start_time(new_pid)
+        state["pid_starts"] = starts
     state_path.write_text(json.dumps(state, indent=2))
 
     probe = wait_healthy(
@@ -1721,6 +1879,7 @@ def refresh(
         _HEALTH_ATTEMPTS,
         _HEALTH_INTERVAL_SECONDS,
         sleeper,
+        is_alive=lambda: runner.process_group_alive(new_pid),
     )
     if not probe.is_healthy:
         sys.stderr.write(

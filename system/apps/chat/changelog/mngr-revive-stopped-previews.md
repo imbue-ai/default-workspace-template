@@ -1,0 +1,1 @@
+A new `draft-into-chat` launch path drafts a text, unsent, into the chat a `chat_id` names. A stopped preview's or UI sketch's "Ask in chat" runs it to reach the chat that booted that preview; it is never a launcher row.

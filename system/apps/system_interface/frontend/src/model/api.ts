@@ -475,6 +475,12 @@ export async function quitApp(appName: string): Promise<void> {
   await postJson<void>(apiUrl(`/api/apps/${encodeURIComponent(appName)}/quit`), {});
 }
 
+/** Start a stopped preview or UI sketch again, where it was; resolves once it runs, and throws with the shell's
+ *  reason when it could not be started. */
+export async function reviveApp(appName: string): Promise<void> {
+  await postJson<unknown>(apiUrl(`/api/apps/${encodeURIComponent(appName)}/revive`), {});
+}
+
 /** Ask the shell to deliver a message this client's page received, from the Imbue Studio chrome or from an app's frame
  *  (``sender`` says which: ``embedder`` or the app), to the apps registered for its type (contracts.md section 5.6);
  *  answers what each app did with it, and throws with the shell's detail when an app did not take it. */

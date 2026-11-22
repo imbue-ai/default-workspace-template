@@ -112,6 +112,20 @@ params = [
 presets = {target = "app_chat"}
 app_params = {name = "app", display_name = "app_display_name"}
 
+# A stopped preview's or UI sketch's "Ask in chat": what happened to it is drafted, unsent, into the chat that
+# booted it, named by id. Never a launcher row.
+[[launch_paths]]
+id = "draft-into-chat"
+label = "Draft into a chat"
+path = "/api/chats/intake"
+method = "POST"
+params = [
+    {name = "chat_id", label = "Chat", required = true},
+    {name = "message", label = "Draft message", required = false},
+]
+presets = {target = "chat", is_draft = "true"}
+chat_draft_params = {chat_id = "chat_id", text = "message"}
+
 # The keystrokes a person may re-bind in the Keyboard shortcuts dialog (the user-profile-state spec in the mngr
 # repository, section 10). Enter sends, and so does the Cmd/Ctrl pair other chat apps taught; Shift+Enter stays the
 # fixed line break, since a keystroke that matches no action falls through to the composer.

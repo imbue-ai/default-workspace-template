@@ -121,6 +121,10 @@ class UpdateNoticeCommandError(ShellError, RuntimeError):
     """The update-self script behind a notice verb could not be run, or failed."""
 
 
+class InstanceReviveError(ShellError, RuntimeError):
+    """A stopped preview or UI sketch could not be started again."""
+
+
 class PortParkingError(ShellError, OSError):
     """A stopped app's port could not be parked."""
 

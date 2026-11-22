@@ -56,6 +56,7 @@ from imbue.system_interface.shell.desktop_document import default_shortcut_targe
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION
 from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
+from imbue.system_interface.shell.instance_revival import REVIVE_SCRIPT_REL_BY_KIND
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.primitives import PageId
@@ -94,14 +95,17 @@ def registry_row_toml(
     # Each launch path as ``(id, label, path)``; ``launch_params`` names each one's param names by id,
     # ``launch_text_params`` the param of each that takes typed text, ``launch_draft_params`` the param of each
     # that takes drafted text, ``launch_mention_params`` the param of each that takes a mention of a person,
-    # ``launch_app_params`` the ``(name, display_name)`` params of each that is about an app, ``launch_methods``
-    # the method of each that is not a GET, and ``launch_presets`` the presets of each that declares any.
+    # ``launch_app_params`` the ``(name, display_name)`` params of each that is about an app,
+    # ``launch_chat_draft_params`` the ``(chat_id, text)`` params of each that drafts into a named chat,
+    # ``launch_methods`` the method of each that is not a GET, and ``launch_presets`` the presets of each that
+    # declares any.
     launch_paths: Sequence[tuple[str, str, str]] = (),
     launch_params: Mapping[str, Sequence[str]] | None = None,
     launch_text_params: Mapping[str, str] | None = None,
     launch_draft_params: Mapping[str, str] | None = None,
     launch_mention_params: Mapping[str, str] | None = None,
     launch_app_params: Mapping[str, tuple[str, str]] | None = None,
+    launch_chat_draft_params: Mapping[str, tuple[str, str]] | None = None,
     launch_methods: Mapping[str, str] | None = None,
     launch_presets: Mapping[str, Mapping[str, str]] | None = None,
     # The ``[pin]`` table as ``(path, style, scope, default_mode)``.
@@ -116,6 +120,9 @@ def registry_row_toml(
     # The types of the ``show`` message handlers that declare ``reload_when_raised``.
     reloaded_when_raised_types: Sequence[str] = (),
     theming_mode: str | None = None,
+    # The isolated instance the row's window shows, as ``(app, kind)``, and the chat that booted it.
+    isolated_instance: tuple[str, str] | None = None,
+    isolated_instance_chat: str | None = None,
 ) -> str:
     """One ``[[apps]]`` row as ``forward_port.py`` writes it, with the manifest-derived keys the shell reads."""
     lines = [
@@ -146,6 +153,10 @@ def registry_row_toml(
         lines.append(f'window_closed_path = "{window_closed_path}"')
     if theming_mode is not None:
         lines.append(f'theming_mode = "{theming_mode}"')
+    if isolated_instance is not None:
+        instance_app, instance_kind = isolated_instance
+        chat = "" if isolated_instance_chat is None else f', chat = "{isolated_instance_chat}"'
+        lines.append(f'isolated_instance = {{ app = "{instance_app}", kind = "{instance_kind}"{chat} }}')
     if message_handlers or shown_message_handlers:
         handlers = [f'{{ type = "{kind}", path = "{path}" }}' for kind, path in message_handlers]
         for kind, show, showing in shown_message_handlers:
@@ -173,6 +184,11 @@ def registry_row_toml(
         app_params = (launch_app_params or {}).get(launch_id)
         if app_params is not None:
             lines.append(f'app_params = {{ name = "{app_params[0]}", display_name = "{app_params[1]}" }}')
+        chat_draft_params = (launch_chat_draft_params or {}).get(launch_id)
+        if chat_draft_params is not None:
+            lines.append(
+                f'chat_draft_params = {{ chat_id = "{chat_draft_params[0]}", text = "{chat_draft_params[1]}" }}'
+            )
         method = (launch_methods or {}).get(launch_id)
         if method is not None:
             lines.append(f'method = "{method}"')
@@ -582,6 +598,62 @@ def write_stub_update_self_script(repo_root: Path, exit_code: int = 0, rollback_
 
 def read_stub_update_self_calls(repo_root: Path) -> list[dict[str, Any]]:
     path = repo_root / STUB_UPDATE_SELF_CALLS_REL
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line]
+
+
+# Starting a stopped preview or UI sketch again
+
+# Where the stub revive script records each call it took.
+STUB_REVIVE_CALLS_REL: Final[str] = "data/.state/isolated-instances/stub-revive-calls.jsonl"
+
+# A stand-in for a flow's revive script (``preview_app.py`` or ``mock_frame.py``) that records its own path,
+# argv, and working directory and exits as told; told a port, it first starts a server there in a session of
+# its own, as a revive boots the instance again, and records the server's pid. Written under the test's
+# workspace root so the shell finds it where it finds the real one.
+_STUB_REVIVE_SCRIPT = """\
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+calls = Path({calls_path!r})
+calls.parent.mkdir(parents=True, exist_ok=True)
+if {exit_code} != 0:
+    served_pid = None
+elif {serve_port} is None:
+    served_pid = None
+else:
+    served_pid = subprocess.Popen(
+        [sys.executable, "-m", "http.server", str({serve_port}), "--bind", "127.0.0.1"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    ).pid
+with calls.open("a") as record:
+    record.write(
+        json.dumps({{"script": __file__, "argv": sys.argv[1:], "cwd": os.getcwd(), "served_pid": served_pid}}) + "\\n"
+    )
+sys.exit({exit_code})
+"""
+
+
+def write_stub_revive_scripts(repo_root: Path, exit_code: int = 0, serve_port: int | None = None) -> None:
+    """Stand the stub in for every flow's revive script under ``repo_root``."""
+    for script_rel in REVIVE_SCRIPT_REL_BY_KIND.values():
+        path = repo_root / script_rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            _STUB_REVIVE_SCRIPT.format(
+                calls_path=str(repo_root / STUB_REVIVE_CALLS_REL), exit_code=exit_code, serve_port=serve_port
+            )
+        )
+
+
+def read_stub_revive_calls(repo_root: Path) -> list[dict[str, Any]]:
+    path = repo_root / STUB_REVIVE_CALLS_REL
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text().splitlines() if line]

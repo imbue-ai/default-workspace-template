@@ -152,6 +152,23 @@ class AppParams(FrozenModel):
         return self
 
 
+class ChatDraftParams(FrozenModel):
+    """The declared params of a launch path that drafts into a named chat: the shell fills them with the id of the
+    chat that made a stopped preview or UI sketch, and with what is drafted there, when its window's "Ask in chat"
+    button is pressed."""
+
+    chat_id: LaunchParamName = Field(description="The param that takes the chat's id")
+    text: LaunchParamName = Field(description="The param that takes the text to draft")
+
+    @model_validator(mode="after")
+    def _check_the_two_params_differ(self) -> Self:
+        if self.chat_id == self.text:
+            raise InvalidManifestValueError(
+                f"chat_draft_params names one param {str(self.chat_id)!r} for both the chat id and the text"
+            )
+        return self
+
+
 class LaunchPath(FrozenModel):
     """A way of starting something the desktop offers (desktop-interface contracts.md section 2): a page path the
     shell opens a window at (GET), or a route the shell posts to for the path of the page to open (POST)."""
@@ -192,6 +209,11 @@ class LaunchPath(FrozenModel):
         description="The declared params the shell fills with the name and display name of the app whose window's "
         '"Chat about this app" button was pressed (the multiplayer spec, section 9.2); never a launcher row',
     )
+    chat_draft_params: ChatDraftParams | None = Field(
+        default=None,
+        description="The declared params the shell fills with a chat's id and the text it drafts there, when a "
+        "stopped preview's or UI sketch's \"Ask in chat\" button is pressed; never a launcher row",
+    )
 
     @model_validator(mode="after")
     def _check_params_presets_and_text_params(self) -> Self:
@@ -208,6 +230,14 @@ class LaunchPath(FrozenModel):
                 "app_params.display_name",
                 None if self.app_params is None else self.app_params.display_name,
             ),
+            (
+                "chat_draft_params.chat_id",
+                None if self.chat_draft_params is None else self.chat_draft_params.chat_id,
+            ),
+            (
+                "chat_draft_params.text",
+                None if self.chat_draft_params is None else self.chat_draft_params.text,
+            ),
         )
         for field_name, chosen in chosen_params:
             if chosen is not None and chosen not in param_names:
@@ -219,10 +249,12 @@ class LaunchPath(FrozenModel):
             self.draft_param,
             self.mention_param,
             self.app_params,
+            self.chat_draft_params,
         )
         if sum(chosen is not None for chosen in chosen_fields) > 1:
             raise InvalidManifestValueError(
-                "a launch path declares at most one of text_param, draft_param, mention_param, and app_params"
+                "a launch path declares at most one of text_param, draft_param, mention_param, app_params, and "
+                "chat_draft_params"
             )
         for preset_name in self.presets:
             if preset_name in param_names:

@@ -84,6 +84,8 @@ export class FakeDesktopApi implements DesktopApi {
   hasNoDesktopWindow = false;
   /** A refusal every route raises while set. */
   refusal: string | null = null;
+  /** The launch paths whose launch the app refuses (a chat it no longer has, say), by ``<app>:<launch id>``. */
+  refusedLaunches = new Set<string>();
   /** The page a POST launch path answers (as the app would); a GET launch path's page is built from its path. */
   postLaunchAnswer = "/launched";
   /** While set, the inventory, the client records, a layout, and the avatar and theme catalogs answer only once
@@ -364,6 +366,9 @@ export class FakeDesktopApi implements DesktopApi {
         (request.isMinimized ? ":minimized" : ""),
     );
     this.refuse();
+    if (this.refusedLaunches.has(`${request.app}:${request.launch}`)) {
+      throw new Error(`The app refused the launch '${request.launch}'`);
+    }
     const app = this.apps.find((candidate) => candidate.name === request.app);
     const launchPath = app?.launch_paths.find((candidate) => candidate.id === request.launch);
     if (app === undefined || launchPath === undefined) {
@@ -596,6 +601,18 @@ export class FakeDesktopApi implements DesktopApi {
   async quitApp(appName: string): Promise<void> {
     this.calls.push(`quitApp:${appName}`);
     this.refuse();
+  }
+
+  /** What the next revives answer: resolved once ``reviveGate`` (when set) resolves, or rejected with
+   *  ``reviveRefusal``. */
+  reviveGate: Promise<void> | null = null;
+  reviveRefusal: string | null = null;
+
+  async reviveApp(appName: string): Promise<void> {
+    this.calls.push(`reviveApp:${appName}`);
+    this.refuse();
+    if (this.reviveGate !== null) await this.reviveGate;
+    if (this.reviveRefusal !== null) throw new Error(this.reviveRefusal);
   }
 
   async setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord> {

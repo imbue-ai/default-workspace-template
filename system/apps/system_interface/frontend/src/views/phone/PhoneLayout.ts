@@ -29,7 +29,7 @@ import type { DesktopStore } from "../../store/DesktopStore";
 import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { UpdateNoticeBanner } from "../UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "../UpdateStalenessBanner";
-import { stoppedPlaceholder } from "../Window";
+import { stoppedInstanceActionsOf, stoppedPlaceholder } from "../Window";
 import { MENU_MIN_WIDTH, openShareSettings, phoneWindowMenuRows } from "../WindowMenu";
 import { HomeGrid } from "./HomeGrid";
 import { PhoneBar } from "./PhoneBar";
@@ -251,7 +251,11 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
                 onbeforeupdate: () => false,
               }),
               shownWindow !== null && isAppShownStopped(state, shownApp)
-                ? m("div", { class: "absolute inset-0" }, stoppedPlaceholder(shownApp))
+                ? m(
+                    "div",
+                    { class: "absolute inset-0" },
+                    stoppedPlaceholder(shownApp, stoppedInstanceActionsOf(store, shownApp, shownWindow.id)),
+                  )
                 : null,
               isHome
                 ? m(HomeGrid, {

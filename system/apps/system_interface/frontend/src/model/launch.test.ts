@@ -5,6 +5,8 @@ import {
   appChatParams,
   appLaunchesOf,
   appShortcutsOf,
+  chatDraftLaunchOf,
+  chatDraftParams,
   fillParamOf,
   freeTextParams,
   freeTextRowsOf,
@@ -217,5 +219,40 @@ describe("the app-chat launch", () => {
     expect(appChatLaunchOf([docs])).toBeNull();
     expect(appChatParams(aboutAnApp, docs)).toEqual({ app: "docs", app_display_name: "Docs" });
     expect(appChatParams(launchPathRecord(), docs)).toEqual({});
+  });
+});
+
+describe("the chat-draft launch", () => {
+  it("keeps a launch path drafting into a named chat out of every row and the shortcut, and picks the first for Ask in chat", () => {
+    const intoAChat = launchPathRecord({
+      id: "draft-into-chat",
+      path: "/api/chats/intake",
+      method: "POST",
+      params: ["chat_id", "message"],
+      chat_draft_params: { chat_id: "chat_id", text: "message" },
+    });
+    const chat = appRecord("chat", {
+      launcher_rank: 10,
+      launch_paths: [launchPathRecord({ id: "root", path: "/" }), intoAChat],
+    });
+    const notes = appRecord("notes", {
+      program: "notes",
+      default_shortcuts: [],
+      launch_paths: [
+        launchPathRecord({ id: "into", params: ["c", "t"], chat_draft_params: { chat_id: "c", text: "t" } }),
+        launchPathRecord({ id: "plain", path: "/plain" }),
+      ],
+    });
+    expect(appLaunchesOf([notes, chat]).map((launch) => launch.launchPath.id)).toEqual(["plain", "root"]);
+    expect(freeTextRowsOf([notes, chat])).toEqual([]);
+    expect(appShortcutsOf(notes)).toEqual([{ launch: "plain", mode: "focus" }]);
+    const launch = chatDraftLaunchOf([notes, chat]);
+    expect(launch === null ? null : `${launch.app.name}:${launch.launchPath.id}`).toBe("chat:draft-into-chat");
+    expect(chatDraftLaunchOf([docs])).toBeNull();
+    expect(chatDraftParams(intoAChat, "agent-lead", "It stopped.")).toEqual({
+      chat_id: "agent-lead",
+      message: "It stopped.",
+    });
+    expect(chatDraftParams(launchPathRecord(), "agent-lead", "It stopped.")).toEqual({});
   });
 });
